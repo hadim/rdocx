@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 10 | 0 | 14 |
+| M23, From-scratch business documents           | 24 | 10 | 1 | 13 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
 | X, Cross-cutting (opportunistic)            | 92 | 88 | 0 | 0  |
-| **Total** | **410** | **324** | **0** | **82** |
+| **Total** | **410** | **324** | **1** | **81** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -465,7 +465,7 @@ regenerated, never hand-edited.
 | F-250 | Ordered mutable section facade | S72 | L | pending |
 | F-251 | Complete section and page geometry | S72 | L | pending |
 | F-252 | Rich per-section headers and footers | S72 | L | pending |
-| F-253 | Container-neutral story editing | S72 | L | pending |
+| F-253 | Container-neutral story editing | S72 | L | in-progress |
 | F-254 | Generic insert, move, clone, and remove operations | S72 | L | pending |
 | F-255 | Part-scoped assets, links, and relationships | S72 | M | pending |
 | F-256 | Transactional cross-document fragment import | S72 | L | pending |

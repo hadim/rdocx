@@ -35,7 +35,7 @@ only complete validated candidates.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-253 | Container-neutral story editing | L | pending | - |
+| F-253 | Container-neutral story editing | L | in-progress | codex |
 | F-250 | Ordered mutable section facade | L | pending | - |
 | F-251 | Complete section and page geometry | L | pending | - |
 | F-254 | Generic insert, move, clone, and remove operations | L | pending | - |
