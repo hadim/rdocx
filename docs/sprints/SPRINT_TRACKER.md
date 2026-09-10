@@ -418,6 +418,7 @@ defended.
 | F-253 | S72 | L | 4 | 2 | 2026-09-10 | Added one deterministic story identity, traversal, and staged text-mutation model across body, cell, related, note, comment, and text-box content |
 | F-250 | S72 | L | 4 | 1 | 2026-09-10 | Added ordered mutable section handles, atomic boundary edits, effective story inheritance, and safe orphan pruning |
 | F-251 | S72 | L | 4 | 1 | 2026-09-10 | Added checked section geometry, source-preserving section XML mutation, and restart-aware displayed page numbering |
+| F-254 | S72 | L | 4 | 1 | 2026-09-10 | Added transactional generic content insertion, removal, cloning, and same-owner movement with exact XML preservation |
 
 ## Velocity
 

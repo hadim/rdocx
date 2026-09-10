@@ -12922,3 +12922,53 @@ values 1, 12, and 27. The integrated `/verify --full` gate passed at
 mutation. PageFrame physical identity is zero-based and independent from its
 one-based displayed section sequence. F-252 must preserve the same staged
 section and story ownership boundary.
+
+### F-254, Generic insert, move, clone, and remove operations
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now exposes an owned concrete
+`ContentFragment` and transactional insertion, removal, cloning, and
+same-owner movement at canonical `ContentLocation` anchors. Operations cover
+direct body, cell, header, footer, note, comment, and text-box content while
+preserving schema order, namespaces, references, and untouched raw XML.
+Cloning assigns fresh document identities before publishing the staged result.
+
+**Non-obvious choices.** Ordinary locations remain genuine direct owner-child
+anchors from the flattened traversal. End insertion is an explicit location
+that resolves before a body section-properties tail and also works for empty
+owners. Cross-owner transfer remains rejected for F-256, while same-owner
+relationships remain in scope. Block content controls validate their complete
+grammar, retained raw slots, entity references, and XML 1.0 legal characters.
+
+**Deviations from the design plan.** Destination and end semantics were made
+explicit without expanding the approved operation set. Six microscope passes
+repaired flattened indexing, self-closing and sole-paragraph owners, identity
+rewrites, bookmark structure, content-control grammar, and namespace replay.
+Pass 6 reported zero defects, zero smells, and zero nitpicks. The bare package
+command selected older same-version registry dependencies, so the required
+package verification used the canonical reviewed local dependency graph.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `interleaved_content_operations_preserve_order_references_and_raw_xml`,
+`same_owner_move_adjusts_destination_after_removal`, and
+`invalid_or_stale_content_operations_are_atomic` passed with the complete
+content-control, namespace, identity, relationship, and package-story riders.
+The `rdocx` regression suite passed 424 tests with 4 ignored. The integrated
+`/verify --full` gate passed at
+`c0186096e6005544daa01134404ce62c34347a89` with exactly 22 package archives,
+all below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Re-resolve content locations after structural
+mutation. Keep story-owner transfer separate from OPC part-scoped relationship
+resolution. F-255 adds the latter, while F-256 owns complete cross-owner and
+cross-document dependency remapping.
