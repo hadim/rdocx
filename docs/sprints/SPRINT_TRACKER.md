@@ -415,6 +415,7 @@ defended.
 | F-X087 | S71 | L | 4 | 1 | 2026-09-09 | Folded Kevin Brown's PR 71 into portable editable Word charts with atomic theme ownership and verified Word and Pages interoperability |
 | F-X088 | S71 | S | 1 | 1 | 2026-09-09 | Verified all Issue 69 fixes with six regressions and 21-sample timing evidence, credited the reporter, and closed the issue |
 | F-X089 | S71 | L | 4 | 1 | 2026-09-09 | Reframed the root and all 26 crate READMEs around implemented outcomes, checked examples, and bounded official comparisons |
+| F-253 | S72 | L | 4 | 2 | 2026-09-10 | Added one deterministic story identity, traversal, and staged text-mutation model across body, cell, related, note, comment, and text-box content |
 
 ## Velocity
 

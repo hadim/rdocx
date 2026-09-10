@@ -12783,3 +12783,50 @@ The integrated `/verify --full` gate passed at
 **Notes for future sessions.** Keep the root README focused on outcomes and
 keep every crate page specific to its direct consumer. Extend the existing
 validator whenever the public message gains a new claim or comparison row.
+
+### F-253, Container-neutral story editing
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** The native Word facade now exposes one deterministic
+`StoryId`, `ContentLocation`, and item traversal model across the body, table
+cells, headers, footers, ordinary footnotes and endnotes, comments, and text
+boxes. The same staged text mutation resolves locations and reports uniform
+owner, path, bounds, kind, and stale errors without publishing a partial
+document or package candidate.
+
+**Non-obvious choices.** Locations are operation-scoped index paths into the
+existing typed and package-backed sources rather than durable node handles or
+a cloned second document tree. Complex fields are projected as owned,
+namespace-complete XML only when an exact borrowed source slice would depend on
+ancestor declarations. Admission remains grammar-owned and fails closed at
+raw, malformed, or unsafe boundaries.
+
+**Deviations from the design plan.** The approved surface remained unchanged.
+Microscope passes strengthened namespace alias handling, nested and same-run
+complex fields, lifecycle provenance, malformed note identities, and atomic
+failure coverage. The integrated workspace gate also required the existing
+Python error classifier to map the new native story error to `RdocxError`.
+Pass 21 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `one_generic_mutation_edits_the_same_shape_in_every_story`,
+`story_traversal_preserves_owner_order_and_raw_nodes`, and
+`invalid_story_locations_are_atomic` passed. The changed `rdocx-oxml`, `rdocx`,
+and `rdocx-py` suites passed, including the exhaustive Python story-error
+mapping. The integrated `/verify --full` gate passed at
+`035b74a3d83f`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Re-resolve every location after mutation. The
+owner and item ordinals intentionally describe one observed operation state.
+F-254 and F-255 may extend mutation and relationship behavior through this
+model, but they must preserve its staged publication and fail-closed typed
+admission boundaries.
