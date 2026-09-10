@@ -76,6 +76,7 @@ pub(crate) fn rdocx_to_pyerr(py: Python<'_>, error: rdocx::Error) -> PyErr {
         | rdocx::Error::Mhtml { .. }
         | rdocx::Error::Odt { .. }
         | rdocx::Error::InvalidEmbeddedMutation { .. }
+        | rdocx::Error::Story(_)
         | rdocx::Error::Other(_) => "RdocxError",
     };
     public_error(py, class_name, error.to_string())
@@ -166,6 +167,9 @@ mod tests {
                     operation: "replace",
                     message: "invalid embedded mutation".to_owned(),
                 },
+                rdocx::Error::Story(rdocx::StoryError::InvalidPath {
+                    path: vec![usize::MAX],
+                }),
             ] {
                 assert!(rdocx_to_pyerr(py, error).get_type(py).is(&expected));
             }
