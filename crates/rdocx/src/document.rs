@@ -4264,29 +4264,48 @@ fn close_content_fragment_namespaces(
 }
 
 fn reject_section_owning_content_fragment(fragment: &ContentFragment) -> Result<()> {
-    if fragment.kind != StoryItemKind::Paragraph {
-        return Ok(());
+    let xml = close_content_fragment_namespaces(&fragment.xml, &fragment.namespace_scope)?;
+    let mut reader = NsReader::from_reader(xml.as_slice());
+    reader.config_mut().trim_text(false);
+    let mut ancestors = Vec::<(bool, Vec<u8>)>::new();
+    let mut buffer = Vec::new();
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(rdocx_oxml::OxmlError::from)?;
+        let is_start = matches!(&event, Event::Start(_));
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                let is_word = word_element(&namespace);
+                let local_name = element.local_name().as_ref().to_vec();
+                if is_word
+                    && local_name == b"sectPr"
+                    && ancestors.last().is_some_and(|(parent_is_word, parent)| {
+                        *parent_is_word && parent.as_slice() == b"pPr"
+                    })
+                    && ancestors.iter().rev().nth(1).is_some_and(
+                        |(grandparent_is_word, grandparent)| {
+                            *grandparent_is_word && grandparent.as_slice() == b"p"
+                        },
+                    )
+                {
+                    return Err(Error::Other(
+                        "generic content operations cannot mutate a section-owning paragraph"
+                            .to_owned(),
+                    ));
+                }
+                if is_start {
+                    ancestors.push((is_word, local_name));
+                }
+            }
+            Event::End(_) => {
+                ancestors.pop();
+            }
+            Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
     }
-    let paragraph = close_content_fragment_namespaces(&fragment.xml, &fragment.namespace_scope)?;
-    let mut wrapped = format!(r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>"#).into_bytes();
-    wrapped.extend_from_slice(&paragraph);
-    wrapped.extend_from_slice(b"</w:body></w:document>");
-    let document = CT_Document::from_xml(&wrapped)?;
-    let [BodyContent::Paragraph(paragraph)] = document.body.content.as_slice() else {
-        return Err(Error::Other(
-            "paragraph content fragment did not reopen as one paragraph".to_owned(),
-        ));
-    };
-    if paragraph
-        .properties
-        .as_ref()
-        .is_some_and(|properties| properties.sect_pr.is_some())
-    {
-        return Err(Error::Other(
-            "generic content operations cannot mutate a section-owning paragraph".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 fn serialize_content_fragment(content: BodyContent) -> Result<Vec<u8>> {

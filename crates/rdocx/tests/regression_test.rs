@@ -22,6 +22,7 @@ use rdocx::{
     StoryKind, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection, TocField,
     TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
+use rdocx_oxml::content_control::SdtContent;
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
 use rdocx_oxml::namespace::W_NS;
 use rdocx_oxml::text::{CT_P, CT_R};
@@ -338,6 +339,80 @@ fn generic_content_operations_reject_section_owning_paragraphs_atomically() {
         "{xml}"
     );
     assert_eq!(ordinary.section_count(), 2);
+}
+
+#[test]
+fn generic_content_operations_reject_section_owning_block_controls_atomically() {
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:q="{W_NS}" xmlns:x="urn:producer"><w:body><w:sdt><w:sdtPr><w:tag w:val="section container"/></w:sdtPr><w:sdtContent><x:p><x:pPr><x:sectPr/></x:pPr></x:p><w:p><w:pPr><x:sectPr/></w:pPr><w:r><w:t>&lt;w:p&gt;&lt;w:pPr&gt;&lt;w:sectPr/&gt;&lt;/w:pPr&gt;&lt;/w:p&gt;</w:t></w:r></w:p><w:p><w:pPr><q:sectPr><x:keep x:token="exact"> retained </x:keep></q:sectPr></w:pPr><w:r><w:t>section boundary</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/></w:body></w:document>"#
+    );
+
+    for operation in ["remove", "clone", "move"] {
+        let mut document = document_with_content_controls(&source);
+        let body = f254_story(&document, StoryKind::Body);
+        let control = f254_item(&document, &body, 0);
+        let before = document.to_bytes().unwrap();
+        let result = match operation {
+            "remove" => document.remove_content_at(&control).map(|_| ()),
+            "clone" => document.clone_content(&control, &ContentLocation::end(body.clone())),
+            "move" => document.move_content(&control, &ContentLocation::end(body)),
+            _ => unreachable!(),
+        };
+        let error = result.expect_err(&format!(
+            "{operation} accepted a section-owning block control"
+        ));
+        assert!(
+            error.to_string().contains("section-owning paragraph"),
+            "{error}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before, "{operation}");
+    }
+
+    let mut section_control = f254_block_context_content_control("<w:p/>");
+    let mut section_paragraph = CT_P::new();
+    section_paragraph.properties = Some(rdocx_oxml::properties::CT_PPr {
+        sect_pr: Some(CT_SectPr::default_letter()),
+        ..Default::default()
+    });
+    section_paragraph.add_run("inserted boundary");
+    section_control.content = vec![SdtContent::Paragraph(section_paragraph)];
+    let section_fragment = ContentFragment::content_control(section_control).unwrap();
+    let mut insertion = Document::new();
+    insertion.add_paragraph("ordinary");
+    let body = f254_story(&insertion, StoryKind::Body);
+    let before = insertion.to_bytes().unwrap();
+    let error = insertion
+        .insert_content(&ContentLocation::end(body), section_fragment)
+        .expect_err("insert accepted a section-owning block control");
+    assert!(
+        error.to_string().contains("section-owning paragraph"),
+        "{error}"
+    );
+    assert_eq!(insertion.to_bytes().unwrap(), before);
+
+    let mut ordinary_control = f254_block_context_content_control("<w:p/>");
+    let mut ordinary_paragraph = CT_P::new();
+    ordinary_paragraph.add_run("<w:p><w:pPr><w:sectPr/></w:pPr></w:p>");
+    ordinary_control.content = vec![
+        SdtContent::RawXml(
+            br#"<x:p xmlns:x="urn:producer"><x:pPr><x:sectPr/></x:pPr></x:p>"#.to_vec(),
+        ),
+        SdtContent::Paragraph(ordinary_paragraph),
+    ];
+    let ordinary_fragment = ContentFragment::content_control(ordinary_control).unwrap();
+    let body = f254_story(&insertion, StoryKind::Body);
+    insertion
+        .insert_content(&ContentLocation::end(body), ordinary_fragment)
+        .unwrap();
+    let xml = document_xml(&mut insertion);
+    assert!(
+        xml.contains(r#"<x:p xmlns:x="urn:producer"><x:pPr><x:sectPr/></x:pPr></x:p>"#),
+        "{xml}"
+    );
+    assert!(
+        xml.contains("&lt;w:p&gt;&lt;w:pPr&gt;&lt;w:sectPr/&gt;&lt;/w:pPr&gt;&lt;/w:p&gt;"),
+        "{xml}"
+    );
 }
 
 #[test]
