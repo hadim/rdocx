@@ -419,6 +419,7 @@ defended.
 | F-250 | S72 | L | 4 | 1 | 2026-09-10 | Added ordered mutable section handles, atomic boundary edits, effective story inheritance, and safe orphan pruning |
 | F-251 | S72 | L | 4 | 1 | 2026-09-10 | Added checked section geometry, source-preserving section XML mutation, and restart-aware displayed page numbering |
 | F-254 | S72 | L | 4 | 1 | 2026-09-10 | Added transactional generic content insertion, removal, cloning, and same-owner movement with exact XML preservation |
+| F-255 | S72 | M | 2 | 1 | 2026-09-10 | Added story-scoped picture, hyperlink, lookup, and validation operations with part-local relationship ownership and deterministic global drawing allocation |
 
 ## Velocity
 

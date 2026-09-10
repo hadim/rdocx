@@ -12972,3 +12972,53 @@ all below 10 MiB.
 mutation. Keep story-owner transfer separate from OPC part-scoped relationship
 resolution. F-255 adds the latter, while F-256 owns complete cross-owner and
 cross-document dependency remapping.
+
+### F-255, Part-scoped assets, links, and relationships
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native Word facade now routes picture, hyperlink,
+relationship validation, image lookup, and hyperlink lookup operations through
+the concrete `StoryId` relationship owner. Body, cell, header, footer, note,
+comment, and text-box content resolve only through their own OPC part, while
+authored media and drawing identifiers remain deterministic.
+
+**Non-obvious choices.** Relationship occurrence provenance is reconciled
+against final serialized XML rather than retained as construction history.
+Zero-use provenance is retired, repeated relationship references remain valid,
+and each live picture occurrence receives a fresh package-global drawing
+identifier. Producer-shadowed namespaces and unmodelled XML remain verbatim,
+while newly authored fragments carry the standard namespace bindings they need.
+
+**Deviations from the design plan.** The approved public surface remained
+unchanged. Five microscope passes hardened typed note publication, producer
+namespace shadows, main-part nested-story provenance, simultaneous identifier
+cycles, removal, cloning, and semantic reorder behavior. Pass 5 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/09-charts-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `equal_related_content_resolves_only_through_its_story_owner`,
+`wrong_scope_relationships_are_rejected_atomically`, and
+`nested_story_assets_survive_enclosing_owner_insert_remove_clone_and_move`
+passed with the lifecycle, namespace, relationship, media, and
+drawing-identifier riders. The complete `rdocx` suite passed 450 library tests
+with 6 ignored, 222 integration tests with 4 ignored, 439 regression tests with
+4 ignored, and 2 doctests. The integrated `/verify --full` gate passed at
+`009e5c4d16a5517cd215d0dd97d7fc7bea569b8e`. All 22 package dry runs succeeded,
+and every archive remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep relationship identifiers part-local and
+drawing identifiers package-global. Re-resolve story and content locations
+after structural mutation. F-256 owns cross-owner and cross-document remapping
+and must carry complete owned relationship and media dependencies
+transactionally.

@@ -39,7 +39,7 @@ only complete validated candidates.
 | F-250 | Ordered mutable section facade | L | done | - |
 | F-251 | Complete section and page geometry | L | done | - |
 | F-254 | Generic insert, move, clone, and remove operations | L | done | - |
-| F-255 | Part-scoped assets, links, and relationships | M | in-progress | codex |
+| F-255 | Part-scoped assets, links, and relationships | M | done | - |
 | F-252 | Rich per-section headers and footers | L | pending | - |
 | F-256 | Transactional cross-document fragment import | L | pending | - |
 
