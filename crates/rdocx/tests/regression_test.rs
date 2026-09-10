@@ -22,7 +22,7 @@ use rdocx::{
     StoryKind, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection, TocField,
     TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
-use rdocx_oxml::document::{BodyContent, CT_Body};
+use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
 use rdocx_oxml::namespace::W_NS;
 use rdocx_oxml::text::{CT_P, CT_R};
 use rdocx_oxml::{CT_Document, CT_Sdt};
@@ -284,6 +284,60 @@ fn invalid_or_stale_content_operations_are_atomic() {
             .is_err()
     );
     assert_eq!(stale_source.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn generic_content_operations_reject_section_owning_paragraphs_atomically() {
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:q="{W_NS}" xmlns:x="urn:producer"><w:body><w:p><w:pPr><q:sectPr><x:keep x:token="exact"> retained </x:keep></q:sectPr></w:pPr><w:r><w:t>section boundary</w:t></w:r></w:p><w:p><w:r><w:t>ordinary</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#
+    );
+
+    for operation in ["remove", "clone", "move"] {
+        let mut document = document_with_content_controls(&source);
+        let body = f254_story(&document, StoryKind::Body);
+        let boundary = f254_item(&document, &body, 0);
+        let before = document.to_bytes().unwrap();
+        let result = match operation {
+            "remove" => document.remove_content_at(&boundary).map(|_| ()),
+            "clone" => document.clone_content(&boundary, &ContentLocation::end(body.clone())),
+            "move" => document.move_content(&boundary, &ContentLocation::end(body)),
+            _ => unreachable!(),
+        };
+        assert!(result.is_err(), "{operation} accepted a section boundary");
+        assert_eq!(document.to_bytes().unwrap(), before, "{operation}");
+    }
+
+    let mut section_paragraph = CT_P::new();
+    let properties = rdocx_oxml::properties::CT_PPr {
+        sect_pr: Some(CT_SectPr::default_letter()),
+        ..Default::default()
+    };
+    section_paragraph.properties = Some(properties);
+    section_paragraph.add_run("inserted boundary");
+    let section_fragment = ContentFragment::paragraph(section_paragraph).unwrap();
+    let mut insertion = Document::new();
+    insertion.add_paragraph("ordinary");
+    let body = f254_story(&insertion, StoryKind::Body);
+    let before = insertion.to_bytes().unwrap();
+    assert!(
+        insertion
+            .insert_content(&ContentLocation::end(body), section_fragment)
+            .is_err()
+    );
+    assert_eq!(insertion.to_bytes().unwrap(), before);
+
+    let mut ordinary = document_with_content_controls(&source);
+    let body = f254_story(&ordinary, StoryKind::Body);
+    let ordinary_paragraph = f254_item(&ordinary, &body, 1);
+    ordinary
+        .move_content(&ordinary_paragraph, &f254_item(&ordinary, &body, 0))
+        .unwrap();
+    let xml = document_xml(&mut ordinary);
+    assert!(
+        xml.contains(r#"<x:keep x:token="exact"> retained </x:keep>"#),
+        "{xml}"
+    );
+    assert_eq!(ordinary.section_count(), 2);
 }
 
 #[test]

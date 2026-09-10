@@ -4263,6 +4263,32 @@ fn close_content_fragment_namespaces(
     Ok(closed)
 }
 
+fn reject_section_owning_content_fragment(fragment: &ContentFragment) -> Result<()> {
+    if fragment.kind != StoryItemKind::Paragraph {
+        return Ok(());
+    }
+    let paragraph = close_content_fragment_namespaces(&fragment.xml, &fragment.namespace_scope)?;
+    let mut wrapped = format!(r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>"#).into_bytes();
+    wrapped.extend_from_slice(&paragraph);
+    wrapped.extend_from_slice(b"</w:body></w:document>");
+    let document = CT_Document::from_xml(&wrapped)?;
+    let [BodyContent::Paragraph(paragraph)] = document.body.content.as_slice() else {
+        return Err(Error::Other(
+            "paragraph content fragment did not reopen as one paragraph".to_owned(),
+        ));
+    };
+    if paragraph
+        .properties
+        .as_ref()
+        .is_some_and(|properties| properties.sect_pr.is_some())
+    {
+        return Err(Error::Other(
+            "generic content operations cannot mutate a section-owning paragraph".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn serialize_content_fragment(content: BodyContent) -> Result<Vec<u8>> {
     let mut document = CT_Document::new();
     document.body.content = vec![content];
@@ -10193,6 +10219,7 @@ impl Document {
         let part_name = source.part_name.clone();
         let source_xml = source.xml.into_owned();
         let (boundary, _, _) = validated_content_boundary(&source_xml, &owner, destination)?;
+        reject_section_owning_content_fragment(&fragment)?;
         let fragment_xml =
             content_fragment_for_insertion(&candidate, &destination.story, &fragment)?;
         let mut updated = source_xml;
@@ -10231,6 +10258,7 @@ impl Document {
             source_owner_index: Some(location.story.owner_index),
             namespace_scope: story_namespace_scope_at(&source_xml, item.full.start)?,
         };
+        reject_section_owning_content_fragment(&fragment)?;
         validate_fragment_relationships(&candidate, &location.story, &fragment)?;
         let mut updated = source_xml;
         updated.drain(item.full);
@@ -10260,6 +10288,7 @@ impl Document {
             source_owner_index: Some(source_location.story.owner_index),
             namespace_scope: story_namespace_scope_at(&source_xml, source_item.full.start)?,
         };
+        reject_section_owning_content_fragment(&fragment)?;
 
         let (destination_source, destination_owner) =
             candidate.story_source_and_owner(&destination.story)?;
@@ -10314,6 +10343,7 @@ impl Document {
             source_owner_index: Some(source_location.story.owner_index),
             namespace_scope: story_namespace_scope_at(&source_xml, source_item.full.start)?,
         };
+        reject_section_owning_content_fragment(&fragment)?;
         validate_fragment_relationships(&candidate, &destination.story, &fragment)?;
         if destination_index == source_index || destination_index == source_index + 1 {
             return Ok(());
