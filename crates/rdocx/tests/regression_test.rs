@@ -416,6 +416,64 @@ fn generic_content_operations_reject_section_owning_block_controls_atomically() 
 }
 
 #[test]
+fn generic_content_operations_preserve_word_lookalikes_below_opaque_roots() {
+    const OPAQUE: &str = r#"<x:raw x:token="exact"><w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>opaque section lookalike</w:t></w:r></w:p></x:raw>"#;
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body><w:p><w:r><w:t>before</w:t></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="opaque container"/></w:sdtPr><w:sdtContent>{OPAQUE}<w:p><w:r><w:t>modeled child</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>after</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#
+    );
+    let control_location = |document: &Document, body: &StoryId| {
+        document
+            .story_items(body)
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                item.kind() == StoryItemKind::ContentControl
+                    && item.location().index_path().len() == 1
+            })
+            .unwrap()
+            .location()
+            .clone()
+    };
+
+    let mut removed = document_with_content_controls(&source);
+    let body = f254_story(&removed, StoryKind::Body);
+    let fragment = removed
+        .remove_content_at(&control_location(&removed, &body))
+        .unwrap();
+    assert!(!document_xml(&mut removed).contains(OPAQUE));
+    let body = f254_story(&removed, StoryKind::Body);
+    removed
+        .insert_content(&ContentLocation::end(body), fragment)
+        .unwrap();
+    assert_eq!(document_xml(&mut removed).matches(OPAQUE).count(), 1);
+
+    let mut cloned = document_with_content_controls(&source);
+    let body = f254_story(&cloned, StoryKind::Body);
+    cloned
+        .clone_content(
+            &control_location(&cloned, &body),
+            &ContentLocation::end(body),
+        )
+        .unwrap();
+    assert_eq!(document_xml(&mut cloned).matches(OPAQUE).count(), 2);
+
+    let mut moved = document_with_content_controls(&source);
+    let body = f254_story(&moved, StoryKind::Body);
+    moved
+        .move_content(
+            &control_location(&moved, &body),
+            &ContentLocation::end(body),
+        )
+        .unwrap();
+    let xml = document_xml(&mut moved);
+    assert_eq!(xml.matches(OPAQUE).count(), 1, "{xml}");
+    assert!(
+        xml.find("after").unwrap() < xml.find(OPAQUE).unwrap(),
+        "{xml}"
+    );
+}
+
+#[test]
 fn content_insertion_supports_every_direct_boundary_and_precedes_section_properties() {
     let mut document = Document::new();
     let body = f254_story(&document, StoryKind::Body);
