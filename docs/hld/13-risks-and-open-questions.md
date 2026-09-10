@@ -105,7 +105,10 @@ blobs.
 deep-copying so the common path never needs it. The Word facade scans
 relationship definitions by owner and identifier definitions by expanded XML
 name before it allocates. Authored DrawingML is remapped only on staged typed
-state, while imported raw owners and their identifiers remain unchanged.
+state, while imported raw owners and their identifiers remain unchanged. Word
+content clones allocate fresh known document identities but retain relationship
+references only inside the unchanged story owner scope. Ambiguous preserved
+identity ranges and relationship ownership reject before publication.
 
 ### R7, scope
 
@@ -131,14 +134,18 @@ The bundled fonts are 6.8 MB outside `src/`, published today only because
 size against the 10 MiB crates.io limit in CI. Roughly 3.5 to 4 MB compressed is
 expected, but verify rather than assume.
 
-### R9, index-path aliasing in the Python bindings
+### R9, index-path aliasing in bindings and story locations
 
 An index path addresses a position, not an object, so a handle held across a
 structural mutation would silently read the wrong element.
 
 *Mitigation*: the revision counter making it a loud `StaleElementError`, lazy
 collections so the idiomatic loop never holds a stale handle, and stable ids in
-v0.2.
+v0.2. Native story locations also carry the owner fingerprint and item kind.
+Structural operations accept an existing boundary only from the canonical
+flattened item that resolves to an actual direct owner child. The separate
+`ContentLocation::end` marker represents the boundary after final content
+without aliasing an item path.
 
 ### R10, the `rpptx-oxml` scope surface
 
@@ -196,6 +203,12 @@ The Word facade's private document identifier owner reserves related part,
 relationship, content-type, and XML identities together. Final-order
 canonicalization runs on a staged clone, so a collision or exhausted range
 cannot publish half of a package invariant.
+
+Generic content insertion, removal, cloning, and movement use the same staged
+boundary. A clone freshens known document identities before insertion.
+Relationship-bearing content remains restricted to its unchanged story owner,
+and preserved identity ownership that cannot be proved rejects. Serialization
+and reopen complete before the candidate replaces live state.
 
 Ordered section removal uses that same staged boundary. Before removing a
 non-final owner, it resolves the first usable same-variant internal header and

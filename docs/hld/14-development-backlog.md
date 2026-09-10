@@ -2401,9 +2401,15 @@ document unchanged on every location or serialization failure.
 supported content shape in every story with identical error behavior.
 
 ### F-254, Generic insert, move, clone, and remove operations (L)
-Add transactional arbitrary-position insertion, movement, cloning, and removal
-for supported content through the container-neutral model. Invalid ranges,
-cross-owner moves, and stale locations fail without partial mutation.
+The native Word facade performs transactional insertion, removal, cloning, and
+same-owner movement of direct story content through owned `ContentFragment`
+values. Existing destinations use canonical actual-item locations that resolve
+to direct owner children. `ContentLocation::end` represents the boundary after
+final direct content, including empty and self-closing owners, and stays before
+body section properties. Clones allocate fresh document identities.
+Relationship-bearing fragments require the unchanged owner scope. Invalid,
+stale, cross-owner, ambiguous, or structurally incomplete operations leave the
+document unchanged.
 **Depends on**: F-253, F-249.
 **Test gate**: regression. Interleaved operations across body and cell content
 preserve exact order, references, and untouched raw XML.

@@ -1022,6 +1022,16 @@ content controls, revisions, and fields as typed content. Content rejected by
 that grammar remains one opaque preserved boundary and cannot expose nested
 owners or editable text.
 
+`ContentFragment` owns one paragraph, table, block content control, or removed
+preserved node. Insert, remove, clone, and move resolve canonical
+`StoryItemRef::location` values only when they name actual direct owner
+children of the matching kind. `ContentLocation::end` is the distinct boundary
+after final direct content. It works for empty and self-closing owners and
+remains before body section properties. Moves stay within one unchanged story
+owner. Clones allocate fresh document identities, while relationship-bearing
+fragments require the unchanged owner scope. Every operation serializes and
+reopens a staged candidate before publishing it.
+
 Ordered Word section ownership also belongs to the `rdocx` facade. Concrete
 `SectionRef` and `Section` handles borrow the existing paragraph-level or
 schema-final `CT_SectPr` owner and carry its document-order ordinal and final

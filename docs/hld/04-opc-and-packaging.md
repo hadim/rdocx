@@ -95,6 +95,19 @@ invalid paths, bounds failures, kind mismatches, non-text items, XML failures,
 and reopen failures leave the original document bytes and facade-owned package
 state unchanged.
 
+Generic story content mutation uses the same package boundary. Existing-item
+destinations are canonical flattened locations that must resolve to actual
+direct owner children. The explicit story-end destination remains before body
+section properties and expands a self-closing owner into a complete element.
+Removal returns one namespace-aware owned fragment. Same-owner moves retain
+its exact bytes, and clones rewrite document identities before insertion.
+Relationship references can move or clone only when their original owner scope
+is unchanged and complete. Content-control fragments validate the complete
+serialized block grammar by expanded name, including retained root slots and
+raw direct Word children. Foreign raw subtrees stay opaque. Invalid locations,
+relationships, identities, XML, and reopen results discard the staged
+candidate without changing the live document.
+
 Theme and font authoring retain the relationship-resolved targets already in a
 package. A missing theme or font table receives one collision-safe part,
 content-type override, and internal main-document relationship on the staged

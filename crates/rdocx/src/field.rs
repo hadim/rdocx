@@ -6186,6 +6186,7 @@ fn collect_merge_field_name(instruction: &str, names: &mut HashSet<String>) {
 #[derive(Default)]
 struct BodyIdentityValues {
     bookmark_ids: Vec<String>,
+    bookmark_events: Vec<(String, bool)>,
     content_control_ids: Vec<String>,
     drawing_ids: Vec<String>,
     non_visual_drawing_ids: Vec<String>,
@@ -6451,7 +6452,10 @@ fn collect_body_identity_values(
         if let Some((_, value)) =
             resolved_element_attribute(element, resolver, b"id", AttributeNamespace::Word)?
         {
-            values.bookmark_ids.push(value);
+            values.bookmark_ids.push(value.clone());
+            values
+                .bookmark_events
+                .push((value, local == b"bookmarkStart"));
         }
         if local == b"bookmarkStart"
             && let Some((_, value)) =
@@ -6765,6 +6769,67 @@ pub(crate) fn patch_bookmark_ids(
             ..Default::default()
         },
     )
+}
+
+pub(crate) fn freshen_content_fragment_identities(
+    document: &mut Document,
+    wrapped_fragment: &[u8],
+) -> Result<Vec<u8>> {
+    let values = body_identity_values(wrapped_fragment)?;
+    let mut open_bookmarks = Vec::new();
+    let mut seen_bookmarks = HashSet::new();
+    for (id, start) in &values.bookmark_events {
+        if *start {
+            if !seen_bookmarks.insert(id.clone()) {
+                return Err(Error::Other(
+                    "content fragment bookmark ownership is incomplete or ambiguous".to_owned(),
+                ));
+            }
+            open_bookmarks.push(id.as_str());
+        } else if open_bookmarks.pop() != Some(id.as_str()) {
+            return Err(Error::Other(
+                "content fragment bookmark ownership is incomplete or ambiguous".to_owned(),
+            ));
+        }
+    }
+    if !open_bookmarks.is_empty() {
+        return Err(Error::Other(
+            "content fragment bookmark ownership is incomplete or ambiguous".to_owned(),
+        ));
+    }
+    let mut state = BodyIdentityState::from_documents(std::slice::from_ref(document))?;
+    let mut remap = BodyIdentityRemap::default();
+    for value in values.bookmark_ids {
+        if let std::collections::btree_map::Entry::Vacant(entry) = remap.bookmark_ids.entry(value) {
+            entry.insert(document.identifiers.reserve_bookmark_id()?.to_string());
+        }
+    }
+    for value in values.content_control_ids {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            remap.content_control_ids.entry(value)
+        {
+            entry.insert(state.allocate_content_control_id()?);
+        }
+    }
+    for value in values.drawing_ids {
+        if let std::collections::btree_map::Entry::Vacant(entry) = remap.drawing_ids.entry(value) {
+            entry.insert(document.identifiers.reserve_drawing_id()?.to_string());
+        }
+    }
+    for value in values.non_visual_drawing_ids {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            remap.non_visual_drawing_ids.entry(value)
+        {
+            entry.insert(state.allocate_non_visual_drawing_id()?);
+        }
+    }
+    for value in values.bookmark_names {
+        if let std::collections::btree_map::Entry::Vacant(entry) = remap.bookmark_names.entry(value)
+        {
+            entry.insert(state.allocate_name()?);
+        }
+    }
+    patch_body_identity_attributes(wrapped_fragment, &remap)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -12819,6 +12884,23 @@ mod tests {
                     Err(Error::Other(message)) if message == expected
                 ),
                 "{xml:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn content_fragment_identity_preflight_rejects_ambiguous_bookmark_ownership() {
+        for fragment in [
+            r#"<x:raw><w:bookmarkStart w:id="4" w:name="one"/><w:bookmarkStart w:id="4" w:name="one"/><w:bookmarkEnd w:id="4"/></x:raw>"#,
+            r#"<x:raw><w:bookmarkStart w:id="4" w:name="one"/><w:bookmarkEnd w:id="4"/><w:bookmarkEnd w:id="4"/></x:raw>"#,
+            r#"<x:raw><w:bookmarkStart w:id="4" w:name="one"/><w:bookmarkStart w:id="4" w:name="two"/><w:bookmarkEnd w:id="4"/></x:raw>"#,
+        ] {
+            let wrapped = format!(
+                r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body>{fragment}</w:body></w:document>"#
+            );
+            assert!(
+                freshen_content_fragment_identities(&mut Document::new(), wrapped.as_bytes(),)
+                    .is_err()
             );
         }
     }

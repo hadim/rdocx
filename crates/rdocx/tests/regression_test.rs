@@ -13,19 +13,924 @@ use quick_xml::Reader as XmlReader;
 use quick_xml::events::Event as XmlEvent;
 use rdocx::{
     BarcodeField, BarcodeKind, BodyContentRef, BodyItemRef, BreakKind, CellItemRef, CellRef,
-    ChartData, ChartKind, CustomProperty, CustomPropertyValue, Document, EmbeddedContentKind,
-    EmbeddedMutationPolicy, EmbeddedSignatureState, FieldDateTime, FieldEvaluationContext,
-    FieldOutcome, HyperlinkItemRef, HyperlinkRef, Length, ListLevel, MailMergeControl,
-    MailMergeData, MailMergeFormattedText, MailMergeImage, MailMergeRecord, MailMergeValue,
-    ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions, RasterOutput, RenderOptions,
-    RevisionView, RunItemRef, RunPosition, RunRange, RunRef, StyleBuilder, StyleType, TableRef,
-    TcField, TocEntrySelection, TocField, TocRebuildReport, UnsupportedXmlRef, WordCreationProfile,
-    WordPackageClass,
+    ChartData, ChartKind, ContentFragment, ContentLocation, CustomProperty, CustomPropertyValue,
+    Document, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState, FieldDateTime,
+    FieldEvaluationContext, FieldOutcome, HyperlinkItemRef, HyperlinkRef, Length, ListLevel,
+    MailMergeControl, MailMergeData, MailMergeFormattedText, MailMergeImage, MailMergeRecord,
+    MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions, RasterOutput,
+    RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange, RunRef, StoryId, StoryItemKind,
+    StoryKind, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection, TocField,
+    TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
-use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
 use rdocx_oxml::namespace::W_NS;
-use rdocx_oxml::text::CT_R;
+use rdocx_oxml::text::{CT_P, CT_R};
+use rdocx_oxml::{CT_Document, CT_Sdt};
+
+fn f254_story(document: &Document, kind: StoryKind) -> StoryId {
+    document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == kind)
+        .unwrap()
+}
+
+fn f254_item(document: &Document, story: &StoryId, index: usize) -> ContentLocation {
+    document.story_items(story).unwrap()[index]
+        .location()
+        .clone()
+}
+
+fn f254_paragraph(text: &str) -> ContentFragment {
+    let mut paragraph = CT_P::new();
+    paragraph.add_run(text);
+    ContentFragment::paragraph(paragraph).unwrap()
+}
+
+fn f254_content_control(xml: &str) -> CT_Sdt {
+    let mut reader = XmlReader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer).unwrap() {
+            XmlEvent::Start(start) if start.local_name().as_ref() == b"sdt" => {
+                return CT_Sdt::from_xml(&mut reader, &start).unwrap();
+            }
+            XmlEvent::Eof => panic!("content-control fixture has no root"),
+            _ => buffer.clear(),
+        }
+    }
+}
+
+fn f254_block_context_content_control(content: &str) -> CT_Sdt {
+    let xml = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:sdt><w:sdtContent>{content}</w:sdtContent></w:sdt></w:body></w:document>"#
+    );
+    let document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+    let Some(BodyContent::ContentControl(control)) = document.body.content.into_iter().next()
+    else {
+        panic!("block-context content-control fixture stays typed");
+    };
+    control
+}
+
+#[test]
+fn interleaved_content_operations_preserve_order_references_and_raw_xml() {
+    let source = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p><w:bookmarkStart w:id="7" w:name="kept"/><w:r><w:t>alpha</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p><x:raw x:token="exact"> retained </x:raw><w:tbl><w:tr><w:tc><x:cell x:token="boundary"/><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>omega</w:t></w:r></w:p></w:body></w:document>"#;
+    let raw = r#"<x:raw x:token="exact"> retained </x:raw>"#;
+    let cell_raw = r#"<x:cell x:token="boundary"/>"#;
+    let mut document = document_with_content_controls(source);
+
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&f254_item(&document, &body, 1), f254_paragraph("inserted"))
+        .unwrap();
+
+    let body = f254_story(&document, StoryKind::Body);
+    let omega = f254_item(&document, &body, 4);
+    document
+        .move_content(&omega, &f254_item(&document, &body, 0))
+        .unwrap();
+
+    let body = f254_story(&document, StoryKind::Body);
+    let alpha = f254_item(&document, &body, 1);
+    document
+        .clone_content(&alpha, &ContentLocation::end(body.clone()))
+        .unwrap();
+
+    let body = f254_story(&document, StoryKind::Body);
+    let preserved = f254_item(&document, &body, 3);
+    let fragment = document.remove_content_at(&preserved).unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&f254_item(&document, &body, 2), fragment)
+        .unwrap();
+
+    let xml = document_xml(&mut document);
+    let positions = [
+        xml.find("omega").unwrap(),
+        xml.find("alpha").unwrap(),
+        xml.find(raw).unwrap(),
+        xml.find("inserted").unwrap(),
+        xml.find("w:tbl").unwrap(),
+        xml.rfind("alpha").unwrap(),
+    ];
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{xml}");
+    assert_eq!(xml.matches(raw).count(), 1, "{xml}");
+    assert_eq!(xml.matches(cell_raw).count(), 1, "{xml}");
+    assert!(xml.contains(r#"w:id="7" w:name="kept""#), "{xml}");
+    let bookmarks = document.bookmarks();
+    assert_eq!(bookmarks.len(), 2, "{bookmarks:?}");
+    assert_ne!(bookmarks[0].id(), bookmarks[1].id());
+    assert_ne!(bookmarks[0].name(), bookmarks[1].name());
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        f254_story(&reopened, StoryKind::TableCell).kind(),
+        StoryKind::TableCell
+    );
+}
+
+#[test]
+fn same_owner_move_adjusts_destination_after_removal() {
+    let mut document = Document::new();
+    for value in ["A", "B", "C", "D"] {
+        document.add_paragraph(value);
+    }
+
+    let body = f254_story(&document, StoryKind::Body);
+    let source = f254_item(&document, &body, 1);
+    document
+        .move_content(&source, &ContentLocation::end(body.clone()))
+        .unwrap();
+    assert_eq!(
+        document
+            .paragraphs()
+            .into_iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        ["A", "C", "D", "B"]
+    );
+
+    let body = f254_story(&document, StoryKind::Body);
+    let source = f254_item(&document, &body, 2);
+    document
+        .move_content(&source, &f254_item(&document, &body, 0))
+        .unwrap();
+    assert_eq!(
+        document
+            .paragraphs()
+            .into_iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        ["D", "A", "C", "B"]
+    );
+
+    let body = f254_story(&document, StoryKind::Body);
+    let source = f254_item(&document, &body, 0);
+    let before = document.to_bytes().unwrap();
+    document
+        .move_content(&source, &f254_item(&document, &body, 0))
+        .unwrap();
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let body = f254_story(&document, StoryKind::Body);
+    let source = f254_item(&document, &body, 1);
+    let before = document.to_bytes().unwrap();
+    document
+        .move_content(&source, &f254_item(&document, &body, 2))
+        .unwrap();
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let body = f254_story(&document, StoryKind::Body);
+    let source = f254_item(&document, &body, 0);
+    document
+        .move_content(&source, &ContentLocation::end(body.clone()))
+        .unwrap();
+    assert_eq!(
+        document
+            .paragraphs()
+            .into_iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        ["A", "C", "B", "D"]
+    );
+
+    let body = f254_story(&document, StoryKind::Body);
+    let source = f254_item(&document, &body, 3);
+    document
+        .move_content(&source, &f254_item(&document, &body, 0))
+        .unwrap();
+    assert_eq!(
+        document
+            .paragraphs()
+            .into_iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        ["D", "A", "C", "B"]
+    );
+}
+
+#[test]
+fn invalid_or_stale_content_operations_are_atomic() {
+    let source = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>body</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>only cell paragraph</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    let mut document = document_with_content_controls(source);
+    let body = f254_story(&document, StoryKind::Body);
+    let cell = f254_story(&document, StoryKind::TableCell);
+    let body_paragraph = f254_item(&document, &body, 0);
+    let field = f254_item(&document, &body, 1);
+    let cell_paragraph = f254_item(&document, &cell, 0);
+
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_content_at(&field).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .remove_content_at(&ContentLocation::new(
+                body.clone(),
+                StoryItemKind::Table,
+                vec![0],
+            ))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .insert_content(
+                &ContentLocation::new(body.clone(), StoryItemKind::Paragraph, vec![usize::MAX],),
+                f254_paragraph("never inserted"),
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .move_content(&body_paragraph, &f254_item(&document, &cell, 0),)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_content_at(&cell_paragraph).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document.set_story_text(&body_paragraph, "changed").unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .insert_content(&body_paragraph, f254_paragraph("stale"),)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let mut stale_source = Document::new();
+    stale_source.add_paragraph("source");
+    stale_source.add_paragraph("mutated");
+    let old_story = f254_story(&stale_source, StoryKind::Body);
+    let old_source = f254_item(&stale_source, &old_story, 0);
+    let changed = f254_item(&stale_source, &old_story, 1);
+    stale_source.set_story_text(&changed, "changed").unwrap();
+    let fresh_story = f254_story(&stale_source, StoryKind::Body);
+    let before = stale_source.to_bytes().unwrap();
+    assert!(
+        stale_source
+            .clone_content(&old_source, &ContentLocation::end(fresh_story),)
+            .is_err()
+    );
+    assert_eq!(stale_source.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn content_insertion_supports_every_direct_boundary_and_precedes_section_properties() {
+    let mut document = Document::new();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&ContentLocation::end(body), f254_paragraph("seed"))
+        .unwrap();
+
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&f254_item(&document, &body, 0), f254_paragraph("before"))
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&f254_item(&document, &body, 1), f254_paragraph("between"))
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&ContentLocation::end(body), f254_paragraph("end"))
+        .unwrap();
+    assert_eq!(
+        document
+            .paragraphs()
+            .into_iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        ["before", "between", "seed", "end"]
+    );
+
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>existing</w:t></w:r></w:p><q:sectPr xmlns:q="{W_NS}"><q:pgSz q:w="12240" q:h="15840"/></q:sectPr></w:body></w:document>"#
+    );
+    let mut sectioned = document_with_content_controls(&source);
+    let body = f254_story(&sectioned, StoryKind::Body);
+    assert_eq!(sectioned.story_items(&body).unwrap().len(), 2);
+    sectioned
+        .insert_content(
+            &ContentLocation::end(body),
+            f254_paragraph("before section"),
+        )
+        .unwrap();
+    let xml = document_xml(&mut sectioned);
+    assert!(
+        xml.find("before section").unwrap() < xml.find(":sectPr").unwrap(),
+        "{xml}"
+    );
+}
+
+#[test]
+fn package_backed_footnote_content_operation_survives_dirty_staging() {
+    let mut document = Document::new();
+    document.add_footnote("first");
+    let footnote = f254_story(&document, StoryKind::Footnote);
+    document
+        .insert_content(&ContentLocation::end(footnote), f254_paragraph("second"))
+        .unwrap();
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.footnotes()[0].1, "first\nsecond");
+}
+
+#[test]
+fn table_cell_raw_boundaries_preserve_duplicate_subtrees() {
+    let source = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:tbl><w:tr><w:tc><x:first x:id="1"/><w:p><w:r><w:t>A</w:t></w:r></w:p><x:dup x:id="same"/><x:dup x:id="same"/><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    let first = r#"<x:first x:id="1"/>"#;
+    let duplicate = r#"<x:dup x:id="same"/>"#;
+    let mut document = document_with_content_controls(source);
+    let cell = f254_story(&document, StoryKind::TableCell);
+    let fragment = document
+        .remove_content_at(&f254_item(&document, &cell, 0))
+        .unwrap();
+    let cell = f254_story(&document, StoryKind::TableCell);
+    document
+        .insert_content(&ContentLocation::end(cell), fragment)
+        .unwrap();
+
+    let cell = f254_story(&document, StoryKind::TableCell);
+    let duplicate_fragment = document
+        .remove_content_at(&f254_item(&document, &cell, 1))
+        .unwrap();
+    let cell = f254_story(&document, StoryKind::TableCell);
+    document
+        .insert_content(&f254_item(&document, &cell, 2), duplicate_fragment)
+        .unwrap();
+
+    let xml = document_xml(&mut document);
+    assert_eq!(xml.matches(first).count(), 1, "{xml}");
+    assert_eq!(xml.matches(duplicate).count(), 2, "{xml}");
+    let order = ["A", duplicate, "B", first].map(|needle| xml.find(needle).unwrap());
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{xml}");
+}
+
+#[test]
+fn cloned_preserved_content_gets_fresh_in_scope_identity_sets() {
+    let raw = r#"<x:raw><w:bookmarkStart w:id="7" w:name="scope"/><w:bookmarkStart w:id="8" w:name="inner"/><w:sdtPr><w:id w:val="9"/></w:sdtPr><wp:docPr id="11"/><pic:cNvPr id="13"/><w:bookmarkEnd w:id="8"/><w:bookmarkEnd w:id="7"/></x:raw>"#;
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>{raw}<w:p><w:r><w:t>end</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&source);
+    let body = f254_story(&document, StoryKind::Body);
+    let item = f254_item(&document, &body, 0);
+    document
+        .clone_content(&item, &ContentLocation::end(body))
+        .unwrap();
+
+    let xml = document_xml(&mut document);
+    assert_eq!(xml.matches("bookmarkStart").count(), 4, "{xml}");
+    assert_eq!(xml.matches("bookmarkEnd").count(), 4, "{xml}");
+    assert_eq!(xml.matches(r#"w:id="7""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"w:id="8""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"w:name="scope""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"w:name="inner""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"w:val="9""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"id="11""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"id="13""#).count(), 1, "{xml}");
+}
+
+#[test]
+fn relationship_scopes_and_unprovable_identity_ownership_fail_closed() {
+    let mut same_owner = Document::new();
+    let relationship = same_owner.add_hyperlink_relationship("https://example.com/same-owner");
+    same_owner
+        .add_paragraph("")
+        .add_hyperlink("linked", &relationship);
+    same_owner.add_paragraph("end");
+    let body = f254_story(&same_owner, StoryKind::Body);
+    let source = f254_item(&same_owner, &body, 0);
+    same_owner
+        .clone_content(&source, &ContentLocation::end(body))
+        .unwrap();
+    let xml = document_xml(&mut same_owner);
+    assert_eq!(
+        xml.matches(&format!(r#"r:id="{relationship}""#)).count(),
+        2,
+        "{xml}"
+    );
+
+    let mut cross_owner = Document::new();
+    let relationship = cross_owner.add_hyperlink_relationship("https://example.com/cross-owner");
+    cross_owner
+        .add_paragraph("")
+        .add_hyperlink("linked", &relationship);
+    cross_owner.add_table(1, 1);
+    let body = f254_story(&cross_owner, StoryKind::Body);
+    let cell = f254_story(&cross_owner, StoryKind::TableCell);
+    let source = f254_item(&cross_owner, &body, 0);
+    let before = cross_owner.to_bytes().unwrap();
+    assert!(
+        cross_owner
+            .clone_content(&source, &f254_item(&cross_owner, &cell, 0))
+            .is_err()
+    );
+    assert_eq!(cross_owner.to_bytes().unwrap(), before);
+
+    let dangling = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:producer"><w:body><x:raw r:id="missing"/><w:p/></w:body></w:document>"#
+    );
+    let mut dangling = document_with_content_controls(&dangling);
+    let body = f254_story(&dangling, StoryKind::Body);
+    let source = f254_item(&dangling, &body, 0);
+    let before = dangling.to_bytes().unwrap();
+    assert!(
+        dangling
+            .move_content(&source, &f254_item(&dangling, &body, 0))
+            .is_err()
+    );
+    assert_eq!(dangling.to_bytes().unwrap(), before);
+
+    for raw in [
+        r#"<w:bookmarkStart w:id="4" w:name="open"/>"#,
+        r#"<w:bookmarkEnd w:id="4"/>"#,
+    ] {
+        let unprovable = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body><x:raw>{raw}</x:raw><w:p/></w:body></w:document>"#
+        );
+        let mut unprovable = document_with_content_controls(&unprovable);
+        let body = f254_story(&unprovable, StoryKind::Body);
+        let source = f254_item(&unprovable, &body, 0);
+        let before = unprovable.to_bytes().unwrap();
+        assert!(
+            unprovable
+                .clone_content(&source, &ContentLocation::end(body))
+                .is_err()
+        );
+        assert_eq!(unprovable.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn cross_owner_namespace_dependent_fragment_is_closed_before_insertion() {
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body><x:raw x:token="kept">value</x:raw><w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&source);
+    let body = f254_story(&document, StoryKind::Body);
+    let fragment = document
+        .remove_content_at(&f254_item(&document, &body, 0))
+        .unwrap();
+    let cell = f254_story(&document, StoryKind::TableCell);
+    document
+        .insert_content(&f254_item(&document, &cell, 0), fragment)
+        .unwrap();
+    let xml = document_xml(&mut document);
+    assert!(xml.contains(r#"<x:raw"#), "{xml}");
+    assert!(xml.contains(r#"xmlns:x="urn:producer""#), "{xml}");
+    assert!(xml.contains(r#"x:token="kept""#), "{xml}");
+    assert!(xml.contains(">value</x:raw>"), "{xml}");
+    Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+}
+
+#[test]
+fn actual_flattened_locations_resolve_only_their_direct_destination_child() {
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>first</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t>later</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&source);
+    let body = f254_story(&document, StoryKind::Body);
+    let items = document.story_items(&body).unwrap();
+    assert_eq!(items.len(), 3);
+    let later = items[2].location().clone();
+    drop(items);
+
+    document
+        .insert_content(&later, f254_paragraph("inserted"))
+        .unwrap();
+    assert_eq!(
+        document
+            .paragraphs()
+            .into_iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        ["first", "inserted", "later"]
+    );
+
+    let body = f254_story(&document, StoryKind::Body);
+    let nested = document.story_items(&body).unwrap()[1].location().clone();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .insert_content(&nested, f254_paragraph("nested"))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&ContentLocation::end(body), f254_paragraph("end"))
+        .unwrap();
+    assert_eq!(document.paragraphs().last().unwrap().text(), "end");
+}
+
+#[test]
+fn canonical_locations_never_fall_back_to_direct_child_indexes() {
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t>later</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&source);
+    let body = f254_story(&document, StoryKind::Body);
+    assert_eq!(
+        document
+            .story_items(&body)
+            .unwrap()
+            .iter()
+            .map(|item| item.kind())
+            .collect::<Vec<_>>(),
+        [
+            StoryItemKind::Paragraph,
+            StoryItemKind::Field,
+            StoryItemKind::Paragraph,
+        ]
+    );
+    let fabricated = ContentLocation::new(body, StoryItemKind::Paragraph, vec![1]);
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .insert_content(&fabricated, f254_paragraph("rejected"))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn same_kind_nested_location_cannot_select_a_direct_content_control() {
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:sdt><w:sdtContent><w:r/></w:sdtContent></w:sdt></w:p><w:sdt><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&source);
+    let body = f254_story(&document, StoryKind::Body);
+    assert_eq!(
+        document
+            .story_items(&body)
+            .unwrap()
+            .iter()
+            .map(|item| item.kind())
+            .collect::<Vec<_>>(),
+        [
+            StoryItemKind::Paragraph,
+            StoryItemKind::ContentControl,
+            StoryItemKind::ContentControl,
+        ]
+    );
+    let nested = ContentLocation::new(body, StoryItemKind::ContentControl, vec![1]);
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .insert_content(&nested, f254_paragraph("rejected"))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn content_control_fragment_constructor_requires_block_content() {
+    for content in [
+        "<w:p/>",
+        "<w:tbl/>",
+        "<w:sdt><w:sdtContent><w:p/></w:sdtContent></w:sdt>",
+    ] {
+        let xml =
+            format!(r#"<w:sdt xmlns:w="{W_NS}"><w:sdtContent>{content}</w:sdtContent></w:sdt>"#);
+        assert_eq!(
+            ContentFragment::content_control(f254_content_control(&xml))
+                .unwrap()
+                .kind(),
+            StoryItemKind::ContentControl
+        );
+    }
+
+    for content in [
+        "<w:tr/>",
+        "<w:tc/>",
+        "<w:r/>",
+        "<w:sdt><w:sdtContent><w:r/></w:sdtContent></w:sdt>",
+    ] {
+        let xml =
+            format!(r#"<w:sdt xmlns:w="{W_NS}"><w:sdtContent>{content}</w:sdtContent></w:sdt>"#);
+        assert!(ContentFragment::content_control(f254_content_control(&xml)).is_err());
+    }
+}
+
+#[test]
+fn content_control_fragment_rejects_preserved_duplicate_content_container() {
+    let xml = format!(
+        r#"<q:sdt xmlns:q="{W_NS}"><q:sdtContent><q:p/></q:sdtContent><q:sdtContent><q:r/></q:sdtContent></q:sdt>"#
+    );
+    let control = f254_content_control(&xml);
+    assert!(ContentFragment::content_control(control).is_err());
+}
+
+#[test]
+fn content_control_fragment_rejects_block_context_raw_known_children() {
+    for content in ["<w:tr/>", "<w:tc/>", "<w:r/>"] {
+        let control = f254_block_context_content_control(content);
+        assert!(ContentFragment::content_control(control).is_err());
+    }
+}
+
+#[test]
+fn content_control_fragment_accepts_aliases_and_foreign_raw_content() {
+    let aliased = format!(r#"<q:sdt xmlns:q="{W_NS}"><q:sdtContent><q:p/></q:sdtContent></q:sdt>"#);
+    assert!(ContentFragment::content_control(f254_content_control(&aliased)).is_ok());
+
+    for content in [
+        r#"<x:r xmlns:x="urn:producer"/>"#,
+        r#"<w:r xmlns:w="urn:producer"/>"#,
+        r#"<x:raw xmlns:x="urn:producer">&producer;</x:raw>"#,
+    ] {
+        let control = f254_block_context_content_control(content);
+        assert!(ContentFragment::content_control(control).is_ok());
+    }
+}
+
+#[test]
+fn content_control_fragment_rejects_direct_non_whitespace_references() {
+    for reference in [
+        "&#65;", "&#x41;", "&amp;", "&lt;", "&gt;", "&apos;", "&quot;",
+    ] {
+        for xml in [
+            format!(
+                r#"<w:sdt xmlns:w="{W_NS}">{reference}<w:sdtContent><w:p/></w:sdtContent></w:sdt>"#
+            ),
+            format!(
+                r#"<w:sdt xmlns:w="{W_NS}"><w:sdtContent>{reference}<w:p/></w:sdtContent></w:sdt>"#
+            ),
+        ] {
+            assert!(
+                ContentFragment::content_control(f254_content_control(&xml)).is_err(),
+                "accepted {reference} in {xml}"
+            );
+        }
+    }
+}
+
+#[test]
+fn content_control_fragment_accepts_direct_whitespace_references() {
+    for reference in [
+        "&#32;", "&#x20;", "&#9;", "&#x9;", "&#10;", "&#xA;", "&#13;", "&#xD;",
+    ] {
+        for xml in [
+            format!(
+                r#"<w:sdt xmlns:w="{W_NS}">{reference}<w:sdtContent><w:p/></w:sdtContent></w:sdt>"#
+            ),
+            format!(
+                r#"<w:sdt xmlns:w="{W_NS}"><w:sdtContent>{reference}<w:p/></w:sdtContent></w:sdt>"#
+            ),
+        ] {
+            assert!(
+                ContentFragment::content_control(f254_content_control(&xml)).is_ok(),
+                "rejected {reference} in {xml}"
+            );
+        }
+    }
+}
+
+#[test]
+fn content_control_fragment_rejects_literal_vertical_tab_and_form_feed() {
+    for whitespace in ['\u{B}', '\u{C}'] {
+        for xml in [
+            format!(
+                "<w:sdt xmlns:w=\"{W_NS}\">{whitespace}<w:sdtContent><w:p/></w:sdtContent></w:sdt>"
+            ),
+            format!(
+                "<w:sdt xmlns:w=\"{W_NS}\"><w:sdtContent><![CDATA[{whitespace}]]><w:p/></w:sdtContent></w:sdt>"
+            ),
+        ] {
+            let result = std::panic::catch_unwind(|| {
+                ContentFragment::content_control(f254_content_control(&xml))
+            });
+            assert!(
+                matches!(result, Ok(Err(_))),
+                "accepted or panicked for U+{:04X} in {xml}",
+                whitespace as u32
+            );
+        }
+    }
+}
+
+#[test]
+fn content_control_fragment_rejects_xml_forbidden_whitespace_references() {
+    for reference in ["&#11;", "&#xB;", "&#12;", "&#xC;"] {
+        for xml in [
+            format!(
+                r#"<w:sdt xmlns:w="{W_NS}">{reference}<w:sdtContent><w:p/></w:sdtContent></w:sdt>"#
+            ),
+            format!(
+                r#"<w:sdt xmlns:w="{W_NS}"><w:sdtContent>{reference}<w:p/></w:sdtContent></w:sdt>"#
+            ),
+        ] {
+            let result = std::panic::catch_unwind(|| {
+                ContentFragment::content_control(f254_content_control(&xml))
+            });
+            assert!(
+                matches!(result, Ok(Err(_))),
+                "accepted or panicked for {reference} in {xml}"
+            );
+        }
+    }
+}
+
+#[test]
+fn content_control_fragment_rejects_other_invalid_xml_character_references() {
+    for reference in [
+        "&#0;",
+        "&#x0;",
+        "&#55296;",
+        "&#xD800;",
+        "&#1114112;",
+        "&#x110000;",
+    ] {
+        for xml in [
+            format!(
+                r#"<w:sdt xmlns:w="{W_NS}">{reference}<w:sdtContent><w:p/></w:sdtContent></w:sdt>"#
+            ),
+            format!(
+                r#"<w:sdt xmlns:w="{W_NS}"><w:sdtContent>{reference}<w:p/></w:sdtContent></w:sdt>"#
+            ),
+        ] {
+            let result = std::panic::catch_unwind(|| {
+                ContentFragment::content_control(f254_content_control(&xml))
+            });
+            assert!(
+                matches!(result, Ok(Err(_))),
+                "accepted or panicked for {reference} in {xml}"
+            );
+        }
+    }
+}
+
+#[test]
+fn content_control_fragment_rejects_unresolved_direct_references_without_panicking() {
+    for xml in [
+        format!(r#"<w:sdt xmlns:w="{W_NS}">&producer;<w:sdtContent><w:p/></w:sdtContent></w:sdt>"#),
+        format!(r#"<w:sdt xmlns:w="{W_NS}"><w:sdtContent>&producer;<w:p/></w:sdtContent></w:sdt>"#),
+    ] {
+        let result = std::panic::catch_unwind(|| {
+            ContentFragment::content_control(f254_content_control(&xml))
+        });
+        assert!(
+            matches!(result, Ok(Err(_))),
+            "accepted or panicked for {xml}"
+        );
+    }
+}
+
+#[test]
+fn empty_self_closing_package_story_accepts_explicit_end() {
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(r#"<w:document xmlns:w="{W_NS}" xmlns:r="{R}"><w:body><w:sectPr><w:headerReference w:type="default" r:id="emptyHeader"/></w:sectPr></w:body></w:document>"#).into_bytes(),
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "emptyHeader",
+            oxml_opc::relationship::rel_types::HEADER,
+            "header-empty.xml",
+        );
+    package.set_part(
+        "/word/header-empty.xml",
+        format!(r#"<q:hdr xmlns:q="{W_NS}"/>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/header-empty.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let header = f254_story(&document, StoryKind::Header);
+    assert!(document.story_items(&header).unwrap().is_empty());
+
+    document
+        .insert_content(&ContentLocation::end(header), f254_paragraph("header"))
+        .unwrap();
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(saved.get_part("/word/header-empty.xml").unwrap()).unwrap();
+    assert!(xml.contains("<q:hdr"), "{xml}");
+    assert!(xml.contains("header"), "{xml}");
+    assert!(xml.contains("</q:hdr>"), "{xml}");
+}
+
+#[test]
+fn sole_table_cell_paragraph_can_move_within_its_owner() {
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body><w:tbl><w:tr><w:tc><x:raw/><w:p><w:r><w:t>only</w:t></w:r></w:p><w:tbl/></w:tc></w:tr></w:tbl></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&source);
+    let cell = f254_story(&document, StoryKind::TableCell);
+    let paragraph = f254_item(&document, &cell, 1);
+    document
+        .move_content(&paragraph, &f254_item(&document, &cell, 0))
+        .unwrap();
+    let xml = document_xml(&mut document);
+    let only = xml.find("only").unwrap();
+    assert!(only < xml.find("<x:raw").unwrap(), "{xml}");
+    assert!(only < xml.rfind("<w:tbl").unwrap(), "{xml}");
+}
+
+#[test]
+fn clone_identity_scan_respects_a_shadowed_foreign_word_prefix() {
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let raw = r#"<x:raw><w:bookmarkStart w:id="999999" w:name="foreign"/><w:bookmarkEnd w:id="999999"/></x:raw>"#;
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(r#"<w:document xmlns:w="{W_NS}" xmlns:r="{R}"><w:body><w:sectPr><w:headerReference w:type="default" r:id="shadowHeader"/></w:sectPr></w:body></w:document>"#).into_bytes(),
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "shadowHeader",
+            oxml_opc::relationship::rel_types::HEADER,
+            "header-shadow.xml",
+        );
+    package.set_part(
+        "/word/header-shadow.xml",
+        format!(r#"<q:hdr xmlns:q="{W_NS}" xmlns:w="urn:producer" xmlns:x="urn:producer">{raw}<q:p/></q:hdr>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/header-shadow.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let header = f254_story(&document, StoryKind::Header);
+    let item = f254_item(&document, &header, 0);
+    document
+        .clone_content(&item, &ContentLocation::end(header))
+        .unwrap();
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(saved.get_part("/word/header-shadow.xml").unwrap()).unwrap();
+    assert_eq!(xml.matches(raw).count(), 2, "{xml}");
+}
+
+#[test]
+fn clone_extracts_identity_rewrites_that_shrink_the_fragment() {
+    let raw = r#"<x:raw><w:bookmarkStart w:id="999999" w:name="producerBookmark"/><w:sdtPr><w:id w:val="888888"/></w:sdtPr><wp:docPr id="777777"/><pic:cNvPr id="666666"/><w:bookmarkEnd w:id="999999"/></x:raw>"#;
+    let source = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>{raw}<w:p/></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&source);
+    let body = f254_story(&document, StoryKind::Body);
+    let item = f254_item(&document, &body, 0);
+    document
+        .clone_content(&item, &ContentLocation::end(body))
+        .unwrap();
+    let xml = document_xml(&mut document);
+    assert_eq!(xml.matches(r#"w:id="999999""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"w:val="888888""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"id="777777""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"id="666666""#).count(), 1, "{xml}");
+}
+
+#[test]
+fn clone_rejects_reversed_and_crossing_bookmark_ranges_atomically() {
+    for raw in [
+        r#"<w:bookmarkEnd w:id="4"/><w:bookmarkStart w:id="4" w:name="reversed"/>"#,
+        r#"<w:bookmarkStart w:id="4" w:name="outer"/><w:bookmarkStart w:id="5" w:name="inner"/><w:bookmarkEnd w:id="4"/><w:bookmarkEnd w:id="5"/>"#,
+    ] {
+        let source = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body><x:raw>{raw}</x:raw><w:p/></w:body></w:document>"#
+        );
+        let mut document = document_with_content_controls(&source);
+        let body = f254_story(&document, StoryKind::Body);
+        let item = f254_item(&document, &body, 0);
+        let before = document.to_bytes().unwrap();
+        assert!(
+            document
+                .clone_content(&item, &ContentLocation::end(body))
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
 
 #[test]
 fn direct_controls_rejected_by_typed_parsing_stay_one_raw_story_item() {

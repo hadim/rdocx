@@ -1,6 +1,6 @@
 # F-254, Generic insert, move, clone, and remove operations
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-253, F-249
@@ -31,6 +31,13 @@ validated staged document. Moves require one owner and adjust the destination
 after source removal. Clones allocate fresh document identities and preserve
 relationship references only where the owner scope is unchanged. Unsupported
 or raw nodes remain movable and cloneable within one owner without parsing.
+For insertion before existing content, the destination is a canonical F-253
+location returned by `StoryItemRef::location`. It identifies that flattened
+item, which must be a genuine direct owner child of the matching kind. Nested
+projections are not insertion boundaries. `ContentLocation::end(story)` is the
+distinct boundary after final direct content, including for empty and
+self-closing owners. The body end boundary remains before the schema-final
+section properties.
 
 ## Rejected alternatives
 
@@ -75,11 +82,11 @@ identical after each successful or rejected operation.
 
 ## Implementation checklist
 
-- [ ] Add the owned supported content fragment value.
-- [ ] Resolve source and destination locations before staged mutation.
-- [ ] Implement insert, remove, clone, and same-owner move.
-- [ ] Reject stale, invalid, and cross-owner operations atomically.
-- [ ] Preserve raw nodes and remap fresh document identities for clones.
+- [x] Add the owned supported content fragment value.
+- [x] Resolve source and destination locations before staged mutation.
+- [x] Implement insert, remove, clone, and same-owner move.
+- [x] Reject stale, invalid, and cross-owner operations atomically.
+- [x] Preserve raw nodes and remap fresh document identities for clones.
 
 ## Open questions
 

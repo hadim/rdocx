@@ -330,6 +330,17 @@ location against a staged package and publishes only a serialized and reopened
 candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
 Python, WASM, and CLI gain no story traversal or mutation entry point.
 
+Native Rust also exposes the owned `ContentFragment` value and
+`ContentLocation::end`. Paragraph, table, and block content-control
+constructors create fixed-prefix fragments, while removal can return one exact
+preserved direct child. `Document::insert_content`, `remove_content_at`,
+`clone_content`, and `move_content` accept only canonical actual-item locations
+or the explicit end boundary. The end boundary is after final direct content
+and before body section properties. Moves stay within one story owner. Clones
+freshen document identities, and relationship-bearing fragments require their
+unchanged owner scope. These are additive pre-1.0 native Rust APIs. Python,
+WASM, and CLI gain no corresponding binding surface.
+
 Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
 Each handle reports its zero-based document ordinal, schema-final ownership,
 and configured geometry while retaining access to the complete section

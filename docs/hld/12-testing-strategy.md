@@ -1404,6 +1404,17 @@ fields, namespace-complete owned projections, borrowed subtree semantics,
 opaque preservation boundaries, separator-note filtering, lifecycle state,
 and mutation of empty text nodes.
 
+The generic content-mutation regression interleaves insert, remove, clone, and
+same-owner move operations across body and table-cell content. It asserts final
+direct-child order, fresh clone identities, valid relationship scope, exact
+unmodelled XML, save and reopen, and byte-identical rollback for invalid or
+stale inputs. Focused source-built cases distinguish canonical actual-item
+anchors from nested flattened projections and use `ContentLocation::end` for
+empty, self-closing, and body section-property boundaries. The content-control
+matrix covers expanded-name aliases, schema order, retained private slots,
+direct nested block controls, opaque foreign subtrees, and exact XML 1.0
+whitespace and character-reference handling without panics.
+
 The ordered section round-trip gate is
 `ordered_section_mutations_preserve_independent_story_references`. It creates
 four ordered owners, removes one boundary, and reopens three portrait,

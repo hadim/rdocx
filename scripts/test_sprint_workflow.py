@@ -8294,7 +8294,7 @@ Pedro Assumpcao and the rdocx maintainers.
         expected_owners = {
             f"F-{number:03d}"
             for number in range(244, 311)
-            if number not in {244, 245, 246, 247, 248, 249, 250, 251, 253}
+            if number not in {244, 245, 246, 247, 248, 249, 250, 251, 253, 254}
         }
         self.assertEqual(
             {row["Owner"] for row in rows if row["Owner"] != "-"},

@@ -51,9 +51,9 @@ pub use comparison::{
 };
 pub use content_control::ContentControlRef;
 pub use document::{
-    AccessibilityIssue, BodyContentRef, BodyItemRef, ContentLocation, Document, EmbeddedFont,
-    EmbeddedFontKind, FontDefinition, FontEmbeddingLicense, ImageInfo, IssueSeverity, LinkInfo,
-    ListLevel, ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
+    AccessibilityIssue, BodyContentRef, BodyItemRef, ContentFragment, ContentLocation, Document,
+    EmbeddedFont, EmbeddedFontKind, FontDefinition, FontEmbeddingLicense, ImageInfo, IssueSeverity,
+    LinkInfo, ListLevel, ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
     NumberingLevelOverride, OutlineNode, RenderOptions, Section, SectionRef, StoryError, StoryId,
     StoryItemKind, StoryItemRef, StoryKind, UnsupportedXmlRef, WordCreationProfile,

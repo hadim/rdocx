@@ -18,6 +18,7 @@ use oxml_opc::{OpcPackage, PackageReadLimits};
 use oxml_sml::Workbook;
 use quick_xml::Writer;
 use quick_xml::XmlVersion;
+use quick_xml::escape::resolve_xml_entity;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
@@ -315,6 +316,61 @@ pub struct ContentLocation {
     story: StoryId,
     item_kind: StoryItemKind,
     index_path: Vec<usize>,
+    is_end: bool,
+}
+
+/// Owned direct story content that can be inserted without a second document tree.
+#[derive(Debug, Clone)]
+pub struct ContentFragment {
+    kind: StoryItemKind,
+    xml: Vec<u8>,
+    source_part_name: Option<String>,
+    source_story_kind: Option<StoryKind>,
+    source_owner_index: Option<usize>,
+    namespace_scope: BTreeMap<String, String>,
+}
+
+impl ContentFragment {
+    /// Create a fixed-prefix paragraph fragment.
+    pub fn paragraph(paragraph: CT_P) -> Result<Self> {
+        Self::from_body_content(BodyContent::Paragraph(paragraph))
+    }
+
+    /// Create a fixed-prefix table fragment.
+    pub fn table(table: CT_Tbl) -> Result<Self> {
+        Self::from_body_content(BodyContent::Table(table))
+    }
+
+    /// Create a fixed-prefix block content-control fragment.
+    pub fn content_control(control: CT_Sdt) -> Result<Self> {
+        Self::from_body_content(BodyContent::ContentControl(control))
+    }
+
+    /// Return the direct story-item kind carried by this fragment.
+    pub fn kind(&self) -> StoryItemKind {
+        self.kind
+    }
+
+    fn from_body_content(content: BodyContent) -> Result<Self> {
+        let kind = match &content {
+            BodyContent::Paragraph(_) => StoryItemKind::Paragraph,
+            BodyContent::Table(_) => StoryItemKind::Table,
+            BodyContent::ContentControl(_) => StoryItemKind::ContentControl,
+            BodyContent::RawXml(_) => StoryItemKind::PreservedNode,
+        };
+        let xml = serialize_content_fragment(content)?;
+        if kind == StoryItemKind::ContentControl {
+            validate_serialized_block_content_control(&xml)?;
+        }
+        Ok(Self {
+            kind,
+            xml,
+            source_part_name: None,
+            source_story_kind: None,
+            source_owner_index: None,
+            namespace_scope: BTreeMap::new(),
+        })
+    }
 }
 
 impl ContentLocation {
@@ -323,6 +379,19 @@ impl ContentLocation {
             story,
             item_kind,
             index_path,
+            is_end: false,
+        }
+    }
+
+    /// Construct the insertion boundary after a story's final direct content.
+    ///
+    /// For the document body, this boundary remains before section properties.
+    pub fn end(story: StoryId) -> Self {
+        Self {
+            story,
+            item_kind: StoryItemKind::PreservedNode,
+            index_path: Vec::new(),
+            is_end: true,
         }
     }
 
@@ -3608,6 +3677,7 @@ struct StoryItemSpan {
     kind: StoryItemKind,
     full: Range<usize>,
     scan: Range<usize>,
+    direct_owner_child: bool,
     complex_field: bool,
     complex_ancestors: Vec<usize>,
     sdt_context: Option<StorySdtContext>,
@@ -3640,6 +3710,7 @@ struct XmlElementFrame {
     full_start: usize,
     owner_kind: Option<StoryKind>,
     item_kind: Option<StoryItemKind>,
+    direct_owner_child: bool,
     sdt_context: Option<StorySdtContext>,
     word_prefixes: Vec<String>,
     opaque: bool,
@@ -4004,6 +4075,696 @@ fn story_namespace_scope_at(xml: &[u8], offset: usize) -> Result<BTreeMap<String
         }
         buffer.clear();
     }
+}
+
+fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan) -> Result<bool> {
+    let mut scope = story_namespace_scope_at(xml, item.full.start)?;
+    let mut reader = quick_xml::Reader::from_reader(&xml[item.full.clone()]);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("content fragment scan failed: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                update_story_namespace_scope(&mut scope, &element)?;
+                let name = element.name();
+                let bytes = name.as_ref();
+                let (prefix, local) =
+                    if let Some(colon) = bytes.iter().position(|byte| *byte == b':') {
+                        (
+                            std::str::from_utf8(&bytes[..colon]).map_err(|error| {
+                                Error::Other(format!(
+                                    "content fragment namespace prefix is invalid: {error}"
+                                ))
+                            })?,
+                            &bytes[colon + 1..],
+                        )
+                    } else {
+                        ("", bytes)
+                    };
+                return Ok(local == b"sectPr"
+                    && scope
+                        .get(prefix)
+                        .is_some_and(|value| value == WORD_NAMESPACE));
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "content fragment has no root element".to_owned(),
+                ));
+            }
+            _ => buffer.clear(),
+        }
+    }
+}
+
+fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
+    let mut items = Vec::new();
+    for item in scan_story_items(xml, owner)? {
+        if !item.direct_owner_child {
+            continue;
+        }
+        if owner.kind == StoryKind::Body && content_fragment_root_is_section_properties(xml, &item)?
+        {
+            continue;
+        }
+        items.push(item);
+    }
+    Ok(items)
+}
+
+fn story_owner_content_end(xml: &[u8], owner: &StoryOwnerSpan) -> Result<usize> {
+    if owner.kind == StoryKind::Body {
+        for item in scan_story_items(xml, owner)? {
+            if item.direct_owner_child && content_fragment_root_is_section_properties(xml, &item)? {
+                return Ok(item.full.start);
+            }
+        }
+    }
+    let mut reader = quick_xml::Reader::from_reader(&xml[owner.full.clone()]);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story owner boundary scan failed: {error}")))?
+        {
+            Event::Start(_) => depth += 1,
+            Event::Empty(_) if depth == 0 => {
+                return (owner.full.end >= owner.full.start + 2)
+                    .then_some(owner.full.end - 2)
+                    .ok_or_else(|| Error::Other("empty story owner is incomplete".to_owned()));
+            }
+            Event::End(_) if depth == 1 => return Ok(owner.full.start + before),
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => {
+                return Err(Error::Other(
+                    "story owner has no closing boundary".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn close_content_fragment_namespaces(
+    xml: &[u8],
+    scope: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let (opening_end, empty, existing) = loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("content fragment scan failed: {error}")))?;
+        match event {
+            Event::Start(element) => {
+                let mut existing = HashSet::new();
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!("content fragment attribute scan failed: {error}"))
+                    })?;
+                    let name = attribute.key.as_ref();
+                    if name == b"xmlns" {
+                        existing.insert(String::new());
+                    } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+                        existing.insert(
+                            std::str::from_utf8(prefix)
+                                .map_err(|error| {
+                                    Error::Other(format!(
+                                        "content fragment namespace prefix is invalid: {error}"
+                                    ))
+                                })?
+                                .to_owned(),
+                        );
+                    }
+                }
+                break (reader.buffer_position() as usize, false, existing);
+            }
+            Event::Empty(element) => {
+                let mut existing = HashSet::new();
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!("content fragment attribute scan failed: {error}"))
+                    })?;
+                    let name = attribute.key.as_ref();
+                    if name == b"xmlns" {
+                        existing.insert(String::new());
+                    } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+                        existing.insert(
+                            std::str::from_utf8(prefix)
+                                .map_err(|error| {
+                                    Error::Other(format!(
+                                        "content fragment namespace prefix is invalid: {error}"
+                                    ))
+                                })?
+                                .to_owned(),
+                        );
+                    }
+                }
+                break (reader.buffer_position() as usize, true, existing);
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "content fragment has no root element".to_owned(),
+                ));
+            }
+            _ => buffer.clear(),
+        }
+    };
+    let mut declarations = Vec::new();
+    for (prefix, namespace) in scope {
+        if prefix == "xml" || existing.contains(prefix) {
+            continue;
+        }
+        declarations.extend_from_slice(b" xmlns");
+        if !prefix.is_empty() {
+            declarations.push(b':');
+            declarations.extend_from_slice(prefix.as_bytes());
+        }
+        declarations.extend_from_slice(b"=\"");
+        declarations.extend_from_slice(quick_xml::escape::escape(namespace).as_bytes());
+        declarations.push(b'"');
+    }
+    if declarations.is_empty() {
+        return Ok(xml.to_vec());
+    }
+    let insertion = opening_end
+        .checked_sub(if empty { 2 } else { 1 })
+        .ok_or_else(|| Error::Other("content fragment opening tag is incomplete".to_owned()))?;
+    let mut closed = Vec::with_capacity(xml.len() + declarations.len());
+    closed.extend_from_slice(&xml[..insertion]);
+    closed.extend_from_slice(&declarations);
+    closed.extend_from_slice(&xml[insertion..]);
+    Ok(closed)
+}
+
+fn serialize_content_fragment(content: BodyContent) -> Result<Vec<u8>> {
+    let mut document = CT_Document::new();
+    document.body.content = vec![content];
+    document.body.sect_pr = None;
+    let xml = document.to_xml()?;
+    let owner = scan_story_owners(&xml, StoryKind::Body)?
+        .into_iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("serialized content fragment has no body owner".to_owned()))?;
+    let items = direct_story_content_items(&xml, &owner)?;
+    let [item] = items.as_slice() else {
+        return Err(Error::Other(
+            "serialized content fragment must contain exactly one direct item".to_owned(),
+        ));
+    };
+    let scope = story_namespace_scope_at(&xml, item.full.start)?;
+    close_content_fragment_namespaces(&xml[item.full.clone()], &scope)
+}
+
+const BLOCK_SDT_PROPERTIES_SLOT: u8 = 1;
+const BLOCK_SDT_END_PROPERTIES_SLOT: u8 = 2;
+const BLOCK_SDT_CONTENT_SLOT: u8 = 4;
+
+fn validate_serialized_block_content_control(xml: &[u8]) -> Result<()> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut root_seen = false;
+    let mut controls: Vec<(usize, Option<usize>, u8, u8)> = Vec::new();
+
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(rdocx_oxml::OxmlError::from)?;
+        match event {
+            Event::Start(element) => {
+                validate_block_control_element(
+                    &namespace,
+                    &element,
+                    depth,
+                    false,
+                    &mut root_seen,
+                    &mut controls,
+                )?;
+                depth += 1;
+            }
+            Event::Empty(element) => validate_block_control_element(
+                &namespace,
+                &element,
+                depth,
+                true,
+                &mut root_seen,
+                &mut controls,
+            )?,
+            Event::End(element) => {
+                if depth == 0 {
+                    return Err(Error::Other(
+                        "block content control has an unmatched end element".to_owned(),
+                    ));
+                }
+                if controls.last().is_some_and(|control| {
+                    control.0 == depth
+                        && word_element(&namespace)
+                        && matches_local_name(element.name().as_ref(), b"sdt")
+                }) {
+                    controls.pop();
+                }
+                depth -= 1;
+            }
+            Event::Text(text) => {
+                let bytes: &[u8] = text.as_ref();
+                if block_control_text_is_direct(depth, &controls)
+                    && !block_control_bytes_are_xml_whitespace(bytes)?
+                {
+                    return Err(Error::Other(
+                        "block content control has direct non-whitespace text".to_owned(),
+                    ));
+                }
+            }
+            Event::CData(text) => {
+                let bytes: &[u8] = text.as_ref();
+                if block_control_text_is_direct(depth, &controls)
+                    && !block_control_bytes_are_xml_whitespace(bytes)?
+                {
+                    return Err(Error::Other(
+                        "block content control has direct non-whitespace CDATA".to_owned(),
+                    ));
+                }
+            }
+            Event::GeneralRef(reference) if block_control_text_is_direct(depth, &controls) => {
+                if !block_control_reference_is_whitespace(&reference)? {
+                    return Err(Error::Other(
+                        "block content control has a direct non-whitespace reference".to_owned(),
+                    ));
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    if !root_seen || depth != 0 || !controls.is_empty() {
+        return Err(Error::Other(
+            "block content control is structurally incomplete".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn block_control_reference_is_whitespace(
+    reference: &quick_xml::events::BytesRef<'_>,
+) -> Result<bool> {
+    if let Some(character) = reference.resolve_char_ref().map_err(|error| {
+        Error::Other(format!(
+            "block content control has an invalid character reference: {error}"
+        ))
+    })? {
+        if !xml_1_0_character_is_valid(character) {
+            return Err(Error::Other(
+                "block content control has an XML 1.0-forbidden character reference".to_owned(),
+            ));
+        }
+        return Ok(xml_1_0_whitespace(character));
+    }
+    let name = reference.decode().map_err(|error| {
+        Error::Other(format!(
+            "block content control has an invalid entity reference: {error}"
+        ))
+    })?;
+    let value = resolve_xml_entity(&name).ok_or_else(|| {
+        Error::Other(format!(
+            "block content control has an unresolved entity reference: &{name};"
+        ))
+    })?;
+    if !value.chars().all(xml_1_0_character_is_valid) {
+        return Err(Error::Other(format!(
+            "block content control entity reference contains an XML 1.0-forbidden character: &{name};"
+        )));
+    }
+    Ok(value.chars().all(xml_1_0_whitespace))
+}
+
+fn block_control_bytes_are_xml_whitespace(bytes: &[u8]) -> Result<bool> {
+    let text = std::str::from_utf8(bytes).map_err(|error| {
+        Error::Other(format!(
+            "block content control has invalid UTF-8 text: {error}"
+        ))
+    })?;
+    Ok(text.chars().all(xml_1_0_whitespace))
+}
+
+fn xml_1_0_whitespace(character: char) -> bool {
+    matches!(character, '\u{20}' | '\u{9}' | '\u{A}' | '\u{D}')
+}
+
+fn xml_1_0_character_is_valid(character: char) -> bool {
+    matches!(character, '\t' | '\n' | '\r')
+        || ('\u{20}'..='\u{D7FF}').contains(&character)
+        || ('\u{E000}'..='\u{FFFD}').contains(&character)
+        || ('\u{10000}'..='\u{10FFFF}').contains(&character)
+}
+
+fn validate_block_control_element(
+    namespace: &ResolveResult<'_>,
+    element: &BytesStart<'_>,
+    parent_depth: usize,
+    empty: bool,
+    root_seen: &mut bool,
+    controls: &mut Vec<(usize, Option<usize>, u8, u8)>,
+) -> Result<()> {
+    let is_word = word_element(namespace);
+    let name = element.name();
+    let local = name.as_ref();
+
+    if controls.is_empty() {
+        if *root_seen || !is_word || !matches_local_name(local, b"sdt") {
+            return Err(Error::Other(
+                "block content control must contain exactly one Word sdt root".to_owned(),
+            ));
+        }
+        *root_seen = true;
+        if !empty {
+            controls.push((parent_depth + 1, None, 0, 0));
+        }
+        return Ok(());
+    }
+
+    let (root_depth, content_depth) = {
+        let control = controls
+            .last()
+            .expect("active block content control was checked above");
+        (control.0, control.1)
+    };
+    if parent_depth == root_depth {
+        if !is_word {
+            return Ok(());
+        }
+        let (slot, order) = if matches_local_name(local, b"sdtPr") {
+            (BLOCK_SDT_PROPERTIES_SLOT, 0)
+        } else if matches_local_name(local, b"sdtEndPr") {
+            (BLOCK_SDT_END_PROPERTIES_SLOT, 1)
+        } else if matches_local_name(local, b"sdtContent") {
+            (BLOCK_SDT_CONTENT_SLOT, 2)
+        } else {
+            return Err(Error::Other(
+                "block content control has an invalid Word root child".to_owned(),
+            ));
+        };
+        let control = controls
+            .last_mut()
+            .expect("active block content control was checked above");
+        if control.3 & slot != 0 || control.2 > order {
+            return Err(Error::Other(
+                "block content control root children are duplicated or out of order".to_owned(),
+            ));
+        }
+        control.2 = order;
+        control.3 |= slot;
+        if slot == BLOCK_SDT_CONTENT_SLOT && !empty {
+            control.1 = Some(parent_depth + 1);
+        }
+        return Ok(());
+    }
+
+    if content_depth != Some(parent_depth) {
+        return Ok(());
+    }
+    if !is_word {
+        return Ok(());
+    }
+    if matches_local_name(local, b"p") || matches_local_name(local, b"tbl") {
+        return Ok(());
+    }
+    if matches_local_name(local, b"sdt") {
+        if !empty {
+            controls.push((parent_depth + 1, None, 0, 0));
+        }
+        return Ok(());
+    }
+    Err(Error::Other(
+        "block content control has a non-block Word content child".to_owned(),
+    ))
+}
+
+fn block_control_text_is_direct(depth: usize, controls: &[(usize, Option<usize>, u8, u8)]) -> bool {
+    controls
+        .last()
+        .is_some_and(|control| depth == control.0 || Some(depth) == control.1)
+}
+
+fn validated_direct_content_item(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    location: &ContentLocation,
+) -> Result<StoryItemSpan> {
+    if location.index_path.len() != 1 {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    let items = scan_story_items(xml, owner)?;
+    let index = location.index_path[0];
+    let item = items.get(index).cloned().ok_or(StoryError::OutOfBounds {
+        index,
+        len: items.len(),
+    })?;
+    if item.kind != location.item_kind {
+        return Err(StoryError::KindMismatch {
+            expected: location.item_kind,
+            actual: item.kind,
+        }
+        .into());
+    }
+    if !item.direct_owner_child
+        || owner.kind == StoryKind::Body && content_fragment_root_is_section_properties(xml, &item)?
+    {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    Ok(item)
+}
+
+fn validated_content_boundary(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    location: &ContentLocation,
+) -> Result<(usize, usize, usize)> {
+    let items = direct_story_content_items(xml, owner)?;
+    if location.is_end {
+        return Ok((
+            story_owner_content_end(xml, owner)?,
+            items.len(),
+            items.len(),
+        ));
+    }
+    if location.index_path.len() != 1 {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    let projected = scan_story_items(xml, owner)?;
+    let index = location.index_path[0];
+    let item = projected.get(index).ok_or(StoryError::OutOfBounds {
+        index,
+        len: projected.len(),
+    })?;
+    if item.kind != location.item_kind {
+        return Err(StoryError::KindMismatch {
+            expected: location.item_kind,
+            actual: item.kind,
+        }
+        .into());
+    }
+    if !item.direct_owner_child
+        || owner.kind == StoryKind::Body && content_fragment_root_is_section_properties(xml, item)?
+    {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    let direct_index = items
+        .iter()
+        .position(|candidate| candidate.full == item.full)
+        .ok_or_else(|| Error::Other("direct content destination was not found".to_owned()))?;
+    Ok((item.full.start, direct_index, items.len()))
+}
+
+fn insert_story_fragment(
+    source: &mut Vec<u8>,
+    owner: &StoryOwnerSpan,
+    boundary: usize,
+    fragment: Vec<u8>,
+) -> Result<()> {
+    let mut reader = quick_xml::Reader::from_reader(&source[owner.full.clone()]);
+    let mut buffer = Vec::new();
+    let empty_name = loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story owner insertion scan failed: {error}")))?
+        {
+            Event::Start(_) => break None,
+            Event::Empty(element) => break Some(element.name().as_ref().to_vec()),
+            Event::Eof => {
+                return Err(Error::Other(
+                    "story owner has no insertion boundary".to_owned(),
+                ));
+            }
+            _ => buffer.clear(),
+        }
+    };
+    if let Some(name) = empty_name {
+        if boundary + 2 != owner.full.end {
+            return Err(Error::Other(
+                "empty story owner insertion boundary is invalid".to_owned(),
+            ));
+        }
+        let mut replacement = Vec::with_capacity(fragment.len() + name.len() + 4);
+        replacement.push(b'>');
+        replacement.extend(fragment);
+        replacement.extend_from_slice(b"</");
+        replacement.extend(name);
+        replacement.push(b'>');
+        source.splice(boundary..owner.full.end, replacement);
+    } else {
+        source.splice(boundary..boundary, fragment);
+    }
+    Ok(())
+}
+
+fn story_scope_matches_fragment(destination: &StoryId, fragment: &ContentFragment) -> bool {
+    fragment.source_part_name.as_deref() == Some(destination.part_name.as_str())
+        && fragment.source_story_kind == Some(destination.kind)
+        && fragment.source_owner_index == Some(destination.owner_index)
+}
+
+fn validate_fragment_relationships(
+    document: &Document,
+    destination: &StoryId,
+    fragment: &ContentFragment,
+) -> Result<()> {
+    let inherited = fragment
+        .namespace_scope
+        .iter()
+        .map(|(prefix, namespace)| {
+            let name = if prefix.is_empty() {
+                "xmlns".to_owned()
+            } else {
+                format!("xmlns:{prefix}")
+            };
+            (name, namespace.clone())
+        })
+        .collect::<Vec<_>>();
+    let relationship_ids = xml_relationship_ids_in_order_with_bindings(&fragment.xml, &inherited)?;
+    if relationship_ids.is_empty() {
+        return Ok(());
+    }
+    if !story_scope_matches_fragment(destination, fragment) {
+        return Err(Error::Other(
+            "content fragment relationship references require the unchanged story owner".to_owned(),
+        ));
+    }
+    let relationships = document
+        .package
+        .get_part_rels(&destination.part_name)
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "content fragment owner {} has no relationship scope",
+                destination.part_name
+            ))
+        })?;
+    for id in relationship_ids {
+        if relationships.get_by_id(&id).is_none() {
+            return Err(Error::Other(format!(
+                "content fragment references missing relationship {id} in {}",
+                destination.part_name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn content_fragment_for_insertion(
+    document: &Document,
+    destination: &StoryId,
+    fragment: &ContentFragment,
+) -> Result<Vec<u8>> {
+    validate_fragment_relationships(document, destination, fragment)?;
+    if fragment.source_part_name.is_none() || story_scope_matches_fragment(destination, fragment) {
+        Ok(fragment.xml.clone())
+    } else {
+        close_content_fragment_namespaces(&fragment.xml, &fragment.namespace_scope)
+    }
+}
+
+fn freshen_content_fragment_identities(
+    document: &mut Document,
+    fragment: &ContentFragment,
+) -> Result<Vec<u8>> {
+    let mut wrapper_prefix = "rdocxw".to_owned();
+    let mut suffix = 1usize;
+    while fragment.namespace_scope.contains_key(&wrapper_prefix) {
+        wrapper_prefix = format!("rdocxw{suffix}");
+        suffix = suffix
+            .checked_add(1)
+            .ok_or_else(|| Error::Other("content wrapper prefix space exhausted".to_owned()))?;
+    }
+    let mut prefix =
+        format!(r#"<{wrapper_prefix}:document xmlns:{wrapper_prefix}="{WORD_NAMESPACE}""#)
+            .into_bytes();
+    for (namespace_prefix, namespace) in &fragment.namespace_scope {
+        if namespace_prefix == "xml" || namespace_prefix == &wrapper_prefix {
+            continue;
+        }
+        prefix.extend_from_slice(b" xmlns");
+        if !namespace_prefix.is_empty() {
+            prefix.push(b':');
+            prefix.extend_from_slice(namespace_prefix.as_bytes());
+        }
+        prefix.extend_from_slice(b"=\"");
+        prefix.extend_from_slice(quick_xml::escape::escape(namespace).as_bytes());
+        prefix.push(b'"');
+    }
+    prefix.extend_from_slice(format!("><{wrapper_prefix}:body>").as_bytes());
+    let suffix = format!("</{wrapper_prefix}:body></{wrapper_prefix}:document>");
+    let mut wrapped = prefix;
+    wrapped.extend_from_slice(&fragment.xml);
+    wrapped.extend_from_slice(suffix.as_bytes());
+    let updated = crate::field::freshen_content_fragment_identities(document, &wrapped)?;
+    let owner = scan_story_owners(&updated, StoryKind::Body)?
+        .into_iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("rewritten content wrapper has no body".to_owned()))?;
+    let items = direct_story_content_items(&updated, &owner)?;
+    let [item] = items.as_slice() else {
+        return Err(Error::Other(
+            "rewritten content wrapper must contain exactly one item".to_owned(),
+        ));
+    };
+    Ok(updated[item.full.clone()].to_vec())
+}
+
+fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) -> Result<()> {
+    if part_name == document.doc_part_name {
+        document.document = CT_Document::from_xml(&xml)?;
+        document.package.set_part(part_name, xml);
+    } else if document.comments_part_name.as_deref() == Some(part_name) {
+        document.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(&xml)?);
+        document.package.set_part(part_name, xml);
+    } else if document.footnotes_part_name.as_deref() == Some(part_name) {
+        document.package.set_part(part_name, xml);
+        document.footnotes_dirty = false;
+    } else {
+        document.package.set_part(part_name, xml);
+    }
+    Ok(())
 }
 
 fn update_story_namespace_scope(
@@ -4458,6 +5219,7 @@ fn scan_complex_field_marker(
                     kind: StoryItemKind::Field,
                     full: field.marker_start..after,
                     scan: field.run_start..run_end,
+                    direct_owner_child: false,
                     complex_field: true,
                     complex_ancestors: field.ancestors,
                     sdt_context: None,
@@ -4560,6 +5322,7 @@ fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerS
                             || matches!(kind, StoryKind::TableCell | StoryKind::TextBox)
                     }),
                     item_kind: None,
+                    direct_owner_child: false,
                     sdt_context,
                     word_prefixes,
                     opaque,
@@ -4840,6 +5603,7 @@ fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemS
                     full_start: before,
                     owner_kind: None,
                     item_kind,
+                    direct_owner_child: depth == 1 && !in_nested_owner,
                     sdt_context,
                     word_prefixes,
                     opaque,
@@ -4902,6 +5666,7 @@ fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemS
                         kind,
                         full: before..after,
                         scan: before..after,
+                        direct_owner_child: depth == 1 && !in_nested_owner,
                         complex_field: false,
                         complex_ancestors: Vec::new(),
                         sdt_context,
@@ -4926,6 +5691,7 @@ fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemS
                         kind,
                         full: frame.full_start..after,
                         scan: frame.full_start..after,
+                        direct_owner_child: frame.direct_owner_child,
                         complex_field: false,
                         complex_ancestors: Vec::new(),
                         sdt_context: frame.sdt_context,
@@ -5082,6 +5848,7 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                     full_start: before,
                     owner_kind: None,
                     item_kind: None,
+                    direct_owner_child: false,
                     sdt_context: if depth == 0 && item.kind == StoryItemKind::ContentControl {
                         item.sdt_context
                     } else {
@@ -5386,6 +6153,7 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
                     full_start: before,
                     owner_kind: None,
                     item_kind: None,
+                    direct_owner_child: false,
                     sdt_context: if depth == 0 && item.kind == StoryItemKind::ContentControl {
                         item.sdt_context
                     } else {
@@ -9368,6 +10136,7 @@ impl Document {
                     story: story.clone(),
                     item_kind: item.kind,
                     index_path: vec![index],
+                    is_end: false,
                 },
             })
             .collect())
@@ -9408,6 +10177,160 @@ impl Document {
             candidate.package.set_part(&source.part_name, updated);
         }
         let reopened = candidate.reopen_prepared_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Insert one owned fragment at a checked direct-child boundary.
+    pub fn insert_content(
+        &mut self,
+        destination: &ContentLocation,
+        fragment: ContentFragment,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&destination.story)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let (boundary, _, _) = validated_content_boundary(&source_xml, &owner, destination)?;
+        let fragment_xml =
+            content_fragment_for_insertion(&candidate, &destination.story, &fragment)?;
+        let mut updated = source_xml;
+        insert_story_fragment(&mut updated, &owner, boundary, fragment_xml)?;
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Remove one checked direct child and return it as an owned fragment.
+    pub fn remove_content_at(&mut self, location: &ContentLocation) -> Result<ContentFragment> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&location.story)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let item = validated_direct_content_item(&source_xml, &owner, location)?;
+        if owner.kind == StoryKind::TableCell
+            && item.kind == StoryItemKind::Paragraph
+            && direct_story_content_items(&source_xml, &owner)?
+                .iter()
+                .filter(|candidate| candidate.kind == StoryItemKind::Paragraph)
+                .count()
+                == 1
+        {
+            return Err(Error::Other(
+                "cannot remove the final required table-cell paragraph".to_owned(),
+            ));
+        }
+        let fragment = ContentFragment {
+            kind: item.kind,
+            xml: source_xml[item.full.clone()].to_vec(),
+            source_part_name: Some(part_name.clone()),
+            source_story_kind: Some(location.story.kind),
+            source_owner_index: Some(location.story.owner_index),
+            namespace_scope: story_namespace_scope_at(&source_xml, item.full.start)?,
+        };
+        validate_fragment_relationships(&candidate, &location.story, &fragment)?;
+        let mut updated = source_xml;
+        updated.drain(item.full);
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(fragment)
+    }
+
+    /// Clone one checked direct child into a checked insertion boundary.
+    pub fn clone_content(
+        &mut self,
+        source_location: &ContentLocation,
+        destination: &ContentLocation,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, source_owner) = candidate.story_source_and_owner(&source_location.story)?;
+        let source_xml = source.xml.into_owned();
+        let source_item =
+            validated_direct_content_item(&source_xml, &source_owner, source_location)?;
+        let mut fragment = ContentFragment {
+            kind: source_item.kind,
+            xml: source_xml[source_item.full.clone()].to_vec(),
+            source_part_name: Some(source_location.story.part_name.clone()),
+            source_story_kind: Some(source_location.story.kind),
+            source_owner_index: Some(source_location.story.owner_index),
+            namespace_scope: story_namespace_scope_at(&source_xml, source_item.full.start)?,
+        };
+
+        let (destination_source, destination_owner) =
+            candidate.story_source_and_owner(&destination.story)?;
+        let destination_part_name = destination_source.part_name.clone();
+        let destination_xml = destination_source.xml.into_owned();
+        let (boundary, _, _) =
+            validated_content_boundary(&destination_xml, &destination_owner, destination)?;
+        fragment.xml = freshen_content_fragment_identities(&mut candidate, &fragment)?;
+        let fragment_xml =
+            content_fragment_for_insertion(&candidate, &destination.story, &fragment)?;
+        let mut updated = destination_xml;
+        insert_story_fragment(&mut updated, &destination_owner, boundary, fragment_xml)?;
+        set_story_source_xml(&mut candidate, &destination_part_name, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Move one checked direct child within its current story owner.
+    pub fn move_content(
+        &mut self,
+        source_location: &ContentLocation,
+        destination: &ContentLocation,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&source_location.story)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let source_item = validated_direct_content_item(&source_xml, &owner, source_location)?;
+
+        let (destination_source, destination_owner) =
+            candidate.story_source_and_owner(&destination.story)?;
+        let destination_xml = destination_source.xml.into_owned();
+        let (boundary, destination_index, _) =
+            validated_content_boundary(&destination_xml, &destination_owner, destination)?;
+        if source_location.story != destination.story {
+            return Err(Error::Other(
+                "content can move only within one unchanged story owner".to_owned(),
+            ));
+        }
+        let direct_items = direct_story_content_items(&source_xml, &owner)?;
+        let source_index = direct_items
+            .iter()
+            .position(|item| item.full == source_item.full)
+            .ok_or_else(|| Error::Other("direct content source was not found".to_owned()))?;
+        let fragment = ContentFragment {
+            kind: source_item.kind,
+            xml: source_xml[source_item.full.clone()].to_vec(),
+            source_part_name: Some(part_name.clone()),
+            source_story_kind: Some(source_location.story.kind),
+            source_owner_index: Some(source_location.story.owner_index),
+            namespace_scope: story_namespace_scope_at(&source_xml, source_item.full.start)?,
+        };
+        validate_fragment_relationships(&candidate, &destination.story, &fragment)?;
+        if destination_index == source_index || destination_index == source_index + 1 {
+            return Ok(());
+        }
+        let removed_len = source_item.full.len();
+        let mut updated = source_xml;
+        updated.drain(source_item.full);
+        let adjusted_boundary = if source_index < destination_index {
+            boundary.checked_sub(removed_len).ok_or_else(|| {
+                Error::Other("content move destination underflowed after removal".to_owned())
+            })?
+        } else {
+            boundary
+        };
+        updated.splice(adjusted_boundary..adjusted_boundary, fragment.xml);
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
     }
