@@ -834,6 +834,27 @@ fn namespace_declarations(element: &BytesStart<'_>) -> Result<Vec<(String, Strin
     Ok(declarations)
 }
 
+fn root_namespace_declarations(xml: &[u8]) -> Result<Vec<(String, String)>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid XML root: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                return namespace_declarations(&element);
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "XML part has no root namespace owner".to_owned(),
+                ));
+            }
+            _ => buffer.clear(),
+        }
+    }
+}
+
 fn apply_namespace_declarations(
     element: &BytesStart<'_>,
     scope: &mut Vec<(String, String)>,
@@ -2210,6 +2231,8 @@ pub(crate) struct DocumentIdentifiers {
     authored_bookmark_names: HashSet<String>,
     authored_story_parts: HashSet<String>,
     authored_story_relationship_ids: HashMap<String, HashSet<String>>,
+    authored_nested_story_relationship_ids: HashMap<String, HashSet<String>>,
+    authored_nested_story_drawing_ids: HashMap<String, HashSet<u32>>,
     authored_bundle_relationship_ids: HashMap<String, HashSet<String>>,
     provisional_relationship_ids: HashMap<String, HashSet<String>>,
 }
@@ -2254,6 +2277,8 @@ impl DocumentIdentifiers {
             authored_bookmark_names: HashSet::new(),
             authored_story_parts: HashSet::new(),
             authored_story_relationship_ids: HashMap::new(),
+            authored_nested_story_relationship_ids: HashMap::new(),
+            authored_nested_story_drawing_ids: HashMap::new(),
             authored_bundle_relationship_ids: HashMap::new(),
             provisional_relationship_ids: HashMap::new(),
         };
@@ -2765,6 +2790,20 @@ impl DocumentIdentifiers {
             .insert(part_name.to_ascii_lowercase());
     }
 
+    fn register_nested_story_relationship(&mut self, story: &StoryId, relationship_id: String) {
+        self.authored_nested_story_relationship_ids
+            .entry(relationship_owner_identity(&story.part_name))
+            .or_default()
+            .insert(relationship_id);
+    }
+
+    fn register_nested_story_drawing(&mut self, story: &StoryId, drawing_id: u32) {
+        self.authored_nested_story_drawing_ids
+            .entry(relationship_owner_identity(&story.part_name))
+            .or_default()
+            .insert(drawing_id);
+    }
+
     pub(crate) fn retire_authored_story_relationships(
         &mut self,
         owner: &str,
@@ -2792,6 +2831,13 @@ impl DocumentIdentifiers {
                 self.authored_story_relationship_ids.remove(&owner);
             }
         }
+        self.authored_nested_story_relationship_ids
+            .retain(|nested_owner, authored| {
+                if nested_owner == &owner {
+                    authored.retain(|id| !removed.contains(id));
+                }
+                !authored.is_empty()
+            });
         if let Some(authored) = self.authored_bundle_relationship_ids.get_mut(&owner) {
             authored.retain(|id| !removed.contains(id));
             if authored.is_empty() {
@@ -2935,6 +2981,26 @@ impl DocumentIdentifiers {
             &source.authored_story_relationship_ids,
             &self.relationship_ids,
         );
+        self.authored_nested_story_relationship_ids = source
+            .authored_nested_story_relationship_ids
+            .iter()
+            .filter_map(|(owner, ids)| {
+                let occupied = self.relationship_ids.get(owner)?;
+                let retained = ids.intersection(occupied).cloned().collect::<HashSet<_>>();
+                (!retained.is_empty()).then(|| (owner.clone(), retained))
+            })
+            .collect();
+        self.authored_nested_story_drawing_ids = source
+            .authored_nested_story_drawing_ids
+            .iter()
+            .filter_map(|(owner, ids)| {
+                let retained = ids
+                    .intersection(&self.drawing_ids)
+                    .copied()
+                    .collect::<HashSet<_>>();
+                (!retained.is_empty()).then(|| (owner.clone(), retained))
+            })
+            .collect();
         self.authored_bundle_relationship_ids = intersect_relationship_registry(
             &source.authored_bundle_relationship_ids,
             &self.relationship_ids,
@@ -3156,6 +3222,20 @@ fn xml_relationship_ids_in_order(xml: &[u8]) -> Result<Vec<String>> {
     xml_relationship_ids_in_order_with_bindings(xml, &[])
 }
 
+fn authored_relationship_ids_in_source_order(
+    xml: &[u8],
+    relationship_ids: &HashSet<String>,
+) -> Option<Vec<String>> {
+    let mut seen = HashSet::new();
+    let all = xml_relationship_ids_in_order(xml).ok()?;
+    let ordered = all
+        .iter()
+        .filter(|id| relationship_ids.contains(*id) && seen.insert((*id).clone()))
+        .cloned()
+        .collect::<Vec<_>>();
+    (ordered.len() == relationship_ids.len()).then_some(ordered)
+}
+
 fn xml_relationship_ids_in_order_with_bindings(
     xml: &[u8],
     inherited_bindings: &[(String, String)],
@@ -3266,7 +3346,206 @@ fn rewrite_authored_doc_pr_ids(xml: &[u8], occupied: &mut HashSet<u32>) -> Resul
     Ok(updated)
 }
 
+enum AuthoredMainDrawing {
+    Modeled,
+    Nested,
+}
+
+fn authored_drawing_slots_in_source_order(
+    xml: &[u8],
+    modeled_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+) -> Result<Vec<(AuthoredMainDrawing, Range<usize>, u32)>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut modeled_remaining = HashMap::new();
+    for id in modeled_ids {
+        *modeled_remaining.entry(*id).or_insert(0usize) += 1;
+    }
+    let mut depth = 0usize;
+    let mut current_depth = None;
+    let mut current_doc_pr = None;
+    let mut current_is_nested = false;
+    let mut ordered = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let namespace = reader.resolver().resolve_element(element.name()).0;
+                let local = element.local_name();
+                let word_drawing = matches!(namespace, ResolveResult::Bound(Namespace(value)) if value == drawing_ns::WP.as_bytes());
+                let drawing = matches!(namespace, ResolveResult::Bound(Namespace(value)) if value == drawing_ns::A.as_bytes());
+                if matches!(&event, Event::Start(_))
+                    && word_drawing
+                    && matches!(local.as_ref(), b"inline" | b"anchor")
+                    && current_depth.is_none()
+                {
+                    current_depth = Some(depth);
+                }
+                if current_depth.is_some() {
+                    if word_drawing && local.as_ref() == b"docPr" {
+                        for attribute in element.attributes() {
+                            let attribute = attribute.map_err(|error| {
+                                Error::Other(format!("invalid story XML: {error}"))
+                            })?;
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            if matches!(namespace, ResolveResult::Unbound)
+                                && local.as_ref() == b"id"
+                            {
+                                let id = attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .map_err(|error| {
+                                        Error::Other(format!("invalid story drawing id: {error}"))
+                                    })?
+                                    .parse::<u32>()
+                                    .map_err(|_| {
+                                        Error::Other("invalid story drawing id".to_owned())
+                                    })?;
+                                let (start, end) = story_attribute_value_span(
+                                    &xml[before..after],
+                                    attribute.key.as_ref(),
+                                )
+                                .ok_or_else(|| {
+                                    Error::Other("story drawing id source was not found".to_owned())
+                                })?;
+                                current_doc_pr = Some((id, before + start..before + end));
+                            }
+                        }
+                    }
+                    if drawing && local.as_ref() == b"blip" {
+                        for attribute in element.attributes() {
+                            let attribute = attribute.map_err(|error| {
+                                Error::Other(format!("invalid story XML: {error}"))
+                            })?;
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::R.as_bytes())
+                                && local.as_ref() == b"embed"
+                            {
+                                let id = attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .map_err(|error| {
+                                        Error::Other(format!(
+                                            "invalid story relationship id: {error}"
+                                        ))
+                                    })?;
+                                if nested_image_relationship_ids.contains(id.as_ref()) {
+                                    current_is_nested = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if matches!(&event, Event::Start(_)) {
+                    depth += 1;
+                }
+            }
+            Event::End(element) => {
+                depth = depth.saturating_sub(1);
+                let namespace = reader.resolver().resolve_element(element.name()).0;
+                let word_drawing = matches!(namespace, ResolveResult::Bound(Namespace(value)) if value == drawing_ns::WP.as_bytes());
+                if word_drawing
+                    && matches!(element.local_name().as_ref(), b"inline" | b"anchor")
+                    && current_depth == Some(depth)
+                {
+                    current_depth = None;
+                    let Some((id, span)) = current_doc_pr.take() else {
+                        if current_is_nested {
+                            return Err(Error::Other(
+                                "authored picture has no wp:docPr identity".to_owned(),
+                            ));
+                        }
+                        buffer.clear();
+                        continue;
+                    };
+                    if current_is_nested {
+                        ordered.push((AuthoredMainDrawing::Nested, span, id));
+                    } else if let Some(remaining) = modeled_remaining.get_mut(&id)
+                        && *remaining > 0
+                    {
+                        *remaining -= 1;
+                        ordered.push((AuthoredMainDrawing::Modeled, span, id));
+                    }
+                    current_is_nested = false;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if modeled_remaining.values().any(|remaining| *remaining != 0) {
+        return Err(Error::Other(
+            "authored drawing occurrences changed during source-order allocation".to_owned(),
+        ));
+    }
+    Ok(ordered)
+}
+
+fn drawing_ids_in_xml(xml: &[u8]) -> Result<HashSet<u32>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut ids = HashSet::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                let namespace = reader.resolver().resolve_element(element.name()).0;
+                if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::WP.as_bytes())
+                    && element.local_name().as_ref() == b"docPr"
+                {
+                    for attribute in element.attributes() {
+                        let attribute = attribute
+                            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                        let (attribute_namespace, local) =
+                            reader.resolver().resolve_attribute(attribute.key);
+                        if matches!(attribute_namespace, ResolveResult::Unbound)
+                            && local.as_ref() == b"id"
+                        {
+                            let value = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .map_err(|error| {
+                                    Error::Other(format!("invalid drawing id: {error}"))
+                                })?
+                                .parse::<u32>()
+                                .map_err(|_| Error::Other("invalid drawing id".to_owned()))?;
+                            ids.insert(value);
+                        }
+                    }
+                }
+            }
+            Event::Eof => return Ok(ids),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 fn remap_xml_relationship_ids(xml: &[u8], remap: &HashMap<String, String>) -> Result<Vec<u8>> {
+    remap_xml_relationship_ids_with_bindings(xml, remap, &[])
+}
+
+fn remap_xml_relationship_ids_with_bindings(
+    xml: &[u8],
+    remap: &HashMap<String, String>,
+    inherited_bindings: &[(String, String)],
+) -> Result<Vec<u8>> {
     if remap.is_empty() {
         return Ok(xml.to_vec());
     }
@@ -3290,7 +3569,23 @@ fn remap_xml_relationship_ids(xml: &[u8], remap: &HashMap<String, String>) -> Re
                         .map_err(|error| {
                             Error::Other(format!("invalid story relationship id: {error}"))
                         })?;
-                    if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::R.as_bytes())
+                    let inherited_relationship_prefix =
+                        matches!(namespace, ResolveResult::Unknown(_))
+                            && attribute.key.as_ref().contains(&b':')
+                            && attribute
+                                .key
+                                .as_ref()
+                                .split(|byte| *byte == b':')
+                                .next()
+                                .and_then(|prefix| std::str::from_utf8(prefix).ok())
+                                .is_some_and(|prefix| {
+                                    let declaration = format!("xmlns:{prefix}");
+                                    inherited_bindings.iter().any(|(name, value)| {
+                                        name == &declaration && value == drawing_ns::R
+                                    })
+                                });
+                    if (matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::R.as_bytes())
+                        || inherited_relationship_prefix)
                         && matches!(local.as_ref(), b"id" | b"embed" | b"link")
                         && let Some(updated) = remap.get(value.as_ref())
                     {
@@ -3372,13 +3667,6 @@ enum DrawingMut<'a> {
 }
 
 impl DrawingMut<'_> {
-    fn set_doc_pr_id(&mut self, id: u32) {
-        match self {
-            Self::Inline(drawing) => drawing.doc_pr_id = id,
-            Self::Anchor(drawing) => drawing.doc_pr_id = id,
-        }
-    }
-
     fn remap_relationship(&mut self, remap: &HashMap<String, String>) {
         let (embed_id, chart_rel_id) = match self {
             Self::Inline(drawing) => (&mut drawing.embed_id, &mut drawing.chart_rel_id),
@@ -3451,6 +3739,8 @@ pub struct Document {
     pub(crate) footnotes: rdocx_oxml::footnotes::CT_Footnotes,
     /// Existing footnotes relationship target. No conventional target is assumed on read.
     pub(crate) footnotes_part_name: Option<String>,
+    /// Producer root namespaces inherited by retained footnote raw XML.
+    footnotes_root_namespace_declarations: Vec<(String, String)>,
     /// Whether a facade mutation requires complete typed footnote serialization.
     pub(crate) footnotes_dirty: bool,
     /// Typed comments loaded through the main document relationship.
@@ -7547,6 +7837,41 @@ fn visit_authored_drawings_mut(
     }
 }
 
+fn close_typed_story_drawing_namespaces(paragraph: &mut CT_P) -> Result<()> {
+    let scope = BTreeMap::from([
+        ("r".to_owned(), drawing_ns::R.to_owned()),
+        ("wp".to_owned(), drawing_ns::WP.to_owned()),
+    ]);
+    let mut error = None;
+    visit_paragraph_drawings_mut(paragraph, &mut |drawing| {
+        if error.is_some() {
+            return;
+        }
+        if let Some(inline) = &mut drawing.inline {
+            let mut writer = Writer::new(Vec::new());
+            if let Err(current) = inline.to_xml(&mut writer).map_err(Error::from) {
+                error = Some(current);
+                return;
+            }
+            match close_content_fragment_namespaces(&writer.into_inner(), &scope) {
+                Ok(xml) => inline.raw_xml = Some(xml),
+                Err(current) => error = Some(current),
+            }
+        } else if let Some(anchor) = &mut drawing.anchor {
+            let mut writer = Writer::new(Vec::new());
+            if let Err(current) = anchor.to_xml(&mut writer).map_err(Error::from) {
+                error = Some(current);
+                return;
+            }
+            match close_content_fragment_namespaces(&writer.into_inner(), &scope) {
+                Ok(xml) => anchor.raw_xml = Some(xml),
+                Err(current) => error = Some(current),
+            }
+        }
+    });
+    error.map_or(Ok(()), Err)
+}
+
 fn authored_drawing(drawing: &CT_Drawing) -> bool {
     drawing
         .inline
@@ -7798,6 +8123,7 @@ impl Document {
             identifiers,
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             footnotes_part_name: None,
+            footnotes_root_namespace_declarations: Vec::new(),
             footnotes_dirty: false,
             comments: None,
             comments_part_name: None,
@@ -7849,6 +8175,9 @@ impl Document {
             identifiers: self.identifiers.clone(),
             footnotes: self.footnotes.clone(),
             footnotes_part_name: self.footnotes_part_name.clone(),
+            footnotes_root_namespace_declarations: self
+                .footnotes_root_namespace_declarations
+                .clone(),
             footnotes_dirty: self.footnotes_dirty,
             comments: self.comments.clone(),
             comments_part_name: self.comments_part_name.clone(),
@@ -8268,17 +8597,28 @@ impl Document {
             .get(&owner_identity)
             .cloned()
             .unwrap_or_default();
-        let mut story_relationships = Vec::new();
-        collect_relationship_ids(&self.document.body.content, &mut story_relationships);
+        let mut modeled_story_relationships = Vec::new();
+        collect_relationship_ids(
+            &self.document.body.content,
+            &mut modeled_story_relationships,
+        );
         if let Some(section) = &self.document.body.sect_pr {
             for reference in section.header_refs.iter().chain(&section.footer_refs) {
-                if !story_relationships.contains(&reference.rel_id) {
-                    story_relationships.push(reference.rel_id.clone());
+                if !modeled_story_relationships.contains(&reference.rel_id) {
+                    modeled_story_relationships.push(reference.rel_id.clone());
                 }
             }
         }
-        let opaque_relationships =
-            self.opaque_relationship_ids_from_serialized_story(&story_relationships)?;
+        let nested_relationships = self
+            .identifiers
+            .authored_nested_story_relationship_ids
+            .get(&owner_identity)
+            .cloned()
+            .unwrap_or_default();
+        let mut opaque_relationships =
+            self.opaque_relationship_ids_from_serialized_story(&modeled_story_relationships)?;
+        opaque_relationships.retain(|id| !nested_relationships.contains(id));
+        let mut story_relationships = self.main_story_relationship_ids();
         let relationships = self
             .package
             .get_part_rels(&owner)
@@ -8460,57 +8800,66 @@ impl Document {
                 }
             }
         }
-        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
-        let mut drawing_count = 0usize;
-        visit_authored_drawings(&self.document.body.content, &mut |_| drawing_count += 1);
-        let mut drawing_ids = Vec::with_capacity(drawing_count);
-        for _ in 0..drawing_count {
-            drawing_ids.push(reserve_u32(&mut occupied_drawings, 1, "drawing")?);
-        }
-        let mut drawing_ids = drawing_ids.into_iter();
-        let mut drawing_error = None;
-        visit_authored_drawings_mut(&mut self.document.body.content, &mut |drawing| {
-            let Some(mut drawing) = drawing
-                .inline
-                .as_mut()
-                .map(DrawingMut::Inline)
-                .or_else(|| drawing.anchor.as_mut().map(DrawingMut::Anchor))
-            else {
-                drawing_error = Some(Error::Other(
-                    "authored drawing has no inline or anchor payload".to_owned(),
-                ));
-                return;
-            };
-            let Some(id) = drawing_ids.next() else {
-                drawing_error = Some(Error::Other(
-                    "authored drawing identifier count changed during canonicalization".to_owned(),
-                ));
-                return;
-            };
-            drawing.set_doc_pr_id(id);
-            drawing.remap_relationship(&relationship_remap);
-        });
-        if let Some(error) = drawing_error {
-            return Err(error);
-        }
-        if drawing_ids.next().is_some() {
-            return Err(Error::Other(
-                "authored drawing identifier count changed during canonicalization".to_owned(),
-            ));
-        }
-        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
-            for hyperlink in &mut paragraph.hyperlinks {
-                if let Some(id) = &mut hyperlink.rel_id
-                    && let Some(updated) = relationship_remap.get(id)
-                {
-                    id.clone_from(updated);
-                }
-            }
-            if let Some(section) = paragraph
-                .properties
-                .as_mut()
-                .and_then(|properties| properties.sect_pr.as_mut())
+        let registered_nested_drawing_ids = self
+            .identifiers
+            .authored_nested_story_drawing_ids
+            .get(&owner_identity)
+            .cloned()
+            .unwrap_or_default();
+        let mut modeled_drawing_ids = Vec::new();
+        visit_authored_drawings(&self.document.body.content, &mut |drawing| {
+            if let Some(inline) = &drawing.inline
+                && !registered_nested_drawing_ids.contains(&inline.doc_pr_id)
             {
+                modeled_drawing_ids.push(inline.doc_pr_id);
+            }
+            if let Some(anchor) = &drawing.anchor
+                && !registered_nested_drawing_ids.contains(&anchor.doc_pr_id)
+            {
+                modeled_drawing_ids.push(anchor.doc_pr_id);
+            }
+        });
+        let has_live_nested_relationships = self.remap_authored_nested_story_relationships(
+            &owner_identity,
+            &nested_relationships,
+            &relationship_remap,
+        )?;
+        if !has_live_nested_relationships {
+            visit_authored_drawings_mut(&mut self.document.body.content, &mut |drawing| {
+                if let Some(mut drawing) = drawing
+                    .inline
+                    .as_mut()
+                    .map(DrawingMut::Inline)
+                    .or_else(|| drawing.anchor.as_mut().map(DrawingMut::Anchor))
+                {
+                    drawing.remap_relationship(&relationship_remap);
+                }
+            });
+            visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+                for hyperlink in &mut paragraph.hyperlinks {
+                    if let Some(id) = &mut hyperlink.rel_id
+                        && let Some(updated) = relationship_remap.get(id)
+                    {
+                        id.clone_from(updated);
+                    }
+                }
+                if let Some(section) = paragraph
+                    .properties
+                    .as_mut()
+                    .and_then(|properties| properties.sect_pr.as_mut())
+                {
+                    for reference in section
+                        .header_refs
+                        .iter_mut()
+                        .chain(&mut section.footer_refs)
+                    {
+                        if let Some(updated) = relationship_remap.get(&reference.rel_id) {
+                            reference.rel_id.clone_from(updated);
+                        }
+                    }
+                }
+            });
+            if let Some(section) = &mut self.document.body.sect_pr {
                 for reference in section
                     .header_refs
                     .iter_mut()
@@ -8521,19 +8870,74 @@ impl Document {
                     }
                 }
             }
-        });
-        if let Some(section) = &mut self.document.body.sect_pr {
-            for reference in section
-                .header_refs
-                .iter_mut()
-                .chain(&mut section.footer_refs)
+        }
+        let related_parts = self.related_story_parts();
+        let live_nested_relationships = self
+            .identifiers
+            .authored_nested_story_relationship_ids
+            .get(&owner_identity)
+            .cloned()
+            .unwrap_or_default();
+        let nested_image_relationship_ids = self
+            .package
+            .get_part_rels(&owner)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::IMAGE
+                    && live_nested_relationships.contains(&relationship.id)
+            })
+            .map(|relationship| relationship.id.clone())
+            .collect::<HashSet<_>>();
+        let current_document_xml = self.document.to_xml()?;
+        let authored_drawing_slots = authored_drawing_slots_in_source_order(
+            &current_document_xml,
+            &modeled_drawing_ids,
+            &nested_image_relationship_ids,
+        )?;
+        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
+        if let Ok(live_ids) = drawing_ids_in_xml(&current_document_xml) {
+            occupied_drawings.extend(live_ids);
+        }
+        for (_, _, id) in &authored_drawing_slots {
+            occupied_drawings.remove(id);
+        }
+        for part in &related_parts {
+            if !self.identifiers.authored_story_parts.contains(part)
+                && let Some(xml) = self.package.get_part(part)
+                && let Ok(live_ids) = drawing_ids_in_xml(xml)
             {
-                if let Some(updated) = relationship_remap.get(&reference.rel_id) {
-                    reference.rel_id.clone_from(updated);
-                }
+                occupied_drawings.extend(live_ids);
             }
         }
-        self.canonicalize_header_footer_relationships()?;
+        let mut drawing_edits = Vec::with_capacity(authored_drawing_slots.len());
+        let mut canonical_nested_drawing_ids = HashSet::new();
+        for (slot, span, _) in authored_drawing_slots {
+            let id = reserve_u32(&mut occupied_drawings, 1, "drawing")?;
+            if matches!(slot, AuthoredMainDrawing::Nested) {
+                canonical_nested_drawing_ids.insert(id);
+            }
+            drawing_edits.push((span.start, span.end, id.to_string().into_bytes()));
+        }
+        if !drawing_edits.is_empty() {
+            let mut updated = current_document_xml;
+            drawing_edits.sort_by_key(|(start, _, _)| *start);
+            for (start, end, replacement) in drawing_edits.into_iter().rev() {
+                updated.splice(start..end, replacement);
+            }
+            self.document = CT_Document::from_xml(&updated)?;
+        }
+        if canonical_nested_drawing_ids.is_empty() {
+            self.identifiers
+                .authored_nested_story_drawing_ids
+                .remove(&owner_identity);
+        } else {
+            self.identifiers
+                .authored_nested_story_drawing_ids
+                .insert(owner_identity.clone(), canonical_nested_drawing_ids);
+        }
+        self.canonicalize_related_story_relationships(&related_parts, &mut occupied_drawings)?;
+        self.identifiers.drawing_ids = occupied_drawings;
         self.canonicalize_image_parts()?;
         Ok(())
     }
@@ -8550,34 +8954,109 @@ impl Document {
         parts
     }
 
-    fn main_story_relationship_ids(&self) -> Vec<String> {
-        let mut ids = Vec::new();
-        collect_relationship_ids(&self.document.body.content, &mut ids);
-        if let Some(section) = &self.document.body.sect_pr {
-            for reference in section.header_refs.iter().chain(&section.footer_refs) {
-                if !ids.contains(&reference.rel_id) {
-                    ids.push(reference.rel_id.clone());
+    fn remap_authored_nested_story_relationships(
+        &mut self,
+        physical_owner: &str,
+        registered: &HashSet<String>,
+        relationship_remap: &HashMap<String, String>,
+    ) -> Result<bool> {
+        let xml = self.document.to_xml()?;
+        let occurrences =
+            xml_relationship_ids_in_order_with_bindings(&xml, &self.body_namespace_bindings)?;
+        let live = registered
+            .iter()
+            .filter(|id| occurrences.contains(id))
+            .cloned()
+            .collect::<HashSet<_>>();
+        if !relationship_remap.is_empty() && !live.is_empty() {
+            let updated = remap_xml_relationship_ids_with_bindings(
+                &xml,
+                relationship_remap,
+                &self.body_namespace_bindings,
+            )?;
+            self.document = CT_Document::from_xml(&updated)?;
+        }
+        if live.is_empty() {
+            self.identifiers
+                .authored_nested_story_relationship_ids
+                .remove(physical_owner);
+        } else {
+            let remapped = live
+                .iter()
+                .map(|id| relationship_remap.get(id).unwrap_or(id).clone())
+                .collect();
+            self.identifiers
+                .authored_nested_story_relationship_ids
+                .insert(physical_owner.to_owned(), remapped);
+        }
+        Ok(!live.is_empty())
+    }
+
+    fn related_story_parts(&self) -> Vec<String> {
+        let mut parts = self.active_header_footer_parts();
+        if let Some(relationships) = self.package.get_part_rels(&self.doc_part_name) {
+            for relationship in &relationships.items {
+                if matches!(
+                    relationship.rel_type.as_str(),
+                    rel_types::FOOTNOTES | rel_types::ENDNOTES | rel_types::COMMENTS
+                ) && relationship_is_internal(relationship)
+                {
+                    let part =
+                        OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+                    if self.package.contains_part(&part) && !parts.contains(&part) {
+                        parts.push(part);
+                    }
                 }
             }
         }
-        ids
+        parts
     }
 
-    fn canonicalize_header_footer_relationships(&mut self) -> Result<()> {
-        let parts = self.active_header_footer_parts();
-        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
-        visit_authored_drawings(&self.document.body.content, &mut |drawing| {
-            if let Some(inline) = &drawing.inline {
-                occupied_drawings.insert(inline.doc_pr_id);
+    fn main_story_relationship_ids(&self) -> Vec<String> {
+        let mut modeled = Vec::new();
+        collect_relationship_ids(&self.document.body.content, &mut modeled);
+        if let Some(section) = &self.document.body.sect_pr {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if !modeled.contains(&reference.rel_id) {
+                    modeled.push(reference.rel_id.clone());
+                }
             }
-            if let Some(anchor) = &drawing.anchor {
-                occupied_drawings.insert(anchor.doc_pr_id);
+        }
+        let owner = relationship_owner_identity(&self.doc_part_name);
+        let nested = self
+            .identifiers
+            .authored_nested_story_relationship_ids
+            .get(&owner)
+            .cloned()
+            .unwrap_or_default();
+        let semantic = modeled
+            .iter()
+            .cloned()
+            .chain(nested.iter().cloned())
+            .collect::<HashSet<_>>();
+        if let Ok(xml) = self.document.to_xml()
+            && let Some(ordered) = authored_relationship_ids_in_source_order(&xml, &semantic)
+        {
+            return ordered;
+        }
+        let mut nested = nested.into_iter().collect::<Vec<_>>();
+        nested.sort();
+        for id in nested {
+            if !modeled.contains(&id) {
+                modeled.push(id);
             }
-        });
+        }
+        modeled
+    }
 
+    fn canonicalize_related_story_relationships(
+        &mut self,
+        parts: &[String],
+        occupied_drawings: &mut HashSet<u32>,
+    ) -> Result<()> {
         for owner in parts {
-            let owner_identity = relationship_owner_identity(&owner);
-            let fully_authored = self.identifiers.authored_story_parts.contains(&owner);
+            let owner_identity = relationship_owner_identity(owner);
+            let fully_authored = self.identifiers.authored_story_parts.contains(owner);
             let partially_authored = self
                 .identifiers
                 .authored_story_relationship_ids
@@ -8589,7 +9068,7 @@ impl Document {
             }
             let xml = self
                 .package
-                .get_part(&owner)
+                .get_part(owner)
                 .ok_or_else(|| Error::Other(format!("story part {owner} is missing")))?
                 .to_vec();
             let referenced = xml_relationship_ids_in_order(&xml)?;
@@ -8601,7 +9080,7 @@ impl Document {
                 .unwrap_or_default();
             let relationships = self
                 .package
-                .get_part_rels(&owner)
+                .get_part_rels(owner)
                 .map(|relationships| relationships.items.clone())
                 .unwrap_or_default();
             let semantic = referenced
@@ -8640,7 +9119,7 @@ impl Document {
                     reserve_relationship_from_cursor(&mut occupied, &mut cursor)?,
                 );
             }
-            if let Some(owner_relationships) = self.package.get_part_rels_mut(&owner) {
+            if let Some(owner_relationships) = self.package.get_part_rels_mut(owner) {
                 for relationship in &mut owner_relationships.items {
                     if let Some(updated) = remap.get(&relationship.id) {
                         relationship.id.clone_from(updated);
@@ -8682,22 +9161,23 @@ impl Document {
                     .collect();
             }
             let xml = if fully_authored {
-                rewrite_authored_doc_pr_ids(&xml, &mut occupied_drawings)?
+                rewrite_authored_doc_pr_ids(&xml, occupied_drawings)?
             } else {
                 xml
             };
-            self.package.set_part(&owner, xml);
+            self.package.set_part(owner, xml);
         }
         Ok(())
     }
 
     fn canonicalize_image_parts(&mut self) -> Result<()> {
         let mut ordered = Vec::new();
+        let main_xml = self.document.to_xml()?;
         let mut owners = vec![(
             self.doc_part_name.clone(),
-            self.main_story_relationship_ids(),
+            xml_relationship_ids_in_order(&main_xml)?,
         )];
-        for owner in self.active_header_footer_parts() {
+        for owner in self.related_story_parts() {
             let owner_identity = relationship_owner_identity(&owner);
             if self.identifiers.authored_story_parts.contains(&owner)
                 || self
@@ -9034,6 +9514,12 @@ impl Document {
             .and_then(|xml| CustomProperties::from_xml(xml).ok());
 
         let footnotes_part_name = resolve_part(rel_types::FOOTNOTES);
+        let footnotes_root_namespace_declarations = footnotes_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+            .map(root_namespace_declarations)
+            .transpose()?
+            .unwrap_or_default();
         let footnotes = footnotes_part_name
             .as_deref()
             .and_then(|part| package.get_part(part))
@@ -9095,6 +9581,7 @@ impl Document {
             identifiers,
             footnotes,
             footnotes_part_name,
+            footnotes_root_namespace_declarations,
             footnotes_dirty: false,
             comments,
             comments_part_name,
@@ -9490,7 +9977,36 @@ impl Document {
 
         // Preserve parsed footnote bytes until a facade mutation makes the typed view dirty.
         if self.footnotes_dirty && !self.footnotes.footnotes.is_empty() {
-            let fx = self.footnotes.to_xml_footnotes()?;
+            let mut footnotes = self.footnotes.clone();
+            for footnote in &mut footnotes.footnotes {
+                for paragraph in &mut footnote.paragraphs {
+                    close_typed_story_drawing_namespaces(paragraph)?;
+                }
+            }
+            let mut fx = footnotes.to_xml_footnotes()?;
+            if self
+                .footnotes_root_namespace_declarations
+                .iter()
+                .any(|(name, value)| name == "xmlns:r" && value != drawing_ns::R)
+            {
+                let fixed = format!(r#" xmlns:r="{}""#, drawing_ns::R).into_bytes();
+                let start = fx
+                    .windows(fixed.len())
+                    .position(|window| window == fixed)
+                    .ok_or_else(|| {
+                        Error::Other(
+                            "typed footnotes serializer lost its relationship namespace".to_owned(),
+                        )
+                    })?;
+                fx.drain(start..start + fixed.len());
+            }
+            let retained_namespaces = self
+                .footnotes_root_namespace_declarations
+                .iter()
+                .filter(|(name, _)| name != "xmlns:w")
+                .map(|(name, value)| (namespace_prefix(name), value.clone()))
+                .collect();
+            let fx = close_content_fragment_namespaces(&fx, &retained_namespaces)?;
             let footnotes_part_name = self.footnotes_part_name.clone();
             let footnotes_part = self
                 .reserve_document_part_bundle(
@@ -9511,6 +10027,12 @@ impl Document {
         // comment API creates one deliberately.
         if let (Some(comments), Some(part_name)) = (&self.comments, self.comments_part_name.clone())
         {
+            let mut comments = comments.clone();
+            for comment in &mut comments.comments {
+                for paragraph in &mut comment.paragraphs {
+                    close_typed_story_drawing_namespaces(paragraph)?;
+                }
+            }
             let xml = comments.to_xml()?;
             self.package.set_part(&part_name, xml);
             self.ensure_part_relationship_checked(
@@ -9760,6 +10282,38 @@ impl Document {
         Ok(id)
     }
 
+    fn add_relative_internal_relationship_checked(
+        &mut self,
+        owner: &str,
+        rel_type: &str,
+        target_part: &str,
+    ) -> Result<String> {
+        let id = self.add_internal_relationship_checked(
+            owner,
+            rel_type,
+            &relative_target(owner, target_part),
+        )?;
+        if owner != self.doc_part_name {
+            self.identifiers
+                .authored_story_relationship_ids
+                .entry(relationship_owner_identity(owner))
+                .or_default()
+                .insert(id.clone());
+        }
+        Ok(id)
+    }
+
+    fn add_image_relationship_checked(
+        &mut self,
+        owner: &str,
+        image_data: &[u8],
+        filename: &str,
+    ) -> Result<String> {
+        let (part_name, format) = self.reserve_image_part(image_data, filename)?;
+        self.install_reserved_image_part(&part_name, image_data, format);
+        self.add_relative_internal_relationship_checked(owner, rel_types::IMAGE, &part_name)
+    }
+
     fn add_external_relationship_checked(
         &mut self,
         owner: &str,
@@ -9775,6 +10329,13 @@ impl Document {
                 target_mode: Some("External".to_owned()),
             },
         );
+        if owner != self.doc_part_name {
+            self.identifiers
+                .authored_story_relationship_ids
+                .entry(relationship_owner_identity(owner))
+                .or_default()
+                .insert(id.clone());
+        }
         Ok(id)
     }
 
@@ -9805,20 +10366,16 @@ impl Document {
             candidate
                 .identifiers
                 .reserve_part_name("/word/embeddings", "Workbook", "xlsx")?;
+        let document_part = candidate.doc_part_name.clone();
         let document_relationship_id = candidate
-            .identifiers
-            .reserve_relationship_id_checked(&candidate.doc_part_name)
+            .add_relative_internal_relationship_checked(
+                &document_part,
+                rel_types::CHART,
+                &chart_part,
+            )
             .map_err(|error| {
                 Error::Other(format!("chart relationship allocation failed: {error}"))
             })?;
-        candidate
-            .package
-            .get_or_create_part_rels(&candidate.doc_part_name)
-            .add_with_id(
-                &document_relationship_id,
-                rel_types::CHART,
-                &relative_target(&candidate.doc_part_name, &chart_part),
-            );
         let workbook_relationship_id = candidate
             .identifiers
             .reserve_relationship_id_checked(&chart_part)
@@ -10161,6 +10718,274 @@ impl Document {
                 },
             })
             .collect())
+    }
+
+    fn append_fragment_to_story(
+        &mut self,
+        story: &StoryId,
+        mut fragment: ContentFragment,
+    ) -> Result<()> {
+        let (source, owner) = self.story_source_and_owner(story)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let destination = ContentLocation::end(story.clone());
+        let (boundary, _, _) = validated_content_boundary(&source_xml, &owner, &destination)?;
+        fragment.source_part_name = Some(part_name.clone());
+        fragment.source_story_kind = Some(story.kind);
+        fragment.source_owner_index = Some(story.owner_index);
+        let fragment_xml = content_fragment_for_insertion(self, story, &fragment)?;
+        let mut updated = source_xml;
+        insert_story_fragment(&mut updated, &owner, boundary, fragment_xml)?;
+        set_story_source_xml(self, &part_name, updated)
+    }
+
+    fn append_cached_footnote_paragraph(
+        &mut self,
+        story: &StoryId,
+        paragraph: &CT_P,
+    ) -> Result<()> {
+        if story.kind != StoryKind::Footnote
+            || self.footnotes_part_name.as_deref() != Some(story.part_name.as_str())
+        {
+            return Ok(());
+        }
+        let footnote = self
+            .footnotes
+            .footnotes
+            .iter_mut()
+            .filter(|footnote| footnote.note_type == rdocx_oxml::footnotes::NoteType::Normal)
+            .nth(story.owner_index)
+            .ok_or_else(|| StoryError::Stale {
+                story: story.clone(),
+            })?;
+        footnote.paragraphs.push(paragraph.clone());
+        Ok(())
+    }
+
+    /// Append an inline picture paragraph to one checked story owner.
+    pub fn add_picture_to_story(
+        &mut self,
+        story: &StoryId,
+        image_data: &[u8],
+        image_filename: &str,
+        width: Length,
+        height: Length,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let relationship_id =
+            candidate.add_image_relationship_checked(&owner, image_data, image_filename)?;
+        let drawing_id = candidate.identifiers.reserve_drawing_id()?;
+
+        let mut inline = CT_Inline::new(&relationship_id, width.to_emu(), height.to_emu());
+        inline.doc_pr_id = drawing_id;
+        let run = CT_R {
+            alt_drawings: Vec::new(),
+            properties: None,
+            content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+        };
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(run);
+        candidate.append_cached_footnote_paragraph(story, &paragraph)?;
+        let preserve_typed_body = story.kind == StoryKind::Body && owner == candidate.doc_part_name;
+        if preserve_typed_body {
+            candidate
+                .document
+                .body
+                .content
+                .push(BodyContent::Paragraph(paragraph));
+        } else {
+            let mut fragment_paragraph = paragraph;
+            close_typed_story_drawing_namespaces(&mut fragment_paragraph)?;
+            let fragment = ContentFragment::paragraph(fragment_paragraph)?;
+            candidate.append_fragment_to_story(story, fragment)?;
+        }
+        if owner == candidate.doc_part_name {
+            candidate
+                .identifiers
+                .register_nested_story_relationship(story, relationship_id);
+            candidate
+                .identifiers
+                .register_nested_story_drawing(story, drawing_id);
+        }
+        candidate.prepare_staged_package()?;
+        candidate.clone_for_staging().reopen_prepared_staged()?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Append one external hyperlink paragraph to a checked story owner.
+    pub fn add_hyperlink_to_story(&mut self, story: &StoryId, text: &str, url: &str) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let relationship_id =
+            candidate.add_external_relationship_checked(&owner, rel_types::HYPERLINK, url)?;
+        let mut paragraph = CT_P::new();
+        crate::Paragraph {
+            inner: &mut paragraph,
+        }
+        .add_hyperlink(text, &relationship_id);
+        paragraph
+            .hyperlinks
+            .last_mut()
+            .expect("the authored hyperlink was appended")
+            .extra_attributes
+            .push(("xmlns:r".to_owned(), drawing_ns::R.to_owned()));
+        candidate.append_cached_footnote_paragraph(story, &paragraph)?;
+        let preserve_typed_body = story.kind == StoryKind::Body && owner == candidate.doc_part_name;
+        if preserve_typed_body {
+            candidate
+                .document
+                .body
+                .content
+                .push(BodyContent::Paragraph(paragraph));
+        } else {
+            let fragment = ContentFragment::paragraph(paragraph)?;
+            candidate.append_fragment_to_story(story, fragment)?;
+        }
+        if owner == candidate.doc_part_name {
+            candidate
+                .identifiers
+                .register_nested_story_relationship(story, relationship_id);
+        }
+        candidate.prepare_staged_package()?;
+        candidate.clone_for_staging().reopen_prepared_staged()?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Add an external hyperlink relationship to a checked story owner.
+    pub fn add_hyperlink_relationship_to_story(
+        &mut self,
+        story: &StoryId,
+        url: &str,
+    ) -> Result<String> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let matching_before = candidate
+            .package
+            .get_part_rels(&owner)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::HYPERLINK
+                    && relationship.target == url
+                    && relationship.target_mode.as_deref() == Some("External")
+            })
+            .count();
+        candidate.add_external_relationship_checked(&owner, rel_types::HYPERLINK, url)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let relationship_id = reopened
+            .package
+            .get_part_rels(&owner)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::HYPERLINK
+                    && relationship.target == url
+                    && relationship.target_mode.as_deref() == Some("External")
+            })
+            .nth(matching_before)
+            .map(|relationship| relationship.id.clone())
+            .ok_or_else(|| Error::Other("authored hyperlink relationship was lost".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(relationship_id)
+    }
+
+    /// Resolve and validate one internal relationship in a checked story scope.
+    pub fn validate_internal_relationship_for_story(
+        &self,
+        story: &StoryId,
+        relationship_id: &str,
+        expected_type: &str,
+    ) -> Result<String> {
+        self.story_source_and_owner(story)?;
+        let relationships = self
+            .package
+            .get_part_rels(&story.part_name)
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "story owner {} has no relationship scope",
+                    story.part_name
+                ))
+            })?;
+        let relationship = relationships.get_by_id(relationship_id).ok_or_else(|| {
+            Error::Other(format!(
+                "story owner {} has no relationship {relationship_id}",
+                story.part_name
+            ))
+        })?;
+        if relationship.rel_type != expected_type {
+            return Err(Error::Other(format!(
+                "story relationship {relationship_id} has type {}, expected {expected_type}",
+                relationship.rel_type
+            )));
+        }
+        if !relationship_is_internal(relationship) {
+            return Err(Error::Other(format!(
+                "story relationship {relationship_id} must be internal"
+            )));
+        }
+        let target = OpcPackage::resolve_rel_target(&story.part_name, &relationship.target);
+        if !self.package.contains_part(&target) {
+            return Err(Error::Other(format!(
+                "story relationship {relationship_id} targets missing part {target}"
+            )));
+        }
+        Ok(target)
+    }
+
+    /// Fetch image bytes through a checked story-local relationship.
+    pub fn image_data_for_story(&self, story: &StoryId, relationship_id: &str) -> Result<Vec<u8>> {
+        let target = self.validate_internal_relationship_for_story(
+            story,
+            relationship_id,
+            rel_types::IMAGE,
+        )?;
+        self.package
+            .get_part(&target)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| Error::Other(format!("image relationship target {target} is missing")))
+    }
+
+    /// Resolve an external hyperlink through a checked story-local relationship.
+    pub fn hyperlink_url_for_story(
+        &self,
+        story: &StoryId,
+        relationship_id: &str,
+    ) -> Result<String> {
+        self.story_source_and_owner(story)?;
+        let relationships = self
+            .package
+            .get_part_rels(&story.part_name)
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "story owner {} has no relationship scope",
+                    story.part_name
+                ))
+            })?;
+        let relationship = relationships.get_by_id(relationship_id).ok_or_else(|| {
+            Error::Other(format!(
+                "story owner {} has no relationship {relationship_id}",
+                story.part_name
+            ))
+        })?;
+        if relationship.rel_type != rel_types::HYPERLINK
+            || relationship.target_mode.as_deref() != Some("External")
+        {
+            return Err(Error::Other(format!(
+                "story relationship {relationship_id} is not an external hyperlink"
+            )));
+        }
+        Ok(relationship.target.clone())
     }
 
     /// Replace the visible text of one checked story item atomically.
@@ -10759,17 +11584,10 @@ impl Document {
         height: Length,
     ) -> Result<()> {
         let mut candidate = self.clone_for_staging();
-        let (part_name, format) = candidate.reserve_image_part(image_data, image_filename)?;
         let owner = candidate.doc_part_name.clone();
-        let rel_id = candidate
-            .identifiers
-            .reserve_relationship_id_checked(&owner)?;
+        let rel_id =
+            candidate.add_image_relationship_checked(&owner, image_data, image_filename)?;
         let drawing_id = candidate.identifiers.reserve_drawing_id()?;
-        let rel_target = candidate.install_reserved_image_part(&part_name, image_data, format);
-        candidate
-            .package
-            .get_or_create_part_rels(&owner)
-            .add_with_id(&rel_id, rel_types::IMAGE, &rel_target);
 
         let mut inline = CT_Inline::new(&rel_id, width.to_emu(), height.to_emu());
         inline.doc_pr_id = drawing_id;
@@ -11004,19 +11822,10 @@ impl Document {
     /// `rel_id` to [`crate::Cell::add_picture`] for inline cell images.
     pub fn embed_image(&mut self, image_data: &[u8], filename: &str) -> String {
         let mut candidate = self.clone_for_staging();
-        let (part_name, format) = candidate
-            .reserve_image_part(image_data, filename)
-            .expect("an in-memory package cannot exhaust every media part suffix");
         let owner = candidate.doc_part_name.clone();
         let relationship_id = candidate
-            .identifiers
-            .reserve_relationship_id_checked(&owner)
+            .add_image_relationship_checked(&owner, image_data, filename)
             .expect("an in-memory package cannot exhaust every relationship identifier");
-        let rel_target = candidate.install_reserved_image_part(&part_name, image_data, format);
-        candidate
-            .package
-            .get_or_create_part_rels(&owner)
-            .add_with_id(&relationship_id, rel_types::IMAGE, &rel_target);
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
         relationship_id
@@ -12075,11 +12884,8 @@ impl Document {
         let part_name = self.reserve_hdr_ftr_part_name(is_header, hdr_type)?;
         self.clear_authored_story_relationships(&part_name);
 
-        // The image relationship belongs to the header/footer part, not the
-        // document, because that is where the drawing referencing it lives.
-        let img_rel_target = self.store_image_part(image_data, image_filename);
         let img_rel_id = self
-            .add_internal_relationship_checked(&part_name, rel_types::IMAGE, &img_rel_target)
+            .add_image_relationship_checked(&part_name, image_data, image_filename)
             .map_err(|error| {
                 Error::Other(format!(
                     "header or footer image relationship allocation failed: {error}"
@@ -19269,6 +20075,21 @@ mod tests {
     const FX087_PAGES_BUILD: &str = "7044.0.273";
     const FX087_CANDIDATE_SHA256: &str =
         "54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9";
+
+    #[test]
+    fn authored_relationship_source_order_resolves_namespaces_and_entities() {
+        let xml = format!(
+            r#"<w:root xmlns:w="{WORD_NAMESPACE}" xmlns:r="{}" xmlns:q="{}" xmlns:x="urn:foreign"><x:lookalike x:id="rId1">r:id="rId1"</x:lookalike><w:a q:embed="rId2"/><w:b r:id="rId&#49;"/></w:root>"#,
+            drawing_ns::R,
+            drawing_ns::R,
+        );
+        let relationship_ids = HashSet::from(["rId1".to_owned(), "rId2".to_owned()]);
+
+        assert_eq!(
+            authored_relationship_ids_in_source_order(xml.as_bytes(), &relationship_ids),
+            Some(vec!["rId2".to_owned(), "rId1".to_owned()])
+        );
+    }
 
     fn replace_numbering_xml(document: &mut Document, xml: Vec<u8>) -> Vec<u8> {
         let mut package =

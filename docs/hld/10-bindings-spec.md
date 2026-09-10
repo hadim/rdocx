@@ -341,6 +341,16 @@ freshen document identities, and relationship-bearing fragments require their
 unchanged owner scope. These are additive pre-1.0 native Rust APIs. Python,
 WASM, and CLI gain no corresponding binding surface.
 
+Native Rust also exposes fallible story-scoped relationship operations on the
+same pre-1.0 `Document` facade. `add_picture_to_story` and
+`add_hyperlink_to_story` append namespace-complete paragraphs to a checked
+`StoryId`. `add_hyperlink_relationship_to_story` allocates one external link
+without inserting content. `validate_internal_relationship_for_story`,
+`image_data_for_story`, and `hyperlink_url_for_story` resolve only through the
+story owner's relationship set and reject stale owners, missing identifiers,
+wrong types, wrong target modes, and missing internal targets. These additions
+do not add a trait, generic parameter, or Python, WASM, or CLI surface.
+
 Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
 Each handle reports its zero-based document ordinal, schema-final ownership,
 and configured geometry while retaining access to the complete section

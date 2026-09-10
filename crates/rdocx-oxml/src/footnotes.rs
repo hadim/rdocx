@@ -398,6 +398,42 @@ mod tests {
         assert_eq!(parsed.footnotes[1].paragraphs[0].text(), "Second footnote.");
     }
 
+    #[test]
+    fn footnote_round_trip_keeps_an_inherited_raw_relationship_attribute_bound() {
+        let xml = format!(
+            r#"<w:footnotes xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:footnote w:id="1"><w:p><x:raw xmlns:x="urn:producer" r:id="rId9"/></w:p></w:footnote></w:footnotes>"#
+        );
+        let parsed = CT_Footnotes::from_xml(xml.as_bytes()).unwrap();
+        let serialized = parsed.to_xml_footnotes().unwrap();
+        let serialized = std::str::from_utf8(&serialized).unwrap();
+        assert!(
+            serialized.contains(
+                r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#
+            ),
+            "{serialized}"
+        );
+        assert!(serialized.contains(r#"r:id="rId9""#), "{serialized}");
+        CT_Footnotes::from_xml(serialized.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn endnote_round_trip_keeps_an_inherited_raw_relationship_attribute_bound() {
+        let xml = format!(
+            r#"<w:endnotes xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:endnote w:id="1"><w:p><x:raw xmlns:x="urn:producer" r:id="rId8"/></w:p></w:endnote></w:endnotes>"#
+        );
+        let parsed = CT_Footnotes::from_xml(xml.as_bytes()).unwrap();
+        let serialized = parsed.to_xml_endnotes().unwrap();
+        let serialized = std::str::from_utf8(&serialized).unwrap();
+        assert!(
+            serialized.contains(
+                r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#
+            ),
+            "{serialized}"
+        );
+        assert!(serialized.contains(r#"r:id="rId8""#), "{serialized}");
+        CT_Footnotes::from_xml(serialized.as_bytes()).unwrap();
+    }
+
     // F-X013b, note types and separator preservation.
 
     const WITH_SEPARATORS: &str = r#"<?xml version="1.0"?>

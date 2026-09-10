@@ -108,6 +108,24 @@ raw direct Word children. Foreign raw subtrees stay opaque. Invalid locations,
 relationships, identities, XML, and reopen results discard the staged
 candidate without changing the live document.
 
+Story-scoped picture and hyperlink authoring resolves the relationship owner
+from the checked `StoryId`. Body, cell, and text-box stories use the main
+document relationship set. Headers, footers, notes, and comments use the
+relationship set of their resolved part. Internal relationship validation
+checks exact type, internal mode, normalized target, and target existence.
+Image and hyperlink lookup applies the same owner boundary. New relationships,
+media parts, content types, XML, and drawing identities publish only after the
+staged package serializes and reopens.
+
+Main-document authored occurrence provenance is derived from live
+namespace-aware XML on every canonicalization. Removing a paragraph retires a
+zero-use occurrence without deleting the relationship definition retained by
+its owned fragment. Same-owner clones keep a shared relationship definition
+and remap every live reference simultaneously. Each live authored picture
+occurrence receives its own global `wp:docPr` identity. Producer-owned raw
+references remain fixed occupants, and image part naming follows final
+serialized relationship order.
+
 Theme and font authoring retain the relationship-resolved targets already in a
 package. A missing theme or font table receives one collision-safe part,
 content-type override, and internal main-document relationship on the staged

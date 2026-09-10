@@ -76,6 +76,1193 @@ fn f254_block_context_content_control(content: &str) -> CT_Sdt {
     control
 }
 
+fn f255_story_document() -> Document {
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="{R}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:f255"><w:body><x:body x:kept="exact"/><w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent><x:box x:kept="exact"/><w:p><w:r><w:t>box</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="ownerHeader"/><w:footerReference w:type="default" r:id="ownerFooter"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    relationships.add_with_id(
+        "ownerHeader",
+        oxml_opc::relationship::rel_types::HEADER,
+        "stories/header.xml",
+    );
+    relationships.add_with_id(
+        "ownerFooter",
+        oxml_opc::relationship::rel_types::FOOTER,
+        "stories/footer.xml",
+    );
+    relationships.add_with_id(
+        "ownerFootnote",
+        oxml_opc::relationship::rel_types::FOOTNOTES,
+        "stories/footnotes.xml",
+    );
+    for (part, content_type, xml) in [
+        (
+            "/word/stories/header.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+            format!(
+                r#"<q:hdr xmlns:q="{W_NS}" xmlns:x="urn:f255"><x:header x:kept="exact"/><q:p><q:r><q:t>header</q:t></q:r></q:p></q:hdr>"#
+            ),
+        ),
+        (
+            "/word/stories/footer.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+            format!(
+                r#"<q:ftr xmlns:q="{W_NS}" xmlns:x="urn:f255"><x:footer x:kept="exact"/><q:p><q:r><q:t>footer</q:t></q:r></q:p></q:ftr>"#
+            ),
+        ),
+        (
+            "/word/stories/footnotes.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+            format!(
+                r#"<q:footnotes xmlns:q="{W_NS}" xmlns:x="urn:f255"><q:footnote q:id="1"><x:note x:kept="exact"/><q:p><q:r><q:t>note</q:t></q:r></q:p></q:footnote></q:footnotes>"#
+            ),
+        ),
+    ] {
+        package.set_part(part, xml.into_bytes());
+        package.content_types.add_override(part, content_type);
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(&bytes.into_inner()).unwrap()
+}
+
+fn f255_relationship_ids(
+    package: &oxml_opc::OpcPackage,
+    owner: &str,
+    relationship_type: &str,
+) -> Vec<String> {
+    package
+        .get_part_rels(owner)
+        .unwrap()
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == relationship_type)
+        .map(|relationship| relationship.id.clone())
+        .collect()
+}
+
+fn f255_nested_owner_document() -> Document {
+    let xml = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>box first</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>box target</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell first</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell target</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>tail</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    document_with_content_controls(&xml)
+}
+
+fn f255_story_with_text(document: &Document, kind: StoryKind, text: &str) -> StoryId {
+    document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .filter(|story| story.kind() == kind)
+        .find(|story| {
+            document.story_items(story).unwrap().iter().any(|item| {
+                item.text()
+                    .unwrap()
+                    .is_some_and(|value| value.contains(text))
+            })
+        })
+        .unwrap_or_else(|| panic!("missing {kind:?} story containing {text}"))
+}
+
+fn f255_body_item_with_text(document: &Document, text: &str) -> ContentLocation {
+    let body = f254_story(document, StoryKind::Body);
+    document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            std::str::from_utf8(item.xml().unwrap().as_ref())
+                .unwrap()
+                .contains(text)
+        })
+        .unwrap_or_else(|| panic!("missing body item containing {text}"))
+        .location()
+        .clone()
+}
+
+fn f255_story_relationship_attribute(document: &Document, story: &StoryId, name: &str) -> String {
+    document
+        .story_items(story)
+        .unwrap()
+        .into_iter()
+        .find_map(|item| {
+            let xml = item.xml().unwrap();
+            let xml = std::str::from_utf8(xml.as_ref()).unwrap();
+            f255_xml_attribute(xml, name)
+        })
+        .unwrap_or_else(|| panic!("missing {name} in {story:?}"))
+}
+
+fn f255_xml_attribute(xml: &str, name: &str) -> Option<String> {
+    let marker = format!(r#"{name}=""#);
+    let start = xml.find(&marker)? + marker.len();
+    let end = start + xml[start..].find('"')?;
+    Some(xml[start..end].to_owned())
+}
+
+fn f255_asset_story(document: &Document, kind: StoryKind) -> StoryId {
+    match kind {
+        StoryKind::Body => f254_story(document, StoryKind::Body),
+        StoryKind::TextBox => f255_story_with_text(document, StoryKind::TextBox, "box target"),
+        StoryKind::TableCell => f255_story_with_text(document, StoryKind::TableCell, "cell target"),
+        _ => panic!("unsupported nested asset test story {kind:?}"),
+    }
+}
+
+fn f255_story_item_with_marker(
+    document: &Document,
+    story: &StoryId,
+    marker: &str,
+) -> ContentLocation {
+    document
+        .story_items(story)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            let xml = item.xml().unwrap();
+            std::str::from_utf8(xml.as_ref()).unwrap().contains(marker)
+        })
+        .unwrap_or_else(|| panic!("missing story item containing {marker}"))
+        .location()
+        .clone()
+}
+
+fn f255_assert_story_assets(document: &Document, kind: StoryKind, label: &str) {
+    let story = f255_story_with_text(document, kind, &format!("{label} target"));
+    let image_id = f255_story_relationship_attribute(document, &story, "r:embed");
+    let hyperlink_id = f255_story_relationship_attribute(document, &story, "r:id");
+    assert_eq!(
+        document.image_data_for_story(&story, &image_id).unwrap(),
+        format!("{label} image").as_bytes()
+    );
+    assert_eq!(
+        document
+            .hyperlink_url_for_story(&story, &hyperlink_id)
+            .unwrap(),
+        format!("https://example.invalid/{label}")
+    );
+}
+
+fn f255_document_with_header_relationship(
+    id: &str,
+    relationship_type: &str,
+    target: &str,
+    external: bool,
+    install_target: bool,
+) -> Document {
+    let mut document = f255_story_document();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    package
+        .get_or_create_part_rels("/word/stories/header.xml")
+        .items
+        .push(oxml_opc::relationship::Relationship {
+            id: id.to_owned(),
+            rel_type: relationship_type.to_owned(),
+            target: target.to_owned(),
+            target_mode: external.then(|| "External".to_owned()),
+        });
+    if install_target {
+        let part = oxml_opc::OpcPackage::resolve_rel_target("/word/stories/header.xml", target);
+        package.set_part(&part, b"target".to_vec());
+        package
+            .content_types
+            .add_override(&part, "application/octet-stream");
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(&bytes.into_inner()).unwrap()
+}
+
+#[test]
+fn equal_related_content_resolves_only_through_its_story_owner() {
+    let mut document = f255_story_document();
+    for kind in [
+        StoryKind::Body,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::TextBox,
+    ] {
+        let story = f254_story(&document, kind);
+        document
+            .add_picture_to_story(
+                &story,
+                b"same image",
+                "same.png",
+                Length::pt(1.0),
+                Length::pt(1.0),
+            )
+            .unwrap_or_else(|error| panic!("{kind:?} picture: {error}"));
+        let story = f254_story(&document, kind);
+        document
+            .add_hyperlink_to_story(&story, "same link", "https://example.invalid/same")
+            .unwrap_or_else(|error| panic!("{kind:?} hyperlink: {error}"));
+    }
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let body = f254_story(&reopened, StoryKind::Body);
+    let text_box = f254_story(&reopened, StoryKind::TextBox);
+    assert_eq!(body.part_name(), text_box.part_name());
+    for kind in [
+        StoryKind::Body,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::TextBox,
+    ] {
+        let story = f254_story(&reopened, kind);
+        let image_ids = f255_relationship_ids(
+            &package,
+            story.part_name(),
+            oxml_opc::relationship::rel_types::IMAGE,
+        );
+        let hyperlink_ids = f255_relationship_ids(
+            &package,
+            story.part_name(),
+            oxml_opc::relationship::rel_types::HYPERLINK,
+        );
+        let expected = if matches!(kind, StoryKind::Body | StoryKind::TextBox) {
+            2
+        } else {
+            1
+        };
+        assert_eq!(image_ids.len(), expected, "{kind:?}");
+        assert_eq!(hyperlink_ids.len(), expected, "{kind:?}");
+        for relationship_id in image_ids {
+            assert_eq!(
+                reopened
+                    .image_data_for_story(&story, &relationship_id)
+                    .unwrap(),
+                b"same image"
+            );
+        }
+        for relationship_id in hyperlink_ids {
+            assert_eq!(
+                reopened
+                    .hyperlink_url_for_story(&story, &relationship_id)
+                    .unwrap(),
+                "https://example.invalid/same"
+            );
+        }
+        let story_xml = std::str::from_utf8(package.get_part(story.part_name()).unwrap()).unwrap();
+        for relationship_id in f255_relationship_ids(
+            &package,
+            story.part_name(),
+            oxml_opc::relationship::rel_types::IMAGE,
+        ) {
+            assert!(
+                story_xml.contains(&format!(r#"r:embed="{relationship_id}""#)),
+                "{kind:?} does not consume image {relationship_id}: {story_xml}"
+            );
+        }
+        for relationship_id in f255_relationship_ids(
+            &package,
+            story.part_name(),
+            oxml_opc::relationship::rel_types::HYPERLINK,
+        ) {
+            assert!(
+                story_xml.contains(&format!(r#"r:id="{relationship_id}""#)),
+                "{kind:?} does not consume hyperlink {relationship_id}: {story_xml}"
+            );
+        }
+    }
+    let header_images = f255_relationship_ids(
+        &package,
+        "/word/stories/header.xml",
+        oxml_opc::relationship::rel_types::IMAGE,
+    );
+    let footer_images = f255_relationship_ids(
+        &package,
+        "/word/stories/footer.xml",
+        oxml_opc::relationship::rel_types::IMAGE,
+    );
+    let note_images = f255_relationship_ids(
+        &package,
+        "/word/stories/footnotes.xml",
+        oxml_opc::relationship::rel_types::IMAGE,
+    );
+    assert_eq!(header_images, footer_images);
+    assert_eq!(footer_images, note_images);
+    for (part, retained) in [
+        ("/word/document.xml", r#"<x:body x:kept="exact"/>"#),
+        ("/word/stories/header.xml", r#"<x:header x:kept="exact"/>"#),
+        ("/word/stories/footer.xml", r#"<x:footer x:kept="exact"/>"#),
+        ("/word/stories/footnotes.xml", r#"<x:note x:kept="exact"/>"#),
+    ] {
+        assert!(
+            std::str::from_utf8(package.get_part(part).unwrap())
+                .unwrap()
+                .contains(retained),
+            "{part} lost {retained}"
+        );
+    }
+}
+
+#[test]
+fn wrong_scope_relationships_are_rejected_atomically() {
+    let mut document = f255_story_document();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .add_picture_to_story(
+            &body,
+            b"image",
+            "image.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        )
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let image_relationship = f255_relationship_ids(
+        &package,
+        body.part_name(),
+        oxml_opc::relationship::rel_types::IMAGE,
+    )
+    .remove(0);
+    let header = f254_story(&document, StoryKind::Header);
+    let external_relationship = document
+        .add_hyperlink_relationship_to_story(&body, "https://example.invalid/body")
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+
+    for result in [
+        document.validate_internal_relationship_for_story(
+            &body,
+            "missingRelationship",
+            oxml_opc::relationship::rel_types::IMAGE,
+        ),
+        document.validate_internal_relationship_for_story(
+            &body,
+            &external_relationship,
+            oxml_opc::relationship::rel_types::HYPERLINK,
+        ),
+        document.validate_internal_relationship_for_story(
+            &body,
+            &image_relationship,
+            oxml_opc::relationship::rel_types::CHART,
+        ),
+        document.validate_internal_relationship_for_story(
+            &header,
+            &image_relationship,
+            oxml_opc::relationship::rel_types::IMAGE,
+        ),
+    ] {
+        assert!(result.is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    let stale = body;
+    let wrong_owner = StoryId::new(
+        StoryKind::Header,
+        stale.part_name().to_owned(),
+        stale.owner_index(),
+    );
+    let before_wrong_owner = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_hyperlink_to_story(
+                &wrong_owner,
+                "must not land",
+                "https://example.invalid/wrong-owner",
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_wrong_owner);
+
+    let current = f254_story(&document, StoryKind::Body);
+    document
+        .add_hyperlink_to_story(&current, "changed", "https://example.invalid/changed")
+        .unwrap();
+    let before_stale = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_picture_to_story(
+                &stale,
+                b"must not land",
+                "rejected.png",
+                Length::pt(1.0),
+                Length::pt(1.0),
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_stale);
+
+    let mut missing = f255_document_with_header_relationship(
+        "missingImage",
+        oxml_opc::relationship::rel_types::IMAGE,
+        "../media/missing.png",
+        false,
+        false,
+    );
+    let header = f254_story(&missing, StoryKind::Header);
+    let before = missing.to_bytes().unwrap();
+    assert!(
+        missing
+            .validate_internal_relationship_for_story(
+                &header,
+                "missingImage",
+                oxml_opc::relationship::rel_types::IMAGE,
+            )
+            .is_err()
+    );
+    assert_eq!(missing.to_bytes().unwrap(), before);
+
+    let mut external_image = f255_document_with_header_relationship(
+        "externalImage",
+        oxml_opc::relationship::rel_types::IMAGE,
+        "https://example.invalid/image.png",
+        true,
+        false,
+    );
+    let header = f254_story(&external_image, StoryKind::Header);
+    let before = external_image.to_bytes().unwrap();
+    assert!(
+        external_image
+            .validate_internal_relationship_for_story(
+                &header,
+                "externalImage",
+                oxml_opc::relationship::rel_types::IMAGE,
+            )
+            .is_err()
+    );
+    assert_eq!(external_image.to_bytes().unwrap(), before);
+
+    let mut internal_hyperlink = f255_document_with_header_relationship(
+        "internalHyperlink",
+        oxml_opc::relationship::rel_types::HYPERLINK,
+        "internal-link-target.bin",
+        false,
+        true,
+    );
+    let header = f254_story(&internal_hyperlink, StoryKind::Header);
+    let before = internal_hyperlink.to_bytes().unwrap();
+    assert!(
+        internal_hyperlink
+            .hyperlink_url_for_story(&header, "internalHyperlink")
+            .is_err()
+    );
+    assert_eq!(internal_hyperlink.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn legacy_body_and_header_helpers_use_the_shared_owner_path() {
+    let mut document = Document::new();
+    document.add_picture(b"image", "body.png", Length::pt(1.0), Length::pt(1.0));
+    document.set_header_image(b"image", "header.png", Length::pt(1.0), Length::pt(1.0));
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let body = f254_story(&reopened, StoryKind::Body);
+    let header = f254_story(&reopened, StoryKind::Header);
+    for story in [&body, &header] {
+        assert!(
+            reopened
+                .story_items(story)
+                .unwrap()
+                .iter()
+                .any(|item| item.kind() == StoryItemKind::Drawing)
+        );
+        let relationships = f255_relationship_ids(
+            &package,
+            story.part_name(),
+            oxml_opc::relationship::rel_types::IMAGE,
+        );
+        assert_eq!(relationships.len(), 1);
+        assert_eq!(
+            reopened
+                .image_data_for_story(story, &relationships[0])
+                .unwrap(),
+            b"image"
+        );
+    }
+}
+
+#[test]
+fn related_footnote_insertion_survives_later_typed_mutation() {
+    let mut seed = Document::new();
+    let original_id = seed.add_footnote("original footnote");
+    let mut document = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+    let footnote = f254_story(&document, StoryKind::Footnote);
+    document
+        .add_picture_to_story(
+            &footnote,
+            b"retained image",
+            "retained.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        )
+        .unwrap();
+    let footnote = f254_story(&document, StoryKind::Footnote);
+    document
+        .add_hyperlink_to_story(
+            &footnote,
+            "retained link",
+            "https://example.invalid/retained",
+        )
+        .unwrap();
+
+    let added_id = document.add_footnote("later typed footnote");
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let footnotes = reopened.footnotes();
+    assert!(
+        footnotes
+            .iter()
+            .any(|(id, text)| *id == added_id && text == "later typed footnote"),
+        "added {added_id}, footnotes {footnotes:?}"
+    );
+
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let owner = footnote.part_name();
+    let xml = std::str::from_utf8(package.get_part(owner).unwrap()).unwrap();
+    let image_id =
+        f255_relationship_ids(&package, owner, oxml_opc::relationship::rel_types::IMAGE).remove(0);
+    let hyperlink_id = f255_relationship_ids(
+        &package,
+        owner,
+        oxml_opc::relationship::rel_types::HYPERLINK,
+    )
+    .remove(0);
+    assert!(xml.contains(&format!(r#"r:embed="{image_id}""#)), "{xml}");
+    assert!(xml.contains(&format!(r#"r:id="{hyperlink_id}""#)), "{xml}");
+    let footnote = f254_story(&reopened, StoryKind::Footnote);
+    assert_eq!(
+        reopened.image_data_for_story(&footnote, &image_id).unwrap(),
+        b"retained image"
+    );
+    assert_eq!(
+        reopened
+            .hyperlink_url_for_story(&footnote, &hyperlink_id)
+            .unwrap(),
+        "https://example.invalid/retained"
+    );
+    assert!(
+        footnotes
+            .iter()
+            .any(|(id, text)| *id == original_id && text.contains("original footnote")),
+        "footnotes {footnotes:?}"
+    );
+}
+
+#[test]
+fn header_drawing_ids_do_not_depend_on_replacement_history() {
+    fn build(with_history: bool) -> Vec<u8> {
+        let mut document = Document::new();
+        if with_history {
+            document.set_header_image(
+                b"retired image",
+                "retired.png",
+                Length::pt(2.0),
+                Length::pt(2.0),
+            );
+        }
+        document.set_header_image(
+            b"final image",
+            "final.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        );
+        document.to_bytes().unwrap()
+    }
+
+    let direct = build(false);
+    let history = build(true);
+    for bytes in [&direct, &history] {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let header = std::str::from_utf8(package.get_part("/word/header1.xml").unwrap()).unwrap();
+        assert!(header.contains(r#"<wp:docPr id="1""#), "{header}");
+    }
+    assert_eq!(history, direct);
+}
+
+#[test]
+fn comment_story_mutation_preserves_shadowed_r_and_wp_raw_meaning() {
+    let mut seed = Document::new();
+    seed.add_paragraph("body");
+    let comment_id = seed
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "producer",
+            None,
+            "comment",
+        )
+        .unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let comments = std::str::from_utf8(package.get_part("/word/comments.xml").unwrap())
+        .unwrap()
+        .replace(
+            "<w:comments ",
+            r#"<w:comments xmlns:r="urn:producer-r" xmlns:wp="urn:producer-wp" "#,
+        )
+        .replace("</w:comment>", r#"<wp:child r:flag="exact"/></w:comment>"#)
+        .replace("</w:comments>", r#"<r:root wp:flag="exact"/></w:comments>"#);
+    package.set_part("/word/comments.xml", comments.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+
+    let comment = f254_story(&document, StoryKind::Comment);
+    document
+        .add_picture_to_story(
+            &comment,
+            b"comment image",
+            "comment.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        )
+        .unwrap();
+    let comment = f254_story(&document, StoryKind::Comment);
+    document
+        .add_hyperlink_to_story(&comment, "comment link", "https://example.invalid/comment")
+        .unwrap();
+    assert!(document.resolve_comment(comment_id, true).unwrap());
+
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/comments.xml").unwrap()).unwrap();
+    assert!(xml.contains(r#"xmlns:r="urn:producer-r""#), "{xml}");
+    assert!(xml.contains(r#"xmlns:wp="urn:producer-wp""#), "{xml}");
+    assert!(xml.contains(r#"<wp:child r:flag="exact"/>"#), "{xml}");
+    assert!(xml.contains(r#"<r:root wp:flag="exact"/>"#), "{xml}");
+    assert!(
+        xml.contains(&format!(
+            r#"xmlns:wp="{}""#,
+            rdocx_oxml::drawing::drawing_ns::WP
+        )),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(&format!(
+            r#"xmlns:r="{}""#,
+            rdocx_oxml::drawing::drawing_ns::R
+        )),
+        "{xml}"
+    );
+}
+
+#[test]
+fn footnote_typed_mutation_preserves_inherited_shadowed_wp_raw_meaning() {
+    let mut seed = Document::new();
+    seed.add_footnote("original");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let footnotes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap())
+        .unwrap()
+        .replace(
+            &format!(r#"xmlns:r="{}""#, rdocx_oxml::drawing::drawing_ns::R),
+            r#"xmlns:r="urn:producer-r""#,
+        )
+        .replace(
+            "<w:footnotes ",
+            r#"<w:footnotes xmlns:wp="urn:producer-wp" "#,
+        )
+        .replacen(
+            "</w:p>",
+            r#"<wp:kept wp:value="exact" r:flag="exact"/></w:p>"#,
+            1,
+        );
+    package.set_part("/word/footnotes.xml", footnotes.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+
+    let footnote = f254_story(&document, StoryKind::Footnote);
+    document
+        .add_picture_to_story(
+            &footnote,
+            b"footnote image",
+            "footnote.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        )
+        .unwrap();
+    let footnote = f254_story(&document, StoryKind::Footnote);
+    document
+        .add_hyperlink_to_story(
+            &footnote,
+            "footnote link",
+            "https://example.invalid/footnote",
+        )
+        .unwrap();
+    document.add_footnote("later typed mutation");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    assert!(xml.contains(r#"xmlns:r="urn:producer-r""#), "{xml}");
+    assert!(xml.contains(r#"xmlns:wp="urn:producer-wp""#), "{xml}");
+    assert!(
+        xml.contains(r#"<wp:kept wp:value="exact" r:flag="exact"/>"#),
+        "{xml}"
+    );
+    assert!(xml.contains("later typed mutation"), "{xml}");
+    assert!(
+        xml.contains(&format!(
+            r#"xmlns:wp="{}""#,
+            rdocx_oxml::drawing::drawing_ns::WP
+        )),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(&format!(
+            r#"xmlns:r="{}""#,
+            rdocx_oxml::drawing::drawing_ns::R
+        )),
+        "{xml}"
+    );
+}
+
+#[test]
+fn body_and_text_box_assets_do_not_depend_on_operation_order() {
+    fn add_assets(document: &mut Document, kind: StoryKind, label: &str) {
+        let story = f254_story(document, kind);
+        document
+            .add_picture_to_story(
+                &story,
+                format!("{label} image").as_bytes(),
+                &format!("{label}.png"),
+                Length::pt(1.0),
+                Length::pt(1.0),
+            )
+            .unwrap();
+        let story = f254_story(document, kind);
+        document
+            .add_hyperlink_to_story(
+                &story,
+                &format!("{label} link"),
+                &format!("https://example.invalid/{label}"),
+            )
+            .unwrap();
+    }
+
+    fn build(reverse: bool) -> Vec<u8> {
+        let mut document = f255_story_document();
+        if reverse {
+            add_assets(&mut document, StoryKind::TextBox, "box");
+            add_assets(&mut document, StoryKind::Body, "body");
+        } else {
+            add_assets(&mut document, StoryKind::Body, "body");
+            add_assets(&mut document, StoryKind::TextBox, "box");
+        }
+        document.to_bytes().unwrap()
+    }
+
+    let forward = build(false);
+    let reverse = build(true);
+    let inspect = |bytes: &[u8]| {
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let relationships = package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .filter(|relationship| {
+                matches!(
+                    relationship.rel_type.as_str(),
+                    oxml_opc::relationship::rel_types::IMAGE
+                        | oxml_opc::relationship::rel_types::HYPERLINK
+                )
+            })
+            .map(|relationship| {
+                (
+                    relationship.id.clone(),
+                    relationship.rel_type.clone(),
+                    relationship.target.clone(),
+                    relationship.target_mode.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut media = package
+            .parts
+            .iter()
+            .filter(|(name, _)| name.starts_with("/word/media/"))
+            .map(|(name, data)| (name.clone(), data.clone()))
+            .collect::<Vec<_>>();
+        media.sort_by(|left, right| left.0.cmp(&right.0));
+        (relationships, media)
+    };
+    assert_eq!(inspect(&forward), inspect(&reverse));
+    assert_eq!(forward, reverse);
+}
+
+#[test]
+fn nested_story_assets_survive_enclosing_owner_insert_remove_clone_and_move() {
+    for (kind, label, first, target) in [
+        (StoryKind::TextBox, "box", "box first", "box target"),
+        (StoryKind::TableCell, "cell", "cell first", "cell target"),
+    ] {
+        for operation in ["insert", "remove", "clone", "move"] {
+            let mut document = f255_nested_owner_document();
+            let story = f255_story_with_text(&document, kind, target);
+            document
+                .add_picture_to_story(
+                    &story,
+                    format!("{label} image").as_bytes(),
+                    &format!("{label}.png"),
+                    Length::pt(1.0),
+                    Length::pt(1.0),
+                )
+                .unwrap_or_else(|error| panic!("{kind:?} {operation} picture: {error}"));
+            let story = f255_story_with_text(&document, kind, target);
+            document
+                .add_hyperlink_to_story(
+                    &story,
+                    &format!("{label} link"),
+                    &format!("https://example.invalid/{label}"),
+                )
+                .unwrap_or_else(|error| panic!("{kind:?} {operation} hyperlink: {error}"));
+
+            let source = f255_body_item_with_text(&document, first);
+            match operation {
+                "insert" => {
+                    let mut donor = f255_nested_owner_document();
+                    let donor_source = f255_body_item_with_text(&donor, first);
+                    let fragment = donor.remove_content_at(&donor_source).unwrap();
+                    let destination = f255_body_item_with_text(&document, target);
+                    document.insert_content(&destination, fragment).unwrap();
+                }
+                "remove" => {
+                    document.remove_content_at(&source).unwrap();
+                }
+                "clone" => {
+                    let destination = f255_body_item_with_text(&document, target);
+                    document.clone_content(&source, &destination).unwrap();
+                }
+                "move" => {
+                    let body = f254_story(&document, StoryKind::Body);
+                    document
+                        .move_content(&source, &ContentLocation::end(body))
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            f255_assert_story_assets(&reopened, kind, label);
+        }
+    }
+}
+
+#[test]
+fn f255_story_asset_paragraph_removal_reconciles_live_provenance() {
+    for kind in [StoryKind::Body, StoryKind::TextBox, StoryKind::TableCell] {
+        let mut picture = f255_nested_owner_document();
+        let story = f255_asset_story(&picture, kind);
+        picture
+            .add_picture_to_story(
+                &story,
+                b"removed picture",
+                "removed.png",
+                Length::pt(1.0),
+                Length::pt(1.0),
+            )
+            .unwrap();
+        let story = f255_asset_story(&picture, kind);
+        let picture_id = f255_story_relationship_attribute(&picture, &story, "r:embed");
+        let location = f255_story_item_with_marker(&picture, &story, "r:embed");
+        picture.remove_content_at(&location).unwrap();
+        let bytes = picture.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let document_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_eq!(
+            document_xml.matches("<wp:docPr").count(),
+            0,
+            "{kind:?} package picture occurrences {document_xml}"
+        );
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let story = f255_asset_story(&reopened, kind);
+        assert!(
+            reopened
+                .story_items(&story)
+                .unwrap()
+                .iter()
+                .all(|item| !std::str::from_utf8(item.xml().unwrap().as_ref())
+                    .unwrap()
+                    .contains(&format!(r#"r:embed="{picture_id}""#))),
+            "{kind:?} retained removed picture occurrence"
+        );
+        assert_eq!(
+            reopened.image_data_for_story(&story, &picture_id).unwrap(),
+            b"removed picture",
+            "{kind:?} picture definition"
+        );
+
+        let mut hyperlink = f255_nested_owner_document();
+        let story = f255_asset_story(&hyperlink, kind);
+        hyperlink
+            .add_hyperlink_to_story(
+                &story,
+                "removed hyperlink",
+                "https://example.invalid/removed",
+            )
+            .unwrap();
+        let story = f255_asset_story(&hyperlink, kind);
+        let hyperlink_id = f255_story_relationship_attribute(&hyperlink, &story, "r:id");
+        let location = f255_story_item_with_marker(&hyperlink, &story, "removed hyperlink");
+        hyperlink.remove_content_at(&location).unwrap();
+        let reopened = Document::from_bytes(&hyperlink.to_bytes().unwrap()).unwrap();
+        let story = f255_asset_story(&reopened, kind);
+        assert!(
+            reopened
+                .story_items(&story)
+                .unwrap()
+                .iter()
+                .all(|item| !std::str::from_utf8(item.xml().unwrap().as_ref())
+                    .unwrap()
+                    .contains(&format!(r#"r:id="{hyperlink_id}""#))),
+            "{kind:?} retained removed hyperlink occurrence"
+        );
+        assert_eq!(
+            reopened
+                .hyperlink_url_for_story(&story, &hyperlink_id)
+                .unwrap(),
+            "https://example.invalid/removed",
+            "{kind:?} hyperlink definition"
+        );
+    }
+}
+
+#[test]
+fn f255_story_asset_paragraph_clone_shares_relationships_and_freshens_drawings() {
+    for kind in [StoryKind::Body, StoryKind::TextBox, StoryKind::TableCell] {
+        let mut picture = f255_nested_owner_document();
+        let story = f255_asset_story(&picture, kind);
+        picture
+            .add_picture_to_story(
+                &story,
+                b"cloned picture",
+                "cloned.png",
+                Length::pt(1.0),
+                Length::pt(1.0),
+            )
+            .unwrap();
+        let story = f255_asset_story(&picture, kind);
+        let source = f255_story_item_with_marker(&picture, &story, "r:embed");
+        picture
+            .clone_content(&source, &ContentLocation::end(story))
+            .unwrap();
+        let bytes = picture.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let document_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_eq!(
+            document_xml.matches("<wp:docPr").count(),
+            2,
+            "{kind:?} package picture occurrences {document_xml}"
+        );
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let story = f255_asset_story(&reopened, kind);
+        let mut picture_items = reopened
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .filter_map(|item| {
+                let xml = item.xml().unwrap();
+                let xml = std::str::from_utf8(xml.as_ref()).unwrap();
+                Some((
+                    f255_xml_attribute(xml, "r:embed")?,
+                    f255_xml_attribute(xml, "id")?,
+                ))
+            })
+            .collect::<Vec<_>>();
+        picture_items.sort();
+        picture_items.dedup();
+        assert_eq!(
+            picture_items.len(),
+            2,
+            "{kind:?} picture occurrences {picture_items:?}"
+        );
+        assert_eq!(picture_items[0].0, picture_items[1].0, "{kind:?} image id");
+        assert_ne!(
+            picture_items[0].1, picture_items[1].1,
+            "{kind:?} drawing id"
+        );
+        assert_eq!(
+            document_xml
+                .matches(&format!(r#"r:embed="{}""#, picture_items[0].0))
+                .count(),
+            2,
+            "{kind:?} serialized image references {document_xml}"
+        );
+        assert_eq!(
+            reopened
+                .image_data_for_story(&story, &picture_items[0].0)
+                .unwrap(),
+            b"cloned picture",
+            "{kind:?} cloned picture semantics"
+        );
+
+        let mut hyperlink = f255_nested_owner_document();
+        let story = f255_asset_story(&hyperlink, kind);
+        hyperlink
+            .add_hyperlink_to_story(&story, "cloned hyperlink", "https://example.invalid/cloned")
+            .unwrap();
+        let story = f255_asset_story(&hyperlink, kind);
+        let source = f255_story_item_with_marker(&hyperlink, &story, "cloned hyperlink");
+        hyperlink
+            .clone_content(&source, &ContentLocation::end(story))
+            .unwrap();
+        let bytes = hyperlink.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let document_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let story = f255_asset_story(&reopened, kind);
+        let mut hyperlink_ids = reopened
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .filter_map(|item| {
+                let xml = item.xml().unwrap();
+                f255_xml_attribute(std::str::from_utf8(xml.as_ref()).unwrap(), "r:id")
+            })
+            .collect::<Vec<_>>();
+        hyperlink_ids.sort();
+        hyperlink_ids.dedup();
+        assert_eq!(hyperlink_ids.len(), 1, "{kind:?} hyperlink ids");
+        assert_eq!(
+            document_xml
+                .matches(&format!(r#"r:id="{}""#, hyperlink_ids[0]))
+                .count(),
+            2,
+            "{kind:?} serialized hyperlink references {document_xml}"
+        );
+        assert_eq!(
+            reopened
+                .hyperlink_url_for_story(&story, &hyperlink_ids[0])
+                .unwrap(),
+            "https://example.invalid/cloned",
+            "{kind:?} cloned hyperlink semantics"
+        );
+    }
+}
+
+#[test]
+fn reordered_body_and_text_box_assets_resolve_to_their_original_semantics() {
+    let mut document = f255_story_document();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .add_picture_to_story(
+            &body,
+            b"body semantic image",
+            "body-semantic.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        )
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .add_hyperlink_to_story(
+            &body,
+            "body semantic link",
+            "https://example.invalid/body-semantic",
+        )
+        .unwrap();
+    let text_box = f254_story(&document, StoryKind::TextBox);
+    document
+        .add_picture_to_story(
+            &text_box,
+            b"box semantic image",
+            "box-semantic.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        )
+        .unwrap();
+    let text_box = f254_story(&document, StoryKind::TextBox);
+    document
+        .add_hyperlink_to_story(
+            &text_box,
+            "box semantic link",
+            "https://example.invalid/box-semantic",
+        )
+        .unwrap();
+
+    let enclosing_text_box = f255_body_item_with_text(&document, "box");
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .move_content(&enclosing_text_box, &ContentLocation::end(body))
+        .unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let text_box = f255_story_with_text(&reopened, StoryKind::TextBox, "box");
+    let box_image = f255_story_relationship_attribute(&reopened, &text_box, "r:embed");
+    let box_hyperlink = f255_story_relationship_attribute(&reopened, &text_box, "r:id");
+    assert_eq!(
+        reopened
+            .image_data_for_story(&text_box, &box_image)
+            .unwrap(),
+        b"box semantic image"
+    );
+    assert_eq!(
+        reopened
+            .hyperlink_url_for_story(&text_box, &box_hyperlink)
+            .unwrap(),
+        "https://example.invalid/box-semantic"
+    );
+
+    let body = f254_story(&reopened, StoryKind::Body);
+    let body_items = reopened.story_items(&body).unwrap();
+    let body_image = body_items
+        .iter()
+        .find_map(|item| {
+            let xml = item.xml().unwrap();
+            let xml = std::str::from_utf8(xml.as_ref()).unwrap();
+            (!xml.contains("txbxContent"))
+                .then(|| f255_xml_attribute(xml, "r:embed"))
+                .flatten()
+        })
+        .expect("body picture paragraph r:embed");
+    let body_hyperlink = body_items
+        .iter()
+        .find_map(|item| {
+            let xml = item.xml().unwrap();
+            let xml = std::str::from_utf8(xml.as_ref()).unwrap();
+            xml.contains("body semantic link")
+                .then(|| f255_xml_attribute(xml, "r:id"))
+                .flatten()
+        })
+        .expect("body hyperlink paragraph r:id");
+    assert_eq!(
+        reopened.image_data_for_story(&body, &body_image).unwrap(),
+        b"body semantic image"
+    );
+    assert_eq!(
+        reopened
+            .hyperlink_url_for_story(&body, &body_hyperlink)
+            .unwrap(),
+        "https://example.invalid/body-semantic"
+    );
+}
+
 #[test]
 fn interleaved_content_operations_preserve_order_references_and_raw_xml() {
     let source = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p><w:bookmarkStart w:id="7" w:name="kept"/><w:r><w:t>alpha</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p><x:raw x:token="exact"> retained </x:raw><w:tbl><w:tr><w:tc><x:cell x:token="boundary"/><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>omega</w:t></w:r></w:p></w:body></w:document>"#;

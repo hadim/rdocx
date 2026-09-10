@@ -480,6 +480,21 @@ operations, Word and PowerPoint main-part reopen, signature discovery and
 coverage, duplicate relationship ids, direct part-map conflicts, and a sentinel
 destination that remains unchanged after pre-serialization validation fails.
 
+The story-scoped relationship gate authors equal picture and hyperlink content
+in body, header, footer, footnote, and text-box owners, saves, reopens, and
+resolves every reference only through its exact `StoryId` relationship scope.
+Atomic negatives cover stale and wrong owners, missing identifiers, wrong
+types, external images, internal hyperlinks, and missing targets. Main-part
+body, text-box, and table-cell lifecycle matrices remove and clone the authored
+paragraphs themselves. Removal leaves zero live XML references while retaining
+the relationship definition for the owned fragment. Clones serialize two
+references to one relationship, and picture clones receive distinct global
+`wp:docPr` identities. Namespace sensitivities cover aliases, character
+references, producer-shadowed `r` and `wp` bindings, and inherited raw
+relationship attributes in standalone footnotes and endnotes. Semantic reorder
+coverage extracts references from the exact body and text-box paragraphs and
+resolves them to their original media bytes and URLs.
+
 The RTF reader differential records Microsoft Word 16.104 build
 16.104.25121423 as the oracle. Its checked input is source-encoded RTF that
 covers body order, run and paragraph formatting, tables, list overrides, PNG

@@ -104,11 +104,14 @@ blobs.
 *Mitigation*: `rewrite_rel_ids`, and `add_slide` synthesising rather than
 deep-copying so the common path never needs it. The Word facade scans
 relationship definitions by owner and identifier definitions by expanded XML
-name before it allocates. Authored DrawingML is remapped only on staged typed
-state, while imported raw owners and their identifiers remain unchanged. Word
-content clones allocate fresh known document identities but retain relationship
-references only inside the unchanged story owner scope. Ambiguous preserved
-identity ranges and relationship ownership reject before publication.
+name before it allocates. Story-scoped authored occurrences are registered only
+after insertion and reconciled against live expanded-name XML on each staged
+serialization. Zero-use occurrence provenance retires without deleting its
+relationship definition. Same-owner clones may share a relationship, every
+live reference is remapped simultaneously, and each live authored picture gets
+a distinct global drawing identity. Imported raw owners and their identifiers
+remain fixed occupants. Ambiguous preserved identity ranges and relationship
+ownership reject before publication.
 
 ### R7, scope
 
@@ -209,6 +212,13 @@ boundary. A clone freshens known document identities before insertion.
 Relationship-bearing content remains restricted to its unchanged story owner,
 and preserved identity ownership that cannot be proved rejects. Serialization
 and reopen complete before the candidate replaces live state.
+
+Picture, hyperlink, and relationship lookup operations resolve the exact OPC
+owner from `StoryId`. Cells and text boxes inherit their containing part, and
+related stories use their resolved part. Media, relationship, content-type,
+XML, and drawing changes publish together only after the complete candidate
+reopens. Shared same-owner clone relationships and per-occurrence drawing
+identities are canonicalized from final serialized order.
 
 Ordered section removal uses that same staged boundary. Before removing a
 non-final owner, it resolves the first usable same-variant internal header and

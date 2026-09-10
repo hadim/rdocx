@@ -115,7 +115,16 @@ attributes in retained body XML and raw drawing payloads are fixed occupants.
 Their values are found by expanded office relationship namespace, including
 bindings inherited by the document body, and are never remapped without a safe
 raw rewrite.
-bookmark, comment, drawing, abstract-numbering, and numbering-instance values
+
+Story-scoped image and hyperlink operations resolve the normalized OPC owner
+from `StoryId`. Cells and text boxes inherit the containing part, while
+headers, footers, notes, and comments use their related parts. Main-part
+occurrence provenance reconciles against live expanded-name references during
+serialization. Repeated same-owner references share one relationship, removed
+references retire only occurrence provenance, and each live authored picture
+receives a distinct globally canonical drawing identity.
+
+Bookmark, comment, drawing, abstract-numbering, and numbering-instance values
 remain separate namespaces. Rich-merge content-control `w:id` and non-visual
 drawing `cNvPr` values remain separate merge-local scopes rather than package
 identifier-owner categories.

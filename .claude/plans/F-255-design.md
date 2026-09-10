@@ -1,6 +1,6 @@
 # F-255, Part-scoped assets, links, and relationships
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: M
 **Depends on**: F-253, F-249
@@ -80,11 +80,11 @@ final relationship and media allocation.
 
 ## Implementation checklist
 
-- [ ] Resolve every supported story to its owning OPC part.
-- [ ] Centralize part-scoped relationship lookup and validation.
-- [ ] Add story-scoped picture and hyperlink insertion.
-- [ ] Route existing helpers through the explicit owner path.
-- [ ] Test identical local ids and content across independent owners.
+- [x] Resolve every supported story to its owning OPC part.
+- [x] Centralize part-scoped relationship lookup and validation.
+- [x] Add story-scoped picture and hyperlink insertion.
+- [x] Route existing helpers through the explicit owner path.
+- [x] Test identical local ids and content across independent owners.
 
 ## Open questions
 

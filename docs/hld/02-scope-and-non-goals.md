@@ -224,7 +224,7 @@ bytes remain in the ZIP package.
 | DOCX-017 | stories | per-section default, first, and even headers and footers | P | P | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3369` | F-252 |
 | DOCX-018 | stories | common content location and traversal | NA | Y | Y | NA | Y | all | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-019 | stories | arbitrary insert, move, clone, and remove | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
-| DOCX-020 | package | part-scoped images, links, and relationships | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3019` | F-255 |
+| DOCX-020 | package | part-scoped images, links, and relationships | Y | Y | Y | Y | Y | all | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-021 | stories | transactional cross-document fragment import | P | Y | P | NA | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4409` | F-256 |
 | DOCX-022 | tables | table properties, grids, widths, borders, and layout mode | P | Y | P | P | P | body | P | P | P | P | P | B | B | partial | implementation:`crates/rdocx/src/table.rs:46` | F-257 |
 | DOCX-023 | tables | row and cell height, merge, margins, borders, and flow | P | Y | P | P | P | body | P | P | P | P | P | B | B | partial | implementation:`crates/rdocx/src/table.rs:266` | F-258 |

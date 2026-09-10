@@ -2415,9 +2415,15 @@ document unchanged.
 preserve exact order, references, and untouched raw XML.
 
 ### F-255, Part-scoped assets, links, and relationships (M)
-Make images, hyperlinks, charts, and other related content allocate against the
-owning OPC part rather than assuming the main document. Public APIs resolve and
-validate relationship scope for every supported story.
+The native Word facade resolves image, hyperlink, chart, and ordinary related
+content through an explicit OPC owner rather than a conventional main-document
+path. Public story-scoped picture and hyperlink insertion, relationship lookup,
+and internal relationship validation use checked `StoryId` owners. Cells and
+text boxes inherit the containing part. Header, footer, note, and comment
+stories use their resolved related parts. Staged serialization reconciles live
+relationship occurrences, preserves same-owner shared references, assigns each
+authored picture occurrence a global drawing identity, and publishes only a
+validated reopened candidate.
 **Depends on**: F-253, F-249.
 **Test gate**: round-trip. Equal content in body, header, footer, note, and text
 box stories resolves only through its correct owner relationships.
