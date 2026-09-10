@@ -16,11 +16,18 @@ use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, Word
 use rdocx_oxml::CT_BorderEdge;
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrType};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
-use rdocx_oxml::shared::{ST_Border, ST_PageOrientation};
+use rdocx_oxml::shared::{ST_Border, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::table::{CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TcPr};
 
 const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
 const MHTML_ORACLE_VERSION: &str = "Microsoft Word 16.104 build 16.104.25121423";
+const WORD_SECTION_ORACLE: &str = "Microsoft Word 16.112.3 build 16.112.26083020";
+const WORD_SECTION_ENVIRONMENT: &str = "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f251-section-pdf-v1; pdftotext=26.09.0; pdfinfo=26.09.0";
+const WORD_SECTION_RECORDS: [&str; 3] = [
+    "page | physical=1 | size_pt=612x792 | PAGE=1",
+    "page | physical=2 | size_pt=792x612 | PAGE=12",
+    "page | physical=3 | size_pt=595x842 | PAGE=27",
+];
 const MHTML_ORACLE_HTML: &str = "<h1>Oracle title</h1><p><strong>bold</strong> <a href='https://example.test/'>link</a><img src='https://example.test/pixel.png' width='2' height='3'></p><ol><li>one</li><li>two</li></ol><table><tr><td>cell</td></tr></table>";
 
 fn container_neutral_story_fixture() -> Document {
@@ -409,6 +416,499 @@ fn section_lookup_is_total_for_every_index() {
     assert!(document.insert_section(4).is_err());
     assert!(document.remove_section(3).is_err());
     assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn section_geometry_round_trips_with_unsupported_children_in_order() {
+    let seed = Document::new().to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed)).unwrap();
+    let source = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p><w:r><w:t>geometry</w:t></w:r></w:p><w:sectPr><w:type w:val="continuous"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/><w:paperSrc w:first="7"/><q:pgNumType q:fmt='lowerRoman' x:start='99' q:start = '3' q:chapStyle='2' q:chapSep='hyphen'/><w:cols w:num="2" w:space="360" w:sep="1"/><w:vAlign w:val="center"/><w:titlePg/><w:docGrid w:linePitch="360"/></w:sectPr></w:body></w:document>"#;
+    package.set_part("/word/document.xml", source.to_vec());
+    let mut archive = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut archive).unwrap();
+    let mut document = Document::from_bytes(archive.get_ref()).unwrap();
+
+    {
+        let mut section = document.section_mut(0).unwrap();
+        section
+            .set_page_size(Length::inches(11.0), Length::inches(8.5))
+            .unwrap();
+        section.set_orientation(ST_PageOrientation::Landscape);
+        section
+            .set_margins(
+                Length::inches(0.5),
+                Length::inches(0.75),
+                Length::inches(1.0),
+                Length::inches(1.25),
+            )
+            .unwrap();
+        section.set_gutter(Length::inches(0.2)).unwrap();
+        section.set_columns(3, Length::inches(0.25)).unwrap();
+        section.set_page_number_start(7).unwrap();
+        section
+            .set_header_footer_distance(Length::inches(0.3), Length::inches(0.4))
+            .unwrap();
+        section.set_different_first_page(false);
+        section.set_break_type(ST_SectionType::OddPage);
+    }
+
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let section = reopened.section(0).unwrap();
+    assert_eq!(section.page_size().unwrap().0.to_twips(), 15840);
+    assert_eq!(section.page_size().unwrap().1.to_twips(), 12240);
+    assert_eq!(section.orientation(), Some(ST_PageOrientation::Landscape));
+    let (top, right, bottom, left) = section.margins().unwrap();
+    assert_eq!(
+        [
+            top.to_twips(),
+            right.to_twips(),
+            bottom.to_twips(),
+            left.to_twips(),
+        ],
+        [720, 1080, 1440, 1800]
+    );
+    assert_eq!(section.gutter().unwrap().to_twips(), 288);
+    assert_eq!(
+        section
+            .columns()
+            .map(|(count, spacing)| (count, spacing.to_twips())),
+        Some((3, 360))
+    );
+    assert_eq!(section.page_number_start(), Some(7));
+    assert_eq!(
+        section
+            .header_footer_distance()
+            .map(|(header, footer)| (header.to_twips(), footer.to_twips())),
+        Some((432, 576))
+    );
+    assert_eq!(section.different_first_page(), Some(false));
+    assert_eq!(section.break_type(), Some(ST_SectionType::OddPage));
+
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let xml = std::str::from_utf8(saved_package.get_part("/word/document.xml").unwrap()).unwrap();
+    for retained in [
+        r#"<w:paperSrc w:first="7"/>"#,
+        r#"q:fmt='lowerRoman'"#,
+        r#"x:start='99'"#,
+        r#"q:chapStyle='2'"#,
+        r#"q:chapSep='hyphen'"#,
+        r#"<w:vAlign w:val="center"/>"#,
+        r#"<w:docGrid w:linePitch="360"/>"#,
+    ] {
+        assert!(
+            xml.contains(retained),
+            "missing retained XML: {retained}\n{xml}"
+        );
+    }
+    let positions = [
+        "w:pgMar",
+        "w:paperSrc",
+        "q:pgNumType",
+        "w:cols",
+        "w:vAlign",
+        "w:titlePg",
+        "w:docGrid",
+    ]
+    .map(|name| xml.find(name).unwrap());
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{xml}");
+    assert!(xml.contains("q:start = '7'"), "{xml}");
+    assert!(xml.contains(r#"w:sep="1""#), "{xml}");
+}
+
+#[test]
+fn rejected_section_geometry_is_atomic() {
+    let mut document = Document::new();
+    let before = document.to_bytes().unwrap();
+    {
+        let mut section = document.section_mut(0).unwrap();
+        assert!(
+            section
+                .set_page_size(Length::twips(0), Length::inches(11.0))
+                .is_err()
+        );
+        assert!(section.set_columns(0, Length::inches(0.5)).is_err());
+        assert!(section.set_columns(2, Length::twips(-1)).is_err());
+        let overflow = Length::emu((i32::MAX as i64 + 1) * 635);
+        assert!(
+            section
+                .set_page_size(overflow, Length::inches(11.0))
+                .is_err()
+        );
+        assert!(
+            section
+                .set_margins(
+                    Length::inches(1.0),
+                    overflow,
+                    Length::inches(1.0),
+                    Length::inches(1.0),
+                )
+                .is_err()
+        );
+        assert!(section.set_gutter(overflow).is_err());
+        assert!(section.set_columns(2, overflow).is_err());
+        assert!(
+            section
+                .set_header_footer_distance(overflow, Length::inches(0.5))
+                .is_err()
+        );
+        assert!(section.set_page_number_start(0).is_err());
+    }
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn legacy_section_geometry_setters_preserve_infallible_compatibility() {
+    let mut document = Document::new();
+    document.set_page_size(Length::twips(0), Length::twips(-1));
+    let overflow = Length::emu((i32::MAX as i64 + 1) * 635);
+    document.set_margins(overflow, overflow, overflow, overflow);
+    document.set_columns(0, Length::twips(-2));
+    document.set_gutter(Length::twips(-3));
+    document.set_header_footer_distance(Length::twips(-4), Length::twips(-5));
+
+    let section = document.section_properties().unwrap();
+    assert_eq!(section.page_width.unwrap().0, 0);
+    assert_eq!(section.page_height.unwrap().0, -1);
+    assert_eq!(section.margin_top.unwrap().0, i32::MIN);
+    assert_eq!(section.margin_right.unwrap().0, i32::MIN);
+    assert_eq!(section.margin_bottom.unwrap().0, i32::MIN);
+    assert_eq!(section.margin_left.unwrap().0, i32::MIN);
+    assert_eq!(section.columns.as_ref().unwrap().num, Some(0));
+    assert_eq!(section.columns.as_ref().unwrap().space.unwrap().0, -2);
+    assert_eq!(section.gutter.unwrap().0, -3);
+    assert_eq!(section.header_distance.unwrap().0, -4);
+    assert_eq!(section.footer_distance.unwrap().0, -5);
+}
+
+struct F251OracleArtifacts {
+    path: std::path::PathBuf,
+}
+
+impl F251OracleArtifacts {
+    fn create(path: std::path::PathBuf) -> Self {
+        std::fs::create_dir_all(&path).unwrap();
+        Self { path }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for F251OracleArtifacts {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn f251_oracle_vectors_are_complete(
+    page_count: usize,
+    size_count: usize,
+    displayed_count: usize,
+) -> bool {
+    page_count == WORD_SECTION_RECORDS.len()
+        && size_count == page_count
+        && displayed_count == page_count
+}
+
+#[test]
+fn f251_oracle_completeness_rejects_extra_or_truncated_pages() {
+    assert!(f251_oracle_vectors_are_complete(3, 3, 3));
+    assert!(!f251_oracle_vectors_are_complete(4, 4, 4));
+    assert!(!f251_oracle_vectors_are_complete(3, 2, 3));
+    assert!(!f251_oracle_vectors_are_complete(3, 3, 2));
+}
+
+#[test]
+fn f251_oracle_artifacts_are_removed_during_unwind() {
+    let directory = std::env::temp_dir().join(format!(
+        "rdocx-f251-cleanup-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let unwind = std::panic::catch_unwind(|| {
+        let artifacts = F251OracleArtifacts::create(directory.clone());
+        std::fs::write(artifacts.path().join("partial.pdf"), b"partial").unwrap();
+        panic!("exercise F-251 cleanup during unwind");
+    });
+    assert!(unwind.is_err());
+    assert!(!directory.exists());
+}
+
+fn f251_section_oracle_source() -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("first section");
+    document.insert_section(1).unwrap();
+    document.add_paragraph("second section");
+    document.insert_section(2).unwrap();
+    document.add_paragraph("third section");
+    for (index, (width, height, orientation, start)) in [
+        (12240, 15840, ST_PageOrientation::Portrait, 1),
+        (15840, 12240, ST_PageOrientation::Landscape, 12),
+        (11906, 16838, ST_PageOrientation::Portrait, 27),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut section = document.section_mut(index).unwrap();
+        section
+            .set_page_size(Length::twips(width), Length::twips(height))
+            .unwrap();
+        section.set_orientation(orientation);
+        section.set_page_number_start(start).unwrap();
+        section.set_break_type(ST_SectionType::NextPage);
+    }
+    document.set_raw_header_with_images(
+        br#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>PAGE=</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>0</w:t></w:r></w:fldSimple></w:p></w:hdr>"#.to_vec(),
+        &[],
+        HdrFtrType::Default,
+    );
+    let header_references = document
+        .section(2)
+        .unwrap()
+        .properties()
+        .header_refs
+        .clone();
+    for index in 0..2 {
+        document
+            .section_mut(index)
+            .unwrap()
+            .properties_mut()
+            .header_refs = header_references.clone();
+    }
+    document
+}
+
+#[test]
+fn mixed_orientation_sections_match_word_geometry_and_page_numbers() {
+    assert_eq!(
+        WORD_SECTION_ORACLE,
+        "Microsoft Word 16.112.3 build 16.112.26083020"
+    );
+    assert_eq!(
+        WORD_SECTION_ENVIRONMENT,
+        "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f251-section-pdf-v1; pdftotext=26.09.0; pdfinfo=26.09.0"
+    );
+    let mut document = f251_section_oracle_source();
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let geometry = reopened
+        .sections()
+        .map(|section| {
+            let (width, height) = section.page_size().unwrap();
+            (width.to_twips(), height.to_twips())
+        })
+        .collect::<Vec<_>>();
+    let page_numbers = reopened
+        .sections()
+        .map(|section| section.page_number_start().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(geometry, [(12240, 15840), (15840, 12240), (11906, 16838)]);
+    assert_eq!(page_numbers, [1, 12, 27]);
+
+    let layout = reopened.layout_deterministic().unwrap();
+    let page_geometry = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| (page.width.round() as i32, page.height.round() as i32))
+        .collect::<Vec<_>>();
+    assert_eq!(page_geometry, [(612, 792), (792, 612), (595, 842)]);
+    let physical_page_numbers = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| page.page_number)
+        .collect::<Vec<_>>();
+    let displayed_page_numbers = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| {
+            let mut text = String::new();
+            oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                oxml_layout::PositionedElement::Text(run) => text.push_str(&run.text),
+                oxml_layout::PositionedElement::MultilingualText(run) => {
+                    text.push_str(&run.logical_text)
+                }
+                _ => {}
+            });
+            let value = text.split_once("PAGE=").unwrap().1;
+            value
+                .chars()
+                .take_while(|character| character.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u32>()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(physical_page_numbers, [1, 2, 3]);
+    assert_eq!(displayed_page_numbers, [1, 12, 27]);
+    let subject_records = page_geometry
+        .iter()
+        .zip(&physical_page_numbers)
+        .zip(&displayed_page_numbers)
+        .map(|(((width, height), physical), displayed)| {
+            format!("page | physical={physical} | size_pt={width}x{height} | PAGE={displayed}")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(subject_records, WORD_SECTION_RECORDS);
+}
+
+#[test]
+#[ignore = "requires pinned Microsoft Word 16.112.3 GUI automation and Poppler 26.09.0"]
+fn regenerate_f251_word_section_oracle() {
+    let plist = "/Applications/Microsoft Word.app/Contents/Info.plist";
+    let version = std::process::Command::new("plutil")
+        .args(["-extract", "CFBundleShortVersionString", "raw", plist])
+        .output()
+        .unwrap();
+    let build = std::process::Command::new("plutil")
+        .args(["-extract", "CFBundleVersion", "raw", plist])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&version.stdout).trim(), "16.112.3");
+    assert_eq!(
+        String::from_utf8_lossy(&build.stdout).trim(),
+        "16.112.26083020"
+    );
+    assert_eq!(
+        WORD_SECTION_ORACLE,
+        "Microsoft Word 16.112.3 build 16.112.26083020"
+    );
+    for command in ["pdftotext", "pdfinfo"] {
+        let version = std::process::Command::new(command)
+            .arg("-v")
+            .output()
+            .unwrap();
+        assert!(version.status.success());
+        let expected = format!("{command} version 26.09.0");
+        assert_eq!(
+            String::from_utf8_lossy(&version.stderr).lines().next(),
+            Some(expected.as_str())
+        );
+    }
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::path::Path::new(
+        "/Users/atulsharma/Library/Containers/com.microsoft.Word/Data/Documents/rdocx-f251-word-oracle",
+    )
+    .join(format!("{}-{nonce}", std::process::id()));
+    let artifacts = F251OracleArtifacts::create(directory.clone());
+    let source_path = artifacts.path().join("f251-source.docx");
+    let pdf_path = artifacts.path().join("f251-word-render.pdf");
+    f251_section_oracle_source().save(&source_path).unwrap();
+
+    let script = format!(
+        r#"with timeout of 60 seconds
+tell application "Microsoft Word"
+activate
+open file name "{}" read only true add to recent files false
+set f251Doc to document 1
+save as f251Doc file name "{}" file format format PDF add to recent files false
+close f251Doc saving no
+end tell
+end timeout"#,
+        source_path.display(),
+        pdf_path.display(),
+    );
+    let word = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .unwrap();
+    assert!(
+        word.status.success(),
+        "Word PDF export failed: {}",
+        String::from_utf8_lossy(&word.stderr)
+    );
+
+    let text_output = std::process::Command::new("pdftotext")
+        .args(["-layout", pdf_path.to_str().unwrap(), "-"])
+        .output()
+        .unwrap();
+    assert!(text_output.status.success());
+    let page_text = String::from_utf8(text_output.stdout).unwrap();
+    let displayed = page_text
+        .split('\u{c}')
+        .filter(|page| !page.trim().is_empty())
+        .map(|page| {
+            let value = page.split_once("PAGE=").expect("Word PAGE field").1;
+            value
+                .chars()
+                .take_while(|character| character.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u32>()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let summary = std::process::Command::new("pdfinfo")
+        .arg(&pdf_path)
+        .output()
+        .unwrap();
+    assert!(summary.status.success());
+    let page_count = String::from_utf8(summary.stdout)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("Pages:").map(str::trim))
+        .expect("pdfinfo total page count")
+        .parse::<usize>()
+        .unwrap();
+    assert_eq!(
+        page_count,
+        WORD_SECTION_RECORDS.len(),
+        "Word PDF produced an unexpected number of pages"
+    );
+    let last_page = page_count.to_string();
+    let info = std::process::Command::new("pdfinfo")
+        .args(["-f", "1", "-l", &last_page, "-box"])
+        .arg(&pdf_path)
+        .output()
+        .unwrap();
+    assert!(info.status.success());
+    let sizes = String::from_utf8(info.stdout)
+        .unwrap()
+        .lines()
+        .filter(|line| line.starts_with("Page"))
+        .filter_map(|line| line.split_once(" size:").map(|(_, size)| size))
+        .map(|size| {
+            let mut values = size.split_whitespace();
+            let width = values.next().unwrap().parse::<f64>().unwrap().round() as i32;
+            assert_eq!(values.next(), Some("x"));
+            let height = values.next().unwrap().parse::<f64>().unwrap().round() as i32;
+            (width, height)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sizes.len(), page_count, "one size is required per PDF page");
+    assert_eq!(
+        displayed.len(),
+        page_count,
+        "one displayed PAGE value is required per PDF page"
+    );
+    assert!(f251_oracle_vectors_are_complete(
+        page_count,
+        sizes.len(),
+        displayed.len()
+    ));
+    let records = sizes
+        .iter()
+        .zip(&displayed)
+        .enumerate()
+        .map(|(index, ((width, height), displayed))| {
+            format!(
+                "page | physical={} | size_pt={width}x{height} | PAGE={displayed}",
+                index + 1
+            )
+        })
+        .collect::<Vec<_>>();
+    println!("F-251 Word records\n{}", records.join("\n"));
+    assert_eq!(records, WORD_SECTION_RECORDS);
+    drop(artifacts);
+    assert!(!directory.exists());
 }
 
 #[test]

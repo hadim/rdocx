@@ -954,6 +954,22 @@ odd pages and on the left for even pages. The marker does not affect text
 placement. Existing render methods select accepted layout and retain the normal
 and deterministic caches. Option-taking tracked renders are uncached.
 
+### Word section geometry and page numbering
+
+Each body section carries its own resolved page width, page height, orientation,
+margins, gutter, columns, header and footer distance, title-page state, and
+break type into pagination. A positive `w:pgNumType/@w:start` resets the
+section's displayed sequence without changing the one-based physical output
+page identity. `PageFrame::page_number` is physical and
+`PageFrame::displayed_page_number` drives PAGE substitution plus first, even,
+and default header or footer selection.
+
+A section without a restart continues after the preceding section's displayed
+last page. Appended endnote pages continue after the final body page for fresh
+and restarted pagination, including a restarted final section. PAGE fields on
+those pages consume the continued displayed value. Number format, chapter
+style, and chapter separator remain preserved but do not affect M23 layout.
+
 ### Word watermarks
 
 Header `w:pict` content has a conservative renderer-only projection. A direct

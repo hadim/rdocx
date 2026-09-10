@@ -1419,6 +1419,27 @@ rejects missing, external, cross-type, absent-part, and malformed-target
 overrides, keeps the first usable duplicate, and proves a pruning-scan failure
 leaves the live typed document and package graph unchanged.
 
+The complete section-geometry differential gate is
+`mixed_orientation_sections_match_word_geometry_and_page_numbers`. One
+source-built document produces portrait letter, landscape letter, and A4 pages
+with physical identities 1, 2, and 3 and displayed PAGE values 1, 12, and 27.
+The ignored regeneration route pins Microsoft Word 16.112.3 build
+16.112.26083020 and Poppler 26.09.0, checks the PDF's total page count, and
+requires one complete geometry and displayed-number record per page. Its exact
+unique artifact directory is removed on success and unwind.
+
+The companion round-trip gate is
+`section_geometry_round_trips_with_unsupported_children_in_order`. It covers
+every M23 geometry property, typed page-number start, schema-slot replay,
+prefix aliases and shadows, duplicate page-number elements, retained M24
+attributes, repeated reference boundaries, and save and reopen. Distinguishable
+references retain predecessor or successor placement. Indistinguishable equal
+duplicates use deterministic source ordinals and produce byte-stable output
+after value-preserving String replacement, reorder, removal, clone, and reopen.
+`rejected_section_geometry_is_atomic` covers zero, negative, and signed-range
+failures without changing the document. No standard sample authors this state,
+so all 49 hash entries remain unchanged.
+
 Five real `.docx` files are stored outside the published crates and fetched by
 `scripts/fetch_docx_corpus.py` into the ignored `corpus/docx` directory. The
 tracked manifest pins one document for each of `business-letter`, `report`,

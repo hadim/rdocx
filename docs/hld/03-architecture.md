@@ -1025,12 +1025,24 @@ owners or editable text.
 Ordered Word section ownership also belongs to the `rdocx` facade. Concrete
 `SectionRef` and `Section` handles borrow the existing paragraph-level or
 schema-final `CT_SectPr` owner and carry its document-order ordinal and final
-owner identity. They inspect section orientation and expose complete properties.
-The mutable handle also normalizes page dimensions when orientation changes and
-configures first-page behavior. `Document` counts, iterates, and looks up those
-owners without constructing a second section tree. Insertion and removal stage
-the complete document and package, retain body order and unmodelled section XML,
-serialize and reopen the candidate, then publish once.
+owner identity. They expose page size, orientation, four margins, gutter,
+equal-width columns, page-number start, header and footer distance, title-page
+state, break type, and the complete properties. Checked setters validate the
+full `Length` value before publishing any narrowed twip. Orientation mutation
+normalizes page dimensions. The legacy final-section `Document` convenience
+setters remain unchecked and infallible. `Document` counts, iterates, and looks
+up those owners without constructing a second section tree. Insertion and
+removal stage the complete document and package, retain body order and
+unmodelled section XML, serialize and reopen the candidate, then publish once.
+
+`rdocx-oxml` authors only `w:pgNumType/@w:start` for M23. Number format,
+chapter style, chapter separator, and every other unsupported attribute or
+child remain in the retained source for M24. Section serialization replays raw
+children at schema slots and at predecessor or successor boundaries between
+repeated header and footer references. Distinguishable references follow their
+value through removal and reorder. Equal public values are indistinguishable
+through the preserved `Vec<HdrFtrRef>` surface and resolve by deterministic
+source ordinal, with a resolvable following reference taking precedence.
 
 `Document` also owns one relationship-resolved `CT_Styles` graph. Public style
 creation, update, default selection, and removal build a complete candidate,

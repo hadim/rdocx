@@ -7,7 +7,9 @@ use crate::content_control::{CT_Sdt, SdtOwner};
 use crate::error::Result;
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{W_NS, matches_local_name};
-use crate::numbering::{local_namespace_overrides, merged_owner_bindings, word_prefixes_at};
+use crate::numbering::{
+    local_namespace_overrides, merged_owner_bindings, namespace_bindings, word_prefixes_at,
+};
 use crate::properties::{get_word_val_attr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
@@ -50,6 +52,42 @@ pub struct CT_Columns {
     pub columns: Vec<CT_Column>,
 }
 
+/// `CT_PageNumberType` -- the M23 page-number restart with retained M24 state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CT_PageNumberType {
+    /// Displayed page number at which this section starts.
+    pub start: Option<u32>,
+    /// Original `w:pgNumType` subtree, including unsupported attributes.
+    #[doc(hidden)]
+    pub raw_xml: Option<Vec<u8>>,
+    /// Parsed start value used to detect an authored change.
+    #[doc(hidden)]
+    pub parsed_start: Option<u32>,
+    /// Qualified name of the retained start attribute.
+    #[doc(hidden)]
+    pub start_attribute_name: Option<Vec<u8>>,
+    /// In-scope Word prefix preferred when adding a missing start attribute.
+    #[doc(hidden)]
+    pub start_insertion_prefix: Option<Vec<u8>>,
+    /// Every inherited or local prefix reserved by the retained source scope.
+    #[doc(hidden)]
+    pub reserved_insertion_prefixes: Vec<Vec<u8>>,
+}
+
+impl CT_PageNumberType {
+    /// Create an authored page-number restart.
+    pub fn new(start: u32) -> Self {
+        Self {
+            start: Some(start),
+            raw_xml: None,
+            parsed_start: None,
+            start_attribute_name: None,
+            start_insertion_prefix: None,
+            reserved_insertion_prefixes: Vec::new(),
+        }
+    }
+}
+
 impl Default for CT_Columns {
     fn default() -> Self {
         CT_Columns {
@@ -60,6 +98,60 @@ impl Default for CT_Columns {
             columns: Vec::new(),
         }
     }
+}
+
+/// Value and occurrence anchor for one repeated section reference.
+///
+/// Distinguishable values follow their source predecessor or successor. Equal
+/// duplicates are indistinguishable through the public `Vec` mutation surface,
+/// so they resolve deterministically by their ordinal among equal current
+/// values. The following anchor takes precedence when both neighbors resolve.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CT_SectPrReferenceAnchor {
+    reference: HdrFtrRef,
+    source_occurrence: usize,
+}
+
+impl CT_SectPrReferenceAnchor {
+    fn at(references: &[HdrFtrRef], index: usize) -> Option<Self> {
+        let reference = references.get(index)?.clone();
+        let source_occurrence = references[..index]
+            .iter()
+            .filter(|candidate| **candidate == reference)
+            .count();
+        Some(Self {
+            reference,
+            source_occurrence,
+        })
+    }
+
+    fn resolve(&self, references: &[HdrFtrRef]) -> Option<usize> {
+        references
+            .iter()
+            .enumerate()
+            .filter(|(_, reference)| **reference == self.reference)
+            .nth(self.source_occurrence)
+            .map(|(index, _)| index)
+    }
+}
+
+/// Retained section-child position, including repeated-child occurrence anchors.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum CT_SectPrRawPosition {
+    /// A schema slot and modeled occurrence boundary.
+    Schema { slot: usize, occurrence: usize },
+    /// A boundary tied to neighboring header-reference values and occurrences.
+    Header {
+        preceding: Option<CT_SectPrReferenceAnchor>,
+        following: Option<CT_SectPrReferenceAnchor>,
+    },
+    /// A boundary tied to neighboring footer-reference values and occurrences.
+    Footer {
+        preceding: Option<CT_SectPrReferenceAnchor>,
+        following: Option<CT_SectPrReferenceAnchor>,
+    },
 }
 
 /// `CT_SectPr` — Section properties (page size, margins, columns, orientation).
@@ -90,6 +182,8 @@ pub struct CT_SectPr {
     pub section_type: Option<ST_SectionType>,
     /// Column layout
     pub columns: Option<CT_Columns>,
+    /// Page-number restart. Unsupported format and chapter attributes remain raw.
+    pub page_number: Option<CT_PageNumberType>,
     /// Title page (different first page header/footer)
     pub title_pg: Option<bool>,
     /// Header references
@@ -98,6 +192,9 @@ pub struct CT_SectPr {
     pub footer_refs: Vec<HdrFtrRef>,
     /// Unknown child elements captured as raw XML.
     pub extra_xml: Vec<Vec<u8>>,
+    /// Schema slots and modeled-child boundaries for retained child elements.
+    #[doc(hidden)]
+    pub extra_xml_positions: Vec<CT_SectPrRawPosition>,
     /// Prior section properties from the schema-final `w:sectPrChange`.
     pub change: Option<CT_Revision>,
 }
@@ -118,10 +215,12 @@ impl CT_SectPr {
             footer_distance: None,
             section_type: None,
             columns: None,
+            page_number: None,
             title_pg: None,
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
             change: None,
         }
     }
@@ -141,10 +240,12 @@ impl CT_SectPr {
             footer_distance: Some(Twips(720)),
             section_type: None,
             columns: None,
+            page_number: None,
             title_pg: None,
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
             change: None,
         }
     }
@@ -164,10 +265,12 @@ impl CT_SectPr {
             footer_distance: Some(Twips(720)),
             section_type: None,
             columns: None,
+            page_number: None,
             title_pg: None,
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
             change: None,
         }
     }
@@ -190,6 +293,9 @@ impl CT_SectPr {
     ) -> Result<Self> {
         let mut sect = Self::empty();
         let mut change_raw_index = 0usize;
+        let mut raw_position = (0usize, 0usize);
+        let mut header_count = 0usize;
+        let mut footer_count = 0usize;
         let mut buf = Vec::new();
 
         loop {
@@ -210,6 +316,7 @@ impl CT_SectPr {
                                 sect.orientation = ST_PageOrientation::from_str(val_str).ok();
                             }
                         }
+                        raw_position = (4, 0);
                     } else if is_word_element(name.as_ref(), b"pgMar", &prefixes) {
                         for attr in e.attributes() {
                             let attr = attr?;
@@ -241,12 +348,27 @@ impl CT_SectPr {
                                     Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
                             }
                         }
+                        raw_position = (5, 0);
                     } else if is_word_element(name.as_ref(), b"type", &prefixes) {
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             sect.section_type = ST_SectionType::from_str(&val).ok();
                         }
+                        raw_position = (3, 0);
+                    } else if is_word_element(name.as_ref(), b"pgNumType", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
+                        if sect.page_number.is_none() {
+                            sect.page_number =
+                                Some(Self::parse_page_number(e, &prefixes, owner_bindings, raw)?);
+                        } else {
+                            sect.push_extra_xml(raw, 6, 1);
+                        }
+                        raw_position = (6, 1);
                     } else if is_word_element(name.as_ref(), b"cols", &prefixes) {
                         sect.columns = Some(Self::parse_cols_empty(e, &prefixes)?);
+                        raw_position = (7, 0);
                     } else if is_word_element(name.as_ref(), b"headerReference", &prefixes) {
                         let mut hdr_type = HdrFtrType::Default;
                         let mut rel_id = String::new();
@@ -265,7 +387,9 @@ impl CT_SectPr {
                                 hdr_ftr_type: hdr_type,
                                 rel_id,
                             });
+                            header_count += 1;
                         }
+                        raw_position = (0, header_count);
                     } else if is_word_element(name.as_ref(), b"footerReference", &prefixes) {
                         let mut ftr_type = HdrFtrType::Default;
                         let mut rel_id = String::new();
@@ -284,9 +408,15 @@ impl CT_SectPr {
                                 hdr_ftr_type: ftr_type,
                                 rel_id,
                             });
+                            footer_count += 1;
                         }
+                        raw_position = (1, footer_count);
                     } else if is_word_element(name.as_ref(), b"titlePg", &prefixes) {
-                        sect.title_pg = Some(true);
+                        sect.title_pg = Some(
+                            get_word_val_attr(e, &prefixes)?
+                                .is_none_or(|value| value != "0" && value != "false"),
+                        );
+                        raw_position = (8, 0);
                     } else if is_word_element(name.as_ref(), b"sectPrChange", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_empty_element(e)?,
@@ -296,17 +426,29 @@ impl CT_SectPr {
                             if let Some(previous) = sect.change.replace(revision) {
                                 sect.extra_xml
                                     .insert(change_raw_index, previous.into_raw_xml());
+                                sect.extra_xml_positions.insert(
+                                    change_raw_index,
+                                    CT_SectPrRawPosition::Schema {
+                                        slot: 9,
+                                        occurrence: 0,
+                                    },
+                                );
                             }
                             change_raw_index = sect.extra_xml.len();
                         } else {
-                            sect.extra_xml.push(raw);
+                            sect.push_extra_xml(raw, 9, 0);
                         }
+                        raw_position = (9, 0);
                     } else {
                         // Capture unknown empty elements
-                        sect.extra_xml.push(crate::text::raw_with_external_bindings(
+                        let position = Self::raw_child_schema_slot(name.as_ref(), &prefixes)
+                            .map_or(raw_position, |slot| (slot, 0));
+                        let raw = crate::text::raw_with_external_bindings(
                             &capture_empty_element(e)?,
                             owner_bindings,
-                        )?);
+                        )?;
+                        sect.push_extra_xml(raw, position.0, position.1);
+                        raw_position = position;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -314,6 +456,19 @@ impl CT_SectPr {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"cols", &prefixes) {
                         sect.columns = Some(Self::parse_cols_start(reader, e, &prefixes)?);
+                        raw_position = (7, 0);
+                    } else if is_word_element(name.as_ref(), b"pgNumType", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        if sect.page_number.is_none() {
+                            sect.page_number =
+                                Some(Self::parse_page_number(e, &prefixes, owner_bindings, raw)?);
+                        } else {
+                            sect.push_extra_xml(raw, 6, 1);
+                        }
+                        raw_position = (6, 1);
                     } else if is_word_element(name.as_ref(), b"sectPrChange", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
@@ -323,17 +478,29 @@ impl CT_SectPr {
                             if let Some(previous) = sect.change.replace(revision) {
                                 sect.extra_xml
                                     .insert(change_raw_index, previous.into_raw_xml());
+                                sect.extra_xml_positions.insert(
+                                    change_raw_index,
+                                    CT_SectPrRawPosition::Schema {
+                                        slot: 9,
+                                        occurrence: 0,
+                                    },
+                                );
                             }
                             change_raw_index = sect.extra_xml.len();
                         } else {
-                            sect.extra_xml.push(raw);
+                            sect.push_extra_xml(raw, 9, 0);
                         }
+                        raw_position = (9, 0);
                     } else {
                         // Capture unknown start elements as raw XML
-                        sect.extra_xml.push(crate::text::raw_with_external_bindings(
+                        let position = Self::raw_child_schema_slot(name.as_ref(), &prefixes)
+                            .map_or(raw_position, |slot| (slot, 0));
+                        let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
                             owner_bindings,
-                        )?);
+                        )?;
+                        sect.push_extra_xml(raw, position.0, position.1);
+                        raw_position = position;
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"sectPr") => {
@@ -346,7 +513,116 @@ impl CT_SectPr {
             buf.clear();
         }
 
+        sect.bind_story_reference_positions();
         Ok(sect)
+    }
+
+    fn parse_page_number(
+        e: &BytesStart<'_>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+        raw_xml: Vec<u8>,
+    ) -> Result<CT_PageNumberType> {
+        let mut start = None;
+        let mut start_attribute_name = None;
+        for attr in e.attributes() {
+            let attr = attr?;
+            if is_word_attribute(attr.key.as_ref(), b"start", word_prefixes) {
+                start = attr
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, e.decoder())?
+                    .parse()
+                    .ok();
+                start_attribute_name = Some(attr.key.as_ref().to_vec());
+            }
+        }
+        let element_name = e.name();
+        let element_prefix = element_name
+            .as_ref()
+            .iter()
+            .position(|byte| *byte == b':')
+            .map(|separator| &element_name.as_ref()[..separator]);
+        let start_insertion_prefix = element_prefix
+            .filter(|prefix| {
+                !prefix.is_empty()
+                    && word_prefixes
+                        .iter()
+                        .any(|candidate| candidate.as_bytes() == *prefix)
+            })
+            .or_else(|| {
+                word_prefixes
+                    .iter()
+                    .find(|prefix| !prefix.is_empty() && !prefix.starts_with('\0'))
+                    .map(String::as_bytes)
+            })
+            .map(<[u8]>::to_vec);
+        let mut reserved_insertion_prefixes = owner_bindings
+            .iter()
+            .map(|(prefix, _)| prefix.as_bytes().to_vec())
+            .collect::<Vec<_>>();
+        reserved_insertion_prefixes.extend(
+            namespace_bindings(word_prefixes)
+                .into_iter()
+                .map(|(prefix, _)| prefix.into_bytes()),
+        );
+        reserved_insertion_prefixes.sort();
+        reserved_insertion_prefixes.dedup();
+        Ok(CT_PageNumberType {
+            start,
+            raw_xml: Some(raw_xml),
+            parsed_start: start,
+            start_attribute_name,
+            start_insertion_prefix,
+            reserved_insertion_prefixes,
+        })
+    }
+
+    fn push_extra_xml(&mut self, raw: Vec<u8>, slot: usize, occurrence: usize) {
+        self.extra_xml.push(raw);
+        self.extra_xml_positions
+            .push(CT_SectPrRawPosition::Schema { slot, occurrence });
+    }
+
+    fn bind_story_reference_positions(&mut self) {
+        for position in &mut self.extra_xml_positions {
+            let (slot, occurrence) = match position {
+                CT_SectPrRawPosition::Schema { slot, occurrence } => (*slot, *occurrence),
+                _ => continue,
+            };
+            let (references, is_header) = match slot {
+                0 => (&self.header_refs, true),
+                1 => (&self.footer_refs, false),
+                _ => continue,
+            };
+            let preceding = occurrence
+                .checked_sub(1)
+                .and_then(|index| CT_SectPrReferenceAnchor::at(references, index));
+            let following = CT_SectPrReferenceAnchor::at(references, occurrence);
+            *position = if is_header {
+                CT_SectPrRawPosition::Header {
+                    preceding,
+                    following,
+                }
+            } else {
+                CT_SectPrRawPosition::Footer {
+                    preceding,
+                    following,
+                }
+            };
+        }
+    }
+
+    fn raw_child_schema_slot(name: &[u8], word_prefixes: &[String]) -> Option<usize> {
+        let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
+        if !is_word_element(name, local, word_prefixes) {
+            return None;
+        }
+        match local {
+            b"footnotePr" | b"endnotePr" => Some(2),
+            b"paperSrc" | b"pgBorders" | b"lnNumType" => Some(5),
+            b"formProt" | b"vAlign" | b"noEndnote" => Some(7),
+            b"textDirection" | b"bidi" | b"rtlGutter" | b"docGrid" | b"printerSettings" => Some(8),
+            _ => None,
+        }
     }
 
     fn parse_cols_attrs(e: &BytesStart, word_prefixes: &[String]) -> Result<CT_Columns> {
@@ -417,21 +693,37 @@ impl CT_SectPr {
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         let mut buf = itoa::Buffer::new();
         writer.write_event(Event::Start(BytesStart::new("w:sectPr")))?;
+        let ordered_raw = self.extra_xml_positions.len() == self.extra_xml.len();
+        if ordered_raw {
+            self.write_story_reference_boundary(writer, &self.header_refs, true, 0)?;
+        }
 
         // headerReference elements
-        for hdr in &self.header_refs {
+        for (index, hdr) in self.header_refs.iter().enumerate() {
             let mut e = BytesStart::new("w:headerReference");
             e.push_attribute(("w:type", hdr.hdr_ftr_type.to_str()));
             e.push_attribute(("r:id", hdr.rel_id.as_str()));
             writer.write_event(Event::Empty(e))?;
+            if ordered_raw {
+                self.write_story_reference_boundary(writer, &self.header_refs, true, index + 1)?;
+            }
+        }
+        if ordered_raw {
+            self.write_story_reference_boundary(writer, &self.footer_refs, false, 0)?;
         }
 
         // footerReference elements
-        for ftr in &self.footer_refs {
+        for (index, ftr) in self.footer_refs.iter().enumerate() {
             let mut e = BytesStart::new("w:footerReference");
             e.push_attribute(("w:type", ftr.hdr_ftr_type.to_str()));
             e.push_attribute(("r:id", ftr.rel_id.as_str()));
             writer.write_event(Event::Empty(e))?;
+            if ordered_raw {
+                self.write_story_reference_boundary(writer, &self.footer_refs, false, index + 1)?;
+            }
+        }
+        if ordered_raw {
+            self.write_raw_position(writer, 2, 0)?;
         }
 
         // type (section break type)
@@ -439,6 +731,9 @@ impl CT_SectPr {
             let mut e = BytesStart::new("w:type");
             e.push_attribute(("w:val", st.to_str()));
             writer.write_event(Event::Empty(e))?;
+        }
+        if ordered_raw {
+            self.write_raw_position(writer, 3, 0)?;
         }
 
         // pgSz
@@ -457,12 +752,18 @@ impl CT_SectPr {
             }
             writer.write_event(Event::Empty(e))?;
         }
+        if ordered_raw {
+            self.write_raw_position(writer, 4, 0)?;
+        }
 
         // pgMar
         if self.margin_top.is_some()
             || self.margin_right.is_some()
             || self.margin_bottom.is_some()
             || self.margin_left.is_some()
+            || self.gutter.is_some()
+            || self.header_distance.is_some()
+            || self.footer_distance.is_some()
         {
             let mut e = BytesStart::new("w:pgMar");
             if let Some(t) = self.margin_top {
@@ -487,6 +788,17 @@ impl CT_SectPr {
                 e.push_attribute(("w:footer", buf.format(f.0)));
             }
             writer.write_event(Event::Empty(e))?;
+        }
+        if ordered_raw {
+            self.write_raw_position(writer, 5, 0)?;
+        }
+
+        // pgNumType. M24 format and chapter attributes stay byte-exact unless start changes.
+        if let Some(page_number) = &self.page_number {
+            page_number.to_xml(writer)?;
+        }
+        if ordered_raw {
+            self.write_raw_position(writer, 6, 1)?;
         }
 
         // cols
@@ -541,17 +853,31 @@ impl CT_SectPr {
                 writer.write_event(Event::End(BytesEnd::new("w:cols")))?;
             }
         }
+        if ordered_raw {
+            self.write_raw_position(writer, 7, 0)?;
+        }
 
         // titlePg
-        if let Some(true) = self.title_pg {
-            writer.write_event(Event::Empty(BytesStart::new("w:titlePg")))?;
+        if let Some(title_pg) = self.title_pg {
+            let mut e = BytesStart::new("w:titlePg");
+            if !title_pg {
+                e.push_attribute(("w:val", "0"));
+            }
+            writer.write_event(Event::Empty(e))?;
         }
 
-        // Write captured unknown elements
-        for raw in &self.extra_xml {
-            writer.get_mut().write_all(raw)?;
+        if ordered_raw {
+            self.write_raw_position(writer, 8, 0)?;
+        } else {
+            // Legacy callers that populate only `extra_xml` retain the previous position.
+            for raw in &self.extra_xml {
+                writer.get_mut().write_all(raw)?;
+            }
         }
 
+        if ordered_raw {
+            self.write_raw_position(writer, 9, 0)?;
+        }
         if let Some(change) = &self.change {
             change.write_xml(writer)?;
         }
@@ -559,6 +885,251 @@ impl CT_SectPr {
         writer.write_event(Event::End(BytesEnd::new("w:sectPr")))?;
         Ok(())
     }
+
+    fn write_raw_position<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        slot: usize,
+        occurrence: usize,
+    ) -> Result<()> {
+        for (position, raw) in self.extra_xml_positions.iter().zip(&self.extra_xml) {
+            if matches!(
+                position,
+                CT_SectPrRawPosition::Schema {
+                    slot: candidate_slot,
+                    occurrence: candidate_occurrence,
+                } if (*candidate_slot, *candidate_occurrence) == (slot, occurrence)
+            ) {
+                writer.get_mut().write_all(raw)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_story_reference_boundary<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        references: &[HdrFtrRef],
+        header: bool,
+        boundary: usize,
+    ) -> Result<()> {
+        for (position, raw) in self.extra_xml_positions.iter().zip(&self.extra_xml) {
+            let anchored = match position {
+                CT_SectPrRawPosition::Header {
+                    preceding,
+                    following,
+                } if header => Some((preceding, following)),
+                CT_SectPrRawPosition::Footer {
+                    preceding,
+                    following,
+                } if !header => Some((preceding, following)),
+                CT_SectPrRawPosition::Schema { slot, occurrence }
+                    if (*slot == 0 && header) || (*slot == 1 && !header) =>
+                {
+                    if (*occurrence).min(references.len()) == boundary {
+                        writer.get_mut().write_all(raw)?;
+                    }
+                    None
+                }
+                _ => None,
+            };
+            let Some((preceding, following)) = anchored else {
+                continue;
+            };
+            let resolved = following
+                .as_ref()
+                .and_then(|reference| reference.resolve(references))
+                .or_else(|| {
+                    preceding
+                        .as_ref()
+                        .and_then(|reference| reference.resolve(references).map(|index| index + 1))
+                })
+                .unwrap_or(references.len());
+            if resolved == boundary {
+                writer.get_mut().write_all(raw)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl CT_PageNumberType {
+    fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        if let Some(raw) = &self.raw_xml {
+            if self.start == self.parsed_start {
+                writer.get_mut().write_all(raw)?;
+                return Ok(());
+            }
+            writer.get_mut().write_all(&replace_page_number_start(
+                raw,
+                self.start,
+                self.start_attribute_name.as_deref(),
+                self.start_insertion_prefix.as_deref(),
+                &self.reserved_insertion_prefixes,
+            )?)?;
+            return Ok(());
+        }
+
+        let mut element = BytesStart::new("w:pgNumType");
+        if let Some(start) = self.start {
+            let mut buf = itoa::Buffer::new();
+            element.push_attribute(("w:start", buf.format(start)));
+        }
+        writer.write_event(Event::Empty(element))?;
+        Ok(())
+    }
+}
+
+fn replace_page_number_start(
+    raw: &[u8],
+    start: Option<u32>,
+    attribute_name: Option<&[u8]>,
+    insertion_prefix: Option<&[u8]>,
+    reserved_prefixes: &[Vec<u8>],
+) -> Result<Vec<u8>> {
+    let replacement = start.map(|value| value.to_string());
+    let mut output = raw.to_vec();
+    let Some((tag_end, attributes)) = start_tag_attributes(raw) else {
+        return Ok(output);
+    };
+    if let Some(name) = attribute_name
+        && let Some((_, value, full)) = attributes
+            .iter()
+            .find(|(candidate, _, _)| &raw[candidate.clone()] == name)
+    {
+        if let Some(ref value_text) = replacement {
+            output.splice(value.clone(), value_text.bytes());
+        } else {
+            output.drain(full.clone());
+        }
+        return Ok(output);
+    }
+
+    if let Some(value) = replacement {
+        let insert_at = raw[..tag_end]
+            .iter()
+            .rposition(|byte| !byte.is_ascii_whitespace() && *byte != b'/')
+            .map_or(tag_end, |index| index + 1);
+        let inserted = if let Some(prefix) = insertion_prefix {
+            format!(" {}:start=\"{value}\"", String::from_utf8_lossy(prefix))
+        } else {
+            let prefix = unused_page_number_prefix(raw, tag_end, &attributes, reserved_prefixes);
+            format!(" xmlns:{prefix}=\"{W_NS}\" {prefix}:start=\"{value}\"")
+        };
+        output.splice(insert_at..insert_at, inserted.bytes());
+    }
+    Ok(output)
+}
+
+fn unused_page_number_prefix(
+    raw: &[u8],
+    tag_end: usize,
+    attributes: &[AttributeSpans],
+    reserved_prefixes: &[Vec<u8>],
+) -> String {
+    for suffix in 0usize.. {
+        let prefix = if suffix == 0 {
+            "rdocxWord".to_owned()
+        } else {
+            format!("rdocxWord{suffix}")
+        };
+        let declaration = format!("xmlns:{prefix}");
+        let qualified = format!("{prefix}:");
+        let used = reserved_prefixes
+            .iter()
+            .any(|candidate| candidate == prefix.as_bytes())
+            || attributes.iter().any(|(name, _, _)| {
+                &raw[name.clone()] == declaration.as_bytes()
+                    || raw[name.clone()].starts_with(qualified.as_bytes())
+            })
+            || raw[1..tag_end].starts_with(qualified.as_bytes());
+        if !used {
+            return prefix;
+        }
+    }
+    unreachable!("the finite start tag cannot use every generated prefix")
+}
+
+type AttributeSpans = (
+    std::ops::Range<usize>,
+    std::ops::Range<usize>,
+    std::ops::Range<usize>,
+);
+
+fn start_tag_attributes(raw: &[u8]) -> Option<(usize, Vec<AttributeSpans>)> {
+    if raw.first() != Some(&b'<') {
+        return None;
+    }
+    let mut quote = None;
+    let tag_end = raw
+        .iter()
+        .enumerate()
+        .find_map(|(index, byte)| match (*byte, quote) {
+            (b'\'' | b'"', None) => {
+                quote = Some(*byte);
+                None
+            }
+            (value, Some(open)) if value == open => {
+                quote = None;
+                None
+            }
+            (b'>', None) => Some(index),
+            _ => None,
+        })?;
+
+    let mut cursor = 1usize;
+    while cursor < tag_end && !raw[cursor].is_ascii_whitespace() && raw[cursor] != b'/' {
+        cursor += 1;
+    }
+    let mut attributes = Vec::new();
+    while cursor < tag_end {
+        let full_start = cursor;
+        while cursor < tag_end && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor == tag_end || raw[cursor] == b'/' {
+            break;
+        }
+        let name_start = cursor;
+        while cursor < tag_end
+            && !raw[cursor].is_ascii_whitespace()
+            && raw[cursor] != b'='
+            && raw[cursor] != b'/'
+        {
+            cursor += 1;
+        }
+        let name_end = cursor;
+        while cursor < tag_end && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if raw.get(cursor) != Some(&b'=') {
+            return None;
+        }
+        cursor += 1;
+        while cursor < tag_end && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let open_quote = *raw.get(cursor)?;
+        if open_quote != b'\'' && open_quote != b'"' {
+            return None;
+        }
+        cursor += 1;
+        let value_start = cursor;
+        while cursor < tag_end && raw[cursor] != open_quote {
+            cursor += 1;
+        }
+        if cursor == tag_end {
+            return None;
+        }
+        let value_end = cursor;
+        cursor += 1;
+        attributes.push((
+            name_start..name_end,
+            value_start..value_end,
+            full_start..cursor,
+        ));
+    }
+    Some((tag_end, attributes))
 }
 
 /// `CT_Body` — The document body containing paragraphs, tables, and section properties.
@@ -1337,6 +1908,329 @@ mod tests {
         let sect = parsed.body.sect_pr.unwrap();
         assert_eq!(sect.section_type, Some(ST_SectionType::Continuous));
         assert_eq!(sect.title_pg, Some(true));
+    }
+
+    #[test]
+    fn page_number_start_mutation_targets_only_the_parsed_attribute() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:q="{W_NS}" xmlns:x="urn:producer"><w:body><w:sectPr><q:pgNumType x:note="q:start='producer'>still producer" q:start = '3' x:tail="keep"/></w:sectPr></w:body></w:document>"#
+        );
+        let mut document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        document
+            .body
+            .sect_pr
+            .as_mut()
+            .unwrap()
+            .page_number
+            .as_mut()
+            .unwrap()
+            .start = Some(27);
+
+        let written = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        assert!(
+            written.contains(r#"x:note="q:start='producer'>still producer""#),
+            "{written}"
+        );
+        assert!(written.contains("q:start = '27'"), "{written}");
+        assert!(written.contains(r#"x:tail="keep""#), "{written}");
+    }
+
+    #[test]
+    fn missing_page_number_start_uses_a_prefix_bound_to_word() {
+        for (page_number, expected, inherited) in [
+            (
+                format!(r#"<q:pgNumType xmlns:q="{W_NS}" xmlns:w="urn:producer"/>"#),
+                "q:start=\"27\"",
+                "",
+            ),
+            (
+                format!(r#"<pgNumType xmlns="{W_NS}" xmlns:w="urn:producer"/>"#),
+                "rdocxWord:start=\"27\"",
+                "",
+            ),
+            (
+                format!(
+                    r#"<pgNumType xmlns="{W_NS}" xmlns:w="urn:producer" xmlns:x="urn:extension" x:type="rdocxWord:ProducerType"/>"#
+                ),
+                "rdocxWord1:start=\"27\"",
+                r#" xmlns:rdocxWord="urn:producer""#,
+            ),
+        ] {
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}"{inherited}><w:body><w:sectPr>{page_number}</w:sectPr></w:body></w:document>"#
+            );
+            let mut document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+            document
+                .body
+                .sect_pr
+                .as_mut()
+                .unwrap()
+                .page_number
+                .as_mut()
+                .unwrap()
+                .start = Some(27);
+
+            let written = document.to_xml().unwrap();
+            let written_text = String::from_utf8(written.clone()).unwrap();
+            assert!(written_text.contains(expected), "{written_text}");
+            assert!(!written_text.contains(r#" w:start="27""#), "{written_text}");
+            if !inherited.is_empty() {
+                assert!(
+                    written_text.contains(r#"xmlns:rdocxWord="urn:producer""#),
+                    "{written_text}"
+                );
+                assert!(
+                    written_text.contains(r#"x:type="rdocxWord:ProducerType""#),
+                    "{written_text}"
+                );
+            }
+            let reopened = CT_Document::from_xml(&written).unwrap();
+            assert_eq!(
+                reopened.body.sect_pr.unwrap().page_number.unwrap().start,
+                Some(27)
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_page_number_elements_preserve_source_order() {
+        for (page_numbers, expected_start) in [
+            (
+                r#"<w:pgNumType x:id="raw-first"/><w:pgNumType x:id="raw-second"/>"#,
+                None,
+            ),
+            (
+                r#"<w:pgNumType w:start="12" x:id="typed-first"/><w:pgNumType w:start="27" x:id="typed-second"/>"#,
+                Some(12),
+            ),
+        ] {
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body><w:sectPr>{page_numbers}</w:sectPr></w:body></w:document>"#
+            );
+            let document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+            assert_eq!(
+                document
+                    .body
+                    .sect_pr
+                    .as_ref()
+                    .unwrap()
+                    .page_number
+                    .as_ref()
+                    .unwrap()
+                    .start,
+                expected_start
+            );
+            let written = String::from_utf8(document.to_xml().unwrap()).unwrap();
+            let first = written.find("first").unwrap();
+            let second = written.find("second").unwrap();
+            assert!(first < second, "{written}");
+        }
+    }
+
+    #[test]
+    fn retained_children_keep_boundaries_between_repeated_story_references() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:producer"><w:body><w:sectPr><w:headerReference w:type="default" r:id="h1"/><x:betweenHeaders/><w:headerReference w:type="first" r:id="h2"/><w:footerReference w:type="default" r:id="f1"/><x:betweenFooters/><w:footerReference w:type="even" r:id="f2"/></w:sectPr></w:body></w:document>"#
+        );
+        let mut document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let written = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        let positions = ["h1", "betweenHeaders", "h2", "f1", "betweenFooters", "f2"]
+            .map(|marker| written.find(marker).unwrap());
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{written}"
+        );
+
+        let mut front_removed = document.clone();
+        front_removed
+            .body
+            .sect_pr
+            .as_mut()
+            .unwrap()
+            .header_refs
+            .remove(0);
+        let front_removed = String::from_utf8(front_removed.to_xml().unwrap()).unwrap();
+        assert!(
+            front_removed.find("betweenHeaders").unwrap() < front_removed.find("h2").unwrap(),
+            "{front_removed}"
+        );
+
+        let mut reordered = document.clone();
+        reordered
+            .body
+            .sect_pr
+            .as_mut()
+            .unwrap()
+            .header_refs
+            .swap(0, 1);
+        let reordered = String::from_utf8(reordered.to_xml().unwrap()).unwrap();
+        let reordered_positions =
+            ["betweenHeaders", "h2", "h1"].map(|marker| reordered.find(marker).unwrap());
+        assert!(
+            reordered_positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{reordered}"
+        );
+
+        let section = document.body.sect_pr.as_mut().unwrap();
+        section.header_refs.clear();
+        section.footer_refs.clear();
+        let shortened = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        assert!(shortened.contains("betweenHeaders"), "{shortened}");
+        assert!(shortened.contains("betweenFooters"), "{shortened}");
+    }
+
+    #[test]
+    fn retained_boundaries_use_occurrences_for_equal_story_references() {
+        fn positions(xml: &str, reference: &str, retained: &str) -> (Vec<usize>, usize) {
+            (
+                xml.match_indices(reference)
+                    .map(|(index, _)| index)
+                    .collect(),
+                xml.find(retained).unwrap(),
+            )
+        }
+
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:producer"><w:body><w:sectPr><w:headerReference w:type="default" r:id="sameHeader"/><x:betweenEqualHeaders/><w:headerReference w:type="default" r:id="sameHeader"/><w:footerReference w:type="default" r:id="sameFooter"/><x:betweenEqualFooters/><w:footerReference w:type="default" r:id="sameFooter"/></w:sectPr></w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+
+        let unchanged = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        let (headers, raw_header) = positions(&unchanged, "sameHeader", "betweenEqualHeaders");
+        let (footers, raw_footer) = positions(&unchanged, "sameFooter", "betweenEqualFooters");
+        assert!(
+            headers[0] < raw_header && raw_header < headers[1],
+            "{unchanged}"
+        );
+        assert!(
+            footers[0] < raw_footer && raw_footer < footers[1],
+            "{unchanged}"
+        );
+
+        let mut front_removed = document.clone();
+        front_removed
+            .body
+            .sect_pr
+            .as_mut()
+            .unwrap()
+            .header_refs
+            .remove(0);
+        let front_removed = String::from_utf8(front_removed.to_xml().unwrap()).unwrap();
+        let (headers, raw_header) = positions(&front_removed, "sameHeader", "betweenEqualHeaders");
+        assert!(headers[0] < raw_header, "{front_removed}");
+
+        let mut tail_removed = document.clone();
+        tail_removed
+            .body
+            .sect_pr
+            .as_mut()
+            .unwrap()
+            .footer_refs
+            .remove(1);
+        let tail_removed = String::from_utf8(tail_removed.to_xml().unwrap()).unwrap();
+        let (footers, raw_footer) = positions(&tail_removed, "sameFooter", "betweenEqualFooters");
+        assert!(footers[0] < raw_footer, "{tail_removed}");
+
+        let mut reordered = document.clone();
+        let section = reordered.body.sect_pr.as_mut().unwrap();
+        section.header_refs.swap(0, 1);
+        section.footer_refs.swap(0, 1);
+        let reordered = String::from_utf8(reordered.to_xml().unwrap()).unwrap();
+        let (headers, raw_header) = positions(&reordered, "sameHeader", "betweenEqualHeaders");
+        let (footers, raw_footer) = positions(&reordered, "sameFooter", "betweenEqualFooters");
+        assert!(
+            headers[0] < raw_header && raw_header < headers[1],
+            "{reordered}"
+        );
+        assert!(
+            footers[0] < raw_footer && raw_footer < footers[1],
+            "{reordered}"
+        );
+    }
+
+    #[test]
+    fn ambiguous_equal_reference_mutations_are_byte_stable() {
+        fn positions(xml: &str) -> (Vec<usize>, usize) {
+            (
+                xml.match_indices("sameHeader")
+                    .map(|(index, _)| index)
+                    .collect(),
+                xml.find("betweenEqualHeaders").unwrap(),
+            )
+        }
+
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:producer"><w:body><w:sectPr><w:headerReference w:type="default" r:id="sameHeader"/><x:betweenEqualHeaders/><w:headerReference w:type="default" r:id="sameHeader"/></w:sectPr></w:body></w:document>"#
+        );
+        let source = CT_Document::from_xml(xml.as_bytes()).unwrap();
+
+        let mut edited = source.clone();
+        let section = edited.body.sect_pr.as_mut().unwrap();
+        let _: &Vec<HdrFtrRef> = &section.header_refs;
+        let old_allocations = [
+            section.header_refs[0].rel_id.as_ptr(),
+            section.header_refs[1].rel_id.as_ptr(),
+        ];
+        let replacements = section
+            .header_refs
+            .iter()
+            .map(|reference| String::from_utf8(reference.rel_id.as_bytes().to_vec()).unwrap())
+            .collect::<Vec<_>>();
+        assert!(replacements.iter().all(|replacement| {
+            old_allocations
+                .iter()
+                .all(|allocation| replacement.as_ptr() != *allocation)
+        }));
+        for (reference, replacement) in section.header_refs.iter_mut().zip(replacements) {
+            reference.rel_id = replacement;
+        }
+        section.header_refs.swap(0, 1);
+
+        let written = String::from_utf8(edited.to_xml().unwrap()).unwrap();
+        let (references, retained) = positions(&written);
+        assert!(
+            references[0] < retained && retained < references[1],
+            "{written}"
+        );
+        assert_eq!(
+            written,
+            String::from_utf8(edited.clone().to_xml().unwrap()).unwrap()
+        );
+
+        let reopened = CT_Document::from_xml(written.as_bytes()).unwrap();
+        let reopened_written = String::from_utf8(reopened.to_xml().unwrap()).unwrap();
+        let (references, retained) = positions(&reopened_written);
+        assert!(
+            references[0] < retained && retained < references[1],
+            "{reopened_written}"
+        );
+        assert_eq!(
+            reopened_written,
+            String::from_utf8(reopened.clone().to_xml().unwrap()).unwrap()
+        );
+
+        let mut replaced_source = source.clone();
+        let section = replaced_source.body.sect_pr.as_mut().unwrap();
+        let retired = section.header_refs.remove(1);
+        drop(retired);
+        section.header_refs.insert(
+            0,
+            HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: "sameHeader".to_owned(),
+            },
+        );
+        let replaced_source = String::from_utf8(replaced_source.to_xml().unwrap()).unwrap();
+        let (references, retained) = positions(&replaced_source);
+        assert!(
+            references[0] < retained && retained < references[1],
+            "{replaced_source}"
+        );
+        let reopened = CT_Document::from_xml(replaced_source.as_bytes()).unwrap();
+        assert_eq!(
+            replaced_source,
+            String::from_utf8(reopened.to_xml().unwrap()).unwrap()
+        );
     }
 
     #[test]

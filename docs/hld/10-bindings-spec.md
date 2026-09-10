@@ -332,14 +332,24 @@ Python, WASM, and CLI gain no story traversal or mutation entry point.
 
 Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
 Each handle reports its zero-based document ordinal, schema-final ownership,
-and configured orientation while retaining access to the complete section
-properties. The mutable handle normalizes page dimensions when setting
-orientation and configures first-page header and footer behavior. `Document`
-adds `section_count`, `sections`, total `section` and `section_mut` lookup, and
-fallible staged `insert_section` and `remove_section` operations. These are
-additive APIs on the published pre-1.0 `rdocx` crate. Python, WASM, and CLI gain
-no section mutation entry point and retain their existing package and render
-behavior.
+and configured geometry while retaining access to the complete section
+properties. Both handles read page size, orientation, margins, gutter,
+equal-width columns, page-number start, header and footer distance, title-page
+state, and break type. The mutable handle adds checked setters for every value,
+normalizes page dimensions when setting orientation, and rejects invalid or
+out-of-range inputs before changing any field. `Document` adds `section_count`,
+`sections`, total `section` and `section_mut` lookup, and fallible staged
+`insert_section` and `remove_section` operations. Its older final-section
+geometry convenience setters remain infallible and unchecked.
+
+`CT_SectPr` adds typed page-number start and raw child-position state, while
+`PageFrame` adds `displayed_page_number` beside its physical `page_number`.
+These model and handle additions are additive APIs on the published pre-1.0
+Rust crates, though exhaustive struct literals can require new fields. The
+published `CT_SectPr.header_refs` and `footer_refs` types remain
+`Vec<HdrFtrRef>` with the complete native vector surface. Python, WASM, and CLI
+gain no section mutation entry point and retain their existing package and
+render behavior.
 
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic

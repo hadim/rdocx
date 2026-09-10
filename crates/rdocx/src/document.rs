@@ -45,6 +45,7 @@ use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{
     CT_P, CT_R, RunContent, story_field_instruction_has_name, story_simple_field_is_typed,
 };
+use rdocx_oxml::units::Twips;
 
 use oxml_core::custom_properties::{CustomProperties, CustomProperty};
 use rdocx_oxml::core_properties::CoreProperties;
@@ -1797,6 +1798,64 @@ impl<'a> SectionRef<'a> {
         self.inner.orientation
     }
 
+    /// Return the explicitly configured page width and height.
+    pub fn page_size(&self) -> Option<(Length, Length)> {
+        Some((
+            Length::twips(self.inner.page_width?.0),
+            Length::twips(self.inner.page_height?.0),
+        ))
+    }
+
+    /// Return the explicitly configured top, right, bottom, and left margins.
+    pub fn margins(&self) -> Option<(Length, Length, Length, Length)> {
+        Some((
+            Length::twips(self.inner.margin_top?.0),
+            Length::twips(self.inner.margin_right?.0),
+            Length::twips(self.inner.margin_bottom?.0),
+            Length::twips(self.inner.margin_left?.0),
+        ))
+    }
+
+    /// Return the explicitly configured gutter.
+    pub fn gutter(&self) -> Option<Length> {
+        self.inner.gutter.map(|value| Length::twips(value.0))
+    }
+
+    /// Return the equal-width column count and spacing when modeled by M23.
+    pub fn columns(&self) -> Option<(u32, Length)> {
+        let columns = self.inner.columns.as_ref()?;
+        if columns.equal_width == Some(false) || !columns.columns.is_empty() {
+            return None;
+        }
+        Some((
+            columns.num.unwrap_or(1),
+            Length::twips(columns.space.map_or(720, |value| value.0)),
+        ))
+    }
+
+    /// Return the explicitly configured page-number restart.
+    pub fn page_number_start(&self) -> Option<u32> {
+        self.inner.page_number.as_ref()?.start
+    }
+
+    /// Return the explicitly configured header and footer distances.
+    pub fn header_footer_distance(&self) -> Option<(Length, Length)> {
+        Some((
+            Length::twips(self.inner.header_distance?.0),
+            Length::twips(self.inner.footer_distance?.0),
+        ))
+    }
+
+    /// Return the explicitly configured title-page state.
+    pub fn different_first_page(&self) -> Option<bool> {
+        self.inner.title_pg
+    }
+
+    /// Return the explicitly configured section break type.
+    pub fn break_type(&self) -> Option<ST_SectionType> {
+        self.inner.section_type
+    }
+
     /// Borrow the complete section properties.
     pub fn properties(&self) -> &'a CT_SectPr {
         self.inner
@@ -1826,6 +1885,25 @@ impl Section<'_> {
         self.inner.orientation
     }
 
+    /// Return the explicitly configured page width and height.
+    pub fn page_size(&self) -> Option<(Length, Length)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .page_size()
+    }
+
+    /// Set this section's positive page dimensions.
+    pub fn set_page_size(&mut self, width: Length, height: Length) -> Result<()> {
+        let width = checked_positive_section_twips(width, "page width")?;
+        let height = checked_positive_section_twips(height, "page height")?;
+        self.inner.page_width = Some(width);
+        self.inner.page_height = Some(height);
+        Ok(())
+    }
+
     /// Set this section's orientation and normalize its page dimensions.
     pub fn set_orientation(&mut self, orientation: ST_PageOrientation) {
         self.inner.orientation = Some(orientation);
@@ -1841,9 +1919,134 @@ impl Section<'_> {
         }
     }
 
+    /// Return the explicitly configured top, right, bottom, and left margins.
+    pub fn margins(&self) -> Option<(Length, Length, Length, Length)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .margins()
+    }
+
+    /// Set this section's top, right, bottom, and left margins.
+    pub fn set_margins(
+        &mut self,
+        top: Length,
+        right: Length,
+        bottom: Length,
+        left: Length,
+    ) -> Result<()> {
+        let top = checked_section_twips(top, "top margin")?;
+        let right = checked_section_twips(right, "right margin")?;
+        let bottom = checked_section_twips(bottom, "bottom margin")?;
+        let left = checked_section_twips(left, "left margin")?;
+        self.inner.margin_top = Some(top);
+        self.inner.margin_right = Some(right);
+        self.inner.margin_bottom = Some(bottom);
+        self.inner.margin_left = Some(left);
+        Ok(())
+    }
+
+    /// Return the explicitly configured gutter.
+    pub fn gutter(&self) -> Option<Length> {
+        self.inner.gutter.map(|value| Length::twips(value.0))
+    }
+
+    /// Set this section's nonnegative gutter.
+    pub fn set_gutter(&mut self, gutter: Length) -> Result<()> {
+        let gutter = checked_nonnegative_section_twips(gutter, "gutter")?;
+        self.inner.gutter = Some(gutter);
+        Ok(())
+    }
+
+    /// Return the equal-width column count and spacing when modeled by M23.
+    pub fn columns(&self) -> Option<(u32, Length)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .columns()
+    }
+
+    /// Set positive-count equal-width columns with nonnegative spacing.
+    pub fn set_columns(&mut self, count: u32, spacing: Length) -> Result<()> {
+        if count == 0 {
+            return Err(Error::Other(
+                "section column count must be positive".to_owned(),
+            ));
+        }
+        let spacing = checked_nonnegative_section_twips(spacing, "column spacing")?;
+        let separator = self.inner.columns.as_ref().and_then(|columns| columns.sep);
+        self.inner.columns = Some(CT_Columns {
+            num: Some(count),
+            space: Some(spacing),
+            equal_width: Some(true),
+            sep: separator,
+            columns: Vec::new(),
+        });
+        Ok(())
+    }
+
+    /// Return the explicitly configured page-number restart.
+    pub fn page_number_start(&self) -> Option<u32> {
+        self.inner.page_number.as_ref()?.start
+    }
+
+    /// Set the positive displayed page number at which this section starts.
+    pub fn set_page_number_start(&mut self, start: u32) -> Result<()> {
+        if start == 0 {
+            return Err(Error::Other(
+                "section page-number start must be positive".to_owned(),
+            ));
+        }
+        match &mut self.inner.page_number {
+            Some(page_number) => page_number.start = Some(start),
+            None => {
+                self.inner.page_number = Some(rdocx_oxml::document::CT_PageNumberType::new(start))
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the explicitly configured header and footer distances.
+    pub fn header_footer_distance(&self) -> Option<(Length, Length)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .header_footer_distance()
+    }
+
+    /// Set nonnegative header and footer distances from the page edges.
+    pub fn set_header_footer_distance(&mut self, header: Length, footer: Length) -> Result<()> {
+        let header = checked_nonnegative_section_twips(header, "header distance")?;
+        let footer = checked_nonnegative_section_twips(footer, "footer distance")?;
+        self.inner.header_distance = Some(header);
+        self.inner.footer_distance = Some(footer);
+        Ok(())
+    }
+
+    /// Return the explicitly configured title-page state.
+    pub fn different_first_page(&self) -> Option<bool> {
+        self.inner.title_pg
+    }
+
     /// Configure whether this section uses first-page header and footer variants.
     pub fn set_different_first_page(&mut self, enabled: bool) {
         self.inner.title_pg = Some(enabled);
+    }
+
+    /// Return the explicitly configured section break type.
+    pub fn break_type(&self) -> Option<ST_SectionType> {
+        self.inner.section_type
+    }
+
+    /// Set this section's break type.
+    pub fn set_break_type(&mut self, break_type: ST_SectionType) {
+        self.inner.section_type = Some(break_type);
     }
 
     /// Borrow the complete section properties.
@@ -1855,6 +2058,33 @@ impl Section<'_> {
     pub fn properties_mut(&mut self) -> &mut CT_SectPr {
         self.inner
     }
+}
+
+fn checked_positive_section_twips(value: Length, name: &str) -> Result<Twips> {
+    if value.to_emu() <= 0 {
+        return Err(Error::Other(format!("section {name} must be positive")));
+    }
+    let twips = checked_section_twips(value, name)?;
+    if twips.0 == 0 {
+        return Err(Error::Other(format!(
+            "section {name} must be at least one twip"
+        )));
+    }
+    Ok(twips)
+}
+
+fn checked_nonnegative_section_twips(value: Length, name: &str) -> Result<Twips> {
+    if value.to_emu() < 0 {
+        return Err(Error::Other(format!("section {name} must be nonnegative")));
+    }
+    checked_section_twips(value, name)
+}
+
+fn checked_section_twips(value: Length, name: &str) -> Result<Twips> {
+    let twips = value.to_emu() / 635;
+    let twips = i32::try_from(twips)
+        .map_err(|_| Error::Other(format!("section {name} exceeds the twip range")))?;
+    Ok(Twips(twips))
 }
 
 fn empty_section_properties() -> CT_SectPr {
@@ -1871,10 +2101,12 @@ fn empty_section_properties() -> CT_SectPr {
         footer_distance: None,
         section_type: None,
         columns: None,
+        page_number: None,
         title_pg: None,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
         extra_xml: Vec::new(),
+        extra_xml_positions: Vec::new(),
         change: None,
     }
 }
@@ -12929,52 +13161,47 @@ impl Document {
             .get_or_insert_with(CT_SectPr::default_letter)
     }
 
-    /// Set page size.
+    /// Set page size without validation, preserving the legacy infallible behavior.
     pub fn set_page_size(&mut self, width: Length, height: Length) {
-        let sect = self.section_properties_mut();
-        sect.page_width = Some(width.as_twips());
-        sect.page_height = Some(height.as_twips());
+        let section = self.section_properties_mut();
+        section.page_width = Some(width.as_twips());
+        section.page_height = Some(height.as_twips());
     }
 
     /// Set page orientation to landscape (swaps width and height if needed).
     pub fn set_landscape(&mut self) {
-        let sect = self.section_properties_mut();
-        sect.orientation = Some(ST_PageOrientation::Landscape);
-        // Swap width/height if portrait dimensions
-        if let (Some(w), Some(h)) = (sect.page_width, sect.page_height)
-            && w.0 < h.0
-        {
-            sect.page_width = Some(h);
-            sect.page_height = Some(w);
+        let ordinal = self.section_count().saturating_sub(1);
+        Section {
+            ordinal,
+            is_final: true,
+            inner: self.section_properties_mut(),
         }
+        .set_orientation(ST_PageOrientation::Landscape);
     }
 
     /// Set page orientation to portrait (swaps width and height if needed).
     pub fn set_portrait(&mut self) {
-        let sect = self.section_properties_mut();
-        sect.orientation = Some(ST_PageOrientation::Portrait);
-        // Swap width/height if landscape dimensions
-        if let (Some(w), Some(h)) = (sect.page_width, sect.page_height)
-            && w.0 > h.0
-        {
-            sect.page_width = Some(h);
-            sect.page_height = Some(w);
+        let ordinal = self.section_count().saturating_sub(1);
+        Section {
+            ordinal,
+            is_final: true,
+            inner: self.section_properties_mut(),
         }
+        .set_orientation(ST_PageOrientation::Portrait);
     }
 
-    /// Set all page margins.
+    /// Set page margins without validation, preserving legacy behavior.
     pub fn set_margins(&mut self, top: Length, right: Length, bottom: Length, left: Length) {
-        let sect = self.section_properties_mut();
-        sect.margin_top = Some(top.as_twips());
-        sect.margin_right = Some(right.as_twips());
-        sect.margin_bottom = Some(bottom.as_twips());
-        sect.margin_left = Some(left.as_twips());
+        let section = self.section_properties_mut();
+        section.margin_top = Some(top.as_twips());
+        section.margin_right = Some(right.as_twips());
+        section.margin_bottom = Some(bottom.as_twips());
+        section.margin_left = Some(left.as_twips());
     }
 
-    /// Set equal-width column layout.
+    /// Set equal-width columns without validation, preserving legacy behavior.
     pub fn set_columns(&mut self, num: u32, spacing: Length) {
-        let sect = self.section_properties_mut();
-        sect.columns = Some(CT_Columns {
+        self.section_properties_mut().columns = Some(CT_Columns {
             num: Some(num),
             space: Some(spacing.as_twips()),
             equal_width: Some(true),
@@ -12983,21 +13210,27 @@ impl Document {
         });
     }
 
-    /// Set header and footer distances from page edges.
+    /// Set header and footer distances without validation for compatibility.
     pub fn set_header_footer_distance(&mut self, header: Length, footer: Length) {
-        let sect = self.section_properties_mut();
-        sect.header_distance = Some(header.as_twips());
-        sect.footer_distance = Some(footer.as_twips());
+        let section = self.section_properties_mut();
+        section.header_distance = Some(header.as_twips());
+        section.footer_distance = Some(footer.as_twips());
     }
 
-    /// Set the gutter margin.
+    /// Set the gutter margin without validation, preserving legacy behavior.
     pub fn set_gutter(&mut self, gutter: Length) {
         self.section_properties_mut().gutter = Some(gutter.as_twips());
     }
 
     /// Enable or disable different first page header/footer.
     pub fn set_different_first_page(&mut self, val: bool) {
-        self.section_properties_mut().title_pg = Some(val);
+        let ordinal = self.section_count().saturating_sub(1);
+        Section {
+            ordinal,
+            is_final: true,
+            inner: self.section_properties_mut(),
+        }
+        .set_different_first_page(val);
     }
 
     /// Enable or disable automatic document hyphenation.
@@ -27833,10 +28066,8 @@ mod watermark_tests {
             HdrFtrType::Even,
         );
         enable_even_headers(&mut document);
-        document
-            .section_properties_mut()
-            .extra_xml
-            .push(br#"<w:pgNumType w:start="1"/>"#.to_vec());
+        document.section_properties_mut().page_number =
+            Some(rdocx_oxml::document::CT_PageNumberType::new(1));
         document.set_text_watermark("DRAFT").unwrap();
 
         let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();

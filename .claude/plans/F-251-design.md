@@ -1,17 +1,16 @@
 # F-251, Complete section and page geometry
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-250
 
 ## Problem
 
-`CT_SectPr` models most ordinary page geometry, but the facade setters at
-`crates/rdocx/src/document.rs:9988` address only the final section and omit
-page-number start and format. The parser stores unsupported section children in
-one side vector at `crates/rdocx-oxml/src/document.rs:100`, so a modeled edit
-must keep those children visible and in valid schema order.
+`CT_SectPr` models most ordinary page geometry, but the legacy facade setters
+address only the final section and omit a page-number restart. The parser also
+stored unsupported section children without their schema positions, so a
+modeled edit could move those children or hide them behind typed content.
 
 ## Spec reference
 
@@ -23,20 +22,25 @@ must keep those children visible and in valid schema order.
 
 ## Approach
 
-Extend the typed section model with the M23 page-number properties needed for
-start and supported number format while preserving unknown attributes and
-children. Expose complete getters and setters on the F-250 section handles for
-page size, orientation, margins, gutter, columns, page numbering, header and
-footer distance, title-page state, and break type. Serialize modeled children
-in `CT_SectPr` schema order and replay unsupported children at stable positions.
-Keep the existing final-section document conveniences as delegating entry
-points into the same concrete implementation.
+Extend the typed section model with M23 authoring for
+`w:pgNumType/@w:start`. Preserve `fmt`, `chapStyle`, `chapSep`, and every other
+unsupported page-number attribute or child for M24. Expose complete getters and
+checked setters on the F-250 section handles for page size, orientation,
+margins, gutter, equal-width columns, page-number start, header and footer
+distance, title-page state, and break type. Serialize modeled children in
+`CT_SectPr` schema order and replay unsupported children at stable schema or
+repeated-reference boundaries. Distinguishable references follow their value,
+while indistinguishable equal duplicates resolve deterministically by source
+ordinal. Keep the existing final-section document conveniences explicitly
+unchecked and infallible for source compatibility.
 
 ## Rejected alternatives
 
 - A facade-only geometry snapshot would lose unknown producer state on write.
 - Replacing `CT_SectPr` wholesale would erase unsupported M24 properties.
 - Floating-point storage would weaken the exact integer-twip contract.
+- Hidden object identities would break the published `Vec<HdrFtrRef>` mutation
+  surface without making equal public values distinguishable to callers.
 
 ## Test plan
 
@@ -47,7 +51,8 @@ points into the same concrete implementation.
 | regression | `rejected_section_geometry_is_atomic` | Invalid columns, dimensions, and numbering values leave bytes unchanged. |
 
 The story test gate is differential: mixed-orientation source-built sections
-match the pinned Word page geometry and page-number sequence.
+match Microsoft Word 16.112.3 build 16.112.26083020 for exact physical page
+geometry and displayed page-number sequence.
 
 ## HLD impact
 
@@ -70,8 +75,10 @@ match the pinned Word page geometry and page-number sequence.
 - Layout and pagination. Read `docs/hld/08-rendering-spec.md`. Use deterministic
   fonts for every baseline and differential render.
 - Public API of a published crate. Read `docs/hld/10-bindings-spec.md` and the
-  structural rules in `CLAUDE.md`. State the additive pre-1.0 semver impact,
-  run `cargo publish --dry-run -p rdocx`, and assert the packaged crate size.
+  structural rules in `CLAUDE.md`. The section accessors and setters, typed
+  page-number state, and displayed page number are additive pre-1.0 Rust API.
+  The public reference fields remain `Vec<HdrFtrRef>`. Run the workspace publish
+  dry run with reviewed local patches and assert every packaged crate size.
 - External oracle comparison. Read `.claude/skills/differential-testing.md`.
   Pin and record the exact Word oracle version.
 
@@ -82,15 +89,15 @@ geometry has no baseline entry unless separately reviewed.
 
 ## Implementation checklist
 
-- [ ] Model page-number start and supported number format with raw retention.
-- [ ] Preserve exact `CT_SectPr` child order during parse and serialization.
-- [ ] Add complete geometry accessors to ordered section handles.
-- [ ] Validate ranges before staged publication.
-- [ ] Add round-trip, differential, and atomic rejection tests.
+- [x] Model page-number start while retaining unsupported M24 state.
+- [x] Preserve exact `CT_SectPr` child order during parse and serialization.
+- [x] Add complete geometry accessors to ordered section handles.
+- [x] Validate ranges before staged publication.
+- [x] Add round-trip, differential, and atomic rejection tests.
 
 ## Open questions
 
 None. M23 authors `w:pgNumType/@w:start` and equal-width count and spacing.
-Format, chapter style, separator, variable widths, and separators remain
-preserved for M24. Zero columns and nonpositive page dimensions fail without
-changing the document.
+Number format, chapter style, chapter separator, variable widths, and column
+separators remain preserved for M24. Zero columns and nonpositive page
+dimensions fail without changing the document.

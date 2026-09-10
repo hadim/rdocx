@@ -2362,12 +2362,22 @@ three ordered sections and proves each independent or inherited story variant,
 relationship type, target, and content after mutation, save, and reopen.
 
 ### F-251, Complete section and page geometry (L)
-Author the M23 section properties for size, orientation, margins, gutter,
-columns, page numbering, header and footer distance, title page, and break type.
-Unsupported section children remain visible until M24 completes them.
+The ordered section handles read and author M23 page size, orientation, margins,
+gutter, equal-width columns, page-number start, header and footer distance,
+title-page state, and break type through checked atomic setters. Legacy
+final-section document setters remain unchecked and infallible. The OXML model
+authors only `w:pgNumType/@w:start`, preserves number format, chapter style,
+chapter separator, and unsupported children for M24, and replays raw children
+at schema and repeated-reference boundaries. Distinguishable references follow
+their value. Indistinguishable equal duplicates use a deterministic source
+ordinal without changing the public `Vec<HdrFtrRef>` fields. Pagination keeps
+physical and displayed page identities separate, substitutes PAGE from the
+displayed value, and continues final-section numbering onto endnote pages.
 **Depends on**: F-250.
-**Test gate**: differential. Mixed-orientation source-built sections match the
-pinned Word page geometry and page-number sequence.
+**Test gate**: differential.
+`mixed_orientation_sections_match_word_geometry_and_page_numbers` matches
+Microsoft Word 16.112.3 build 16.112.26083020 for three exact page geometries,
+physical identities, and displayed PAGE values.
 
 ### F-252, Rich per-section headers and footers (L)
 Create, link, unlink, inherit, replace, and remove default, first, and even

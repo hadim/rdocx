@@ -64,6 +64,12 @@ OOXML uses a different unit almost everywhere. All of them live in `oxml-core`.
 EMU is chosen as the canonical unit because it divides evenly into both inches
 and centimetres, and because it is what DrawingML already uses.
 
+Word section geometry is stored in integer twips. Checked section-handle
+setters accept `Length`, convert its complete EMU value by truncating toward
+zero at 635 EMU per twip, and reject values outside the signed 32-bit twip
+range before changing any property. Legacy final-section document convenience
+setters retain their unchecked truncating behavior.
+
 ## The PowerPoint triangle
 
 The single most important structural concept, and the one with no analogue in
@@ -149,3 +155,10 @@ to compile.
 **Deterministic font mode**. Rendering using only the bundled fonts, with system
 font loading bypassed, so that a digest recorded on one machine matches one
 recorded on another.
+
+**Physical page number**. The one-based output-page identity stored in
+`PageFrame::page_number`. Section restarts never change it.
+
+**Displayed page number**. The value reset by `w:pgNumType/@w:start`, stored in
+`PageFrame::displayed_page_number`, used for PAGE fields and header or footer
+variant selection, and continued onto appended endnote pages.

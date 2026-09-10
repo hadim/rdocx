@@ -1171,12 +1171,14 @@ impl<'a> Pager<'a> {
             }
         }
 
-        self.pages.push(PageFrame::new(
+        let mut page = PageFrame::new(
             self.page_number,
             self.geometry.page_width,
             self.geometry.page_height,
             all_elements,
-        ));
+        );
+        page.displayed_page_number = self.header_page_number;
+        self.pages.push(page);
         self.page_number += 1;
         self.header_page_number += 1;
         self.cursor_y = 0.0;
@@ -1570,7 +1572,7 @@ pub fn append_endnote_pages(
         });
     }
 
-    append_ordered_endnote_pages(pages, &ordered, notes, geometry, 0);
+    append_ordered_endnote_pages(pages, &ordered, notes, geometry, 0, 1);
 }
 
 pub(crate) fn append_endnote_pages_for_references(
@@ -1579,6 +1581,7 @@ pub(crate) fn append_endnote_pages_for_references(
     notes: &NoteRegistry,
     geometry: PageGeometry,
     preceding_page_count: usize,
+    next_displayed_page_number: usize,
 ) {
     let mut ordered = Vec::new();
     for &note in references {
@@ -1590,7 +1593,14 @@ pub(crate) fn append_endnote_pages_for_references(
         }
     }
 
-    append_ordered_endnote_pages(pages, &ordered, notes, geometry, preceding_page_count);
+    append_ordered_endnote_pages(
+        pages,
+        &ordered,
+        notes,
+        geometry,
+        preceding_page_count,
+        next_displayed_page_number,
+    );
 }
 
 fn append_ordered_endnote_pages(
@@ -1599,6 +1609,7 @@ fn append_ordered_endnote_pages(
     notes: &NoteRegistry,
     geometry: PageGeometry,
     preceding_page_count: usize,
+    next_displayed_page_number: usize,
 ) {
     if ordered.is_empty() {
         return;
@@ -1608,15 +1619,21 @@ fn append_ordered_endnote_pages(
     let mut elements: Vec<PositionedElement> = Vec::new();
     let mut cursor_y = 0.0;
     let mut page_number = preceding_page_count + pages.len() + 1;
+    let mut displayed_page_number = pages.last().map_or(next_displayed_page_number, |page| {
+        page.displayed_page_number.saturating_add(1)
+    });
 
     let mut flush = |elements: &mut Vec<PositionedElement>, page_number: &mut usize| {
-        pages.push(PageFrame::new(
+        let mut page = PageFrame::new(
             *page_number,
             geometry.page_width,
             geometry.page_height,
             std::mem::take(elements),
-        ));
+        );
+        page.displayed_page_number = displayed_page_number;
+        pages.push(page);
         *page_number += 1;
+        displayed_page_number = displayed_page_number.saturating_add(1);
     };
 
     for &note_ref in ordered {

@@ -7086,10 +7086,12 @@ fn empty_section_properties() -> CT_SectPr {
         footer_distance: None,
         section_type: None,
         columns: None,
+        page_number: None,
         title_pg: None,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
         extra_xml: Vec::new(),
+        extra_xml_positions: Vec::new(),
         change: None,
     }
 }

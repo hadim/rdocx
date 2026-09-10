@@ -2220,6 +2220,7 @@ impl Engine {
                         &notes,
                         final_geometry,
                         checkpoint.page_count,
+                        checkpoint.next_header_page_number,
                     );
                 } else {
                     paginator::append_endnote_pages(&mut recorded.pages, &notes, final_geometry);
@@ -2387,7 +2388,7 @@ impl Engine {
             }
             let inputs = FieldSubstitutionInputs {
                 page_index,
-                page_number: page.page_number,
+                page_number: page.displayed_page_number,
                 total_pages,
                 bookmark_pages: bookmark_identity.clone(),
                 font_identity: font_trace.clone(),
@@ -2410,7 +2411,7 @@ impl Engine {
                 continue;
             }
             let page = Arc::make_mut(page);
-            let page_num = page.page_number;
+            let page_num = page.displayed_page_number;
             substitute_fields(
                 &mut page.elements,
                 page_num,
@@ -6942,30 +6943,11 @@ fn sect_pr_to_geometry(sect_pr: &CT_SectPr) -> PageGeometry {
 }
 
 fn section_page_number_start(sect_pr: &CT_SectPr) -> Option<usize> {
-    for raw in &sect_pr.extra_xml {
-        let Some((name, raw_attributes)) = raw_root_start_tag(raw) else {
-            continue;
-        };
-        let Some(attributes) = parse_raw_attributes(raw_attributes) else {
-            continue;
-        };
-        if xml_local_name(name) != b"pgNumType"
-            || !raw_name_has_namespace(name, &attributes, rdocx_oxml::namespace::W_NS, false)
-        {
-            continue;
-        }
-        let (_, value) = attributes.iter().find(|(attribute_name, _)| {
-            xml_local_name(attribute_name) == b"start"
-                && raw_name_has_namespace(
-                    attribute_name,
-                    &attributes,
-                    rdocx_oxml::namespace::W_NS,
-                    true,
-                )
-        })?;
-        return decode_xml_attribute(value)?.parse().ok();
-    }
-    None
+    sect_pr
+        .page_number
+        .as_ref()?
+        .start
+        .map(|value| value as usize)
 }
 
 fn xml_local_name(name: &[u8]) -> &[u8] {
@@ -13395,6 +13377,60 @@ mod tests {
     }
 
     #[test]
+    fn endnote_pages_continue_restarted_display_numbers_and_page_fields() {
+        let mut input = related_story_restart_input(700);
+        input.document.body.sect_pr.as_mut().unwrap().page_number =
+            Some(rdocx_oxml::document::CT_PageNumberType::new(27));
+        let endnote = &mut input.endnotes.as_mut().unwrap().footnotes[0].paragraphs[0];
+        endnote.add_run(" ENDNOTE_PAGE=");
+        let mut page_run = CT_R::new("");
+        page_run.content = vec![RunContent::Field(Field::new("PAGE", "0"))];
+        endnote.runs.push(page_run);
+
+        let assert_endnote_page = |result: &LayoutResult| {
+            let rendered_text = |page: &PageFrame| {
+                compatibility_page_elements(page)
+                    .into_iter()
+                    .filter_map(|element| match element {
+                        PositionedElement::Text(run) => Some(run.text.as_str()),
+                        PositionedElement::MultilingualText(run) => Some(run.logical_text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>()
+            };
+            let (index, page) = result
+                .pages
+                .iter()
+                .enumerate()
+                .find(|(_, page)| rendered_text(page).contains("stable endnote text"))
+                .expect("endnote page");
+            let expected = result.pages[index - 1]
+                .displayed_page_number
+                .saturating_add(1);
+            assert_eq!(page.page_number, index + 1);
+            assert_eq!(page.displayed_page_number, expected);
+            assert!(
+                rendered_text(page).contains(&format!("ENDNOTE_PAGE={expected}")),
+                "PAGE substitution must use the continued displayed number"
+            );
+        };
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let initial = engine.layout(&input).expect("initial endnote layout");
+        assert_endnote_page(&initial);
+        set_body_paragraph_text(&mut input, 350, "paragraph 350 changed line");
+        let warm = engine.layout(&input).expect("warm endnote layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh endnote layout");
+        assert_layout_results_equal(&warm, &fresh);
+        assert_endnote_page(&warm);
+        assert_endnote_page(&fresh);
+        assert!((1..=2).contains(&engine.page_layout_invocation_count()));
+    }
+
+    #[test]
     fn restarted_body_completion_appends_prefix_and_suffix_endnotes_with_final_page_numbers() {
         use rdocx_oxml::footnotes::{CT_Footnote, NoteType};
 
@@ -15731,22 +15767,9 @@ mod tests {
     }
 
     #[test]
-    fn section_page_number_start_requires_a_direct_word_child_and_decodes_entities() {
+    fn section_page_number_start_uses_the_typed_section_property() {
         let mut section = CT_SectPr::default_letter();
-        section.extra_xml = vec![
-            br#"<x:pgNumType xmlns:x="urn:producer" x:start="2"/>"#.to_vec(),
-            br#"<w:pgNumType xmlns:w="urn:producer" w:start="2"/>"#.to_vec(),
-            format!(
-                r#"<w:wrapper xmlns:w="{}"><w:pgNumType w:start="2"/></w:wrapper>"#,
-                rdocx_oxml::namespace::W_NS
-            )
-            .into_bytes(),
-            format!(
-                r#"<q:pgNumType xmlns:q="{}" q:start="&#x31;"/>"#,
-                rdocx_oxml::namespace::W_NS
-            )
-            .into_bytes(),
-        ];
+        section.page_number = Some(rdocx_oxml::document::CT_PageNumberType::new(1));
 
         assert_eq!(section_page_number_start(&section), Some(1));
     }
