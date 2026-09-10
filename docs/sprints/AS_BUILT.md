@@ -12830,3 +12830,47 @@ owner and item ordinals intentionally describe one observed operation state.
 F-254 and F-255 may extend mutation and relationship behavior through this
 model, but they must preserve its staged publication and fail-closed typed
 admission boundaries.
+
+### F-250, Ordered mutable section facade
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now exposes ordered concrete
+`SectionRef` and `Section` handles for every paragraph-owned boundary and the
+final body-owned section. Callers can inspect and mutate section properties,
+insert or remove section boundaries atomically, and retain independent header
+and footer ownership across those structural changes.
+
+**Non-obvious choices.** Section identity is an operation-scoped ordinal plus
+its paragraph or final-body owner. Removing a predecessor materializes the
+effective inherited references before the boundary disappears. Empty boundary
+paragraphs are cleaned up, the final owner is promoted safely, and only facade
+owned story parts that become unreachable are pruned. Effective story lookup
+uses the first usable eligible reference, so malformed, external, cross-type,
+missing, and unparsable references cannot displace valid inheritance.
+
+**Deviations from the design plan.** The approved public surface remained
+unchanged. Microscope passes repaired inherited story loss after predecessor
+removal and hardened duplicate and unusable reference handling. Pass 4 reported
+zero defects, zero smells, and zero nitpicks on the prepared feature tree.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `ordered_section_mutations_preserve_independent_story_references`,
+`removing_a_predecessor_materializes_inherited_header_and_footer_references`,
+and `removing_a_section_never_orphans_a_shared_story` passed with the malformed,
+external, cross-type, duplicate, and pruning hazard regressions. The integrated
+`/verify --full` gate passed at
+`dc0f4f44c2baa85401da5ed098cfe643a8956c33`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Re-resolve section handles after structural
+mutation. F-251 and F-252 build on the same concrete handle and must preserve
+the staged publication, effective reference, and ownership rules.
