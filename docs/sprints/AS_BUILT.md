@@ -12874,3 +12874,51 @@ external, cross-type, duplicate, and pruning hazard regressions. The integrated
 **Notes for future sessions.** Re-resolve section handles after structural
 mutation. F-251 and F-252 build on the same concrete handle and must preserve
 the staged publication, effective reference, and ownership rules.
+
+### F-251, Complete section and page geometry
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Ordered section handles now expose checked accessors and
+setters for page size, orientation, margins, gutter, equal-width columns,
+page-number restart, header and footer distance, title-page state, and break
+type. Layout carries displayed page numbers separately from physical page
+identity, including restarted sections and continued endnote pages.
+
+**Non-obvious choices.** M23 authors only `w:pgNumType/@w:start` and preserves
+number format, chapter style, chapter separator, and other M24 state exactly.
+The published header and footer reference fields remain ordinary
+`Vec<HdrFtrRef>` values. Distinguishable repeated references retain their
+source anchors, while indistinguishable equal values resolve deterministically
+by source ordinal. Legacy final-section setters retain their historical
+unchecked and infallible behavior for source compatibility.
+
+**Deviations from the design plan.** The approved plan's broad page-number
+format wording was reconciled with its explicit M23 boundary so only the start
+value is authored. Six microscope passes repaired raw page-number scanning,
+duplicate and foreign XML ordering, arithmetic overflow, endnote numbering,
+atomic legacy behavior, oracle completeness, and public `Vec` compatibility.
+Pass 6 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/01-glossary.md`,
+`docs/hld/02-scope-and-non-goals.md`, `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `mixed_orientation_sections_match_word_geometry_and_page_numbers`,
+`section_geometry_round_trips_with_unsupported_children_in_order`, and
+`rejected_section_geometry_is_atomic` passed. The genuine Microsoft Word
+16.112.3 build 16.112.26083020 oracle produced physical pages 1, 2, and 3 with
+page sizes 612 by 792, 792 by 612, and 595 by 842 points and displayed PAGE
+values 1, 12, and 27. The integrated `/verify --full` gate passed at
+`dc5d802291737ae4cc7ca8673ee52c4599572f0f`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Re-resolve section handles after structural
+mutation. PageFrame physical identity is zero-based and independent from its
+one-based displayed section sequence. F-252 must preserve the same staged
+section and story ownership boundary.
