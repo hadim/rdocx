@@ -37,7 +37,7 @@ only complete validated candidates.
 |------|-------|------|--------|-------|
 | F-253 | Container-neutral story editing | L | done | - |
 | F-250 | Ordered mutable section facade | L | done | - |
-| F-251 | Complete section and page geometry | L | pending | - |
+| F-251 | Complete section and page geometry | L | in-progress | codex |
 | F-254 | Generic insert, move, clone, and remove operations | L | pending | - |
 | F-255 | Part-scoped assets, links, and relationships | M | pending | - |
 | F-252 | Rich per-section headers and footers | L | pending | - |
