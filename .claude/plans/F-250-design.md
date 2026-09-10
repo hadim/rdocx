@@ -1,6 +1,6 @@
 # F-250, Ordered mutable section facade
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-249
@@ -81,11 +81,11 @@ serialization for equivalent section state.
 
 ## Implementation checklist
 
-- [ ] Add ordered immutable and mutable section handles and total lookup.
-- [ ] Add staged section insertion and removal without a second tree.
-- [ ] Preserve paragraph order, final-section ownership, and raw section XML.
-- [ ] Retain shared stories and prune only unreferenced facade-owned stories.
-- [ ] Add round-trip and atomic-failure coverage.
+- [x] Add ordered immutable and mutable section handles and total lookup.
+- [x] Add staged section insertion and removal without a second tree.
+- [x] Preserve paragraph order, final-section ownership, and raw section XML.
+- [x] Retain shared stories and prune only unreferenced facade-owned stories.
+- [x] Add round-trip and atomic-failure coverage.
 
 ## Open questions
 

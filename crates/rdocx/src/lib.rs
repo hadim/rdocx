@@ -55,8 +55,9 @@ pub use document::{
     EmbeddedFontKind, FontDefinition, FontEmbeddingLicense, ImageInfo, IssueSeverity, LinkInfo,
     ListLevel, ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
-    NumberingLevelOverride, OutlineNode, RenderOptions, StoryError, StoryId, StoryItemKind,
-    StoryItemRef, StoryKind, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    NumberingLevelOverride, OutlineNode, RenderOptions, Section, SectionRef, StoryError, StoryId,
+    StoryItemKind, StoryItemRef, StoryKind, UnsupportedXmlRef, WordCreationProfile,
+    WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,

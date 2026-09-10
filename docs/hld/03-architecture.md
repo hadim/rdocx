@@ -1022,6 +1022,16 @@ content controls, revisions, and fields as typed content. Content rejected by
 that grammar remains one opaque preserved boundary and cannot expose nested
 owners or editable text.
 
+Ordered Word section ownership also belongs to the `rdocx` facade. Concrete
+`SectionRef` and `Section` handles borrow the existing paragraph-level or
+schema-final `CT_SectPr` owner and carry its document-order ordinal and final
+owner identity. They inspect section orientation and expose complete properties.
+The mutable handle also normalizes page dimensions when orientation changes and
+configures first-page behavior. `Document` counts, iterates, and looks up those
+owners without constructing a second section tree. Insertion and removal stage
+the complete document and package, retain body order and unmodelled section XML,
+serialize and reopen the candidate, then publish once.
+
 `Document` also owns one relationship-resolved `CT_Styles` graph. Public style
 creation, update, default selection, and removal build a complete candidate,
 validate identifiers, reference types, defaults, links, next styles, and

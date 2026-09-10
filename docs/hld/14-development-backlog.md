@@ -2348,12 +2348,18 @@ stable identifiers, repeated saves are byte-identical, and collision or
 overflow failures are atomic.
 
 ### F-250, Ordered mutable section facade (L)
-Expose every section in document order with stable lookup, insertion, removal,
-and mutation across paragraph-level and final section properties. Section
-operations preserve body order and cannot orphan related stories.
+The native facade exposes every paragraph-level and schema-final section owner
+in document order through concrete immutable and mutable handles. Handles carry
+their ordinal and final-owner identity, inspect orientation, and retain complete
+property access. Mutable handles normalize page dimensions for orientation
+changes and configure first-page behavior. Total lookup, insertion, and removal
+stage the complete document and package without a second section tree. Removal
+preserves effective same-variant header and footer inheritance, body order, and
+unmodelled XML, and prunes only unreachable facade-owned related stories.
 **Depends on**: F-249.
-**Test gate**: round-trip. A portrait, landscape, portrait document retains all
-three ordered sections and their independent references after every mutation.
+**Test gate**: round-trip. A portrait, landscape, portrait document retains
+three ordered sections and proves each independent or inherited story variant,
+relationship type, target, and content after mutation, save, and reopen.
 
 ### F-251, Complete section and page geometry (L)
 Author the M23 section properties for size, orientation, margins, gutter,

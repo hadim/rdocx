@@ -1773,6 +1773,112 @@ pub enum BodyContentRef<'a> {
     UnsupportedXml(UnsupportedXmlRef<'a>),
 }
 
+/// An immutable borrowed view of one section in document order.
+#[derive(Clone, Copy)]
+pub struct SectionRef<'a> {
+    ordinal: usize,
+    is_final: bool,
+    inner: &'a CT_SectPr,
+}
+
+impl<'a> SectionRef<'a> {
+    /// Return this section's zero-based document-order position.
+    pub fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+
+    /// Return whether this section owns the schema-final body properties.
+    pub fn is_final(&self) -> bool {
+        self.is_final
+    }
+
+    /// Return the explicitly configured page orientation.
+    pub fn orientation(&self) -> Option<ST_PageOrientation> {
+        self.inner.orientation
+    }
+
+    /// Borrow the complete section properties.
+    pub fn properties(&self) -> &'a CT_SectPr {
+        self.inner
+    }
+}
+
+/// A mutable borrowed view of one section in document order.
+pub struct Section<'a> {
+    ordinal: usize,
+    is_final: bool,
+    inner: &'a mut CT_SectPr,
+}
+
+impl Section<'_> {
+    /// Return this section's zero-based document-order position.
+    pub fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+
+    /// Return whether this section owns the schema-final body properties.
+    pub fn is_final(&self) -> bool {
+        self.is_final
+    }
+
+    /// Return the explicitly configured page orientation.
+    pub fn orientation(&self) -> Option<ST_PageOrientation> {
+        self.inner.orientation
+    }
+
+    /// Set this section's orientation and normalize its page dimensions.
+    pub fn set_orientation(&mut self, orientation: ST_PageOrientation) {
+        self.inner.orientation = Some(orientation);
+        if let (Some(width), Some(height)) = (self.inner.page_width, self.inner.page_height) {
+            let dimensions_need_swap = match orientation {
+                ST_PageOrientation::Landscape => width.0 < height.0,
+                ST_PageOrientation::Portrait => width.0 > height.0,
+            };
+            if dimensions_need_swap {
+                self.inner.page_width = Some(height);
+                self.inner.page_height = Some(width);
+            }
+        }
+    }
+
+    /// Configure whether this section uses first-page header and footer variants.
+    pub fn set_different_first_page(&mut self, enabled: bool) {
+        self.inner.title_pg = Some(enabled);
+    }
+
+    /// Borrow the complete section properties.
+    pub fn properties(&self) -> &CT_SectPr {
+        self.inner
+    }
+
+    /// Mutably borrow the complete section properties.
+    pub fn properties_mut(&mut self) -> &mut CT_SectPr {
+        self.inner
+    }
+}
+
+fn empty_section_properties() -> CT_SectPr {
+    CT_SectPr {
+        page_width: None,
+        page_height: None,
+        orientation: None,
+        margin_top: None,
+        margin_right: None,
+        margin_bottom: None,
+        margin_left: None,
+        gutter: None,
+        header_distance: None,
+        footer_distance: None,
+        section_type: None,
+        columns: None,
+        title_pg: None,
+        header_refs: Vec::new(),
+        footer_refs: Vec::new(),
+        extra_xml: Vec::new(),
+        change: None,
+    }
+}
+
 /// Package and WordprocessingML identity state owned by the document facade.
 ///
 /// Each set represents one OOXML scope. References are deliberately excluded
@@ -10838,24 +10944,11 @@ impl Document {
         } else {
             &sect.footer_refs
         };
-        let rels = self.package.get_part_rels(&self.doc_part_name)?;
-        let expected_type = if is_header {
-            rel_types::HEADER
-        } else {
-            rel_types::FOOTER
-        };
-        let rel = refs
-            .iter()
-            .filter(|reference| reference.hdr_ftr_type == hdr_type)
-            .find_map(|reference| {
-                rels.get_by_id(&reference.rel_id).filter(|relationship| {
-                    relationship.rel_type == expected_type && relationship_is_internal(relationship)
-                })
-            })?;
-        let part_name = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
-        let xml = self.package.get_part(&part_name)?;
-        let hdr_ftr = CT_HdrFtr::from_xml(xml).ok()?;
-        Some(hdr_ftr.text())
+        let reference = self.first_usable_header_footer_reference(refs, hdr_type, is_header)?;
+        Some(
+            self.load_header_footer(&reference.rel_id, is_header)?
+                .text(),
+        )
     }
 
     // ---- Numbering/Lists ----
@@ -12455,6 +12548,372 @@ impl Document {
     }
 
     // ---- Section/Page setup ----
+
+    /// Return the number of section property owners in document order.
+    pub fn section_count(&self) -> usize {
+        self.section_properties_in_order().count()
+    }
+
+    /// Iterate over every section in document order.
+    pub fn sections(&self) -> impl Iterator<Item = SectionRef<'_>> {
+        let final_ordinal = self.section_count().checked_sub(1);
+        let has_final_body_owner = self.document.body.sect_pr.is_some();
+        self.section_properties_in_order()
+            .enumerate()
+            .map(move |(ordinal, inner)| SectionRef {
+                ordinal,
+                is_final: has_final_body_owner && Some(ordinal) == final_ordinal,
+                inner,
+            })
+    }
+
+    /// Get a section by its document-order index.
+    pub fn section(&self, index: usize) -> Option<SectionRef<'_>> {
+        let final_ordinal = self.section_count().checked_sub(1);
+        let has_final_body_owner = self.document.body.sect_pr.is_some();
+        self.section_properties_in_order()
+            .nth(index)
+            .map(|inner| SectionRef {
+                ordinal: index,
+                is_final: has_final_body_owner && Some(index) == final_ordinal,
+                inner,
+            })
+    }
+
+    /// Get a mutable section by its document-order index.
+    pub fn section_mut(&mut self, index: usize) -> Option<Section<'_>> {
+        let count = self.section_count();
+        let has_final_body_owner = self.document.body.sect_pr.is_some();
+        if index >= count {
+            return None;
+        }
+        self.invalidate_layout();
+        let mut remaining = index;
+        for content in &mut self.document.body.content {
+            if let BodyContent::Paragraph(paragraph) = content
+                && let Some(inner) = paragraph
+                    .properties
+                    .as_mut()
+                    .and_then(|properties| properties.sect_pr.as_mut())
+            {
+                if remaining == 0 {
+                    return Some(Section {
+                        ordinal: index,
+                        is_final: has_final_body_owner && index + 1 == count,
+                        inner,
+                    });
+                }
+                remaining -= 1;
+            }
+        }
+        self.document.body.sect_pr.as_mut().map(|inner| Section {
+            ordinal: index,
+            is_final: has_final_body_owner && index + 1 == count,
+            inner,
+        })
+    }
+
+    /// Insert an empty section at a document-order index.
+    ///
+    /// `index == section_count()` appends a new final section. Larger indices
+    /// are rejected without changing the document.
+    pub fn insert_section(&mut self, index: usize) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.insert_section_in_place(index)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Remove a section by document-order index and merge its content.
+    ///
+    /// A non-final section merges into the following section. Removing the
+    /// final section promotes the preceding section properties to the final
+    /// body owner. The sole section cannot be removed.
+    pub fn remove_section(&mut self, index: usize) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        let removed_references = candidate.remove_section_in_place(index)?;
+        candidate.prune_unreachable_authored_section_stories(&removed_references)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    fn insert_section_in_place(&mut self, index: usize) -> Result<()> {
+        let count = self.section_count();
+        if index > count {
+            return Err(Error::Other(format!(
+                "section index {index} is out of bounds for insertion into {count} sections"
+            )));
+        }
+        self.invalidate_layout();
+        if count == 0 {
+            self.document.body.sect_pr = Some(empty_section_properties());
+            return Ok(());
+        }
+        if index == count {
+            let previous_final = self.document.body.sect_pr.take().ok_or_else(|| {
+                Error::Other("document section ownership changed during insertion".to_owned())
+            })?;
+            let mut paragraph = CT_P::new();
+            paragraph.properties = Some(CT_PPr {
+                sect_pr: Some(previous_final),
+                ..CT_PPr::default()
+            });
+            self.document
+                .body
+                .content
+                .push(BodyContent::Paragraph(paragraph));
+            self.document.body.sect_pr = Some(empty_section_properties());
+            return Ok(());
+        }
+
+        let insert_at = if index == 0 {
+            0
+        } else {
+            self.paragraph_section_owner_index(index - 1)
+                .ok_or_else(|| {
+                    Error::Other("document section ownership changed during insertion".to_owned())
+                })?
+                + 1
+        };
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            sect_pr: Some(empty_section_properties()),
+            ..CT_PPr::default()
+        });
+        self.document
+            .body
+            .content
+            .insert(insert_at, BodyContent::Paragraph(paragraph));
+        Ok(())
+    }
+
+    fn remove_section_in_place(&mut self, index: usize) -> Result<Vec<HdrFtrRef>> {
+        let count = self.section_count();
+        if count <= 1 {
+            return Err(Error::Other(
+                "the sole document section cannot be removed".to_owned(),
+            ));
+        }
+        if index >= count {
+            return Err(Error::Other(format!(
+                "section index {index} is out of bounds for {count} sections"
+            )));
+        }
+        let removed_section = self
+            .section(index)
+            .expect("validated section index")
+            .properties();
+        let removed = removed_section
+            .header_refs
+            .iter()
+            .chain(&removed_section.footer_refs)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.invalidate_layout();
+
+        if index + 1 < count {
+            let mut effective_headers: [Option<HdrFtrRef>; 3] = [None, None, None];
+            let mut effective_footers: [Option<HdrFtrRef>; 3] = [None, None, None];
+            for section in self.section_properties_in_order().take(index + 1) {
+                for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+                    let slot = header_type_index(hdr_type);
+                    if let Some(reference) = self.first_usable_header_footer_reference(
+                        &section.header_refs,
+                        hdr_type,
+                        true,
+                    ) {
+                        effective_headers[slot] = Some(reference.clone());
+                    }
+                    if let Some(reference) = self.first_usable_header_footer_reference(
+                        &section.footer_refs,
+                        hdr_type,
+                        false,
+                    ) {
+                        effective_footers[slot] = Some(reference.clone());
+                    }
+                }
+            }
+            let following = self
+                .section(index + 1)
+                .expect("every non-final section has a following section");
+            let mut following_header_overrides = [false; 3];
+            let mut following_footer_overrides = [false; 3];
+            for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+                let slot = header_type_index(hdr_type);
+                following_header_overrides[slot] = self
+                    .first_usable_header_footer_reference(
+                        &following.properties().header_refs,
+                        hdr_type,
+                        true,
+                    )
+                    .is_some();
+                following_footer_overrides[slot] = self
+                    .first_usable_header_footer_reference(
+                        &following.properties().footer_refs,
+                        hdr_type,
+                        false,
+                    )
+                    .is_some();
+            }
+            let mut following = self
+                .section_mut(index + 1)
+                .expect("every non-final section has a following section");
+            for (slot, inherited) in effective_headers.into_iter().enumerate() {
+                if !following_header_overrides[slot]
+                    && let Some(inherited) = inherited
+                {
+                    following.properties_mut().header_refs.push(inherited);
+                }
+            }
+            for (slot, inherited) in effective_footers.into_iter().enumerate() {
+                if !following_footer_overrides[slot]
+                    && let Some(inherited) = inherited
+                {
+                    following.properties_mut().footer_refs.push(inherited);
+                }
+            }
+        }
+
+        if index + 1 < count || self.document.body.sect_pr.is_none() {
+            let owner_index = self
+                .paragraph_section_owner_index(index)
+                .expect("every non-final section has a paragraph owner");
+            let remove_empty_owner = {
+                let BodyContent::Paragraph(paragraph) =
+                    &mut self.document.body.content[owner_index]
+                else {
+                    unreachable!("recorded section owner is not a paragraph")
+                };
+                let properties = paragraph
+                    .properties
+                    .as_mut()
+                    .expect("a section owner has paragraph properties");
+                properties.sect_pr = None;
+                if *properties == CT_PPr::default() {
+                    paragraph.properties = None;
+                }
+                *paragraph == CT_P::new()
+            };
+            if remove_empty_owner {
+                self.document.body.content.remove(owner_index);
+            }
+        } else {
+            let previous_owner = self
+                .paragraph_section_owner_index(index - 1)
+                .expect("a removable final section has a preceding paragraph owner");
+            let (promoted, remove_empty_owner) = {
+                let BodyContent::Paragraph(paragraph) =
+                    &mut self.document.body.content[previous_owner]
+                else {
+                    unreachable!("recorded section owner is not a paragraph")
+                };
+                let properties = paragraph
+                    .properties
+                    .as_mut()
+                    .expect("a section owner has paragraph properties");
+                let promoted = properties
+                    .sect_pr
+                    .take()
+                    .expect("recorded section properties disappeared");
+                if *properties == CT_PPr::default() {
+                    paragraph.properties = None;
+                }
+                (promoted, *paragraph == CT_P::new())
+            };
+            if remove_empty_owner {
+                self.document.body.content.remove(previous_owner);
+            }
+            self.document.body.sect_pr = Some(promoted);
+        }
+        Ok(removed)
+    }
+
+    fn paragraph_section_owner_index(&self, ordinal: usize) -> Option<usize> {
+        self.document
+            .body
+            .content
+            .iter()
+            .enumerate()
+            .filter(|(_, content)| {
+                matches!(
+                    content,
+                    BodyContent::Paragraph(CT_P {
+                        properties: Some(properties),
+                        ..
+                    }) if properties.sect_pr.is_some()
+                )
+            })
+            .nth(ordinal)
+            .map(|(index, _)| index)
+    }
+
+    fn prune_unreachable_authored_section_stories(&mut self, removed: &[HdrFtrRef]) -> Result<()> {
+        let modeled_ids = self.main_story_relationship_ids();
+        let mut active_ids = modeled_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let opaque_ids = self.opaque_relationship_ids_from_serialized_story(&modeled_ids)?;
+        active_ids.extend(opaque_ids.iter().map(String::as_str));
+        let removable_ids = removed
+            .iter()
+            .map(|reference| reference.rel_id.as_str())
+            .filter(|id| !active_ids.contains(id))
+            .collect::<HashSet<_>>();
+        let candidates = self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .filter(|relationship| {
+                removable_ids.contains(relationship.id.as_str())
+                    && relationship_is_internal(relationship)
+                    && matches!(
+                        relationship.rel_type.as_str(),
+                        rel_types::HEADER | rel_types::FOOTER
+                    )
+            })
+            .map(|relationship| {
+                (
+                    relationship.id.clone(),
+                    OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target),
+                )
+            })
+            .filter(|(_, target)| self.identifiers.authored_story_parts.contains(target))
+            .collect::<Vec<_>>();
+
+        for (relationship_id, target) in candidates {
+            if let Some(relationships) = self.package.get_part_rels_mut(&self.doc_part_name) {
+                relationships
+                    .items
+                    .retain(|relationship| relationship.id != relationship_id);
+            }
+            self.identifiers
+                .retire_authored_story_relationships(&self.doc_part_name, [relationship_id]);
+            let target_identity = part_name_identity(&target);
+            let still_referenced = self.package.part_rels.iter().any(|(owner, relationships)| {
+                relationships.items.iter().any(|relationship| {
+                    relationship_is_internal(relationship)
+                        && part_name_identity(&OpcPackage::resolve_rel_target(
+                            owner,
+                            &relationship.target,
+                        )) == target_identity
+                })
+            });
+            if still_referenced {
+                continue;
+            }
+            self.clear_authored_story_relationships(&target);
+            self.package.remove_part(&target);
+            self.package.remove_part_rels(&target);
+            self.package.content_types.remove_override(&target);
+            self.identifiers.authored_story_parts.remove(&target);
+            self.identifiers.retire_authored_part(&target);
+        }
+        Ok(())
+    }
 
     /// Get the section properties (page size, margins).
     pub fn section_properties(&self) -> Option<&CT_SectPr> {
@@ -14391,7 +14850,24 @@ impl Document {
     fn load_header_footer(&self, rel_id: &str, is_header: bool) -> Option<CT_HdrFtr> {
         let part_name = self.header_footer_part_name(rel_id, is_header)?;
         let xml = self.package.get_part(&part_name)?;
+        if !header_footer_story_has_expected_root(xml, is_header) {
+            return None;
+        }
         CT_HdrFtr::from_xml(xml).ok()
+    }
+
+    fn first_usable_header_footer_reference<'a>(
+        &self,
+        references: &'a [HdrFtrRef],
+        hdr_type: HdrFtrType,
+        is_header: bool,
+    ) -> Option<&'a HdrFtrRef> {
+        references.iter().find(|reference| {
+            reference.hdr_ftr_type == hdr_type
+                && self
+                    .load_header_footer(&reference.rel_id, is_header)
+                    .is_some()
+        })
     }
 
     /// Run raw XML replacement on all XML parts (for text boxes, shapes, charts, etc.).
@@ -15850,6 +16326,38 @@ fn header_type_index(hdr_type: HdrFtrType) -> usize {
         HdrFtrType::Default => 0,
         HdrFtrType::First => 1,
         HdrFtrType::Even => 2,
+    }
+}
+
+fn header_footer_story_has_expected_root(xml: &[u8], is_header: bool) -> bool {
+    let expected_local_name = if is_header {
+        b"hdr".as_slice()
+    } else {
+        b"ftr".as_slice()
+    };
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buffer = Vec::new();
+    loop {
+        let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) else {
+            return false;
+        };
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                return matches!(
+                    namespace,
+                    ResolveResult::Bound(Namespace(uri)) if uri == WORD_NAMESPACE.as_bytes()
+                ) && matches_local_name(element.name().as_ref(), expected_local_name);
+            }
+            Event::Decl(_) | Event::Comment(_) | Event::PI(_) => {}
+            Event::Eof
+            | Event::Text(_)
+            | Event::CData(_)
+            | Event::DocType(_)
+            | Event::GeneralRef(_)
+            | Event::End(_) => return false,
+        }
+        buffer.clear();
     }
 }
 
@@ -23484,6 +23992,185 @@ mod tests {
 
         let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
         assert!(reopened.has_header_footer_content());
+    }
+
+    fn authored_header_on_predecessor() -> (Document, HdrFtrRef) {
+        let mut document = Document::new();
+        document.set_header("valid inherited header");
+        document.insert_section(0).unwrap();
+        let valid = document
+            .section_mut(1)
+            .unwrap()
+            .properties_mut()
+            .header_refs
+            .pop()
+            .unwrap();
+        document
+            .section_mut(0)
+            .unwrap()
+            .properties_mut()
+            .header_refs
+            .push(valid.clone());
+        (document, valid)
+    }
+
+    #[test]
+    fn section_removal_ignores_each_unusable_following_header_override() {
+        for hazard in [
+            "missing relationship",
+            "external relationship",
+            "cross-type relationship",
+            "missing target",
+            "malformed target",
+        ] {
+            let (mut document, valid) = authored_header_on_predecessor();
+            let hazardous_id = format!("hazard-{}", hazard.replace(' ', "-"));
+            match hazard {
+                "missing relationship" => {}
+                "external relationship" => document
+                    .package
+                    .get_or_create_part_rels("/word/document.xml")
+                    .items
+                    .push(oxml_opc::relationship::Relationship {
+                        id: hazardous_id.clone(),
+                        rel_type: rel_types::HEADER.to_owned(),
+                        target: "https://example.test/header.xml".to_owned(),
+                        target_mode: Some("External".to_owned()),
+                    }),
+                "cross-type relationship" => document
+                    .package
+                    .get_or_create_part_rels("/word/document.xml")
+                    .add_with_id(&hazardous_id, rel_types::FOOTER, "header1.xml"),
+                "missing target" => document
+                    .package
+                    .get_or_create_part_rels("/word/document.xml")
+                    .add_with_id(&hazardous_id, rel_types::HEADER, "missing-header.xml"),
+                "malformed target" => {
+                    document
+                        .package
+                        .get_or_create_part_rels("/word/document.xml")
+                        .add_with_id(&hazardous_id, rel_types::HEADER, "malformed-header.xml");
+                    document
+                        .package
+                        .set_part("/word/malformed-header.xml", b"<not-a-header/>".to_vec());
+                }
+                _ => unreachable!(),
+            }
+            document
+                .section_mut(1)
+                .unwrap()
+                .properties_mut()
+                .header_refs
+                .push(HdrFtrRef {
+                    hdr_ftr_type: HdrFtrType::Default,
+                    rel_id: hazardous_id,
+                });
+
+            document.remove_section(0).unwrap();
+
+            assert_eq!(
+                document.header_text().as_deref(),
+                Some("valid inherited header"),
+                "{hazard} displaced the inherited story"
+            );
+            assert!(
+                document
+                    .section(0)
+                    .unwrap()
+                    .properties()
+                    .header_refs
+                    .iter()
+                    .any(|reference| reference.rel_id == valid.rel_id),
+                "{hazard} prevented inheritance materialization"
+            );
+            assert!(document.package.get_part("/word/header1.xml").is_some());
+        }
+    }
+
+    #[test]
+    fn section_removal_keeps_the_first_usable_duplicate_as_effective() {
+        let (mut document, valid) = authored_header_on_predecessor();
+        let mut later_header = CT_HdrFtr::new();
+        let mut paragraph = CT_P::new();
+        paragraph.add_run("later duplicate header");
+        later_header.paragraphs.push(paragraph);
+        document.package.set_part(
+            "/word/header-later.xml",
+            later_header.to_xml_header().unwrap(),
+        );
+        document
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("laterHeader", rel_types::HEADER, "header-later.xml");
+        document
+            .section_mut(0)
+            .unwrap()
+            .properties_mut()
+            .header_refs
+            .push(HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: "laterHeader".to_owned(),
+            });
+
+        document.remove_section(0).unwrap();
+
+        assert_eq!(
+            document.header_text().as_deref(),
+            Some("valid inherited header")
+        );
+        assert_eq!(
+            document.section(0).unwrap().properties().header_refs,
+            [valid]
+        );
+    }
+
+    #[test]
+    fn section_story_pruning_failure_is_atomic() {
+        let (mut document, _) = authored_header_on_predecessor();
+        document
+            .package
+            .set_part("/word/document.xml", b"<invalid".to_vec());
+        let before_document = document.document.to_xml().unwrap();
+        let before_main = document
+            .package
+            .get_part("/word/document.xml")
+            .unwrap()
+            .to_vec();
+        let before_relationships = document
+            .package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .clone();
+        let before_authored_parts = document.identifiers.authored_story_parts.clone();
+        let mut pruning_probe = document.clone_for_staging();
+        let removed = pruning_probe.remove_section_in_place(0).unwrap();
+        assert!(
+            pruning_probe
+                .prune_unreachable_authored_section_stories(&removed)
+                .is_err()
+        );
+
+        assert!(document.remove_section(0).is_err());
+
+        assert_eq!(document.document.to_xml().unwrap(), before_document);
+        assert_eq!(
+            document.package.get_part("/word/document.xml").unwrap(),
+            before_main
+        );
+        assert_eq!(
+            document
+                .package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .items,
+            before_relationships
+        );
+        assert_eq!(
+            document.identifiers.authored_story_parts,
+            before_authored_parts
+        );
+        assert!(document.package.get_part("/word/header1.xml").is_some());
     }
 
     #[test]

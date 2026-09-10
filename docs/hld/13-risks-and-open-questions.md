@@ -197,6 +197,13 @@ relationship, content-type, and XML identities together. Final-order
 canonicalization runs on a staged clone, so a collision or exhausted range
 cannot publish half of a package invariant.
 
+Ordered section removal uses that same staged boundary. Before removing a
+non-final owner, it resolves the first usable same-variant internal header and
+footer relationship and materializes inherited behavior on the following
+section. It prunes only facade-owned parts that no modeled or opaque reference
+can reach. Missing, malformed, cross-type, external, shared, and producer-owned
+edges cannot publish a half-updated section and story graph.
+
 Style graph mutations use the same rule. Adding or updating one side of a
 legal paragraph and character link updates the reciprocal edge in the staged
 candidate. Missing targets, incompatible types, duplicate defaults, cycles,

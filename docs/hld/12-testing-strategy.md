@@ -1404,6 +1404,21 @@ fields, namespace-complete owned projections, borrowed subtree semantics,
 opaque preservation boundaries, separator-note filtering, lifecycle state,
 and mutation of empty text nodes.
 
+The ordered section round-trip gate is
+`ordered_section_mutations_preserve_independent_story_references`. It creates
+four ordered owners, removes one boundary, and reopens three portrait,
+landscape, and portrait sections without moving body content or unmodelled
+section XML. Every surviving explicit or materialized story reference is
+checked by variant, relationship id, exact relationship type, resolved target,
+and parsed story text. Focused tests cover total immutable and mutable lookup,
+bound ordinal and final-owner identity, dimension-normalizing orientation
+mutation, final-owner promotion, inherited default and first-page headers and
+footers, shared authored targets, producer-owned targets, last-owner pruning,
+and sole-section or out-of-range atomicity. The relationship hazard matrix
+rejects missing, external, cross-type, absent-part, and malformed-target
+overrides, keeps the first usable duplicate, and proves a pruning-scan failure
+leaves the live typed document and package graph unchanged.
+
 Five real `.docx` files are stored outside the published crates and fetched by
 `scripts/fetch_docx_corpus.py` into the ignored `corpus/docx` directory. The
 tracked manifest pins one document for each of `business-letter`, `report`,

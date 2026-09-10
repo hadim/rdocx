@@ -330,6 +330,17 @@ location against a staged package and publishes only a serialized and reopened
 candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
 Python, WASM, and CLI gain no story traversal or mutation entry point.
 
+Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
+Each handle reports its zero-based document ordinal, schema-final ownership,
+and configured orientation while retaining access to the complete section
+properties. The mutable handle normalizes page dimensions when setting
+orientation and configures first-page header and footer behavior. `Document`
+adds `section_count`, `sections`, total `section` and `section_mut` lookup, and
+fallible staged `insert_section` and `remove_section` operations. These are
+additive APIs on the published pre-1.0 `rdocx` crate. Python, WASM, and CLI gain
+no section mutation entry point and retain their existing package and render
+behavior.
+
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic
 bundled-font page targets and returns `TocRebuildReport` with entry, newly

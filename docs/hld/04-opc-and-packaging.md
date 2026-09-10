@@ -447,6 +447,19 @@ untouched and cannot shadow a later valid relationship. Text, raw XML, image,
 and background-image setters apply the same eligibility rule before reusing a
 referenced part. An ineligible slot receives a fresh collision-safe part name.
 
+Section removal preserves the following section's effective header and footer
+behavior before deleting a non-final boundary. For each default, first, and even
+variant, resolution takes the first reference whose relationship has the exact
+header or footer type, is internal, reaches an existing part with the expected
+story root, and parses successfully. Missing, external, cross-type, absent-part,
+malformed-target, and later duplicate references cannot displace an earlier
+usable story. A missing usable override on the following section receives the
+effective reference before package pruning. Pruning deletes only a facade-owned
+header or footer relationship and part that no modeled or opaque reference can
+still reach. Shared and producer-owned targets remain intact. The boundary,
+relationship, part, content-type, and authored-identity changes publish only
+after the staged package serializes and reopens successfully.
+
 An authored watermark owns only a VML shape whose expanded name is `v:shape`
 and whose unqualified id is `rdocx-watermark`. Replacement patches that exact
 byte range in the original header, leaves tables, controls, root attributes,
