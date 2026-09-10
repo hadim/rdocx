@@ -1012,6 +1012,16 @@ An empty custom-properties part is pruned only when the current facade created
 it. Settings mutations use the same staged boundary and keep the existing
 relationship-resolved target.
 
+Container-neutral Word story editing also belongs to the `rdocx` facade.
+Concrete `StoryKind`, `StoryId`, `ContentLocation`, `StoryItemKind`, and
+`StoryItemRef` values address the body, cells, headers, footers, ordinary
+footnotes and endnotes, comments, and nested text boxes without constructing a
+second document tree. The facade resolves package owners and stable source
+order. The existing `rdocx-oxml` grammar remains the authority for admitting
+content controls, revisions, and fields as typed content. Content rejected by
+that grammar remains one opaque preserved boundary and cannot expose nested
+owners or editable text.
+
 `Document` also owns one relationship-resolved `CT_Styles` graph. Public style
 creation, update, default selection, and removal build a complete candidate,
 validate identifiers, reference types, defaults, links, next styles, and

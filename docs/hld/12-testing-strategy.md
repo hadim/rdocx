@@ -1391,6 +1391,19 @@ and Strict alternative-format import targets. The composed predicate inspects
 the rebuilt TOC cache, section boundary, and body and header comparison output
 so each milestone operation is mutation-sensitive.
 
+The container-neutral story gate source-builds one package containing body,
+cell, text-box, header, footer, footnote, endnote, and comment owners. Its
+integration predicate applies the same location resolver and text mutation to
+every kind, then checks identical wrong-owner, kind, bounds, and stale errors.
+The round-trip predicate pins deterministic owner and item order for paragraphs,
+tables, controls, fields, drawings, and preserved nodes, including exact raw
+XML after save and reopen. The atomicity regression records package bytes
+before every invalid location and requires them to remain unchanged. Focused
+regressions also cover prefix aliases, typed admission, nested and same-run
+fields, namespace-complete owned projections, borrowed subtree semantics,
+opaque preservation boundaries, separator-note filtering, lifecycle state,
+and mutation of empty text nodes.
+
 Five real `.docx` files are stored outside the published crates and fetched by
 `scripts/fetch_docx_corpus.py` into the ignored `corpus/docx` directory. The
 tracked manifest pins one document for each of `business-letter`, `report`,

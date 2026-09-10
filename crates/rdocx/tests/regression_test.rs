@@ -13,18 +13,2294 @@ use quick_xml::Reader as XmlReader;
 use quick_xml::events::Event as XmlEvent;
 use rdocx::{
     BarcodeField, BarcodeKind, BodyContentRef, BodyItemRef, BreakKind, CellItemRef, CellRef,
-    ChartData, ChartKind, Document, EmbeddedContentKind, EmbeddedMutationPolicy,
-    EmbeddedSignatureState, FieldDateTime, FieldEvaluationContext, FieldOutcome, HyperlinkItemRef,
-    HyperlinkRef, Length, ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText,
-    MailMergeImage, MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat,
-    RasterOptions, RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange,
-    RunRef, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection, TocField,
-    TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    ChartData, ChartKind, CustomProperty, CustomPropertyValue, Document, EmbeddedContentKind,
+    EmbeddedMutationPolicy, EmbeddedSignatureState, FieldDateTime, FieldEvaluationContext,
+    FieldOutcome, HyperlinkItemRef, HyperlinkRef, Length, ListLevel, MailMergeControl,
+    MailMergeData, MailMergeFormattedText, MailMergeImage, MailMergeRecord, MailMergeValue,
+    ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions, RasterOutput, RenderOptions,
+    RevisionView, RunItemRef, RunPosition, RunRange, RunRef, StyleBuilder, StyleType, TableRef,
+    TcField, TocEntrySelection, TocField, TocRebuildReport, UnsupportedXmlRef, WordCreationProfile,
+    WordPackageClass,
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
 use rdocx_oxml::namespace::W_NS;
 use rdocx_oxml::text::CT_R;
+
+#[test]
+fn direct_controls_rejected_by_typed_parsing_stay_one_raw_story_item() {
+    let empty = r#"<w:sdt x:token="empty"/>"#;
+    let malformed = r#"<w:sdt x:token="malformed"><w:sdtPr><w:id w:val="not-an-integer"/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt>"#;
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body>{empty}{malformed}</w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let items = document.story_items(&body).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![
+            rdocx::StoryItemKind::PreservedNode,
+            rdocx::StoryItemKind::PreservedNode,
+        ]
+    );
+    assert!(items.iter().all(|item| item.text().unwrap().is_none()));
+    drop(items);
+
+    let before = document.to_bytes().unwrap();
+    for ordinal in 0..2 {
+        let invalid = rdocx::ContentLocation::new(
+            body.clone(),
+            rdocx::StoryItemKind::ContentControl,
+            vec![ordinal],
+        );
+        assert!(document.set_story_text(&invalid, "must not land").is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    let saved = document_xml(&mut document);
+    assert!(saved.contains(empty), "{saved}");
+    assert!(saved.contains(malformed), "{saved}");
+}
+
+#[test]
+fn revisions_rejected_by_the_complete_typed_parser_stay_opaque() {
+    let mut revision = r#"<w:r><w:t>hidden revision text</w:t></w:r>"#.to_owned();
+    for id in 0..33 {
+        revision = format!(r#"<w:ins w:id="{id}" w:author="Ada">{revision}</w:ins>"#);
+    }
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>{revision}</w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let items = document.story_items(&body).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![rdocx::StoryItemKind::Paragraph]
+    );
+    assert_eq!(items[0].text().unwrap(), None);
+    drop(items);
+
+    let before = document.to_bytes().unwrap();
+    let invalid = rdocx::ContentLocation::new(body, rdocx::StoryItemKind::Field, vec![1]);
+    assert!(document.set_story_text(&invalid, "must not land").is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert!(document_xml(&mut document).contains(&revision));
+}
+
+#[test]
+fn empty_quoted_first_tokens_never_admit_story_fields() {
+    let simple = r#"<w:fldSimple w:instr="&quot;&quot; PAGE" x:token="simple"><w:r><w:t>simple cache</w:t></w:r></w:fldSimple>"#;
+    let complex = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>&quot;&quot; PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>complex cache</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p>{simple}</w:p><w:p>{complex}</w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let items = document.story_items(&body).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![
+            rdocx::StoryItemKind::Paragraph,
+            rdocx::StoryItemKind::Paragraph,
+        ]
+    );
+    assert_eq!(items[0].text().unwrap(), None);
+    assert_eq!(items[1].text().unwrap().as_deref(), Some("complex cache"));
+    drop(items);
+
+    let before = document.to_bytes().unwrap();
+    let invalid = rdocx::ContentLocation::new(body, rdocx::StoryItemKind::Field, vec![1]);
+    assert!(document.set_story_text(&invalid, "must not land").is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let saved = document_xml(&mut document);
+    assert!(saved.contains(simple), "{saved}");
+    assert!(
+        saved.contains("<w:instrText>&quot;&quot; PAGE</w:instrText>"),
+        "{saved}"
+    );
+    assert!(saved.contains("<w:t>complex cache</w:t>"), "{saved}");
+}
+
+#[test]
+fn separator_free_complex_fields_are_empty_and_editable() {
+    let field = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>{field}</w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let fields = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].text().unwrap().as_deref(), Some(""));
+    let location = fields[0].location().clone();
+    drop(fields);
+
+    document.set_story_text(&location, "42").unwrap();
+    let saved = document_xml(&mut document);
+    assert!(
+        saved.contains("<w:instrText> PAGE </w:instrText>"),
+        "{saved}"
+    );
+    assert!(
+        saved.contains(r#"<w:fldChar w:fldCharType="separate"/>"#),
+        "{saved}"
+    );
+    assert!(saved.contains("<w:t>42</w:t>"), "{saved}");
+}
+
+#[test]
+fn nested_separator_does_not_replace_the_outer_field_separator() {
+    let field = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> IF </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> MERGEFIELD Inner </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>inner cache</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:r><w:instrText> = &quot;x&quot; &quot;yes&quot; &quot;no&quot; </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>{field}</w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let fields = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 2);
+    let outer = fields
+        .iter()
+        .find(|item| item.text().unwrap().as_deref() == Some(""))
+        .expect("separator-free outer field")
+        .location()
+        .clone();
+    drop(fields);
+
+    document.set_story_text(&outer, "visible outer").unwrap();
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(
+        saved_xml.matches(r#"w:fldCharType="separate""#).count(),
+        2,
+        "{saved_xml}"
+    );
+
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let body = reopened.stories().unwrap().remove(0);
+    let outer_text = reopened
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .find_map(|item| (item.text().unwrap().as_deref() == Some("visible outer")).then_some(()));
+    assert_eq!(outer_text, Some(()));
+}
+
+#[test]
+fn default_word_namespace_field_separator_reopens_as_namespaced_xml() {
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let relationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{word}" xmlns:r="{relationships}"><w:body><w:sectPr><w:headerReference w:type="default" r:id="defaultHeader"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "defaultHeader",
+            oxml_opc::relationship::rel_types::HEADER,
+            "header-default-story.xml",
+        );
+    package.content_types.add_override(
+        "/word/header-default-story.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    package.set_part(
+        "/word/header-default-story.xml",
+        format!(
+            r#"<hdr xmlns="{word}" xmlns:q="{word}"><p><r><fldChar q:fldCharType="begin"/></r><r><instrText> PAGE </instrText></r><r><fldChar q:fldCharType="end"/></r></p></hdr>"#
+        )
+        .into_bytes(),
+    );
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let mut document = Document::from_bytes(output.get_ref()).unwrap();
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let location = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .expect("default-namespace field")
+        .location()
+        .clone();
+
+    document.set_story_text(&location, "23").unwrap();
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let body = reopened
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let fields = reopened
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].text().unwrap().as_deref(), Some("23"));
+}
+
+#[test]
+fn typed_boundaries_invalidate_story_complex_fields() {
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r>"#;
+    let tail = r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>cache</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let boundaries = [
+        r#"<w:commentRangeStart w:id="1"/>"#.to_owned(),
+        r#"<w:bookmarkStart w:id="2" w:name="crossing"/>"#.to_owned(),
+        r#"<w:sdt><w:sdtContent><w:r><w:t>control boundary</w:t></w:r></w:sdtContent></w:sdt>"#
+            .to_owned(),
+        r#"<w:ins w:id="3" w:author="Ada"><w:r><w:t>revision boundary</w:t></w:r></w:ins>"#
+            .to_owned(),
+        format!(r#"<w:hyperlink w:anchor="partial">{tail}</w:hyperlink>"#),
+    ];
+    let paragraphs = boundaries
+        .iter()
+        .enumerate()
+        .map(|(index, boundary)| {
+            if index == boundaries.len() - 1 {
+                format!("<w:p>{begin}{boundary}</w:p>")
+            } else {
+                format!("<w:p>{begin}{boundary}{tail}</w:p>")
+            }
+        })
+        .collect::<String>();
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"> <w:body>{paragraphs}</w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let items = document.story_items(&body).unwrap();
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+            .count(),
+        0
+    );
+    drop(items);
+
+    let before = document.to_bytes().unwrap();
+    let invalid = rdocx::ContentLocation::new(body, rdocx::StoryItemKind::Field, vec![1]);
+    assert!(document.set_story_text(&invalid, "must not land").is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let saved = document_xml(&mut document);
+    for retained in [
+        "commentRangeStart",
+        "bookmarkStart",
+        "control boundary",
+        "revision boundary",
+        "hyperlink",
+    ] {
+        assert!(saved.contains(retained), "missing {retained}: {saved}");
+    }
+    assert_eq!(
+        saved.matches("<w:instrText> PAGE </w:instrText>").count(),
+        5
+    );
+    assert_eq!(saved.matches("<w:t>cache</w:t>").count(), 5);
+}
+
+#[test]
+fn rejected_complex_field_does_not_hide_valid_paragraph_siblings() {
+    let left = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>left cache</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let rejected = concat!(
+        r#"<x:rejected-start/>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> DATE </w:instrText></w:r>"#,
+        r#"<w:bookmarkStart w:id="7" w:name="crossing"/>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>rejected cache</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<x:rejected-end/>"#,
+        r#"<w:bookmarkEnd w:id="7"/>"#,
+    );
+    let right = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> NUMPAGES </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>right cache</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p>{left}{rejected}{right}</w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let initial = document_xml(&mut document);
+    let rejected_start = initial.find("<x:rejected-start/>").unwrap();
+    let rejected_end_start = initial.find("<x:rejected-end/>").unwrap();
+    let rejected_end = rejected_end_start + "<x:rejected-end/>".len();
+    let rejected_before = initial[rejected_start..rejected_end].to_owned();
+    let body = document.stories().unwrap().remove(0);
+    let fields = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields
+            .iter()
+            .map(|field| field.text().unwrap().unwrap())
+            .collect::<Vec<_>>(),
+        ["left cache", "right cache"]
+    );
+    let left_location = fields[0].location().clone();
+    assert!(
+        std::str::from_utf8(fields[0].xml().unwrap().as_ref())
+            .unwrap()
+            .contains("<w:instrText> PAGE </w:instrText>")
+    );
+    assert!(
+        std::str::from_utf8(fields[1].xml().unwrap().as_ref())
+            .unwrap()
+            .contains("<w:instrText> NUMPAGES </w:instrText>")
+    );
+    drop(fields);
+
+    document
+        .set_story_text(&left_location, "left updated")
+        .unwrap();
+    let body = document.stories().unwrap().remove(0);
+    let right_location = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.text().unwrap().as_deref() == Some("right cache"))
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .set_story_text(&right_location, "right updated")
+        .unwrap();
+
+    let body = document.stories().unwrap().remove(0);
+    let before_rejected_attempt = document.to_bytes().unwrap();
+    let rejected_location = rdocx::ContentLocation::new(body, rdocx::StoryItemKind::Field, vec![0]);
+    assert!(
+        document
+            .set_story_text(&rejected_location, "must not land")
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_rejected_attempt);
+    let saved = document_xml(&mut document);
+    assert!(saved.contains("<w:t>left updated</w:t>"), "{saved}");
+    assert!(saved.contains("<w:t>right updated</w:t>"), "{saved}");
+    assert!(saved.contains(&rejected_before), "{saved}");
+}
+
+#[test]
+fn unclosed_complex_field_does_not_hide_fields_in_later_paragraphs() {
+    let malformed = concat!(
+        r#"<x:malformed-start/>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> BROKEN </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>malformed cache</w:t></w:r>"#,
+        r#"<x:malformed-end/>"#,
+    );
+    let later = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>later cache</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let nested = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> IF </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> MERGEFIELD Inner </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>inner cache</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:r><w:instrText> = &quot;x&quot; &quot;yes&quot; &quot;no&quot; </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>outer cache</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p>{malformed}</w:p><w:p>{later}</w:p><w:p>{nested}</w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let initial = document_xml(&mut document);
+    let malformed_start = initial.find("<x:malformed-start/>").unwrap();
+    let malformed_end_start = initial.find("<x:malformed-end/>").unwrap();
+    let malformed_end = malformed_end_start + "<x:malformed-end/>".len();
+    let malformed_before = initial[malformed_start..malformed_end].to_owned();
+    let body = document.stories().unwrap().remove(0);
+    let fields = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields
+            .iter()
+            .map(|field| field.text().unwrap().unwrap())
+            .collect::<Vec<_>>(),
+        ["later cache", "outer cache", "inner cache"]
+    );
+    assert!(
+        std::str::from_utf8(fields[0].xml().unwrap().as_ref())
+            .unwrap()
+            .contains("<w:instrText> PAGE </w:instrText>")
+    );
+    assert!(
+        std::str::from_utf8(fields[2].xml().unwrap().as_ref())
+            .unwrap()
+            .contains("<w:instrText> MERGEFIELD Inner </w:instrText>")
+    );
+    let later_location = fields[0].location().clone();
+    drop(fields);
+
+    document
+        .set_story_text(&later_location, "later updated")
+        .unwrap();
+    let body = document.stories().unwrap().remove(0);
+    let inner_location = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.text().unwrap().as_deref() == Some("inner cache"))
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .set_story_text(&inner_location, "inner updated")
+        .unwrap();
+
+    let body = document.stories().unwrap().remove(0);
+    let before_invalid = document.to_bytes().unwrap();
+    let malformed_location =
+        rdocx::ContentLocation::new(body, rdocx::StoryItemKind::Field, vec![0]);
+    assert!(
+        document
+            .set_story_text(&malformed_location, "must not land")
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_invalid);
+    let saved = document_xml(&mut document);
+    assert!(saved.contains("<w:t>later updated</w:t>"), "{saved}");
+    assert!(saved.contains("<w:t>inner updated</w:t>"), "{saved}");
+    assert!(saved.contains("<w:t>outer cache</w:t>"), "{saved}");
+    assert!(saved.contains(&malformed_before), "{saved}");
+}
+
+#[test]
+fn complex_story_field_xml_is_one_well_formed_projection() {
+    let field = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>{field}</w:p></w:body></w:document>"#
+    );
+    let document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let items = document.story_items(&body).unwrap();
+    let field_xml = items
+        .iter()
+        .find(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .unwrap()
+        .xml()
+        .unwrap();
+    assert!(matches!(&field_xml, std::borrow::Cow::Owned(_)));
+    let field_xml = std::str::from_utf8(field_xml.as_ref()).unwrap();
+    assert!(
+        field_xml.starts_with("<w:p ")
+            && field_xml.contains(
+                r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#
+            ),
+        "{field_xml}"
+    );
+    assert!(field_xml.ends_with("</w:p>"), "{field_xml}");
+    assert!(field_xml.contains(field), "{field_xml}");
+    let mut reader = XmlReader::from_str(field_xml);
+    loop {
+        match reader.read_event() {
+            Ok(XmlEvent::Eof) => break,
+            Ok(_) => {}
+            Err(error) => panic!("complex field projection is malformed: {error}"),
+        }
+    }
+}
+
+#[test]
+fn identical_complex_bytes_inside_a_simple_field_do_not_cross_admit() {
+    let complex = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>same cache</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:fldSimple w:instr="DATE">{complex}</w:fldSimple></w:p><w:p>{complex}</w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let fields = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 2);
+    let complex = fields
+        .iter()
+        .find(|field| {
+            std::str::from_utf8(field.xml().unwrap().as_ref())
+                .unwrap()
+                .contains("<w:instrText> PAGE </w:instrText>")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    drop(fields);
+
+    document
+        .set_story_text(&complex, "direct replacement")
+        .unwrap();
+    let saved = document_xml(&mut document);
+    assert_eq!(saved.matches("same cache").count(), 1, "{saved}");
+    assert_eq!(saved.matches("direct replacement").count(), 1, "{saved}");
+
+    let body = document.stories().unwrap().remove(0);
+    let before = document.to_bytes().unwrap();
+    let invalid = rdocx::ContentLocation::new(body, rdocx::StoryItemKind::Field, vec![9]);
+    assert!(document.set_story_text(&invalid, "must not land").is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+fn document_with_header_story(header: &str) -> Document {
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let relationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part("/word/header-story-range.xml", header.as_bytes().to_vec());
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "header-story-range.xml",
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{word}" xmlns:r="{relationships}"><w:body><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+fn header_story_xml(document: &mut Document) -> String {
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    std::str::from_utf8(package.get_part("/word/header-story-range.xml").unwrap())
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn complex_projection_retains_a_foreign_inherited_w_binding() {
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let header = format!(
+        concat!(
+            r#"<q:hdr xmlns:q="{0}" xmlns:w="urn:producer"><q:p><q:r w:flag="keep">"#,
+            r#"<q:fldChar q:fldCharType="begin"/><q:instrText>PAGE</q:instrText>"#,
+            r#"<q:fldChar q:fldCharType="separate"/><q:t>7</q:t>"#,
+            r#"<q:fldChar q:fldCharType="end"/></q:r></q:p></q:hdr>"#,
+        ),
+        word
+    );
+    let document = document_with_header_story(&header);
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let projection = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .unwrap()
+        .xml()
+        .unwrap()
+        .into_owned();
+    let projection = std::str::from_utf8(&projection).unwrap();
+    assert!(projection.starts_with("<q:p "), "{projection}");
+    assert!(
+        projection.contains(&format!(r#"xmlns:q="{word}""#)),
+        "{projection}"
+    );
+    assert!(
+        projection.contains(r#"xmlns:w="urn:producer""#),
+        "{projection}"
+    );
+    assert!(
+        projection.contains(r#"<q:r w:flag="keep">"#),
+        "{projection}"
+    );
+    let mut reader = XmlReader::from_str(projection);
+    loop {
+        match reader.read_event() {
+            Ok(XmlEvent::Eof) => break,
+            Ok(_) => {}
+            Err(error) => panic!("complex field projection is malformed: {error}"),
+        }
+    }
+}
+
+#[test]
+fn same_run_sibling_and_nested_story_fields_have_isolated_ranges() {
+    let sibling_xml = concat!(
+        r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r>"#,
+        r#"<w:fldChar w:fldCharType="begin"/><w:instrText>DATE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>first cache</w:t><w:fldChar w:fldCharType="end"/>"#,
+        r#"<w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>second cache</w:t><w:fldChar w:fldCharType="end"/>"#,
+        r#"</w:r></w:p></w:hdr>"#,
+    );
+    let mut siblings = document_with_header_story(sibling_xml);
+    let body = siblings
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let fields = siblings
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields
+            .iter()
+            .map(|field| field.text().unwrap().unwrap())
+            .collect::<Vec<_>>(),
+        ["first cache", "second cache"]
+    );
+    let first_projection = String::from_utf8(fields[0].xml().unwrap().into_owned()).unwrap();
+    let second_projection = String::from_utf8(fields[1].xml().unwrap().into_owned()).unwrap();
+    assert!(first_projection.contains("DATE") && !first_projection.contains("PAGE"));
+    assert!(second_projection.contains("PAGE") && !second_projection.contains("DATE"));
+    let second = fields[1].location().clone();
+    drop(fields);
+    siblings
+        .set_story_text(&second, "second replacement")
+        .unwrap();
+    let saved = header_story_xml(&mut siblings);
+    assert!(saved.contains("first cache"), "{saved}");
+    assert!(!saved.contains("second cache"), "{saved}");
+    assert!(saved.contains("second replacement"), "{saved}");
+
+    let nested_xml = concat!(
+        r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r>"#,
+        r#"<w:fldChar w:fldCharType="begin"/><w:instrText>IF </w:instrText>"#,
+        r#"<w:fldChar w:fldCharType="begin"/><w:instrText>MERGEFIELD Inner</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>inner cache</w:t><w:fldChar w:fldCharType="end"/>"#,
+        r#"<w:instrText> = 1 yes no</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>outer cache</w:t><w:fldChar w:fldCharType="end"/>"#,
+        r#"</w:r></w:p></w:hdr>"#,
+    );
+    let mut nested = document_with_header_story(nested_xml);
+    let body = nested
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let fields = nested
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].text().unwrap().as_deref(), Some("outer cache"));
+    assert_eq!(fields[1].text().unwrap().as_deref(), Some("inner cache"));
+    let inner_projection = String::from_utf8(fields[1].xml().unwrap().into_owned()).unwrap();
+    assert!(
+        inner_projection.contains("MERGEFIELD Inner"),
+        "{inner_projection}"
+    );
+    assert!(
+        !inner_projection.contains("outer cache"),
+        "{inner_projection}"
+    );
+    let inner = fields[1].location().clone();
+    drop(fields);
+    nested.set_story_text(&inner, "inner replacement").unwrap();
+    let saved = header_story_xml(&mut nested);
+    assert!(saved.contains("outer cache"), "{saved}");
+    assert!(!saved.contains("inner cache"), "{saved}");
+    assert!(saved.contains("inner replacement"), "{saved}");
+}
+
+#[test]
+fn same_run_cached_result_nested_field_is_independently_editable() {
+    let xml = concat!(
+        r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r>"#,
+        r#"<w:fldChar w:fldCharType="begin"/><w:instrText>IF Outer</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>outer head</w:t>"#,
+        r#"<w:fldChar w:fldCharType="begin"/><w:instrText>MERGEFIELD Inner</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>inner cache</w:t><w:fldChar w:fldCharType="end"/>"#,
+        r#"<w:t>outer tail</w:t><w:fldChar w:fldCharType="end"/>"#,
+        r#"</w:r></w:p></w:hdr>"#,
+    );
+    let mut document = document_with_header_story(xml);
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let fields = document
+        .story_items(&header)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(
+        fields[0].text().unwrap().as_deref(),
+        Some("outer headinner cacheouter tail")
+    );
+    assert_eq!(fields[1].text().unwrap().as_deref(), Some("inner cache"));
+    let outer_projection = String::from_utf8(fields[0].xml().unwrap().into_owned()).unwrap();
+    let inner_projection = String::from_utf8(fields[1].xml().unwrap().into_owned()).unwrap();
+    assert!(outer_projection.contains("IF Outer"), "{outer_projection}");
+    assert!(
+        outer_projection.contains("MERGEFIELD Inner"),
+        "{outer_projection}"
+    );
+    assert!(
+        inner_projection.contains("MERGEFIELD Inner"),
+        "{inner_projection}"
+    );
+    assert!(!inner_projection.contains("IF Outer"), "{inner_projection}");
+    assert!(
+        !inner_projection.contains("outer head"),
+        "{inner_projection}"
+    );
+    assert!(
+        !inner_projection.contains("outer tail"),
+        "{inner_projection}"
+    );
+    let stale_outer = fields[0].location().clone();
+    let inner = fields[1].location().clone();
+    drop(fields);
+
+    document
+        .set_story_text(&inner, "inner replacement")
+        .unwrap();
+    let saved = header_story_xml(&mut document);
+    assert!(saved.contains("IF Outer"), "{saved}");
+    assert!(saved.contains("MERGEFIELD Inner"), "{saved}");
+    assert!(saved.contains("outer head"), "{saved}");
+    assert!(saved.contains("outer tail"), "{saved}");
+    assert!(saved.contains("inner replacement"), "{saved}");
+    assert!(!saved.contains("inner cache"), "{saved}");
+
+    let before_stale_attempt = document.to_bytes().unwrap();
+    assert!(matches!(
+        document.set_story_text(&stale_outer, "must not land"),
+        Err(rdocx::Error::Story(rdocx::StoryError::Stale { .. }))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before_stale_attempt);
+}
+
+#[test]
+fn hyperlink_local_word_alias_admits_its_complex_story_field() {
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let xml = format!(
+        r#"<w:hdr xmlns:w="{word}" xmlns:x="urn:producer"><w:p><w:hyperlink xmlns:q="{word}" w:anchor="local-alias"><q:r><q:fldChar q:fldCharType="begin"/><q:instrText>PAGE</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>alias cache</q:t><x:keep x:flag="exact"/><q:fldChar q:fldCharType="end"/></q:r></w:hyperlink></w:p></w:hdr>"#
+    );
+    let mut document = document_with_header_story(&xml);
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let fields = document
+        .story_items(&header)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].text().unwrap().as_deref(), Some("alias cache"));
+    let projection = String::from_utf8(fields[0].xml().unwrap().into_owned()).unwrap();
+    assert!(
+        projection.contains(&format!(r#"xmlns:q="{word}""#)),
+        "{projection}"
+    );
+    assert!(
+        projection.contains("<q:instrText>PAGE</q:instrText>"),
+        "{projection}"
+    );
+    let field = fields[0].location().clone();
+    drop(fields);
+
+    document
+        .set_story_text(&field, "alias replacement")
+        .unwrap();
+    let saved = header_story_xml(&mut document);
+    assert!(
+        saved.contains(&format!(
+            r#"<w:hyperlink xmlns:q="{word}" w:anchor="local-alias">"#
+        )),
+        "{saved}"
+    );
+    assert!(saved.contains("<q:instrText>PAGE</q:instrText>"), "{saved}");
+    assert!(saved.contains("<q:t>alias replacement</q:t>"), "{saved}");
+    assert!(!saved.contains("alias cache"), "{saved}");
+    assert!(saved.contains(r#"<x:keep x:flag="exact"/>"#), "{saved}");
+}
+
+#[test]
+fn descendant_word_alias_survives_shadowing_of_the_paragraph_prefix() {
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let hyperlink = format!(
+        concat!(
+            r#"<q:hyperlink xmlns:q="{word}" xmlns:w="urn:producer" q:anchor="shadowed-paragraph-prefix">"#,
+            r#"<q:r w:flag="foreign"><q:fldChar q:fldCharType="begin"/>"#,
+            r#"<q:instrText>PAGE</q:instrText><q:fldChar q:fldCharType="separate"/>"#,
+            r#"<q:t>shadow cache</q:t><x:keep x:flag="exact"/>"#,
+            r#"<q:fldChar q:fldCharType="end"/></q:r></q:hyperlink>"#,
+        ),
+        word = word,
+    );
+    let xml =
+        format!(r#"<w:hdr xmlns:w="{word}" xmlns:x="urn:customer"><w:p>{hyperlink}</w:p></w:hdr>"#);
+    let mut document = document_with_header_story(&xml);
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let fields = document
+        .story_items(&header)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].text().unwrap().as_deref(), Some("shadow cache"));
+    let projection = String::from_utf8(fields[0].xml().unwrap().into_owned()).unwrap();
+    assert!(projection.starts_with("<q:p "), "{projection}");
+    assert!(
+        projection.contains(&format!(r#"xmlns:q="{word}""#)),
+        "{projection}"
+    );
+    assert!(
+        projection.contains(r#"xmlns:w="urn:producer""#),
+        "{projection}"
+    );
+    assert!(
+        projection.contains(r#"<q:r w:flag="foreign">"#),
+        "{projection}"
+    );
+    assert!(
+        projection.contains(r#"<x:keep x:flag="exact"/>"#),
+        "{projection}"
+    );
+    let field = fields[0].location().clone();
+    drop(fields);
+
+    document
+        .set_story_text(&field, "shadow replacement")
+        .unwrap();
+    let saved = header_story_xml(&mut document);
+    let expected = hyperlink.replace("shadow cache", "shadow replacement");
+    assert!(saved.contains(&expected), "{saved}");
+    assert!(!saved.contains("shadow cache"), "{saved}");
+}
+
+#[test]
+fn valid_inner_result_field_is_hidden_when_its_outer_field_is_invalid() {
+    let field_bytes = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>   </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>outer head</w:t>"#,
+        r#"<w:fldChar w:fldCharType="begin"/><w:instrText>MERGEFIELD Inner</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>inner cache</w:t><w:fldChar w:fldCharType="end"/>"#,
+        r#"<x:keep x:flag="exact"/><w:t>outer tail</w:t><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let xml = format!(
+        r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:p>{field_bytes}</w:p></w:hdr>"#
+    );
+    let mut document = document_with_header_story(&xml);
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let items = document.story_items(&header).unwrap();
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+            .count(),
+        0
+    );
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        [rdocx::StoryItemKind::Paragraph]
+    );
+    drop(items);
+
+    let before = document.to_bytes().unwrap();
+    let fabricated = rdocx::ContentLocation::new(header, rdocx::StoryItemKind::Field, vec![1]);
+    assert!(
+        document
+            .set_story_text(&fabricated, "must not land")
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let saved = header_story_xml(&mut document);
+    assert!(saved.contains(field_bytes), "{saved}");
+    assert!(!saved.contains("must not land"), "{saved}");
+}
+
+#[test]
+fn story_inline_containers_follow_their_typed_child_grammars() {
+    let hyperlink_raw = r#"<w:hyperlink w:anchor="raw-hyperlink"><w:sdt x:raw="hyperlink-control"><w:sdtContent><w:r><w:t>hidden hyperlink control</w:t></w:r></w:sdtContent></w:sdt><w:fldSimple w:instr="DATE" x:raw="hyperlink-field"><w:r><w:t>hidden hyperlink field</w:t></w:r></w:fldSimple></w:hyperlink>"#;
+    let field_control_raw = r#"<w:sdt x:raw="field-control"><w:sdtContent><w:r><w:t>hidden field control</w:t></w:r></w:sdtContent></w:sdt>"#;
+    let field_hyperlink_raw = r#"<w:hyperlink w:anchor="raw-field-link" x:raw="field-hyperlink"><w:r><w:t>hidden field hyperlink</w:t></w:r></w:hyperlink>"#;
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p><w:ins w:id="1" w:author="Ada"><w:r><w:t>revision direct</w:t></w:r><w:hyperlink w:anchor="typed-link"><w:r><w:t>linked direct</w:t></w:r><w:moveTo w:id="2" w:author="Grace"><w:r><w:t>nested revision</w:t></w:r></w:moveTo></w:hyperlink></w:ins></w:p><w:p>{hyperlink_raw}</w:p><w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>direct field</w:t></w:r>{field_control_raw}{field_hyperlink_raw}</w:fldSimple></w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let items = document.story_items(&body).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![
+            rdocx::StoryItemKind::Paragraph,
+            rdocx::StoryItemKind::Paragraph,
+            rdocx::StoryItemKind::Paragraph,
+            rdocx::StoryItemKind::Field,
+        ]
+    );
+    assert_eq!(
+        items[0].text().unwrap().as_deref(),
+        Some("revision directlinked directnested revision")
+    );
+    assert_eq!(items[1].text().unwrap(), None);
+    assert_eq!(items[2].text().unwrap().as_deref(), Some("direct field"));
+    assert_eq!(items[3].text().unwrap().as_deref(), Some("direct field"));
+    let revision_paragraph = items[0].location().clone();
+    drop(items);
+
+    document
+        .set_story_text(&revision_paragraph, "revision replacement")
+        .unwrap();
+    let saved = document_xml(&mut document);
+    assert!(saved.contains("<w:t>revision replacement</w:t>"), "{saved}");
+    assert!(saved.contains(hyperlink_raw), "{saved}");
+    assert!(saved.contains(field_control_raw), "{saved}");
+    assert!(saved.contains(field_hyperlink_raw), "{saved}");
+
+    let body = document.stories().unwrap().remove(0);
+    let before_rejected_edit = document.to_bytes().unwrap();
+    for raw_kind in [
+        rdocx::StoryItemKind::ContentControl,
+        rdocx::StoryItemKind::Field,
+    ] {
+        let raw_child = rdocx::ContentLocation::new(body.clone(), raw_kind, vec![1]);
+        assert!(matches!(
+            document.set_story_text(&raw_child, "must not land"),
+            Err(rdocx::Error::Story(rdocx::StoryError::KindMismatch { .. }))
+        ));
+        assert_eq!(document.to_bytes().unwrap(), before_rejected_edit);
+    }
+
+    let body = document.stories().unwrap().remove(0);
+    let field = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            item.kind() == rdocx::StoryItemKind::Field
+                && item.text().unwrap().as_deref() == Some("direct field")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .set_story_text(&field, "field replacement")
+        .unwrap();
+    let saved = document_xml(&mut document);
+    assert!(saved.contains("<w:t>field replacement</w:t>"), "{saved}");
+    assert!(saved.contains(hyperlink_raw), "{saved}");
+    assert!(saved.contains(field_control_raw), "{saved}");
+    assert!(saved.contains(field_hyperlink_raw), "{saved}");
+}
+
+#[test]
+fn raw_inline_wrappers_rejected_by_typed_parsing_stay_opaque_and_atomic() {
+    let missing_author =
+        r#"<w:ins w:id="1" x:token="missing-author"><w:r><w:t>hidden revision</w:t></w:r></w:ins>"#;
+    let missing_instruction = r#"<w:fldSimple x:token="missing-instr"><w:r><w:t>hidden missing instruction</w:t></w:r></w:fldSimple>"#;
+    let empty_instruction = r#"<w:fldSimple w:instr="" x:token="empty-instr"><w:r><w:t>hidden empty instruction</w:t></w:r></w:fldSimple>"#;
+    let empty_parsed_name = r#"<w:fldSimple w:instr="&quot;&quot;" x:token="empty-parsed-name"><w:r><w:t>hidden empty parsed name</w:t></w:r></w:fldSimple>"#;
+    let empty_field = r#"<w:fldSimple w:instr="PAGE" x:token="empty-field"/>"#;
+    let empty_drawing = r#"<w:drawing x:token="empty-drawing"/>"#;
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p>{missing_author}{missing_instruction}{empty_instruction}{empty_parsed_name}{empty_field}<w:r>{empty_drawing}</w:r></w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let items = document.story_items(&body).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![rdocx::StoryItemKind::Paragraph]
+    );
+    assert_eq!(items[0].text().unwrap(), None);
+    drop(items);
+
+    let before = document.to_bytes().unwrap();
+    let invalid_field = rdocx::ContentLocation::new(body, rdocx::StoryItemKind::Field, vec![1]);
+    assert!(
+        document
+            .set_story_text(&invalid_field, "must not land")
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let saved = document_xml(&mut document);
+    for raw in [
+        missing_author,
+        missing_instruction,
+        empty_instruction,
+        empty_parsed_name,
+        empty_field,
+        empty_drawing,
+    ] {
+        assert!(saved.contains(raw), "missing {raw} in {saved}");
+    }
+}
+
+#[test]
+fn complex_fields_rejected_by_typed_projection_are_not_story_fields() {
+    let empty_instruction = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>   </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>empty instruction cache</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let duplicate_separator = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>first cache</w:t></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>second cache</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let unmodeled_source_runs = r#"<w:ins w:id="7" x:token="raw-field-runs"><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>raw wrapper cache</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:ins>"#;
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p>{empty_instruction}</w:p><w:p>{duplicate_separator}</w:p><w:p>{unmodeled_source_runs}</w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let body = document.stories().unwrap().remove(0);
+    let items = document.story_items(&body).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![
+            rdocx::StoryItemKind::Paragraph,
+            rdocx::StoryItemKind::Paragraph,
+            rdocx::StoryItemKind::Paragraph,
+        ]
+    );
+    drop(items);
+
+    let before = document.to_bytes().unwrap();
+    let invalid_field = rdocx::ContentLocation::new(body, rdocx::StoryItemKind::Field, vec![1]);
+    assert!(
+        document
+            .set_story_text(&invalid_field, "must not land")
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let saved = document_xml(&mut document);
+    assert!(saved.contains("<w:instrText>   </w:instrText>"), "{saved}");
+    assert!(
+        saved.contains("<w:t>empty instruction cache</w:t>"),
+        "{saved}"
+    );
+    assert!(
+        saved.contains("<w:instrText> PAGE </w:instrText>"),
+        "{saved}"
+    );
+    assert!(saved.contains("<w:t>first cache</w:t>"), "{saved}");
+    assert!(saved.contains("<w:t>second cache</w:t>"), "{saved}");
+    assert!(saved.contains(unmodeled_source_runs), "{saved}");
+    assert_eq!(
+        saved
+            .matches(r#"<w:fldChar w:fldCharType="separate"/>"#)
+            .count(),
+        4,
+        "{saved}"
+    );
+}
+
+#[test]
+fn row_and_cell_controls_keep_the_nested_cell_story_editable() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:tbl><w:sdt><w:sdtPr/><w:sdtContent><w:tr><w:sdt><w:sdtPr/><w:sdtContent><w:tc><w:tcPr><x:keep x:flag="exact"><x:child/></x:keep></w:tcPr><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>cell before</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc></w:sdtContent></w:sdt></w:tr><x:raw x:flag="opaque"><w:tr><w:tc><w:p><w:r><w:t>hidden cell</w:t></w:r></w:p></w:tc></w:tr></x:raw></w:sdtContent></w:sdt></w:tbl></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let stories = document.stories().unwrap();
+    assert_eq!(
+        stories.iter().map(|story| story.kind()).collect::<Vec<_>>(),
+        vec![rdocx::StoryKind::Body, rdocx::StoryKind::TableCell]
+    );
+    let cell = stories
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::TableCell)
+        .unwrap();
+    let control = document
+        .story_items(&cell)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == rdocx::StoryItemKind::ContentControl)
+        .unwrap();
+    assert_eq!(control.text().unwrap().as_deref(), Some("cell before"));
+    let location = control.location().clone();
+
+    document.set_story_text(&location, "cell after").unwrap();
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let saved = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(saved.contains("<w:t>cell after</w:t>"), "{saved}");
+    assert!(!saved.contains("<w:t>cell before</w:t>"), "{saved}");
+    assert!(
+        saved.contains(r#"<x:keep x:flag="exact"><x:child/></x:keep>"#),
+        "{saved}"
+    );
+    assert!(
+        saved.contains(r#"<x:raw x:flag="opaque"><w:tr><w:tc><w:p><w:r><w:t>hidden cell</w:t></w:r></w:p></w:tc></w:tr></x:raw>"#),
+        "{saved}"
+    );
+}
+
+#[test]
+fn nested_complex_fields_keep_each_cached_result_boundary() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> OUTER </w:instrText></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> INNER-INSTRUCTION </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>instruction nested cache</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:instrText> OUTER-TAIL </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>outer head</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> INNER-RESULT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>result nested cache</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>outer tail</w:t><x:keep x:flag="exact"><w:t>hidden raw</w:t></x:keep></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let body = document.stories().unwrap().remove(0);
+    let fields = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 3);
+    assert_eq!(
+        fields
+            .iter()
+            .map(|field| field.text().unwrap().unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            "outer headresult nested cacheouter tail".to_owned(),
+            "instruction nested cache".to_owned(),
+            "result nested cache".to_owned(),
+        ]
+    );
+    let stale_outer = fields[0].location().clone();
+    let nested_result = fields[2].location().clone();
+    drop(fields);
+
+    document
+        .set_story_text(&nested_result, "nested replacement")
+        .unwrap();
+    let body = document.stories().unwrap().remove(0);
+    let outer = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .unwrap();
+    assert_eq!(
+        outer.text().unwrap().as_deref(),
+        Some("outer headnested replacementouter tail")
+    );
+    let before_stale_attempt = document.to_bytes().unwrap();
+    assert!(matches!(
+        document.set_story_text(&stale_outer, "must not land"),
+        Err(rdocx::Error::Story(rdocx::StoryError::Stale { .. }))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before_stale_attempt);
+
+    let body = document.stories().unwrap().remove(0);
+    let outer = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == rdocx::StoryItemKind::Field)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .set_story_text(&outer, "outer replacement")
+        .unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let saved = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    for instruction in [
+        "<w:instrText> OUTER </w:instrText>",
+        "<w:instrText> INNER-INSTRUCTION </w:instrText>",
+        "<w:instrText> OUTER-TAIL </w:instrText>",
+        "<w:instrText> INNER-RESULT </w:instrText>",
+    ] {
+        assert!(saved.contains(instruction), "{saved}");
+    }
+    assert!(saved.contains("<w:t>outer replacement</w:t>"), "{saved}");
+    assert!(!saved.contains("outer tail</w:t>"), "{saved}");
+    assert!(
+        saved.contains(r#"<x:keep x:flag="exact"><w:t>hidden raw</w:t></x:keep>"#),
+        "{saved}"
+    );
+}
+
+#[test]
+fn balanced_complex_fields_are_one_editable_cached_result() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>before</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>after</w:t></w:r></w:p></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let body = document.stories().unwrap().remove(0);
+    let items = document.story_items(&body).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![rdocx::StoryItemKind::Paragraph, rdocx::StoryItemKind::Field,]
+    );
+    assert_eq!(items[1].text().unwrap().as_deref(), Some("1"));
+    let field = items[1].location().clone();
+
+    document.set_story_text(&field, "42").unwrap();
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let saved = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(
+        saved.contains("<w:instrText> PAGE </w:instrText>"),
+        "{saved}"
+    );
+    assert!(saved.contains("<w:t>before</w:t>"), "{saved}");
+    assert!(saved.contains("<w:t>42</w:t>"), "{saved}");
+    assert!(saved.contains("<w:t>after</w:t>"), "{saved}");
+    assert!(!saved.contains("<w:t>1</w:t>"), "{saved}");
+}
+
+#[test]
+fn invalid_known_positions_and_unknown_foreign_wrappers_stay_opaque() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>visible</w:t></w:r><w:tbl><w:tr><w:tc><w:p><w:r><w:t>hidden cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:p><w:p><w:r><w:pict><v:producer><w:t>hidden text</w:t><w:txbxContent><w:p><w:r><w:t>hidden box</w:t></w:r></w:p></w:txbxContent></v:producer></w:pict></w:r></w:p></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let stories = document.stories().unwrap();
+    assert_eq!(
+        stories.iter().map(|story| story.kind()).collect::<Vec<_>>(),
+        vec![rdocx::StoryKind::Body]
+    );
+    let items = document.story_items(&stories[0]).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![
+            rdocx::StoryItemKind::Paragraph,
+            rdocx::StoryItemKind::Paragraph,
+            rdocx::StoryItemKind::Drawing,
+        ]
+    );
+    assert_eq!(items[0].text().unwrap().as_deref(), Some("visible"));
+    assert_eq!(items[1].text().unwrap(), None);
+    assert_eq!(items[2].text().unwrap(), None);
+    let drawing = items[2].location().clone();
+    drop(items);
+
+    let before = document.to_bytes().unwrap();
+    assert!(matches!(
+        document.set_story_text(&drawing, "rejected"),
+        Err(rdocx::Error::Story(
+            rdocx::StoryError::NotTextBearing { .. }
+        ))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn related_story_parts_follow_package_relationship_order() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    relationships.add_with_id(
+        "commentsFirst",
+        oxml_opc::relationship::rel_types::COMMENTS,
+        "comments-first.xml",
+    );
+    relationships.add_with_id(
+        "footnotesSecond",
+        oxml_opc::relationship::rel_types::FOOTNOTES,
+        "footnotes-second.xml",
+    );
+    package.set_part(
+        "/word/comments-first.xml",
+        format!(r#"<w:comments xmlns:w="{W}"><w:comment w:id="4" w:author="Ada"><w:p><w:r><w:t>comment</w:t></w:r></w:p></w:comment></w:comments>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/comments-first.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    package.set_part(
+        "/word/footnotes-second.xml",
+        format!(r#"<w:footnotes xmlns:w="{W}"><w:footnote w:id="4"><w:p><w:r><w:t>footnote</w:t></w:r></w:p></w:footnote></w:footnotes>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/footnotes-second.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(&bytes.into_inner()).unwrap();
+
+    assert_eq!(
+        document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .map(|story| story.kind())
+            .collect::<Vec<_>>(),
+        vec![
+            rdocx::StoryKind::Body,
+            rdocx::StoryKind::Comment,
+            rdocx::StoryKind::Footnote,
+        ]
+    );
+}
+
+#[test]
+fn preserved_word_wrappers_remain_opaque_to_story_scans() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>visible</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>field</w:t></w:r></w:fldSimple><w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>visible box</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r><w:producer producer="exact"><w:t>hidden text</w:t><w:txbxContent><w:p><w:r><w:t>hidden box</w:t></w:r></w:p></w:txbxContent></w:producer></w:p><w:producer producer="root exact"><w:t>root hidden</w:t></w:producer></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let stories = document.stories().unwrap();
+    assert_eq!(
+        stories.iter().map(|story| story.kind()).collect::<Vec<_>>(),
+        vec![rdocx::StoryKind::Body, rdocx::StoryKind::TextBox]
+    );
+    let body = &stories[0];
+    let items = document.story_items(body).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![
+            rdocx::StoryItemKind::Paragraph,
+            rdocx::StoryItemKind::Field,
+            rdocx::StoryItemKind::Drawing,
+            rdocx::StoryItemKind::PreservedNode,
+        ]
+    );
+    assert_eq!(items[0].text().unwrap().as_deref(), Some("visiblefield"));
+    assert_eq!(items[1].text().unwrap().as_deref(), Some("field"));
+    assert_eq!(items[3].text().unwrap(), None);
+
+    let preserved = items[3].location().clone();
+    let paragraph = items[0].location().clone();
+    let before = document.to_bytes().unwrap();
+    assert!(matches!(
+        document.set_story_text(&preserved, "rejected"),
+        Err(rdocx::Error::Story(
+            rdocx::StoryError::NotTextBearing { .. }
+        ))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document.set_story_text(&paragraph, "after").unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let saved = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(saved.contains("<w:t>after</w:t>"), "{saved}");
+    assert!(
+        saved.contains(r#"<w:producer producer="exact"><w:t>hidden text</w:t><w:txbxContent><w:p><w:r><w:t>hidden box</w:t></w:r></w:p></w:txbxContent></w:producer>"#),
+        "{saved}"
+    );
+    assert!(
+        saved.contains(r#"<w:producer producer="root exact"><w:t>root hidden</w:t></w:producer>"#),
+        "{saved}"
+    );
+}
+
+#[test]
+fn missing_and_malformed_note_ids_remain_separator_infrastructure() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    relationships.add_with_id(
+        "footnotes",
+        oxml_opc::relationship::rel_types::FOOTNOTES,
+        "footnotes.xml",
+    );
+    relationships.add_with_id(
+        "endnotes",
+        oxml_opc::relationship::rel_types::ENDNOTES,
+        "endnotes.xml",
+    );
+    for (part, content_type, root, note, visible_kind) in [
+        (
+            "/word/footnotes.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+            "footnotes",
+            "footnote",
+            "foot",
+        ),
+        (
+            "/word/endnotes.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+            "endnotes",
+            "endnote",
+            "end",
+        ),
+    ] {
+        package.set_part(
+            part,
+            format!(
+                r#"<w:{root} xmlns:w="{W}"><w:{note}><w:p><w:r><w:t>missing</w:t></w:r></w:p><w:txbxContent><w:p><w:r><w:t>hidden nested owner</w:t></w:r></w:p></w:txbxContent></w:{note}><w:{note} w:id=""><w:p><w:r><w:t>empty</w:t></w:r></w:p></w:{note}><w:{note} w:id="not-a-number"><w:p><w:r><w:t>malformed</w:t></w:r></w:p></w:{note}><w:{note} w:id="&#54;"><w:p><w:r><w:t>{visible_kind}</w:t></w:r></w:p></w:{note}></w:{root}>"#
+            )
+            .into_bytes(),
+        );
+        package.content_types.add_override(part, content_type);
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    assert_eq!(
+        document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .map(|story| story.kind())
+            .collect::<Vec<_>>(),
+        vec![
+            rdocx::StoryKind::Body,
+            rdocx::StoryKind::Footnote,
+            rdocx::StoryKind::Endnote,
+        ]
+    );
+
+    for kind in [rdocx::StoryKind::Footnote, rdocx::StoryKind::Endnote] {
+        let stories = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .filter(|story| story.kind() == kind)
+            .collect::<Vec<_>>();
+        assert_eq!(stories.len(), 1, "{kind:?}");
+        assert_eq!(stories[0].owner_index(), 0);
+        assert!(matches!(
+            document.story_items(&stories[0]).unwrap()[0]
+                .text()
+                .unwrap()
+                .as_deref(),
+            Some("foot" | "end")
+        ));
+    }
+}
+
+#[test]
+fn empty_story_text_elements_retain_their_formatted_owners() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(r#"<w:document xmlns:w="{W}" xmlns:r="{R}"><w:body><w:sectPr><w:headerReference w:type="default" r:id="emptyTextHeader"/></w:sectPr></w:body></w:document>"#).into_bytes(),
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "emptyTextHeader",
+            oxml_opc::relationship::rel_types::HEADER,
+            "empty-text-header.xml",
+        );
+    package.set_part(
+        "/word/empty-text-header.xml",
+        format!(r#"<w:hdr xmlns:w="{W}"><w:p><w:r><w:rPr><w:b/></w:rPr><w:t/></w:r></w:p><w:p><w:fldSimple w:instr="PAGE"><w:r><w:rPr><w:i/></w:rPr><w:t></w:t></w:r></w:fldSimple></w:p><w:p><w:sdt><w:sdtContent><w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t/></w:r></w:sdtContent></w:sdt></w:p></w:hdr>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/empty-text-header.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+
+    let location = |document: &Document, kind: rdocx::StoryItemKind, ordinal: usize| {
+        let header = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == rdocx::StoryKind::Header)
+            .unwrap();
+        let items = document
+            .story_items(&header)
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.kind() == kind)
+            .collect::<Vec<_>>();
+        assert_eq!(items[ordinal].text().unwrap().as_deref(), Some(""));
+        items[ordinal].location().clone()
+    };
+
+    document
+        .set_story_text(
+            &location(&document, rdocx::StoryItemKind::Paragraph, 0),
+            "bold",
+        )
+        .unwrap();
+    document
+        .set_story_text(
+            &location(&document, rdocx::StoryItemKind::Field, 0),
+            "italic",
+        )
+        .unwrap();
+    document
+        .set_story_text(
+            &location(&document, rdocx::StoryItemKind::ContentControl, 0),
+            "underlined",
+        )
+        .unwrap();
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let saved =
+        std::str::from_utf8(package.get_part("/word/empty-text-header.xml").unwrap()).unwrap();
+    assert!(
+        saved.contains("<w:rPr><w:b/></w:rPr><w:t>bold</w:t>"),
+        "{saved}"
+    );
+    assert!(
+        saved.contains("<w:rPr><w:i/></w:rPr><w:t>italic</w:t>"),
+        "{saved}"
+    );
+    assert!(
+        saved.contains(r#"<w:rPr><w:u w:val="single"/></w:rPr><w:t>underlined</w:t>"#),
+        "{saved}"
+    );
+}
+
+#[test]
+fn story_text_mutation_fails_closed_atomically_for_shadowed_fixed_prefixes() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body><q:p xmlns:wp="urn:foreign"><wp:producer/><q:r><q:t>before</q:t></q:r></q:p></q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let body = document.stories().unwrap().remove(0);
+    let location = document.story_items(&body).unwrap()[0].location().clone();
+    let before = document.to_bytes().unwrap();
+
+    let error = document.set_story_text(&location, "after").unwrap_err();
+
+    assert!(error.to_string().contains("shadowed `wp` namespace"));
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn preserved_story_subtrees_do_not_expose_or_edit_embedded_word_content() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:producer"><w:body><mc:AlternateContent><mc:Choice Requires="w14"><w:tbl><w:tr><w:tc><w:p><w:r><w:t>hidden cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:txbxContent><w:p><w:r><w:t>hidden box</w:t></w:r></w:p></w:txbxContent></mc:Choice></mc:AlternateContent><w:p><w:r><w:t>visible</w:t><x:opaque><w:fldSimple w:instr="PAGE"><w:r><w:t>hidden field</w:t></w:r></w:fldSimple><w:drawing/><w:txbxContent><w:p><w:r><w:t>hidden nested box</w:t></w:r></w:p></w:txbxContent></x:opaque></w:r></w:p></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let stories = document.stories().unwrap();
+    assert_eq!(
+        stories.iter().map(|story| story.kind()).collect::<Vec<_>>(),
+        vec![rdocx::StoryKind::Body]
+    );
+    let items = document.story_items(&stories[0]).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        vec![
+            rdocx::StoryItemKind::PreservedNode,
+            rdocx::StoryItemKind::Paragraph,
+        ]
+    );
+    assert_eq!(items[0].text().unwrap(), None);
+    assert_eq!(items[1].text().unwrap().as_deref(), Some("visible"));
+    let preserved = items[0].location().clone();
+    let paragraph = items[1].location().clone();
+    let before = document.to_bytes().unwrap();
+    assert!(matches!(
+        document.set_story_text(&preserved, "not editable"),
+        Err(rdocx::Error::Story(
+            rdocx::StoryError::NotTextBearing { .. }
+        ))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document.set_story_text(&paragraph, "after").unwrap();
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(saved_xml.contains("<w:t>after</w:t>"), "{saved_xml}");
+    for hidden in [
+        "hidden cell",
+        "hidden box",
+        "hidden field",
+        "hidden nested box",
+    ] {
+        assert!(saved_xml.contains(hidden), "missing {hidden}: {saved_xml}");
+    }
+}
+
+#[test]
+fn invalid_story_locations_are_atomic() {
+    let mut document = Document::new();
+    document.add_paragraph("unchanged");
+    let body = document.stories().unwrap().remove(0);
+
+    let wrong_owner = rdocx::ContentLocation::new(
+        rdocx::StoryId::new(
+            rdocx::StoryKind::Header,
+            body.part_name(),
+            body.owner_index(),
+        ),
+        rdocx::StoryItemKind::Paragraph,
+        vec![0],
+    );
+    let before = document.to_bytes().expect("serialize wrong-owner baseline");
+    assert!(matches!(
+        document.set_story_text(&wrong_owner, "changed"),
+        Err(rdocx::Error::Story(rdocx::StoryError::WrongOwner { .. }))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let body = document.stories().unwrap().remove(0);
+    let wrong_kind =
+        rdocx::ContentLocation::new(body.clone(), rdocx::StoryItemKind::Table, vec![0]);
+    let before = document.to_bytes().expect("serialize wrong-kind baseline");
+    assert!(matches!(
+        document.set_story_text(&wrong_kind, "changed"),
+        Err(rdocx::Error::Story(rdocx::StoryError::KindMismatch { .. }))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let body = document.stories().unwrap().remove(0);
+    let out_of_bounds =
+        rdocx::ContentLocation::new(body, rdocx::StoryItemKind::Paragraph, vec![usize::MAX]);
+    let before = document.to_bytes().expect("serialize bounds baseline");
+    assert!(matches!(
+        document.set_story_text(&out_of_bounds, "changed"),
+        Err(rdocx::Error::Story(rdocx::StoryError::OutOfBounds { .. }))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let body = document.stories().unwrap().remove(0);
+    let stale = document
+        .story_items(&body)
+        .unwrap()
+        .remove(0)
+        .location()
+        .clone();
+    document.add_paragraph("structural change");
+    let before = document.to_bytes().expect("serialize stale-path baseline");
+    assert!(matches!(
+        document.set_story_text(&stale, "changed"),
+        Err(rdocx::Error::Story(rdocx::StoryError::Stale { .. }))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let body = document.stories().unwrap().remove(0);
+    let stale_after_attributes = document
+        .story_items(&body)
+        .unwrap()
+        .remove(0)
+        .location()
+        .clone();
+    document
+        .paragraph_mut(0)
+        .unwrap()
+        .set_alignment(rdocx::paragraph::Alignment::Center);
+    let before = document.to_bytes().expect("serialize attribute baseline");
+    assert!(matches!(
+        document.set_story_text(&stale_after_attributes, "changed"),
+        Err(rdocx::Error::Story(rdocx::StoryError::Stale { .. }))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let body = document.stories().unwrap().remove(0);
+    let stale_after_text = document
+        .story_items(&body)
+        .unwrap()
+        .remove(0)
+        .location()
+        .clone();
+    document
+        .set_story_text(&stale_after_text, "first mutation")
+        .unwrap();
+    let before = document.to_bytes().expect("serialize text baseline");
+    assert!(matches!(
+        document.set_story_text(&stale_after_text, "second mutation"),
+        Err(rdocx::Error::Story(rdocx::StoryError::Stale { .. }))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn story_text_mutation_preserves_authored_identifier_history() {
+    let mut edited = Document::new();
+    edited.add_paragraph("first");
+    edited.add_paragraph("second");
+    edited.add_paragraph("story before");
+    edited
+        .add_bookmark(
+            "Second",
+            RunRange {
+                start: RunPosition {
+                    body_index: 1,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 1,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+    let body = edited.stories().unwrap().remove(0);
+    let location = edited
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.text().unwrap().as_deref() == Some("story before"))
+        .unwrap()
+        .location()
+        .clone();
+    edited.set_story_text(&location, "story after").unwrap();
+    edited
+        .add_bookmark(
+            "First",
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+
+    let mut direct = Document::new();
+    direct.add_paragraph("first");
+    direct.add_paragraph("second");
+    direct.add_paragraph("story after");
+    for (name, body_index) in [("First", 0), ("Second", 1)] {
+        direct
+            .add_bookmark(
+                name,
+                RunRange {
+                    start: RunPosition {
+                        body_index,
+                        run_index: 0,
+                    },
+                    end: RunPosition {
+                        body_index,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+    }
+
+    assert_eq!(
+        edited.to_bytes().unwrap(),
+        direct.to_bytes().unwrap(),
+        "story reopen changed authored bookmark canonicalization"
+    );
+}
+
+#[test]
+fn story_text_mutation_preserves_owned_custom_properties_until_final_removal() {
+    let mut document =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+    document.add_paragraph("story before");
+    document
+        .set_custom_property(CustomProperty {
+            fmtid: "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}".to_owned(),
+            pid: 2,
+            name: Some("RemoveMe".to_owned()),
+            value: CustomPropertyValue::Bool(true),
+        })
+        .unwrap();
+    let body = document.stories().unwrap().remove(0);
+    let location = document.story_items(&body).unwrap()[0].location().clone();
+
+    document.set_story_text(&location, "story after").unwrap();
+    assert!(
+        document
+            .remove_custom_property("RemoveMe")
+            .unwrap()
+            .is_some()
+    );
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert!(
+        package
+            .package_rels
+            .get_by_type(oxml_opc::relationship::rel_types::CUSTOM_PROPERTIES)
+            .is_none()
+    );
+    assert!(package.get_part("/docProps/custom.xml").is_none());
+}
+
+#[test]
+fn story_text_mutation_preserves_owned_settings_until_final_removal() {
+    let mut document =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+    document.add_paragraph("story before");
+    document.set_document_variable("RemoveMe", "value").unwrap();
+    let body = document.stories().unwrap().remove(0);
+    let location = document.story_items(&body).unwrap()[0].location().clone();
+
+    document.set_story_text(&location, "story after").unwrap();
+    assert_eq!(
+        document.remove_document_variable("RemoveMe").unwrap(),
+        Some("value".to_owned())
+    );
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert!(
+        package
+            .get_part_rels("/word/document.xml")
+            .and_then(|relationships| {
+                relationships.get_by_type(oxml_opc::relationship::rel_types::SETTINGS)
+            })
+            .is_none()
+    );
+    assert!(package.get_part("/word/settings.xml").is_none());
+}
+
+#[test]
+fn story_text_mutation_preserves_owned_comment_parts_until_final_removal() {
+    let mut document =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+    document.add_paragraph("story before");
+    let comment_id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "Remove me",
+        )
+        .unwrap();
+    let body = document.stories().unwrap().remove(0);
+    let location = document.story_items(&body).unwrap()[0].location().clone();
+
+    document.set_story_text(&location, "story after").unwrap();
+    assert!(document.remove_comment(comment_id).unwrap());
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    assert!(
+        relationships
+            .get_by_type(oxml_opc::relationship::rel_types::COMMENTS)
+            .is_none()
+    );
+    assert!(
+        relationships
+            .get_by_type("http://schemas.microsoft.com/office/2011/relationships/commentsExtended")
+            .is_none()
+    );
+    assert!(package.get_part("/word/comments.xml").is_none());
+    assert!(package.get_part("/word/commentsExtended.xml").is_none());
+}
+
+#[test]
+fn story_text_mutation_keeps_nested_owners_entities_and_boundary_spaces() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{W}" xmlns:r="{R}" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t xml:space="preserve">outer</w:t><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>nested box</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>nested cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr><w:headerReference w:type="default" r:id="edgeHeader"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "edgeHeader",
+            oxml_opc::relationship::rel_types::HEADER,
+            "edge-header.xml",
+        );
+    package.set_part(
+        "/word/edge-header.xml",
+        format!(r#"<w:hdr xmlns:w="{W}"><w:p><w:r><w:t>A &amp; B</w:t><w:t><![CDATA[<literal>&amp;]]></w:t></w:r></w:p></w:hdr>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/edge-header.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let body = document.stories().unwrap().remove(0);
+    let mut items = document.story_items(&body).unwrap();
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    assert_eq!(
+        document.story_items(&header).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("A & B<literal>&amp;")
+    );
+    assert_eq!(items[0].text().unwrap().as_deref(), Some("outer"));
+    let paragraph = items.remove(0).location().clone();
+    let table = items
+        .into_iter()
+        .find(|item| item.kind() == rdocx::StoryItemKind::Table)
+        .unwrap()
+        .location()
+        .clone();
+    let before = document.to_bytes().unwrap();
+    assert!(matches!(
+        document.set_story_text(&table, "must not cross into cell"),
+        Err(rdocx::Error::Story(
+            rdocx::StoryError::NotTextBearing { .. }
+        ))
+    ));
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.set_story_text(&paragraph, "plain").unwrap();
+    let plain_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let plain = String::from_utf8(
+        plain_package
+            .get_part("/word/document.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(plain.contains("<w:t>plain</w:t>"));
+    assert!(!plain.contains("xml:space=\"preserve\">plain"));
+    let body = document.stories().unwrap().remove(0);
+    let paragraph = document.story_items(&body).unwrap()[0].location().clone();
+    document
+        .set_story_text(&paragraph, " leading & trailing ")
+        .unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let xml = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes))
+        .unwrap()
+        .get_part("/word/document.xml")
+        .unwrap()
+        .to_vec();
+    let xml = String::from_utf8(xml).unwrap();
+    assert!(xml.contains(r#"<w:t xml:space="preserve"> leading &amp; trailing </w:t>"#));
+    assert!(xml.contains("<w:t>nested box</w:t>"));
+    assert!(xml.contains("<w:t>nested cell</w:t>"));
+}
+
+#[test]
+fn self_closing_story_paragraphs_accept_text_mutation() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(r#"<w:document xmlns:w="{W}" xmlns:r="{R}"><w:body><w:sectPr><w:headerReference w:type="default" r:id="emptyHeader"/></w:sectPr></w:body></w:document>"#).into_bytes(),
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "emptyHeader",
+            oxml_opc::relationship::rel_types::HEADER,
+            "empty-header.xml",
+        );
+    package.set_part(
+        "/word/empty-header.xml",
+        format!(r#"<w:hdr xmlns:w="{W}"><w:p/></w:hdr>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/empty-header.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let paragraph = document.story_items(&header).unwrap()[0].location().clone();
+
+    document
+        .set_story_text(&paragraph, "added to empty")
+        .unwrap();
+
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    assert_eq!(
+        document.story_items(&header).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("added to empty")
+    );
+}
+
+#[test]
+fn story_text_mutation_preserves_unrelated_opening_tag_bytes() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(r#"<w:document xmlns:w="{W}" xmlns:r="{R}"><w:body><w:sectPr><w:headerReference w:type="default" r:id="attributeHeader"/></w:sectPr></w:body></w:document>"#).into_bytes(),
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "attributeHeader",
+            oxml_opc::relationship::rel_types::HEADER,
+            "attribute-header.xml",
+        );
+    package.set_part(
+        "/word/attribute-header.xml",
+        format!(r#"<w:hdr xmlns:w="{W}" xmlns:x="urn:producer"><w:p><w:r><w:t x:first = 'A &amp; B'  xml:space = 'preserve' x:last='&#65;'>old</w:t></w:r></w:p></w:hdr>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/attribute-header.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let paragraph = document.story_items(&header).unwrap()[0].location().clone();
+
+    document.set_story_text(&paragraph, "plain").unwrap();
+    let plain = document.to_bytes().unwrap();
+    let plain = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(plain)).unwrap();
+    let plain = std::str::from_utf8(plain.get_part("/word/attribute-header.xml").unwrap()).unwrap();
+    assert!(
+        plain.contains(r#"<w:t x:first = 'A &amp; B' x:last='&#65;'>plain</w:t>"#),
+        "{plain}"
+    );
+
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let paragraph = document.story_items(&header).unwrap()[0].location().clone();
+    document.set_story_text(&paragraph, " boundary ").unwrap();
+    let preserved = document.to_bytes().unwrap();
+    let preserved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(preserved)).unwrap();
+    let preserved =
+        std::str::from_utf8(preserved.get_part("/word/attribute-header.xml").unwrap()).unwrap();
+    assert!(
+        preserved.contains(
+            r#"<w:t x:first = 'A &amp; B' x:last='&#65;' xml:space="preserve"> boundary </w:t>"#
+        ),
+        "{preserved}"
+    );
+}
+
+#[test]
+fn separator_records_are_not_exposed_as_editable_stories() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "notes",
+            oxml_opc::relationship::rel_types::FOOTNOTES,
+            "footnotes.xml",
+        );
+    package.set_part(
+        "/word/footnotes.xml",
+        format!(r#"<w:footnotes xmlns:w="{W}"><w:footnote w:type="separator" w:id="-1"><w:p/></w:footnote><w:footnote w:type="continuationSeparator" w:id="0"><w:p/></w:footnote><w:footnote w:id="2"><w:p><w:r><w:t>real note</w:t></w:r></w:p></w:footnote></w:footnotes>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/footnotes.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let notes = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .filter(|story| story.kind() == rdocx::StoryKind::Footnote)
+        .collect::<Vec<_>>();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].owner_index(), 0);
+    assert_eq!(
+        document.story_items(&notes[0]).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("real note")
+    );
+}
+
+#[test]
+fn escaped_separator_types_are_not_exposed_as_editable_stories() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "notes",
+            oxml_opc::relationship::rel_types::FOOTNOTES,
+            "footnotes.xml",
+        );
+    package.set_part(
+        "/word/footnotes.xml",
+        format!(r#"<w:footnotes xmlns:w="{W}"><w:footnote w:type="separ&#97;tor" w:id="4"><w:p><w:r><w:t>hidden separator</w:t></w:r></w:p></w:footnote><w:footnote w:id="5"><w:p><w:r><w:t>real note</w:t></w:r></w:p></w:footnote></w:footnotes>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/footnotes.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let notes = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .filter(|story| story.kind() == rdocx::StoryKind::Footnote)
+        .collect::<Vec<_>>();
+
+    assert_eq!(notes.len(), 1);
+    assert_eq!(
+        document.story_items(&notes[0]).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("real note")
+    );
+}
+
+#[test]
+fn escaped_nonpositive_note_ids_are_not_exposed_as_editable_stories() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "notes",
+            oxml_opc::relationship::rel_types::FOOTNOTES,
+            "footnotes.xml",
+        );
+    package.set_part(
+        "/word/footnotes.xml",
+        format!(r#"<w:footnotes xmlns:w="{W}"><w:footnote w:id="&#45;1"><w:p><w:r><w:t>hidden separator</w:t></w:r></w:p></w:footnote><w:footnote w:id="5"><w:p><w:r><w:t>real note</w:t></w:r></w:p></w:footnote></w:footnotes>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/footnotes.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let notes = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .filter(|story| story.kind() == rdocx::StoryKind::Footnote)
+        .collect::<Vec<_>>();
+
+    assert_eq!(notes.len(), 1);
+    assert_eq!(
+        document.story_items(&notes[0]).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("real note")
+    );
+}
 
 struct MeasuredAllocator;
 

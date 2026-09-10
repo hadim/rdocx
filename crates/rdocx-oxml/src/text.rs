@@ -1427,6 +1427,15 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
     )))
 }
 
+/// Whether a preserved simple field is admitted by the complete typed parser.
+#[doc(hidden)]
+pub fn story_simple_field_is_typed(raw: &[u8], word_prefixes: &[String]) -> bool {
+    parse_simple_field(raw, word_prefixes)
+        .ok()
+        .flatten()
+        .is_some()
+}
+
 fn simple_result_run_display(raw: &[u8], word_prefixes: &[String]) -> Result<Option<String>> {
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().trim_text(false);
@@ -2556,7 +2565,18 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
         }
     }
 
-    for (start, end, mut field, properties) in completed.into_iter().rev() {
+    let mut grouped = Vec::<(usize, usize, Vec<(Field, Option<CT_RPr>)>)>::new();
+    for (start, end, field, properties) in completed {
+        if let Some((group_start, group_end, fields)) = grouped.last_mut()
+            && *group_start == start
+            && *group_end == end
+        {
+            fields.push((field, properties));
+        } else {
+            grouped.push((start, end, vec![(field, properties)]));
+        }
+    }
+    for (start, end, mut fields) in grouped.into_iter().rev() {
         if has_typed_boundary_inside(
             start,
             end,
@@ -2569,11 +2589,13 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
             continue;
         }
         let raw_xml = complex_field_source(start, end, run_sources, extra_xml, hyperlinks);
-        if let FieldSource::Parsed {
-            raw_xml: source, ..
-        } = &mut field.source
-        {
-            *source = raw_xml;
+        for (field, _) in &mut fields {
+            if let FieldSource::Parsed {
+                raw_xml: source, ..
+            } = &mut field.source
+            {
+                *source = raw_xml.clone();
+            }
         }
         extra_xml.retain(|(at, _)| !(*at > start && *at <= end));
         for hyperlink in hyperlinks.iter_mut() {
@@ -2584,11 +2606,18 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
             });
         }
 
-        runs.splice(start..=end, [field_run(field, properties)]);
-        run_sources.splice(start..=end, [None]);
+        let replacement_count = fields.len();
+        runs.splice(
+            start..=end,
+            fields
+                .into_iter()
+                .map(|(field, properties)| field_run(field, properties)),
+        );
+        run_sources.splice(start..=end, std::iter::repeat_n(None, replacement_count));
         remap_complex_field_boundaries(
             start,
             end,
+            replacement_count,
             ComplexFieldBoundariesMut {
                 extra_xml,
                 comment_ranges,
@@ -2698,6 +2727,7 @@ struct ComplexFieldBoundariesMut<'a> {
 fn remap_complex_field_boundaries(
     start: usize,
     end: usize,
+    replacement_count: usize,
     boundaries: ComplexFieldBoundariesMut<'_>,
 ) {
     let ComplexFieldBoundariesMut {
@@ -2708,12 +2738,16 @@ fn remap_complex_field_boundaries(
         revisions,
         hyperlinks,
     } = boundaries;
-    let removed = end - start;
+    let source_count = end - start + 1;
     let remap = |at: &mut usize| {
         if *at > end {
-            *at -= removed;
+            if replacement_count >= source_count {
+                *at += replacement_count - source_count;
+            } else {
+                *at -= source_count - replacement_count;
+            }
         } else if *at > start {
-            *at = start + 1;
+            *at = start + replacement_count;
         }
     };
     for (at, _) in extra_xml {
@@ -2727,8 +2761,15 @@ fn remap_complex_field_boundaries(
     }
     for marker in bookmark_markers {
         if marker.run_index > end {
-            marker.projected_run_index = marker.projected_run_index.saturating_sub(removed);
-            marker.tracked_run_index = marker.tracked_run_index.saturating_sub(removed);
+            if replacement_count >= source_count {
+                let inserted = replacement_count - source_count;
+                marker.projected_run_index += inserted;
+                marker.tracked_run_index += inserted;
+            } else {
+                let removed = source_count - replacement_count;
+                marker.projected_run_index = marker.projected_run_index.saturating_sub(removed);
+                marker.tracked_run_index = marker.tracked_run_index.saturating_sub(removed);
+            }
         }
         remap(&mut marker.run_index);
     }
@@ -3627,6 +3668,41 @@ impl CT_P {
         }
     }
 
+    /// Return exact source bytes for complex fields admitted by the typed paragraph parser.
+    #[doc(hidden)]
+    pub fn story_complex_field_sources(
+        xml: &[u8],
+        inherited_word_prefixes: &[String],
+    ) -> Result<Vec<Vec<u8>>> {
+        let mut reader = Reader::from_reader(xml);
+        reader.config_mut().trim_text(false);
+        let mut buffer = Vec::new();
+        let paragraph = loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(element) => {
+                    let prefixes = word_prefixes_at(&element, inherited_word_prefixes)?;
+                    if !is_word_element(element.name().as_ref(), b"p", &prefixes) {
+                        return Err(OxmlError::MissingElement("w:p root".to_owned()));
+                    }
+                    break Self::from_xml_with_prefixes(&mut reader, &prefixes)?;
+                }
+                Event::Empty(element) => {
+                    let prefixes = word_prefixes_at(&element, inherited_word_prefixes)?;
+                    if is_word_element(element.name().as_ref(), b"p", &prefixes) {
+                        break Self::new();
+                    }
+                    return Err(OxmlError::MissingElement("w:p root".to_owned()));
+                }
+                Event::Eof => return Err(OxmlError::MissingElement("w:p root".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        };
+        let mut sources = Vec::new();
+        collect_story_complex_field_sources(&paragraph, &mut sources);
+        Ok(sources)
+    }
+
     pub(crate) fn from_xml_with_prefixes(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
@@ -4092,6 +4168,46 @@ impl CT_P {
             controls.push(sdt);
             sdt.collect_controls(SdtOwner::Inline, controls);
         }
+    }
+}
+
+fn collect_story_complex_field_sources(paragraph: &CT_P, sources: &mut Vec<Vec<u8>>) {
+    for run in paragraph.runs() {
+        for content in &run.content {
+            let RunContent::Field(field) = content else {
+                continue;
+            };
+            collect_story_complex_field_source(field, sources);
+        }
+    }
+    for (_, _, revision) in &paragraph.revisions {
+        collect_story_revision_complex_field_sources(revision, sources);
+    }
+}
+
+fn collect_story_complex_field_source(field: &Field, sources: &mut Vec<Vec<u8>>) {
+    if let FieldSource::Parsed {
+        form: FieldForm::Complex,
+        raw_xml,
+        ..
+    } = &field.source
+    {
+        sources.push(raw_xml.clone());
+    }
+    for nested in field.nested_fields_in_source_order() {
+        collect_story_complex_field_source(nested, sources);
+    }
+}
+
+fn collect_story_revision_complex_field_sources(
+    revision: &CT_Revision,
+    sources: &mut Vec<Vec<u8>>,
+) {
+    if let Some(paragraph) = revision.content_paragraph() {
+        collect_story_complex_field_sources(paragraph, sources);
+    }
+    for (_, nested) in revision.nested_revisions() {
+        collect_story_revision_complex_field_sources(nested, sources);
     }
 }
 
@@ -6979,6 +7095,12 @@ fn parse_field_instruction(instr: &str) -> FieldInstruction {
     parse_field_instruction_parts(vec![InstructionPart::Text(instr.to_owned())])
 }
 
+/// Whether the shared field lexer and parser admit a nonempty first token.
+#[doc(hidden)]
+pub fn story_field_instruction_has_name(instruction: &str) -> bool {
+    !parse_field_instruction(instruction).name.is_empty()
+}
+
 #[derive(Debug)]
 enum InstructionPart {
     Text(String),
@@ -7720,6 +7842,42 @@ mod tests {
         let field = parsed_field(&paragraph, 0);
         assert_eq!(field.instruction.name, "DATE");
         assert_eq!(field.cached_result, "17 August 2026");
+    }
+
+    #[test]
+    fn same_run_sibling_complex_fields_keep_both_typed_sources() {
+        let xml = concat!(
+            r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r>"#,
+            r#"<w:fldChar w:fldCharType="begin"/><w:instrText>DATE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>first</w:t><w:fldChar w:fldCharType="end"/>"#,
+            r#"<w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>second</w:t><w:fldChar w:fldCharType="end"/>"#,
+            r#"</w:r><w:bookmarkStart w:id="1" w:name="after"/></w:p>"#,
+        );
+        let paragraph = CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+        let fields = paragraph
+            .runs()
+            .into_iter()
+            .flat_map(|run| run.content.iter())
+            .filter_map(|content| match content {
+                RunContent::Field(field) => Some(field),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].instruction.name, "DATE");
+        assert_eq!(fields[0].cached_result, "first");
+        assert_eq!(fields[1].instruction.name, "PAGE");
+        assert_eq!(fields[1].cached_result, "second");
+        let serialized = serialized_paragraph(&paragraph);
+        assert!(
+            serialized.find("PAGE").unwrap() < serialized.find("bookmarkStart").unwrap(),
+            "{serialized}"
+        );
+        assert_eq!(
+            CT_P::story_complex_field_sources(xml.as_bytes(), &[])
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

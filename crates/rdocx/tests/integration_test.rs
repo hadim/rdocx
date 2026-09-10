@@ -1,5 +1,6 @@
 //! Integration tests for rdocx — end-to-end document creation and round-trip.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use oxml_opc::OpcPackage;
@@ -8,7 +9,8 @@ use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
     BodyItemRef, BorderStyle, Length, ListLevel, MhtmlDiagnostic, ParagraphRef, RunPosition,
-    RunRange, SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
+    RunRange, SectionBreak, StoryItemKind, StoryKind, StyleBuilder, TabAlignment, TabLeader,
+    UnderlineStyle,
 };
 use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, WordPackageClass};
 use rdocx_oxml::CT_BorderEdge;
@@ -19,6 +21,327 @@ use rdocx_oxml::table::{CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TcPr};
 const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
 const MHTML_ORACLE_VERSION: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const MHTML_ORACLE_HTML: &str = "<h1>Oracle title</h1><p><strong>bold</strong> <a href='https://example.test/'>link</a><img src='https://example.test/pixel.png' width='2' height='3'></p><ol><li>one</li><li>two</li></ol><table><tr><td>cell</td></tr></table>";
+
+fn container_neutral_story_fixture() -> Document {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().expect("serialize seed document");
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{W}" xmlns:r="{R}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:producer"><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p><w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>field</w:t></w:r></w:fldSimple><w:r><w:drawing></w:drawing></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p><x:cell x:flag="exact"/></w:tc></w:tr></w:tbl><w:sdt><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>text box</w:t></w:r></w:p><x:textbox x:flag="exact"/></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><x:keep x:flag="exact"><x:child/></x:keep><w:sectPr><w:headerReference w:type="default" r:id="storyHeader"/><w:footerReference w:type="default" r:id="storyFooter"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    relationships.add_with_id("storyHeader", rel_types::HEADER, "header-story.xml");
+    relationships.add_with_id("storyFooter", rel_types::FOOTER, "footer-story.xml");
+    relationships.add_with_id(
+        "storyFootnotes",
+        rel_types::FOOTNOTES,
+        "footnotes-story.xml",
+    );
+    relationships.add_with_id("storyEndnotes", rel_types::ENDNOTES, "endnotes-story.xml");
+    relationships.add_with_id("storyComments", rel_types::COMMENTS, "comments-story.xml");
+    for (part, content_type, xml) in [
+        (
+            "/word/header-story.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+            format!(
+                r#"<a:hdr xmlns:a="{W}" xmlns:x="urn:producer"><a:p><a:r><a:t>header</a:t></a:r></a:p><x:header x:flag="exact"/></a:hdr>"#
+            ),
+        ),
+        (
+            "/word/footer-story.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+            format!(
+                r#"<w:ftr xmlns:w="{W}" xmlns:x="urn:producer"><w:p><w:r><w:t>footer</w:t></w:r></w:p><x:footer x:flag="exact"/></w:ftr>"#
+            ),
+        ),
+        (
+            "/word/footnotes-story.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+            format!(
+                r#"<w:footnotes xmlns:w="{W}" xmlns:x="urn:producer"><w:footnote w:id="2"><w:p><w:r><w:t>footnote</w:t></w:r></w:p><x:footnote x:flag="exact"/></w:footnote></w:footnotes>"#
+            ),
+        ),
+        (
+            "/word/endnotes-story.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+            format!(
+                r#"<w:endnotes xmlns:w="{W}" xmlns:x="urn:producer"><w:endnote w:id="2"><w:p><w:r><w:t>endnote</w:t></w:r></w:p><x:endnote x:flag="exact"/></w:endnote></w:endnotes>"#
+            ),
+        ),
+        (
+            "/word/comments-story.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+            format!(
+                r#"<w:comments xmlns:w="{W}" xmlns:x="urn:producer"><w:comment w:id="2" w:author="Ada"><w:p><w:r><w:t>comment</w:t></w:r></w:p><x:comment x:flag="exact"/></w:comment></w:comments>"#
+            ),
+        ),
+    ] {
+        package.set_part(part, xml.into_bytes());
+        package.content_types.add_override(part, content_type);
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(&bytes.into_inner()).expect("open all-story fixture")
+}
+
+#[test]
+fn one_generic_mutation_edits_the_same_shape_in_every_story() {
+    let mut document = container_neutral_story_fixture();
+    let stories = document.stories().expect("discover document stories");
+    let kinds = stories.iter().map(|story| story.kind()).collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        [
+            StoryKind::Body,
+            StoryKind::TableCell,
+            StoryKind::TextBox,
+            StoryKind::Header,
+            StoryKind::Footer,
+            StoryKind::Footnote,
+            StoryKind::Endnote,
+            StoryKind::Comment,
+        ]
+    );
+    for kind in &kinds {
+        let story = document
+            .stories()
+            .expect("re-resolve stories before mutation")
+            .into_iter()
+            .find(|story| story.kind() == *kind)
+            .expect("fixture story survives prior mutation");
+        let location = document
+            .story_items(&story)
+            .expect("traverse story")
+            .into_iter()
+            .find(|item| item.kind() == StoryItemKind::Paragraph)
+            .unwrap_or_else(|| panic!("{:?} fixture story has no paragraph", story.kind()))
+            .location()
+            .clone();
+
+        let wrong_owner_kind = if story.part_name() == "/word/document.xml" {
+            StoryKind::Header
+        } else {
+            StoryKind::Body
+        };
+        let wrong_owner = rdocx::ContentLocation::new(
+            rdocx::StoryId::new(wrong_owner_kind, story.part_name(), story.owner_index()),
+            StoryItemKind::Paragraph,
+            vec![0],
+        );
+        assert!(matches!(
+            document.set_story_text(&wrong_owner, "rejected"),
+            Err(rdocx::Error::Story(rdocx::StoryError::WrongOwner { .. }))
+        ));
+        let wrong_kind = rdocx::ContentLocation::new(
+            story.clone(),
+            StoryItemKind::Table,
+            location.index_path().to_vec(),
+        );
+        assert!(matches!(
+            document.set_story_text(&wrong_kind, "rejected"),
+            Err(rdocx::Error::Story(rdocx::StoryError::KindMismatch { .. }))
+        ));
+        let out_of_bounds =
+            rdocx::ContentLocation::new(story.clone(), StoryItemKind::Paragraph, vec![usize::MAX]);
+        assert!(matches!(
+            document.set_story_text(&out_of_bounds, "rejected"),
+            Err(rdocx::Error::Story(rdocx::StoryError::OutOfBounds { .. }))
+        ));
+        document
+            .set_story_text(&location, &format!("edited {:?}", story.kind()))
+            .expect("generic paragraph mutation");
+        assert!(matches!(
+            document.set_story_text(&location, "rejected stale reuse"),
+            Err(rdocx::Error::Story(rdocx::StoryError::Stale { .. }))
+        ));
+    }
+    for kind in kinds {
+        let story = document
+            .stories()
+            .expect("re-resolve stories after mutation")
+            .into_iter()
+            .find(|story| story.kind() == kind)
+            .expect("edited fixture story");
+        let texts = document
+            .story_items(&story)
+            .expect("re-traverse edited story")
+            .into_iter()
+            .filter_map(|item| item.text().expect("project story text"))
+            .collect::<Vec<_>>();
+        assert!(
+            texts.contains(&format!("edited {:?}", story.kind())),
+            "{:?} was not edited: {texts:?}",
+            story.kind()
+        );
+    }
+}
+
+#[test]
+fn story_traversal_preserves_owner_order_and_raw_nodes() {
+    let mut document = container_neutral_story_fixture();
+    let stories = document.stories().expect("discover document stories");
+    let body = stories.first().expect("body story");
+    let item_kinds = document
+        .story_items(body)
+        .expect("traverse body story")
+        .into_iter()
+        .map(|item| item.kind())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        item_kinds,
+        vec![
+            StoryItemKind::Paragraph,
+            StoryItemKind::Paragraph,
+            StoryItemKind::Field,
+            StoryItemKind::Drawing,
+            StoryItemKind::Table,
+            StoryItemKind::ContentControl,
+            StoryItemKind::Paragraph,
+            StoryItemKind::Drawing,
+            StoryItemKind::PreservedNode,
+            StoryItemKind::PreservedNode,
+        ]
+    );
+    let expected_owners = vec![
+        (
+            StoryKind::Body,
+            vec![
+                StoryItemKind::Paragraph,
+                StoryItemKind::Paragraph,
+                StoryItemKind::Field,
+                StoryItemKind::Drawing,
+                StoryItemKind::Table,
+                StoryItemKind::ContentControl,
+                StoryItemKind::Paragraph,
+                StoryItemKind::Drawing,
+                StoryItemKind::PreservedNode,
+                StoryItemKind::PreservedNode,
+            ],
+        ),
+        (
+            StoryKind::TableCell,
+            vec![StoryItemKind::Paragraph, StoryItemKind::PreservedNode],
+        ),
+        (
+            StoryKind::TextBox,
+            vec![StoryItemKind::Paragraph, StoryItemKind::PreservedNode],
+        ),
+        (
+            StoryKind::Header,
+            vec![StoryItemKind::Paragraph, StoryItemKind::PreservedNode],
+        ),
+        (
+            StoryKind::Footer,
+            vec![StoryItemKind::Paragraph, StoryItemKind::PreservedNode],
+        ),
+        (
+            StoryKind::Footnote,
+            vec![StoryItemKind::Paragraph, StoryItemKind::PreservedNode],
+        ),
+        (
+            StoryKind::Endnote,
+            vec![StoryItemKind::Paragraph, StoryItemKind::PreservedNode],
+        ),
+        (
+            StoryKind::Comment,
+            vec![StoryItemKind::Paragraph, StoryItemKind::PreservedNode],
+        ),
+    ];
+    let before_owners = stories
+        .iter()
+        .map(|story| {
+            (
+                story.kind(),
+                document
+                    .story_items(story)
+                    .unwrap()
+                    .into_iter()
+                    .map(|item| item.kind())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(before_owners, expected_owners);
+    let before = document.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&before).unwrap();
+    let after_owners = reopened
+        .stories()
+        .unwrap()
+        .into_iter()
+        .map(|story| {
+            let items = reopened
+                .story_items(&story)
+                .unwrap()
+                .into_iter()
+                .map(|item| item.kind())
+                .collect::<Vec<_>>();
+            (story.kind(), items)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(after_owners, expected_owners);
+    let after = reopened.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(after)).unwrap();
+    for (part_name, retained) in [
+        (
+            "/word/document.xml",
+            "<x:keep x:flag=\"exact\"><x:child/></x:keep>",
+        ),
+        ("/word/document.xml", "<x:cell x:flag=\"exact\"/>"),
+        ("/word/document.xml", "<x:textbox x:flag=\"exact\"/>"),
+        ("/word/header-story.xml", "<x:header x:flag=\"exact\"/>"),
+        ("/word/footer-story.xml", "<x:footer x:flag=\"exact\"/>"),
+        (
+            "/word/footnotes-story.xml",
+            "<x:footnote x:flag=\"exact\"/>",
+        ),
+        ("/word/endnotes-story.xml", "<x:endnote x:flag=\"exact\"/>"),
+        ("/word/comments-story.xml", "<x:comment x:flag=\"exact\"/>"),
+    ] {
+        let part = package.get_part(part_name).unwrap();
+        assert!(
+            part.windows(retained.len())
+                .any(|window| window == retained.as_bytes()),
+            "{part_name} lost {retained}"
+        );
+    }
+}
+
+#[test]
+fn story_xml_distinguishes_owned_typed_sources_from_borrowed_package_slices() {
+    let document = container_neutral_story_fixture();
+    let stories = document.stories().unwrap();
+    let body = stories
+        .iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let header = stories
+        .iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let comment = stories
+        .iter()
+        .find(|story| story.kind() == StoryKind::Comment)
+        .unwrap();
+
+    let body_xml = document.story_items(body).unwrap()[0].xml().unwrap();
+    assert!(matches!(body_xml, Cow::Owned(_)));
+    let header_xml = document.story_items(header).unwrap()[0].xml().unwrap();
+    assert!(matches!(header_xml, Cow::Borrowed(_)));
+    assert!(
+        !std::str::from_utf8(header_xml.as_ref())
+            .unwrap()
+            .contains("xmlns:a"),
+        "borrowed subtree unexpectedly materialized its ancestor namespace"
+    );
+    let comment_xml = document.story_items(comment).unwrap()[0].xml().unwrap();
+    assert!(matches!(comment_xml, Cow::Owned(_)));
+}
 
 #[test]
 fn chart_rgb_colour_is_reexported_by_all_three_facades() {

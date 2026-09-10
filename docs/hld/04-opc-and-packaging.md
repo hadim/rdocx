@@ -69,6 +69,32 @@ declare macro-capable main-part identity without inventing a VBA project. Empty
 core properties omit created and modified timestamps, so equivalent fresh
 constructions remain byte-identical.
 
+Word story discovery begins with the main body and its nested cell and text-box
+owners, then follows header and footer references in document order and note
+and comment relationships in package relationship order. Ordinary footnotes
+and endnotes keep their source order, while conventional nonpositive separator
+records are not public story owners. Each `StoryId` includes the normalized
+source part, owner kind, source-order ordinal, and a structural fingerprint.
+Any changed owner makes a retained identity stale before indexed content can be
+resolved.
+
+Story items are projections over the existing typed and retained package
+sources. Body and comment items can expose owned XML serialized from their
+typed owners. Other package-backed items borrow their exact subtree bytes and
+can depend on namespace declarations on retained ancestors. A complex field
+instead exposes one owned, namespace-complete paragraph projection because its
+source can span sibling runs. Complete typed admission decides whether
+controls, revisions, simple fields, and complex fields cross the preservation
+boundary. Unmodelled and rejected subtrees remain opaque and byte-preserved.
+
+Story text replacement runs on a staged clone. It resolves the owner,
+fingerprint, one-element index path, item kind, and text-bearing capability,
+patches only the selected owner, then serializes and reopens the complete
+candidate before one commit. Missing or wrong owners, stale fingerprints,
+invalid paths, bounds failures, kind mismatches, non-text items, XML failures,
+and reopen failures leave the original document bytes and facade-owned package
+state unchanged.
+
 Theme and font authoring retain the relationship-resolved targets already in a
 package. A missing theme or font table receives one collision-safe part,
 content-type override, and internal main-document relationship on the staged

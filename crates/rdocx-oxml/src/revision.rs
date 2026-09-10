@@ -56,6 +56,12 @@ impl CT_Revision {
         Self::try_from_raw(raw_xml, word_prefixes).ok()
     }
 
+    /// Whether a preserved wrapper is admitted by the complete typed parser.
+    #[doc(hidden)]
+    pub fn story_raw_is_typed(raw_xml: &[u8], word_prefixes: &[String]) -> bool {
+        Self::try_from_raw(raw_xml.to_vec(), word_prefixes).is_ok()
+    }
+
     pub(crate) fn into_raw_xml(self) -> Vec<u8> {
         self.raw_xml
     }

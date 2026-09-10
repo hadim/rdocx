@@ -2373,10 +2373,13 @@ public container operations.
 and survives save, reopen, replacement, and inheritance changes.
 
 ### F-253, Container-neutral story editing (L)
-Define one public content-location and mutation model for the body, table cells,
-headers, footers, notes, comments, and text boxes. The model supports ordered
-paragraph, table, control, field, drawing, and preserved-node traversal without
-introducing a second document tree.
+The native Word facade provides one public content-location and mutation model
+for the body, table cells, headers, footers, ordinary notes, comments, and text
+boxes. Deterministic owner and item traversal exposes paragraphs, tables,
+controls, fields, drawings, and preserved nodes over existing typed and package
+sources without introducing a second document tree. Checked text mutation
+resolves an operation-scoped location on a staged package and leaves the
+document unchanged on every location or serialization failure.
 **Depends on**: F-240.
 **Test gate**: integration. One generic mutation visits and edits the same
 supported content shape in every story with identical error behavior.

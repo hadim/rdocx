@@ -54,6 +54,9 @@ pub enum Error {
         message: String,
     },
 
+    #[error("story location error: {0}")]
+    Story(#[from] crate::document::StoryError),
+
     #[error("{0}")]
     Other(String),
 }

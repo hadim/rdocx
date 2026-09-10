@@ -317,6 +317,19 @@ final recursive document order. `CT_Inline` and `CT_Anchor` expose their parsed
 constant for a drawing. Python, WASM, and CLI gain the deterministic behavior
 through the native facade without adding binding methods.
 
+Native Rust also exposes the concrete non-exhaustive `StoryKind` and
+`StoryItemKind` enums, owned `StoryId` and `ContentLocation` paths, borrowed
+`StoryItemRef` views, and the concrete `StoryError` resolution failures.
+`Document::stories` returns body, cell, text-box, header, footer, ordinary note,
+and comment owners in deterministic order. `Document::story_items` returns
+paragraph, table, content-control, field, drawing, and preserved-node items in
+source order. Its `xml` result is borrowed for exact package-backed subtrees and
+owned for typed body or comment sources and namespace-complete complex-field
+projections. `Document::set_story_text` resolves a checked operation-scoped
+location against a staged package and publishes only a serialized and reopened
+candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
+Python, WASM, and CLI gain no story traversal or mutation entry point.
+
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic
 bundled-font page targets and returns `TocRebuildReport` with entry, newly

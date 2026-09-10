@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -20,7 +22,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
-use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline, drawing_ns};
 use rdocx_oxml::font_table::{EmbeddedFontReference, FontFaceKind, FontTable};
@@ -32,6 +34,7 @@ use rdocx_oxml::numbering::{
     CT_AbstractNum, CT_Lvl, CT_Num, CT_NumLvl, CT_Numbering, ST_LvlSuffix, ST_NumberFormat,
 };
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::revision::CT_Revision;
 use rdocx_oxml::settings::{
     CT_Settings, CharacterSpacingControl, CompatibilitySetting, DocumentProtection,
     ThemeFontLanguage,
@@ -39,7 +42,9 @@ use rdocx_oxml::settings::{
 use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
-use rdocx_oxml::text::{CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{
+    CT_P, CT_R, RunContent, story_field_instruction_has_name, story_simple_field_is_typed,
+};
 
 use oxml_core::custom_properties::{CustomProperties, CustomProperty};
 use rdocx_oxml::core_properties::CoreProperties;
@@ -230,6 +235,224 @@ pub enum BodyItemRef<'a> {
     /// A preserved body child that rdocx does not model.
     UnsupportedXml(&'a [u8]),
 }
+
+/// A container in the WordprocessingML story graph.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StoryKind {
+    Body,
+    TableCell,
+    Header,
+    Footer,
+    Footnote,
+    Endnote,
+    Comment,
+    TextBox,
+}
+
+/// The supported kind of one item in a story.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StoryItemKind {
+    Paragraph,
+    Table,
+    ContentControl,
+    Field,
+    Drawing,
+    PreservedNode,
+}
+
+/// Stable owner identity for one operation over an opened document.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StoryId {
+    kind: StoryKind,
+    part_name: String,
+    owner_index: usize,
+    fingerprint: u64,
+}
+
+impl StoryId {
+    /// Construct an unfingerprinted owner identity for checked lookup.
+    ///
+    /// Identities returned by [`Document::stories`] are required for a
+    /// successful mutation. This constructor lets callers deserialize or
+    /// validate external paths without granting unchecked access.
+    pub fn new(kind: StoryKind, part_name: impl Into<String>, owner_index: usize) -> Self {
+        Self {
+            kind,
+            part_name: part_name.into(),
+            owner_index,
+            fingerprint: 0,
+        }
+    }
+
+    /// Construct the conventional main-body identity for checked lookup.
+    ///
+    /// Prefer an identity returned by [`Document::stories`]. This constructor
+    /// is useful when validating externally retained locations and deliberately
+    /// carries no structural fingerprint.
+    pub fn body() -> Self {
+        Self::new(StoryKind::Body, "/word/document.xml", 0)
+    }
+
+    pub fn kind(&self) -> StoryKind {
+        self.kind
+    }
+
+    pub fn part_name(&self) -> &str {
+        &self.part_name
+    }
+
+    pub fn owner_index(&self) -> usize {
+        self.owner_index
+    }
+}
+
+/// A checked path to one item inside a story owner.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContentLocation {
+    story: StoryId,
+    item_kind: StoryItemKind,
+    index_path: Vec<usize>,
+}
+
+impl ContentLocation {
+    pub fn new(story: StoryId, item_kind: StoryItemKind, index_path: Vec<usize>) -> Self {
+        Self {
+            story,
+            item_kind,
+            index_path,
+        }
+    }
+
+    pub fn story(&self) -> &StoryId {
+        &self.story
+    }
+
+    pub fn item_kind(&self) -> StoryItemKind {
+        self.item_kind
+    }
+
+    pub fn index_path(&self) -> &[usize] {
+        &self.index_path
+    }
+}
+
+/// A borrowed view of one supported story item.
+///
+/// The view owns its checked location. Body and comment items can use owned XML
+/// serialized from their typed sources. Other package-backed items can borrow
+/// exact subtree slices whose namespace bindings depend on retained ancestors.
+/// A complex field uses an owned, namespace-complete paragraph projection
+/// because its source can span several sibling runs.
+pub struct StoryItemRef<'a> {
+    document: &'a Document,
+    location: ContentLocation,
+}
+
+impl<'a> StoryItemRef<'a> {
+    pub fn location(&self) -> &ContentLocation {
+        &self.location
+    }
+
+    pub fn kind(&self) -> StoryItemKind {
+        self.location.item_kind
+    }
+
+    pub fn text(&self) -> Result<Option<String>> {
+        let (source, item) = self.document.story_item_source(&self.location)?;
+        story_item_text(source.xml.as_ref(), &item)
+    }
+
+    /// Returns the XML used by this traversal.
+    ///
+    /// Typed body and comment sources can return owned subtree bytes. Other
+    /// package-backed sources can return a borrowed exact slice, which can rely
+    /// on namespace declarations from ancestors outside that slice. Complex
+    /// fields return an owned, standalone paragraph with the in-scope namespace
+    /// declarations materialized.
+    pub fn xml(&self) -> Result<Cow<'a, [u8]>> {
+        let (source, item) = self.document.story_item_source(&self.location)?;
+        if item.complex_field {
+            return Ok(Cow::Owned(complex_story_field_xml(
+                source.xml.as_ref(),
+                &item,
+            )?));
+        }
+        match source.xml {
+            Cow::Borrowed(xml) => Ok(Cow::Borrowed(&xml[item.full])),
+            Cow::Owned(xml) => Ok(Cow::Owned(xml[item.full].to_vec())),
+        }
+    }
+}
+
+/// A location resolution failure from the container-neutral story API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoryError {
+    OwnerNotFound {
+        story: StoryId,
+    },
+    WrongOwner {
+        expected: StoryKind,
+        actual: StoryKind,
+    },
+    Stale {
+        story: StoryId,
+    },
+    InvalidPath {
+        path: Vec<usize>,
+    },
+    OutOfBounds {
+        index: usize,
+        len: usize,
+    },
+    KindMismatch {
+        expected: StoryItemKind,
+        actual: StoryItemKind,
+    },
+    NotTextBearing {
+        kind: StoryItemKind,
+    },
+}
+
+impl fmt::Display for StoryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OwnerNotFound { story } => write!(
+                formatter,
+                "story owner {:?} at {}[{}] was not found",
+                story.kind, story.part_name, story.owner_index
+            ),
+            Self::WrongOwner { expected, actual } => {
+                write!(
+                    formatter,
+                    "story owner kind is {actual:?}, expected {expected:?}"
+                )
+            }
+            Self::Stale { story } => write!(
+                formatter,
+                "story location for {:?} at {}[{}] is stale",
+                story.kind, story.part_name, story.owner_index
+            ),
+            Self::InvalidPath { path } => write!(formatter, "invalid story item path {path:?}"),
+            Self::OutOfBounds { index, len } => {
+                write!(
+                    formatter,
+                    "story item index {index} is out of bounds for {len} items"
+                )
+            }
+            Self::KindMismatch { expected, actual } => write!(
+                formatter,
+                "story item kind is {actual:?}, expected {expected:?}"
+            ),
+            Self::NotTextBearing { kind } => {
+                write!(formatter, "story item kind {kind:?} has no editable text")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StoryError {}
 
 const WORD_NAMESPACE: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
@@ -3026,6 +3249,2018 @@ fn default_application_properties() -> AppProperties {
     properties.application = Some("rdocx".to_owned());
     properties.application_version = Some(env!("CARGO_PKG_VERSION").to_owned());
     properties
+}
+
+struct StorySource<'a> {
+    root_kind: StoryKind,
+    part_name: String,
+    xml: Cow<'a, [u8]>,
+}
+
+#[derive(Clone)]
+struct StoryOwnerSpan {
+    kind: StoryKind,
+    owner_index: usize,
+    full: Range<usize>,
+    fingerprint: u64,
+}
+
+#[derive(Clone)]
+struct StoryItemSpan {
+    kind: StoryItemKind,
+    full: Range<usize>,
+    scan: Range<usize>,
+    complex_field: bool,
+    complex_ancestors: Vec<usize>,
+    sdt_context: Option<StorySdtContext>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StoryNamespace {
+    Word,
+    Vml,
+    Drawing,
+    DrawingPicture,
+    WordDrawing,
+    WordShape,
+    WordGroup,
+    Other,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StorySdtContext {
+    Block,
+    Table,
+    Row,
+    Inline,
+}
+
+struct XmlElementFrame {
+    namespace: StoryNamespace,
+    local_name: Vec<u8>,
+    is_word: bool,
+    full_start: usize,
+    owner_kind: Option<StoryKind>,
+    item_kind: Option<StoryItemKind>,
+    sdt_context: Option<StorySdtContext>,
+    word_prefixes: Vec<String>,
+    opaque: bool,
+}
+
+fn word_element(namespace: &ResolveResult<'_>) -> bool {
+    matches!(
+        namespace,
+        ResolveResult::Bound(Namespace(uri)) if *uri == WORD_NAMESPACE.as_bytes()
+    )
+}
+
+fn story_namespace(namespace: &ResolveResult<'_>) -> StoryNamespace {
+    match namespace {
+        ResolveResult::Bound(Namespace(uri)) => match *uri {
+            uri if uri == WORD_NAMESPACE.as_bytes() => StoryNamespace::Word,
+            b"urn:schemas-microsoft-com:vml" => StoryNamespace::Vml,
+            b"http://schemas.openxmlformats.org/drawingml/2006/main" => StoryNamespace::Drawing,
+            b"http://schemas.openxmlformats.org/drawingml/2006/picture" => {
+                StoryNamespace::DrawingPicture
+            }
+            b"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" => {
+                StoryNamespace::WordDrawing
+            }
+            b"http://schemas.microsoft.com/office/word/2010/wordprocessingShape" => {
+                StoryNamespace::WordShape
+            }
+            b"http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" => {
+                StoryNamespace::WordGroup
+            }
+            _ => StoryNamespace::Other,
+        },
+        _ => StoryNamespace::Other,
+    }
+}
+
+fn modeled_word_child(parent: &[u8], child: &[u8]) -> bool {
+    match parent {
+        b"document" => child == b"body",
+        b"footnotes" => child == b"footnote",
+        b"endnotes" => child == b"endnote",
+        b"comments" => child == b"comment",
+        b"body" | b"hdr" | b"ftr" | b"footnote" | b"endnote" | b"comment" | b"txbxContent" => {
+            matches!(child, b"p" | b"tbl" | b"sdt" | b"sectPr")
+        }
+        b"tc" => matches!(child, b"tcPr" | b"p" | b"tbl" | b"sdt"),
+        b"tbl" => matches!(child, b"tblPr" | b"tblGrid" | b"tr" | b"sdt"),
+        b"tr" => matches!(child, b"trPr" | b"tc" | b"sdt"),
+        b"p" => matches!(
+            child,
+            b"pPr"
+                | b"r"
+                | b"sdt"
+                | b"hyperlink"
+                | b"fldSimple"
+                | b"ins"
+                | b"del"
+                | b"moveFrom"
+                | b"moveTo"
+                | b"bookmarkStart"
+                | b"bookmarkEnd"
+                | b"commentRangeStart"
+                | b"commentRangeEnd"
+                | b"proofErr"
+        ),
+        b"r" => matches!(
+            child,
+            b"rPr"
+                | b"t"
+                | b"delText"
+                | b"instrText"
+                | b"delInstrText"
+                | b"fldChar"
+                | b"drawing"
+                | b"pict"
+                | b"object"
+                | b"tab"
+                | b"br"
+                | b"cr"
+                | b"sym"
+                | b"noBreakHyphen"
+                | b"softHyphen"
+                | b"footnoteReference"
+                | b"endnoteReference"
+                | b"commentReference"
+                | b"lastRenderedPageBreak"
+        ),
+        b"sdt" => matches!(child, b"sdtPr" | b"sdtEndPr" | b"sdtContent"),
+        b"sdtContent" => false,
+        b"hyperlink" => {
+            matches!(child, b"r" | b"ins" | b"del" | b"moveFrom" | b"moveTo")
+        }
+        b"ins" | b"del" | b"moveFrom" | b"moveTo" => matches!(
+            child,
+            b"r" | b"hyperlink" | b"ins" | b"del" | b"moveFrom" | b"moveTo"
+        ),
+        b"fldSimple" => child == b"r",
+        _ => false,
+    }
+}
+
+fn story_sdt_context(stack: &[XmlElementFrame]) -> Option<StorySdtContext> {
+    let parent = stack.last()?;
+    if parent.namespace != StoryNamespace::Word {
+        return None;
+    }
+    match parent.local_name.as_slice() {
+        b"body" | b"hdr" | b"ftr" | b"footnote" | b"endnote" | b"comment" | b"txbxContent"
+        | b"tc" => Some(StorySdtContext::Block),
+        b"tbl" => Some(StorySdtContext::Table),
+        b"tr" => Some(StorySdtContext::Row),
+        b"p" | b"hyperlink" | b"fldSimple" | b"ins" | b"del" | b"moveFrom" | b"moveTo" => {
+            Some(StorySdtContext::Inline)
+        }
+        b"sdtContent" => parent.sdt_context,
+        _ => None,
+    }
+}
+
+fn story_element_sdt_context(
+    stack: &[XmlElementFrame],
+    namespace: StoryNamespace,
+    local_name: &[u8],
+) -> Option<StorySdtContext> {
+    if namespace != StoryNamespace::Word {
+        return None;
+    }
+    match local_name {
+        b"sdt" => story_sdt_context(stack),
+        b"sdtContent" => stack.last().and_then(|parent| {
+            (parent.namespace == StoryNamespace::Word && parent.local_name == b"sdt")
+                .then_some(parent.sdt_context)
+                .flatten()
+        }),
+        _ => None,
+    }
+}
+
+fn modeled_sdt_content_child(context: Option<StorySdtContext>, child: &[u8]) -> bool {
+    child == b"sdt"
+        || match context {
+            Some(StorySdtContext::Block) => matches!(child, b"p" | b"tbl"),
+            Some(StorySdtContext::Table) => child == b"tr",
+            Some(StorySdtContext::Row) => child == b"tc",
+            Some(StorySdtContext::Inline) => child == b"r",
+            None => false,
+        }
+}
+
+fn modeled_story_child(
+    stack: &[XmlElementFrame],
+    namespace: StoryNamespace,
+    local_name: &[u8],
+) -> bool {
+    let Some(parent) = stack.last() else {
+        return namespace == StoryNamespace::Word;
+    };
+    match (parent.namespace, namespace) {
+        (StoryNamespace::Word, StoryNamespace::Word) if parent.local_name == b"sdtContent" => {
+            modeled_sdt_content_child(parent.sdt_context, local_name)
+        }
+        (StoryNamespace::Word, StoryNamespace::Word) => {
+            modeled_word_child(&parent.local_name, local_name)
+        }
+        (StoryNamespace::Word, StoryNamespace::Vml) => {
+            matches!(parent.local_name.as_slice(), b"pict" | b"object")
+                && matches!(
+                    local_name,
+                    b"shape"
+                        | b"group"
+                        | b"rect"
+                        | b"roundrect"
+                        | b"oval"
+                        | b"line"
+                        | b"polyline"
+                        | b"curve"
+                        | b"arc"
+                )
+        }
+        (StoryNamespace::Vml, StoryNamespace::Vml) => match parent.local_name.as_slice() {
+            b"group" => matches!(
+                local_name,
+                b"shape"
+                    | b"group"
+                    | b"rect"
+                    | b"roundrect"
+                    | b"oval"
+                    | b"line"
+                    | b"polyline"
+                    | b"curve"
+                    | b"arc"
+            ),
+            b"shape" | b"rect" | b"roundrect" | b"oval" | b"line" | b"polyline" | b"curve"
+            | b"arc" => local_name == b"textbox",
+            _ => false,
+        },
+        (StoryNamespace::Vml, StoryNamespace::Word) => {
+            parent.local_name == b"textbox" && local_name == b"txbxContent"
+        }
+        (StoryNamespace::Word, StoryNamespace::WordDrawing) => {
+            parent.local_name == b"drawing" && matches!(local_name, b"inline" | b"anchor")
+        }
+        (StoryNamespace::WordDrawing, StoryNamespace::Drawing) => {
+            matches!(parent.local_name.as_slice(), b"inline" | b"anchor")
+                && local_name == b"graphic"
+        }
+        (StoryNamespace::Drawing, StoryNamespace::Drawing) => match parent.local_name.as_slice() {
+            b"graphic" => local_name == b"graphicData",
+            _ => false,
+        },
+        (StoryNamespace::Drawing, StoryNamespace::WordShape) => {
+            parent.local_name == b"graphicData" && local_name == b"wsp"
+        }
+        (StoryNamespace::Drawing, StoryNamespace::WordGroup) => {
+            parent.local_name == b"graphicData" && local_name == b"wgp"
+        }
+        (StoryNamespace::WordGroup, StoryNamespace::WordGroup) => {
+            matches!(parent.local_name.as_slice(), b"wgp" | b"grpSp") && local_name == b"grpSp"
+        }
+        (StoryNamespace::WordGroup, StoryNamespace::WordShape) => {
+            matches!(parent.local_name.as_slice(), b"wgp" | b"grpSp") && local_name == b"wsp"
+        }
+        (StoryNamespace::WordShape, StoryNamespace::WordShape) => {
+            parent.local_name == b"wsp" && local_name == b"txbx"
+        }
+        (StoryNamespace::WordShape, StoryNamespace::Word) => {
+            parent.local_name == b"txbx" && local_name == b"txbxContent"
+        }
+        (StoryNamespace::Drawing, StoryNamespace::DrawingPicture) => {
+            parent.local_name == b"graphicData" && local_name == b"pic"
+        }
+        _ => false,
+    }
+}
+
+fn field_instruction_has_name(instruction: &str) -> bool {
+    story_field_instruction_has_name(instruction)
+}
+
+fn story_word_prefixes_at(
+    element: &BytesStart<'_>,
+    inherited: &[String],
+    is_word_element: bool,
+) -> Result<Vec<String>> {
+    let mut prefixes = inherited.to_vec();
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("story namespace declaration scan failed: {error}"))
+        })?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            b"".as_slice()
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            prefix
+        } else {
+            continue;
+        };
+        let prefix = std::str::from_utf8(prefix)
+            .map_err(|error| Error::Other(format!("story namespace prefix is invalid: {error}")))?
+            .to_owned();
+        prefixes.retain(|candidate| candidate != &prefix);
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+            .map_err(|error| {
+                Error::Other(format!(
+                    "story namespace declaration decode failed: {error}"
+                ))
+            })?;
+        if value.as_ref() == WORD_NAMESPACE {
+            prefixes.push(prefix);
+        }
+    }
+    if is_word_element {
+        let name = element.name();
+        let prefix = name
+            .as_ref()
+            .split(|byte| *byte == b':')
+            .next()
+            .filter(|_| name.as_ref().contains(&b':'))
+            .unwrap_or(b"");
+        let prefix = std::str::from_utf8(prefix)
+            .map_err(|error| Error::Other(format!("story element prefix is invalid: {error}")))?
+            .to_owned();
+        if !prefixes.contains(&prefix) {
+            prefixes.push(prefix);
+        }
+    }
+    Ok(prefixes)
+}
+
+fn story_element_end(xml: &[u8], start: usize) -> Result<usize> {
+    let fragment = xml
+        .get(start..)
+        .ok_or_else(|| Error::Other("story element begins outside its source part".to_owned()))?;
+    let mut reader = quick_xml::Reader::from_reader(fragment);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story element scan failed: {error}")))?
+        {
+            Event::Start(_) => depth += 1,
+            Event::Empty(_) if depth == 0 => {
+                return Ok(start + reader.buffer_position() as usize);
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(start + reader.buffer_position() as usize);
+                }
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "story element has no matching closing element".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn story_namespace_scope_at(xml: &[u8], offset: usize) -> Result<BTreeMap<String, String>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut scopes = vec![BTreeMap::<String, String>::new()];
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story namespace scope scan failed: {error}")))?
+        {
+            Event::Start(element) => {
+                let mut scope = scopes.last().cloned().unwrap_or_default();
+                update_story_namespace_scope(&mut scope, &element)?;
+                if before == offset {
+                    return Ok(scope);
+                }
+                scopes.push(scope);
+            }
+            Event::Empty(element) => {
+                if before == offset {
+                    let mut scope = scopes.last().cloned().unwrap_or_default();
+                    update_story_namespace_scope(&mut scope, &element)?;
+                    return Ok(scope);
+                }
+            }
+            Event::End(_) => {
+                if scopes.len() > 1 {
+                    scopes.pop();
+                }
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "story item namespace scope was not found".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn update_story_namespace_scope(
+    scope: &mut BTreeMap<String, String>,
+    element: &BytesStart<'_>,
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("story namespace scope attribute failed: {error}"))
+        })?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            ""
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            std::str::from_utf8(prefix).map_err(|error| {
+                Error::Other(format!("story namespace scope prefix is invalid: {error}"))
+            })?
+        } else {
+            continue;
+        };
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+            .map_err(|error| {
+                Error::Other(format!("story namespace scope value is invalid: {error}"))
+            })?
+            .into_owned();
+        if value.is_empty() {
+            scope.remove(prefix);
+        } else {
+            scope.insert(prefix.to_owned(), value);
+        }
+    }
+    Ok(())
+}
+
+fn story_word_prefix_for_scope(scope: &BTreeMap<String, String>) -> String {
+    scope
+        .iter()
+        .find_map(|(prefix, namespace)| (namespace == WORD_NAMESPACE).then_some(prefix.clone()))
+        .unwrap_or_else(|| {
+            let mut suffix = 0usize;
+            loop {
+                let candidate = if suffix == 0 {
+                    "rdocxw".to_owned()
+                } else {
+                    format!("rdocxw{suffix}")
+                };
+                if !scope.contains_key(&candidate) {
+                    break candidate;
+                }
+                suffix += 1;
+            }
+        })
+}
+
+fn complex_story_field_xml(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<u8>> {
+    let scope = story_namespace_scope_at(xml, item.scan.start)?;
+    let word_prefix = story_word_prefix_for_scope(&scope);
+    let mut bindings = scope;
+    bindings
+        .entry(word_prefix.clone())
+        .or_insert_with(|| WORD_NAMESPACE.to_owned());
+    let qualified_paragraph = if word_prefix.is_empty() {
+        "p".to_owned()
+    } else {
+        format!("{word_prefix}:p")
+    };
+    let mut projection = format!("<{qualified_paragraph}").into_bytes();
+    for (prefix, namespace) in bindings {
+        projection.extend_from_slice(b" xmlns");
+        if !prefix.is_empty() {
+            projection.push(b':');
+            projection.extend_from_slice(prefix.as_bytes());
+        }
+        projection.extend_from_slice(b"=\"");
+        projection.extend_from_slice(quick_xml::escape::escape(&namespace).as_bytes());
+        projection.push(b'"');
+    }
+    projection.push(b'>');
+    projection.extend_from_slice(&complex_story_field_runs(xml, item)?);
+    projection.extend_from_slice(format!("</{qualified_paragraph}>").as_bytes());
+    Ok(projection)
+}
+
+struct StoryRunShell {
+    open_end: usize,
+    close_start: usize,
+    close_end: usize,
+}
+
+fn story_run_shell(xml: &[u8], start: usize) -> Result<StoryRunShell> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut active = false;
+    let mut depth = 0usize;
+    let mut open_end = None;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (_, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story run shell scan failed: {error}")))?;
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            if !matches!(event, Event::Start(_)) {
+                return Err(Error::Other(
+                    "complex story field does not begin in a run".to_owned(),
+                ));
+            }
+            active = true;
+            depth = 1;
+            open_end = Some(after);
+        } else {
+            match event {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Ok(StoryRunShell {
+                            open_end: open_end.unwrap_or(after),
+                            close_start: before,
+                            close_end: after,
+                        });
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        buffer.clear();
+    }
+    Err(Error::Other(
+        "complex story field run has no matching close".to_owned(),
+    ))
+}
+
+fn complex_story_field_runs(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<u8>> {
+    let first = story_run_shell(xml, item.scan.start)?;
+    let mut last_start = item.scan.start;
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0usize;
+    let mut active = false;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("complex story run scan failed: {error}")))?;
+        let is_word_namespace = word_element(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != item.scan.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                if depth == 0 && is_word_namespace && element.local_name().as_ref() == b"r" {
+                    last_start = before;
+                }
+                depth += 1;
+            }
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => break,
+            _ => {}
+        }
+        if after == item.scan.end {
+            break;
+        }
+        buffer.clear();
+    }
+    let last = story_run_shell(xml, last_start)?;
+    let mut result = Vec::new();
+    if last_start == item.scan.start {
+        result.extend_from_slice(&xml[item.scan.start..first.open_end]);
+        result.extend_from_slice(&xml[item.full.clone()]);
+        result.extend_from_slice(&xml[first.close_start..first.close_end]);
+        return Ok(result);
+    }
+    result.extend_from_slice(&xml[item.scan.start..first.open_end]);
+    result.extend_from_slice(&xml[item.full.start..first.close_end]);
+    result.extend_from_slice(&xml[first.close_end..last_start]);
+    result.extend_from_slice(&xml[last_start..last.open_end]);
+    result.extend_from_slice(&xml[last.open_end..item.full.end]);
+    result.extend_from_slice(&xml[last.close_start..last.close_end]);
+    Ok(result)
+}
+
+fn modeled_story_event(
+    stack: &[XmlElementFrame],
+    namespace: StoryNamespace,
+    local_name: &[u8],
+    element: &BytesStart<'_>,
+    empty: bool,
+    xml: &[u8],
+    before: usize,
+    after: usize,
+) -> Result<bool> {
+    if !modeled_story_child(stack, namespace, local_name) {
+        return Ok(false);
+    }
+    if namespace != StoryNamespace::Word {
+        return Ok(true);
+    }
+    if matches!(
+        local_name,
+        b"sdt" | b"ins" | b"del" | b"moveFrom" | b"moveTo" | b"fldSimple"
+    ) {
+        let inherited = stack
+            .last()
+            .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+        let word_prefixes = story_word_prefixes_at(element, inherited, true)?;
+        let raw_end = if empty {
+            after
+        } else {
+            story_element_end(xml, before)?
+        };
+        let raw = xml
+            .get(before..raw_end)
+            .ok_or_else(|| Error::Other("story element lies outside its source part".to_owned()))?;
+        if local_name == b"sdt" {
+            let owner = match story_sdt_context(stack) {
+                Some(StorySdtContext::Block) => StorySdtOwner::Block,
+                Some(StorySdtContext::Table) => StorySdtOwner::Table,
+                Some(StorySdtContext::Row) => StorySdtOwner::Row,
+                Some(StorySdtContext::Inline) => StorySdtOwner::Inline,
+                None => return Ok(false),
+            };
+            return Ok(CT_Sdt::story_raw_is_typed(raw, &word_prefixes, owner));
+        }
+        if matches!(local_name, b"ins" | b"del" | b"moveFrom" | b"moveTo") {
+            return Ok(CT_Revision::story_raw_is_typed(raw, &word_prefixes));
+        }
+        return Ok(!empty && story_simple_field_is_typed(raw, &word_prefixes));
+    }
+    if empty && matches!(local_name, b"drawing" | b"pict" | b"sdt" | b"hyperlink") {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn opaque_story_event(
+    stack: &[XmlElementFrame],
+    namespace: StoryNamespace,
+    local_name: &[u8],
+    element: &BytesStart<'_>,
+    empty: bool,
+    xml: &[u8],
+    before: usize,
+    after: usize,
+) -> Result<bool> {
+    Ok(stack.last().is_some_and(|frame| frame.opaque)
+        || !modeled_story_event(
+            stack, namespace, local_name, element, empty, xml, before, after,
+        )?)
+}
+
+fn direct_story_item_kind(is_word: bool, local_name: &[u8]) -> StoryItemKind {
+    if !is_word {
+        return StoryItemKind::PreservedNode;
+    }
+    match local_name {
+        b"p" => StoryItemKind::Paragraph,
+        b"tbl" => StoryItemKind::Table,
+        b"sdt" => StoryItemKind::ContentControl,
+        _ => StoryItemKind::PreservedNode,
+    }
+}
+
+fn owner_kind(local_name: &[u8]) -> Option<StoryKind> {
+    match local_name {
+        b"body" => Some(StoryKind::Body),
+        b"tc" => Some(StoryKind::TableCell),
+        b"hdr" => Some(StoryKind::Header),
+        b"ftr" => Some(StoryKind::Footer),
+        b"footnote" => Some(StoryKind::Footnote),
+        b"endnote" => Some(StoryKind::Endnote),
+        b"comment" => Some(StoryKind::Comment),
+        b"txbxContent" => Some(StoryKind::TextBox),
+        _ => None,
+    }
+}
+
+fn editable_note_owner(reader: &NsReader<&[u8]>, element: &BytesStart<'_>) -> Result<bool> {
+    let mut id = None;
+    let mut separator = false;
+    for attribute in element.attributes() {
+        let attribute = attribute
+            .map_err(|error| Error::Other(format!("story owner attribute scan failed: {error}")))?;
+        let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
+        if !word_element(&namespace) {
+            continue;
+        }
+        match local_name.as_ref() {
+            b"type" => {
+                let value = attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                    .map_err(|error| {
+                        Error::Other(format!("story owner type decode failed: {error}"))
+                    })?;
+                separator = matches!(
+                    value.as_ref(),
+                    "separator" | "continuationSeparator" | "continuationNotice"
+                );
+            }
+            b"id" => {
+                id = attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                    .map_err(|error| {
+                        Error::Other(format!("story owner id decode failed: {error}"))
+                    })?
+                    .parse::<i32>()
+                    .ok();
+            }
+            _ => {}
+        }
+    }
+    Ok(!separator && id.unwrap_or(0) > 0)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ComplexFieldMarker {
+    Begin,
+    Separate,
+    End,
+}
+
+struct ComplexFieldScan {
+    marker_start: usize,
+    run_start: usize,
+    ancestors: Vec<usize>,
+    separators: usize,
+    instruction: String,
+    leading_nested: bool,
+    valid: bool,
+}
+
+impl ComplexFieldScan {
+    fn accepted(&self) -> bool {
+        self.valid
+            && self.separators <= 1
+            && !self.leading_nested
+            && field_instruction_has_name(&self.instruction)
+    }
+}
+
+fn complex_field_marker(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+) -> Result<Option<ComplexFieldMarker>> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("field marker attribute scan failed: {error}"))
+        })?;
+        let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
+        if !word_element(&namespace) || local_name.as_ref() != b"fldCharType" {
+            continue;
+        }
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+            .map_err(|error| Error::Other(format!("field marker type decode failed: {error}")))?;
+        return Ok(match value.as_ref() {
+            "begin" => Some(ComplexFieldMarker::Begin),
+            "separate" => Some(ComplexFieldMarker::Separate),
+            "end" => Some(ComplexFieldMarker::End),
+            _ => None,
+        });
+    }
+    Ok(None)
+}
+
+fn story_enclosing_run_range(
+    xml: &[u8],
+    stack: &[XmlElementFrame],
+) -> Result<Option<Range<usize>>> {
+    let Some(start) = stack.iter().rev().find_map(|frame| {
+        (!frame.opaque && frame.namespace == StoryNamespace::Word && frame.local_name == b"r")
+            .then_some(frame.full_start)
+    }) else {
+        return Ok(None);
+    };
+    Ok(Some(start..story_element_end(xml, start)?))
+}
+
+fn complex_field_scan_context(stack: &[XmlElementFrame]) -> bool {
+    stack.iter().any(|frame| {
+        !frame.opaque && frame.namespace == StoryNamespace::Word && frame.local_name == b"r"
+    }) && !stack
+        .iter()
+        .any(|frame| frame.namespace == StoryNamespace::Word && frame.local_name == b"fldSimple")
+}
+
+fn scan_complex_field_marker(
+    fields: &mut Vec<ComplexFieldScan>,
+    items: &mut Vec<StoryItemSpan>,
+    marker: Option<ComplexFieldMarker>,
+    before: usize,
+    after: usize,
+    run_start: usize,
+    run_end: usize,
+) {
+    match marker {
+        Some(ComplexFieldMarker::Begin) => {
+            let ancestors = fields.iter().map(|field| field.marker_start).collect();
+            fields.push(ComplexFieldScan {
+                marker_start: before,
+                run_start,
+                ancestors,
+                separators: 0,
+                instruction: String::new(),
+                leading_nested: false,
+                valid: true,
+            });
+        }
+        Some(ComplexFieldMarker::Separate) => {
+            if let Some(field) = fields.last_mut() {
+                field.separators += 1;
+                if field.separators > 1 {
+                    field.valid = false;
+                }
+            }
+        }
+        Some(ComplexFieldMarker::End) => {
+            let Some(field) = fields.pop() else {
+                return;
+            };
+            let accepted = field.accepted();
+            if let Some(parent) = fields.last_mut() {
+                if !accepted {
+                    parent.valid = false;
+                } else if parent.separators == 0 && !field_instruction_has_name(&parent.instruction)
+                {
+                    parent.leading_nested = true;
+                }
+            }
+            if accepted {
+                items.push(StoryItemSpan {
+                    kind: StoryItemKind::Field,
+                    full: field.marker_start..after,
+                    scan: field.run_start..run_end,
+                    complex_field: true,
+                    complex_ancestors: field.ancestors,
+                    sdt_context: None,
+                });
+            }
+        }
+        None => {}
+    }
+}
+
+fn push_complex_field_instruction(
+    fields: &mut [ComplexFieldScan],
+    stack: &[XmlElementFrame],
+    text: &str,
+) {
+    let modeled_instruction = stack.last().is_some_and(|frame| {
+        !frame.opaque && frame.namespace == StoryNamespace::Word && frame.local_name == b"instrText"
+    });
+    if modeled_instruction
+        && let Some(field) = fields.last_mut()
+        && field.separators == 0
+    {
+        field.instruction.push_str(text);
+    }
+}
+
+fn update_complex_field_results(results: &mut Vec<bool>, marker: Option<ComplexFieldMarker>) {
+    match marker {
+        Some(ComplexFieldMarker::Begin) => results.push(false),
+        Some(ComplexFieldMarker::Separate) => {
+            if let Some(result) = results.last_mut() {
+                *result = true;
+            }
+        }
+        Some(ComplexFieldMarker::End) => {
+            results.pop();
+        }
+        None => {}
+    }
+}
+
+fn complex_field_text_visible(item: &StoryItemSpan, results: &[bool]) -> bool {
+    !item.complex_field || (!results.is_empty() && results.iter().all(|result| *result))
+}
+
+fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerSpan>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack: Vec<XmlElementFrame> = Vec::new();
+    let mut owners = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story XML scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                let is_word = is_word_namespace;
+                let local_name = element.local_name().as_ref().to_vec();
+                let sdt_context = story_element_sdt_context(&stack, namespace_kind, &local_name);
+                let direct_owner_child =
+                    stack.last().is_some_and(|frame| frame.owner_kind.is_some());
+                let mut opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    &local_name,
+                    &element,
+                    false,
+                    xml,
+                    before,
+                    after,
+                )? || (direct_owner_child
+                    && direct_story_item_kind(is_word, &local_name)
+                        == StoryItemKind::PreservedNode);
+                let mut candidate = (!opaque && is_word)
+                    .then(|| owner_kind(&local_name))
+                    .flatten();
+                if matches!(candidate, Some(StoryKind::Footnote | StoryKind::Endnote))
+                    && !editable_note_owner(&reader, &element)?
+                {
+                    candidate = None;
+                    opaque = true;
+                }
+                let inherited = stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word)?;
+                stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word,
+                    full_start: before,
+                    owner_kind: candidate.filter(|kind| {
+                        *kind == root_kind
+                            || matches!(kind, StoryKind::TableCell | StoryKind::TextBox)
+                    }),
+                    item_kind: None,
+                    sdt_context,
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                let direct_owner_child =
+                    stack.last().is_some_and(|frame| frame.owner_kind.is_some());
+                let local_name = element.local_name();
+                let opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    xml,
+                    before,
+                    after,
+                )? || (direct_owner_child
+                    && direct_story_item_kind(is_word_namespace, local_name.as_ref())
+                        == StoryItemKind::PreservedNode);
+                if is_word_namespace
+                    && !opaque
+                    && let Some(kind) = owner_kind(local_name.as_ref()).filter(|kind| {
+                        *kind == root_kind
+                            || matches!(kind, StoryKind::TableCell | StoryKind::TextBox)
+                    })
+                    && (!matches!(kind, StoryKind::Footnote | StoryKind::Endnote)
+                        || editable_note_owner(&reader, &element)?)
+                {
+                    owners.push(StoryOwnerSpan {
+                        kind,
+                        owner_index: 0,
+                        full: before..after,
+                        fingerprint: structural_fingerprint(&xml[before..after])?,
+                    });
+                }
+            }
+            Event::End(_) => {
+                let Some(frame) = stack.pop() else {
+                    return Err(Error::Other(
+                        "story XML contains an unmatched closing element".to_owned(),
+                    ));
+                };
+                if let Some(kind) = frame.owner_kind {
+                    owners.push(StoryOwnerSpan {
+                        kind,
+                        owner_index: 0,
+                        full: frame.full_start..after,
+                        fingerprint: structural_fingerprint(&xml[frame.full_start..after])?,
+                    });
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    owners.sort_by_key(|owner| owner.full.start);
+    let mut counts = HashMap::new();
+    for owner in &mut owners {
+        let count = counts.entry(owner.kind).or_insert(0usize);
+        owner.owner_index = *count;
+        *count += 1;
+    }
+    Ok(owners)
+}
+
+fn structural_fingerprint(xml: &[u8]) -> Result<u64> {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    let mut hash = OFFSET;
+    for byte in xml {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    Ok(hash)
+}
+
+fn typed_complex_field_candidate_is_admitted(
+    xml: &[u8],
+    paragraph: &Range<usize>,
+    candidate: &StoryItemSpan,
+    inherited_word_prefixes: &[String],
+) -> Result<bool> {
+    let paragraph_xml = &xml[paragraph.clone()];
+    let mut reader = quick_xml::Reader::from_reader(paragraph_xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let paragraph_local_name = loop {
+        match reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("typed story field paragraph scan failed: {error}"))
+        })? {
+            Event::Start(element) => {
+                break element.local_name().as_ref().to_vec();
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "typed story field paragraph has no root element".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    };
+    let scanned = &xml[candidate.scan.clone()];
+    let marker_start = candidate
+        .full
+        .start
+        .checked_sub(candidate.scan.start)
+        .filter(|start| *start <= scanned.len())
+        .ok_or_else(|| {
+            Error::Other("complex story field starts outside its run span".to_owned())
+        })?;
+    let marker_end = candidate
+        .full
+        .end
+        .checked_sub(candidate.scan.start)
+        .filter(|end| marker_start <= *end && *end <= scanned.len())
+        .ok_or_else(|| Error::Other("complex story field ends outside its run span".to_owned()))?;
+    let mut run_reader = quick_xml::Reader::from_reader(scanned);
+    run_reader.config_mut().trim_text(false);
+    let mut run_buffer = Vec::new();
+    let mut run_opening_end = None;
+    let mut run_closing_start = None;
+    loop {
+        let before = run_reader.buffer_position() as usize;
+        let event = run_reader
+            .read_event_into(&mut run_buffer)
+            .map_err(|error| Error::Other(format!("typed story field run scan failed: {error}")))?;
+        let after = run_reader.buffer_position() as usize;
+        if run_opening_end.is_none() && matches!(event, Event::Start(_)) {
+            run_opening_end = Some(after);
+        }
+        if after == scanned.len() && matches!(event, Event::End(_)) {
+            run_closing_start = Some(before);
+            break;
+        }
+        if matches!(event, Event::Eof) {
+            break;
+        }
+        run_buffer.clear();
+    }
+    let Some(run_opening_end) = run_opening_end.filter(|end| *end <= marker_start) else {
+        return Ok(false);
+    };
+    let Some(run_closing_start) = run_closing_start.filter(|start| marker_end <= *start) else {
+        return Ok(false);
+    };
+    let mut isolated = Vec::new();
+    isolated.extend_from_slice(&scanned[..run_opening_end]);
+    isolated.extend_from_slice(&scanned[marker_start..marker_end]);
+    isolated.extend_from_slice(&scanned[run_closing_start..]);
+    let mut scope = story_namespace_scope_at(xml, candidate.scan.start)?;
+    let word_prefix = story_word_prefix_for_scope(&scope);
+    scope
+        .entry(word_prefix.clone())
+        .or_insert_with(|| WORD_NAMESPACE.to_owned());
+    let mut paragraph_name = Vec::new();
+    if !word_prefix.is_empty() {
+        paragraph_name.extend_from_slice(word_prefix.as_bytes());
+        paragraph_name.push(b':');
+    }
+    paragraph_name.extend_from_slice(&paragraph_local_name);
+    let mut fragment = Vec::new();
+    fragment.push(b'<');
+    fragment.extend_from_slice(&paragraph_name);
+    for (prefix, namespace) in scope {
+        fragment.extend_from_slice(b" xmlns");
+        if !prefix.is_empty() {
+            fragment.push(b':');
+            fragment.extend_from_slice(prefix.as_bytes());
+        }
+        fragment.extend_from_slice(b"=\"");
+        fragment.extend_from_slice(quick_xml::escape::escape(&namespace).as_bytes());
+        fragment.push(b'"');
+    }
+    fragment.push(b'>');
+    fragment.extend_from_slice(&isolated);
+    fragment.extend_from_slice(b"</");
+    fragment.extend_from_slice(&paragraph_name);
+    fragment.push(b'>');
+    let Ok(sources) = CT_P::story_complex_field_sources(&fragment, inherited_word_prefixes) else {
+        return Ok(false);
+    };
+    Ok(sources.iter().any(|source| source == &isolated))
+}
+
+fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack: Vec<XmlElementFrame> = Vec::new();
+    let mut items = Vec::new();
+    let mut complex_fields = Vec::<ComplexFieldScan>::new();
+    let mut paragraphs = Vec::<(Range<usize>, Vec<String>)>::new();
+    let mut active = false;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story item scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != owner.full.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                let is_word = is_word_namespace;
+                let local_name = element.local_name().as_ref().to_vec();
+                let sdt_context = story_element_sdt_context(&stack, namespace_kind, &local_name);
+                let depth = stack.len();
+                let in_nested_owner = stack.iter().skip(1).any(|frame| {
+                    frame.is_word && matches!(frame.local_name.as_slice(), b"tc" | b"txbxContent")
+                });
+                let child_opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    &local_name,
+                    &element,
+                    false,
+                    xml,
+                    before,
+                    after,
+                )?;
+                let item_kind = if depth == 1 && !in_nested_owner {
+                    Some(if child_opaque {
+                        StoryItemKind::PreservedNode
+                    } else {
+                        direct_story_item_kind(is_word, &local_name)
+                    })
+                } else if !in_nested_owner && !child_opaque && is_word {
+                    match local_name.as_slice() {
+                        b"sdt" => Some(StoryItemKind::ContentControl),
+                        b"fldSimple" => Some(StoryItemKind::Field),
+                        b"drawing" | b"pict" => Some(StoryItemKind::Drawing),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let opaque = child_opaque || item_kind == Some(StoryItemKind::PreservedNode);
+                if !opaque
+                    && !in_nested_owner
+                    && is_word
+                    && local_name.as_slice() == b"fldChar"
+                    && complex_field_scan_context(&stack)
+                    && let Some(run) = story_enclosing_run_range(xml, &stack)?
+                {
+                    scan_complex_field_marker(
+                        &mut complex_fields,
+                        &mut items,
+                        complex_field_marker(&reader, &element)?,
+                        before,
+                        after,
+                        run.start,
+                        run.end,
+                    );
+                }
+                let inherited = stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
+                stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word,
+                    full_start: before,
+                    owner_kind: None,
+                    item_kind,
+                    sdt_context,
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                let is_word = is_word_namespace;
+                let local_name = element.local_name();
+                let sdt_context =
+                    story_element_sdt_context(&stack, namespace_kind, local_name.as_ref());
+                let depth = stack.len();
+                let opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    xml,
+                    before,
+                    after,
+                )?;
+                let in_nested_owner = stack.iter().skip(1).any(|frame| {
+                    frame.is_word && matches!(frame.local_name.as_slice(), b"tc" | b"txbxContent")
+                });
+                let kind = if depth == 1 && !in_nested_owner {
+                    Some(if opaque {
+                        StoryItemKind::PreservedNode
+                    } else {
+                        direct_story_item_kind(is_word, local_name.as_ref())
+                    })
+                } else if !in_nested_owner && !opaque && is_word {
+                    match local_name.as_ref() {
+                        b"sdt" => Some(StoryItemKind::ContentControl),
+                        b"fldSimple" => Some(StoryItemKind::Field),
+                        b"drawing" | b"pict" => Some(StoryItemKind::Drawing),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if !opaque
+                    && !in_nested_owner
+                    && is_word
+                    && local_name.as_ref() == b"fldChar"
+                    && complex_field_scan_context(&stack)
+                    && let Some(run) = story_enclosing_run_range(xml, &stack)?
+                {
+                    scan_complex_field_marker(
+                        &mut complex_fields,
+                        &mut items,
+                        complex_field_marker(&reader, &element)?,
+                        before,
+                        after,
+                        run.start,
+                        run.end,
+                    );
+                }
+                if let Some(kind) = kind {
+                    items.push(StoryItemSpan {
+                        kind,
+                        full: before..after,
+                        scan: before..after,
+                        complex_field: false,
+                        complex_ancestors: Vec::new(),
+                        sdt_context,
+                    });
+                }
+            }
+            Event::End(_) => {
+                let Some(frame) = stack.pop() else {
+                    return Err(Error::Other(
+                        "story item XML contains an unmatched closing element".to_owned(),
+                    ));
+                };
+                if !frame.opaque
+                    && frame.namespace == StoryNamespace::Word
+                    && frame.local_name == b"p"
+                {
+                    paragraphs.push((frame.full_start..after, frame.word_prefixes.clone()));
+                    complex_fields.clear();
+                }
+                if let Some(kind) = frame.item_kind {
+                    items.push(StoryItemSpan {
+                        kind,
+                        full: frame.full_start..after,
+                        scan: frame.full_start..after,
+                        complex_field: false,
+                        complex_ancestors: Vec::new(),
+                        sdt_context: frame.sdt_context,
+                    });
+                }
+                if after == owner.full.end {
+                    break;
+                }
+            }
+            Event::Text(value) => {
+                let decoded = value.decode().map_err(|error| {
+                    Error::Other(format!("field instruction decode failed: {error}"))
+                })?;
+                let value = quick_xml::escape::unescape(&decoded).map_err(|error| {
+                    Error::Other(format!("field instruction unescape failed: {error}"))
+                })?;
+                push_complex_field_instruction(&mut complex_fields, &stack, &value);
+            }
+            Event::CData(value) => {
+                let value = value.decode().map_err(|error| {
+                    Error::Other(format!("field instruction CDATA decode failed: {error}"))
+                })?;
+                push_complex_field_instruction(&mut complex_fields, &stack, &value);
+            }
+            Event::GeneralRef(value) => push_complex_field_instruction(
+                &mut complex_fields,
+                &stack,
+                &oxml_core::xml_text::resolve_entity(&value),
+            ),
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut typed_complex_admission = HashMap::<usize, bool>::new();
+    for (paragraph, word_prefixes) in &paragraphs {
+        for candidate in items.iter().filter(|item| {
+            item.complex_field
+                && paragraph.start <= item.scan.start
+                && item.scan.end <= paragraph.end
+        }) {
+            let admitted = typed_complex_field_candidate_is_admitted(
+                xml,
+                paragraph,
+                candidate,
+                word_prefixes,
+            )?;
+            typed_complex_admission.insert(candidate.full.start, admitted);
+        }
+    }
+    items.retain(|item| {
+        !item.complex_field
+            || (typed_complex_admission
+                .get(&item.full.start)
+                .copied()
+                .unwrap_or(false)
+                && item.complex_ancestors.iter().all(|ancestor| {
+                    typed_complex_admission
+                        .get(ancestor)
+                        .copied()
+                        .unwrap_or(false)
+                }))
+    });
+    items.sort_by_key(|item| (item.full.start, item.full.end));
+    items.dedup_by(|left, right| left.kind == right.kind && left.full == right.full);
+    Ok(items)
+}
+
+fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut in_text = 0usize;
+    let mut text = String::new();
+    let mut found = false;
+    let mut active = false;
+    let mut element_stack: Vec<XmlElementFrame> = Vec::new();
+    let mut nested_owner_depth = 0usize;
+    let mut complex_results = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story text scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != item.scan.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                let depth = element_stack.len();
+                let local_name = element.local_name().as_ref().to_vec();
+                let opaque =
+                    if element_stack.is_empty() && item.kind == StoryItemKind::ContentControl {
+                        false
+                    } else {
+                        opaque_story_event(
+                            &element_stack,
+                            namespace_kind,
+                            &local_name,
+                            &element,
+                            false,
+                            xml,
+                            before,
+                            after,
+                        )?
+                    };
+                if !opaque
+                    && item.complex_field
+                    && item.full.start <= before
+                    && before < item.full.end
+                    && is_word_namespace
+                    && local_name == b"fldChar"
+                {
+                    update_complex_field_results(
+                        &mut complex_results,
+                        complex_field_marker(&reader, &element)?,
+                    );
+                }
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(local_name.as_slice(), b"tc" | b"txbxContent")
+                {
+                    nested_owner_depth += 1;
+                }
+                if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name == b"t"
+                {
+                    in_text += 1;
+                    found = true;
+                }
+                let inherited = element_stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
+                element_stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word: is_word_namespace,
+                    full_start: before,
+                    owner_kind: None,
+                    item_kind: None,
+                    sdt_context: if depth == 0 && item.kind == StoryItemKind::ContentControl {
+                        item.sdt_context
+                    } else {
+                        story_element_sdt_context(
+                            &element_stack,
+                            namespace_kind,
+                            element.local_name().as_ref(),
+                        )
+                    },
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                let local_name = element.local_name();
+                let opaque = opaque_story_event(
+                    &element_stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    xml,
+                    before,
+                    after,
+                )?;
+                if !opaque
+                    && item.complex_field
+                    && item.full.start <= before
+                    && before < item.full.end
+                    && is_word_namespace
+                    && local_name.as_ref() == b"fldChar"
+                {
+                    update_complex_field_results(
+                        &mut complex_results,
+                        complex_field_marker(&reader, &element)?,
+                    );
+                } else if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name.as_ref() == b"t"
+                {
+                    found = true;
+                }
+            }
+            Event::End(element) => {
+                let opaque = element_stack.pop().is_some_and(|frame| frame.opaque);
+                let depth = element_stack.len();
+                if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && element.local_name().as_ref() == b"t"
+                {
+                    in_text = in_text.saturating_sub(1);
+                }
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(element.local_name().as_ref(), b"tc" | b"txbxContent")
+                {
+                    nested_owner_depth = nested_owner_depth.saturating_sub(1);
+                }
+            }
+            Event::Text(value)
+                if complex_field_text_visible(item, &complex_results) && in_text > 0 =>
+            {
+                text.push_str(
+                    &quick_xml::escape::unescape(&value.decode().map_err(|error| {
+                        Error::Other(format!("story text decode failed: {error}"))
+                    })?)
+                    .map_err(|error| {
+                        Error::Other(format!("story text unescape failed: {error}"))
+                    })?,
+                )
+            }
+            Event::CData(value)
+                if complex_field_text_visible(item, &complex_results) && in_text > 0 =>
+            {
+                text.push_str(
+                    &value.decode().map_err(|error| {
+                        Error::Other(format!("story CDATA decode failed: {error}"))
+                    })?,
+                )
+            }
+            Event::GeneralRef(value)
+                if complex_field_text_visible(item, &complex_results) && in_text > 0 =>
+            {
+                text.push_str(&oxml_core::xml_text::resolve_entity(&value));
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if (item.complex_field && after >= item.full.end)
+            || (!item.complex_field && after == item.scan.end)
+        {
+            break;
+        }
+        buffer.clear();
+    }
+    Ok((found || item.complex_field).then_some(text))
+}
+
+fn story_text_start(element: &BytesStart<'_>, preserve_space: bool) -> Result<Vec<u8>> {
+    let content: &[u8] = element;
+    let mut xml_space_key = None;
+    for attribute in element.attributes() {
+        let attribute = attribute
+            .map_err(|error| Error::Other(format!("story text attribute scan failed: {error}")))?;
+        if attribute.key.as_ref() == b"xml:space" {
+            let key_address = attribute.key.as_ref().as_ptr() as usize;
+            let content_address = content.as_ptr() as usize;
+            let key_start = key_address.checked_sub(content_address).ok_or_else(|| {
+                Error::Other("story text attribute lies outside its opening tag".to_owned())
+            })?;
+            if key_start + attribute.key.as_ref().len() > content.len() {
+                return Err(Error::Other(
+                    "story text attribute lies outside its opening tag".to_owned(),
+                ));
+            }
+            xml_space_key = Some((key_start, attribute.key.as_ref().len()));
+        }
+    }
+
+    let mut updated = Vec::with_capacity(content.len() + 23);
+    updated.push(b'<');
+    if let Some((key_start, key_len)) = xml_space_key {
+        let mut attribute_start = key_start;
+        while attribute_start > element.name().as_ref().len()
+            && content[attribute_start - 1].is_ascii_whitespace()
+        {
+            attribute_start -= 1;
+        }
+        let mut attribute_end = key_start + key_len;
+        while content
+            .get(attribute_end)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
+            attribute_end += 1;
+        }
+        if content.get(attribute_end) != Some(&b'=') {
+            return Err(Error::Other(
+                "story text xml:space attribute has no equals sign".to_owned(),
+            ));
+        }
+        attribute_end += 1;
+        while content
+            .get(attribute_end)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
+            attribute_end += 1;
+        }
+        let quote = *content.get(attribute_end).ok_or_else(|| {
+            Error::Other("story text xml:space attribute has no quoted value".to_owned())
+        })?;
+        if !matches!(quote, b'\'' | b'"') {
+            return Err(Error::Other(
+                "story text xml:space attribute has no quoted value".to_owned(),
+            ));
+        }
+        attribute_end += 1;
+        let value_end = content[attribute_end..]
+            .iter()
+            .position(|byte| *byte == quote)
+            .map(|offset| attribute_end + offset + 1)
+            .ok_or_else(|| {
+                Error::Other("story text xml:space attribute has no closing quote".to_owned())
+            })?;
+        updated.extend_from_slice(&content[..attribute_start]);
+        updated.extend_from_slice(&content[value_end..]);
+    } else {
+        updated.extend_from_slice(content);
+    }
+    if preserve_space {
+        updated.extend_from_slice(b" xml:space=\"preserve\"");
+    }
+    updated.push(b'>');
+    Ok(updated)
+}
+
+fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(source);
+    reader.config_mut().trim_text(false);
+    let mut text_depth = 0usize;
+    let mut text_ranges = Vec::new();
+    let mut root_prefix = None;
+    let mut root_end = None;
+    let mut root_is_empty = false;
+    let mut first_text_start = None;
+    let mut first_empty_text = None;
+    let mut found_text = false;
+    let mut element_stack: Vec<XmlElementFrame> = Vec::new();
+    let mut nested_owner_depth = 0usize;
+    let mut complex_results = Vec::new();
+    let mut outer_complex_separator_found = false;
+    let mut complex_end_marker_start = None;
+    let mut complex_insertion_word_prefixes = Vec::new();
+    let mut active = false;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story text mutation scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != item.scan.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                let depth = element_stack.len();
+                if depth == 0 {
+                    let qualified_name = element.name();
+                    let name = std::str::from_utf8(qualified_name.as_ref()).map_err(|error| {
+                        Error::Other(format!("story item name is not UTF-8: {error}"))
+                    })?;
+                    root_prefix = Some(
+                        name.split_once(':')
+                            .map_or("", |(prefix, _)| prefix)
+                            .to_owned(),
+                    );
+                }
+                let local_name = element.local_name().as_ref().to_vec();
+                let opaque =
+                    if element_stack.is_empty() && item.kind == StoryItemKind::ContentControl {
+                        false
+                    } else {
+                        opaque_story_event(
+                            &element_stack,
+                            namespace_kind,
+                            &local_name,
+                            &element,
+                            false,
+                            source,
+                            before,
+                            after,
+                        )?
+                    };
+                if !opaque
+                    && item.complex_field
+                    && item.full.start <= before
+                    && before < item.full.end
+                    && is_word_namespace
+                    && local_name == b"fldChar"
+                {
+                    let marker = complex_field_marker(&reader, &element)?;
+                    if marker == Some(ComplexFieldMarker::Separate) && complex_results.len() == 1 {
+                        outer_complex_separator_found = true;
+                    } else if marker == Some(ComplexFieldMarker::End) && complex_results.len() == 1
+                    {
+                        complex_end_marker_start = Some(before);
+                        complex_insertion_word_prefixes = element_stack
+                            .last()
+                            .map_or_else(Vec::new, |frame| frame.word_prefixes.clone());
+                    }
+                    update_complex_field_results(&mut complex_results, marker);
+                }
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(local_name.as_slice(), b"tc" | b"txbxContent")
+                {
+                    nested_owner_depth += 1;
+                }
+                if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name == b"t"
+                {
+                    found_text = true;
+                    if first_text_start.is_none() && first_empty_text.is_none() {
+                        first_text_start = Some((
+                            before..after,
+                            story_text_start(
+                                &element,
+                                value.starts_with(' ') || value.ends_with(' '),
+                            )?,
+                        ));
+                    }
+                    text_ranges.push(after..after);
+                    text_depth += 1;
+                }
+                let inherited = element_stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
+                element_stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word: is_word_namespace,
+                    full_start: before,
+                    owner_kind: None,
+                    item_kind: None,
+                    sdt_context: if depth == 0 && item.kind == StoryItemKind::ContentControl {
+                        item.sdt_context
+                    } else {
+                        story_element_sdt_context(
+                            &element_stack,
+                            namespace_kind,
+                            element.local_name().as_ref(),
+                        )
+                    },
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                if element_stack.is_empty() {
+                    root_is_empty = true;
+                    let qualified_name = element.name();
+                    let name = std::str::from_utf8(qualified_name.as_ref()).map_err(|error| {
+                        Error::Other(format!("story item name is not UTF-8: {error}"))
+                    })?;
+                    root_prefix = Some(
+                        name.split_once(':')
+                            .map_or("", |(prefix, _)| prefix)
+                            .to_owned(),
+                    );
+                }
+                let local_name = element.local_name();
+                let opaque = opaque_story_event(
+                    &element_stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    source,
+                    before,
+                    after,
+                )?;
+                if !opaque
+                    && item.complex_field
+                    && item.full.start <= before
+                    && before < item.full.end
+                    && is_word_namespace
+                    && local_name.as_ref() == b"fldChar"
+                {
+                    let marker = complex_field_marker(&reader, &element)?;
+                    if marker == Some(ComplexFieldMarker::Separate) && complex_results.len() == 1 {
+                        outer_complex_separator_found = true;
+                    } else if marker == Some(ComplexFieldMarker::End) && complex_results.len() == 1
+                    {
+                        complex_end_marker_start = Some(before);
+                        complex_insertion_word_prefixes = element_stack
+                            .last()
+                            .map_or_else(Vec::new, |frame| frame.word_prefixes.clone());
+                    }
+                    update_complex_field_results(&mut complex_results, marker);
+                } else if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name.as_ref() == b"t"
+                {
+                    found_text = true;
+                    if first_text_start.is_none() && first_empty_text.is_none() {
+                        let preserve_space = value.starts_with(' ') || value.ends_with(' ');
+                        let mut replacement = story_text_start(&element, preserve_space)?;
+                        replacement.extend_from_slice(quick_xml::escape::escape(value).as_bytes());
+                        replacement.extend_from_slice(b"</");
+                        replacement.extend_from_slice(element.name().as_ref());
+                        replacement.push(b'>');
+                        first_empty_text = Some((before..after, replacement));
+                    }
+                }
+            }
+            Event::End(element) => {
+                let opaque = element_stack.pop().is_some_and(|frame| frame.opaque);
+                let depth = element_stack.len();
+                if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && element.local_name().as_ref() == b"t"
+                {
+                    text_depth = text_depth.saturating_sub(1);
+                }
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(element.local_name().as_ref(), b"tc" | b"txbxContent")
+                {
+                    nested_owner_depth = nested_owner_depth.saturating_sub(1);
+                }
+                if depth == 0 {
+                    root_end = Some(before);
+                }
+            }
+            Event::Text(_) | Event::CData(_) | Event::GeneralRef(_)
+                if complex_field_text_visible(item, &complex_results) && text_depth > 0 =>
+            {
+                text_ranges.push(before..after);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if (item.complex_field && after >= item.full.end)
+            || (!item.complex_field && after == item.scan.end)
+        {
+            break;
+        }
+        buffer.clear();
+    }
+
+    let escaped = quick_xml::escape::escape(value).into_owned();
+    let mut updated = source.to_vec();
+    if !found_text {
+        if item.complex_field {
+            let insert_at = complex_end_marker_start.ok_or_else(|| {
+                Error::Other("complex story field has no closing marker".to_owned())
+            })?;
+            let nonempty_word_prefix = complex_insertion_word_prefixes
+                .iter()
+                .find(|prefix| !prefix.is_empty());
+            let default_word_namespace =
+                complex_insertion_word_prefixes.iter().any(String::is_empty);
+            let (prefix, declaration, attribute_prefix, attribute_declaration) =
+                if let Some(prefix) = nonempty_word_prefix {
+                    (format!("{prefix}:"), String::new(), prefix.as_str(), "")
+                } else if default_word_namespace {
+                    (
+                        String::new(),
+                        String::new(),
+                        "w",
+                        concat!(
+                            " xmlns:w=\"",
+                            "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+                            "\""
+                        ),
+                    )
+                } else {
+                    (
+                        "w:".to_owned(),
+                        format!(" xmlns:w=\"{WORD_NAMESPACE}\""),
+                        "w",
+                        "",
+                    )
+                };
+            let space = if value.starts_with(' ') || value.ends_with(' ') {
+                " xml:space=\"preserve\""
+            } else {
+                ""
+            };
+            let separator = if outer_complex_separator_found {
+                String::new()
+            } else {
+                format!(
+                    "<{prefix}fldChar{declaration}{attribute_declaration} \
+                     {attribute_prefix}:fldCharType=\"separate\"/>"
+                )
+            };
+            let replacement =
+                format!("{separator}<{prefix}t{declaration}{space}>{escaped}</{prefix}t>");
+            updated.splice(insert_at..insert_at, replacement.bytes());
+            return Ok(updated);
+        }
+        if item.kind != StoryItemKind::Paragraph {
+            return Err(StoryError::NotTextBearing { kind: item.kind }.into());
+        }
+        let prefix = root_prefix.unwrap_or_else(|| "w".to_owned());
+        let prefix = if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{prefix}:")
+        };
+        let space = if value.starts_with(' ') || value.ends_with(' ') {
+            " xml:space=\"preserve\""
+        } else {
+            ""
+        };
+        let run = format!("<{prefix}r><{prefix}t{space}>{escaped}</{prefix}t></{prefix}r>");
+        if let Some(end) = root_end {
+            updated.splice(end..end, run.bytes());
+        } else if root_is_empty {
+            let slash = item.full.end.checked_sub(2).ok_or_else(|| {
+                Error::Other("self-closing paragraph story item is truncated".to_owned())
+            })?;
+            if source.get(slash..item.full.end) != Some(b"/>".as_slice()) {
+                return Err(Error::Other(
+                    "self-closing paragraph story item has no closing slash".to_owned(),
+                ));
+            }
+            let replacement = format!(">{run}</{prefix}p>");
+            updated.splice(slash..item.full.end, replacement.bytes());
+        } else {
+            return Err(Error::Other(
+                "paragraph story item has no closing element".to_owned(),
+            ));
+        }
+    } else {
+        for (ordinal, range) in text_ranges.iter().enumerate().rev() {
+            let replacement = if ordinal == 0 && first_empty_text.is_none() {
+                escaped.as_bytes()
+            } else {
+                b""
+            };
+            updated.splice(range.clone(), replacement.iter().copied());
+        }
+        if let Some((range, replacement)) = first_text_start {
+            updated.splice(range, replacement);
+        }
+        if let Some((range, replacement)) = first_empty_text {
+            updated.splice(range, replacement);
+        }
+    }
+    Ok(updated)
 }
 
 fn validate_fresh_word_compatible_package(
@@ -5946,12 +8181,24 @@ impl Document {
         limits: PackageReadLimits,
     ) -> Result<Self> {
         let provenance = self.identifiers.clone();
+        let custom_properties_owned = self.custom_properties_owned;
+        let settings_owned = self.settings_owned;
+        let owned_settings = settings_owned.then(|| self.settings.clone());
+        let comments_owned = self.comments_owned;
+        let comments_extended_owned = self.comments_extended_owned;
         let embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
         let package_signatures_invalidated = self.package_signatures_invalidated;
         let mut output = std::io::Cursor::new(Vec::new());
         self.package.write_to(&mut output)?;
         let mut reopened = Self::from_bytes_with_limits(output.get_ref(), limits)?;
         reopened.identifiers.reconcile_provenance(&provenance);
+        reopened.custom_properties_owned = custom_properties_owned;
+        reopened.settings_owned = settings_owned;
+        if let Some(settings) = owned_settings {
+            reopened.settings = settings;
+        }
+        reopened.comments_owned = comments_owned;
+        reopened.comments_extended_owned = comments_extended_owned;
         reopened.embedded_invalidated_signatures = embedded_invalidated_signatures;
         reopened.package_signatures_invalidated = package_signatures_invalidated;
         Ok(reopened)
@@ -6586,6 +8833,244 @@ impl Document {
         self.theme = Some(theme);
         self.theme_part_name = Some(theme_part);
         self.theme_dirty = false;
+        Ok(())
+    }
+
+    fn story_sources(&self) -> Result<Vec<StorySource<'_>>> {
+        let mut sources = vec![StorySource {
+            root_kind: StoryKind::Body,
+            part_name: self.doc_part_name.clone(),
+            xml: Cow::Owned(self.document.to_xml()?),
+        }];
+        let mut seen = HashSet::new();
+        seen.insert((StoryKind::Body, self.doc_part_name.clone()));
+
+        for (relationship_id, is_header) in self.header_footer_rel_ids() {
+            let kind = if is_header {
+                StoryKind::Header
+            } else {
+                StoryKind::Footer
+            };
+            let part_name = self
+                .header_footer_part_name(&relationship_id, is_header)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "{kind:?} reference {relationship_id} has no valid internal relationship"
+                    ))
+                })?;
+            if seen.insert((kind, part_name.clone())) {
+                let xml = self.package.get_part(&part_name).ok_or_else(|| {
+                    Error::Other(format!("{kind:?} story targets missing part {part_name}"))
+                })?;
+                sources.push(StorySource {
+                    root_kind: kind,
+                    part_name,
+                    xml: Cow::Borrowed(xml),
+                });
+            }
+        }
+
+        if let Some(relationships) = self.package.get_part_rels(&self.doc_part_name) {
+            for relationship in &relationships.items {
+                let kind = match relationship.rel_type.as_str() {
+                    rel_types::FOOTNOTES => StoryKind::Footnote,
+                    rel_types::ENDNOTES => StoryKind::Endnote,
+                    rel_types::COMMENTS => StoryKind::Comment,
+                    _ => continue,
+                };
+                if !relationship_is_internal(relationship) {
+                    continue;
+                }
+                let part_name =
+                    OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+                if !seen.insert((kind, part_name.clone())) {
+                    return Err(Error::Other(format!(
+                        "{kind:?} story part {part_name} is referenced more than once"
+                    )));
+                }
+                let xml = match kind {
+                    StoryKind::Footnote
+                        if self.footnotes_dirty
+                            && self.footnotes_part_name.as_deref() == Some(part_name.as_str()) =>
+                    {
+                        Cow::Owned(self.footnotes.to_xml_footnotes()?)
+                    }
+                    StoryKind::Comment
+                        if self.comments_part_name.as_deref() == Some(part_name.as_str()) =>
+                    {
+                        Cow::Owned(
+                            self.comments
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    Error::Other(format!(
+                                        "comments story {part_name} has no typed owner"
+                                    ))
+                                })?
+                                .to_xml()?,
+                        )
+                    }
+                    _ => Cow::Borrowed(self.package.get_part(&part_name).ok_or_else(|| {
+                        Error::Other(format!("{kind:?} story targets missing part {part_name}"))
+                    })?),
+                };
+                sources.push(StorySource {
+                    root_kind: kind,
+                    part_name,
+                    xml,
+                });
+            }
+        }
+        Ok(sources)
+    }
+
+    /// Discover every supported Word story owner in stable document and
+    /// relationship order.
+    pub fn stories(&self) -> Result<Vec<StoryId>> {
+        let mut stories = Vec::new();
+        let mut seen = HashSet::new();
+        for source in self.story_sources()? {
+            for owner in scan_story_owners(&source.xml, source.root_kind)? {
+                let identity = (owner.kind, source.part_name.clone(), owner.owner_index);
+                if seen.insert(identity) {
+                    stories.push(StoryId {
+                        kind: owner.kind,
+                        part_name: source.part_name.clone(),
+                        owner_index: owner.owner_index,
+                        fingerprint: owner.fingerprint,
+                    });
+                }
+            }
+        }
+        Ok(stories)
+    }
+
+    fn story_source_and_owner<'a>(
+        &'a self,
+        story: &StoryId,
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan)> {
+        let mut sources = self.story_sources()?;
+        let source = sources.iter().position(|source| {
+            source.part_name == story.part_name
+                && (source.root_kind == story.kind
+                    || matches!(story.kind, StoryKind::TableCell | StoryKind::TextBox))
+        });
+        let source = match source {
+            Some(index) => sources.swap_remove(index),
+            None => {
+                if let Some(actual) = sources
+                    .iter()
+                    .find(|source| source.part_name == story.part_name)
+                    .map(|source| source.root_kind)
+                {
+                    return Err(StoryError::WrongOwner {
+                        expected: story.kind,
+                        actual,
+                    }
+                    .into());
+                }
+                return Err(StoryError::OwnerNotFound {
+                    story: story.clone(),
+                }
+                .into());
+            }
+        };
+        let owner = scan_story_owners(&source.xml, source.root_kind)?
+            .into_iter()
+            .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
+            .ok_or_else(|| StoryError::OwnerNotFound {
+                story: story.clone(),
+            })?;
+        if story.fingerprint != owner.fingerprint {
+            return Err(StoryError::Stale {
+                story: story.clone(),
+            }
+            .into());
+        }
+        Ok((source, owner))
+    }
+
+    fn story_item_source<'a>(
+        &'a self,
+        location: &ContentLocation,
+    ) -> Result<(StorySource<'a>, StoryItemSpan)> {
+        let (source, owner) = self.story_source_and_owner(&location.story)?;
+        if location.index_path.len() != 1 {
+            return Err(StoryError::InvalidPath {
+                path: location.index_path.clone(),
+            }
+            .into());
+        }
+        let items = scan_story_items(source.xml.as_ref(), &owner)?;
+        let index = location.index_path[0];
+        let item = items.get(index).cloned().ok_or(StoryError::OutOfBounds {
+            index,
+            len: items.len(),
+        })?;
+        if item.kind != location.item_kind {
+            return Err(StoryError::KindMismatch {
+                expected: location.item_kind,
+                actual: item.kind,
+            }
+            .into());
+        }
+        Ok((source, item))
+    }
+
+    /// Traverse one story's supported content without constructing a second
+    /// document tree.
+    pub fn story_items<'a>(&'a self, story: &StoryId) -> Result<Vec<StoryItemRef<'a>>> {
+        let (source, owner) = self.story_source_and_owner(story)?;
+        let spans = scan_story_items(&source.xml, &owner)?;
+        Ok(spans
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| StoryItemRef {
+                document: self,
+                location: ContentLocation {
+                    story: story.clone(),
+                    item_kind: item.kind,
+                    index_path: vec![index],
+                },
+            })
+            .collect())
+    }
+
+    /// Replace the visible text of one checked story item atomically.
+    pub fn set_story_text(&mut self, location: &ContentLocation, value: &str) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&location.story)?;
+        if location.index_path.len() != 1 {
+            return Err(StoryError::InvalidPath {
+                path: location.index_path.clone(),
+            }
+            .into());
+        }
+        let items = scan_story_items(&source.xml, &owner)?;
+        let index = location.index_path[0];
+        let item = items.get(index).ok_or(StoryError::OutOfBounds {
+            index,
+            len: items.len(),
+        })?;
+        if item.kind != location.item_kind {
+            return Err(StoryError::KindMismatch {
+                expected: location.item_kind,
+                actual: item.kind,
+            }
+            .into());
+        }
+        if item.kind == StoryItemKind::PreservedNode {
+            return Err(StoryError::NotTextBearing { kind: item.kind }.into());
+        }
+        let updated = replace_story_item_text(&source.xml, item, value)?;
+        if source.part_name == candidate.doc_part_name {
+            candidate.document = CT_Document::from_xml(&updated)?;
+            candidate.flush_to_package()?;
+        } else {
+            candidate.package.set_part(&source.part_name, updated);
+        }
+        let reopened = candidate.reopen_prepared_staged()?;
+        self.commit_staged_mutation(reopened);
         Ok(())
     }
 

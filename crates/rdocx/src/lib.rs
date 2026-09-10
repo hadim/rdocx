@@ -51,12 +51,12 @@ pub use comparison::{
 };
 pub use content_control::ContentControlRef;
 pub use document::{
-    AccessibilityIssue, BodyContentRef, BodyItemRef, Document, EmbeddedFont, EmbeddedFontKind,
-    FontDefinition, FontEmbeddingLicense, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
-    ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
+    AccessibilityIssue, BodyContentRef, BodyItemRef, ContentLocation, Document, EmbeddedFont,
+    EmbeddedFontKind, FontDefinition, FontEmbeddingLicense, ImageInfo, IssueSeverity, LinkInfo,
+    ListLevel, ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
-    NumberingLevelOverride, OutlineNode, RenderOptions, UnsupportedXmlRef, WordCreationProfile,
-    WordPackageClass,
+    NumberingLevelOverride, OutlineNode, RenderOptions, StoryError, StoryId, StoryItemKind,
+    StoryItemRef, StoryKind, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,

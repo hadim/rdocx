@@ -625,6 +625,12 @@ impl CT_Sdt {
         Self::from_raw_with_context(raw, inherited, SdtOwner::Inline)
     }
 
+    /// Whether a preserved control is admitted by the complete typed parser.
+    #[doc(hidden)]
+    pub fn story_raw_is_typed(raw: &[u8], inherited: &[String], owner: StorySdtOwner) -> bool {
+        Self::from_raw_with_context(raw, inherited, owner.into()).is_some()
+    }
+
     fn from_raw_with_context(raw: &[u8], inherited: &[String], owner: SdtOwner) -> Option<Self> {
         let mut reader = Reader::from_reader(raw);
         reader.config_mut().trim_text(false);
@@ -887,6 +893,27 @@ impl CT_Sdt {
                 SdtContent::ContentControl(sdt) => sdt.collect_runs(runs),
                 _ => {}
             }
+        }
+    }
+}
+
+/// The typed parent grammar used to admit a story content control.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorySdtOwner {
+    Block,
+    Table,
+    Row,
+    Inline,
+}
+
+impl From<StorySdtOwner> for SdtOwner {
+    fn from(owner: StorySdtOwner) -> Self {
+        match owner {
+            StorySdtOwner::Block => Self::Body,
+            StorySdtOwner::Table => Self::Table,
+            StorySdtOwner::Row => Self::Row,
+            StorySdtOwner::Inline => Self::Inline,
         }
     }
 }

@@ -1,6 +1,6 @@
 # F-253, Container-neutral story editing
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-240
@@ -77,11 +77,11 @@ must preserve equivalent existing serialization.
 
 ## Implementation checklist
 
-- [ ] Add concrete story identity, content location, item kind, and error values.
-- [ ] Discover supported owners in deterministic order.
-- [ ] Traverse the existing typed tree without cloning it into a second model.
-- [ ] Resolve one staged generic mutation with uniform errors.
-- [ ] Test every named story and supported item category.
+- [x] Add concrete story identity, content location, item kind, and error values.
+- [x] Discover supported owners in deterministic order.
+- [x] Traverse the existing typed tree without cloning it into a second model.
+- [x] Resolve one staged generic mutation with uniform errors.
+- [x] Test every named story and supported item category.
 
 ## Open questions
 
