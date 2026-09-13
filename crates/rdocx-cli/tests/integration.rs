@@ -270,6 +270,41 @@ fn replace_writes_a_reopenable_document_and_reports_the_exact_count() {
 }
 
 #[test]
+fn cli_replace_reports_namespace_preflight_errors_without_panicking() {
+    let temp = TempWorkspace::new("replace-namespace-error");
+    let input = temp.path.join("used-default.docx");
+    let output_path = temp.path.join("must-not-exist.docx");
+    write_document(&input, &["before"]);
+
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(&input).unwrap())).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap())
+        .unwrap()
+        .replacen("<w:document", r#"<w:document xmlns="urn:used-default""#, 1)
+        .replacen("<w:body>", "<w:body><producer/>", 1);
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut file = fs::File::create(&input).unwrap();
+    package.write_to(&mut file).unwrap();
+
+    let output = cli(&[
+        "replace",
+        path_text(&input),
+        "--placeholder",
+        "before",
+        "--value",
+        "after",
+        "--output",
+        path_text(&output_path),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("shadowed `default` namespace"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert!(!output_path.exists());
+}
+
+#[test]
 fn validate_exit_status_is_a_verdict() {
     let temp = TempWorkspace::new("validate");
     let valid = temp.path.join("valid.docx");

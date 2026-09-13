@@ -881,6 +881,7 @@ fn apply_namespace_declarations(
 fn unsafe_serializer_namespace_prefix(
     root_declarations: &[(String, String)],
     body_declarations: &[(String, String)],
+    document_xml: Option<&[u8]>,
 ) -> Option<String> {
     if let Some((name, _)) = body_declarations.first() {
         return Some(namespace_prefix(name));
@@ -890,11 +891,71 @@ fn unsafe_serializer_namespace_prefix(
         let prefix = namespace_prefix(name);
         let expected = match canonical_serializer_namespace(&prefix) {
             Some(expected) => expected,
-            None if prefix.is_empty() => return Some("default".to_owned()),
+            None if prefix.is_empty() => {
+                return match document_xml.and_then(|xml| root_default_namespace_is_used(xml, value))
+                {
+                    Some(false) => None,
+                    Some(true) | None => Some("default".to_owned()),
+                };
+            }
             None => return None,
         };
         (value != expected).then_some(prefix)
     })
+}
+
+fn root_default_namespace_is_used(xml: &[u8], root_namespace: &str) -> Option<bool> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root_binding_scopes = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer).ok()?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let mut local_default = None;
+                for attribute in element.attributes() {
+                    let attribute = attribute.ok()?;
+                    if attribute.key.as_ref() == b"xmlns" {
+                        if local_default.is_some() {
+                            return None;
+                        }
+                        local_default = Some(
+                            attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    element.decoder(),
+                                )
+                                .ok()?
+                                .into_owned(),
+                        );
+                    }
+                }
+
+                let root_binding_is_active = if root_binding_scopes.is_empty() {
+                    if local_default.as_deref() != Some(root_namespace) {
+                        return None;
+                    }
+                    true
+                } else if local_default.is_some() {
+                    false
+                } else {
+                    *root_binding_scopes.last()?
+                };
+                if !element.name().as_ref().contains(&b':') && root_binding_is_active {
+                    return Some(true);
+                }
+                if matches!(event, Event::Start(_)) {
+                    root_binding_scopes.push(root_binding_is_active);
+                }
+            }
+            Event::End(_) => {
+                root_binding_scopes.pop()?;
+            }
+            Event::Eof => return root_binding_scopes.is_empty().then_some(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn canonical_serializer_namespace(prefix: &str) -> Option<&'static str> {
@@ -10297,6 +10358,7 @@ impl Document {
         let unsafe_prefix = unsafe_serializer_namespace_prefix(
             &self.root_namespace_declarations,
             &self.body_namespace_declarations,
+            existing_document_xml,
         )
         .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
         let doc_xml = if typed_document_is_unchanged && unsafe_prefix.is_some() {
@@ -10312,7 +10374,11 @@ impl Document {
             let serialized = self.document.to_xml()?;
             replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
         };
+        let namespace_scopes = document_namespace_scopes(&doc_xml)?;
         self.package.set_part(&self.doc_part_name, doc_xml);
+        self.root_namespace_declarations = namespace_scopes.root_declarations;
+        self.body_namespace_declarations = namespace_scopes.body_declarations;
+        self.body_namespace_bindings = namespace_scopes.body_bindings;
         Ok(())
     }
 
@@ -16635,12 +16701,19 @@ impl Document {
     /// A `replacement` that contains `placeholder` is substituted once, not
     /// repeatedly.
     pub fn replace_text(&mut self, placeholder: &str, replacement: &str) -> usize {
+        self.try_replace_text(placeholder, replacement)
+            .expect("text replacement package preflight failed")
+    }
+
+    /// Fallible twin of [`Self::replace_text`].
+    ///
+    /// The complete replacement is staged, serialized, and reopened before it
+    /// replaces the live document. A preflight failure leaves `self` unchanged.
+    pub fn try_replace_text(&mut self, placeholder: &str, replacement: &str) -> Result<usize> {
         let mut candidate = self.clone_for_staging();
-        let count = candidate
-            .replace_batch(&[(placeholder, replacement)])
-            .expect("text replacement package preflight failed");
+        let count = candidate.replace_batch(&[(placeholder, replacement)])?;
         self.commit_staged_mutation(candidate);
-        count
+        Ok(count)
     }
 
     /// Replace multiple placeholders at once. Returns total replacements.
@@ -20372,6 +20445,57 @@ mod tests {
         );
         let mut identifiers = DocumentIdentifiers::scan(&package).unwrap();
         assert_eq!(identifiers.reserve_drawing_id().unwrap(), 2);
+    }
+
+    #[test]
+    fn default_namespace_use_respects_element_scope() {
+        let root = "urn:root-default";
+        let declarations = vec![("xmlns".to_owned(), root.to_owned())];
+        for xml in [
+            format!(
+                r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body foreign="value"/></q:document>"#
+            ),
+            format!(
+                r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body><local xmlns="urn:nested"><child/></local></q:body></q:document>"#
+            ),
+            format!(
+                r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body><local xmlns="{root}"><child/></local></q:body></q:document>"#
+            ),
+            format!(
+                r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body><local xmlns=""><child/></local></q:body></q:document>"#
+            ),
+            format!(
+                r#"<?xml version="1.0"?><w:document xmlns:w="{WORD_NAMESPACE}" xmlns="{root}"><w:body><w:p><w:r><w:drawing xmlns:wp="{}" xmlns:a="{}"><wp:inline><wp:docPr id="1"/><a:graphic/></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#,
+                drawing_ns::WP,
+                drawing_ns::A,
+            ),
+        ] {
+            assert_eq!(
+                unsafe_serializer_namespace_prefix(&declarations, &[], Some(xml.as_bytes())),
+                None,
+                "{xml}"
+            );
+        }
+
+        let used = format!(
+            r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body><local/></q:body></q:document>"#
+        );
+        assert_eq!(
+            unsafe_serializer_namespace_prefix(&declarations, &[], Some(used.as_bytes())),
+            Some("default".to_owned())
+        );
+        let malformed =
+            format!(r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body>"#);
+        let ambiguous = format!(
+            r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}" xmlns="urn:other"><q:body/></q:document>"#
+        );
+        for xml in [malformed, ambiguous] {
+            assert_eq!(
+                unsafe_serializer_namespace_prefix(&declarations, &[], Some(xml.as_bytes())),
+                Some("default".to_owned()),
+                "{xml}"
+            );
+        }
     }
 
     #[test]

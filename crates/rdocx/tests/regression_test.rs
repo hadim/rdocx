@@ -11146,6 +11146,60 @@ fn unused_fixed_prefix_declarations_do_not_reject_safe_raw_replay() {
 }
 
 #[test]
+fn unused_root_default_namespace_allows_atomic_save() {
+    let task_namespace = "http://schemas.microsoft.com/office/tasks/2019/documenttasks";
+    let xml = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns="{task_namespace}" xmlns:x="urn:producer"><w:body><x:producer x:kept="exact"/><w:p><w:r><w:t>before</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    assert_eq!(document.try_replace_text("before", "after").unwrap(), 1);
+
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(
+        saved_xml.contains(r#"xmlns:x="urn:producer""#),
+        "{saved_xml}"
+    );
+    assert!(
+        saved_xml.contains(r#"<x:producer x:kept="exact"/>"#),
+        "{saved_xml}"
+    );
+    assert_eq!(
+        Document::from_bytes(&saved)
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .text(),
+        "after"
+    );
+}
+
+#[test]
+fn used_root_default_namespace_still_fails_atomically() {
+    let xml = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns="urn:used-default"><w:body><producer/><w:p><w:r><w:t>before</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let before = document.to_bytes().unwrap();
+    let error = document.try_replace_text("before", "after").unwrap_err();
+    assert!(error.to_string().contains("shadowed `default` namespace"));
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn try_replace_text_publishes_only_a_preflighted_candidate() {
+    let mut document = Document::new();
+    document.add_paragraph("before before");
+    assert_eq!(document.try_replace_text("before", "after").unwrap(), 2);
+    assert_eq!(document.paragraph(0).unwrap().text(), "after after");
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "after after");
+}
+
+#[test]
 fn expanded_raw_markers_disambiguate_a_valid_owner_edit() {
     let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
       <q:p xmlns:x="urn:same"><x:a/><x:b mark="same"></x:b><q:r><q:t>first</q:t></q:r></q:p>

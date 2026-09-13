@@ -332,7 +332,7 @@ fn compute_lcs(a: &[String], b: &[String]) -> Vec<String> {
 /// Replace a placeholder in a DOCX file and save to output.
 pub fn replace(file: &Path, placeholder: &str, value: &str, output: &Path) -> Result<()> {
     let mut doc = Document::open(file)?;
-    let count = doc.replace_text(placeholder, value);
+    let count = doc.try_replace_text(placeholder, value)?;
     doc.save(output)?;
     println!("Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\"");
     println!("Written to {}", output.display());

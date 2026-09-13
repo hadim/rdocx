@@ -373,6 +373,16 @@ namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
 
+An unknown default namespace declared on the document root is classified by
+its effective lexical scope before canonical serialization. An unused root
+default may be omitted without blocking a typed mutation. An unprefixed element
+that inherits it keeps the binding live and blocks modified serialization.
+Nested default declarations shadow the root declaration, including when they
+repeat the same URI, and unprefixed attributes never use a default namespace.
+Malformed or ambiguous declarations fail closed. After a successful canonical
+publication, the document refreshes its root and body namespace facts from the
+published main-story bytes so a later save applies the same classification.
+
 Direct paragraph `m:oMath` and `m:oMathPara` children use that same owner and
 boundary discipline. The reader accepts any prefix bound to the Transitional
 OfficeMath namespace. Canonical typed writes use `m:` and replay the inherited

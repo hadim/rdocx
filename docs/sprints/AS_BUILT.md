@@ -13068,3 +13068,49 @@ workflow regressions.
 **Notes for future sessions.** Keep producer drawing validation part-local and
 authored drawing allocation package-global. Same-part normalized aliases remain
 invalid, and foreign same-local-name elements remain outside this scope.
+
+### F-X091, Serialize unused root default namespaces safely
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The Word serializer now classifies an unknown default
+namespace on the document root by effective lexical use. An unused declaration
+no longer blocks typed mutation or save, while an inherited unprefixed element,
+malformed scope, or ambiguous declaration still fails closed. The native facade
+adds atomic `try_replace_text`, and the CLI uses it to report serialization
+errors without panicking or creating partial output.
+
+**Non-obvious choices.** Nested default declarations shadow the root even when
+they repeat the same URI, and unprefixed attributes do not consume a default
+namespace. Successful canonical serialization refreshes cached namespace facts
+from the emitted main-story bytes so repeated saves remain consistent after an
+unused declaration is omitted.
+
+**Deviations from the design plan.** None. Microscope pass 1 requested explicit
+coverage for same-URI nested shadowing and duplicate default declarations. Pass
+2 reported zero defects, zero smells, and zero nitpicks after those cases were
+added.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `unused_root_default_namespace_allows_atomic_save`,
+`used_root_default_namespace_still_fails_atomically`,
+`default_namespace_use_respects_element_scope`,
+`try_replace_text_publishes_only_a_preflighted_candidate`, and
+`cli_replace_reports_namespace_preflight_errors_without_panicking` passed. The
+exact Issue 73 attachment was replaced, saved, and reopened. The complete
+`/verify` gate passed with pinned LibreOffice, Poppler, and python-pptx oracles,
+including full workspace tests, WASM, rustdoc, README inventories, and workflow
+regressions. All 22 package dry runs succeeded, and every archive remained
+below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve lexical declaration provenance rather
+than comparing namespace URIs alone. Keep modified serialization fail-closed
+for every used, malformed, or ambiguous producer default.

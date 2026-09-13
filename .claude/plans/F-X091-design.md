@@ -1,6 +1,6 @@
 # F-X091, Serialize unused root default namespaces safely
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: M
 **Depends on**: F-255
@@ -71,13 +71,13 @@ Expected unchanged across all 49 entries. Any delta blocks completion.
 
 ## Implementation checklist
 
-- [ ] Classify root default use with a scope-aware walk.
-- [ ] Keep used, ambiguous, and malformed cases fail-closed.
-- [ ] Add the fallible single-placeholder replacement twin.
-- [ ] Route CLI replacement through its existing Result boundary.
-- [ ] Add namespace, atomicity, and compiled CLI regressions.
-- [ ] Run the full gate, package gate, and unchanged hash harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Classify root default use with a scope-aware walk.
+- [x] Keep used, ambiguous, and malformed cases fail-closed.
+- [x] Add the fallible single-placeholder replacement twin.
+- [x] Route CLI replacement through its existing Result boundary.
+- [x] Add namespace, atomicity, and compiled CLI regressions.
+- [x] Run the full gate, package gate, and unchanged hash harness.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

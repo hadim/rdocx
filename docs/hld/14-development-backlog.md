@@ -4716,13 +4716,17 @@ rejecting every unknown default binding. An unused declaration does not block a
 typed mutation or save. A used, ambiguous, or malformed binding still fails
 closed and leaves the package unchanged. Add fallible
 `Document::try_replace_text` for the CLI while retaining the legacy infallible
-signature.
+signature. Nested declarations shadow the root by lexical scope, unprefixed
+attributes do not consume the default, and successful serialization refreshes
+the cached namespace facts from the published main-story bytes.
 
 **Depends on**: F-255.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/73>.
 **Test gate**: regression. `unused_root_default_namespace_allows_atomic_save`
-mutates and reopens the reported package shape with exact raw preservation, and
-a used inherited default namespace still fails atomically through native and
+mutates and reopens the reported package shape while retaining its prefixed raw
+producer element. Scope regressions cover same-URI and different-URI shadows,
+undeclaration, unprefixed attributes, malformed input, and duplicate defaults.
+A used inherited default namespace still fails atomically through native and
 CLI paths without a panic or partial output.
 
 ### F-X092, Preserve logical reading order in generated PDFs (L)

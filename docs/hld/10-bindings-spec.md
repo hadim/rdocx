@@ -541,6 +541,13 @@ shadows override document-root bindings during that correlation. Python,
 WASM, and CLI surfaces gain no EPUB entry point and retain their existing error
 contracts.
 
+The native Word facade provides additive `Document::try_replace_text` beside
+the legacy infallible `replace_text` method. The fallible method stages the
+replacement and publishes it only after namespace-safe serialization succeeds.
+The command-line `replace` operation uses this boundary, reports the stable
+serialization error, and creates no partial output. Python and WASM bindings
+gain no corresponding method.
+
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
 backend, but the native method signatures, returned byte type, binding method

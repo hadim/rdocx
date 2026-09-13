@@ -116,6 +116,14 @@ occupancy. This accepts legitimate cross-part reuse without permitting authored
 collisions or same-part aliases. Ambiguous preserved identity ranges and
 relationship ownership reject before publication.
 
+An unknown root default namespace is safe to omit only when namespace-aware
+scope analysis proves that no unprefixed element inherits it. Nested default
+declarations shadow the root even when their URI is identical, while
+unprefixed attributes do not consume it. Used, malformed, or ambiguous cases
+reject before publication. Successful canonical serialization refreshes the
+cached namespace facts from the emitted main-story bytes, which keeps repeated
+saves consistent after an unused declaration is omitted.
+
 ### R7, scope
 
 Charts plus full parity in one release is **17 to 18 months solo** with nothing

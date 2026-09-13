@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 15 | 0 | 9 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 102 | 89 | 0 | 9 |
-| **Total** | **420** | **330** | **0** | **86** |
+| X, Cross-cutting (opportunistic)            | 102 | 90 | 0 | 8 |
+| **Total** | **420** | **331** | **0** | **85** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -630,7 +630,7 @@ regenerated, never hand-edited.
 | F-X088 | Verify and close Issue 69 after S70 fixes | S71 | S | done |
 | F-X089 | Capability-led README family | S71 | L | done |
 | F-X090 | Accept part-local producer drawing identities | S72 | S | done |
-| F-X091 | Serialize unused root default namespaces safely | S72 | M | pending |
+| F-X091 | Serialize unused root default namespaces safely | S72 | M | done |
 | F-X092 | Preserve logical reading order in generated PDFs | S72 | L | pending |
 | F-X093 | Preserve drawings through document comparison staging | S72 | M | pending |
 | F-X094a | Expose Word collaboration and redline commands in rdocx-cli | S72 | M | pending |

@@ -2407,6 +2407,15 @@ setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
 revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.
 
+The Word namespace regression matrix covers an unused unknown default on the
+document root, an inherited use by an unprefixed element, unprefixed
+attributes, nested different-URI and same-URI shadows, explicit undeclaration,
+malformed XML, and duplicate default declarations. Native replacement proves
+that a candidate is published only after successful serialization. The
+compiled CLI proves the unsafe case exits without a panic or partial output.
+The exact Issue 73 attachment is also replaced, saved, and reopened under the
+pinned external-tool environment.
+
 The pull-request WASM job uses exact Node 24.11.1 and wasm-pack 0.15.0. It
 installs the official Binaryen version 125 Linux archive only after verifying
 its pinned SHA-256, places that optimizer on `PATH`, and requires the exact
