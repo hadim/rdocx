@@ -45,7 +45,7 @@ cross-part relationships while committing only complete validated candidates.
 | F-251 | Complete section and page geometry | L | done | - |
 | F-254 | Generic insert, move, clone, and remove operations | L | done | - |
 | F-255 | Part-scoped assets, links, and relationships | M | done | - |
-| F-X090 | Accept part-local producer drawing identities | S | pending | - |
+| F-X090 | Accept part-local producer drawing identities | S | done | - |
 | F-X091 | Serialize unused root default namespaces safely | M | pending | - |
 | F-252 | Rich per-section headers and footers | L | pending | - |
 | F-X093 | Preserve drawings through document comparison staging | M | pending | - |

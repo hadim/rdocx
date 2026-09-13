@@ -107,11 +107,14 @@ while package maps retain producer spelling. Facade operations reserve
 complete identifier bundles on staged state, while serialization derives
 authored identifiers from final recursive document order before publishing the
 candidate. Relationship identifiers remain scoped to their owning part, and
-only identities captured at package open have preserved provenance. Current
-graph edges added later join authored semantic canonicalization even when no
-modeled `r:id` refers to them. Internal and external edges retain their targets
-and modes while receiving deterministic type-and-target order. Relationship
-attributes in retained body XML and raw drawing payloads are fixed occupants.
+producer drawing-definition uniqueness is also validated within each physical
+XML part. The union of every valid producer drawing value remains occupied for
+package-global authored allocation. Only identities captured at package open
+have preserved provenance. Current graph edges added later join authored
+semantic canonicalization even when no modeled `r:id` refers to them. Internal
+and external edges retain their targets and modes while receiving deterministic
+type-and-target order. Relationship attributes in retained body XML and raw
+drawing payloads are fixed occupants.
 Their values are found by expanded office relationship namespace, including
 bindings inherited by the document body, and are never remapped without a safe
 raw rewrite.
@@ -122,7 +125,9 @@ headers, footers, notes, and comments use their related parts. Main-part
 occurrence provenance reconciles against live expanded-name references during
 serialization. Repeated same-owner references share one relationship, removed
 references retire only occurrence provenance, and each live authored picture
-receives a distinct globally canonical drawing identity.
+receives a distinct globally canonical drawing identity. Producer drawings may
+reuse one preserved identity in different physical parts without being
+renumbered.
 
 Bookmark, comment, drawing, abstract-numbering, and numbering-instance values
 remain separate namespaces. Rich-merge content-control `w:id` and non-visual

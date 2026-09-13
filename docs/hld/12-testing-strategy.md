@@ -466,6 +466,11 @@ targets reserve case-insensitive part identities while retaining producer
 spelling. Mutation-history cases include building-block replacement. Header and
 footer cases reject cross-type or unrelated header-shaped relationship targets
 for text, raw XML, image, and background-image setter families.
+Cross-part drawing coverage opens a package whose body and header reuse one
+normalized producer `wp:docPr` identity, preserves both drawing payloads,
+allocates a later authored drawing outside the package-wide occupied union, and
+reopens repeatedly. A same-part character-reference alias remains a duplicate,
+and a foreign same-local-name element remains outside the drawing scope.
 Current-graph relationship cases add an unreferenced theme edge after chart
 authoring and require chart `rId1` followed by theme `rId2`. A producer theme
 captured on package open keeps its original id, while unknown internal and

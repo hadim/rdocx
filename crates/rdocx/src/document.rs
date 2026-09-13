@@ -2353,13 +2353,15 @@ impl DocumentIdentifiers {
             if let Some(categories) = identity_parts.get(&part_name_identity(part_name))
                 && identifier_xml_is_well_formed(bytes)
             {
+                let mut part_drawing_ids = HashSet::new();
                 identifiers
-                    .scan_xml_definitions(bytes, categories)
+                    .scan_xml_definitions(bytes, categories, &mut part_drawing_ids)
                     .map_err(|error| {
                         Error::Other(format!(
                             "cannot scan identifiers in XML part {part_name}: {error}"
                         ))
                     })?;
+                identifiers.drawing_ids.extend(part_drawing_ids);
             }
         }
         identifiers.preserved_relationship_ids = identifiers.relationship_ids.clone();
@@ -2405,6 +2407,7 @@ impl DocumentIdentifiers {
         &mut self,
         xml: &[u8],
         categories: &HashSet<IdentifierXmlCategory>,
+        part_drawing_ids: &mut HashSet<u32>,
     ) -> Result<()> {
         let mut reader = NsReader::from_reader(xml);
         let mut buffer = Vec::new();
@@ -2440,7 +2443,7 @@ impl DocumentIdentifiers {
                         None
                     };
                     if let Some(category) = category.filter(|value| categories.contains(value)) {
-                        self.scan_xml_id(&reader, element, category)?;
+                        self.scan_xml_id(&reader, element, category, part_drawing_ids)?;
                     }
                 }
                 Event::Eof => return Ok(()),
@@ -2455,6 +2458,7 @@ impl DocumentIdentifiers {
         reader: &NsReader<&[u8]>,
         element: &BytesStart<'_>,
         category: IdentifierXmlCategory,
+        part_drawing_ids: &mut HashSet<u32>,
     ) -> Result<()> {
         for attribute in element.attributes() {
             let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
@@ -2487,7 +2491,7 @@ impl DocumentIdentifiers {
                     let value = value
                         .parse::<u32>()
                         .map_err(|_| Error::Other(format!("invalid drawing id {value}")))?;
-                    Self::insert_unique(&mut self.drawing_ids, value, "drawing")?;
+                    Self::insert_unique(part_drawing_ids, value, "drawing")?;
                 }
                 IdentifierXmlCategory::Bookmark => {
                     let value = value
@@ -20339,7 +20343,7 @@ mod tests {
     }
 
     #[test]
-    fn encoded_identifier_aliases_collide_during_package_scan() {
+    fn same_part_normalized_drawing_ids_remain_invalid() {
         let mut package =
             OpcPackage::with_main_part("word/document.xml", content_types::WORD_DOCUMENT);
         package.set_part(
@@ -20352,6 +20356,22 @@ mod tests {
         );
         let error = DocumentIdentifiers::scan(&package).unwrap_err();
         assert!(error.to_string().contains("duplicate drawing id 1"));
+    }
+
+    #[test]
+    fn foreign_doc_pr_does_not_enter_drawing_identity_scope() {
+        let mut package =
+            OpcPackage::with_main_part("word/document.xml", content_types::WORD_DOCUMENT);
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{WORD_NAMESPACE}" xmlns:wp="{}" xmlns:x="urn:foreign"><w:body><x:docPr id="1"/><wp:docPr id="1"/></w:body></w:document>"#,
+                drawing_ns::WP,
+            )
+            .into_bytes(),
+        );
+        let mut identifiers = DocumentIdentifiers::scan(&package).unwrap();
+        assert_eq!(identifiers.reserve_drawing_id().unwrap(), 2);
     }
 
     #[test]

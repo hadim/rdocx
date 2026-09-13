@@ -312,10 +312,13 @@ method signatures stay unchanged, but fallible operations can report imported,
 preserved, overflow, and pending-collision errors before publication. Save and
 byte serialization use a staged clone and assign authored relationship,
 bookmark, comment, drawing, numbering, part, and content-type identities in
-final recursive document order. `CT_Inline` and `CT_Anchor` expose their parsed
-`doc_pr_id` on the pre-1.0 Rust model so callers no longer receive an invented
-constant for a drawing. Python, WASM, and CLI gain the deterministic behavior
-through the native facade without adding binding methods.
+final recursive document order. Producer drawing definitions are checked for
+uniqueness per physical XML part, then their package-wide union remains occupied
+for globally fresh authored drawing allocation. `CT_Inline` and `CT_Anchor`
+expose their parsed `doc_pr_id` on the pre-1.0 Rust model so callers no longer
+receive an invented constant for a drawing. Python, WASM, and CLI gain the
+deterministic behavior through the native facade without adding binding
+methods.
 
 Native Rust also exposes the concrete non-exhaustive `StoryKind` and
 `StoryItemKind` enums, owned `StoryId` and `ContentLocation` paths, borrowed

@@ -135,6 +135,50 @@ fn f255_story_document() -> Document {
     Document::from_bytes(&bytes.into_inner()).unwrap()
 }
 
+fn f_x090_cross_part_drawing_package() -> Vec<u8> {
+    let mut document = f255_story_document();
+    document.add_picture(b"body image", "body.png", Length::pt(1.0), Length::pt(1.0));
+    let header = f254_story(&document, StoryKind::Header);
+    document
+        .add_picture_to_story(
+            &header,
+            b"header image",
+            "header.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        )
+        .unwrap();
+
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let body_doc_pr = document_xml
+        .split_once("<wp:docPr")
+        .and_then(|(_, suffix)| f255_xml_attribute(suffix, "id"))
+        .expect("body picture has wp:docPr/@id");
+    let header_xml = std::str::from_utf8(package.get_part(header.part_name()).unwrap()).unwrap();
+    let header_doc_pr = header_xml
+        .split_once("<wp:docPr")
+        .and_then(|(_, suffix)| f255_xml_attribute(suffix, "id"))
+        .expect("header picture has wp:docPr/@id");
+    assert_ne!(header_doc_pr, body_doc_pr);
+    package.set_part(
+        header.part_name(),
+        header_xml
+            .replacen(
+                &format!(r#"wp:docPr id="{header_doc_pr}""#),
+                &format!(r#"wp:docPr id="{body_doc_pr}""#),
+                1,
+            )
+            .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    bytes.into_inner()
+}
+
 fn f255_producer_header_drawing_document() -> Document {
     let mut document = f255_story_document();
     let mut package =
@@ -799,6 +843,93 @@ fn legacy_body_and_header_helpers_use_the_shared_owner_path() {
                 .unwrap(),
             b"image"
         );
+    }
+}
+
+#[test]
+fn cross_part_producer_drawing_ids_do_not_block_document_open() {
+    let bytes = f_x090_cross_part_drawing_package();
+    let source_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let source_document_xml = source_package
+        .get_part("/word/document.xml")
+        .unwrap()
+        .to_vec();
+    let source_header_xml = source_package
+        .get_part("/word/stories/header.xml")
+        .unwrap()
+        .to_vec();
+    let source_document_text = std::str::from_utf8(&source_document_xml).unwrap();
+    let drawing_start = source_document_text.find("<w:drawing>").unwrap();
+    let drawing_end = source_document_text[drawing_start..]
+        .find("</w:drawing>")
+        .map(|offset| drawing_start + offset + "</w:drawing>".len())
+        .unwrap();
+    let source_body_drawing = &source_document_text[drawing_start..drawing_end];
+    let producer_id = source_document_text
+        .split_once("<wp:docPr")
+        .and_then(|(_, suffix)| f255_xml_attribute(suffix, "id"))
+        .unwrap();
+    let mut document = Document::from_bytes(&bytes).unwrap();
+    document.add_picture(
+        b"authored image",
+        "authored.png",
+        Length::pt(1.0),
+        Length::pt(1.0),
+    );
+
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let header_xml =
+        std::str::from_utf8(package.get_part("/word/stories/header.xml").unwrap()).unwrap();
+    let marker = format!(r#"wp:docPr id="{producer_id}""#);
+    assert!(document_xml.contains(&marker), "{document_xml}");
+    assert!(header_xml.contains(&marker), "{header_xml}");
+    let authored_ids = document_xml
+        .split("<wp:docPr")
+        .skip(1)
+        .filter_map(|suffix| f255_xml_attribute(suffix, "id"))
+        .collect::<Vec<_>>();
+    assert_eq!(authored_ids.len(), 2, "{document_xml}");
+    assert_ne!(authored_ids[0], authored_ids[1], "{document_xml}");
+    assert!(document_xml.contains(source_body_drawing), "{document_xml}");
+    assert_eq!(
+        package.get_part("/word/stories/header.xml").unwrap(),
+        source_header_xml
+    );
+    Document::from_bytes(&saved).unwrap();
+}
+
+#[test]
+fn part_local_drawing_identity_scope_survives_story_round_trip() {
+    let mut bytes = f_x090_cross_part_drawing_package();
+    let drawing_id = |xml: &str| {
+        xml.split_once("<wp:docPr")
+            .and_then(|(_, suffix)| f255_xml_attribute(suffix, "id"))
+            .expect("part has wp:docPr/@id")
+    };
+    let source_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let producer_id = drawing_id(
+        std::str::from_utf8(source_package.get_part("/word/document.xml").unwrap()).unwrap(),
+    );
+    assert_eq!(
+        drawing_id(
+            std::str::from_utf8(source_package.get_part("/word/stories/header.xml").unwrap(),)
+                .unwrap(),
+        ),
+        producer_id
+    );
+    for marker in ["first", "second"] {
+        let mut document = Document::from_bytes(&bytes).unwrap();
+        document.add_paragraph(marker);
+        bytes = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        for part_name in ["/word/document.xml", "/word/stories/header.xml"] {
+            let xml = std::str::from_utf8(package.get_part(part_name).unwrap()).unwrap();
+            assert_eq!(xml.matches("<wp:docPr").count(), 1, "{part_name}: {xml}");
+            assert_eq!(drawing_id(xml), producer_id, "{part_name}: {xml}");
+        }
     }
 }
 

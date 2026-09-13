@@ -13028,3 +13028,43 @@ drawing identifiers package-global. Re-resolve story and content locations
 after structural mutation. F-256 owns cross-owner and cross-document remapping
 and must carry complete owned relationship and media dependencies
 transactionally.
+
+### F-X090, Accept part-local producer drawing identities
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Producer `wp:docPr` definitions are now checked for
+uniqueness within each physical XML part. Every accepted value then joins the
+package-wide occupied set, so body and header parts may reuse a producer value
+while later facade-authored drawings remain globally fresh.
+
+**Non-obvious choices.** Opening never renumbers producer XML. The scanner uses
+a fresh drawing set for each part, then merges it only after that part validates.
+Other identifier categories retain their existing scope and allocation rules.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that the
+repeated-save test counted drawings without comparing their values. Pass 2
+reported zero defects, zero smells, and zero nitpicks after both parts were
+bound to the original reused identity on every reopen.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `cross_part_producer_drawing_ids_do_not_block_document_open`,
+`same_part_normalized_drawing_ids_remain_invalid`,
+`part_local_drawing_identity_scope_survives_story_round_trip`, and
+`foreign_doc_pr_does_not_enter_drawing_identity_scope` passed. The complete
+`/verify` gate passed with pinned LibreOffice and Poppler, including full
+workspace tests, WASM, rustdoc, README package inventories, and release
+workflow regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep producer drawing validation part-local and
+authored drawing allocation package-global. Same-part normalized aliases remain
+invalid, and foreign same-local-name elements remain outside this scope.

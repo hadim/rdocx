@@ -1,6 +1,6 @@
 # F-X090, Accept part-local producer drawing identities
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: S
 **Depends on**: F-255
@@ -69,12 +69,12 @@ Expected unchanged across all 49 entries. Any delta blocks completion.
 
 ## Implementation checklist
 
-- [ ] Validate drawing definitions per physical XML part.
-- [ ] Merge valid producer values into global allocation occupancy.
-- [ ] Preserve the globally fresh authored allocator.
-- [ ] Add the positive and negative source-built regressions.
-- [ ] Run the full gate and unchanged hash harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Validate drawing definitions per physical XML part.
+- [x] Merge valid producer values into global allocation occupancy.
+- [x] Preserve the globally fresh authored allocator.
+- [x] Add the positive and negative source-built regressions.
+- [x] Run the full gate and unchanged hash harness.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

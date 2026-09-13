@@ -570,8 +570,12 @@ continues after its greatest numeric identifier and avoids nonnumeric producer
 identities. Bookmark and comment identifiers start at zero. Drawing and
 numbering-instance identifiers start at one, and abstract-numbering identifiers
 start at zero. Imported definitions are scanned by expanded XML name, including
-the unqualified `id` attribute on `wp:docPr`. Duplicate definitions, exhausted
-ranges, and pending collisions fail before a staged candidate is published.
+the unqualified `id` attribute on `wp:docPr`. Producer `wp:docPr` definitions
+must be unique within one physical XML part, but the same normalized value may
+occur in another part. Every accepted value joins the package-wide occupied set
+so later authored drawings remain globally fresh. Other duplicate definitions,
+exhausted ranges, and pending collisions fail before a staged candidate is
+published.
 
 Canonical part layouts:
 

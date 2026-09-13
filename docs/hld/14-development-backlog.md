@@ -4696,11 +4696,11 @@ archives contains its byte-identical declared README.
 
 ### F-X090, Accept part-local producer drawing identities (S)
 
-Open producer documents when the same normalized `wp:docPr/@id` appears in
-different physical XML parts. Validate imported drawing identities within each
-part, then retain their complete union as occupied input to the package-global
-authored allocator. Preserve producer XML and continue rejecting normalized
-duplicates inside one part.
+Producer documents open when the same normalized `wp:docPr/@id` appears in
+different physical XML parts. Imported drawing identities are validated within
+each part, then their complete union remains occupied input to the
+package-global authored allocator. Producer XML remains unchanged, and
+normalized duplicates inside one part remain invalid.
 
 **Depends on**: F-255.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/72>.

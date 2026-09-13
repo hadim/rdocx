@@ -110,8 +110,11 @@ serialization. Zero-use occurrence provenance retires without deleting its
 relationship definition. Same-owner clones may share a relationship, every
 live reference is remapped simultaneously, and each live authored picture gets
 a distinct global drawing identity. Imported raw owners and their identifiers
-remain fixed occupants. Ambiguous preserved identity ranges and relationship
-ownership reject before publication.
+remain fixed occupants. Producer drawing-definition uniqueness is checked per
+physical XML part, then every accepted value joins package-global authored
+occupancy. This accepts legitimate cross-part reuse without permitting authored
+collisions or same-part aliases. Ambiguous preserved identity ranges and
+relationship ownership reject before publication.
 
 ### R7, scope
 
