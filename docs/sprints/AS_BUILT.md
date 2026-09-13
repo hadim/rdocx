@@ -12996,11 +12996,12 @@ while newly authored fragments carry the standard namespace bindings they need.
 unchanged. Five microscope passes hardened typed note publication, producer
 namespace shadows, main-part nested-story provenance, simultaneous identifier
 cycles, removal, cloning, and semantic reorder behavior. Pass 5 reported zero
-defects, zero smells, and zero nitpicks. Sprint review passes 8 through 11 then
+defects, zero smells, and zero nitpicks. Sprint review passes 8 through 13 then
 made physical package XML authoritative across producer related stories,
 typed note and comment mutation, field updates, signature invalidation, and
-repeated publication. Pass 11 reported zero blocking and zero should-fix
-findings.
+repeated publication. ZIP, package-class, signing, encryption, and Flat OPC
+outputs share the same canonical comment boundary. Pass 13 reported zero
+blocking and zero should-fix findings.
 
 **Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
 `docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,

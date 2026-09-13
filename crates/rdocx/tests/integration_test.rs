@@ -2715,7 +2715,7 @@ mod flat_opc_package_class_tests {
         package
     }
 
-    fn add_package_signature_graph(package: &mut OpcPackage) {
+    pub(super) fn add_package_signature_graph(package: &mut OpcPackage) {
         package.set_part("/_xmlsignatures/origin.sigs", Vec::new());
         package.set_part(
             "/_xmlsignatures/sig1.xml",
@@ -2743,7 +2743,7 @@ mod flat_opc_package_class_tests {
             );
     }
 
-    fn has_package_signature_invalidation_marker(package: &OpcPackage) -> bool {
+    pub(super) fn has_package_signature_invalidation_marker(package: &OpcPackage) -> bool {
         package.package_rels.items.iter().any(|relationship| {
             relationship.rel_type == "urn:rdocx:relationships/invalidated-package-signature"
         })
@@ -8724,7 +8724,7 @@ fn comments_part_uses_its_existing_relationship_target() {
     source.add_paragraph("body");
     let bytes = source.to_bytes().unwrap();
     let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
-    let comments_xml = br#"<x:comments xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><x:comment x:id="9"><x:p><x:r><x:t>custom target</x:t></x:r></x:p></x:comment></x:comments>"#;
+    let comments_xml = br#"<x:comments xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><x:comment x:id="9"><x:p><x:r><x:t>custom target</x:t></x:r></x:p><raw:commentChild xmlns:raw="urn:rdocx:comments-raw" raw:kept="exact"/></x:comment><raw:rootChild xmlns:raw="urn:rdocx:comments-raw" raw:kept="exact"/></x:comments>"#;
     package.set_part("/custom/comments-data.xml", comments_xml.to_vec());
     package.content_types.add_override(
         "/custom/comments-data.xml",
@@ -8733,23 +8733,66 @@ fn comments_part_uses_its_existing_relationship_target() {
     package
         .get_or_create_part_rels("/word/document.xml")
         .add(rel_types::COMMENTS, "../custom/comments-data.xml");
+    flat_opc_package_class_tests::add_package_signature_graph(&mut package);
 
     let mut input = std::io::Cursor::new(Vec::new());
     package.write_to(&mut input).unwrap();
     let mut document = Document::from_bytes(input.get_ref()).unwrap();
-    let saved = document.to_bytes().unwrap();
-    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let assert_canonical_package = |saved_package: &OpcPackage| {
+        assert!(saved_package.get_part("/word/comments.xml").is_none());
+        assert_eq!(
+            saved_package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .get_by_type(rel_types::COMMENTS)
+                .unwrap()
+                .target,
+            "../custom/comments-data.xml"
+        );
+        let output =
+            std::str::from_utf8(saved_package.get_part("/custom/comments-data.xml").unwrap())
+                .unwrap();
+        assert!(output.contains("<w:comments"), "{output}");
+        assert!(output.contains("custom target"), "{output}");
+        assert!(
+            output.contains(
+                r#"<raw:commentChild xmlns:raw="urn:rdocx:comments-raw" raw:kept="exact"/>"#
+            ),
+            "{output}"
+        );
+        assert!(
+            output.contains(
+                r#"<raw:rootChild xmlns:raw="urn:rdocx:comments-raw" raw:kept="exact"/>"#
+            ),
+            "{output}"
+        );
+        assert!(
+            flat_opc_package_class_tests::has_package_signature_invalidation_marker(saved_package)
+        );
+        assert!(saved_package.parts.contains_key("/_xmlsignatures/sig1.xml"));
+    };
 
-    assert!(saved_package.get_part("/word/comments.xml").is_none());
-    let output = String::from_utf8(
-        saved_package
-            .get_part("/custom/comments-data.xml")
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap();
-    assert!(output.contains("<w:comments"));
-    assert!(output.contains("custom target"));
+    let saved = document.to_bytes().unwrap();
+    assert_eq!(document.to_bytes().unwrap(), saved);
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert_canonical_package(&saved_package);
+    let mut reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.comments()[0].text(), "custom target");
+    assert_eq!(reopened.to_bytes().unwrap(), saved);
+
+    let flat = document.to_flat_opc_bytes().unwrap();
+    assert_eq!(document.to_flat_opc_bytes().unwrap(), flat);
+    let flat_xml = std::str::from_utf8(&flat).unwrap();
+    assert!(flat_xml.contains(r#"pkg:name="/custom/comments-data.xml""#));
+    assert!(flat_xml.contains("<w:comments"), "{flat_xml}");
+    assert!(flat_xml.contains("urn:rdocx:relationships/invalidated-package-signature"));
+    assert!(flat_xml.contains(r#"pkg:name="/_xmlsignatures/sig1.xml""#));
+    let mut reopened = Document::from_flat_opc_bytes(&flat).unwrap();
+    assert_eq!(reopened.comments()[0].text(), "custom target");
+    assert_eq!(reopened.to_flat_opc_bytes().unwrap(), flat);
+    let reopened_package =
+        OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+    assert_canonical_package(&reopened_package);
 }
 
 #[test]

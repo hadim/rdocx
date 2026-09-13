@@ -9520,7 +9520,7 @@ impl Document {
     /// and all other package payloads remain present.
     pub fn to_bytes_as(&self, class: WordPackageClass) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         candidate
             .package
             .content_types
@@ -9578,7 +9578,7 @@ impl Document {
         certificate_der: &[u8],
     ) -> Result<oxml_opc::SignatureReport> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         let report = candidate
             .package
             .sign(private_key_pkcs8_der, certificate_der)?;
@@ -9904,7 +9904,7 @@ impl Document {
     /// Save the document to a file path.
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
             &mut candidate.package,
             candidate.package_signatures_invalidated,
@@ -9916,7 +9916,7 @@ impl Document {
     /// Save the document to a byte vector.
     pub fn to_bytes(&mut self) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
             &mut candidate.package,
             candidate.package_signatures_invalidated,
@@ -9943,7 +9943,7 @@ impl Document {
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
             &mut candidate.package,
             candidate.package_signatures_invalidated,
@@ -9965,6 +9965,11 @@ impl Document {
         self.refresh_related_story_caches()?;
         self.package_signatures_invalidated |= retained_signature_invalidated;
         self.flush_to_package()
+    }
+
+    pub(crate) fn prepare_staged_output(&mut self) -> Result<()> {
+        self.comments_dirty |= self.comments.is_some() && self.comments_part_name.is_some();
+        self.prepare_staged_package()
     }
 
     pub(crate) fn prepare_and_reopen_staged(mut self) -> Result<Self> {
@@ -10788,9 +10793,14 @@ impl Document {
                         "{kind:?} story part {part_name} is referenced more than once"
                     )));
                 }
-                let xml = Cow::Borrowed(self.package.get_part(&part_name).ok_or_else(|| {
+                let part_xml = self.package.get_part(&part_name).ok_or_else(|| {
                     Error::Other(format!("{kind:?} story targets missing part {part_name}"))
-                })?);
+                })?;
+                let xml = if kind == StoryKind::Comment {
+                    Cow::Owned(part_xml.to_vec())
+                } else {
+                    Cow::Borrowed(part_xml)
+                };
                 sources.push(StorySource {
                     root_kind: kind,
                     part_name,
