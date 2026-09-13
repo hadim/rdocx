@@ -873,6 +873,10 @@ formatting, textual whitespace, fields, comments, and any public
 `ComparisonStoryKind`. The non-exhaustive story enum names the main, header,
 footer, comment, text-box, footnote, and endnote categories. The comparison
 surface covers relationship-resolved stories, fields, and nested text boxes.
+The native facade stages the main story from package-authoritative XML and
+preserves exact unchanged drawing wrappers even when sibling text in the same
+paragraph, table, cell, or control changes. Accepting and rejecting the result
+retain the drawing payload, relationship graph, and media bytes.
 It emits same-story moves and supported run, paragraph, table, and section
 property revisions. Diagnostic locations retain the actual story identity and
 stable owner path. This API is native Rust only. Python, WASM, and CLI surfaces

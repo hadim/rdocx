@@ -13166,3 +13166,45 @@ verified at 886,690 bytes, below the 10 MiB limit.
 part-local and resolve each section's effective variant before cloning. Prune
 only unreachable facade-owned graphs, and use the common story operations for
 rich edits rather than introducing another content model.
+
+### F-X093, Preserve drawings through document comparison staging
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Document comparison and tracked-revision resolution now
+stage the main story from package-authoritative XML. Exact source spans pass
+through changed paragraphs, tables, rows, cells, controls, and runs so stable
+inline and anchored drawings retain their complete wrapper, namespace scope,
+extended payload, relationships, and media.
+
+**Non-obvious choices.** Granular comparison reuses an exact whole run only
+when each aligned owner contributes one unit. This preserves stable drawing
+runs without duplicating a multi-unit text run at word or character
+granularity. Staged accept and reject checks remain the package-wide commit
+boundary.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that exact
+source was not threaded through changed owners. Pass 2 found that whole-run
+reuse could duplicate multi-unit runs. Pass 3 reported zero defects, zero
+smells, and zero nitpicks after both corrections.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `document_compare_preserves_inline_drawings_through_staging`,
+`comparison_drawings_survive_accept_and_reject`,
+`comparison_preserves_anchored_and_extended_doc_pr_payloads`, and
+`comparison_rejects_a_genuinely_missing_doc_pr_atomically` passed. The full
+workspace, WASM, rustdoc, README, workflow, package, and supply-chain gates
+passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat prepared package bytes as authoritative
+whenever unchanged opaque content can own namespace scope. Preserve exact
+wrappers through the complete owner hierarchy rather than reconstructing a
+drawing from its typed projection.

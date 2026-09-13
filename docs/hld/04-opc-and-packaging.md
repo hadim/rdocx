@@ -965,8 +965,10 @@ Tracked-revision resolution is also staged above the package boundary. The
 facade resolves selected revision placements in the main document, headers,
 footers, comments, normal footnotes, endnotes, and nested text boxes. It patches
 each affected source part once and reparses the complete candidate package
-before replacing live typed state. Namespace declarations carried only by a
-removed revision or property owner are promoted to retained raw descendants.
+before replacing live typed state. Main-story resolution starts from the
+prepared package's authoritative document bytes rather than a typed
+reserialization. Namespace declarations carried only by a removed revision or
+property owner remain available to retained raw descendants.
 Any selector, revision-shape, namespace, parse, or serialization failure leaves
 all package part bytes and live document state unchanged. The ordinary
 deterministic save path writes the validated result later and preserves every
@@ -974,7 +976,12 @@ unrelated part and relationship.
 
 Document comparison uses the same package boundary. It clones the complete
 typed document and package state, resolves identical story shells and
-relationships, and aligns modeled owners in each nonignored story. Policy
+relationships, and aligns modeled owners in each nonignored story. The prepared
+package's main-document bytes are authoritative. Exact source spans flow through
+body items, paragraphs, tables, rows, cells, controls, and runs, including when
+another child of the same owner changes. An unchanged drawing-bearing run keeps
+its complete wrapper, local namespace declarations, extended drawing children,
+and relationship identifier. Policy
 projection removes only the selected comparison facts. Ignored formatting,
 textual whitespace, fields, comments, and story categories retain the original
 bytes. Character and word alignment carries source ownership and raw-child

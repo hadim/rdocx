@@ -4762,9 +4762,12 @@ text revisions are emitted. Invalid drawings still fail atomically.
 **Depends on**: F-255.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/75>.
 **Test gate**: regression. `document_compare_preserves_inline_drawings_through_staging`
-compares source-built packages containing body and header drawings, preserves
-their exact payloads and relationships through compare, save, reopen, accept,
-and reject, and still rejects a genuinely missing `wp:docPr/@id`.
+compares source-built packages containing body and header drawings whose text
+sibling changes. It preserves exact inline and anchored wrappers, namespace
+bindings, extended `docPr` children, relationships, and media through compare,
+save, reopen, accept, and reject at run, word, and character granularity. A
+stable multi-unit run appears once, while a genuinely missing `wp:docPr/@id`
+still rejects atomically.
 
 ### F-X094a, Expose Word collaboration and redline commands in rdocx-cli (M)
 

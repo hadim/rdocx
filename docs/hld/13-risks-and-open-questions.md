@@ -116,6 +116,12 @@ occupancy. This accepts legitimate cross-part reuse without permitting authored
 collisions or same-part aliases. Ambiguous preserved identity ranges and
 relationship ownership reject before publication.
 
+Comparison and revision resolution treat prepared package XML as authoritative
+for the main story. Exact source spans pass through every changed owner so a
+stable drawing run keeps namespace scope and opaque payload even when a sibling
+changes. Staged accept and reject checks cover the package graph, and malformed
+drawing identity fails without publishing candidate state.
+
 An unknown root default namespace is safe to omit only when namespace-aware
 scope analysis proves that no unprefixed element inherits it. Nested default
 declarations shadow the root even when their URI is identical, while

@@ -1,6 +1,6 @@
 # F-X093, Preserve drawings through document comparison staging
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: M
 **Depends on**: F-255
@@ -70,13 +70,13 @@ Expected unchanged across all 49 entries. Any delta blocks completion.
 
 ## Implementation checklist
 
-- [ ] Add the exact source-built comparison reproduction before source edits.
-- [ ] Read prepared main XML from package-authoritative bytes.
-- [ ] Preserve drawing wrappers, namespace scopes, relationships, and media.
-- [ ] Prove compare, save, reopen, accept, and reject.
-- [ ] Retain atomic failure for a genuinely malformed drawing.
-- [ ] Run the full gate and unchanged hash harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Add the exact source-built comparison reproduction before source edits.
+- [x] Read prepared main XML from package-authoritative bytes.
+- [x] Preserve drawing wrappers, namespace scopes, relationships, and media.
+- [x] Prove compare, save, reopen, accept, and reject.
+- [x] Retain atomic failure for a genuinely malformed drawing.
+- [x] Run the full gate and unchanged hash harness.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

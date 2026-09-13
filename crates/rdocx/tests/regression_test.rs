@@ -16270,6 +16270,329 @@ fn comparison_part_xml(document: &mut Document, part_name: &str) -> String {
     .expect("comparison part is UTF-8")
 }
 
+fn f_x093_inline_drawing(relationship_id: &str, marker: &str) -> String {
+    format!(
+        r#"<w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:inline><wp:extent cx="1" cy="1"/><wp:docPr id="11" name="Picture"><x:extension xmlns:x="urn:f-x093" x:marker="{marker}"/></wp:docPr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{relationship_id}"/></a:graphicData></a:graphic></wp:inline></w:drawing>"#
+    )
+}
+
+fn f_x093_anchor_drawing(relationship_id: &str, marker: &str) -> String {
+    format!(
+        r#"<w:drawing><q:anchor xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" behindDoc="0" relativeHeight="1"><q:positionH relativeFrom="column"><q:posOffset>7</q:posOffset></q:positionH><q:positionV relativeFrom="paragraph"><q:posOffset>9</q:posOffset></q:positionV><q:extent cx="2" cy="3"/><q:wrapNone/><q:docPr id="21" name="Anchored picture"><x:extension xmlns:x="urn:f-x093" x:marker="{marker}"/></q:docPr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{relationship_id}"/></a:graphicData></a:graphic></q:anchor></w:drawing>"#
+    )
+}
+
+fn f_x093_comparison_document_with_drawings(
+    value: &str,
+    body_drawing: &str,
+    header_drawing: &str,
+) -> Document {
+    let mut seed = Document::new();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        seed.to_bytes().expect("serialize comparison drawing seed"),
+    ))
+    .expect("open comparison drawing seed");
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    let header_id = relationships.add(oxml_opc::relationship::rel_types::HEADER, "header1.xml");
+    relationships.add_with_id(
+        "bodyImage",
+        oxml_opc::relationship::rel_types::IMAGE,
+        "media/body.png",
+    );
+    package
+        .get_or_create_part_rels("/word/header1.xml")
+        .add_with_id(
+            "headerImage",
+            oxml_opc::relationship::rel_types::IMAGE,
+            "media/header.png",
+        );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>{value} body</w:t></w:r><w:r><w:t>stable body words</w:t></w:r><w:r>{body_drawing}</w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
+        )
+        .into_bytes(),
+    );
+    package.set_part(
+        "/word/header1.xml",
+        format!(
+            r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:r><w:t>{value} header</w:t></w:r><w:r><w:t>stable header words</w:t></w:r><w:r>{header_drawing}</w:r></w:p></w:hdr>"#,
+        )
+        .into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/header1.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    package.set_part("/word/media/body.png", b"body image".to_vec());
+    package.set_part("/word/media/header.png", b"header image".to_vec());
+    package
+        .content_types
+        .add_override("/word/media/body.png", "image/png");
+    package
+        .content_types
+        .add_override("/word/media/header.png", "image/png");
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package
+        .write_to(&mut bytes)
+        .expect("serialize comparison drawing fixture");
+    Document::from_bytes(bytes.get_ref()).expect("open comparison drawing fixture")
+}
+
+fn f_x093_comparison_document(value: &str) -> Document {
+    f_x093_comparison_document_with_drawings(
+        value,
+        &f_x093_inline_drawing("bodyImage", "body-exact"),
+        &f_x093_inline_drawing("headerImage", "header-exact"),
+    )
+}
+
+fn f_x093_drawing_fragment(xml: &str) -> &str {
+    let start = xml.find("<w:drawing").expect("drawing start");
+    let end =
+        xml[start..].find("</w:drawing>").expect("drawing end") + start + "</w:drawing>".len();
+    &xml[start..end]
+}
+
+fn f_x093_visible_text(xml: &str) -> String {
+    let mut reader = XmlReader::from_str(xml);
+    let mut text = String::new();
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer).unwrap() {
+            XmlEvent::Start(element) if element.local_name().as_ref() == b"t" => {
+                let value = reader.read_text(element.name()).unwrap();
+                text.push_str(&value.decode().unwrap());
+            }
+            XmlEvent::Eof => return text,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+#[test]
+fn document_compare_preserves_inline_drawings_through_staging() {
+    let mut original = f_x093_comparison_document("original");
+    let mut edited = f_x093_comparison_document("edited");
+    let original_bytes = original.to_bytes().expect("save original drawing input");
+    let edited_bytes = edited.to_bytes().expect("save edited drawing input");
+    Document::from_bytes(&original_bytes).expect("reopen original drawing input");
+    Document::from_bytes(&edited_bytes).expect("reopen edited drawing input");
+    let original_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(original_bytes))
+        .expect("open original drawing package");
+    let expected_drawings = ["/word/document.xml", "/word/header1.xml"].map(|part| {
+        let xml = std::str::from_utf8(original_package.get_part(part).unwrap()).unwrap();
+        f_x093_drawing_fragment(xml).to_owned()
+    });
+
+    original
+        .compare(&edited, "Ada", "2026-09-13T09:00:00Z")
+        .expect("compare documents with package-scoped drawing namespaces");
+    let bytes = original.to_bytes().expect("save tracked comparison");
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes))
+        .expect("reopen tracked comparison package");
+    let document_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap())
+        .expect("document XML is UTF-8");
+    let header_xml = std::str::from_utf8(package.get_part("/word/header1.xml").unwrap())
+        .expect("header XML is UTF-8");
+
+    assert_eq!(f_x093_drawing_fragment(document_xml), expected_drawings[0]);
+    assert_eq!(f_x093_drawing_fragment(header_xml), expected_drawings[1]);
+    assert!(document_xml.contains("<w:del"), "{document_xml}");
+    assert!(document_xml.contains("<w:ins"), "{document_xml}");
+
+    for (xml, relationship_id, marker) in [
+        (document_xml, "bodyImage", "body-exact"),
+        (header_xml, "headerImage", "header-exact"),
+    ] {
+        assert!(xml.contains("xmlns:wp="), "{xml}");
+        assert!(
+            xml.contains(r#"<wp:docPr id="11" name="Picture">"#),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(&format!(r#"r:embed="{relationship_id}""#)),
+            "{xml}"
+        );
+        assert!(xml.contains(&format!(r#"x:marker="{marker}""#)), "{xml}");
+    }
+    assert_eq!(
+        package.get_part("/word/media/body.png"),
+        Some(&b"body image"[..])
+    );
+    assert_eq!(
+        package.get_part("/word/media/header.png"),
+        Some(&b"header image"[..])
+    );
+    Document::from_bytes(&bytes).expect("reopen tracked comparison document");
+}
+
+#[test]
+fn comparison_drawings_survive_accept_and_reject() {
+    for granularity in [
+        rdocx::ComparisonGranularity::Run,
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Character,
+    ] {
+        let mut tracked = f_x093_comparison_document("original");
+        tracked
+            .compare_with_options(
+                &f_x093_comparison_document("edited"),
+                "Ada",
+                "2026-09-13T09:01:00Z",
+                &rdocx::ComparisonOptions {
+                    granularity,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let tracked = tracked.to_bytes().unwrap();
+
+        for (view, expected, accept) in [
+            ("accepted", "edited", true),
+            ("rejected", "original", false),
+        ] {
+            let mut document = Document::from_bytes(&tracked).unwrap();
+            if accept {
+                document.accept_all().unwrap();
+            } else {
+                document.reject_all().unwrap();
+            }
+            let bytes = document.to_bytes().unwrap();
+            let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+            let main =
+                std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+            let header =
+                std::str::from_utf8(package.get_part("/word/header1.xml").unwrap()).unwrap();
+            let main_text = f_x093_visible_text(main);
+            let header_text = f_x093_visible_text(header);
+            let unexpected = if accept { "original" } else { "edited" };
+            assert!(
+                main_text.contains(expected),
+                "{granularity:?} {view}: {main}"
+            );
+            assert!(
+                header_text.contains(expected),
+                "{granularity:?} {view}: {header}"
+            );
+            assert!(
+                !main_text.contains(unexpected),
+                "{granularity:?} {view}: {main}"
+            );
+            assert!(
+                !header_text.contains(unexpected),
+                "{granularity:?} {view}: {header}"
+            );
+            assert_eq!(main_text.matches("stable body words").count(), 1, "{main}");
+            assert_eq!(
+                header_text.matches("stable header words").count(),
+                1,
+                "{header}"
+            );
+            assert!(main.contains(r#"r:embed="bodyImage""#), "{view}: {main}");
+            assert!(
+                header.contains(r#"r:embed="headerImage""#),
+                "{view}: {header}"
+            );
+            for (owner, relationship_id, target, payload) in [
+                (
+                    "/word/document.xml",
+                    "bodyImage",
+                    "/word/media/body.png",
+                    b"body image".as_slice(),
+                ),
+                (
+                    "/word/header1.xml",
+                    "headerImage",
+                    "/word/media/header.png",
+                    b"header image".as_slice(),
+                ),
+            ] {
+                let relationship = package
+                    .get_part_rels(owner)
+                    .unwrap()
+                    .get_by_id(relationship_id)
+                    .unwrap();
+                assert_eq!(
+                    relationship.rel_type,
+                    oxml_opc::relationship::rel_types::IMAGE
+                );
+                assert_eq!(
+                    oxml_opc::OpcPackage::resolve_rel_target(owner, &relationship.target),
+                    target
+                );
+                assert_eq!(package.get_part(target), Some(payload));
+            }
+        }
+    }
+}
+
+#[test]
+fn comparison_preserves_anchored_and_extended_doc_pr_payloads() {
+    let mut original = f_x093_comparison_document_with_drawings(
+        "original",
+        &f_x093_anchor_drawing("bodyImage", "body-anchor-exact"),
+        &f_x093_anchor_drawing("headerImage", "header-anchor-exact"),
+    );
+    let edited = f_x093_comparison_document_with_drawings(
+        "edited",
+        &f_x093_anchor_drawing("bodyImage", "body-anchor-exact"),
+        &f_x093_anchor_drawing("headerImage", "header-anchor-exact"),
+    );
+
+    original
+        .compare(&edited, "Ada", "2026-09-13T09:02:00Z")
+        .unwrap();
+    let bytes = original.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    for (part, relationship_id, marker) in [
+        ("/word/document.xml", "bodyImage", "body-anchor-exact"),
+        ("/word/header1.xml", "headerImage", "header-anchor-exact"),
+    ] {
+        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+        assert!(xml.contains("<q:anchor"), "{xml}");
+        assert!(
+            xml.contains(r#"<q:docPr id="21" name="Anchored picture">"#),
+            "{xml}"
+        );
+        assert!(xml.contains(&format!(r#"x:marker="{marker}""#)), "{xml}");
+        assert!(
+            xml.contains(&format!(r#"r:embed="{relationship_id}""#)),
+            "{xml}"
+        );
+        let positions = [
+            "<q:positionH",
+            "<q:positionV",
+            "<q:extent",
+            "<q:wrapNone",
+            "<q:docPr",
+            "<a:graphic",
+        ]
+        .map(|element| xml.find(element).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{xml}");
+    }
+    Document::from_bytes(&bytes).expect("reopen anchored comparison");
+}
+
+#[test]
+fn comparison_rejects_a_genuinely_missing_doc_pr_atomically() {
+    let malformed = r#"<w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:inline><wp:docPr name="Missing id"/></wp:inline></w:drawing>"#;
+    let mut original = f_x093_comparison_document("original");
+    let edited = f_x093_comparison_document_with_drawings(
+        "edited",
+        &f_x093_inline_drawing("bodyImage", "body-exact"),
+        malformed,
+    );
+    let before = original.to_bytes().unwrap();
+
+    let error = original
+        .compare(&edited, "Ada", "2026-09-13T09:03:00Z")
+        .unwrap_err();
+    assert!(error.to_string().contains("wp:docPr/@id"), "{error}");
+    assert_eq!(original.to_bytes().unwrap(), before);
+}
+
 fn comparison_story_with_run_properties(
     mut document: Document,
     part_name: &str,

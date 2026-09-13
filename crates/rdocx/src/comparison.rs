@@ -262,17 +262,25 @@ impl Document {
 
         reject_cross_story_moves(&original, &edited, &original_stories, options)?;
 
-        let original_xml = original.document.to_xml()?;
-        let edited_xml = edited.document.to_xml()?;
+        let original_xml = original
+            .package
+            .get_part(&original.doc_part_name)
+            .ok_or_else(|| {
+                Error::Other(format!("missing main story {}", original.doc_part_name))
+            })?;
+        let edited_xml = edited
+            .package
+            .get_part(&edited.doc_part_name)
+            .ok_or_else(|| Error::Other(format!("missing main story {}", edited.doc_part_name)))?;
         let text_box_markers =
             comparison_text_box_markers(&original, &edited, &original_stories, options)?;
         let mut used_ids = if story_ignored(options, ComparisonStoryKind::Main) {
             HashSet::new()
         } else {
-            word_ids_with_options(&original_xml, options)?
+            word_ids_with_options(original_xml, options)?
         };
         if !story_ignored(options, ComparisonStoryKind::Main) {
-            used_ids.extend(word_ids_with_options(&edited_xml, options)?);
+            used_ids.extend(word_ids_with_options(edited_xml, options)?);
         }
         for story in &original_stories {
             used_ids.extend(word_ids_with_options(
@@ -289,27 +297,38 @@ impl Document {
         };
         let mut diagnostics = Vec::new();
         let tracked_body = if story_ignored(options, ComparisonStoryKind::Main) {
-            extract_body_inner(&original_xml)?.to_owned()
+            extract_body_inner(original_xml)?.to_owned()
         } else if story_ignored(options, ComparisonStoryKind::TextBox) {
             compare_story_inner(
-                extract_body_inner(&original_xml)?,
-                extract_body_inner(&edited_xml)?,
+                extract_body_inner(original_xml)?,
+                extract_body_inner(edited_xml)?,
                 "body",
                 "w",
                 &mut metadata,
                 &mut diagnostics,
             )?
         } else {
+            let original_body = extract_body_inner(original_xml)?;
+            let edited_body = extract_body_inner(edited_xml)?;
+            let original_spans = story_content_spans(original_body, "w")?;
+            let edited_spans = story_content_spans(edited_body, "w")?;
+            if original_spans.len() != original.document.body.content.len()
+                || edited_spans.len() != edited.document.body.content.len()
+            {
+                return Err(Error::Other(
+                    "comparison could not correlate main-story owners".to_owned(),
+                ));
+            }
             compare_body(
                 &original.document,
                 &edited.document,
                 "body",
-                None,
+                Some((original_body, &original_spans)),
                 &mut metadata,
                 &mut diagnostics,
             )?
         };
-        let tracked_xml = replace_body_inner(&original_xml, &tracked_body)?;
+        let tracked_xml = replace_body_inner(original_xml, &tracked_body)?;
         let tracked = CT_Document::from_xml(tracked_xml.as_bytes())?;
         tracked.to_xml()?;
 
@@ -1592,16 +1611,39 @@ fn compare_body(
                 .is_some_and(|content| matches!(content, BodyContent::Paragraph(_)))
         });
         match (original_index, edited_index) {
-            (Some(left), Some(right)) => output.push((
-                matches!(edited.body.content[right], BodyContent::Paragraph(_)),
-                compare_body_content(
-                    &original.body.content[left],
-                    &edited.body.content[right],
-                    &body_location(location, &edited.body.content[right], right),
-                    metadata,
-                    diagnostics,
-                )?,
-            )),
+            (Some(left), Some(right)) => {
+                let original_content = &original.body.content[left];
+                let edited_content = &edited.body.content[right];
+                let compared = if original_content == edited_content {
+                    if let Some((source, spans)) = original_source {
+                        source
+                            .get(spans[left].clone())
+                            .ok_or_else(|| {
+                                Error::Other(format!(
+                                    "comparison source span is invalid at {location}[{left}]"
+                                ))
+                            })?
+                            .to_owned()
+                    } else {
+                        body_content_xml(original_content)?
+                    }
+                } else {
+                    let content_source =
+                        original_source.and_then(|(source, spans)| source.get(spans[left].clone()));
+                    compare_body_content(
+                        original_content,
+                        edited_content,
+                        content_source,
+                        &body_location(location, edited_content, right),
+                        metadata,
+                        diagnostics,
+                    )?
+                };
+                output.push((
+                    matches!(edited_content, BodyContent::Paragraph(_)),
+                    compared,
+                ));
+            }
             (Some(left), None) => {
                 let content = &original.body.content[left];
                 if let Some(id) = moves.original[left] {
@@ -1941,19 +1983,34 @@ fn inserted_paragraph_content(
 fn compare_body_content(
     original: &BodyContent,
     edited: &BodyContent,
+    original_source: Option<&str>,
     location: &str,
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
     match (original, edited) {
-        (BodyContent::Paragraph(left), BodyContent::Paragraph(right)) => {
-            compare_paragraph(left, right, location, metadata, diagnostics)
-        }
-        (BodyContent::Table(left), BodyContent::Table(right)) => {
-            compare_table(left, right, location, metadata, diagnostics)
-        }
+        (BodyContent::Paragraph(left), BodyContent::Paragraph(right)) => compare_paragraph(
+            left,
+            right,
+            original_source,
+            location,
+            metadata,
+            diagnostics,
+        ),
+        (BodyContent::Table(left), BodyContent::Table(right)) => compare_table(
+            left,
+            right,
+            original_source,
+            location,
+            metadata,
+            diagnostics,
+        ),
         (BodyContent::ContentControl(left), BodyContent::ContentControl(right)) => {
-            compare_control(left, right, location, metadata, diagnostics)
+            if let Some(source) = original_source {
+                compare_control_from_xml(left, right, location, metadata, diagnostics, source)
+            } else {
+                compare_control(left, right, location, metadata, diagnostics)
+            }
         }
         _ if body_signature(original) == body_signature(edited) => body_content_xml(original),
         _ => Err(Error::Other(format!(
@@ -1985,12 +2042,20 @@ fn inserted_body_content(content: &BodyContent, metadata: &mut Metadata<'_>) -> 
 fn compare_paragraph(
     original: &CT_P,
     edited: &CT_P,
+    original_source: Option<&str>,
     location: &str,
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
     if uses_attributed_run_path(metadata.options) {
-        return compare_granular_paragraph(original, edited, location, metadata, diagnostics);
+        return compare_granular_paragraph(
+            original,
+            edited,
+            original_source,
+            location,
+            metadata,
+            diagnostics,
+        );
     }
     if !original.hyperlinks.is_empty()
         || !edited.hyperlinks.is_empty()
@@ -2003,7 +2068,14 @@ fn compare_paragraph(
         || !original.extra_xml.is_empty()
         || !edited.extra_xml.is_empty()
     {
-        return compare_complex_paragraph(original, edited, location, metadata, diagnostics);
+        return compare_complex_paragraph(
+            original,
+            edited,
+            original_source,
+            location,
+            metadata,
+            diagnostics,
+        );
     }
 
     let mut output = String::from("<w:p>");
@@ -2035,17 +2107,32 @@ fn compare_paragraph(
             location,
         )?;
     }
+    let original_run_spans = original_source
+        .map(paragraph_run_spans)
+        .transpose()?
+        .unwrap_or_default();
+    if original_source.is_some() && original_run_spans.len() != original.runs.len() {
+        return Err(Error::Other(format!(
+            "comparison could not correlate paragraph run owners at {location}"
+        )));
+    }
     for (left, right) in aligned {
         match (left, right) {
             (Some(i), Some(j)) => {
                 if original_signatures[i] == edited_signatures[j] {
-                    output.push_str(&compared_run_xml(
-                        &original.runs[i],
-                        &edited.runs[j],
-                        &format!("{location}/run[{j}]"),
-                        metadata,
-                        diagnostics,
-                    )?);
+                    if original.runs[i] == edited.runs[j]
+                        && let Some(source) = original_source
+                    {
+                        output.push_str(&source[original_run_spans[i].clone()]);
+                    } else {
+                        output.push_str(&compared_run_xml(
+                            &original.runs[i],
+                            &edited.runs[j],
+                            &format!("{location}/run[{j}]"),
+                            metadata,
+                            diagnostics,
+                        )?);
+                    }
                 } else {
                     let deleted = deleted_run_xml(&original.runs[i])?;
                     output.push_str(&metadata.ids.revision(
@@ -2069,7 +2156,11 @@ fn compare_paragraph(
             }
             (Some(i), None) => {
                 if run_is_ignored(&original.runs[i], metadata.options) {
-                    output.push_str(&paragraph_owned_run_xml(&original.runs[i])?);
+                    if let Some(source) = original_source {
+                        output.push_str(&source[original_run_spans[i].clone()]);
+                    } else {
+                        output.push_str(&paragraph_owned_run_xml(&original.runs[i])?);
+                    }
                     continue;
                 }
                 let run = deleted_run_xml(&original.runs[i])?;
@@ -2128,6 +2219,7 @@ enum GranularAction {
 fn compare_granular_paragraph(
     original: &CT_P,
     edited: &CT_P,
+    original_source: Option<&str>,
     location: &str,
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
@@ -2149,22 +2241,42 @@ fn compare_granular_paragraph(
     {
         let properties =
             paragraph_properties_xml(original, edited, location, metadata, diagnostics)?;
+        let spans = original_source
+            .map(paragraph_run_spans)
+            .transpose()?
+            .unwrap_or_default();
+        if original_source.is_some() && spans.len() != original.runs.len() {
+            return Err(Error::Other(format!(
+                "comparison could not correlate granular run owners at {location}"
+            )));
+        }
         let replacements = original
             .runs
             .iter()
             .zip(&edited.runs)
             .enumerate()
             .map(|(index, (left, right))| {
-                compared_run_xml(
-                    left,
-                    right,
-                    &format!("{location}/run[{index}]"),
-                    metadata,
-                    diagnostics,
-                )
+                if left == right
+                    && let Some(source) = original_source
+                {
+                    Ok(source[spans[index].clone()].to_owned())
+                } else {
+                    compared_run_xml(
+                        left,
+                        right,
+                        &format!("{location}/run[{index}]"),
+                        metadata,
+                        diagnostics,
+                    )
+                }
             })
             .collect::<Result<Vec<_>>>()?;
-        return replace_paragraph_properties_and_runs(original, &properties, &replacements);
+        return replace_paragraph_properties_and_runs(
+            original,
+            original_source,
+            &properties,
+            &replacements,
+        );
     }
 
     let original_units = attributed_run_units(&original.runs, metadata.options);
@@ -2264,7 +2376,9 @@ fn compare_granular_paragraph(
     interleave_granular_paragraph(
         original,
         edited,
+        original_source,
         &original_units,
+        &edited_units,
         &grouped_alignment,
         &replacements,
         &properties,
@@ -2440,10 +2554,13 @@ fn merge_unit_runs(units: &[AttributedRunUnit], indices: &[usize]) -> Option<CT_
 
 fn replace_paragraph_properties_and_runs(
     paragraph: &CT_P,
+    original_source: Option<&str>,
     properties: &str,
     runs: &[String],
 ) -> Result<String> {
-    let mut source = paragraph_xml(paragraph)?;
+    let mut source = original_source
+        .map(str::to_owned)
+        .map_or_else(|| paragraph_xml(paragraph), Ok)?;
     let property_spans = direct_word_element_spans(&source, "pPr")?;
     match (property_spans.first(), properties.is_empty()) {
         (Some(span), false) => source.replace_range(span.clone(), properties),
@@ -2464,7 +2581,9 @@ fn replace_paragraph_properties_and_runs(
 fn interleave_granular_paragraph(
     original: &CT_P,
     edited: &CT_P,
+    original_source: Option<&str>,
     original_units: &[AttributedRunUnit],
+    edited_units: &[AttributedRunUnit],
     aligned: &[(Option<usize>, Option<usize>)],
     replacements: &[String],
     properties: &str,
@@ -2472,7 +2591,9 @@ fn interleave_granular_paragraph(
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
-    let mut source = paragraph_xml(original)?;
+    let mut source = original_source
+        .map(str::to_owned)
+        .map_or_else(|| paragraph_xml(original), Ok)?;
     let property_spans = direct_word_element_spans(&source, "pPr")?;
     match (property_spans.first(), properties.is_empty()) {
         (Some(span), false) => source.replace_range(span.clone(), properties),
@@ -2498,7 +2619,16 @@ fn interleave_granular_paragraph(
     let mut output = source[..insertion_boundary].to_owned();
     let mut cursor = insertion_boundary;
     let mut consumed_owner = None;
-    for ((left, _), replacement) in aligned.iter().zip(replacements) {
+    let mut original_owner_units = vec![0usize; original.runs.len()];
+    let mut edited_owner_units = vec![0usize; edited.runs.len()];
+    for unit in original_units {
+        original_owner_units[unit.owner] += 1;
+    }
+    for unit in edited_units {
+        edited_owner_units[unit.owner] += 1;
+    }
+    for ((left, right), replacement) in aligned.iter().zip(replacements) {
+        let mut exact_run = None;
         if let Some(unit) = left.map(|index| &original_units[index])
             && consumed_owner != Some(unit.owner)
         {
@@ -2506,8 +2636,15 @@ fn interleave_granular_paragraph(
             output.push_str(&source[cursor..span.start]);
             cursor = span.end;
             consumed_owner = Some(unit.owner);
+            if let Some(right_owner) = right.map(|index| edited_units[index].owner)
+                && original.runs[unit.owner] == edited.runs[right_owner]
+                && original_owner_units[unit.owner] == 1
+                && edited_owner_units[right_owner] == 1
+            {
+                exact_run = Some(&source[span.clone()]);
+            }
         }
-        output.push_str(replacement);
+        output.push_str(exact_run.unwrap_or(replacement));
     }
     output.push_str(&source[cursor..]);
 
@@ -2765,6 +2902,7 @@ fn attributed_unit_signature(unit: &AttributedRunUnit) -> String {
 fn compare_complex_paragraph(
     original: &CT_P,
     edited: &CT_P,
+    original_source: Option<&str>,
     location: &str,
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
@@ -2796,7 +2934,9 @@ fn compare_complex_paragraph(
                 diagnostics,
             )?;
         }
-        return paragraph_xml(original);
+        return original_source
+            .map(str::to_owned)
+            .map_or_else(|| paragraph_xml(original), Ok);
     }
     if original.hyperlinks != edited.hyperlinks
         || (!metadata.options.ignore_comments && original.comment_ranges != edited.comment_ranges)
@@ -2810,7 +2950,15 @@ fn compare_complex_paragraph(
         )));
     }
 
-    let source = paragraph_xml(original)?;
+    let source = original_source
+        .map(str::to_owned)
+        .map_or_else(|| paragraph_xml(original), Ok)?;
+    let run_spans = paragraph_run_spans(&source)?;
+    if run_spans.len() != original.runs.len() {
+        return Err(Error::Other(format!(
+            "comparison could not correlate complex paragraph runs at {location}"
+        )));
+    }
     let original_signatures = original
         .runs
         .iter()
@@ -2835,28 +2983,24 @@ fn compare_complex_paragraph(
     let mut output = String::new();
     let mut cursor = 0usize;
     for (left, right) in aligned {
-        let old_run = left
-            .map(|index| paragraph_owned_run_xml(&original.runs[index]))
-            .transpose()?;
-        if let Some(old_run) = &old_run {
-            let relative = source[cursor..].find(old_run).ok_or_else(|| {
-                Error::Other(format!(
-                    "comparison could not locate a serialized run at {location}"
-                ))
-            })?;
-            let start = cursor + relative;
-            output.push_str(&source[cursor..start]);
-            cursor = start + old_run.len();
+        if let Some(index) = left {
+            let span = &run_spans[index];
+            output.push_str(&source[cursor..span.start]);
+            cursor = span.end;
         }
         match (left, right) {
             (Some(i), Some(j)) if original_signatures[i] == edited_signatures[j] => {
-                output.push_str(&compared_run_xml(
-                    &original.runs[i],
-                    &edited.runs[j],
-                    &format!("{location}/run[{j}]"),
-                    metadata,
-                    diagnostics,
-                )?);
+                if original.runs[i] == edited.runs[j] {
+                    output.push_str(&source[run_spans[i].clone()]);
+                } else {
+                    output.push_str(&compared_run_xml(
+                        &original.runs[i],
+                        &edited.runs[j],
+                        &format!("{location}/run[{j}]"),
+                        metadata,
+                        diagnostics,
+                    )?);
+                }
             }
             (Some(i), Some(j)) => {
                 let deleted = deleted_run_xml(&original.runs[i])?;
@@ -2880,7 +3024,7 @@ fn compare_complex_paragraph(
             }
             (Some(i), None) => {
                 if run_is_ignored(&original.runs[i], metadata.options) {
-                    output.push_str(&paragraph_owned_run_xml(&original.runs[i])?);
+                    output.push_str(&source[run_spans[i].clone()]);
                     continue;
                 }
                 let deleted = deleted_run_xml(&original.runs[i])?;
@@ -3165,6 +3309,7 @@ fn paragraph_mark_properties(
 fn compare_table(
     original: &CT_Tbl,
     edited: &CT_Tbl,
+    original_source: Option<&str>,
     location: &str,
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
@@ -3191,7 +3336,9 @@ fn compare_table(
         .iter()
         .map(|row| row_signature_with_options(row, metadata.options))
         .collect::<Vec<_>>();
-    let mut source = table_xml(original)?;
+    let mut source = original_source
+        .map(str::to_owned)
+        .map_or_else(|| table_xml(original), Ok)?;
     let properties = table_properties_xml(
         original.properties.as_ref(),
         edited.properties.as_ref(),
@@ -3239,6 +3386,7 @@ fn compare_table(
                 output.push_str(&compare_row(
                     &original.rows[i],
                     &edited.rows[j],
+                    Some(&source[row_spans[i].clone()]),
                     &format!("{location}/row[{j}]"),
                     metadata,
                     diagnostics,
@@ -3424,6 +3572,7 @@ fn marked_row(row: &CT_Row, kind: &str, metadata: &mut Metadata<'_>) -> Result<S
 fn compare_row(
     original: &CT_Row,
     edited: &CT_Row,
+    original_source: Option<&str>,
     location: &str,
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
@@ -3439,7 +3588,9 @@ fn compare_row(
     if !metadata.options.ignore_formatting && row_formatting(original) != row_formatting(edited) {
         formatting_diagnostic(diagnostics, location.to_owned());
     }
-    let mut output = row_xml(original)?;
+    let mut output = original_source
+        .map(str::to_owned)
+        .map_or_else(|| row_xml(original), Ok)?;
     let cell_spans = direct_word_element_spans(&output, "tc")?;
     if cell_spans.len() != original.cells.len() {
         return Err(Error::Other(format!(
@@ -3519,12 +3670,22 @@ fn compare_cell_from_xml(
         let child_location = format!("{location}/content[{index}]");
         let source = &original_xml[span.clone()];
         replacements.push(match (left, right) {
-            (CellContent::Paragraph(left), CellContent::Paragraph(right)) => {
-                compare_paragraph(left, right, &child_location, metadata, diagnostics)?
-            }
-            (CellContent::Table(left), CellContent::Table(right)) => {
-                compare_table(left, right, &child_location, metadata, diagnostics)?
-            }
+            (CellContent::Paragraph(left), CellContent::Paragraph(right)) => compare_paragraph(
+                left,
+                right,
+                Some(source),
+                &child_location,
+                metadata,
+                diagnostics,
+            )?,
+            (CellContent::Table(left), CellContent::Table(right)) => compare_table(
+                left,
+                right,
+                Some(source),
+                &child_location,
+                metadata,
+                diagnostics,
+            )?,
             (CellContent::ContentControl(left), CellContent::ContentControl(right)) => {
                 compare_control_from_xml(
                     left,
@@ -3633,6 +3794,21 @@ fn compare_control_from_xml(
         &original_content,
         &edited_content,
     );
+    let content_spans = direct_word_element_spans(original_xml, "sdtContent")?;
+    let content_span = content_spans.first().ok_or_else(|| {
+        Error::Other(format!(
+            "comparison could not find content-control content at {location}"
+        ))
+    })?;
+    let content_source = &original_xml[content_span.clone()];
+    let content_inner = element_inner_range_any_prefix(content_source, "sdtContent")?;
+    let content_inner = &content_source[content_inner];
+    let original_spans = story_content_spans(content_inner, "w")?;
+    if original_spans.len() != original_content.len() {
+        return Err(Error::Other(format!(
+            "comparison could not correlate content-control owners at {location}"
+        )));
+    }
     let mut content: Vec<(bool, String)> = Vec::new();
     let mut whitespace_emitted = vec![false; whitespace_slots.len()];
     for (position, (left, right)) in aligned.iter().copied().enumerate() {
@@ -3665,6 +3841,7 @@ fn compare_control_from_xml(
                 compare_control_content(
                     original_content[i],
                     edited_content[j],
+                    Some(&content_inner[original_spans[i].clone()]),
                     &child_location,
                     metadata,
                     diagnostics,
@@ -3735,30 +3912,52 @@ fn inline_control_raw_boundaries(
 fn compare_control_content(
     original: &SdtContent,
     edited: &SdtContent,
+    original_source: Option<&str>,
     location: &str,
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
     match (original, edited) {
-        (SdtContent::Paragraph(left), SdtContent::Paragraph(right)) => {
-            compare_paragraph(left, right, location, metadata, diagnostics)
-        }
-        (SdtContent::Table(left), SdtContent::Table(right)) => {
-            compare_table(left, right, location, metadata, diagnostics)
-        }
+        (SdtContent::Paragraph(left), SdtContent::Paragraph(right)) => compare_paragraph(
+            left,
+            right,
+            original_source,
+            location,
+            metadata,
+            diagnostics,
+        ),
+        (SdtContent::Table(left), SdtContent::Table(right)) => compare_table(
+            left,
+            right,
+            original_source,
+            location,
+            metadata,
+            diagnostics,
+        ),
         (SdtContent::ContentControl(left), SdtContent::ContentControl(right)) => {
-            compare_control(left, right, location, metadata, diagnostics)
+            if let Some(source) = original_source {
+                compare_control_from_xml(left, right, location, metadata, diagnostics, source)
+            } else {
+                compare_control(left, right, location, metadata, diagnostics)
+            }
         }
-        (SdtContent::Row(left), SdtContent::Row(right)) => {
-            compare_row(left, right, location, metadata, diagnostics)
-        }
+        (SdtContent::Row(left), SdtContent::Row(right)) => compare_row(
+            left,
+            right,
+            original_source,
+            location,
+            metadata,
+            diagnostics,
+        ),
         (SdtContent::Cell(left), SdtContent::Cell(right)) => compare_cell_from_xml(
             left,
             right,
             location,
             metadata,
             diagnostics,
-            &cell_xml(left)?,
+            &original_source
+                .map(str::to_owned)
+                .map_or_else(|| cell_xml(left), Ok)?,
         ),
         (SdtContent::Run(left), SdtContent::Run(right)) => {
             if uses_attributed_run_path(metadata.options) {
@@ -3774,7 +3973,13 @@ fn compare_control_content(
                 if !metadata.options.ignore_formatting && left.properties != right.properties {
                     formatting_diagnostic(diagnostics, location.to_owned());
                 }
-                run_xml(left)
+                if left == right
+                    && let Some(source) = original_source
+                {
+                    Ok(source.to_owned())
+                } else {
+                    run_xml(left)
+                }
             } else {
                 let deleted = metadata.ids.revision(
                     "del",

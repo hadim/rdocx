@@ -148,12 +148,17 @@ impl Document {
     ) -> Result<usize> {
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;
-        let source = candidate.document.to_xml()?;
-        let mut tree = XmlTree::parse(&source)?;
-        if let Some(packaged_xml) = candidate.package.get_part(&candidate.doc_part_name) {
-            let packaged_tree = XmlTree::parse(packaged_xml)?;
-            tree.recover_property_owner_namespaces(&packaged_tree);
-        }
+        let source = candidate
+            .package
+            .get_part(&candidate.doc_part_name)
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "missing revision story part {}",
+                    candidate.doc_part_name
+                ))
+            })?
+            .to_vec();
+        let tree = XmlTree::parse(&source)?;
         let mut state = RenderState {
             resolution,
             scope: scope.clone(),
@@ -331,46 +336,6 @@ impl<'a> XmlTree<'a> {
         convert_deleted_text: bool,
     ) -> Result<Vec<u8>> {
         self.render_with_namespaces(index, state, convert_deleted_text, &[])
-    }
-
-    fn recover_property_owner_namespaces(&mut self, packaged: &XmlTree<'_>) {
-        let packaged_revisions = packaged
-            .elements
-            .iter()
-            .filter_map(|element| {
-                let metadata = element.revision.as_ref()?;
-                let parent = element.parent?;
-                is_property_change(metadata.kind).then(|| {
-                    (
-                        metadata.clone(),
-                        packaged.elements[parent].namespace_declarations.clone(),
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        let mut used = vec![false; packaged_revisions.len()];
-
-        for index in 0..self.elements.len() {
-            let Some(metadata) = self.elements[index].revision.as_ref() else {
-                continue;
-            };
-            if !is_property_change(metadata.kind) {
-                continue;
-            }
-            let Some(parent) = self.elements[index].parent else {
-                continue;
-            };
-            let Some((matched, (_, declarations))) = packaged_revisions.iter().enumerate().find(
-                |(candidate, (packaged_metadata, _))| {
-                    !used[*candidate] && packaged_metadata == metadata
-                },
-            ) else {
-                continue;
-            };
-            used[matched] = true;
-            self.elements[parent].namespace_declarations =
-                merged_namespaces(&self.elements[parent].namespace_declarations, declarations);
-        }
     }
 
     fn render_with_namespaces(
