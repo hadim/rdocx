@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 15 | 0 | 9 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 92 | 88 | 0 | 0  |
-| **Total** | **410** | **329** | **0** | **77** |
+| X, Cross-cutting (opportunistic)            | 102 | 88 | 0 | 10 |
+| **Total** | **420** | **329** | **0** | **87** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -629,4 +629,14 @@ regenerated, never hand-edited.
 | F-X087 | Portable authored Word charts from PR 71 | S71 | L | done |
 | F-X088 | Verify and close Issue 69 after S70 fixes | S71 | S | done |
 | F-X089 | Capability-led README family | S71 | L | done |
+| F-X090 | Accept part-local producer drawing identities | S72 | S | pending |
+| F-X091 | Serialize unused root default namespaces safely | S72 | M | pending |
+| F-X092 | Preserve logical reading order in generated PDFs | S72 | L | pending |
+| F-X093 | Preserve drawings through document comparison staging | S72 | M | pending |
+| F-X094a | Expose Word collaboration and redline commands in rdocx-cli | S72 | M | pending |
+| F-X094b | Structured CLI text and layout plus guarded replacement | S72 | L | pending |
+| F-X094c | Priority rdocx Python collaboration, comparison, layout, and TOC | S72 | L | pending |
+| F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | S72 | L | pending |
+| F-X094e | rpptx Python rendering, comments, and notes | S72 | L | pending |
+| F-X094f | Prepare the py-v0.13.1 release path | S72 | M | pending |
 <!-- AUTOGEN:backlog-MX END -->

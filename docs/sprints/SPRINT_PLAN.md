@@ -1362,7 +1362,10 @@ retaining compiled examples, package evidence, and honest boundaries.
 #### Sprint S72, Sections, stories, and content ownership
 
 **Goal**: expose ordered sections and one relationship-safe content model for
-the body and every related story required by from-scratch generation.
+the body and every related story required by from-scratch generation. The
+user-approved issue wave also restores producer-package compatibility,
+searchable PDF text, comparison with drawings, CLI automation, Python access,
+and a reviewed Python release path.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -1373,10 +1376,25 @@ the body and every related story required by from-scratch generation.
 | F-254 | Generic insert, move, clone, and remove operations | L |
 | F-255 | Part-scoped assets, links, and relationships | M |
 | F-256 | Transactional cross-document fragment import | L |
+| F-X090 | Accept part-local producer drawing identities | S |
+| F-X091 | Serialize unused root default namespaces safely | M |
+| F-X092 | Preserve logical reading order in generated PDFs | L |
+| F-X093 | Preserve drawings through document comparison staging | M |
+| F-X094a | Expose Word collaboration and redline commands in rdocx-cli | M |
+| F-X094b | Structured CLI text and layout plus guarded replacement | L |
+| F-X094c | Priority rdocx Python collaboration, comparison, layout, and TOC | L |
+| F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | L |
+| F-X094e | rpptx Python rendering, comments, and notes | L |
+| F-X094f | Prepare the py-v0.13.1 release path | M |
 
 F-253 is the common owner model for every mutation. Section and relationship
 work then converges in F-252, while F-256 lands last against the complete
-dependency-remapping surface.
+dependency-remapping surface. F-X090 through F-X093 are one-story corrections
+for Issues 72 through 75. F-X094a through F-X094f split Issue 76 into reviewable
+CLI, binding, and release-preparation contracts. F-X092 is the only wave that
+may move the PDF hash baseline and lands after every unchanged-baseline story.
+S72 prepares but does not create or publish `py-v0.13.1`. Publication remains a
+separate `/release` action with fresh approval at the reviewed SHA.
 
 #### Sprint S73, Tables, rich content, and private corpus gate
 

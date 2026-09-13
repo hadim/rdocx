@@ -4694,6 +4694,154 @@ duplicate evidence, or a broadened uniqueness conclusion, binds security claims
 to default-off Cargo features, and proves every one of the 22 publishable
 archives contains its byte-identical declared README.
 
+### F-X090, Accept part-local producer drawing identities (S)
+
+Open producer documents when the same normalized `wp:docPr/@id` appears in
+different physical XML parts. Validate imported drawing identities within each
+part, then retain their complete union as occupied input to the package-global
+authored allocator. Preserve producer XML and continue rejecting normalized
+duplicates inside one part.
+
+**Depends on**: F-255.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/72>.
+**Test gate**: regression. `cross_part_producer_drawing_ids_do_not_block_document_open`
+opens a source-built package whose body and header reuse one valid drawing id,
+preserves both parts through mutation and reopen, allocates a new authored id
+outside the occupied union, and still rejects same-part normalized duplicates.
+
+### F-X091, Serialize unused root default namespaces safely (M)
+
+Classify a producer root default namespace by namespace-aware use rather than
+rejecting every unknown default binding. An unused declaration does not block a
+typed mutation or save. A used, ambiguous, or malformed binding still fails
+closed and leaves the package unchanged. Add fallible
+`Document::try_replace_text` for the CLI while retaining the legacy infallible
+signature.
+
+**Depends on**: F-255.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/73>.
+**Test gate**: regression. `unused_root_default_namespace_allows_atomic_save`
+mutates and reopens the reported package shape with exact raw preservation, and
+a used inherited default namespace still fails atomically through native and
+CLI paths without a panic or partial output.
+
+### F-X092, Preserve logical reading order in generated PDFs (L)
+
+Make the shared PDF backend expose complete logical lines instead of
+run-fragmented extraction for large Word documents and PowerPoint
+presentations. Emit rich runs with run-wide extraction geometry and preserve
+logical source order across adjacent styled and bidirectional runs without
+changing glyph paint order, pagination, or raster geometry.
+
+**Depends on**: F-255.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/74>.
+**Test gate**: regression. `large_word_and_presentation_pdfs_preserve_logical_reading_order`
+builds large DOCX and PPTX inputs with uniquely numbered multiword lines split
+across runs. Pinned Poppler 26.01.0 extracts each substantial line once and in
+logical order while deterministic raster output remains unchanged.
+
+### F-X093, Preserve drawings through document comparison staging (M)
+
+Keep package-authoritative main-story XML and namespace ownership through
+comparison, tracked-body construction, staged reopen, and accept or reject
+postconditions. Valid body and related-story drawings remain complete while
+text revisions are emitted. Invalid drawings still fail atomically.
+
+**Depends on**: F-255.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/75>.
+**Test gate**: regression. `document_compare_preserves_inline_drawings_through_staging`
+compares source-built packages containing body and header drawings, preserves
+their exact payloads and relationships through compare, save, reopen, accept,
+and reject, and still rejects a genuinely missing `wp:docPr/@id`.
+
+### F-X094a, Expose Word collaboration and redline commands in rdocx-cli (M)
+
+Expose shipped comment, revision-resolution, and comparison facades through
+nested `rdocx comment`, `rdocx revision`, and `rdocx compare` commands. Every
+mutation requires an explicit output, publishes atomically, and returns exact
+schema-1 JSON when requested. Revision inspection remains explicitly scoped to
+the main story.
+
+**Depends on**: F-148, F-150, F-234, F-235.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: integration. `cli_collaboration_commands_are_schema_stable_and_atomic`
+lists and mutates comment threads, lists and resolves revisions, creates a
+reopenable redline, verifies exact JSON, and proves invalid inputs publish no
+destination.
+
+### F-X094b, Structured CLI text and layout plus guarded replacement (L)
+
+Add schema-1 JSON for rich accepted-view body text and deterministic body-item
+layout. Text records carry a top-level body index and typed nested path. Layout
+uses real point-space fragments for page-spanning items, empty tables, and
+image-bearing paragraphs. `replace --expect N` guards the existing run-aware
+replacement before publication.
+
+**Depends on**: F-X032, F-X037, F-X047.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: integration. `cli_structured_text_layout_and_guarded_replace_preserve_exact_contracts`
+checks nested text paths, run formatting, multi-page body fragments, empty and
+image extents, and an exact-count mismatch that creates no output.
+
+### F-X094c, Priority rdocx Python collaboration, comparison, layout, and TOC (L)
+
+Expose current comparison, main-body comments, deterministic layout and page
+lookup, and TOC rebuild through precisely typed immutable Python snapshots.
+Structural mutations advance binding revision only after success. The surface
+does not complete the future all-story work in F-291, F-293, F-295, or F-310.
+
+**Depends on**: F-X094b, F-148, F-232, F-234, F-235.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: binding. `priority_word_operations_return_typed_snapshots_and_remain_atomic`
+reopens a redline and comment thread, checks real layout fragments and TOC
+counts, passes installed typing and stub checks, and proves native failures do
+not mutate the Python document.
+
+### F-X094d, rdocx Python sections, styles, rich stories, and hyperlinks (L)
+
+After F-252, expose ordered section, style, rich header and footer, and
+relationship-resolved hyperlink snapshots. Records retain source order, story
+ownership, inheritance, and nested paths without adding a second document tree
+or an untyped dictionary layer.
+
+**Depends on**: F-252, F-255, F-X094c.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: binding. `word_structure_snapshots_preserve_order_ownership_and_types`
+opens a three-section document with inherited and independent rich variants,
+styles, and links, then verifies exact frozen records and installed typing
+through save and reopen.
+
+### F-X094e, rpptx Python rendering, comments, and notes (L)
+
+Expose deterministic slide and speaker-note PDF and PNG rendering, notes text,
+and the current modern comment-author, thread, reply, and ordered mutation
+facade through precisely typed Python values. Rendering releases the GIL and
+collaboration mutation retains native identity and atomicity.
+
+**Depends on**: F-136, F-217, F-226.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: binding. `presentation_render_comments_and_notes_match_native_snapshots`
+renders slide and notes outputs, reads notes text, mutates and reopens one
+comment thread, passes installed typing, and proves invalid identities publish
+no mutation.
+
+### F-X094f, Prepare the py-v0.13.1 release path (M)
+
+Extend the reviewed release ceremony with a Python family containing `rdocx`
+and `rpptx` at one version, exactly twelve cp39-abi3 wheels and two source
+distributions, trusted PyPI publication, byte-identical GitHub release notes,
+registry ownership verification, and contribution evidence. S72 prepares this
+contract but creates no tag, publishes nothing, posts no external comment, and
+does not close Issue 76. Those actions require a later release F-ID and fresh
+`/release py-v0.13.1` approval at the reviewed SHA.
+
+**Depends on**: F-137, F-138, F-X094a, F-X094c, F-X094d, F-X094e.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: release preparation. `python_release_contract_rejects_partial_or_unapproved_publication`
+accepts only the exact tag, distribution, wheel, source archive, trusted
+publisher, reviewed-note, verification, and approval contract. Negative
+mutations reject every partial or manual-publication path.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

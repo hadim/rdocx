@@ -4,9 +4,11 @@
 
 **Goal**: expose every document section in stable order and provide one
 relationship-safe content model for the body and every related story required
-by from-scratch generation. Public mutations must preserve schema order,
-unmodelled XML, story ownership, and cross-part relationships while committing
-only complete validated candidates.
+by from-scratch generation. The user-approved issue wave also restores
+producer-package compatibility, searchable PDF text, comparison with drawings,
+CLI automation, Python access, and a reviewed Python release path. Public
+mutations must preserve schema order, unmodelled XML, story ownership, and
+cross-part relationships while committing only complete validated candidates.
 
 ## Spec references
 
@@ -29,7 +31,10 @@ only complete validated candidates.
 - `docs/hld/13-risks-and-open-questions.md`, for the rule that cross-part Word
   invariants are staged and validated as one operation.
 - `docs/hld/14-development-backlog.md`, for the F-250 through F-256 acceptance
-  contracts, dependencies, sizes, and M23 sequencing.
+  contracts, the F-X090 through F-X094f issue contracts, dependencies, sizes,
+  and S72 sequencing.
+- `docs/hld/15-build-and-toolchain.md`, for Python wheel construction, trusted
+  publication authority, artifact verification, and the separate release gate.
 
 ## The wave
 
@@ -40,8 +45,18 @@ only complete validated candidates.
 | F-251 | Complete section and page geometry | L | done | - |
 | F-254 | Generic insert, move, clone, and remove operations | L | done | - |
 | F-255 | Part-scoped assets, links, and relationships | M | done | - |
+| F-X090 | Accept part-local producer drawing identities | S | pending | - |
+| F-X091 | Serialize unused root default namespaces safely | M | pending | - |
 | F-252 | Rich per-section headers and footers | L | pending | - |
+| F-X093 | Preserve drawings through document comparison staging | M | pending | - |
 | F-256 | Transactional cross-document fragment import | L | pending | - |
+| F-X094a | Expose Word collaboration and redline commands in rdocx-cli | M | pending | - |
+| F-X094b | Structured CLI text and layout plus guarded replacement | L | pending | - |
+| F-X094c | Priority rdocx Python collaboration, comparison, layout, and TOC | L | pending | - |
+| F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | L | pending | - |
+| F-X094e | rpptx Python rendering, comments, and notes | L | pending | - |
+| F-X094f | Prepare the py-v0.13.1 release path | M | pending | - |
+| F-X092 | Preserve logical reading order in generated PDFs | L | pending | - |
 
 ## Sequencing note
 
@@ -50,10 +65,14 @@ Rows are listed in dependency order, not F-ID order.
 F-253 and F-250 establish the independent story and section ownership
 foundations. F-251 may proceed once ordered section mutation exists, while
 F-254 and F-255 build generic mutation and part-scoped relationships on the
-container-neutral story model. F-252 converges the section and story tracks so
-each header and footer variant can own rich related content safely. F-256 lands
-last because fragment import must remap the complete package, style, numbering,
-section, story, asset, and relationship surface delivered through F-255.
+container-neutral story model. F-X090 and F-X091 repair producer admission and
+namespace serialization before F-252 expands related stories. F-252 converges
+the section and story tracks so each header and footer variant can own rich
+related content safely. F-X093 then protects drawings through comparison, and
+F-256 remaps the complete package dependency graph. F-X094a through F-X094e
+expose the reviewed native capabilities through the CLI and Python bindings.
+F-X094f prepares the Python release contract without publishing. F-X092 lands
+last because it exclusively owns the declared PDF baseline change.
 
 ## Definition of done for this sprint
 
@@ -76,6 +95,17 @@ section, story, asset, and relationship surface delivered through F-255.
 - A dependency-rich cross-document fragment can be imported repeatedly with
   deterministic remapping and no collisions, while any unsupported dependency
   aborts without changing the destination.
+- Producer drawing identifiers are validated per physical part, unused ambient
+  default namespaces do not block safe saves, and comparison preserves valid
+  drawings and namespace ownership.
+- Generated Word and PowerPoint PDFs preserve complete logical text lines for
+  pinned extraction while retaining deterministic visual geometry.
+- CLI and Python users can reach the issue-defined collaboration, comparison,
+  layout, text, story, hyperlink, rendering, comment, and note capabilities
+  through exact typed or schema-versioned contracts.
+- The `py-v0.13.1` release path validates twelve wheels and two source
+  distributions, but creates no tag and performs no publication without a
+  separate `/release` approval.
 - Every operation preserves unmodelled XML and schema child order, publishes
   only a complete staged document and package candidate, remains deterministic,
   and leaves the hash harness unchanged unless a separately labelled and
