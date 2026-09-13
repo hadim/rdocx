@@ -1001,6 +1001,15 @@ that displayed parity for a section. Missing later variants inherit only the
 same type from the preceding section. No selected first or even variant borrows
 default header, footer, or watermark content.
 
+The native authoring facade preserves that selection contract. Creating a
+first-page story enables the section title-page state. Creating an even-page
+story does not change the document-wide even-page setting, which has its own
+explicit getter and setter. Removing a variant authors an explicit empty story,
+while inheriting it removes the direct reference. Cloned and replaced stories
+retain their part-local images, links, drawings, fields, tables, and supported
+nested content, so layout receives the same relationship-resolved content at
+the geometry of the section that selects it.
+
 Every public document mutation and mutable-accessor entry point clears both
 completed result caches before changing or exposing content. It preserves the
 normal engine so safe paragraph and shaping work can be reused after an edit.

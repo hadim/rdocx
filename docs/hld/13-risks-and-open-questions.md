@@ -238,6 +238,16 @@ section. It prunes only facade-owned parts that no modeled or opaque reference
 can reach. Missing, malformed, cross-type, external, shared, and producer-owned
 edges cannot publish a half-updated section and story graph.
 
+Per-section header and footer mutations use the same invariant boundary.
+Lookup follows only the requested variant through preceding sections. Link
+accepts only an existing internal exact-type story. Unlink and replace copy the
+story XML and complete part-local relationship set, rebase internal relative
+targets, and freshen drawing identities before publication. Inherit removes the
+direct reference, while remove installs an explicit empty story. Pruning is
+limited to facade-owned graph nodes that are unreachable from modeled and
+opaque references. The document-wide even-page setting is an explicit typed
+operation, and first-page creation enables the section title-page state.
+
 Style graph mutations use the same rule. Adding or updating one side of a
 legal paragraph and character link updates the reciprocal edge in the staged
 candidate. Missing targets, incompatible types, duplicate defaults, cycles,

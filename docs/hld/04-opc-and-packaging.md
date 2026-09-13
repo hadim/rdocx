@@ -488,6 +488,19 @@ untouched and cannot shadow a later valid relationship. Text, raw XML, image,
 and background-image setters apply the same eligibility rule before reusing a
 referenced part. An ineligible slot receives a fresh collision-safe part name.
 
+Per-section story operations resolve only internal relationships whose type and
+target root match the requested header or footer family. Linking reuses one
+exact-type relationship. Inheritance removes the direct reference and exposes
+the preceding same-type story. Unlink and replacement copy the effective story
+XML into a collision-safe part, copy its part-local relationship set, rebase
+internal relative targets, and allocate fresh drawing identities. Removal
+installs an explicit empty story so it cannot expose inherited content. Pruning
+removes only unreachable facade-owned relationships, parts, content types, and
+media. Shared, producer-owned, opaque, and still-reachable graphs remain intact.
+Every operation publishes only after the staged package serializes and reopens.
+The typed `w:evenAndOddHeaders` setting reads namespace aliases and writes a
+fixed `w:` prefix in its schema slot.
+
 Section removal preserves the following section's effective header and footer
 behavior before deleting a non-final boundary. For each default, first, and even
 variant, resolution takes the first reference whose relationship has the exact

@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 15 | 0 | 9 |
+| M23, From-scratch business documents           | 24 | 16 | 0 | 8 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
 | X, Cross-cutting (opportunistic)            | 102 | 90 | 0 | 8 |
-| **Total** | **420** | **331** | **0** | **85** |
+| **Total** | **420** | **332** | **0** | **84** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -464,7 +464,7 @@ regenerated, never hand-edited.
 | F-249 | Deterministic package identifier allocation | S71 | M | done |
 | F-250 | Ordered mutable section facade | S72 | L | done |
 | F-251 | Complete section and page geometry | S72 | L | done |
-| F-252 | Rich per-section headers and footers | S72 | L | pending |
+| F-252 | Rich per-section headers and footers | S72 | L | done |
 | F-253 | Container-neutral story editing | S72 | L | done |
 | F-254 | Generic insert, move, clone, and remove operations | S72 | L | done |
 | F-255 | Part-scoped assets, links, and relationships | S72 | M | done |

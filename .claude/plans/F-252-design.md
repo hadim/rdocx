@@ -1,6 +1,6 @@
 # F-252, Rich per-section headers and footers
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-250, F-253
@@ -82,11 +82,11 @@ the same package graph and bytes.
 
 ## Implementation checklist
 
-- [ ] Resolve effective same-type variants per section.
-- [ ] Add staged create, link, unlink, replace, and remove operations.
-- [ ] Route rich edits through the F-253 story content model.
-- [ ] Clone and prune complete part-local relationship closures safely.
-- [ ] Add inheritance, rich-content, render, and reopen tests.
+- [x] Resolve effective same-type variants per section.
+- [x] Add staged create, link, unlink, replace, and remove operations.
+- [x] Route rich edits through the F-253 story content model.
+- [x] Clone and prune complete part-local relationship closures safely.
+- [x] Add inheritance, rich-content, render, and reopen tests.
 
 ## Open questions
 

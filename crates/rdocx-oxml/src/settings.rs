@@ -191,6 +191,7 @@ pub struct CT_Settings {
     character_spacing_control: Option<CharacterSpacingControl>,
     theme_font_language: Option<ThemeFontLanguage>,
     automatic_hyphenation: Option<bool>,
+    even_and_odd_headers: Option<bool>,
     math_properties: Option<MathProperties>,
     /// Parsed parts keep their complete producer bytes as the serialization
     /// source. This retains root attributes, child order, whitespace, and all
@@ -220,6 +221,8 @@ impl CT_Settings {
         let mut theme_font_language_count = 0usize;
         let mut automatic_hyphenation = None;
         let mut automatic_hyphenation_count = 0usize;
+        let mut even_and_odd_headers = None;
+        let mut even_and_odd_headers_count = 0usize;
         let mut math_properties = None;
         let mut math_properties_count = 0usize;
         let mut doc_vars_depth = None;
@@ -279,6 +282,15 @@ impl CT_Settings {
                         {
                             automatic_hyphenation_count += 1;
                             automatic_hyphenation = parse_toggle(&element, &prefixes)?;
+                        } else if depth == 1
+                            && is_word_element(
+                                element.name().as_ref(),
+                                b"evenAndOddHeaders",
+                                &prefixes,
+                            )
+                        {
+                            even_and_odd_headers_count += 1;
+                            even_and_odd_headers = parse_toggle(&element, &prefixes)?;
                         } else if depth == 1
                             && is_word_element(
                                 element.name().as_ref(),
@@ -366,6 +378,11 @@ impl CT_Settings {
                         automatic_hyphenation_count += 1;
                         automatic_hyphenation = parse_toggle(&element, &prefixes)?;
                     } else if depth == 1
+                        && is_word_element(element.name().as_ref(), b"evenAndOddHeaders", &prefixes)
+                    {
+                        even_and_odd_headers_count += 1;
+                        even_and_odd_headers = parse_toggle(&element, &prefixes)?;
+                    } else if depth == 1
                         && is_word_element(element.name().as_ref(), b"defaultTabStop", &prefixes)
                     {
                         default_tab_stop_count += 1;
@@ -422,6 +439,9 @@ impl CT_Settings {
         if automatic_hyphenation_count != 1 {
             automatic_hyphenation = None;
         }
+        if even_and_odd_headers_count != 1 {
+            even_and_odd_headers = None;
+        }
         if math_properties_count != 1 {
             math_properties = None;
         }
@@ -442,6 +462,7 @@ impl CT_Settings {
             character_spacing_control,
             theme_font_language,
             automatic_hyphenation,
+            even_and_odd_headers,
             math_properties,
             source_xml: Some(xml.to_vec()),
         })
@@ -627,6 +648,7 @@ impl CT_Settings {
             && self.character_spacing_control.is_none()
             && self.theme_font_language.is_none()
             && self.automatic_hyphenation.is_none()
+            && self.even_and_odd_headers.is_none()
             && self.math_properties.is_none()
             && self.source_xml.is_none()
     }
@@ -684,6 +706,21 @@ impl CT_Settings {
         Ok(())
     }
 
+    /// Return whether Word selects distinct even-page header and footer stories.
+    ///
+    /// OOXML defines omission as disabled.
+    pub fn even_and_odd_headers(&self) -> bool {
+        self.even_and_odd_headers.unwrap_or(false)
+    }
+
+    /// Set distinct even-page header and footer selection.
+    pub fn set_even_and_odd_headers(&mut self, enabled: bool) -> Result<()> {
+        let replacement = write_toggle_setting("w:evenAndOddHeaders", enabled)?;
+        self.rewrite_scalar(b"evenAndOddHeaders", replacement)?;
+        self.even_and_odd_headers = Some(enabled);
+        Ok(())
+    }
+
     /// Serialize settings with fixed Word prefixes and schema child order.
     pub fn to_xml(&self) -> Result<Vec<u8>> {
         if let Some(source) = &self.source_xml {
@@ -710,6 +747,9 @@ impl CT_Settings {
         }
         if let Some(enabled) = self.automatic_hyphenation {
             write_toggle(&mut writer, "w:autoHyphenation", enabled)?;
+        }
+        if let Some(enabled) = self.even_and_odd_headers {
+            write_toggle(&mut writer, "w:evenAndOddHeaders", enabled)?;
         }
         if let Some(value) = self.character_spacing_control {
             writer.get_mut().extend_from_slice(&write_valued_setting(
@@ -1293,6 +1333,12 @@ fn write_toggle(writer: &mut Writer<Vec<u8>>, name: &str, value: bool) -> Result
     Ok(())
 }
 
+fn write_toggle_setting(name: &str, value: bool) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    write_toggle(&mut writer, name, value)?;
+    Ok(writer.into_inner())
+}
+
 fn rewrite_automatic_hyphenation(source: &[u8], enabled: bool) -> Result<Vec<u8>> {
     let mut reader = Reader::from_reader(source);
     reader.config_mut().trim_text(false);
@@ -1686,6 +1732,7 @@ mod tests {
             character_spacing_control: None,
             theme_font_language: None,
             automatic_hyphenation: None,
+            even_and_odd_headers: None,
             math_properties: None,
             source_xml: None,
         };
@@ -1746,6 +1793,29 @@ mod tests {
                 .unwrap()
                 .automatic_hyphenation()
         );
+    }
+
+    #[test]
+    fn even_and_odd_headers_are_alias_safe_and_rewrite_in_schema_order() {
+        let xml = format!(
+            r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:foreign"><q:defaultTableStyle q:val="TableNormal"/><x:evenAndOddHeaders/><q:evenAndOddHeaders q:val="off"/><q:bookFoldPrinting/><x:kept/></q:settings>"#,
+        );
+        let mut settings = CT_Settings::from_xml(xml.as_bytes()).unwrap();
+        assert!(!settings.even_and_odd_headers());
+        settings.set_even_and_odd_headers(true).unwrap();
+        let output = String::from_utf8(settings.to_xml().unwrap()).unwrap();
+        assert!(output.contains("<w:evenAndOddHeaders/>"));
+        assert!(output.contains("<x:evenAndOddHeaders/>"));
+        assert!(output.contains("<x:kept/>"));
+        assert!(
+            output.find("defaultTableStyle").unwrap()
+                < output.find("<w:evenAndOddHeaders").unwrap()
+        );
+        assert!(
+            output.find("<w:evenAndOddHeaders").unwrap() < output.find("bookFoldPrinting").unwrap()
+        );
+        let reopened = CT_Settings::from_xml(output.as_bytes()).unwrap();
+        assert!(reopened.even_and_odd_headers());
     }
 
     #[test]

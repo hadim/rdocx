@@ -422,6 +422,7 @@ defended.
 | F-255 | S72 | M | 2 | 1 | 2026-09-10 | Added story-scoped picture, hyperlink, lookup, and validation operations with part-local relationship ownership and deterministic global drawing allocation |
 | F-X090 | S72 | S | 1 | 1 | 2026-09-13 | Accepted reused producer drawing identities across physical XML parts while retaining package-global authored allocation |
 | F-X091 | S72 | M | 2 | 1 | 2026-09-13 | Allowed safe serialization of unused root defaults and added atomic fallible text replacement for the CLI |
+| F-252 | S72 | L | 4 | 1 | 2026-09-13 | Added transactional rich default, first, and even header and footer lifecycle operations for every section with exact Word selection parity |
 
 ## Velocity
 

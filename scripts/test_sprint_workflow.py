@@ -8295,7 +8295,7 @@ Pedro Assumpcao and the rdocx maintainers.
             f"F-{number:03d}"
             for number in range(244, 311)
             if number
-            not in {244, 245, 246, 247, 248, 249, 250, 251, 253, 254, 255}
+            not in {244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255}
         }
         self.assertEqual(
             {row["Owner"] for row in rows if row["Owner"] != "-"},

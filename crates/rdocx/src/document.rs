@@ -252,6 +252,77 @@ pub enum StoryKind {
     TextBox,
 }
 
+/// Whether a section story is a header or a footer.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HeaderFooterKind {
+    Header,
+    Footer,
+}
+
+impl HeaderFooterKind {
+    fn story_kind(self) -> StoryKind {
+        match self {
+            Self::Header => StoryKind::Header,
+            Self::Footer => StoryKind::Footer,
+        }
+    }
+
+    fn relationship_type(self) -> &'static str {
+        match self {
+            Self::Header => rel_types::HEADER,
+            Self::Footer => rel_types::FOOTER,
+        }
+    }
+
+    fn content_type(self) -> &'static str {
+        match self {
+            Self::Header => {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"
+            }
+            Self::Footer => {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"
+            }
+        }
+    }
+
+    fn part_stem(self) -> &'static str {
+        match self {
+            Self::Header => "header",
+            Self::Footer => "footer",
+        }
+    }
+
+    fn is_header(self) -> bool {
+        self == Self::Header
+    }
+}
+
+/// The effective header or footer story selected for one section variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionStory {
+    story: StoryId,
+    source_section: usize,
+    inherited: bool,
+}
+
+impl SectionStory {
+    /// Return the physical story owner.
+    pub fn story(&self) -> &StoryId {
+        &self.story
+    }
+
+    /// Return the section that supplies the effective reference.
+    pub fn source_section(&self) -> usize {
+        self.source_section
+    }
+
+    /// Return whether the selected section inherits this story.
+    pub fn is_inherited(&self) -> bool {
+        self.inherited
+    }
+}
+
 /// The supported kind of one item in a story.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -14821,6 +14892,402 @@ impl Document {
             })
     }
 
+    /// Resolve the effective header or footer story for one section variant.
+    pub fn section_story(
+        &self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<Option<SectionStory>> {
+        if section_index >= self.section_count() {
+            return Err(Error::Other(format!(
+                "section index {section_index} is out of range"
+            )));
+        }
+        let mut effective = None;
+        for (source_section, section) in self
+            .section_properties_in_order()
+            .enumerate()
+            .take(section_index + 1)
+        {
+            let references = match kind {
+                HeaderFooterKind::Header => &section.header_refs,
+                HeaderFooterKind::Footer => &section.footer_refs,
+            };
+            if let Some(reference) = self
+                .first_usable_header_footer_reference(references, hdr_type, kind.is_header())
+                .cloned()
+            {
+                effective = Some((source_section, reference));
+            }
+        }
+        let Some((source_section, reference)) = effective else {
+            return Ok(None);
+        };
+        let part_name = self
+            .header_footer_part_name(&reference.rel_id, kind.is_header())
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "section story relationship {} is not a valid internal {:?}",
+                    reference.rel_id, kind
+                ))
+            })?;
+        Ok(Some(SectionStory {
+            story: self.story_id_for_header_footer_part(&part_name, kind)?,
+            source_section,
+            inherited: source_section != section_index,
+        }))
+    }
+
+    /// Ensure that one section has an explicit story, creating an empty story
+    /// when the variant is absent or inherited.
+    pub fn create_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<StoryId> {
+        if let Some(story) = self.section_story(section_index, kind, hdr_type)?
+            && !story.is_inherited()
+        {
+            let first_page_is_enabled = self
+                .section(section_index)
+                .is_some_and(|section| section.properties().title_pg.unwrap_or(false));
+            if hdr_type != HdrFtrType::First || first_page_is_enabled {
+                return Ok(story.story);
+            }
+            let mut candidate = self.clone_for_staging();
+            candidate
+                .section_mut(section_index)
+                .ok_or_else(|| {
+                    Error::Other(format!("section index {section_index} is out of range"))
+                })?
+                .inner
+                .title_pg = Some(true);
+            let reopened = candidate.prepare_and_reopen_staged()?;
+            let result = reopened
+                .section_story(section_index, kind, hdr_type)?
+                .map(|section_story| section_story.story)
+                .ok_or_else(|| {
+                    Error::Other("existing first-page story was not published".to_owned())
+                })?;
+            self.commit_staged_mutation(reopened);
+            return Ok(result);
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let story = candidate.install_empty_section_story(section_index, kind, hdr_type)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let result = reopened
+            .section_story(section_index, kind, hdr_type)?
+            .map(|section_story| section_story.story)
+            .ok_or_else(|| Error::Other("created section story was not published".to_owned()))?;
+        debug_assert_eq!(result.part_name(), story.part_name());
+        self.commit_staged_mutation(reopened);
+        Ok(result)
+    }
+
+    /// Point one section variant at an existing same-kind story in this document.
+    pub fn link_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+        story: &StoryId,
+    ) -> Result<StoryId> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.validate_section_story_target(story, kind)?;
+        let relationship_id = candidate.document_story_relationship(kind, story.part_name())?;
+        let removed = candidate.set_direct_section_story_reference(
+            section_index,
+            kind,
+            hdr_type,
+            Some(relationship_id),
+        )?;
+        candidate.prune_unreachable_authored_section_stories(&removed)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let result = reopened
+            .section_story(section_index, kind, hdr_type)?
+            .map(|section_story| section_story.story)
+            .ok_or_else(|| Error::Other("linked section story was not published".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(result)
+    }
+
+    /// Remove the direct reference so the same variant inherits from the
+    /// nearest preceding section, or remains absent when none exists.
+    pub fn inherit_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let removed =
+            candidate.set_direct_section_story_reference(section_index, kind, hdr_type, None)?;
+        candidate.prune_unreachable_authored_section_stories(&removed)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Clone the effective story into an independent story owned by this section.
+    pub fn unlink_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<StoryId> {
+        let effective = self
+            .section_story(section_index, kind, hdr_type)?
+            .ok_or_else(|| Error::Other("cannot unlink an absent section story".to_owned()))?;
+        self.replace_section_story(section_index, kind, hdr_type, effective.story())
+    }
+
+    /// Replace one variant with an independent copy of an existing same-kind story.
+    pub fn replace_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+        source: &StoryId,
+    ) -> Result<StoryId> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.validate_section_story_target(source, kind)?;
+        let part_name = candidate.clone_header_footer_story_part(source.part_name(), kind)?;
+        let relationship_id = candidate.document_story_relationship(kind, &part_name)?;
+        let removed = candidate.set_direct_section_story_reference(
+            section_index,
+            kind,
+            hdr_type,
+            Some(relationship_id),
+        )?;
+        candidate.prune_unreachable_authored_section_stories(&removed)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let result = reopened
+            .section_story(section_index, kind, hdr_type)?
+            .map(|section_story| section_story.story)
+            .ok_or_else(|| Error::Other("replaced section story was not published".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(result)
+    }
+
+    /// Replace one section variant with a distinct empty story.
+    pub fn remove_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<StoryId> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.install_empty_section_story(section_index, kind, hdr_type)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let result = reopened
+            .section_story(section_index, kind, hdr_type)?
+            .map(|section_story| section_story.story)
+            .ok_or_else(|| Error::Other("empty section story was not published".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(result)
+    }
+
+    fn story_id_for_header_footer_part(
+        &self,
+        part_name: &str,
+        kind: HeaderFooterKind,
+    ) -> Result<StoryId> {
+        let xml = self
+            .package
+            .get_part(part_name)
+            .ok_or_else(|| Error::Other(format!("section story part {part_name} is missing")))?;
+        let story_kind = kind.story_kind();
+        let owner = scan_story_owners(xml, story_kind)?
+            .into_iter()
+            .find(|owner| owner.kind == story_kind)
+            .ok_or_else(|| Error::Other(format!("section story part {part_name} has no root")))?;
+        Ok(StoryId {
+            kind: story_kind,
+            part_name: part_name.to_owned(),
+            owner_index: owner.owner_index,
+            fingerprint: owner.fingerprint,
+        })
+    }
+
+    fn validate_section_story_target(&self, story: &StoryId, kind: HeaderFooterKind) -> Result<()> {
+        if story.kind != kind.story_kind() {
+            return Err(StoryError::WrongOwner {
+                expected: kind.story_kind(),
+                actual: story.kind,
+            }
+            .into());
+        }
+        let (_, owner) = self.story_source_and_owner(story)?;
+        if owner.kind != kind.story_kind() || owner.owner_index != 0 {
+            return Err(Error::Other(
+                "section story target must be the physical header or footer root".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn document_story_relationship(
+        &mut self,
+        kind: HeaderFooterKind,
+        part_name: &str,
+    ) -> Result<String> {
+        if let Some(id) = self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .and_then(|relationships| {
+                relationships.items.iter().find(|relationship| {
+                    relationship.rel_type == kind.relationship_type()
+                        && relationship_is_internal(relationship)
+                        && part_name_identity(&OpcPackage::resolve_rel_target(
+                            &self.doc_part_name,
+                            &relationship.target,
+                        )) == part_name_identity(part_name)
+                })
+            })
+            .map(|relationship| relationship.id.clone())
+        {
+            return Ok(id);
+        }
+        let id = self
+            .identifiers
+            .reserve_relationship_id_checked(&self.doc_part_name)?;
+        let target = relative_target(&self.doc_part_name, part_name);
+        self.package
+            .get_or_create_part_rels(&self.doc_part_name)
+            .add_with_id(&id, kind.relationship_type(), &target);
+        Ok(id)
+    }
+
+    fn set_direct_section_story_reference(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+        relationship_id: Option<String>,
+    ) -> Result<Vec<HdrFtrRef>> {
+        let section = self.section_mut(section_index).ok_or_else(|| {
+            Error::Other(format!("section index {section_index} is out of range"))
+        })?;
+        let references = match kind {
+            HeaderFooterKind::Header => &mut section.inner.header_refs,
+            HeaderFooterKind::Footer => &mut section.inner.footer_refs,
+        };
+        let mut removed = Vec::new();
+        references.retain(|reference| {
+            if reference.hdr_ftr_type == hdr_type {
+                removed.push(reference.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if let Some(rel_id) = relationship_id {
+            references.push(HdrFtrRef {
+                hdr_ftr_type: hdr_type,
+                rel_id,
+            });
+            if hdr_type == HdrFtrType::First {
+                section.inner.title_pg = Some(true);
+            }
+        }
+        Ok(removed)
+    }
+
+    fn install_empty_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<StoryId> {
+        let xml = Self::serialize_hdr_ftr(&CT_HdrFtr::new(), kind.is_header())?;
+        let part_name = self.install_header_footer_story_part(xml, None, kind)?;
+        let relationship_id = self.document_story_relationship(kind, &part_name)?;
+        let removed = self.set_direct_section_story_reference(
+            section_index,
+            kind,
+            hdr_type,
+            Some(relationship_id),
+        )?;
+        self.prune_unreachable_authored_section_stories(&removed)?;
+        self.story_id_for_header_footer_part(&part_name, kind)
+    }
+
+    fn clone_header_footer_story_part(
+        &mut self,
+        source_part: &str,
+        kind: HeaderFooterKind,
+    ) -> Result<String> {
+        let xml = self
+            .package
+            .get_part(source_part)
+            .ok_or_else(|| Error::Other(format!("section story part {source_part} is missing")))?;
+        if !header_footer_story_has_expected_root(xml, kind.is_header()) {
+            return Err(Error::Other(format!(
+                "section story part {source_part} has the wrong root"
+            )));
+        }
+        let mut xml = xml.to_vec();
+        xml = rewrite_authored_doc_pr_ids(&xml, &mut self.identifiers.drawing_ids)?;
+        let relationships = self.package.get_part_rels(source_part).cloned();
+        self.install_header_footer_story_part(
+            xml,
+            relationships.as_ref().map(|rels| (source_part, rels)),
+            kind,
+        )
+    }
+
+    fn install_header_footer_story_part(
+        &mut self,
+        xml: Vec<u8>,
+        copied_relationships: Option<(&str, &oxml_opc::relationship::Relationships)>,
+        kind: HeaderFooterKind,
+    ) -> Result<String> {
+        let part_name = self
+            .identifiers
+            .reserve_part_name("/word", kind.part_stem(), "xml")?;
+        self.package.set_part(&part_name, xml);
+        self.package
+            .content_types
+            .add_override(&part_name, kind.content_type());
+        self.identifiers.register_content_type_override(&part_name);
+        self.identifiers
+            .authored_story_parts
+            .insert(part_name.clone());
+
+        if let Some((source_part, relationships)) = copied_relationships {
+            let mut relationships = relationships.clone();
+            for relationship in &mut relationships.items {
+                if relationship_is_internal(relationship) {
+                    let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                    relationship.target = relative_target(&part_name, &target);
+                }
+            }
+            let owner = relationship_owner_identity(&part_name);
+            let ids = relationships
+                .items
+                .iter()
+                .map(|relationship| relationship.id.clone())
+                .collect::<HashSet<_>>();
+            self.identifiers
+                .relationship_ids
+                .insert(owner.clone(), ids.clone());
+            if !ids.is_empty() {
+                self.identifiers
+                    .authored_story_relationship_ids
+                    .insert(owner, ids);
+            }
+            self.package.set_part_rels(&part_name, relationships);
+        }
+        Ok(part_name)
+    }
+
     /// Get a mutable section by its document-order index.
     pub fn section_mut(&mut self, index: usize) -> Option<Section<'_>> {
         let count = self.section_count();
@@ -15271,6 +15738,24 @@ impl Document {
             .map_err(|error| {
                 Error::Other(format!("settings relationship allocation failed: {error}"))
             })?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Return whether distinct even-page header and footer stories are enabled.
+    pub fn even_and_odd_headers(&self) -> bool {
+        self.settings
+            .as_ref()
+            .is_some_and(CT_Settings::even_and_odd_headers)
+    }
+
+    /// Enable or disable distinct even-page header and footer story selection.
+    pub fn set_even_and_odd_headers(&mut self, enabled: bool) -> Result<()> {
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_even_and_odd_headers(enabled)?;
         self.commit_staged_mutation(candidate);
         Ok(())
     }
@@ -16923,13 +17408,7 @@ impl Document {
     }
 
     fn even_headers_enabled(&self) -> bool {
-        let Some(settings) = self.settings.as_ref() else {
-            return false;
-        };
-        settings
-            .to_xml()
-            .ok()
-            .is_some_and(|xml| settings_enable_even_headers(&xml))
+        self.even_and_odd_headers()
     }
 
     // ---- Regex replacement ----
@@ -18536,40 +19015,6 @@ fn chart_namespace_matches(namespace: &ResolveResult<'_>) -> bool {
     }
 }
 
-fn settings_enable_even_headers(xml: &[u8]) -> bool {
-    let mut reader = NsReader::from_reader(xml);
-    reader.config_mut().trim_text(true);
-    let mut buffer = Vec::new();
-    let mut depth = 0usize;
-    loop {
-        let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) else {
-            return false;
-        };
-        match event {
-            Event::Start(ref element) => {
-                if depth == 1
-                    && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
-                    && matches_local_name(element.name().as_ref(), b"evenAndOddHeaders")
-                {
-                    return word_on_off_value(&reader, element);
-                }
-                depth += 1;
-            }
-            Event::Empty(ref element)
-                if depth == 1
-                    && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
-                    && matches_local_name(element.name().as_ref(), b"evenAndOddHeaders") =>
-            {
-                return word_on_off_value(&reader, element);
-            }
-            Event::End(_) => depth = depth.saturating_sub(1),
-            Event::Eof => return false,
-            _ => {}
-        }
-        buffer.clear();
-    }
-}
-
 fn header_type_index(hdr_type: HdrFtrType) -> usize {
     match hdr_type {
         HdrFtrType::Default => 0,
@@ -18677,29 +19122,6 @@ fn materialize_header_footer_inheritance(
             false,
         );
     }
-}
-
-fn word_on_off_value(
-    reader: &NsReader<&[u8]>,
-    element: &quick_xml::events::BytesStart<'_>,
-) -> bool {
-    element
-        .attributes()
-        .flatten()
-        .find_map(|attribute| {
-            let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
-            if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
-                && local.as_ref() == b"val"
-            {
-                attribute
-                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
-                    .ok()
-                    .map(|value| !matches!(value.as_ref(), "0" | "false" | "off"))
-            } else {
-                None
-            }
-        })
-        .unwrap_or(true)
 }
 
 /// Express `target_part` relative to the directory holding `source_part`.

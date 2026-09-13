@@ -221,7 +221,7 @@ bytes remain in the ZIP package.
 | DOCX-014 | package | deterministic identifiers across owned parts | Y | Y | Y | NA | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-015 | sections | ordered section lookup, insertion, mutation, and removal | Y | Y | Y | Y | Y | body | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:12553` | - |
 | DOCX-016 | sections | M23 page geometry and ordinary section properties | Y | Y | Y | NA | Y | body | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs`,implementation:`crates/rdocx-oxml/src/document.rs`,implementation:`crates/rdocx-layout/src/engine.rs` | - |
-| DOCX-017 | stories | per-section default, first, and even headers and footers | P | P | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3369` | F-252 |
+| DOCX-017 | stories | per-section default, first, and even headers and footers | Y | Y | Y | Y | Y | related | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs`,test:`crates/rdocx/tests/regression_test.rs` | - |
 | DOCX-018 | stories | common content location and traversal | NA | Y | Y | NA | Y | all | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-019 | stories | arbitrary insert, move, clone, and remove | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-020 | package | part-scoped images, links, and relationships | Y | Y | Y | Y | Y | all | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |

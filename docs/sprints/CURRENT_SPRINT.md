@@ -47,7 +47,7 @@ cross-part relationships while committing only complete validated candidates.
 | F-255 | Part-scoped assets, links, and relationships | M | done | - |
 | F-X090 | Accept part-local producer drawing identities | S | done | - |
 | F-X091 | Serialize unused root default namespaces safely | M | done | - |
-| F-252 | Rich per-section headers and footers | L | pending | - |
+| F-252 | Rich per-section headers and footers | L | done | - |
 | F-X093 | Preserve drawings through document comparison staging | M | pending | - |
 | F-256 | Transactional cross-document fragment import | L | pending | - |
 | F-X094a | Expose Word collaboration and redline commands in rdocx-cli | M | pending | - |

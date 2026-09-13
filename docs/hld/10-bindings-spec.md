@@ -366,6 +366,17 @@ out-of-range inputs before changing any field. `Document` adds `section_count`,
 `insert_section` and `remove_section` operations. Its older final-section
 geometry convenience setters remain infallible and unchecked.
 
+Native Rust also exposes non-exhaustive `HeaderFooterKind`, the existing
+`HdrFtrType`, and owned `SectionStory`. `Document::section_story` resolves one
+effective default, first, or even header or footer and reports its source
+section and inherited state. `create_section_story`, `link_section_story`,
+`inherit_section_story`, `unlink_section_story`, `replace_section_story`, and
+`remove_section_story` are staged fallible operations. Rich content remains
+addressed by the returned `StoryId` through the common story API. The facade
+also exposes `even_and_odd_headers` and `set_even_and_odd_headers`, while first
+story creation enables section `titlePg`. These are additive pre-1.0 native
+Rust APIs. Python, WASM, and CLI gain no corresponding binding surface.
+
 `CT_SectPr` adds typed page-number start and raw child-position state, while
 `PageFrame` adds `displayed_page_number` beside its physical `page_number`.
 These model and handle additions are additive APIs on the published pre-1.0

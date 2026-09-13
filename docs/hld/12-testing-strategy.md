@@ -1459,6 +1459,25 @@ The ignored regeneration route pins Microsoft Word 16.112.3 build
 requires one complete geometry and displayed-number record per page. Its exact
 unique artifact directory is removed on success and unwind.
 
+The per-section story differential gate is
+`section_header_footer_variants_match_word_width_and_inheritance`. One
+source-built document produces three pages at each of 612, 720, and 540 point
+page widths. Every group selects the expected default, first, and even header
+and footer through direct, inherited, and replaced references. The ignored live
+route pins Microsoft Word 16.112.4 build 16.112.26090911 on macOS 26.6.2 build
+25G83 and Poppler 26.09.0. It requires all nine exact page records and removes
+its unique artifact directory on success and unwind.
+
+`rich_section_stories_survive_reopen_replace_and_unlink` covers paragraphs,
+tables, fields, block controls with nested tables, hyperlinks, images, drawings,
+fresh drawing identities, relationship rebasing, title-page enablement, save,
+and reopen. `removing_one_variant_retains_shared_and_inherited_stories` covers
+explicit empty removal, same-type inheritance, shared targets, facade-owned
+pruning, and byte-exact retention of unrelated stories. Stale, wrong-kind,
+out-of-range, and absent-story operations prove byte-identical rollback. The
+typed settings test covers namespace aliases, fixed write prefixes, schema
+order, and duplicate projection behavior. All 49 hash entries remain unchanged.
+
 The companion round-trip gate is
 `section_geometry_round_trips_with_unsupported_children_in_order`. It covers
 every M23 geometry property, typed page-number start, schema-slot replay,

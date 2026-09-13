@@ -13114,3 +13114,55 @@ below 10 MiB.
 **Notes for future sessions.** Preserve lexical declaration provenance rather
 than comparing namespace URIs alone. Keep modified serialization fail-closed
 for every used, malformed, or ambiguous producer default.
+
+### F-252, Rich per-section headers and footers
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now resolves and reports effective
+default, first, and even header and footer stories for every section. It
+creates, links, inherits, unlinks, replaces, and removes each variant through a
+staged package boundary. Rich content remains editable through the common story
+model, including paragraphs, tables, fields, block controls, hyperlinks,
+images, and drawings. The settings model also exposes typed even-page header
+selection.
+
+**Non-obvious choices.** Missing references inherit only the same variant.
+Inheritance removes the direct reference, while removal authors an explicit
+empty story so inherited content cannot reappear. Unlink and replacement clone
+the effective story XML and its part-local relationship set, rebase internal
+relative targets, and allocate fresh drawing identities. First-page creation
+enables `titlePg`, while even-page story creation leaves the document-wide
+selection setting to an explicit operation.
+
+**Deviations from the design plan.** None. Microscope pass 1 found three
+completion defects in title-page enablement, public even-page setting control,
+and unwind cleanup for oracle artifacts. Pass 2 reported zero defects, zero
+smells, and zero nitpicks after remediation.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `section_header_footer_variants_match_word_width_and_inheritance`,
+`rich_section_stories_survive_reopen_replace_and_unlink`,
+`removing_one_variant_retains_shared_and_inherited_stories`,
+`f252_oracle_artifacts_are_removed_during_unwind`, and
+`even_and_odd_headers_are_alias_safe_and_rewrite_in_schema_order` passed. The
+live Microsoft Word 16.112.4 build 16.112.26090911 differential reproduced all
+nine expected page records with Poppler 26.09.0. The complete `/verify` gate
+passed with workspace tests, pinned LibreOffice, WASM, rustdoc, README package
+inventories, and workflow regressions. The exact reviewed `rdocx` archive
+verified at 886,690 bytes, below the 10 MiB limit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep header and footer relationship ownership
+part-local and resolve each section's effective variant before cloning. Prune
+only unreachable facade-owned graphs, and use the common story operations for
+rich edits rather than introducing another content model.

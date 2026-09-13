@@ -15,12 +15,13 @@ use rdocx::{
     BarcodeField, BarcodeKind, BodyContentRef, BodyItemRef, BreakKind, CellItemRef, CellRef,
     ChartData, ChartKind, ContentFragment, ContentLocation, CustomProperty, CustomPropertyValue,
     Document, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState, FieldDateTime,
-    FieldEvaluationContext, FieldOutcome, HyperlinkItemRef, HyperlinkRef, Length, ListLevel,
-    MailMergeControl, MailMergeData, MailMergeFormattedText, MailMergeImage, MailMergeRecord,
-    MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions, RasterOutput,
-    RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange, RunRef, StoryId, StoryItemKind,
-    StoryKind, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection, TocField,
-    TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    FieldEvaluationContext, FieldOutcome, HdrFtrType, HeaderFooterKind, HyperlinkItemRef,
+    HyperlinkRef, Length, ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText,
+    MailMergeImage, MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat,
+    RasterOptions, RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange,
+    RunRef, StoryId, StoryItemKind, StoryKind, StyleBuilder, StyleType, TableRef, TcField,
+    TocEntrySelection, TocField, TocRebuildReport, UnsupportedXmlRef, WordCreationProfile,
+    WordPackageClass,
 };
 use rdocx_oxml::content_control::SdtContent;
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
@@ -47,6 +48,686 @@ fn f254_paragraph(text: &str) -> ContentFragment {
     let mut paragraph = CT_P::new();
     paragraph.add_run(text);
     ContentFragment::paragraph(paragraph).unwrap()
+}
+
+const WORD_F252_ORACLE: &str = "Microsoft Word 16.112.4 build 16.112.26090911";
+const WORD_F252_ENVIRONMENT: &str = "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f252-section-story-pdf-v1; pdftotext=26.09.0; pdfinfo=26.09.0";
+const WORD_F252_RECORDS: [&str; 9] = [
+    "page=1 | width_pt=612 | header=H-FIRST | body=S0-FIRST | footer=F-FIRST",
+    "page=2 | width_pt=612 | header=H-EVEN | body=S0-EVEN | footer=F-EVEN",
+    "page=3 | width_pt=612 | header=H-DEFAULT | body=S0-DEFAULT | footer=F-DEFAULT",
+    "page=4 | width_pt=720 | header=H-FIRST | body=S1-FIRST | footer=F-FIRST",
+    "page=5 | width_pt=720 | header=H-DEFAULT | body=S1-DEFAULT | footer=F-DEFAULT",
+    "page=6 | width_pt=720 | header=H-EVEN | body=S1-EVEN | footer=F-EVEN",
+    "page=7 | width_pt=540 | header=H-FIRST | body=S2-FIRST | footer=F-FIRST",
+    "page=8 | width_pt=540 | header=H-EVEN | body=S2-EVEN | footer=F-EVEN",
+    "page=9 | width_pt=540 | header=H-DEFAULT | body=S2-DEFAULT | footer=F-DEFAULT",
+];
+
+struct F252OracleArtifacts {
+    directory: std::path::PathBuf,
+}
+
+impl F252OracleArtifacts {
+    fn create(directory: std::path::PathBuf) -> Self {
+        std::fs::create_dir_all(&directory).unwrap();
+        Self { directory }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.directory
+    }
+}
+
+impl Drop for F252OracleArtifacts {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn f252_section_story(
+    document: &Document,
+    section: usize,
+    kind: HeaderFooterKind,
+    hdr_type: HdrFtrType,
+) -> StoryId {
+    document
+        .section_story(section, kind, hdr_type)
+        .unwrap()
+        .unwrap()
+        .story()
+        .clone()
+}
+
+fn f252_oracle_document() -> Document {
+    let mut document = Document::new();
+    for (section, markers) in [
+        ["S0-FIRST", "S0-EVEN", "S0-DEFAULT"],
+        ["S1-FIRST", "S1-DEFAULT", "S1-EVEN"],
+        ["S2-FIRST", "S2-EVEN", "S2-DEFAULT"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if section > 0 {
+            document.insert_section(section).unwrap();
+        }
+        for (page, marker) in markers.into_iter().enumerate() {
+            document.add_paragraph(marker).page_break_before(page > 0);
+        }
+    }
+    for (section, width) in [612.0, 720.0, 540.0].into_iter().enumerate() {
+        let mut section_ref = document.section_mut(section).unwrap();
+        section_ref
+            .set_page_size(Length::pt(width), Length::pt(792.0))
+            .unwrap();
+        section_ref
+            .set_margins(
+                Length::pt(72.0),
+                Length::pt(72.0),
+                Length::pt(72.0),
+                Length::pt(72.0),
+            )
+            .unwrap();
+        section_ref.set_different_first_page(true);
+    }
+    document.set_even_and_odd_headers(true).unwrap();
+    assert!(document.even_and_odd_headers());
+
+    for (kind, hdr_type, marker) in [
+        (HeaderFooterKind::Header, HdrFtrType::Default, "H-DEFAULT"),
+        (HeaderFooterKind::Header, HdrFtrType::First, "H-FIRST"),
+        (HeaderFooterKind::Header, HdrFtrType::Even, "H-EVEN"),
+        (HeaderFooterKind::Footer, HdrFtrType::Default, "F-DEFAULT"),
+        (HeaderFooterKind::Footer, HdrFtrType::First, "F-FIRST"),
+        (HeaderFooterKind::Footer, HdrFtrType::Even, "F-EVEN"),
+    ] {
+        let story = document.create_section_story(0, kind, hdr_type).unwrap();
+        document
+            .insert_content(&ContentLocation::end(story), f254_paragraph(marker))
+            .unwrap();
+    }
+    for (kind, hdr_type) in [
+        (HeaderFooterKind::Header, HdrFtrType::Default),
+        (HeaderFooterKind::Header, HdrFtrType::First),
+        (HeaderFooterKind::Header, HdrFtrType::Even),
+        (HeaderFooterKind::Footer, HdrFtrType::Default),
+        (HeaderFooterKind::Footer, HdrFtrType::First),
+        (HeaderFooterKind::Footer, HdrFtrType::Even),
+    ] {
+        document.inherit_section_story(1, kind, hdr_type).unwrap();
+        let source = f252_section_story(&document, 0, kind, hdr_type);
+        document
+            .replace_section_story(2, kind, hdr_type, &source)
+            .unwrap();
+    }
+    document
+}
+
+fn f252_page_text(page: &oxml_layout::PageFrame) -> String {
+    let mut text = String::new();
+    oxml_layout::walk(&page.elements, &mut |element, _| match element {
+        oxml_layout::PositionedElement::Text(run) => text.push_str(&run.text),
+        oxml_layout::PositionedElement::MultilingualText(run) => text.push_str(&run.logical_text),
+        _ => {}
+    });
+    text
+}
+
+#[test]
+fn section_header_footer_variants_match_word_width_and_inheritance() {
+    assert_eq!(
+        WORD_F252_ORACLE,
+        "Microsoft Word 16.112.4 build 16.112.26090911"
+    );
+    assert_eq!(
+        WORD_F252_ENVIRONMENT,
+        "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f252-section-story-pdf-v1; pdftotext=26.09.0; pdfinfo=26.09.0"
+    );
+    let document = Document::from_bytes(&f252_oracle_document().to_bytes().unwrap()).unwrap();
+    assert!(document.even_and_odd_headers());
+    for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+        for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+            let first = document.section_story(0, kind, hdr_type).unwrap().unwrap();
+            let inherited = document.section_story(1, kind, hdr_type).unwrap().unwrap();
+            let replaced = document.section_story(2, kind, hdr_type).unwrap().unwrap();
+            assert!(!first.is_inherited());
+            assert!(inherited.is_inherited());
+            assert_eq!(inherited.source_section(), 0);
+            assert_eq!(inherited.story().part_name(), first.story().part_name());
+            assert!(!replaced.is_inherited());
+            assert_eq!(replaced.source_section(), 2);
+            assert_ne!(replaced.story().part_name(), first.story().part_name());
+        }
+    }
+
+    let expected = [
+        ("H-FIRST", "S0-FIRST", "F-FIRST"),
+        ("H-EVEN", "S0-EVEN", "F-EVEN"),
+        ("H-DEFAULT", "S0-DEFAULT", "F-DEFAULT"),
+        ("H-FIRST", "S1-FIRST", "F-FIRST"),
+        ("H-DEFAULT", "S1-DEFAULT", "F-DEFAULT"),
+        ("H-EVEN", "S1-EVEN", "F-EVEN"),
+        ("H-FIRST", "S2-FIRST", "F-FIRST"),
+        ("H-EVEN", "S2-EVEN", "F-EVEN"),
+        ("H-DEFAULT", "S2-DEFAULT", "F-DEFAULT"),
+    ];
+    let layout = document.layout_deterministic().unwrap();
+    assert_eq!(layout.layout.pages.len(), expected.len());
+    let records = layout
+        .layout
+        .pages
+        .iter()
+        .zip(expected)
+        .enumerate()
+        .map(|(index, (page, (header, body, footer)))| {
+            let text = f252_page_text(page);
+            for marker in [header, body, footer] {
+                assert!(
+                    text.contains(marker),
+                    "missing {marker} on page {}: {text}",
+                    index + 1
+                );
+            }
+            format!(
+                "page={} | width_pt={} | header={header} | body={body} | footer={footer}",
+                index + 1,
+                page.width.round() as i32
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records, WORD_F252_RECORDS);
+}
+
+#[test]
+fn f252_oracle_artifacts_are_removed_during_unwind() {
+    let directory = std::env::temp_dir().join(format!(
+        "rdocx-f252-cleanup-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let unwind = std::panic::catch_unwind(|| {
+        let artifacts = F252OracleArtifacts::create(directory.clone());
+        std::fs::write(artifacts.path().join("partial.pdf"), b"partial").unwrap();
+        panic!("exercise F-252 cleanup during unwind");
+    });
+    assert!(unwind.is_err());
+    assert!(!directory.exists());
+}
+
+#[test]
+#[ignore = "requires pinned Microsoft Word 16.112.4 GUI automation and Poppler 26.09.0"]
+fn regenerate_f252_section_story_word_oracle() {
+    let plist = "/Applications/Microsoft Word.app/Contents/Info.plist";
+    for (key, expected) in [
+        ("CFBundleShortVersionString", "16.112.4"),
+        ("CFBundleVersion", "16.112.26090911"),
+    ] {
+        let output = std::process::Command::new("plutil")
+            .args(["-extract", key, "raw", plist])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+    }
+    assert_eq!(
+        WORD_F252_ORACLE,
+        "Microsoft Word 16.112.4 build 16.112.26090911"
+    );
+    for command in ["pdftotext", "pdfinfo"] {
+        let output = std::process::Command::new(command)
+            .arg("-v")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).lines().next(),
+            Some(format!("{command} version 26.09.0").as_str())
+        );
+    }
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::path::Path::new(
+        "/Users/atulsharma/Library/Containers/com.microsoft.Word/Data/Documents/rdocx-f252-word-oracle",
+    )
+    .join(format!("{}-{nonce}", std::process::id()));
+    let artifacts = F252OracleArtifacts::create(directory.clone());
+    let source = artifacts.path().join("f252-source.docx");
+    let pdf = artifacts.path().join("f252-word.pdf");
+    f252_oracle_document().save(&source).unwrap();
+    let script = format!(
+        r#"with timeout of 60 seconds
+tell application "Microsoft Word"
+activate
+open file name "{}" read only true add to recent files false
+set f252Doc to document 1
+save as f252Doc file name "{}" file format format PDF add to recent files false
+close f252Doc saving no
+end tell
+end timeout"#,
+        source.display(),
+        pdf.display(),
+    );
+    let word = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .unwrap();
+    assert!(
+        word.status.success(),
+        "Word PDF export failed: {}",
+        String::from_utf8_lossy(&word.stderr)
+    );
+
+    let text_output = std::process::Command::new("pdftotext")
+        .args(["-layout", pdf.to_str().unwrap(), "-"])
+        .output()
+        .unwrap();
+    assert!(text_output.status.success());
+    let pages = String::from_utf8(text_output.stdout)
+        .unwrap()
+        .split('\u{c}')
+        .filter(|page| !page.trim().is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(pages.len(), WORD_F252_RECORDS.len());
+    let expected = [
+        ("H-FIRST", "S0-FIRST", "F-FIRST"),
+        ("H-EVEN", "S0-EVEN", "F-EVEN"),
+        ("H-DEFAULT", "S0-DEFAULT", "F-DEFAULT"),
+        ("H-FIRST", "S1-FIRST", "F-FIRST"),
+        ("H-DEFAULT", "S1-DEFAULT", "F-DEFAULT"),
+        ("H-EVEN", "S1-EVEN", "F-EVEN"),
+        ("H-FIRST", "S2-FIRST", "F-FIRST"),
+        ("H-EVEN", "S2-EVEN", "F-EVEN"),
+        ("H-DEFAULT", "S2-DEFAULT", "F-DEFAULT"),
+    ];
+    let records = pages
+        .iter()
+        .zip(expected)
+        .enumerate()
+        .map(|(index, (text, (header, body, footer)))| {
+            for marker in [header, body, footer] {
+                assert!(
+                    text.contains(marker),
+                    "Word page {} misses {marker}: {text}",
+                    index + 1
+                );
+            }
+            let info = std::process::Command::new("pdfinfo")
+                .args([
+                    "-f",
+                    &(index + 1).to_string(),
+                    "-l",
+                    &(index + 1).to_string(),
+                    pdf.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap();
+            assert!(info.status.success());
+            let info = String::from_utf8(info.stdout).unwrap();
+            let width = info
+                .lines()
+                .find(|line| line.starts_with("Page") && line.contains(" size:"))
+                .unwrap()
+                .split_once("size:")
+                .unwrap()
+                .1
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .parse::<f64>()
+                .unwrap()
+                .round() as i32;
+            format!(
+                "page={} | width_pt={width} | header={header} | body={body} | footer={footer}",
+                index + 1
+            )
+        })
+        .collect::<Vec<_>>();
+    println!("F-252 Word records\n{}", records.join("\n"));
+    assert_eq!(records, WORD_F252_RECORDS);
+    drop(artifacts);
+    assert!(!directory.exists());
+}
+
+#[test]
+fn rich_section_stories_survive_reopen_replace_and_unlink() {
+    let mut document = Document::new();
+    document.add_paragraph("first section");
+    document.insert_section(1).unwrap();
+    document.add_paragraph("second section");
+    document.insert_section(2).unwrap();
+    document.add_paragraph("third section");
+
+    let first = document
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::First)
+        .unwrap();
+    document
+        .section_mut(0)
+        .unwrap()
+        .set_different_first_page(false);
+    let recreated = document
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::First)
+        .unwrap();
+    assert_eq!(recreated.part_name(), first.part_name());
+    assert_eq!(
+        document.section(0).unwrap().different_first_page(),
+        Some(true)
+    );
+
+    let mut header = document
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    let fixture = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body>
+        <w:p><w:r><w:t>rich paragraph</w:t></w:r></w:p>
+        <w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>rich table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+        <w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>rich field</w:t></w:r></w:fldSimple></w:p>
+        <w:sdt><w:sdtContent><w:p><w:r><w:t>rich control</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>nested table</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:sdtContent></w:sdt>
+        </w:body></w:document>"#
+    );
+    for content in CT_Document::from_xml(fixture.as_bytes())
+        .unwrap()
+        .body
+        .content
+    {
+        let fragment = match content {
+            BodyContent::Paragraph(paragraph) => ContentFragment::paragraph(paragraph).unwrap(),
+            BodyContent::Table(table) => ContentFragment::table(table).unwrap(),
+            BodyContent::ContentControl(control) => {
+                ContentFragment::content_control(control).unwrap()
+            }
+            BodyContent::RawXml(_) => panic!("rich fixture remains typed"),
+        };
+        document
+            .insert_content(&ContentLocation::end(header), fragment)
+            .unwrap();
+        header = f252_section_story(&document, 0, HeaderFooterKind::Header, HdrFtrType::Default);
+    }
+    document
+        .add_hyperlink_to_story(&header, "rich hyperlink", "https://example.invalid/f252")
+        .unwrap();
+    header = f252_section_story(&document, 0, HeaderFooterKind::Header, HdrFtrType::Default);
+    let stale_header = header.clone();
+    document
+        .add_picture_to_story(
+            &header,
+            b"f252 image payload",
+            "f252.png",
+            Length::pt(12.0),
+            Length::pt(8.0),
+        )
+        .unwrap();
+
+    let before_stale = document.to_bytes().unwrap();
+    assert!(
+        document
+            .replace_section_story(
+                2,
+                HeaderFooterKind::Header,
+                HdrFtrType::Default,
+                &stale_header,
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_stale);
+
+    let footer = document
+        .create_section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap();
+    let before_wrong_kind = document.to_bytes().unwrap();
+    assert!(
+        document
+            .link_section_story(1, HeaderFooterKind::Header, HdrFtrType::Default, &footer,)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_wrong_kind);
+    assert!(
+        document
+            .create_section_story(99, HeaderFooterKind::Header, HdrFtrType::Default)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_wrong_kind);
+
+    document
+        .inherit_section_story(1, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    let independent = document
+        .unlink_section_story(1, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    let source = f252_section_story(&document, 0, HeaderFooterKind::Header, HdrFtrType::Default);
+    let replacement = document
+        .replace_section_story(2, HeaderFooterKind::Header, HdrFtrType::Default, &source)
+        .unwrap();
+    assert_ne!(independent.part_name(), source.part_name());
+    assert_ne!(replacement.part_name(), source.part_name());
+    assert_ne!(replacement.part_name(), independent.part_name());
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let stories = (0..3)
+        .map(|section| {
+            f252_section_story(
+                &reopened,
+                section,
+                HeaderFooterKind::Header,
+                HdrFtrType::Default,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stories
+            .iter()
+            .map(|story| story.part_name())
+            .collect::<HashSet<_>>()
+            .len(),
+        3
+    );
+    let mut drawing_ids = HashSet::new();
+    for story in &stories {
+        let items = reopened.story_items(story).unwrap();
+        assert_eq!(
+            items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+            [
+                StoryItemKind::Paragraph,
+                StoryItemKind::Table,
+                StoryItemKind::Paragraph,
+                StoryItemKind::Field,
+                StoryItemKind::ContentControl,
+                StoryItemKind::Paragraph,
+                StoryItemKind::Paragraph,
+                StoryItemKind::Drawing,
+            ]
+        );
+        let xml = items
+            .iter()
+            .map(|item| {
+                let xml = item.xml().unwrap();
+                std::str::from_utf8(xml.as_ref()).unwrap().to_owned()
+            })
+            .collect::<String>();
+        for marker in [
+            "rich paragraph",
+            "rich table",
+            "w:fldSimple",
+            "rich field",
+            "w:sdt",
+            "rich control",
+            "nested table",
+            "rich hyperlink",
+            "w:drawing",
+        ] {
+            assert!(xml.contains(marker), "missing {marker} in {xml}");
+        }
+        let hyperlink_id = f255_xml_attribute(&xml, "r:id").unwrap();
+        assert_eq!(
+            reopened
+                .hyperlink_url_for_story(story, &hyperlink_id)
+                .unwrap(),
+            "https://example.invalid/f252"
+        );
+        let image_id = f255_xml_attribute(&xml, "r:embed").unwrap();
+        assert_eq!(
+            reopened.image_data_for_story(story, &image_id).unwrap(),
+            b"f252 image payload"
+        );
+        let drawing_id = xml
+            .split("<wp:docPr")
+            .nth(1)
+            .and_then(|tail| f255_xml_attribute(tail, "id"))
+            .unwrap();
+        assert!(drawing_ids.insert(drawing_id));
+    }
+}
+
+#[test]
+fn removing_one_variant_retains_shared_and_inherited_stories() {
+    let mut document = Document::new();
+    document.add_paragraph("first section");
+    document.insert_section(1).unwrap();
+    document.add_paragraph("second section");
+    document.insert_section(2).unwrap();
+    document.add_paragraph("third section");
+
+    let before_absent = document.to_bytes().unwrap();
+    assert!(
+        document
+            .unlink_section_story(1, HeaderFooterKind::Footer, HdrFtrType::Even)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_absent);
+
+    let header = document
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    document
+        .insert_content(
+            &ContentLocation::end(header),
+            f254_paragraph("unrelated header"),
+        )
+        .unwrap();
+    let first_footer = document
+        .create_section_story(0, HeaderFooterKind::Footer, HdrFtrType::First)
+        .unwrap();
+    document
+        .insert_content(
+            &ContentLocation::end(first_footer),
+            f254_paragraph("unrelated first footer"),
+        )
+        .unwrap();
+
+    let mut footer = document
+        .create_section_story(0, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .unwrap();
+    document
+        .insert_content(
+            &ContentLocation::end(footer),
+            f254_paragraph("shared even footer"),
+        )
+        .unwrap();
+    footer = f252_section_story(&document, 0, HeaderFooterKind::Footer, HdrFtrType::Even);
+    document
+        .add_picture_to_story(
+            &footer,
+            b"shared footer image",
+            "shared.png",
+            Length::pt(5.0),
+            Length::pt(5.0),
+        )
+        .unwrap();
+    footer = f252_section_story(&document, 0, HeaderFooterKind::Footer, HdrFtrType::Even);
+    document
+        .link_section_story(1, HeaderFooterKind::Footer, HdrFtrType::Even, &footer)
+        .unwrap();
+
+    let header_part =
+        f252_section_story(&document, 0, HeaderFooterKind::Header, HdrFtrType::Default)
+            .part_name()
+            .to_owned();
+    let first_footer_part =
+        f252_section_story(&document, 0, HeaderFooterKind::Footer, HdrFtrType::First)
+            .part_name()
+            .to_owned();
+    let shared_part = f252_section_story(&document, 0, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .part_name()
+        .to_owned();
+    let before = document.to_bytes().unwrap();
+    let before_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+    let retained = [&header_part, &first_footer_part, &shared_part]
+        .into_iter()
+        .map(|part| {
+            (
+                part.clone(),
+                before_package.get_part(part).unwrap().to_vec(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let empty = document
+        .remove_section_story(1, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .unwrap();
+    let empty_part = empty.part_name().to_owned();
+
+    let first = document
+        .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .unwrap()
+        .unwrap();
+    let second = document
+        .section_story(1, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.story().part_name(), footer.part_name());
+    assert_eq!(second.story().part_name(), empty.part_name());
+    assert_ne!(first.story().part_name(), second.story().part_name());
+
+    document
+        .inherit_section_story(1, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .unwrap();
+    for section in 1..3 {
+        let inherited = document
+            .section_story(section, HeaderFooterKind::Footer, HdrFtrType::Even)
+            .unwrap()
+            .unwrap();
+        assert!(inherited.is_inherited());
+        assert_eq!(inherited.source_section(), 0);
+        assert_eq!(inherited.story().part_name(), shared_part);
+    }
+    let after_inherit = document.to_bytes().unwrap();
+    let inherited_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&after_inherit)).unwrap();
+    assert!(inherited_package.get_part(&empty_part).is_none());
+
+    let clone = document
+        .unlink_section_story(2, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .unwrap();
+    let clone_part = clone.part_name().to_owned();
+    let clone_bytes = document.to_bytes().unwrap();
+    let clone_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&clone_bytes)).unwrap();
+    assert!(clone_package.get_part(&clone_part).is_some());
+    let clone_relationships = clone_package.get_part_rels(&clone_part).unwrap();
+    assert!(clone_relationships.items.iter().any(|relationship| {
+        relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE
+            && oxml_opc::OpcPackage::resolve_rel_target(&clone_part, &relationship.target)
+                .starts_with("/word/media/")
+    }));
+    document
+        .inherit_section_story(2, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .unwrap();
+
+    let final_bytes = document.to_bytes().unwrap();
+    let final_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&final_bytes)).unwrap();
+    assert!(final_package.get_part(&clone_part).is_none());
+    for (part, expected) in retained {
+        assert_eq!(
+            final_package.get_part(&part).unwrap(),
+            expected,
+            "retained section story {part}"
+        );
+    }
 }
 
 fn f254_content_control(xml: &str) -> CT_Sdt {

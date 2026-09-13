@@ -2380,13 +2380,21 @@ Microsoft Word 16.112.3 build 16.112.26083020 for three exact page geometries,
 physical identities, and displayed PAGE values.
 
 ### F-252, Rich per-section headers and footers (L)
-Create, link, unlink, inherit, replace, and remove default, first, and even
-header and footer stories per section. Each story accepts paragraphs, tables,
-fields, links, images, drawings, and nested supported content through the same
-public container operations.
+The native facade creates, links, unlinks, inherits, replaces, and removes
+default, first, and even header and footer stories per section. Effective
+lookup follows same-type inheritance and reports the source section. Removal
+authors an explicit empty story, while inheritance removes the direct
+reference. Unlink and replacement clone the complete part-local relationship
+set, rebase internal targets, and freshen drawing identities. Each story accepts
+paragraphs, tables, fields, links, images, drawings, and nested supported
+content through the common public container operations. First-page creation
+enables `titlePg`, and even-page selection has an explicit document setting.
 **Depends on**: F-250, F-253.
-**Test gate**: differential. Every section variant renders at the correct width
-and survives save, reopen, replacement, and inheritance changes.
+**Test gate**: differential.
+`section_header_footer_variants_match_word_width_and_inheritance` matches
+Microsoft Word 16.112.4 build 16.112.26090911 across nine pages at three exact
+widths and proves default, first, and even selection through direct, inherited,
+and replaced stories.
 
 ### F-253, Container-neutral story editing (L)
 The native Word facade provides one public content-location and mutation model

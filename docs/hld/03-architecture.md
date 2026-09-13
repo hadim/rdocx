@@ -1059,6 +1059,17 @@ up those owners without constructing a second section tree. Insertion and
 removal stage the complete document and package, retain body order and
 unmodelled section XML, serialize and reopen the candidate, then publish once.
 
+Per-section header and footer ownership is a native `rdocx` facade concern.
+`HeaderFooterKind` and `HdrFtrType` select the story family and default, first,
+or even variant. `SectionStory` reports the resolved `StoryId`, its source
+section, and whether it is inherited. Lookup follows only the same variant
+through preceding sections. Create, link, inherit, unlink, replace, and remove
+stage the complete document and package, serialize and reopen the candidate,
+then publish once. First-page creation enables `titlePg`. Even-page selection
+is controlled separately by the typed document setting. Rich edits continue
+through the container-neutral story operations rather than a second header or
+footer content model.
+
 `rdocx-oxml` authors only `w:pgNumType/@w:start` for M23. Number format,
 chapter style, chapter separator, and every other unsupported attribute or
 child remain in the retained source for M24. Section serialization replays raw
