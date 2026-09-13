@@ -12996,7 +12996,11 @@ while newly authored fragments carry the standard namespace bindings they need.
 unchanged. Five microscope passes hardened typed note publication, producer
 namespace shadows, main-part nested-story provenance, simultaneous identifier
 cycles, removal, cloning, and semantic reorder behavior. Pass 5 reported zero
-defects, zero smells, and zero nitpicks.
+defects, zero smells, and zero nitpicks. Sprint review passes 8 through 11 then
+made physical package XML authoritative across producer related stories,
+typed note and comment mutation, field updates, signature invalidation, and
+repeated publication. Pass 11 reported zero blocking and zero should-fix
+findings.
 
 **Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
 `docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
@@ -13013,7 +13017,8 @@ drawing-identifier riders. The complete `rdocx` suite passed 450 library tests
 with 6 ignored, 222 integration tests with 4 ignored, 439 regression tests with
 4 ignored, and 2 doctests. The integrated `/verify --full` gate passed at
 `009e5c4d16a5517cd215d0dd97d7fc7bea569b8e`. All 22 package dry runs succeeded,
-and every archive remained below 10 MiB.
+and every archive remained below 10 MiB. The post-review amendment regression
+suite passed 445 tests with 4 ignored.
 
 **Hash harness.** Unchanged, 49 of 49.
 

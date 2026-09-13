@@ -355,6 +355,7 @@ impl Document {
     ) -> Result<i32> {
         let mut candidate = self.clone_for_staging();
         let id = candidate.add_comment_staged(range, author, initials, text)?;
+        candidate.flush_dirty_related_story_models()?;
         self.commit_staged_mutation(candidate);
         Ok(id)
     }
@@ -418,6 +419,7 @@ impl Document {
             raw_before: raw_count_at(end, range.end.run_index),
         });
         self.identifiers = identifiers;
+        self.comments_dirty = true;
         self.invalidate_layout();
         Ok(id)
     }
@@ -426,6 +428,7 @@ impl Document {
     pub fn reply_to(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
         let mut candidate = self.clone_for_staging();
         let id = candidate.reply_to_staged(parent_id, author, text)?;
+        candidate.flush_dirty_related_story_models()?;
         self.commit_staged_mutation(candidate);
         Ok(id)
     }
@@ -506,6 +509,7 @@ impl Document {
             done: None,
             extra_attributes: Vec::new(),
         });
+        self.comments_dirty = true;
         self.invalidate_layout();
         Ok(id)
     }
@@ -515,6 +519,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         let updated = candidate.resolve_comment_staged(id, resolved)?;
         if updated {
+            candidate.flush_dirty_related_story_models()?;
             self.commit_staged_mutation(candidate);
         }
         Ok(updated)
@@ -573,6 +578,7 @@ impl Document {
                 extra_attributes: Vec::new(),
             });
         }
+        self.comments_dirty = true;
         self.invalidate_layout();
         Ok(true)
     }
@@ -582,6 +588,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         let removed = candidate.remove_comment_staged(id)?;
         if removed {
+            candidate.flush_dirty_related_story_models()?;
             self.commit_staged_mutation(candidate);
         }
         Ok(removed)
@@ -663,6 +670,7 @@ impl Document {
         self.identifiers
             .retire_authored_comment_ids(removed_ids.iter().copied());
         self.remove_owned_empty_comment_parts();
+        self.comments_dirty = self.comments.is_some();
         self.invalidate_layout();
         Ok(true)
     }

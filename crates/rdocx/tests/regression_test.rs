@@ -135,6 +135,125 @@ fn f255_story_document() -> Document {
     Document::from_bytes(&bytes.into_inner()).unwrap()
 }
 
+fn f255_producer_header_drawing_document() -> Document {
+    let mut document = f255_story_document();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/stories/header.xml").unwrap())
+        .unwrap()
+        .replace(
+            "</q:hdr>",
+            &format!(
+                r#"<x:shadow xmlns:wp="urn:producer-wp"><wp:docPr id="88" x:kept="exact"/></x:shadow><q:p><q:r><q:drawing><wp:inline xmlns:wp="{}"><wp:docPr id="77" name="producer"/><a:graphic xmlns:a="{}"><x:sentinel x:kept="exact"/><a:blip xmlns:r="{}" r:embed="producerImage"/></a:graphic></wp:inline></q:drawing></q:r></q:p></q:hdr>"#,
+                rdocx_oxml::drawing::drawing_ns::WP,
+                rdocx_oxml::drawing::drawing_ns::A,
+                rdocx_oxml::drawing::drawing_ns::R,
+            ),
+        );
+    package.set_part("/word/stories/header.xml", header.into_bytes());
+    package
+        .get_or_create_part_rels("/word/stories/header.xml")
+        .add_with_id(
+            "producerImage",
+            oxml_opc::relationship::rel_types::IMAGE,
+            "../media/producer.png",
+        );
+    package.set_part("/word/media/producer.png", b"producer image".to_vec());
+    package
+        .content_types
+        .add_override("/word/media/producer.png", "image/png");
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(&bytes.into_inner()).unwrap()
+}
+
+fn f255_install_producer_story_drawing(
+    mut document: Document,
+    part_name: &str,
+    story_close: &str,
+    root_close: &str,
+) -> Document {
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let producer = format!(
+        r#"<x:shadow xmlns:x="urn:f255" xmlns:wp="urn:producer-wp"><wp:docPr id="88" x:kept="exact"/></x:shadow><w:p xmlns:w="{W_NS}"><w:r><w:drawing><wp:inline xmlns:wp="{}"><wp:docPr id="77" name="producer"/><a:graphic xmlns:a="{}"><x:sentinel xmlns:x="urn:f255" x:kept="exact"/><a:blip xmlns:r="{}" r:embed="producerImage"/></a:graphic></wp:inline></w:drawing></w:r></w:p>{story_close}"#,
+        rdocx_oxml::drawing::drawing_ns::WP,
+        rdocx_oxml::drawing::drawing_ns::A,
+        rdocx_oxml::drawing::drawing_ns::R,
+    );
+    let source = std::str::from_utf8(package.get_part(part_name).unwrap()).unwrap();
+    let root_name = root_close.trim_start_matches("</").trim_end_matches('>');
+    let root_start = format!("<{root_name}");
+    let source = source.replacen(
+        &root_start,
+        &format!(r#"{root_start} xmlns:r="urn:producer-r" r:kept="exact""#),
+        1,
+    );
+    let updated = source.replacen(story_close, &producer, 1).replacen(
+        root_close,
+        &format!(r#"<x:rootChild xmlns:x="urn:f255" x:kept="exact"/>{root_close}"#),
+        1,
+    );
+    assert_ne!(updated, source, "missing story close {story_close}");
+    package.set_part(part_name, updated.into_bytes());
+    let producer_target = if part_name == "/word/comments.xml" {
+        "media/producer.png"
+    } else {
+        "../media/producer.png"
+    };
+    package.get_or_create_part_rels(part_name).add_with_id(
+        "producerImage",
+        oxml_opc::relationship::rel_types::IMAGE,
+        producer_target,
+    );
+    package.set_part("/word/media/producer.png", b"producer image".to_vec());
+    package
+        .content_types
+        .add_override("/word/media/producer.png", "image/png");
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(&bytes.into_inner()).unwrap()
+}
+
+fn f255_producer_footnote_drawing_document() -> Document {
+    f255_install_producer_story_drawing(
+        f255_story_document(),
+        "/word/stories/footnotes.xml",
+        "</q:footnote>",
+        "</q:footnotes>",
+    )
+}
+
+fn f255_producer_comment_drawing_document() -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "producer comment",
+        )
+        .unwrap();
+    f255_install_producer_story_drawing(
+        document,
+        "/word/comments.xml",
+        "</w:comment>",
+        "</w:comments>",
+    )
+}
+
 fn f255_relationship_ids(
     package: &oxml_opc::OpcPackage,
     owner: &str,
@@ -234,6 +353,96 @@ fn f255_story_item_with_marker(
         .unwrap_or_else(|| panic!("missing story item containing {marker}"))
         .location()
         .clone()
+}
+
+fn f255_package_story_image_data_in_order(bytes: &[u8], part_name: &str) -> Vec<Vec<u8>> {
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part(part_name).unwrap()).unwrap();
+    let relationships = package.get_part_rels(part_name).unwrap();
+    let marker = r#"r:embed=""#;
+    let mut remainder = xml;
+    let mut images = Vec::new();
+    while let Some(start) = remainder.find(marker) {
+        let value = &remainder[start + marker.len()..];
+        let end = value.find('"').unwrap();
+        let relationship = relationships.get_by_id(&value[..end]).unwrap_or_else(|| {
+            panic!(
+                "missing relationship {} in {part_name}: {relationships:?}\n{xml}",
+                &value[..end]
+            )
+        });
+        assert_eq!(
+            relationship.rel_type,
+            oxml_opc::relationship::rel_types::IMAGE
+        );
+        let target = oxml_opc::OpcPackage::resolve_rel_target(part_name, &relationship.target);
+        images.push(package.get_part(&target).unwrap().to_vec());
+        remainder = &value[end + 1..];
+    }
+    images
+}
+
+fn f255_move_story_image_to_end(document: &mut Document, kind: StoryKind, image: &[u8]) {
+    let story = f254_story(document, kind);
+    let location = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            let xml = item.xml().unwrap();
+            let Some(relationship_id) =
+                f255_xml_attribute(std::str::from_utf8(xml.as_ref()).unwrap(), "r:embed")
+            else {
+                return false;
+            };
+            document
+                .image_data_for_story(&story, &relationship_id)
+                .is_ok_and(|candidate| candidate == image)
+        })
+        .expect("story image item")
+        .location()
+        .clone();
+    document
+        .move_content(&location, &ContentLocation::end(story))
+        .unwrap();
+}
+
+fn f255_assert_canonical_producer_story(bytes: &[u8], part_name: &str) {
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part(part_name).unwrap()).unwrap();
+    let drawing_ids = xml
+        .split(r#"<wp:docPr id=""#)
+        .skip(1)
+        .map(|suffix| suffix.split('"').next().unwrap().parse::<u32>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(drawing_ids, [88, 77, 78, 79], "{xml}");
+    assert!(
+        xml.contains(r#"<wp:docPr id="88" x:kept="exact"/>"#),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(r#"<x:sentinel xmlns:x="urn:f255" x:kept="exact"/><a:blip"#),
+        "{xml}"
+    );
+    assert!(xml.contains(r#"r:embed="producerImage""#), "{xml}");
+    assert!(
+        xml.contains(r#"<x:rootChild xmlns:x="urn:f255" x:kept="exact"/>"#),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(r#"xmlns:r="urn:producer-r" r:kept="exact""#),
+        "{xml}"
+    );
+    let relationships = &package.get_part_rels(part_name).unwrap().items;
+    assert_eq!(relationships[0].id, "producerImage");
+    let producer_target = if part_name == "/word/comments.xml" {
+        "media/producer.png"
+    } else {
+        "../media/producer.png"
+    };
+    assert_eq!(relationships[0].target, producer_target);
+    assert_eq!(relationships[1].id, "rId0");
+    assert_eq!(relationships[2].id, "rId1");
 }
 
 fn f255_assert_story_assets(document: &Document, kind: StoryKind, label: &str) {
@@ -690,6 +899,356 @@ fn header_drawing_ids_do_not_depend_on_replacement_history() {
         assert!(header.contains(r#"<wp:docPr id="1""#), "{header}");
     }
     assert_eq!(history, direct);
+}
+
+#[test]
+fn producer_header_picture_ids_follow_final_recursive_order() {
+    fn build(reorder: bool) -> Vec<u8> {
+        let mut document = f255_producer_header_drawing_document();
+        let images: [(&[u8], &str); 2] = if reorder {
+            [(b"image A", "a.png"), (b"image B", "b.png")]
+        } else {
+            [(b"image B", "b.png"), (b"image A", "a.png")]
+        };
+        for (image, name) in images {
+            let header = f254_story(&document, StoryKind::Header);
+            document
+                .add_picture_to_story(&header, image, name, Length::pt(1.0), Length::pt(1.0))
+                .unwrap();
+        }
+        if reorder {
+            let header = f254_story(&document, StoryKind::Header);
+            let image_a = document
+                .story_items(&header)
+                .unwrap()
+                .into_iter()
+                .find(|item| {
+                    let xml = item.xml().unwrap();
+                    let Some(relationship_id) =
+                        f255_xml_attribute(std::str::from_utf8(xml.as_ref()).unwrap(), "r:embed")
+                    else {
+                        return false;
+                    };
+                    document
+                        .image_data_for_story(&header, &relationship_id)
+                        .is_ok_and(|image| image == b"image A")
+                })
+                .expect("image A story item")
+                .location()
+                .clone();
+            document
+                .move_content(&image_a, &ContentLocation::end(header))
+                .unwrap();
+        }
+        document.to_bytes().unwrap()
+    }
+
+    let reordered = build(true);
+    let direct = build(false);
+    for bytes in [&reordered, &direct] {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let header =
+            std::str::from_utf8(package.get_part("/word/stories/header.xml").unwrap()).unwrap();
+        let drawing_ids = header
+            .split(r#"<wp:docPr id=""#)
+            .skip(1)
+            .map(|suffix| suffix.split('"').next().unwrap().parse::<u32>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(drawing_ids, [88, 77, 78, 79], "{header}");
+        assert!(
+            header.contains(
+                r#"<x:shadow xmlns:wp="urn:producer-wp"><wp:docPr id="88" x:kept="exact"/></x:shadow>"#
+            ),
+            "{header}"
+        );
+        assert!(
+            header.contains(r#"<x:sentinel x:kept="exact"/><a:blip"#),
+            "{header}"
+        );
+        assert!(header.contains(r#"r:embed="producerImage""#), "{header}");
+        let relationships = &package
+            .get_part_rels("/word/stories/header.xml")
+            .unwrap()
+            .items;
+        assert_eq!(relationships[0].id, "producerImage");
+        assert_eq!(relationships[0].target, "../media/producer.png");
+        assert_eq!(relationships[1].id, "rId0");
+        assert_eq!(relationships[2].id, "rId1");
+    }
+    let reordered_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reordered.as_slice())).unwrap();
+    let direct_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(direct.as_slice())).unwrap();
+    assert_eq!(reordered_package.parts, direct_package.parts);
+    assert_eq!(
+        reordered_package
+            .get_part_rels("/word/stories/header.xml")
+            .unwrap()
+            .items,
+        direct_package
+            .get_part_rels("/word/stories/header.xml")
+            .unwrap()
+            .items
+    );
+    assert_eq!(reordered, direct);
+}
+
+#[test]
+fn typed_footnote_flush_preserves_canonical_story_history() {
+    fn build(reorder: bool) -> Vec<u8> {
+        let mut document = f255_producer_footnote_drawing_document();
+        let images: [(&[u8], &str); 2] = if reorder {
+            [(b"image A", "a.png"), (b"image B", "b.png")]
+        } else {
+            [(b"image B", "b.png"), (b"image A", "a.png")]
+        };
+        for (image, name) in images {
+            let footnote = f254_story(&document, StoryKind::Footnote);
+            document
+                .add_picture_to_story(&footnote, image, name, Length::pt(1.0), Length::pt(1.0))
+                .unwrap();
+        }
+        if reorder {
+            f255_move_story_image_to_end(&mut document, StoryKind::Footnote, b"image A");
+        }
+        document.add_footnote("later typed footnote");
+
+        let bytes = document.to_bytes().unwrap();
+        assert_eq!(document.to_bytes().unwrap(), bytes);
+        f255_assert_canonical_producer_story(&bytes, "/word/stories/footnotes.xml");
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let xml =
+            std::str::from_utf8(package.get_part("/word/stories/footnotes.xml").unwrap()).unwrap();
+        assert!(
+            xml.find("later typed footnote").unwrap()
+                < xml
+                    .find(r#"<x:rootChild xmlns:x="urn:f255" x:kept="exact"/>"#)
+                    .unwrap(),
+            "{xml}"
+        );
+        assert_eq!(
+            f255_package_story_image_data_in_order(&bytes, "/word/stories/footnotes.xml"),
+            [
+                b"producer image".to_vec(),
+                b"image B".to_vec(),
+                b"image A".to_vec(),
+            ]
+        );
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        let footnote = f254_story(&reopened, StoryKind::Footnote);
+        assert_eq!(
+            reopened
+                .image_data_for_story(&footnote, "producerImage")
+                .unwrap(),
+            b"producer image"
+        );
+        assert!(
+            reopened
+                .footnotes()
+                .iter()
+                .any(|(_, text)| text == "later typed footnote")
+        );
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        bytes
+    }
+
+    assert_eq!(build(true), build(false));
+}
+
+#[test]
+fn typed_comment_flush_preserves_canonical_story_history() {
+    fn build(reorder: bool) -> Vec<u8> {
+        let mut document = f255_producer_comment_drawing_document();
+        let images: [(&[u8], &str); 2] = if reorder {
+            [(b"image A", "a.png"), (b"image B", "b.png")]
+        } else {
+            [(b"image B", "b.png"), (b"image A", "a.png")]
+        };
+        for (image, name) in images {
+            let comment = f254_story(&document, StoryKind::Comment);
+            document
+                .add_picture_to_story(&comment, image, name, Length::pt(1.0), Length::pt(1.0))
+                .unwrap();
+        }
+        if reorder {
+            f255_move_story_image_to_end(&mut document, StoryKind::Comment, b"image A");
+        }
+        let parent = document.comments()[0].id();
+        document
+            .reply_to(parent, "Grace", "later typed reply")
+            .unwrap();
+
+        let bytes = document.to_bytes().unwrap();
+        assert_eq!(document.to_bytes().unwrap(), bytes);
+        f255_assert_canonical_producer_story(&bytes, "/word/comments.xml");
+        assert_eq!(
+            f255_package_story_image_data_in_order(&bytes, "/word/comments.xml"),
+            [
+                b"producer image".to_vec(),
+                b"image B".to_vec(),
+                b"image A".to_vec(),
+            ]
+        );
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        let comment = f254_story(&reopened, StoryKind::Comment);
+        assert_eq!(
+            reopened
+                .image_data_for_story(&comment, "producerImage")
+                .unwrap(),
+            b"producer image"
+        );
+        assert!(
+            reopened
+                .comments()
+                .iter()
+                .any(|comment| comment.text() == "later typed reply")
+        );
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        bytes
+    }
+
+    assert_eq!(build(true), build(false));
+}
+
+#[test]
+fn producer_footnote_story_ids_remain_current_after_typed_addition() {
+    let mut document = f255_producer_footnote_drawing_document();
+    document.add_footnote("later typed footnote");
+    let footnote = f254_story(&document, StoryKind::Footnote);
+    let location = document
+        .story_items(&footnote)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.text().unwrap().as_deref() == Some("note"))
+        .expect("producer note paragraph")
+        .location()
+        .clone();
+    document
+        .set_story_text(&location, "updated producer note")
+        .unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    assert_eq!(document.to_bytes().unwrap(), bytes);
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml =
+        std::str::from_utf8(package.get_part("/word/stories/footnotes.xml").unwrap()).unwrap();
+    assert!(xml.contains("updated producer note"), "{xml}");
+    assert!(xml.contains("later typed footnote"), "{xml}");
+    assert!(xml.contains(r#"<x:note x:kept="exact"/>"#), "{xml}");
+    assert!(
+        xml.contains(r#"xmlns:r="urn:producer-r" r:kept="exact""#),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(r#"<x:rootChild xmlns:x="urn:f255" x:kept="exact"/>"#),
+        "{xml}"
+    );
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn existing_footnote_field_update_survives_a_prior_typed_addition() {
+    let mut document = f255_producer_footnote_drawing_document();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let part_name = "/word/stories/footnotes.xml";
+    let source = std::str::from_utf8(package.get_part(part_name).unwrap()).unwrap();
+    let field = r#"<q:p><q:fldSimple q:instr="MERGEFIELD Existing"><q:r><q:t>stored field</q:t></q:r></q:fldSimple></q:p>"#;
+    let updated = source.replace("<q:p><q:r><q:t>note</q:t></q:r></q:p>", field);
+    assert_ne!(updated, source);
+    package.set_part(part_name, updated.into_bytes());
+    let mut seed = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut seed).unwrap();
+    document = Document::from_bytes(seed.get_ref()).unwrap();
+
+    document.add_footnote("later typed footnote");
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([(
+            "Existing".to_owned(),
+            "updated existing field".to_owned(),
+        )]),
+        ..FieldEvaluationContext::default()
+    };
+    assert_eq!(document.update_fields(&context).unwrap(), 1);
+
+    let bytes = document.to_bytes().unwrap();
+    assert_eq!(document.to_bytes().unwrap(), bytes);
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part(part_name).unwrap()).unwrap();
+    assert!(xml.contains("updated existing field"), "{xml}");
+    assert!(xml.contains("later typed footnote"), "{xml}");
+    assert!(xml.contains(r#"<x:note x:kept="exact"/>"#), "{xml}");
+    assert!(
+        xml.contains(r#"<x:rootChild xmlns:x="urn:f255" x:kept="exact"/>"#),
+        "{xml}"
+    );
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    let fields = reopened.evaluate_fields(&context).unwrap();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].cached_result, "updated existing field");
+    assert!(
+        reopened
+            .footnotes()
+            .iter()
+            .any(|(_, text)| text == "later typed footnote")
+    );
+    assert_eq!(reopened.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn signed_endnote_field_update_is_published_through_the_atomic_package_boundary() {
+    let mut package = f236_embedded_package(true);
+    let part_name = "/word/signed-endnotes.xml";
+    let xml = format!(
+        r#"<q:endnotes xmlns:q="{W_NS}" xmlns:x="urn:producer"><x:rootBefore/><q:endnote q:id="2" x:kept="exact"><x:noteBefore/><q:p><q:fldSimple q:instr="MERGEFIELD SignedEndnote"><q:r><q:t>stored endnote</q:t><x:inside/></q:r></q:fldSimple></q:p><x:noteAfter/></q:endnote><x:rootAfter/></q:endnotes>"#
+    );
+    package.set_part(part_name, xml.into_bytes());
+    package.content_types.add_override(
+        part_name,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+    );
+    package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::ENDNOTES,
+        "signed-endnotes.xml",
+    );
+    let mut seed = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut seed).unwrap();
+    let mut document = Document::from_bytes(seed.get_ref()).unwrap();
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([(
+            "SignedEndnote".to_owned(),
+            "updated signed endnote".to_owned(),
+        )]),
+        ..FieldEvaluationContext::default()
+    };
+
+    assert_eq!(document.update_fields(&context).unwrap(), 1);
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let endnotes = std::str::from_utf8(package.get_part(part_name).unwrap()).unwrap();
+    assert!(endnotes.contains("updated signed endnote"), "{endnotes}");
+    for preserved in [
+        "<x:rootBefore/>",
+        r#"x:kept="exact""#,
+        "<x:noteBefore/>",
+        "<x:inside/>",
+        "<x:noteAfter/>",
+        "<x:rootAfter/>",
+    ] {
+        assert!(
+            endnotes.contains(preserved),
+            "missing {preserved}: {endnotes}"
+        );
+    }
+    assert!(package.package_rels.items.iter().any(|relationship| {
+        relationship.rel_type == "urn:rdocx:relationships/invalidated-package-signature"
+    }));
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), bytes);
 }
 
 #[test]

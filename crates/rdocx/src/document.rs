@@ -3747,6 +3747,8 @@ pub struct Document {
     pub(crate) comments: Option<rdocx_oxml::comments::CT_Comments>,
     /// Existing comments relationship target. No target is invented on read.
     pub(crate) comments_part_name: Option<String>,
+    /// Whether a typed comment mutation must be published into the package.
+    pub(crate) comments_dirty: bool,
     /// Typed reply linkage and resolved state for comments.
     pub(crate) comments_extended: Option<rdocx_oxml::comments_extended::CT_CommentsEx>,
     /// Existing comments-extended relationship target.
@@ -5069,13 +5071,122 @@ fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) 
     } else if document.comments_part_name.as_deref() == Some(part_name) {
         document.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(&xml)?);
         document.package.set_part(part_name, xml);
+        document.comments_dirty = false;
     } else if document.footnotes_part_name.as_deref() == Some(part_name) {
+        document.footnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(&xml)?;
         document.package.set_part(part_name, xml);
         document.footnotes_dirty = false;
     } else {
         document.package.set_part(part_name, xml);
     }
     Ok(())
+}
+
+fn serialized_footnote_fragment(footnote: &rdocx_oxml::footnotes::CT_Footnote) -> Result<Vec<u8>> {
+    let serialized = rdocx_oxml::footnotes::CT_Footnotes {
+        footnotes: vec![footnote.clone()],
+    }
+    .to_xml_footnotes()?;
+    let owner = scan_story_owners(&serialized, StoryKind::Footnote)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Other("serialized footnote has no story owner".to_owned()))?;
+    let scope = story_namespace_scope_at(&serialized, owner.full.start)?;
+    close_content_fragment_namespaces(&serialized[owner.full], &scope)
+}
+
+fn append_story_fragments_to_root(
+    xml: &[u8],
+    root_local_name: &[u8],
+    item_local_name: &[u8],
+    fragments: &[Vec<u8>],
+) -> Result<Vec<u8>> {
+    if fragments.is_empty() {
+        return Ok(xml.to_vec());
+    }
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut saw_root = false;
+    let mut after_last_item = None;
+    let boundary = loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid footnotes XML: {error}")))?;
+        let is_word = word_element(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                if !saw_root {
+                    if is_word && element.local_name().as_ref() == root_local_name {
+                        saw_root = true;
+                        depth = 1;
+                    }
+                } else {
+                    if depth == 1 && is_word && element.local_name().as_ref() == item_local_name {
+                        after_last_item = Some(story_element_end(xml, before)?);
+                    }
+                    depth += 1;
+                }
+            }
+            Event::Empty(element) => {
+                if !saw_root && is_word && element.local_name().as_ref() == root_local_name {
+                    let name = element.name().as_ref().to_vec();
+                    let insertion = after.checked_sub(2).ok_or_else(|| {
+                        Error::Other("empty story root opening tag is incomplete".to_owned())
+                    })?;
+                    let mut updated = Vec::new();
+                    updated.extend_from_slice(&xml[..insertion]);
+                    updated.push(b'>');
+                    updated.extend(
+                        fragments
+                            .iter()
+                            .flat_map(|fragment| fragment.iter().copied()),
+                    );
+                    updated.extend_from_slice(b"</");
+                    updated.extend_from_slice(&name);
+                    updated.push(b'>');
+                    updated.extend_from_slice(&xml[after..]);
+                    return Ok(updated);
+                }
+                if saw_root
+                    && depth == 1
+                    && is_word
+                    && element.local_name().as_ref() == item_local_name
+                {
+                    after_last_item = Some(after);
+                }
+            }
+            Event::End(element) => {
+                if saw_root
+                    && depth == 1
+                    && is_word
+                    && element.local_name().as_ref() == root_local_name
+                {
+                    break after_last_item.unwrap_or(before);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => {
+                return Err(Error::Other(format!(
+                    "story XML has no closing {} root element",
+                    String::from_utf8_lossy(root_local_name)
+                )));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    };
+    let mut updated = xml.to_vec();
+    updated.splice(
+        boundary..boundary,
+        fragments
+            .iter()
+            .flat_map(|fragment| fragment.iter().copied()),
+    );
+    Ok(updated)
 }
 
 fn update_story_namespace_scope(
@@ -8127,6 +8238,7 @@ impl Document {
             footnotes_dirty: false,
             comments: None,
             comments_part_name: None,
+            comments_dirty: false,
             comments_extended: None,
             comments_extended_part_name: None,
             comments_owned: false,
@@ -8181,6 +8293,7 @@ impl Document {
             footnotes_dirty: self.footnotes_dirty,
             comments: self.comments.clone(),
             comments_part_name: self.comments_part_name.clone(),
+            comments_dirty: self.comments_dirty,
             comments_extended: self.comments_extended.clone(),
             comments_extended_part_name: self.comments_extended_part_name.clone(),
             comments_owned: self.comments_owned,
@@ -8197,11 +8310,10 @@ impl Document {
         }
     }
 
-    fn canonicalize_authored_identifiers(&mut self) -> Result<()> {
+    fn canonicalize_typed_identifiers(&mut self) -> Result<()> {
         self.canonicalize_bookmark_ids()?;
         self.canonicalize_comment_ids()?;
         self.canonicalize_numbering_ids()?;
-        self.canonicalize_drawing_ids()?;
         Ok(())
     }
 
@@ -8375,6 +8487,7 @@ impl Document {
                         .sort_by(|left, right| left.para_id.cmp(&right.para_id));
                 }
             }
+            self.comments_dirty = true;
         }
         Ok(())
     }
@@ -9054,6 +9167,47 @@ impl Document {
         parts: &[String],
         occupied_drawings: &mut HashSet<u32>,
     ) -> Result<()> {
+        let mut partially_authored_drawing_slots = HashMap::new();
+        for owner in parts {
+            if self.identifiers.authored_story_parts.contains(owner) {
+                continue;
+            }
+            let owner_identity = relationship_owner_identity(owner);
+            let partially_authored = self
+                .identifiers
+                .authored_story_relationship_ids
+                .get(&owner_identity)
+                .cloned()
+                .unwrap_or_default();
+            if partially_authored.is_empty() {
+                continue;
+            }
+            let xml = self
+                .package
+                .get_part(owner)
+                .ok_or_else(|| Error::Other(format!("story part {owner} is missing")))?;
+            let authored_image_relationship_ids = self
+                .package
+                .get_part_rels(owner)
+                .into_iter()
+                .flat_map(|relationships| &relationships.items)
+                .filter(|relationship| {
+                    relationship.rel_type == rel_types::IMAGE
+                        && partially_authored.contains(&relationship.id)
+                })
+                .map(|relationship| relationship.id.clone())
+                .collect::<HashSet<_>>();
+            let drawing_slots =
+                authored_drawing_slots_in_source_order(xml, &[], &authored_image_relationship_ids)?
+                    .into_iter()
+                    .map(|(_, span, id)| (span, id))
+                    .collect::<Vec<_>>();
+            for (_, id) in &drawing_slots {
+                occupied_drawings.remove(id);
+            }
+            partially_authored_drawing_slots.insert(owner.clone(), drawing_slots);
+        }
+
         for owner in parts {
             let owner_identity = relationship_owner_identity(owner);
             let fully_authored = self.identifiers.authored_story_parts.contains(owner);
@@ -9125,11 +9279,23 @@ impl Document {
                         relationship.id.clone_from(updated);
                     }
                 }
-                if fully_authored {
-                    let mut authored = owner_relationships
+                let canonicalized_relationship_ids = if fully_authored {
+                    owner_relationships
                         .items
                         .iter()
                         .filter(|relationship| !preserved.contains(&relationship.id))
+                        .map(|relationship| relationship.id.clone())
+                        .collect::<HashSet<_>>()
+                } else {
+                    remap.values().cloned().collect::<HashSet<_>>()
+                };
+                if !canonicalized_relationship_ids.is_empty() {
+                    let mut authored = owner_relationships
+                        .items
+                        .iter()
+                        .filter(|relationship| {
+                            canonicalized_relationship_ids.contains(&relationship.id)
+                        })
                         .cloned()
                         .collect::<Vec<_>>();
                     authored.sort_by_key(|relationship| {
@@ -9141,13 +9307,28 @@ impl Document {
                     });
                     let mut authored = authored.into_iter();
                     for relationship in &mut owner_relationships.items {
-                        if !preserved.contains(&relationship.id) {
+                        if canonicalized_relationship_ids.contains(&relationship.id) {
                             *relationship = authored
                                 .next()
                                 .expect("each authored relationship slot has a value");
                         }
                     }
                 }
+            }
+            let mut drawing_edits = Vec::new();
+            if !fully_authored {
+                for (span, _) in partially_authored_drawing_slots
+                    .remove(owner)
+                    .unwrap_or_default()
+                {
+                    let id = reserve_u32(occupied_drawings, 1, "drawing")?;
+                    drawing_edits.push((span.start, span.end, id.to_string().into_bytes()));
+                }
+            }
+            let mut xml = xml;
+            drawing_edits.sort_by_key(|(start, _, _)| *start);
+            for (start, end, replacement) in drawing_edits.into_iter().rev() {
+                xml.splice(start..end, replacement);
             }
             let xml = remap_xml_relationship_ids(&xml, &remap)?;
             if let Some(ids) = self
@@ -9585,6 +9766,7 @@ impl Document {
             footnotes_dirty: false,
             comments,
             comments_part_name,
+            comments_dirty: false,
             comments_extended,
             comments_extended_part_name,
             comments_owned: false,
@@ -9775,9 +9957,13 @@ impl Document {
 
     pub(crate) fn prepare_staged_package(&mut self) -> Result<()> {
         self.preflight_flush_required_bundles()?;
-        self.canonicalize_authored_identifiers()?;
-        self.package_signatures_invalidated |=
+        self.canonicalize_typed_identifiers()?;
+        let retained_signature_invalidated =
             self.retained_package_signature_would_be_invalidated()?;
+        self.flush_dirty_related_story_models()?;
+        self.canonicalize_drawing_ids()?;
+        self.refresh_related_story_caches()?;
+        self.package_signatures_invalidated |= retained_signature_invalidated;
         self.flush_to_package()
     }
 
@@ -9866,38 +10052,7 @@ impl Document {
 
     /// Write the in-memory document/styles back into the OPC package parts.
     pub(crate) fn flush_to_package(&mut self) -> Result<()> {
-        // A read-only save with unsafe retained namespace shadows keeps the
-        // producer's complete scopes and every retained raw subtree byte for
-        // byte. A modified document fails closed when canonical serialization
-        // could change the meaning or bytes of retained content.
-        let existing_document_xml = self.package.get_part(&self.doc_part_name);
-        let typed_document_is_unchanged = existing_document_xml
-            .and_then(|xml| CT_Document::from_xml(xml).ok())
-            .as_ref()
-            == Some(&self.document);
-        let nested_namespace_owners = existing_document_xml
-            .map(nested_modeled_namespace_owners)
-            .transpose()?
-            .unwrap_or_default();
-        let unsafe_prefix = unsafe_serializer_namespace_prefix(
-            &self.root_namespace_declarations,
-            &self.body_namespace_declarations,
-        )
-        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
-        let doc_xml = if typed_document_is_unchanged && unsafe_prefix.is_some() {
-            existing_document_xml
-                .expect("compared existing document XML")
-                .to_vec()
-        } else {
-            if let Some(prefix) = unsafe_prefix {
-                return Err(Error::Other(format!(
-                    "cannot serialize a modified document with a shadowed `{prefix}` namespace"
-                )));
-            }
-            let serialized = self.document.to_xml()?;
-            replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
-        };
-        self.package.set_part(&self.doc_part_name, doc_xml);
+        self.flush_document_to_package()?;
 
         // Serialize the styles part. A document opened without one still gets
         // rdocx's defaults written out, so make sure it is reachable: an
@@ -9975,75 +10130,7 @@ impl Document {
             self.package.set_part(part_name, table.to_xml()?);
         }
 
-        // Preserve parsed footnote bytes until a facade mutation makes the typed view dirty.
-        if self.footnotes_dirty && !self.footnotes.footnotes.is_empty() {
-            let mut footnotes = self.footnotes.clone();
-            for footnote in &mut footnotes.footnotes {
-                for paragraph in &mut footnote.paragraphs {
-                    close_typed_story_drawing_namespaces(paragraph)?;
-                }
-            }
-            let mut fx = footnotes.to_xml_footnotes()?;
-            if self
-                .footnotes_root_namespace_declarations
-                .iter()
-                .any(|(name, value)| name == "xmlns:r" && value != drawing_ns::R)
-            {
-                let fixed = format!(r#" xmlns:r="{}""#, drawing_ns::R).into_bytes();
-                let start = fx
-                    .windows(fixed.len())
-                    .position(|window| window == fixed)
-                    .ok_or_else(|| {
-                        Error::Other(
-                            "typed footnotes serializer lost its relationship namespace".to_owned(),
-                        )
-                    })?;
-                fx.drain(start..start + fixed.len());
-            }
-            let retained_namespaces = self
-                .footnotes_root_namespace_declarations
-                .iter()
-                .filter(|(name, _)| name != "xmlns:w")
-                .map(|(name, value)| (namespace_prefix(name), value.clone()))
-                .collect();
-            let fx = close_content_fragment_namespaces(&fx, &retained_namespaces)?;
-            let footnotes_part_name = self.footnotes_part_name.clone();
-            let footnotes_part = self
-                .reserve_document_part_bundle(
-                    footnotes_part_name.as_deref(),
-                    "/word/footnotes.xml",
-                    rel_types::FOOTNOTES,
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
-                )
-                .map_err(|error| {
-                    Error::Other(format!("footnotes relationship allocation failed: {error}"))
-                })?;
-            self.footnotes_part_name = Some(footnotes_part.clone());
-            self.package.set_part(&footnotes_part, fx);
-        }
-
-        // An existing comments part is modelled and flushed to its resolved
-        // relationship target. An absent part remains absent until the later
-        // comment API creates one deliberately.
-        if let (Some(comments), Some(part_name)) = (&self.comments, self.comments_part_name.clone())
-        {
-            let mut comments = comments.clone();
-            for comment in &mut comments.comments {
-                for paragraph in &mut comment.paragraphs {
-                    close_typed_story_drawing_namespaces(paragraph)?;
-                }
-            }
-            let xml = comments.to_xml()?;
-            self.package.set_part(&part_name, xml);
-            self.ensure_part_relationship_checked(
-                &part_name,
-                rel_types::COMMENTS,
-                crate::comments::COMMENTS_CONTENT_TYPE,
-            )
-            .map_err(|error| {
-                Error::Other(format!("comments relationship allocation failed: {error}"))
-            })?;
-        }
+        self.flush_dirty_related_story_models()?;
 
         if let (Some(comments), Some(part_name)) = (
             &self.comments_extended,
@@ -10104,6 +10191,135 @@ impl Document {
             self.package.set_part(&custom_part, custom_xml);
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn flush_dirty_related_story_models(&mut self) -> Result<()> {
+        // Existing footnote XML remains the authority. Typed additions are
+        // inserted into that root once so producer namespace declarations and
+        // unmodelled root children never pass through the lossy typed model.
+        if self.footnotes_dirty && !self.footnotes.footnotes.is_empty() {
+            let footnotes_part_name = self.footnotes_part_name.clone();
+            let footnotes_part = self
+                .reserve_document_part_bundle(
+                    footnotes_part_name.as_deref(),
+                    "/word/footnotes.xml",
+                    rel_types::FOOTNOTES,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+                )
+                .map_err(|error| {
+                    Error::Other(format!("footnotes relationship allocation failed: {error}"))
+                })?;
+            self.footnotes_part_name = Some(footnotes_part.clone());
+            let xml = if let Some(existing_xml) = self.package.get_part(&footnotes_part) {
+                let existing = rdocx_oxml::footnotes::CT_Footnotes::from_xml(existing_xml)?;
+                let additions = self
+                    .footnotes
+                    .footnotes
+                    .iter()
+                    .filter(|footnote| {
+                        existing.footnotes.iter().all(|candidate| {
+                            candidate.id != footnote.id || candidate.note_type != footnote.note_type
+                        })
+                    })
+                    .map(serialized_footnote_fragment)
+                    .collect::<Result<Vec<_>>>()?;
+                if existing.footnotes.len() + additions.len() != self.footnotes.footnotes.len() {
+                    return Err(Error::Other(
+                        "typed footnote mutation is not an additive package update".to_owned(),
+                    ));
+                }
+                append_story_fragments_to_root(existing_xml, b"footnotes", b"footnote", &additions)?
+            } else {
+                let mut footnotes = self.footnotes.clone();
+                for footnote in &mut footnotes.footnotes {
+                    for paragraph in &mut footnote.paragraphs {
+                        close_typed_story_drawing_namespaces(paragraph)?;
+                    }
+                }
+                footnotes.to_xml_footnotes()?
+            };
+            self.package.set_part(&footnotes_part, xml);
+            self.footnotes_dirty = false;
+        }
+
+        // An existing comments part is modelled and flushed to its resolved
+        // relationship target. An absent part remains absent until the later
+        // comment API creates one deliberately.
+        if self.comments_dirty
+            && let (Some(comments), Some(part_name)) =
+                (&self.comments, self.comments_part_name.clone())
+        {
+            let mut comments = comments.clone();
+            for comment in &mut comments.comments {
+                for paragraph in &mut comment.paragraphs {
+                    close_typed_story_drawing_namespaces(paragraph)?;
+                }
+            }
+            let xml = comments.to_xml()?;
+            self.package.set_part(&part_name, xml);
+            self.comments_dirty = false;
+            self.ensure_part_relationship_checked(
+                &part_name,
+                rel_types::COMMENTS,
+                crate::comments::COMMENTS_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!("comments relationship allocation failed: {error}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn flush_document_to_package(&mut self) -> Result<()> {
+        // A read-only save with unsafe retained namespace shadows keeps the
+        // producer's complete scopes and every retained raw subtree byte for
+        // byte. A modified document fails closed when canonical serialization
+        // could change the meaning or bytes of retained content.
+        let existing_document_xml = self.package.get_part(&self.doc_part_name);
+        let typed_document_is_unchanged = existing_document_xml
+            .and_then(|xml| CT_Document::from_xml(xml).ok())
+            .as_ref()
+            == Some(&self.document);
+        let nested_namespace_owners = existing_document_xml
+            .map(nested_modeled_namespace_owners)
+            .transpose()?
+            .unwrap_or_default();
+        let unsafe_prefix = unsafe_serializer_namespace_prefix(
+            &self.root_namespace_declarations,
+            &self.body_namespace_declarations,
+        )
+        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
+        let doc_xml = if typed_document_is_unchanged && unsafe_prefix.is_some() {
+            existing_document_xml
+                .expect("compared existing document XML")
+                .to_vec()
+        } else {
+            if let Some(prefix) = unsafe_prefix {
+                return Err(Error::Other(format!(
+                    "cannot serialize a modified document with a shadowed `{prefix}` namespace"
+                )));
+            }
+            let serialized = self.document.to_xml()?;
+            replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
+        };
+        self.package.set_part(&self.doc_part_name, doc_xml);
+        Ok(())
+    }
+
+    fn refresh_related_story_caches(&mut self) -> Result<()> {
+        if let Some(part_name) = self.footnotes_part_name.as_deref()
+            && let Some(xml) = self.package.get_part(part_name)
+        {
+            self.footnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml)?;
+            self.footnotes_dirty = false;
+        }
+        if let Some(part_name) = self.comments_part_name.as_deref()
+            && let Some(xml) = self.package.get_part(part_name)
+        {
+            self.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(xml)?);
+            self.comments_dirty = false;
+        }
         Ok(())
     }
 
@@ -10572,31 +10788,9 @@ impl Document {
                         "{kind:?} story part {part_name} is referenced more than once"
                     )));
                 }
-                let xml = match kind {
-                    StoryKind::Footnote
-                        if self.footnotes_dirty
-                            && self.footnotes_part_name.as_deref() == Some(part_name.as_str()) =>
-                    {
-                        Cow::Owned(self.footnotes.to_xml_footnotes()?)
-                    }
-                    StoryKind::Comment
-                        if self.comments_part_name.as_deref() == Some(part_name.as_str()) =>
-                    {
-                        Cow::Owned(
-                            self.comments
-                                .as_ref()
-                                .ok_or_else(|| {
-                                    Error::Other(format!(
-                                        "comments story {part_name} has no typed owner"
-                                    ))
-                                })?
-                                .to_xml()?,
-                        )
-                    }
-                    _ => Cow::Borrowed(self.package.get_part(&part_name).ok_or_else(|| {
-                        Error::Other(format!("{kind:?} story targets missing part {part_name}"))
-                    })?),
-                };
+                let xml = Cow::Borrowed(self.package.get_part(&part_name).ok_or_else(|| {
+                    Error::Other(format!("{kind:?} story targets missing part {part_name}"))
+                })?);
                 sources.push(StorySource {
                     root_kind: kind,
                     part_name,
@@ -10739,29 +10933,6 @@ impl Document {
         set_story_source_xml(self, &part_name, updated)
     }
 
-    fn append_cached_footnote_paragraph(
-        &mut self,
-        story: &StoryId,
-        paragraph: &CT_P,
-    ) -> Result<()> {
-        if story.kind != StoryKind::Footnote
-            || self.footnotes_part_name.as_deref() != Some(story.part_name.as_str())
-        {
-            return Ok(());
-        }
-        let footnote = self
-            .footnotes
-            .footnotes
-            .iter_mut()
-            .filter(|footnote| footnote.note_type == rdocx_oxml::footnotes::NoteType::Normal)
-            .nth(story.owner_index)
-            .ok_or_else(|| StoryError::Stale {
-                story: story.clone(),
-            })?;
-        footnote.paragraphs.push(paragraph.clone());
-        Ok(())
-    }
-
     /// Append an inline picture paragraph to one checked story owner.
     pub fn add_picture_to_story(
         &mut self,
@@ -10790,7 +10961,6 @@ impl Document {
         };
         let mut paragraph = CT_P::new();
         paragraph.runs.push(run);
-        candidate.append_cached_footnote_paragraph(story, &paragraph)?;
         let preserve_typed_body = story.kind == StoryKind::Body && owner == candidate.doc_part_name;
         if preserve_typed_body {
             candidate
@@ -10837,7 +11007,6 @@ impl Document {
             .expect("the authored hyperlink was appended")
             .extra_attributes
             .push(("xmlns:r".to_owned(), drawing_ns::R.to_owned()));
-        candidate.append_cached_footnote_paragraph(story, &paragraph)?;
         let preserve_typed_body = story.kind == StoryKind::Body && owner == candidate.doc_part_name;
         if preserve_typed_body {
             candidate
@@ -11300,7 +11469,6 @@ impl Document {
             .reserve_footnotes_bundle()
             .expect("an in-memory document can allocate a footnotes part");
         candidate.invalidate_layout();
-        candidate.footnotes_dirty = true;
         use rdocx_oxml::footnotes::CT_Footnote;
         use rdocx_oxml::text::CT_P;
         let id = candidate
@@ -11318,6 +11486,13 @@ impl Document {
             note_type: rdocx_oxml::footnotes::NoteType::Normal,
             paragraphs: vec![p],
         });
+        candidate.footnotes_dirty = true;
+        candidate
+            .flush_dirty_related_story_models()
+            .expect("an in-memory document can publish a typed footnote");
+        candidate
+            .refresh_related_story_caches()
+            .expect("an in-memory document can refresh a typed footnote");
         self.commit_staged_mutation(candidate);
         id
     }
@@ -20564,7 +20739,8 @@ mod tests {
         );
 
         let mut staged = document.clone_for_staging();
-        staged.canonicalize_authored_identifiers().unwrap();
+        staged.canonicalize_typed_identifiers().unwrap();
+        staged.canonicalize_drawing_ids().unwrap();
         let numeric = staged
             .package
             .get_part_rels("/word/document.xml")
@@ -20591,7 +20767,8 @@ mod tests {
             .unwrap();
         assert!(authored.contains(&numeric));
         assert!(!authored.contains(&provisional));
-        staged.canonicalize_authored_identifiers().unwrap();
+        staged.canonicalize_typed_identifiers().unwrap();
+        staged.canonicalize_drawing_ids().unwrap();
         assert_eq!(
             staged
                 .package

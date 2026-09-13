@@ -806,7 +806,13 @@ impl Document {
 
     /// Evaluate and materialize every typed field cache in document order.
     pub fn update_fields(&mut self, context: &FieldEvaluationContext) -> Result<usize> {
-        self.update_fields_with_policy(context, false)
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_dirty_related_story_models()?;
+        let updated = candidate.update_fields_with_policy(context, false)?;
+        if updated != 0 {
+            self.commit_staged_mutation(candidate);
+        }
+        Ok(updated)
     }
 
     /// Rebuild every supported table of contents already present in the document.
@@ -1064,6 +1070,7 @@ impl Document {
         context: &FieldEvaluationContext,
         missing_merge_fields_as_empty: bool,
     ) -> Result<usize> {
+        let package_before = self.package.clone();
         let evaluations =
             self.evaluate_fields_with_policy(context, missing_merge_fields_as_empty)?;
         let updates = evaluations
@@ -1133,7 +1140,7 @@ impl Document {
         let footnotes_start = update_index;
         apply_updates_to_notes(&mut footnotes, &updates, &mut update_index);
         let mut footnotes_dirty = self.footnotes_dirty;
-        if update_index > footnotes_start && !self.footnotes_dirty {
+        if update_index > footnotes_start {
             if let Some((part_name, xml)) = relationship_parts(self, rel_types::FOOTNOTES)
                 .into_iter()
                 .next()
@@ -1143,6 +1150,7 @@ impl Document {
                     patch_story_field_sources(&xml, &paragraphs, PackageStoryKind::Footnotes)?;
                 CT_Footnotes::from_xml(&updated)?;
                 staged_parts.push((part_name, updated));
+                footnotes_dirty = false;
             } else {
                 footnotes_dirty = true;
             }
@@ -1182,6 +1190,12 @@ impl Document {
         for (part_name, xml) in staged_parts {
             self.package.set_part(&part_name, xml);
         }
+        self.package_signatures_invalidated |= self
+            .retained_package_signature_would_be_invalidated()?
+            || crate::embedded::synchronized_package_mutation_invalidates_signature(
+                &package_before,
+                &self.package,
+            );
         self.invalidate_layout();
         Ok(updates.len())
     }
