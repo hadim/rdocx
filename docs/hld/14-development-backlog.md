@@ -4798,6 +4798,12 @@ uses real point-space fragments for page-spanning items, empty tables, and
 image-bearing paragraphs. `replace --expect N` guards the existing run-aware
 replacement before publication.
 
+The native sidecar keeps every direct body item addressable. Its public fragment
+record exposes one-based physical and displayed pages plus point-space bounds,
+while preserved unlaid items have an empty fragment list. Cached pagination
+retains the same fragment result as fresh pagination without changing shared
+positioned output.
+
 **Depends on**: F-X032, F-X037, F-X047.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
 **Test gate**: integration. `cli_structured_text_layout_and_guarded_replace_preserve_exact_contracts`

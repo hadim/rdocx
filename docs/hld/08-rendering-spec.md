@@ -920,6 +920,23 @@ table before layout and return it with the positioned output as
 than allocating per page. Source metadata does not change shaping, pagination,
 font selection, or rendered bytes.
 
+`WordLayoutResult::body_layout_fragments` also resolves one zero-based direct
+body item to its placed point-space extents. Each `WordBodyLayoutFragment`
+records one-based physical and displayed page numbers plus top-left `x`, `y`,
+`width`, and `height` values in points. Paragraph fragments use the placed flow
+box, including empty and image-bearing lines. Table fragments use the union of
+the rows placed on that page, including repeated header rows. A page-spanning
+item therefore owns one fragment on every occupied page. Body-level content
+controls aggregate the blocks projected from that direct body owner. Preserved
+unlaid content remains addressable through an empty fragment slice.
+
+The body owner is a private result-local overlay on shared layout blocks.
+`PositionedElement` and the renderer input remain unchanged. Recorded restart
+state retains the sidecar with its exact pages, accounts for its capacity under
+the existing aggregate cache ceiling, and combines cached prefix and suffix
+fragments with newly paginated fragments. Warm and cold provenance results are
+therefore equal without moving rendered output.
+
 ### Word revision views
 
 `LayoutInput::revision_view` selects the accepted or tracked projection before

@@ -261,6 +261,11 @@ literals in pre-1.0 Rust consumers. They add no Python, WASM, or CLI surface.
 `document_paragraph_numbering`, and `document_body_paragraph_numbering` as
 result-local native Rust numbering lookups. The latter two remain hidden from
 generated documentation but are still additive public Rust APIs.
+`WordBodyLayoutFragment` and `WordLayoutResult::body_layout_fragments` add a
+public pre-1.0 point-space extent lookup for each direct main-body item. The
+record uses one-based physical and displayed page numbers. Preserved unlaid
+content resolves to an empty slice, while an invalid body index resolves to
+`None`.
 
 Native Rust also exposes `WordPackageClass` for DOCX, DOCM, DOTX, and DOTM.
 `Document::package_class` reads the exact main-part override.
@@ -1506,8 +1511,18 @@ mutually exclusive with the one-based `render --pages` range. Both flags select
 against the same deterministic layout snapshot that is passed to the shared
 raster backend. The legacy `--page 0` default PNG path and single-line stdout
 remain unchanged. The `text` command emits paragraphs and table cells in
-document order through the facade plain-text representation. Both the selected
-page and all-page `render` paths use bundled deterministic fonts. The compiled
+document order through the facade plain-text representation. `text --json`
+emits schema-1 accepted-view paragraphs with a zero-based direct body index,
+typed zero-based nested path, direct style and numbering, text, and ordered
+runs. Run formatting is null when no direct run properties exist. Otherwise it
+contains nullable direct bold, italic, strike, underline, font, point size,
+colour, highlight, language, and character style fields. `layout --json` uses
+bundled deterministic fonts and reports every direct body item. Its point-space
+fragments carry one-based physical and displayed page numbers, and preserved
+unlaid items retain an empty fragment list. `replace --expect N` checks the
+run-aware replacement count before staged publication. A mismatch creates no
+output and leaves an existing destination untouched. Both the selected page
+and all-page `render` paths use bundled deterministic fonts. The compiled
 surface also includes nested comment thread commands, main-story revision
 inspection, all-story filtered revision resolution, whole-run comparison, and
 TOC rebuild. Every new mutation requires an explicit output and publishes

@@ -1115,3 +1115,166 @@ fn compare_accept_and_reject_reproduce_each_input() {
         Document::open(original).unwrap().text()
     );
 }
+
+#[test]
+fn cli_structured_text_layout_and_guarded_replace_preserve_exact_contracts() {
+    let temp = TempWorkspace::new("structured-automation");
+    let input = temp.path.join("structured.docx");
+    let mismatch = temp.path.join("mismatch.docx");
+    let replaced = temp.path.join("replaced.docx");
+    let mut document = fixture_document(&["Alpha TOKEN"]);
+    {
+        let mut table = document.add_table(1, 1);
+        table.cell(0, 0).unwrap().set_text("Nested TOKEN");
+    }
+    document.save(&input).unwrap();
+
+    let text = cli(&["text", path_text(&input), "--json"]);
+    assert_success(&text, "structured text");
+    let text: serde_json::Value = serde_json::from_slice(&text.stdout).unwrap();
+    assert_eq!(text["schema"], 1);
+    assert_eq!(text["scope"], "main");
+    assert_eq!(text["revision_view"], "accepted");
+    assert_eq!(text["paragraphs"].as_array().unwrap().len(), 2);
+    assert_eq!(text["paragraphs"][0]["body_index"], 0);
+    assert_eq!(text["paragraphs"][0]["path"], json!([]));
+    assert_eq!(
+        text["paragraphs"][1]["path"],
+        json!([
+            {"kind": "row", "index": 0},
+            {"kind": "cell", "index": 0},
+            {"kind": "paragraph", "index": 0}
+        ])
+    );
+
+    let layout = cli(&["layout", path_text(&input), "--json"]);
+    assert_success(&layout, "structured layout");
+    let layout: serde_json::Value = serde_json::from_slice(&layout.stdout).unwrap();
+    assert_eq!(layout["schema"], 1);
+    assert_eq!(layout["scope"], "main");
+    assert_eq!(layout["units"], "points");
+    let body_items = layout["body_items"].as_array().unwrap();
+    assert_eq!(body_items.len(), 2);
+    for (body_index, item) in body_items.iter().enumerate() {
+        assert_eq!(item["body_index"], body_index);
+        let fragments = item["fragments"].as_array().unwrap();
+        assert!(!fragments.is_empty());
+        for fragment in fragments {
+            assert!(fragment["physical_page"].as_u64().unwrap() >= 1);
+            assert!(fragment["displayed_page"].as_u64().unwrap() >= 1);
+            assert!(fragment["width"].as_f64().unwrap() > 0.0);
+            assert!(fragment["height"].as_f64().unwrap() > 0.0);
+        }
+    }
+
+    let guarded = cli(&[
+        "replace",
+        path_text(&input),
+        "--placeholder",
+        "TOKEN",
+        "--value",
+        "done",
+        "--expect",
+        "3",
+        "--output",
+        path_text(&mismatch),
+    ]);
+    assert!(!guarded.status.success());
+    assert!(!mismatch.exists());
+
+    let replaced_output = cli(&[
+        "replace",
+        path_text(&input),
+        "--placeholder",
+        "TOKEN",
+        "--value",
+        "done",
+        "--expect",
+        "2",
+        "--output",
+        path_text(&replaced),
+    ]);
+    assert_success(&replaced_output, "guarded replacement");
+    assert_eq!(
+        Document::open(replaced).unwrap().text(),
+        "Alpha done\nNested done\t\n"
+    );
+}
+
+#[test]
+fn text_json_preserves_nested_paths_styles_numbering_and_run_formatting() {
+    let temp = TempWorkspace::new("structured-text");
+    let input = temp.path.join("text.docx");
+    let mut document = fixture_document(&[]);
+    {
+        let mut paragraph = document.add_paragraph("");
+        paragraph.set_style("Heading1");
+        assert!(paragraph.set_numbering(7, 2));
+        paragraph.add_run("plain");
+        let mut formatted = paragraph.add_run("rich");
+        formatted.set_bold(true);
+        formatted.set_italic(false);
+        formatted.set_font("Carlito");
+        formatted.set_size(14.0);
+        formatted.set_color("FF0000");
+    }
+    {
+        let mut table = document.add_table(1, 1);
+        table.cell(0, 0).unwrap().set_text("nested");
+    }
+    document.save(&input).unwrap();
+
+    let output = cli(&["text", path_text(&input), "--json"]);
+    assert_success(&output, "structured text formatting");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "revision_view": "accepted",
+            "paragraphs": [
+                {
+                    "body_index": 0,
+                    "path": [],
+                    "style": "Heading1",
+                    "numbering": {"num_id": 7, "level": 2},
+                    "text": "plainrich",
+                    "runs": [
+                        {"index": 0, "text": "plain", "formatting": null},
+                        {
+                            "index": 1,
+                            "text": "rich",
+                            "formatting": {
+                                "bold": true,
+                                "italic": false,
+                                "strike": null,
+                                "underline": null,
+                                "font": "Carlito",
+                                "size_points": 14.0,
+                                "color": "FF0000",
+                                "highlight": null,
+                                "language": null,
+                                "style": null
+                            }
+                        }
+                    ]
+                },
+                {
+                    "body_index": 1,
+                    "path": [
+                        {"kind": "row", "index": 0},
+                        {"kind": "cell", "index": 0},
+                        {"kind": "paragraph", "index": 0}
+                    ],
+                    "style": null,
+                    "numbering": null,
+                    "text": "nested",
+                    "runs": [
+                        {"index": 0, "text": "nested", "formatting": null}
+                    ]
+                }
+            ]
+        })
+    );
+}

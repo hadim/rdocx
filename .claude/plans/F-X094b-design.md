@@ -1,6 +1,6 @@
 # F-X094b, Structured CLI text and layout plus guarded replacement
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-X032, F-X037, F-X047
@@ -69,13 +69,13 @@ positioned or rendered output.
 
 ## Implementation checklist
 
-- [ ] Add the body-fragment record and accessor.
-- [ ] Carry body ownership and record split or empty extents.
-- [ ] Add exact structured text and layout JSON.
-- [ ] Add guarded run-aware replacement.
-- [ ] Document units, paths, pages, and unmatched behavior.
-- [ ] Run sensitivity tests, the full gate, and unchanged hashes.
-- [ ] Update exactly the listed HLD files.
+- [x] Add the body-fragment record and accessor.
+- [x] Carry body ownership and record split or empty extents.
+- [x] Add exact structured text and layout JSON.
+- [x] Add guarded run-aware replacement.
+- [x] Document units, paths, pages, and unmatched behavior.
+- [x] Run sensitivity tests, the full gate, and unchanged hashes.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

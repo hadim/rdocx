@@ -2130,6 +2130,16 @@ bytes, legacy zero-based `render --page`, one-based `render --pages`, shared
 image format extensions, invalid range rejection and no partial output. Process
 ID and an atomic counter isolate temporary workspaces across concurrent runs.
 
+The same binary binds the schema-1 structured automation surface. Its exact
+text record asserts direct style, numbering, nullable run formatting, and typed
+row, cell, and paragraph path segments. The layout record requires positive
+point-space extents and one-based physical and displayed page numbers for
+paragraphs and tables. Guarded replacement proves both an exact-count publish
+and a mismatch that creates no output. Focused deterministic layout tests
+separately require a page-spanning body item to produce ordered fragments on
+multiple pages, require empty-cell tables and image-bearing paragraphs to keep
+real extents, and compare warm restart fragments with a fresh pagination.
+
 All 27 workspace packages explicitly declare one distinct README. The root
 README is the high-level `rdocx` guide. It leads with the complete native
 document workflow and a seven-row implemented-outcome summary before examples,

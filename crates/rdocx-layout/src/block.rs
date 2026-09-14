@@ -138,15 +138,34 @@ pub(crate) enum SharedLayoutBlock {
     Owned {
         block: Box<LayoutBlock>,
         reflow_direction: TextDirection,
+        body_index: Option<usize>,
     },
     Paragraph {
         block: Arc<ParagraphBlock>,
         semantics: ParagraphSemantics,
+        body_index: Option<usize>,
     },
     Table {
         block: Arc<TableBlock>,
         semantics: TableSemantics,
+        body_index: Option<usize>,
     },
+}
+
+impl SharedLayoutBlock {
+    pub(crate) fn set_body_index(&mut self, body_index: usize) {
+        match self {
+            Self::Owned {
+                body_index: owner, ..
+            }
+            | Self::Paragraph {
+                body_index: owner, ..
+            }
+            | Self::Table {
+                body_index: owner, ..
+            } => *owner = Some(body_index),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -193,6 +212,10 @@ impl Deref for TableView<'_> {
 pub(crate) trait LayoutBlockLike {
     fn paragraph(&self) -> Option<ParagraphView<'_>>;
     fn table(&self) -> Option<TableView<'_>>;
+
+    fn body_index(&self) -> Option<usize> {
+        None
+    }
 
     fn content_height(&self) -> f64 {
         self.paragraph().map_or_else(
@@ -247,11 +270,14 @@ impl LayoutBlockLike for SharedLayoutBlock {
             Self::Owned {
                 block,
                 reflow_direction,
+                ..
             } => block.paragraph().map(|mut paragraph| {
                 paragraph.reflow_direction = *reflow_direction;
                 paragraph
             }),
-            Self::Paragraph { block, semantics } => Some(ParagraphView {
+            Self::Paragraph {
+                block, semantics, ..
+            } => Some(ParagraphView {
                 block,
                 semantics: Some(semantics),
                 reflow_direction: semantics.reflow_direction,
@@ -265,10 +291,20 @@ impl LayoutBlockLike for SharedLayoutBlock {
         match self {
             Self::Owned { block, .. } => block.table(),
             Self::Paragraph { .. } => None,
-            Self::Table { block, semantics } => Some(TableView {
+            Self::Table {
+                block, semantics, ..
+            } => Some(TableView {
                 block,
                 semantics: Some(semantics),
             }),
+        }
+    }
+
+    fn body_index(&self) -> Option<usize> {
+        match self {
+            Self::Owned { body_index, .. }
+            | Self::Paragraph { body_index, .. }
+            | Self::Table { body_index, .. } => *body_index,
         }
     }
 }

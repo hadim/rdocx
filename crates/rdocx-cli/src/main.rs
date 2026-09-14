@@ -30,6 +30,17 @@ enum Command {
     Text {
         /// Path to the DOCX file
         file: PathBuf,
+        /// Output accepted-view rich text as schema-1 JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect deterministic top-level body layout geometry
+    Layout {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Output point-space body fragments as schema-1 JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Convert DOCX to another format (pdf, html, md, png, jpeg, tiff)
     Convert {
@@ -77,6 +88,9 @@ enum Command {
         /// Output file path
         #[arg(long, short = 'o')]
         output: PathBuf,
+        /// Require exactly this many replacements before publishing output
+        #[arg(long)]
+        expect: Option<usize>,
     },
     /// Validate OOXML conformance
     Validate {
@@ -330,7 +344,8 @@ fn main() {
 
     let result = match cli.command {
         Command::Inspect { file, json } => commands::inspect(&file, json),
-        Command::Text { file } => commands::text(&file),
+        Command::Text { file, json } => commands::text(&file, json),
+        Command::Layout { file, json } => commands::layout(&file, json),
         Command::Convert {
             file,
             to,
@@ -358,7 +373,8 @@ fn main() {
             placeholder,
             value,
             output,
-        } => commands::replace(&file, &placeholder, &value, &output),
+            expect,
+        } => commands::replace(&file, &placeholder, &value, expect, &output),
         // Handled above so its exit code can reflect the verdict.
         Command::Validate { .. } => unreachable!(),
         Command::Render {

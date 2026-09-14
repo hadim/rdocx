@@ -5,7 +5,13 @@ use std::path::{Path, PathBuf};
 use oxml_cli_support::{
     StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
 };
-use rdocx::{Document, RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange};
+use rdocx::{
+    BodyItemRef, Document, RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
+};
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
+use rdocx_oxml::document::{BodyContent, CT_Document};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
+use rdocx_oxml::text::{CT_P, CT_R};
 use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -120,10 +126,246 @@ fn inspect_json(file: &Path, doc: &Document, style_ids: Vec<String>) -> Result<V
 ///
 /// Body paragraphs and table cell text are both emitted, in document order —
 /// printing only `paragraphs()` would silently drop everything inside tables.
-pub fn text(file: &Path) -> Result<()> {
+pub fn text(file: &Path, json_output: bool) -> Result<()> {
     let doc = Document::open(file)?;
-    print!("{}", doc.text());
+    if json_output {
+        let document = parsed_main_document(file)?;
+        let mut paragraphs = Vec::new();
+        for (body_index, content) in document.body.content.iter().enumerate() {
+            match content {
+                BodyContent::Paragraph(paragraph) => {
+                    paragraphs.push(paragraph_json(body_index, &[], paragraph));
+                }
+                BodyContent::Table(table) => {
+                    collect_table_paragraphs(body_index, &[], table, &mut paragraphs);
+                }
+                BodyContent::ContentControl(control) => {
+                    collect_control_paragraphs(body_index, &[], control, &mut paragraphs);
+                }
+                BodyContent::RawXml(_) => {}
+            }
+        }
+        print_json(json!({
+            "scope": "main",
+            "revision_view": "accepted",
+            "paragraphs": paragraphs,
+        }))?;
+    } else {
+        print!("{}", doc.text());
+    }
     Ok(())
+}
+
+/// Emit deterministic point-space extents for every direct body item.
+pub fn layout(file: &Path, json_output: bool) -> Result<()> {
+    let doc = Document::open(file)?;
+    let layout = doc.layout_deterministic()?;
+    let body_items = doc
+        .body_items()
+        .enumerate()
+        .map(|(body_index, item)| {
+            let kind = match item {
+                BodyItemRef::Paragraph(_) => "paragraph",
+                BodyItemRef::Table(_) => "table",
+                BodyItemRef::ContentControl(_) => "content-control",
+                BodyItemRef::UnsupportedXml(_) => "unsupported-xml",
+            };
+            let fragments = layout
+                .body_layout_fragments(body_index)
+                .unwrap_or_default()
+                .iter()
+                .map(|fragment| {
+                    json!({
+                        "physical_page": fragment.physical_page,
+                        "displayed_page": fragment.displayed_page,
+                        "x": fragment.x,
+                        "y": fragment.y,
+                        "width": fragment.width,
+                        "height": fragment.height,
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "body_index": body_index,
+                "kind": kind,
+                "fragments": fragments,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if json_output {
+        print_json(json!({
+            "scope": "main",
+            "revision_view": "accepted",
+            "units": "points",
+            "page_count": layout.layout.pages.len(),
+            "body_items": body_items,
+        }))?;
+    } else {
+        println!("Pages: {}", layout.layout.pages.len());
+        for item in body_items {
+            println!(
+                "Body item {} ({}): {} fragment(s)",
+                item["body_index"],
+                item["kind"].as_str().unwrap_or("unknown"),
+                item["fragments"].as_array().map_or(0, Vec::len)
+            );
+        }
+    }
+    Ok(())
+}
+
+fn parsed_main_document(file: &Path) -> Result<CT_Document> {
+    let package = oxml_opc::OpcPackage::open(file)?;
+    let part = package
+        .main_document_part()
+        .ok_or("package declares no main document relationship")?;
+    let bytes = package
+        .get_part(&part)
+        .ok_or_else(|| format!("main document part {part} is missing"))?;
+    Ok(CT_Document::from_xml(bytes)?)
+}
+
+fn path_segment(kind: &str, index: usize) -> Value {
+    json!({ "kind": kind, "index": index })
+}
+
+fn paragraph_json(body_index: usize, path: &[Value], paragraph: &CT_P) -> Value {
+    let runs = paragraph
+        .accepted_bookmark_runs()
+        .into_iter()
+        .enumerate()
+        .map(|(index, run)| {
+            json!({
+                "index": index,
+                "text": run.text(),
+                "formatting": run_formatting_json(run),
+            })
+        })
+        .collect::<Vec<_>>();
+    let style = paragraph
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.style_id.as_deref());
+    let numbering = paragraph.properties.as_ref().and_then(|properties| {
+        properties.num_id.map(|num_id| {
+            json!({
+                "num_id": num_id,
+                "level": properties.num_ilvl.unwrap_or(0),
+            })
+        })
+    });
+    json!({
+        "body_index": body_index,
+        "path": path,
+        "style": style,
+        "numbering": numbering,
+        "text": runs.iter().filter_map(|run| run["text"].as_str()).collect::<String>(),
+        "runs": runs,
+    })
+}
+
+fn run_formatting_json(run: &CT_R) -> Value {
+    let Some(properties) = run.properties.as_ref() else {
+        return Value::Null;
+    };
+    json!({
+        "bold": properties.bold,
+        "italic": properties.italic,
+        "strike": properties.strike,
+        "underline": properties.underline.map(|value| value.to_str()),
+        "font": properties.font_ascii,
+        "size_points": properties.sz.map(|value| value.to_pt()),
+        "color": properties.color,
+        "highlight": properties.highlight.map(|value| value.to_str()),
+        "language": properties.language,
+        "style": properties.style_id,
+    })
+}
+
+fn collect_table_paragraphs(
+    body_index: usize,
+    path: &[Value],
+    table: &CT_Tbl,
+    output: &mut Vec<Value>,
+) {
+    for (row_index, row) in table.rows.iter().enumerate() {
+        let mut row_path = path.to_vec();
+        row_path.push(path_segment("row", row_index));
+        collect_row_paragraphs(body_index, &row_path, row, output);
+    }
+}
+
+fn collect_row_paragraphs(
+    body_index: usize,
+    path: &[Value],
+    row: &CT_Row,
+    output: &mut Vec<Value>,
+) {
+    for (cell_index, cell) in row.cells.iter().enumerate() {
+        let mut cell_path = path.to_vec();
+        cell_path.push(path_segment("cell", cell_index));
+        collect_cell_paragraphs(body_index, &cell_path, cell, output);
+    }
+}
+
+fn collect_cell_paragraphs(
+    body_index: usize,
+    path: &[Value],
+    cell: &CT_Tc,
+    output: &mut Vec<Value>,
+) {
+    for (content_index, content) in cell.content.iter().enumerate() {
+        let mut content_path = path.to_vec();
+        match content {
+            CellContent::Paragraph(paragraph) => {
+                content_path.push(path_segment("paragraph", content_index));
+                output.push(paragraph_json(body_index, &content_path, paragraph));
+            }
+            CellContent::Table(table) => {
+                content_path.push(path_segment("table", content_index));
+                collect_table_paragraphs(body_index, &content_path, table, output);
+            }
+            CellContent::ContentControl(control) => {
+                content_path.push(path_segment("content-control", content_index));
+                collect_control_paragraphs(body_index, &content_path, control, output);
+            }
+        }
+    }
+}
+
+fn collect_control_paragraphs(
+    body_index: usize,
+    path: &[Value],
+    control: &CT_Sdt,
+    output: &mut Vec<Value>,
+) {
+    for (content_index, content) in control.content.iter().enumerate() {
+        let mut content_path = path.to_vec();
+        match content {
+            SdtContent::Paragraph(paragraph) => {
+                content_path.push(path_segment("paragraph", content_index));
+                output.push(paragraph_json(body_index, &content_path, paragraph));
+            }
+            SdtContent::Table(table) => {
+                content_path.push(path_segment("table", content_index));
+                collect_table_paragraphs(body_index, &content_path, table, output);
+            }
+            SdtContent::Row(row) => {
+                content_path.push(path_segment("row", content_index));
+                collect_row_paragraphs(body_index, &content_path, row, output);
+            }
+            SdtContent::Cell(cell) => {
+                content_path.push(path_segment("cell", content_index));
+                collect_cell_paragraphs(body_index, &content_path, cell, output);
+            }
+            SdtContent::ContentControl(nested) => {
+                content_path.push(path_segment("content-control", content_index));
+                collect_control_paragraphs(body_index, &content_path, nested, output);
+            }
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+        }
+    }
 }
 
 /// Convert a DOCX file to another format.
@@ -697,10 +939,24 @@ fn compute_lcs(a: &[String], b: &[String]) -> Vec<String> {
 }
 
 /// Replace a placeholder in a DOCX file and save to output.
-pub fn replace(file: &Path, placeholder: &str, value: &str, output: &Path) -> Result<()> {
+pub fn replace(
+    file: &Path,
+    placeholder: &str,
+    value: &str,
+    expect: Option<usize>,
+    output: &Path,
+) -> Result<()> {
     let mut doc = Document::open(file)?;
     let count = doc.try_replace_text(placeholder, value)?;
-    doc.save(output)?;
+    if let Some(expected) = expect
+        && count != expected
+    {
+        return Err(format!(
+            "expected {expected} replacement(s) of \"{placeholder}\", found {count}"
+        )
+        .into());
+    }
+    publish_document(&mut doc, output)?;
     println!("Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\"");
     println!("Written to {}", output.display());
     Ok(())
