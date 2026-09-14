@@ -1431,6 +1431,20 @@ wheels and two source distributions, and receives `id-token: write` only for a
 artifacts but cannot publish them. Every external action and the maturin tool
 version are pinned to reviewed immutable versions.
 
+The Python release family is the exact pair of `rdocx` and `rpptx`
+distributions at one version. After the reviewed SHA is pushed but before a
+`py-vX.Y.Z` tag is created, a manual build-only run at that SHA must produce
+twelve `cp39-abi3` wheels and two source distributions. Every artifact name
+and embedded metadata must name one selected distribution at `X.Y.Z`. The
+downloaded pair is installed
+together under clean Python 3.9 and 3.12 environments for the priority runtime
+gate. Exact `mypy==2.3.0 --strict` and stubtest run under Python 3.12 because
+that mypy version requires Python 3.10 or newer. The tag-only publish job uses
+PyPI trusted publishing. Successful publication is not complete until both project
+versions, all fourteen files, authenticated owner or maintainer roles, the
+exact reviewed GitHub release body, and every contribution notification are
+verified.
+
 **A PR-time job that builds the wheel and runs pytest is mandatory.** The
 absence of exactly this job for wasm is why `rdocx-wasm` rotted.
 

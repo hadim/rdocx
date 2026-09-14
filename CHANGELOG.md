@@ -2,7 +2,48 @@
 
 ## Unreleased
 
-No changes have been recorded since the v0.13.1 preparation.
+No changes have been recorded since the py-v0.13.1 preparation.
+
+## py-v0.13.1
+
+### Highlights
+
+The first paired Python release brings the distinctive Word and PowerPoint
+automation surfaces to PyPI. `rdocx` and `rpptx` install together at 0.13.1
+with CPython 3.9 and newer support through `cp39-abi3` wheels.
+
+### Added
+
+- `rdocx` exposes comparison, comments and replies, revision filtering and
+  resolution, deterministic layout snapshots, TOC rebuilding, ordered section
+  and style inspection, rich header and footer stories, and relationship-safe
+  hyperlinks.
+- `rpptx` exposes deterministic presentation PDF and slide PNG output, speaker
+  notes as text, PDF, and PNG, plus modern comment authors, threads, replies,
+  and ordered comment movement.
+- Both distributions ship installed type declarations checked with strict mypy
+  and stubtest. The release contains twelve platform wheels and one source
+  distribution per project.
+
+### Fixed
+
+- Publication now rejects a partial two-project artifact set, mismatched name
+  or version metadata, a non-ABI3 wheel, manual-dispatch publication, and any
+  release that lacks fresh approval at the reviewed commit.
+
+### Compatibility
+
+The distribution names and import names are `rdocx` and `rpptx`. Both require
+Python 3.9 or newer and use the stable ABI from Python 3.9. Existing locally
+built binding APIs remain source compatible. This Python release does not
+publish or change any crates.io, WASM, or npm package.
+
+### Contributors
+
+[@hadim](https://github.com/hadim) reported the missing high-value binding
+surfaces and made the case for publishing both projects on PyPI in
+[Issue 76](https://github.com/tensorbee/rdocx/issues/76). Atul Sharma
+implemented and hardened the native, CLI, binding, and release paths.
 
 ## v0.13.1
 

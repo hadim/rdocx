@@ -73,14 +73,14 @@ Expected unchanged across all 49 entries.
 
 ## Implementation checklist
 
-- [ ] Add the exact Python family to release commands and validation.
-- [ ] Harden the wheel artifact, trusted publisher, release-body, and owner checks.
-- [ ] Add exhaustive negative workflow mutations.
-- [ ] Prepare reviewed notes and contribution inventory for Issue 76.
-- [ ] Synchronize generated command adapters.
+- [x] Add the exact Python family to release commands and validation.
+- [x] Harden the wheel artifact, trusted publisher, release-body, and owner checks.
+- [x] Add exhaustive negative workflow mutations.
+- [x] Prepare reviewed notes and contribution inventory for Issue 76.
+- [x] Synchronize generated command adapters.
 - [ ] Run full local and hosted build-only verification.
-- [ ] Stop before tag, push, PyPI, external comment, or issue closure.
-- [ ] Update exactly the listed HLD files.
+- [x] Stop before tag, push, PyPI, external comment, or issue closure.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

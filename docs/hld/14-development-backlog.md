@@ -4868,10 +4868,13 @@ no mutation.
 Extend the reviewed release ceremony with a Python family containing `rdocx`
 and `rpptx` at one version, exactly twelve cp39-abi3 wheels and two source
 distributions, trusted PyPI publication, byte-identical GitHub release notes,
-registry ownership verification, and contribution evidence. S72 prepares this
-contract but creates no tag, publishes nothing, posts no external comment, and
-does not close Issue 76. Those actions require a later release F-ID and fresh
-`/release py-v0.13.1` approval at the reviewed SHA.
+registry ownership verification, and contribution evidence. A manual
+`wheels.yml` run at the reviewed SHA is build-only and supplies the exact
+artifacts for clean Python 3.9 and 3.12 install and runtime checks. Strict
+typing and stub checks run under Python 3.12. S72 prepares this contract but
+creates no tag, publishes nothing, posts no external comment, and does not
+close Issue 76. Those actions require fresh `/release py-v0.13.1` approval at
+the reviewed SHA.
 
 **Depends on**: F-137, F-138, F-X094a, F-X094c, F-X094d, F-X094e.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.

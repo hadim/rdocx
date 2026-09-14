@@ -13,6 +13,7 @@ import tarfile
 import tempfile
 import tomllib
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -6364,6 +6365,322 @@ rdocx-layout = "=0.10.1"
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 self.assert_partial_v0_11_0_cleanup_contract(mutated)
 
+    def test_python_release_contract_rejects_partial_or_unapproved_publication(
+        self,
+    ) -> None:
+        release = (workflow.REPO / ".claude/commands/release.md").read_text(
+            encoding="utf-8"
+        )
+        release_notes = (
+            workflow.REPO / ".claude/commands/release-notes.md"
+        ).read_text(encoding="utf-8")
+        wheels = (workflow.REPO / ".github/workflows/wheels.yml").read_bytes()
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+
+        def assert_contract(
+            release_text: str,
+            release_notes_text: str,
+            wheels_bytes: bytes,
+            changelog_text: str,
+        ) -> None:
+            normalized_release = " ".join(release_text.split())
+            normalized_notes = " ".join(release_notes_text.split())
+
+            self.assertIn(
+                "# /release {vX.Y.Z | rpptx-vX.Y.Z | py-vX.Y.Z}",
+                release_text,
+            )
+            self.assertIn(
+                "# /release-notes {vX.Y.Z | rpptx-vX.Y.Z | py-vX.Y.Z}",
+                release_notes_text,
+            )
+            for required in (
+                "exact two-distribution set is `rdocx` from `rdocx-py` and "
+                "`rpptx` from `rpptx-py`",
+                "exactly twelve `cp39-abi3` wheels",
+                "exactly one source distribution per distribution",
+                "manually dispatch `wheels.yml` at that exact branch and SHA",
+                "successful build-only run",
+                "inspect every wheel and source distribution for exact name "
+                "and version metadata",
+                "python-release-artifacts <requested-tag> <download-directory>",
+                "Manual dispatch must create no tag, PyPI file, or GitHub release",
+                "query PyPI and refuse unless both target project versions are absent",
+                "trusted publisher entries for both exact project names",
+                "Record the authenticated PyPI owner or maintainer roles",
+                "separate explicit go or no-go immediately before the first "
+                "external mutation",
+                "Stop before tag creation if any build-only check fails",
+                "Create one annotated tag for the requested argument at that "
+                "exact HEAD",
+                "Python tag starts `.github/workflows/wheels.yml`",
+                "verify both exact project versions and all fourteen files",
+                "compare it byte for byte",
+            ):
+                self.assertIn(required, normalized_release)
+
+            self.assertIn(
+                "`py-vX.Y.Z` is the paired `rdocx` and `rpptx` Python "
+                "distribution family",
+                normalized_notes,
+            )
+            self.assertIn(
+                "Python notes cover the two Python distributions and their "
+                "public binding surfaces, not crates.io or npm packages",
+                normalized_notes,
+            )
+
+            self.assert_wheels_workflow_contract(wheels_bytes)
+            rendered = workflow.render_release_notes(changelog_text, "py-v0.13.1")
+            self.assertIn(
+                "https://github.com/tensorbee/rdocx/issues/76", rendered
+            )
+            self.assertIn("[@hadim](https://github.com/hadim)", rendered)
+            self.assertIn("twelve platform wheels", rendered)
+            self.assertIn("one source\n  distribution per project", rendered)
+
+            for crate, distribution in (
+                ("rdocx-py", "rdocx"),
+                ("rpptx-py", "rpptx"),
+            ):
+                manifest = tomllib.loads(
+                    (workflow.REPO / f"crates/{crate}/Cargo.toml").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                project = tomllib.loads(
+                    (workflow.REPO / f"crates/{crate}/pyproject.toml").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(manifest["package"]["version"], {"workspace": True})
+                self.assertFalse(manifest["package"]["publish"])
+                self.assertEqual(project["project"]["name"], distribution)
+                self.assertEqual(project["project"]["version"], "0.13.1")
+                self.assertEqual(project["project"]["requires-python"], ">=3.9")
+                self.assertEqual(
+                    project["tool"]["maturin"]["features"], ["extension-module"]
+                )
+
+            root = tomllib.loads(
+                (workflow.REPO / "Cargo.toml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                root["workspace"]["dependencies"]["pyo3"]["features"],
+                ["abi3-py39"],
+            )
+
+        self.assertIsNotNone(workflow.RELEASE_TAG_RE.fullmatch("py-v0.13.1"))
+        for invalid in (
+            "py-v0.13",
+            "py-v01.13.1",
+            "python-v0.13.1",
+            "py-v0.13.1-rc1",
+            "py-rpptx-v0.13.1",
+        ):
+            with self.subTest(invalid_tag=invalid):
+                self.assertIsNone(workflow.RELEASE_TAG_RE.fullmatch(invalid))
+
+        assert_contract(release, release_notes, wheels, changelog)
+
+        def write_artifacts(root: Path) -> None:
+            version = "0.13.1"
+            for distribution in workflow.PYTHON_RELEASE_DISTRIBUTIONS:
+                for platform in workflow.PYTHON_RELEASE_PLATFORMS:
+                    wheel_path = root / (
+                        f"{distribution}-{version}-cp39-abi3-{platform}.whl"
+                    )
+                    dist_info = f"{distribution}-{version}.dist-info"
+                    with zipfile.ZipFile(wheel_path, mode="w") as archive:
+                        archive.writestr(
+                            f"{dist_info}/METADATA",
+                            "Metadata-Version: 2.1\n"
+                            f"Name: {distribution}\nVersion: {version}\n",
+                        )
+                        archive.writestr(
+                            f"{dist_info}/WHEEL",
+                            "Wheel-Version: 1.0\n"
+                            "Root-Is-Purelib: false\n"
+                            f"Tag: cp39-abi3-{platform}\n",
+                        )
+
+                sdist_path = root / f"{distribution}-{version}.tar.gz"
+                metadata = (
+                    "Metadata-Version: 2.1\n"
+                    f"Name: {distribution}\nVersion: {version}\n"
+                ).encode()
+                member = tarfile.TarInfo(
+                    f"{distribution}-{version}/PKG-INFO"
+                )
+                member.size = len(metadata)
+                with tarfile.open(sdist_path, mode="w:gz") as archive:
+                    archive.addfile(member, io.BytesIO(metadata))
+
+        with tempfile.TemporaryDirectory(prefix="python-release-artifacts-") as temp:
+            artifacts = Path(temp)
+            write_artifacts(artifacts)
+            result = workflow.validate_python_release_artifacts(
+                "py-v0.13.1", artifacts
+            )
+            self.assertEqual(result["distributions"], ("rdocx", "rpptx"))
+            self.assertEqual(result["wheels"], 12)
+            self.assertEqual(result["sdists"], 2)
+
+            missing = artifacts / (
+                "rdocx-0.13.1-cp39-abi3-manylinux_2_28_x86_64.whl"
+            )
+            missing.unlink()
+            with self.assertRaises(ValueError):
+                workflow.validate_python_release_artifacts(
+                    "py-v0.13.1", artifacts
+                )
+
+            write_artifacts(artifacts)
+            wrong_version = artifacts / (
+                "rpptx-0.13.1-cp39-abi3-win_amd64.whl"
+            )
+            with zipfile.ZipFile(wrong_version, mode="w") as archive:
+                archive.writestr(
+                    "rpptx-0.13.1.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: rpptx\nVersion: 0.13.0\n",
+                )
+                archive.writestr(
+                    "rpptx-0.13.1.dist-info/WHEEL",
+                    "Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
+                    "Tag: cp39-abi3-win_amd64\n",
+                )
+            with self.assertRaises(ValueError):
+                workflow.validate_python_release_artifacts(
+                    "py-v0.13.1", artifacts
+                )
+
+            write_artifacts(artifacts)
+            extra_metadata = artifacts / (
+                "rdocx-0.13.1-cp39-abi3-macosx_11_0_arm64.whl"
+            )
+            with zipfile.ZipFile(extra_metadata, mode="a") as archive:
+                archive.writestr(
+                    "other-0.13.1.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: other\nVersion: 0.13.1\n",
+                )
+            with self.assertRaises(ValueError):
+                workflow.validate_python_release_artifacts(
+                    "py-v0.13.1", artifacts
+                )
+
+        mutations = (
+            (
+                "partial-family",
+                release.replace(
+                    "exact two-distribution set is `rdocx` from `rdocx-py`\n"
+                    "and `rpptx` from `rpptx-py`",
+                    "single distribution set is `rdocx` from `rdocx-py`",
+                    1,
+                ),
+                release_notes,
+                wheels,
+                changelog,
+            ),
+            (
+                "missing-fresh-approval",
+                release.replace(
+                    "separate explicit go or no-go immediately before the first",
+                    "earlier sprint approval before the first",
+                    1,
+                ),
+                release_notes,
+                wheels,
+                changelog,
+            ),
+            (
+                "existing-version-allowed",
+                release.replace(
+                    "both target project\n    versions are absent",
+                    "either target project version is present",
+                    1,
+                ),
+                release_notes,
+                wheels,
+                changelog,
+            ),
+            (
+                "missing-owner-proof",
+                release.replace(
+                    "Record the authenticated PyPI owner or maintainer roles",
+                    "Assume the PyPI owner roles",
+                    1,
+                ),
+                release_notes,
+                wheels,
+                changelog,
+            ),
+            (
+                "moved-tag",
+                release.replace(
+                    "Create one annotated tag for the requested argument at that exact HEAD",
+                    "Create one annotated tag for the requested argument at the latest HEAD",
+                    1,
+                ),
+                release_notes,
+                wheels,
+                changelog,
+            ),
+            (
+                "partial-wheel-set",
+                release,
+                release_notes,
+                wheels.replace(
+                    b"          assert len(wheels) == 12, wheels\n",
+                    b"          assert len(wheels) == 6, wheels\n",
+                    1,
+                ),
+                changelog,
+            ),
+            (
+                "manual-publication",
+                release,
+                release_notes,
+                wheels.replace(
+                    b"startsWith(github.ref, 'refs/tags/py-v')",
+                    b"github.event_name == 'workflow_dispatch'",
+                    1,
+                ),
+                changelog,
+            ),
+            (
+                "missing-trusted-publisher",
+                release,
+                release_notes,
+                wheels.replace(
+                    b"      id-token: write\n", b"      id-token: read\n", 1
+                ),
+                changelog,
+            ),
+            (
+                "unreviewed-notes",
+                release,
+                release_notes,
+                wheels,
+                changelog.replace(
+                    "https://github.com/tensorbee/rdocx/issues/76",
+                    "https://example.com/unreviewed",
+                    1,
+                ),
+            ),
+        )
+        for name, release_text, notes_text, wheels_bytes, changelog_text in mutations:
+            self.assertNotEqual(
+                (release_text, notes_text, wheels_bytes, changelog_text),
+                (release, release_notes, wheels, changelog),
+                name,
+            )
+            with self.subTest(name=name), self.assertRaises(
+                (AssertionError, ValueError)
+            ):
+                assert_contract(
+                    release_text, notes_text, wheels_bytes, changelog_text
+                )
+
     def test_release_command_is_the_only_release_tag_authority(self) -> None:
         release = (workflow.REPO / ".claude/commands/release.md").read_text(
             encoding="utf-8"
@@ -6380,7 +6697,9 @@ rdocx-layout = "=0.10.1"
         normalized_release = " ".join(release.split())
 
         self.assertIn("only command", release)
-        self.assertIn("# /release {vX.Y.Z | rpptx-vX.Y.Z}", release)
+        self.assertIn(
+            "# /release {vX.Y.Z | rpptx-vX.Y.Z | py-vX.Y.Z}", release
+        )
         self.assertIn(
             "The exact seven-package stable set is `rdocx-opc`, `rdocx-oxml`, "
             "`rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and "
@@ -6642,7 +6961,9 @@ rdocx-layout = "=0.10.1"
             "compatibility",
         ):
             self.assertIn(evidence, normalized)
-        self.assertIn("# /release-notes {vX.Y.Z | rpptx-vX.Y.Z}", command)
+        self.assertIn(
+            "# /release-notes {vX.Y.Z | rpptx-vX.Y.Z | py-vX.Y.Z}", command
+        )
         self.assertIn("Canonical source: `.claude/commands/release-notes.md`.", skill)
         self.assertIn(f"Source SHA-256: `{digest}`.", skill)
         self.assertIn("allow_implicit_invocation: false", interface)

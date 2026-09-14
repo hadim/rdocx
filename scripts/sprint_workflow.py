@@ -15,6 +15,8 @@ Subcommands:
     validate-handoff PATH ...    check a worker handoff before integration
     close-preflight SNN          the checks /close-sprint requires
     release-notes TAG            validate or render reviewed release notes
+    python-release-artifacts TAG DIR
+                                 validate the complete Python release set
 
 Exit codes: 0 ok, 1 refused, 2 usage.
 """
@@ -22,12 +24,15 @@ Exit codes: 0 ok, 1 refused, 2 usage.
 from __future__ import annotations
 
 import argparse
+from email.parser import Parser
 import json
 import re
 import string
 import subprocess
 import sys
+import tarfile
 import unicodedata
+import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -63,8 +68,21 @@ SPRINT_ID_RE = re.compile(r"^S\d+(?:\.\d+)?$")
 HANDOFF_FIELD_RE = re.compile(r"^\*\*([A-Za-z][A-Za-z -]*)\*\*:\s*(.+?)\s*$", re.MULTILINE)
 SEMVER_COMPONENT_RE = r"(?:0|[1-9][0-9]*)"
 RELEASE_TAG_RE = re.compile(
-    rf"^(?:rpptx-)?v{SEMVER_COMPONENT_RE}\."
+    rf"^(?:(?:rpptx|py)-)?v{SEMVER_COMPONENT_RE}\."
     rf"{SEMVER_COMPONENT_RE}\.{SEMVER_COMPONENT_RE}$"
+)
+PYTHON_RELEASE_TAG_RE = re.compile(
+    rf"^py-v(?P<version>{SEMVER_COMPONENT_RE}\."
+    rf"{SEMVER_COMPONENT_RE}\.{SEMVER_COMPONENT_RE})$"
+)
+PYTHON_RELEASE_DISTRIBUTIONS = ("rdocx", "rpptx")
+PYTHON_RELEASE_PLATFORMS = (
+    "manylinux_2_28_x86_64",
+    "manylinux_2_28_aarch64",
+    "musllinux_1_2_x86_64",
+    "macosx_10_12_x86_64",
+    "macosx_11_0_arm64",
+    "win_amd64",
 )
 RELEASE_NOTE_PLACEHOLDER_RE = re.compile(
     r"\b(?:TBD|TODO|FIXME|CHANGEME|PLACEHOLDER)\b|\?\?\?|\[insert\b",
@@ -612,7 +630,8 @@ def render_release_notes(changelog: str, tag: str) -> str:
     """Validate and return one reviewed changelog section body."""
     if not RELEASE_TAG_RE.fullmatch(tag):
         raise ValueError(
-            f"{tag!r} is not a release tag, expected vX.Y.Z or rpptx-vX.Y.Z"
+            f"{tag!r} is not a release tag, expected vX.Y.Z, rpptx-vX.Y.Z, "
+            "or py-vX.Y.Z"
         )
 
     lines = changelog.splitlines(keepends=True)
@@ -681,6 +700,131 @@ def cmd_release_notes(args: argparse.Namespace) -> int:
         sys.stdout.write(notes)
     else:
         print(f"release-notes {args.tag}: ok")
+    return 0
+
+
+def validate_python_release_artifacts(tag: str, directory: Path) -> dict[str, object]:
+    """Validate the exact paired Python distribution artifact set."""
+    match = PYTHON_RELEASE_TAG_RE.fullmatch(tag)
+    if match is None:
+        raise ValueError(f"{tag!r} is not a Python release tag, expected py-vX.Y.Z")
+    version = match.group("version")
+    if not directory.is_dir():
+        raise ValueError(f"Python release artifact directory is missing: {directory}")
+
+    expected_wheels = {
+        f"{distribution}-{version}-cp39-abi3-{platform}.whl"
+        for distribution in PYTHON_RELEASE_DISTRIBUTIONS
+        for platform in PYTHON_RELEASE_PLATFORMS
+    }
+    expected_sdists = {
+        f"{distribution}-{version}.tar.gz"
+        for distribution in PYTHON_RELEASE_DISTRIBUTIONS
+    }
+    expected_names = expected_wheels | expected_sdists
+    entries = sorted(directory.iterdir(), key=lambda path: path.name)
+    actual_names = {path.name for path in entries}
+    if len(entries) != len(actual_names):
+        raise ValueError("Python release artifact directory has duplicate names")
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        unexpected = sorted(actual_names - expected_names)
+        raise ValueError(
+            "Python release artifact set differs from the exact family, "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    if any(not path.is_file() for path in entries):
+        raise ValueError("Python release artifact set contains a non-file entry")
+
+    for name in sorted(expected_wheels):
+        path = directory / name
+        distribution = name.split("-", 1)[0]
+        platform = name.removesuffix(".whl").rsplit("-", 1)[1]
+        dist_info = f"{distribution}-{version}.dist-info"
+        metadata_name = f"{dist_info}/METADATA"
+        wheel_name = f"{dist_info}/WHEEL"
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            metadata_records = [
+                member
+                for member in names
+                if member.endswith(".dist-info/METADATA")
+                or member.endswith(".dist-info/WHEEL")
+            ]
+            if sorted(metadata_records) != sorted((metadata_name, wheel_name)):
+                raise ValueError(
+                    f"{name} has unexpected distribution metadata records"
+                )
+            if names.count(metadata_name) != 1 or names.count(wheel_name) != 1:
+                raise ValueError(f"{name} lacks one exact METADATA and WHEEL record")
+            metadata = Parser().parsestr(
+                archive.read(metadata_name).decode("utf-8", errors="strict")
+            )
+            wheel = Parser().parsestr(
+                archive.read(wheel_name).decode("utf-8", errors="strict")
+            )
+        if metadata.get("Name") != distribution:
+            raise ValueError(f"{name} has project name {metadata.get('Name')!r}")
+        if metadata.get("Version") != version:
+            raise ValueError(f"{name} has project version {metadata.get('Version')!r}")
+        expected_tag = f"cp39-abi3-{platform}"
+        if wheel.get_all("Tag", []) != [expected_tag]:
+            raise ValueError(
+                f"{name} has wheel tags {wheel.get_all('Tag', [])!r}, "
+                f"expected {[expected_tag]!r}"
+            )
+
+    for name in sorted(expected_sdists):
+        path = directory / name
+        distribution = name.split("-", 1)[0]
+        root = f"{distribution}-{version}"
+        metadata_name = f"{root}/PKG-INFO"
+        with tarfile.open(path, mode="r:gz") as archive:
+            members = archive.getmembers()
+            names = [member.name for member in members]
+            if any(
+                member.name.startswith("/")
+                or ".." in Path(member.name).parts
+                or not (
+                    member.name == root or member.name.startswith(f"{root}/")
+                )
+                for member in members
+            ):
+                raise ValueError(f"{name} contains a path outside {root}/")
+            if names.count(metadata_name) != 1:
+                raise ValueError(f"{name} lacks one exact PKG-INFO record")
+            metadata_member = archive.getmember(metadata_name)
+            if not metadata_member.isfile():
+                raise ValueError(f"{name} PKG-INFO is not a regular file")
+            metadata_file = archive.extractfile(metadata_member)
+            if metadata_file is None:
+                raise ValueError(f"{name} PKG-INFO is not a regular file")
+            metadata = Parser().parsestr(
+                metadata_file.read().decode("utf-8", errors="strict")
+            )
+        if metadata.get("Name") != distribution:
+            raise ValueError(f"{name} has project name {metadata.get('Name')!r}")
+        if metadata.get("Version") != version:
+            raise ValueError(f"{name} has project version {metadata.get('Version')!r}")
+
+    return {
+        "tag": tag,
+        "version": version,
+        "distributions": PYTHON_RELEASE_DISTRIBUTIONS,
+        "wheels": len(expected_wheels),
+        "sdists": len(expected_sdists),
+    }
+
+
+def cmd_python_release_artifacts(args: argparse.Namespace) -> int:
+    try:
+        result = validate_python_release_artifacts(args.tag, Path(args.directory))
+    except (OSError, UnicodeError, ValueError, tarfile.TarError, zipfile.BadZipFile) as error:
+        die(f"python release artifacts: {error}")
+    print(
+        f"python-release-artifacts {result['tag']}: "
+        f"{result['wheels']} wheels, {result['sdists']} source distributions, ok"
+    )
     return 0
 
 
@@ -1131,6 +1275,7 @@ def main() -> int:
     p = sub.add_parser("validate-handoff"); p.add_argument("path"); p.add_argument("--fid", required=True); p.set_defaults(fn=cmd_validate_handoff)
     p = sub.add_parser("close-preflight"); p.add_argument("sprint"); p.set_defaults(fn=cmd_close_preflight)
     p = sub.add_parser("release-notes"); p.add_argument("tag"); mode = p.add_mutually_exclusive_group(required=True); mode.add_argument("--check", action="store_true"); mode.add_argument("--render", action="store_true"); p.set_defaults(fn=cmd_release_notes)
+    p = sub.add_parser("python-release-artifacts"); p.add_argument("tag"); p.add_argument("directory"); p.set_defaults(fn=cmd_python_release_artifacts)
 
     args = ap.parse_args()
     if getattr(args, "fid", None) and not FID_RE.match(args.fid):

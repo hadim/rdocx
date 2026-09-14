@@ -511,14 +511,17 @@ Preparation changes release carriers, assertions, and selected-family notes
 without changing runtime behavior.
 External release actions remain owned by `/release`.
 
-`/release {vX.Y.Z | rpptx-vX.Y.Z}` is the only command allowed to create or push
-either crates.io release tag or start crates.io publication. It selects exactly
-one namespace. The stable path validates the workspace version, its internal
-pins, and the exact seven-package stable set. The incubating path validates the
-common explicit version, workspace pins, and the exact 15-package incubating
-set.
+`/release {vX.Y.Z | rpptx-vX.Y.Z | py-vX.Y.Z}` is the only command allowed to
+create or push a registry release tag or start crates.io or PyPI publication.
+It selects exactly one namespace. The stable path validates the workspace
+version, its internal pins, and the exact seven-package stable set. The
+incubating path validates the common explicit version, workspace pins, and the
+exact 15-package incubating set. The Python path validates the exact `rdocx`
+and `rpptx` distribution pair, twelve `cp39-abi3` wheels, two source
+distributions, trusted-publisher identity, installed runtime and typing gates,
+and absent target versions on PyPI.
 
-`/release-notes TAG` is the deliberate preparation ceremony for the same two
+`/release-notes TAG` is the deliberate preparation ceremony for the same three
 namespaces. It derives human-written highlights, additions, fixes,
 compatibility guidance, and contributor credit from reviewed repository
 evidence, then updates the exact changelog section for review with the code.
@@ -537,13 +540,18 @@ and GitHub release link, then retains their URLs in the release evidence. A
 missing link, credit, inventory entry, or notification blocks completion of the
 release F-ID.
 
-Both paths require a clean sprint branch, full verification and a clean sprint
-review recorded at the exact HEAD, a workspace dry run containing exactly the
-22-package union and its exact local patch set, archives below 10 MiB with
-required assets, an absent local and remote requested tag, and a separate final
-approval immediately before the first mutation. `/release` pushes only the
-requested tag. `/close-sprint` remains the only command allowed to merge
-`main` or create an `sNN` tag.
+All three paths require a clean sprint branch, full verification and a clean
+sprint review recorded at the exact HEAD, an absent local and remote requested
+tag, and a separate final approval immediately before the first mutation. The
+Rust paths also require the workspace dry run containing exactly the 22-package
+union and its local patch set, archives below 10 MiB, and required assets. The
+Python path pushes the reviewed sprint SHA after approval, then requires a
+successful build-only `wheels.yml` run at that exact SHA before tag creation.
+It also requires exact artifact and metadata validation, clean Python 3.9 and
+3.12 installs and runtime checks, Python 3.12 typing and stub checks,
+trusted-publisher evidence, and absent target versions on PyPI.
+`/release` pushes only the requested tag. `/close-sprint` remains the only
+command allowed to merge `main` or create an `sNN` tag.
 
 When a later sprint wave depends on an integrated and reviewed F-ID that is not
 completed, `/run-sprint` uses a resumable dependency-prefix checkpoint before
@@ -562,17 +570,18 @@ source for each F-ID's title and size. It refreshes those fields and adds newly
 listed F-IDs while preserving the existing phase, feature state, owner, wave,
 worker handoff, review, and verification records.
 
-The requested tag starts `publish.yml`. Its Linux runner reproduces the
+A Rust release tag starts `publish.yml`. Its Linux runner reproduces the
 deterministic hash baseline, release metadata check, and full workspace dry run
-before crates.io publication begins. Success requires every package in the
-selected family to report the requested version and expected owner, plus a
-matching GitHub release targeting the reviewed SHA. `rdocx-wasm` inherits the
-stable workspace version but stays `publish = false` because its distribution
-path is npm.
+before crates.io publication begins. A Python release tag starts `wheels.yml`.
+Only its tag event may reach the OIDC publish job. Success requires every
+selected registry entry to report the requested version and expected owner,
+plus a matching GitHub release targeting the reviewed SHA. `rdocx-wasm`
+inherits the stable workspace version but stays `publish = false` because its
+distribution path is npm.
 
-The Python package version tracks the Rust train through a
-`pre-release-replacements` entry so the wheel version and the crate version
-cannot diverge.
+Both Python `pyproject.toml` versions and their Rust binding crate versions are
+exact release carriers. The Python preflight checks all four values instead of
+rewriting them during the release ceremony.
 
 ## CI job matrix
 
