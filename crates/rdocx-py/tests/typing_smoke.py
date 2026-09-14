@@ -10,6 +10,8 @@ from rdocx import (
     ComparisonDiagnostic,
     Document,
     Font,
+    HeaderFooterVariant,
+    Hyperlink,
     Inches,
     LayoutFragment,
     LayoutPage,
@@ -23,6 +25,10 @@ from rdocx import (
     RunCollection,
     RunPosition,
     RunRange,
+    Section,
+    Story,
+    StoryItem,
+    Style,
     Table,
     TableCollection,
     TocRebuildReport,
@@ -65,6 +71,12 @@ def exercise_rdocx_types(path: Path) -> None:
     )
     reply_id: int = document.reply_to(comment_id, author="Grace", text="done")
     comments: tuple[Comment, ...] = document.comments
+    sections: tuple[Section, ...] = document.sections
+    styles: tuple[Style, ...] = document.styles
+    stories: tuple[Story, ...] = document.stories
+    story_items: tuple[StoryItem, ...] = document.story_items
+    variants: tuple[HeaderFooterVariant, ...] = document.header_footer_variants
+    hyperlinks: tuple[Hyperlink, ...] = document.hyperlinks
     resolved: bool = document.resolve_comment(comment_id)
     removed: bool = document.remove_comment(reply_id)
     diagnostics: tuple[ComparisonDiagnostic, ...] = document.compare(
@@ -77,6 +89,12 @@ def exercise_rdocx_types(path: Path) -> None:
         bounds: BoundingBox = fragments[0].bounds
         assert_type(bounds.width, float)
     assert_type(comments[0].date, str | None)
+    assert_type(sections[0].page_width, int | None)
+    assert_type(styles[0].style_type, str)
+    assert_type(stories[0].owner_index, int)
+    assert_type(story_items[0].index_path, tuple[int, ...])
+    assert_type(variants[0].story, Story | None)
+    assert_type(hyperlinks[0].url, str | None)
     assert_type(report.entry_count, int)
     package_bytes, pdf_bytes, pages, maybe_page, sliced, channels
 

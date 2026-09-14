@@ -236,6 +236,330 @@ pub struct PyTocRebuildReport {
     pub diagnostic_count: usize,
 }
 
+#[pyclass(name = "Story", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyStory {
+    pub kind: String,
+    pub part_name: String,
+    pub owner_index: usize,
+}
+
+#[pymethods]
+impl PyStory {
+    #[new]
+    #[pyo3(signature = (*, kind, part_name, owner_index))]
+    fn new(kind: String, part_name: String, owner_index: usize) -> Self {
+        Self {
+            kind,
+            part_name,
+            owner_index,
+        }
+    }
+}
+
+#[pyclass(name = "StoryItem", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyStoryItem {
+    story: PyStory,
+    kind: String,
+    index_path: Vec<usize>,
+    text: Option<String>,
+}
+
+#[pymethods]
+impl PyStoryItem {
+    #[new]
+    #[pyo3(signature = (*, story, kind, index_path, text))]
+    fn new(
+        story: PyRef<'_, PyStory>,
+        kind: String,
+        index_path: Vec<usize>,
+        text: Option<String>,
+    ) -> Self {
+        Self {
+            story: story.clone(),
+            kind,
+            index_path,
+            text,
+        }
+    }
+
+    #[getter]
+    fn story(&self) -> PyStory {
+        self.story.clone()
+    }
+
+    #[getter]
+    fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    #[getter]
+    fn index_path<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.index_path.iter().copied())
+    }
+
+    #[getter]
+    fn text(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+}
+
+#[pyclass(name = "Hyperlink", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyHyperlink {
+    story: PyStory,
+    index_path: Vec<usize>,
+    text: String,
+    url: Option<String>,
+    anchor: Option<String>,
+    relationship_id: Option<String>,
+}
+
+#[pymethods]
+impl PyHyperlink {
+    #[new]
+    #[pyo3(signature = (*, story, index_path, text, url, anchor, relationship_id))]
+    fn new(
+        story: PyRef<'_, PyStory>,
+        index_path: Vec<usize>,
+        text: String,
+        url: Option<String>,
+        anchor: Option<String>,
+        relationship_id: Option<String>,
+    ) -> Self {
+        Self {
+            story: story.clone(),
+            index_path,
+            text,
+            url,
+            anchor,
+            relationship_id,
+        }
+    }
+
+    #[getter]
+    fn story(&self) -> PyStory {
+        self.story.clone()
+    }
+
+    #[getter]
+    fn index_path<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.index_path.iter().copied())
+    }
+
+    #[getter]
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    #[getter]
+    fn url(&self) -> Option<&str> {
+        self.url.as_deref()
+    }
+
+    #[getter]
+    fn anchor(&self) -> Option<&str> {
+        self.anchor.as_deref()
+    }
+
+    #[getter]
+    fn relationship_id(&self) -> Option<&str> {
+        self.relationship_id.as_deref()
+    }
+}
+
+#[pyclass(name = "HeaderFooterVariant", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyHeaderFooterVariant {
+    section_index: usize,
+    kind: String,
+    variant: String,
+    story: Option<PyStory>,
+    source_section: Option<usize>,
+    inherited: bool,
+}
+
+#[pymethods]
+impl PyHeaderFooterVariant {
+    #[new]
+    #[pyo3(signature = (*, section_index, kind, variant, story, source_section, inherited))]
+    fn new(
+        section_index: usize,
+        kind: String,
+        variant: String,
+        story: Option<PyRef<'_, PyStory>>,
+        source_section: Option<usize>,
+        inherited: bool,
+    ) -> Self {
+        Self {
+            section_index,
+            kind,
+            variant,
+            story: story.map(|value| value.clone()),
+            source_section,
+            inherited,
+        }
+    }
+
+    #[getter]
+    fn section_index(&self) -> usize {
+        self.section_index
+    }
+
+    #[getter]
+    fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    #[getter]
+    fn variant(&self) -> &str {
+        &self.variant
+    }
+
+    #[getter]
+    fn story(&self) -> Option<PyStory> {
+        self.story.clone()
+    }
+
+    #[getter]
+    fn source_section(&self) -> Option<usize> {
+        self.source_section
+    }
+
+    #[getter]
+    fn inherited(&self) -> bool {
+        self.inherited
+    }
+}
+
+#[pyclass(name = "Section", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PySection {
+    pub ordinal: usize,
+    pub is_final: bool,
+    pub orientation: Option<String>,
+    pub page_width: Option<i64>,
+    pub page_height: Option<i64>,
+    pub margin_top: Option<i64>,
+    pub margin_right: Option<i64>,
+    pub margin_bottom: Option<i64>,
+    pub margin_left: Option<i64>,
+    pub gutter: Option<i64>,
+    pub column_count: Option<u32>,
+    pub column_spacing: Option<i64>,
+    pub page_number_start: Option<u32>,
+    pub header_distance: Option<i64>,
+    pub footer_distance: Option<i64>,
+    pub different_first_page: Option<bool>,
+    pub break_type: Option<String>,
+}
+
+#[pymethods]
+impl PySection {
+    #[new]
+    #[pyo3(signature = (*, ordinal, is_final, orientation, page_width, page_height, margin_top, margin_right, margin_bottom, margin_left, gutter, column_count, column_spacing, page_number_start, header_distance, footer_distance, different_first_page, break_type))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        ordinal: usize,
+        is_final: bool,
+        orientation: Option<String>,
+        page_width: Option<i64>,
+        page_height: Option<i64>,
+        margin_top: Option<i64>,
+        margin_right: Option<i64>,
+        margin_bottom: Option<i64>,
+        margin_left: Option<i64>,
+        gutter: Option<i64>,
+        column_count: Option<u32>,
+        column_spacing: Option<i64>,
+        page_number_start: Option<u32>,
+        header_distance: Option<i64>,
+        footer_distance: Option<i64>,
+        different_first_page: Option<bool>,
+        break_type: Option<String>,
+    ) -> Self {
+        Self {
+            ordinal,
+            is_final,
+            orientation,
+            page_width,
+            page_height,
+            margin_top,
+            margin_right,
+            margin_bottom,
+            margin_left,
+            gutter,
+            column_count,
+            column_spacing,
+            page_number_start,
+            header_distance,
+            footer_distance,
+            different_first_page,
+            break_type,
+        }
+    }
+}
+
+#[pyclass(name = "Style", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyStyle {
+    pub style_id: String,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub style_type: String,
+    pub linked_style: Option<String>,
+    pub next_style: Option<String>,
+    pub priority: Option<u32>,
+    pub auto_redefine: Option<bool>,
+    pub hidden: Option<bool>,
+    pub semi_hidden: Option<bool>,
+    pub unhide_when_used: Option<bool>,
+    pub quick_format: Option<bool>,
+    pub locked: Option<bool>,
+    pub is_default: bool,
+}
+
+#[pymethods]
+impl PyStyle {
+    #[new]
+    #[pyo3(signature = (*, style_id, name, based_on, style_type, linked_style, next_style, priority, auto_redefine, hidden, semi_hidden, unhide_when_used, quick_format, locked, is_default))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        style_id: String,
+        name: Option<String>,
+        based_on: Option<String>,
+        style_type: String,
+        linked_style: Option<String>,
+        next_style: Option<String>,
+        priority: Option<u32>,
+        auto_redefine: Option<bool>,
+        hidden: Option<bool>,
+        semi_hidden: Option<bool>,
+        unhide_when_used: Option<bool>,
+        quick_format: Option<bool>,
+        locked: Option<bool>,
+        is_default: bool,
+    ) -> Self {
+        Self {
+            style_id,
+            name,
+            based_on,
+            style_type,
+            linked_style,
+            next_style,
+            priority,
+            auto_redefine,
+            hidden,
+            semi_hidden,
+            unhide_when_used,
+            quick_format,
+            locked,
+            is_default,
+        }
+    }
+}
+
 #[pymethods]
 impl PyTocRebuildReport {
     #[new]
@@ -261,6 +585,101 @@ impl PyDocument {
             inner,
             revisions: RevisionCounter::new(),
         }
+    }
+}
+
+fn story_snapshot(story: &rdocx::StoryId) -> PyStory {
+    PyStory {
+        kind: match story.kind() {
+            rdocx::StoryKind::Body => "body",
+            rdocx::StoryKind::TableCell => "table_cell",
+            rdocx::StoryKind::Header => "header",
+            rdocx::StoryKind::Footer => "footer",
+            rdocx::StoryKind::Footnote => "footnote",
+            rdocx::StoryKind::Endnote => "endnote",
+            rdocx::StoryKind::Comment => "comment",
+            rdocx::StoryKind::TextBox => "text_box",
+            _ => "unknown",
+        }
+        .to_owned(),
+        part_name: story.part_name().to_owned(),
+        owner_index: story.owner_index(),
+    }
+}
+
+fn story_item_kind_name(kind: rdocx::StoryItemKind) -> &'static str {
+    match kind {
+        rdocx::StoryItemKind::Paragraph => "paragraph",
+        rdocx::StoryItemKind::Table => "table",
+        rdocx::StoryItemKind::ContentControl => "content_control",
+        rdocx::StoryItemKind::Field => "field",
+        rdocx::StoryItemKind::Drawing => "drawing",
+        rdocx::StoryItemKind::PreservedNode => "preserved_node",
+        _ => "unknown",
+    }
+}
+
+fn section_snapshot(section: rdocx::SectionRef<'_>) -> PySection {
+    let (page_width, page_height) = section.page_size().map_or((None, None), |(width, height)| {
+        (Some(width.to_emu()), Some(height.to_emu()))
+    });
+    let (margin_top, margin_right, margin_bottom, margin_left) =
+        section
+            .margins()
+            .map_or((None, None, None, None), |(top, right, bottom, left)| {
+                (
+                    Some(top.to_emu()),
+                    Some(right.to_emu()),
+                    Some(bottom.to_emu()),
+                    Some(left.to_emu()),
+                )
+            });
+    let (column_count, column_spacing) =
+        section.columns().map_or((None, None), |(count, spacing)| {
+            (Some(count), Some(spacing.to_emu()))
+        });
+    let (header_distance, footer_distance) = section
+        .header_footer_distance()
+        .map_or((None, None), |(header, footer)| {
+            (Some(header.to_emu()), Some(footer.to_emu()))
+        });
+    PySection {
+        ordinal: section.ordinal(),
+        is_final: section.is_final(),
+        orientation: section.orientation().map(|value| value.to_str().to_owned()),
+        page_width,
+        page_height,
+        margin_top,
+        margin_right,
+        margin_bottom,
+        margin_left,
+        gutter: section.gutter().map(rdocx::Length::to_emu),
+        column_count,
+        column_spacing,
+        page_number_start: section.page_number_start(),
+        header_distance,
+        footer_distance,
+        different_first_page: section.different_first_page(),
+        break_type: section.break_type().map(|value| value.to_str().to_owned()),
+    }
+}
+
+fn style_snapshot(style: rdocx::style::Style<'_>) -> PyStyle {
+    PyStyle {
+        style_id: style.style_id().to_owned(),
+        name: style.name().map(str::to_owned),
+        based_on: style.based_on().map(str::to_owned),
+        style_type: style.style_type().to_str().to_owned(),
+        linked_style: style.linked_style().map(str::to_owned),
+        next_style: style.next_style().map(str::to_owned),
+        priority: style.priority(),
+        auto_redefine: style.auto_redefine(),
+        hidden: style.hidden(),
+        semi_hidden: style.semi_hidden(),
+        unhide_when_used: style.unhide_when_used(),
+        quick_format: style.quick_format(),
+        locked: style.locked(),
+        is_default: style.is_default(),
     }
 }
 
@@ -402,6 +821,113 @@ impl PyDocument {
                 resolved: comment.resolved(),
             }),
         )
+    }
+
+    #[getter]
+    fn sections<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let sections = self
+            .inner
+            .sections()
+            .map(section_snapshot)
+            .collect::<Vec<_>>();
+        PyTuple::new(py, sections)
+    }
+
+    #[getter]
+    fn styles<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.inner.styles().into_iter().map(style_snapshot))
+    }
+
+    #[getter]
+    fn stories<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let stories = self
+            .inner
+            .stories()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        PyTuple::new(py, stories.iter().map(story_snapshot))
+    }
+
+    #[getter]
+    fn story_items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let stories = self
+            .inner
+            .stories()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let mut snapshots = Vec::new();
+        for story in stories {
+            let story_snapshot = story_snapshot(&story);
+            for item in self
+                .inner
+                .story_items(&story)
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+            {
+                snapshots.push(PyStoryItem {
+                    story: story_snapshot.clone(),
+                    kind: story_item_kind_name(item.kind()).to_owned(),
+                    index_path: item.location().index_path().to_vec(),
+                    text: item.text().map_err(|error| rdocx_to_pyerr(py, error))?,
+                });
+            }
+        }
+        PyTuple::new(py, snapshots)
+    }
+
+    #[getter]
+    fn header_footer_variants<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let mut snapshots = Vec::new();
+        for section_index in 0..self.inner.section_count() {
+            for (kind, kind_name) in [
+                (rdocx::HeaderFooterKind::Header, "header"),
+                (rdocx::HeaderFooterKind::Footer, "footer"),
+            ] {
+                for variant in [
+                    rdocx::HdrFtrType::Default,
+                    rdocx::HdrFtrType::First,
+                    rdocx::HdrFtrType::Even,
+                ] {
+                    let resolved = self
+                        .inner
+                        .section_story(section_index, kind, variant)
+                        .map_err(|error| rdocx_to_pyerr(py, error))?;
+                    snapshots.push(PyHeaderFooterVariant {
+                        section_index,
+                        kind: kind_name.to_owned(),
+                        variant: variant.to_str().to_owned(),
+                        story: resolved.as_ref().map(|value| story_snapshot(value.story())),
+                        source_section: resolved.as_ref().map(rdocx::SectionStory::source_section),
+                        inherited: resolved.is_some_and(|value| value.is_inherited()),
+                    });
+                }
+            }
+        }
+        PyTuple::new(py, snapshots)
+    }
+
+    #[getter]
+    fn hyperlinks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let stories = self
+            .inner
+            .stories()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let mut snapshots = Vec::new();
+        for story in stories {
+            let story_snapshot = story_snapshot(&story);
+            for (location, link) in self
+                .inner
+                .story_links(&story)
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+            {
+                snapshots.push(PyHyperlink {
+                    story: story_snapshot.clone(),
+                    index_path: location.index_path().to_vec(),
+                    text: link.text,
+                    url: link.url,
+                    anchor: link.anchor,
+                    relationship_id: link.rel_id,
+                });
+            }
+        }
+        PyTuple::new(py, snapshots)
     }
 
     #[pyo3(signature = (range, *, author, text, initials = None))]

@@ -4831,7 +4831,12 @@ not mutate the Python document.
 After F-252, expose ordered section, style, rich header and footer, and
 relationship-resolved hyperlink snapshots. Records retain source order, story
 ownership, inheritance, and nested paths without adding a second document tree
-or an untyped dictionary layer.
+or an untyped dictionary layer. Frozen Python records expose sections in EMU,
+styles, physical stories, story items, all effective header and footer
+variants, and hyperlinks. Native `StoryItemRef::links` returns existing
+`LinkInfo` records and resolves each relationship through the checked story
+owner. Native `Document::story_links` pairs the existing location and link
+types in physical source order across nested and ancestor-owned items.
 
 **Depends on**: F-252, F-255, F-X094c.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.

@@ -9,10 +9,11 @@ from .enum import text as _text
 _Path = str | _os.PathLike[str]
 __all__ = [
     "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
-    "Comment", "ComparisonDiagnostic", "Document", "Font", "LayoutFragment",
-    "LayoutPage", "Paragraph", "ParagraphCollection", "ParagraphFormat", "Row",
-    "RowCollection", "Run", "RunCollection", "RunPosition", "RunRange", "Table",
-    "TableCollection", "TocRebuildReport",
+    "Comment", "ComparisonDiagnostic", "Document", "Font", "HeaderFooterVariant",
+    "Hyperlink", "LayoutFragment", "LayoutPage", "Paragraph", "ParagraphCollection",
+    "ParagraphFormat", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
+    "RunRange", "Section", "Story", "StoryItem", "Style", "Table", "TableCollection",
+    "TocRebuildReport",
 ]
 
 
@@ -141,6 +142,198 @@ class TocRebuildReport:
 
 
 @_final
+class Story:
+    def __new__(cls, *, kind: str, part_name: str, owner_index: int) -> Story: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def part_name(self) -> str: ...
+    @property
+    def owner_index(self) -> int: ...
+
+
+@_final
+class StoryItem:
+    def __new__(
+        cls,
+        *,
+        story: Story,
+        kind: str,
+        index_path: tuple[int, ...],
+        text: str | None,
+    ) -> StoryItem: ...
+    @property
+    def story(self) -> Story: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def index_path(self) -> tuple[int, ...]: ...
+    @property
+    def text(self) -> str | None: ...
+
+
+@_final
+class Hyperlink:
+    def __new__(
+        cls,
+        *,
+        story: Story,
+        index_path: tuple[int, ...],
+        text: str,
+        url: str | None,
+        anchor: str | None,
+        relationship_id: str | None,
+    ) -> Hyperlink: ...
+    @property
+    def story(self) -> Story: ...
+    @property
+    def index_path(self) -> tuple[int, ...]: ...
+    @property
+    def text(self) -> str: ...
+    @property
+    def url(self) -> str | None: ...
+    @property
+    def anchor(self) -> str | None: ...
+    @property
+    def relationship_id(self) -> str | None: ...
+
+
+@_final
+class HeaderFooterVariant:
+    def __new__(
+        cls,
+        *,
+        section_index: int,
+        kind: str,
+        variant: str,
+        story: Story | None,
+        source_section: int | None,
+        inherited: bool,
+    ) -> HeaderFooterVariant: ...
+    @property
+    def section_index(self) -> int: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def variant(self) -> str: ...
+    @property
+    def story(self) -> Story | None: ...
+    @property
+    def source_section(self) -> int | None: ...
+    @property
+    def inherited(self) -> bool: ...
+
+
+@_final
+class Section:
+    def __new__(
+        cls,
+        *,
+        ordinal: int,
+        is_final: bool,
+        orientation: str | None,
+        page_width: int | None,
+        page_height: int | None,
+        margin_top: int | None,
+        margin_right: int | None,
+        margin_bottom: int | None,
+        margin_left: int | None,
+        gutter: int | None,
+        column_count: int | None,
+        column_spacing: int | None,
+        page_number_start: int | None,
+        header_distance: int | None,
+        footer_distance: int | None,
+        different_first_page: bool | None,
+        break_type: str | None,
+    ) -> Section: ...
+    @property
+    def ordinal(self) -> int: ...
+    @property
+    def is_final(self) -> bool: ...
+    @property
+    def orientation(self) -> str | None: ...
+    @property
+    def page_width(self) -> int | None: ...
+    @property
+    def page_height(self) -> int | None: ...
+    @property
+    def margin_top(self) -> int | None: ...
+    @property
+    def margin_right(self) -> int | None: ...
+    @property
+    def margin_bottom(self) -> int | None: ...
+    @property
+    def margin_left(self) -> int | None: ...
+    @property
+    def gutter(self) -> int | None: ...
+    @property
+    def column_count(self) -> int | None: ...
+    @property
+    def column_spacing(self) -> int | None: ...
+    @property
+    def page_number_start(self) -> int | None: ...
+    @property
+    def header_distance(self) -> int | None: ...
+    @property
+    def footer_distance(self) -> int | None: ...
+    @property
+    def different_first_page(self) -> bool | None: ...
+    @property
+    def break_type(self) -> str | None: ...
+
+
+@_final
+class Style:
+    def __new__(
+        cls,
+        *,
+        style_id: str,
+        name: str | None,
+        based_on: str | None,
+        style_type: str,
+        linked_style: str | None,
+        next_style: str | None,
+        priority: int | None,
+        auto_redefine: bool | None,
+        hidden: bool | None,
+        semi_hidden: bool | None,
+        unhide_when_used: bool | None,
+        quick_format: bool | None,
+        locked: bool | None,
+        is_default: bool,
+    ) -> Style: ...
+    @property
+    def style_id(self) -> str: ...
+    @property
+    def name(self) -> str | None: ...
+    @property
+    def based_on(self) -> str | None: ...
+    @property
+    def style_type(self) -> str: ...
+    @property
+    def linked_style(self) -> str | None: ...
+    @property
+    def next_style(self) -> str | None: ...
+    @property
+    def priority(self) -> int | None: ...
+    @property
+    def auto_redefine(self) -> bool | None: ...
+    @property
+    def hidden(self) -> bool | None: ...
+    @property
+    def semi_hidden(self) -> bool | None: ...
+    @property
+    def unhide_when_used(self) -> bool | None: ...
+    @property
+    def quick_format(self) -> bool | None: ...
+    @property
+    def locked(self) -> bool | None: ...
+    @property
+    def is_default(self) -> bool: ...
+
+
+@_final
 class Document:
     def __new__(cls, path: _Path | None = None) -> Document: ...
     @staticmethod
@@ -166,6 +359,18 @@ class Document:
     ) -> tuple[ComparisonDiagnostic, ...]: ...
     @property
     def comments(self) -> tuple[Comment, ...]: ...
+    @property
+    def sections(self) -> tuple[Section, ...]: ...
+    @property
+    def styles(self) -> tuple[Style, ...]: ...
+    @property
+    def stories(self) -> tuple[Story, ...]: ...
+    @property
+    def story_items(self) -> tuple[StoryItem, ...]: ...
+    @property
+    def header_footer_variants(self) -> tuple[HeaderFooterVariant, ...]: ...
+    @property
+    def hyperlinks(self) -> tuple[Hyperlink, ...]: ...
     def add_comment(
         self,
         range: RunRange,

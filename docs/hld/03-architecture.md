@@ -1036,6 +1036,14 @@ content controls, revisions, and fields as typed content. Content rejected by
 that grammar remains one opaque preserved boundary and cannot expose nested
 owners or editable text.
 
+`StoryItemRef::links` returns modeled hyperlinks in item source order. Display
+text comes from the existing story text projection, while relationship targets
+resolve only through the item's checked physical `StoryId`. Nested cells and
+text boxes remain separate owners and are not folded into the enclosing item.
+`Document::story_links` merges item-owned links by their physical XML position
+and returns each existing `LinkInfo` with its checked `ContentLocation`. This
+keeps nested content-control ownership without reordering interleaved links.
+
 `ContentFragment` owns one paragraph, table, block content control, or removed
 preserved node. Insert, remove, clone, and move resolve canonical
 `StoryItemRef::location` values only when they name actual direct owner
@@ -1081,6 +1089,12 @@ then publish once. First-page creation enables `titlePg`. Even-page selection
 is controlled separately by the typed document setting. Rich edits continue
 through the container-neutral story operations rather than a second header or
 footer content model.
+
+The Python facade projects sections, styles, stories, story items, effective
+header and footer variants, and hyperlinks into detached frozen records.
+Document accessors return tuples in native source order. Records retain the
+physical story owner, item index path, inheritance source, and relationship
+identifier without exposing raw XML or adding a second binding-side tree.
 
 `rdocx-oxml` authors only `w:pgNumType/@w:start` for M23. Number format,
 chapter style, chapter separator, and every other unsupported attribute or

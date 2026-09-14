@@ -13,8 +13,9 @@ use pyo3::types::{PyAny, PyType};
 use oxml_py_support::StaleElementError;
 
 use document::{
-    PyBoundingBox, PyComment, PyComparisonDiagnostic, PyDocument, PyLayoutFragment, PyLayoutPage,
-    PyRunPosition, PyRunRange, PyTocRebuildReport,
+    PyBoundingBox, PyComment, PyComparisonDiagnostic, PyDocument, PyHeaderFooterVariant,
+    PyHyperlink, PyLayoutFragment, PyLayoutPage, PyRunPosition, PyRunRange, PySection, PyStory,
+    PyStoryItem, PyStyle, PyTocRebuildReport,
 };
 use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
@@ -96,6 +97,12 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyLayoutFragment>()?;
     module.add_class::<PyLayoutPage>()?;
     module.add_class::<PyTocRebuildReport>()?;
+    module.add_class::<PyStory>()?;
+    module.add_class::<PyStoryItem>()?;
+    module.add_class::<PyHyperlink>()?;
+    module.add_class::<PyHeaderFooterVariant>()?;
+    module.add_class::<PySection>()?;
+    module.add_class::<PyStyle>()?;
     module.add_class::<PyParagraph>()?;
     module.add_class::<PyParagraphCollection>()?;
     module.add_class::<PyRun>()?;

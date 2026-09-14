@@ -384,7 +384,12 @@ without inserting content. `validate_internal_relationship_for_story`,
 `image_data_for_story`, and `hyperlink_url_for_story` resolve only through the
 story owner's relationship set and reject stale owners, missing identifiers,
 wrong types, wrong target modes, and missing internal targets. These additions
-do not add a trait, generic parameter, or Python, WASM, or CLI surface.
+do not add a trait, generic parameter, or WASM or CLI surface.
+`StoryItemRef::links` inventories modeled links in source order and returns the
+existing `LinkInfo` values after checked owner-scoped resolution.
+`Document::story_links` pairs those records with their existing
+`ContentLocation` owners and merges nested and ancestor-owned links by physical
+source position.
 
 Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
 Each handle reports its zero-based document ordinal, schema-final ownership,
@@ -407,7 +412,8 @@ section and inherited state. `create_section_story`, `link_section_story`,
 addressed by the returned `StoryId` through the common story API. The facade
 also exposes `even_and_odd_headers` and `set_even_and_odd_headers`, while first
 story creation enables section `titlePg`. These are additive pre-1.0 native
-Rust APIs. Python, WASM, and CLI gain no corresponding binding surface.
+Rust APIs. Python exposes immutable inspection snapshots but no corresponding
+mutation entry point. WASM and CLI gain no corresponding binding surface.
 
 `CT_SectPr` adds typed page-number start and raw child-position state, while
 `PageFrame` adds `displayed_page_number` beside its physical `page_number`.
@@ -417,6 +423,17 @@ published `CT_SectPr.header_refs` and `footer_refs` types remain
 `Vec<HdrFtrRef>` with the complete native vector surface. Python, WASM, and CLI
 gain no section mutation entry point and retain their existing package and
 render behavior.
+
+Python `Document.sections`, `styles`, `stories`, `story_items`,
+`header_footer_variants`, and `hyperlinks` return tuples of frozen typed
+records. Section lengths are integer EMU values. Story records retain kind,
+normalized part name, and owner index. Item and hyperlink records retain tuple
+index paths, while variant records retain section, source section, inheritance,
+kind, and default, first, or even selection. Hyperlink URLs are resolved by the
+native checked story API. Their order comes from the story-wide native
+projection, including when a nested control precedes a link owned by its
+ancestor item. Returned records are detached snapshots, so later document
+mutation cannot alter an earlier result.
 
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic

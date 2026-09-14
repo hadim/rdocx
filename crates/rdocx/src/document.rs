@@ -640,6 +640,19 @@ impl<'a> StoryItemRef<'a> {
         story_item_text(source.xml.as_ref(), &item)
     }
 
+    /// Return modeled hyperlinks in source order with story-scoped targets.
+    pub fn links(&self) -> Result<Vec<LinkInfo>> {
+        let (source, item) = self.document.story_item_source(&self.location)?;
+        let links = scan_story_item_links(source.xml.as_ref(), &item)?;
+        links
+            .into_iter()
+            .map(|link| {
+                self.document
+                    .story_link_info(&self.location.story, source.xml.as_ref(), link)
+            })
+            .collect()
+    }
+
     /// Returns the XML used by this traversal.
     ///
     /// Typed body and comment sources can return owned subtree bytes. Other
@@ -4269,6 +4282,12 @@ struct StoryItemSpan {
     sdt_context: Option<StorySdtContext>,
 }
 
+struct StoryLinkSpan {
+    full: Range<usize>,
+    rel_id: Option<String>,
+    anchor: Option<String>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StoryNamespace {
     Word,
@@ -6527,6 +6546,195 @@ fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemS
     items.sort_by_key(|item| (item.full.start, item.full.end));
     items.dedup_by(|left, right| left.kind == right.kind && left.full == right.full);
     Ok(items)
+}
+
+fn scan_story_item_links(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<StoryLinkSpan>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack: Vec<XmlElementFrame> = Vec::new();
+    let mut open_links = Vec::new();
+    let mut links = Vec::new();
+    let mut nested_owner_depth = 0usize;
+    let mut active = false;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story hyperlink scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != item.scan.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                let depth = stack.len();
+                let local_name = element.local_name().as_ref().to_vec();
+                let opaque = if stack.is_empty() && item.kind == StoryItemKind::ContentControl {
+                    false
+                } else {
+                    opaque_story_event(
+                        &stack,
+                        namespace_kind,
+                        &local_name,
+                        &element,
+                        false,
+                        xml,
+                        before,
+                        after,
+                    )?
+                };
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(local_name.as_slice(), b"tc" | b"txbxContent" | b"sdt")
+                {
+                    nested_owner_depth += 1;
+                }
+                if !opaque
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name == b"hyperlink"
+                {
+                    let (rel_id, anchor) = story_hyperlink_attributes(&reader, &element)?;
+                    open_links.push((before, rel_id, anchor));
+                }
+                let inherited = stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
+                stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word: is_word_namespace,
+                    full_start: before,
+                    owner_kind: None,
+                    item_kind: None,
+                    direct_owner_child: false,
+                    sdt_context: if depth == 0 && item.kind == StoryItemKind::ContentControl {
+                        item.sdt_context
+                    } else {
+                        story_element_sdt_context(
+                            &stack,
+                            namespace_kind,
+                            element.local_name().as_ref(),
+                        )
+                    },
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                let local_name = element.local_name();
+                let opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    xml,
+                    before,
+                    after,
+                )?;
+                if !opaque
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name.as_ref() == b"hyperlink"
+                {
+                    let (rel_id, anchor) = story_hyperlink_attributes(&reader, &element)?;
+                    links.push(StoryLinkSpan {
+                        full: before..after,
+                        rel_id,
+                        anchor,
+                    });
+                }
+            }
+            Event::End(_) => {
+                let Some(frame) = stack.pop() else {
+                    return Err(Error::Other(
+                        "story hyperlink XML contains an unmatched closing element".to_owned(),
+                    ));
+                };
+                if !frame.opaque
+                    && nested_owner_depth == 0
+                    && frame.namespace == StoryNamespace::Word
+                    && frame.local_name == b"hyperlink"
+                {
+                    let (start, rel_id, anchor) = open_links.pop().ok_or_else(|| {
+                        Error::Other("story hyperlink has no matching start".to_owned())
+                    })?;
+                    links.push(StoryLinkSpan {
+                        full: start..after,
+                        rel_id,
+                        anchor,
+                    });
+                }
+                if !frame.opaque
+                    && !stack.is_empty()
+                    && frame.namespace == StoryNamespace::Word
+                    && matches!(frame.local_name.as_slice(), b"tc" | b"txbxContent" | b"sdt")
+                {
+                    nested_owner_depth = nested_owner_depth.saturating_sub(1);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if after == item.scan.end {
+            break;
+        }
+        buffer.clear();
+    }
+    if !open_links.is_empty() {
+        return Err(Error::Other(
+            "story hyperlink has no matching end".to_owned(),
+        ));
+    }
+    Ok(links)
+}
+
+fn story_hyperlink_attributes(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+) -> Result<(Option<String>, Option<String>)> {
+    let mut rel_id = None;
+    let mut anchor = None;
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("story hyperlink attribute scan failed: {error}"))
+        })?;
+        let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
+        let target = if matches!(
+            namespace,
+            ResolveResult::Bound(Namespace(uri)) if uri == drawing_ns::R.as_bytes()
+        ) && local_name.as_ref() == b"id"
+        {
+            &mut rel_id
+        } else if word_element(&namespace) && local_name.as_ref() == b"anchor" {
+            &mut anchor
+        } else {
+            continue;
+        };
+        *target = Some(
+            attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                .map_err(|error| {
+                    Error::Other(format!("story hyperlink attribute decode failed: {error}"))
+                })?
+                .into_owned(),
+        );
+    }
+    Ok((rel_id, anchor))
 }
 
 fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
@@ -11273,6 +11481,71 @@ impl Document {
                     is_end: false,
                 },
             })
+            .collect())
+    }
+
+    fn story_link_info(
+        &self,
+        story: &StoryId,
+        xml: &[u8],
+        link: StoryLinkSpan,
+    ) -> Result<LinkInfo> {
+        let text_item = StoryItemSpan {
+            kind: StoryItemKind::Paragraph,
+            full: link.full.clone(),
+            scan: link.full,
+            direct_owner_child: false,
+            complex_field: false,
+            complex_ancestors: Vec::new(),
+            sdt_context: None,
+        };
+        let text = story_item_text(xml, &text_item)?.unwrap_or_default();
+        let url = link
+            .rel_id
+            .as_deref()
+            .map(|relationship_id| self.hyperlink_url_for_story(story, relationship_id))
+            .transpose()?;
+        Ok(LinkInfo {
+            text,
+            url,
+            anchor: link.anchor,
+            rel_id: link.rel_id,
+        })
+    }
+
+    /// Return one story's modeled hyperlinks in physical source order together
+    /// with the checked location of the item that owns each hyperlink.
+    pub fn story_links(&self, story: &StoryId) -> Result<Vec<(ContentLocation, LinkInfo)>> {
+        let (source, owner) = self.story_source_and_owner(story)?;
+        let items = scan_story_items(source.xml.as_ref(), &owner)?;
+        let mut links = Vec::new();
+        for (index, item) in items.into_iter().enumerate() {
+            for link in scan_story_item_links(source.xml.as_ref(), &item)? {
+                let source_position = link.full.start;
+                let source_end = link.full.end;
+                let owner_width = item.full.end - item.full.start;
+                let info = self.story_link_info(story, source.xml.as_ref(), link)?;
+                links.push((
+                    source_position,
+                    source_end,
+                    owner_width,
+                    ContentLocation {
+                        story: story.clone(),
+                        item_kind: item.kind,
+                        index_path: vec![index],
+                        is_end: false,
+                    },
+                    info,
+                ));
+            }
+        }
+        links.sort_by_key(|(source_position, _, owner_width, _, _)| {
+            (*source_position, *owner_width)
+        });
+        links.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+        Ok(links
+            .into_iter()
+            .map(|(_, _, _, location, info)| (location, info))
             .collect())
     }
 

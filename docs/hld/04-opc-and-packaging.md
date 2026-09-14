@@ -86,6 +86,9 @@ instead exposes one owned, namespace-complete paragraph projection because its
 source can span sibling runs. Complete typed admission decides whether
 controls, revisions, simple fields, and complex fields cross the preservation
 boundary. Unmodelled and rejected subtrees remain opaque and byte-preserved.
+Story-wide hyperlink projection retains the source byte position only while
+building its result, then returns existing locations and link records in that
+physical order. Relationship lookup remains scoped to the owning story part.
 
 Story text replacement runs on a staged clone. It resolves the owner,
 fingerprint, one-element index path, item kind, and text-bearing capability,
@@ -116,6 +119,11 @@ checks exact type, internal mode, normalized target, and target existence.
 Image and hyperlink lookup applies the same owner boundary. New relationships,
 media parts, content types, XML, and drawing identities publish only after the
 staged package serializes and reopens.
+
+Hyperlink inventory follows the same rule. Each modeled story item discovers
+its own hyperlink elements, then resolves each relationship identifier through
+the checked story owner. Equal identifiers in the main part and a header or
+footer therefore remain distinct package relationships.
 
 Main-document authored occurrence provenance is derived from live
 namespace-aware XML on every canonicalization. Removing a paragraph retires a

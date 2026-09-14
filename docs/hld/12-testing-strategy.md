@@ -1487,6 +1487,20 @@ route pins Microsoft Word 16.112.4 build 16.112.26090911 on macOS 26.6.2 build
 25G83 and Poppler 26.09.0. It requires all nine exact page records and removes
 its unique artifact directory on success and unwind.
 
+The installed Python structure gate is
+`word_structure_snapshots_preserve_order_ownership_and_types`. A source-built
+three-section package includes inherited and independent header and footer
+owners, rich story content, a custom style, and equal hyperlink relationship
+identifiers in the body and two headers. It proves exact frozen records,
+source order, physical ownership, item paths, owner-scoped URL resolution,
+single ownership for a hyperlink in nested content controls, physical ordering
+when a nested link precedes an ancestor-owned link, snapshot stability after
+mutation, strict mypy, and stubtest after reopen.
+The native companion
+`story_item_links_resolve_only_through_the_checked_owner` resolves an equal
+identifier to distinct body and header targets and checks the same interleaved
+source order. All 49 hash entries remain unchanged.
+
 `rich_section_stories_survive_reopen_replace_and_unlink` covers paragraphs,
 tables, fields, block controls with nested tables, hyperlinks, images, drawings,
 fresh drawing identities, relationship rebasing, title-page enablement, save,

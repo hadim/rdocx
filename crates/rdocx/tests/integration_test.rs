@@ -99,6 +99,87 @@ fn container_neutral_story_fixture() -> Document {
 }
 
 #[test]
+fn story_item_links_resolve_only_through_the_checked_owner() {
+    const LINK_TYPE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+    let mut seed = container_neutral_story_fixture();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+        .expect("open story fixture package");
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let body = body.replacen(
+        "<w:body>",
+        r#"<w:body><w:p><w:hyperlink r:id="scopedLink"><w:r><w:t>body link</w:t></w:r></w:hyperlink></w:p><w:sdt><w:sdtContent><w:sdt><w:sdtContent><w:p><w:hyperlink w:anchor="nested-target"><w:r><w:t>nested link</w:t></w:r></w:hyperlink></w:p></w:sdtContent></w:sdt><w:p><w:hyperlink w:anchor="after-target"><w:r><w:t>after link</w:t></w:r></w:hyperlink></w:p></w:sdtContent></w:sdt>"#,
+        1,
+    );
+    package.set_part("/word/document.xml", body.into_bytes());
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    let header = header.replacen(
+        "</a:hdr>",
+        r#"<a:p xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:hyperlink r:id="scopedLink"><a:r><a:t>header link</a:t></a:r></a:hyperlink></a:p></a:hdr>"#,
+        1,
+    );
+    package.set_part("/word/header-story.xml", header.into_bytes());
+    for (owner, target) in [
+        ("/word/document.xml", "https://body.example/"),
+        ("/word/header-story.xml", "https://header.example/"),
+    ] {
+        let relationships = package.get_or_create_part_rels(owner);
+        relationships.add_with_id("scopedLink", LINK_TYPE, target);
+        relationships
+            .items
+            .last_mut()
+            .expect("inserted relationship")
+            .target_mode = Some("External".to_owned());
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let stories = document.stories().unwrap();
+    let body = stories
+        .iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap()
+        .clone();
+    let header = stories
+        .iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap()
+        .clone();
+    let body_link = document.story_items(&body).unwrap()[0].links().unwrap();
+    let header_link = document
+        .story_items(&header)
+        .unwrap()
+        .into_iter()
+        .flat_map(|item| item.links().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(body_link[0].rel_id.as_deref(), Some("scopedLink"));
+    assert_eq!(header_link[0].rel_id.as_deref(), Some("scopedLink"));
+    assert_eq!(body_link[0].url.as_deref(), Some("https://body.example/"));
+    assert_eq!(
+        header_link[0].url.as_deref(),
+        Some("https://header.example/")
+    );
+
+    let body_story_links = document.story_links(&body).unwrap();
+    assert_eq!(
+        body_story_links
+            .iter()
+            .map(|(location, link)| (
+                link.text.as_str(),
+                link.anchor.as_deref(),
+                location.index_path()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("body link", None, &[0][..]),
+            ("nested link", Some("nested-target"), &[2][..]),
+            ("after link", Some("after-target"), &[1][..]),
+        ]
+    );
+}
+
+#[test]
 fn one_generic_mutation_edits_the_same_shape_in_every_story() {
     let mut document = container_neutral_story_fixture();
     let stories = document.stories().expect("discover document stories");
