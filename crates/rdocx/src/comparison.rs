@@ -272,6 +272,18 @@ impl Document {
             .package
             .get_part(&edited.doc_part_name)
             .ok_or_else(|| Error::Other(format!("missing main story {}", edited.doc_part_name)))?;
+        if original_xml == edited_xml {
+            let mut stories_unchanged = true;
+            for story in &original_stories {
+                if story_xml(&original, story)? != story_xml(&edited, story)? {
+                    stories_unchanged = false;
+                    break;
+                }
+            }
+            if stories_unchanged {
+                return Ok(Vec::new());
+            }
+        }
         let text_box_markers =
             comparison_text_box_markers(&original, &edited, &original_stories, options)?;
         let mut used_ids = if story_ignored(options, ComparisonStoryKind::Main) {

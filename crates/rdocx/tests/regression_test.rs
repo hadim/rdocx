@@ -15318,6 +15318,21 @@ fn a_failed_comparison_leaves_the_original_package_unchanged() {
 }
 
 #[test]
+fn comparison_of_byte_identical_stories_is_a_true_no_op() {
+    let mut original = Document::new();
+    original.add_paragraph("same");
+    let before = original.to_bytes().expect("serialize original");
+    let edited = Document::from_bytes(&before).expect("reopen identical edit");
+
+    let diagnostics = original
+        .compare(&edited, "Ada", "2026-09-14T09:02:00Z")
+        .expect("compare identical stories");
+
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert_eq!(original.to_bytes().expect("serialize comparison"), before);
+}
+
+#[test]
 fn comparison_preserves_unmodelled_xml_byte_for_byte() {
     let body_raw = r#"<x:bodyOpaque xmlns:x="urn:comparison-body" x:value="keep"/>"#;
     let paragraph_raw =

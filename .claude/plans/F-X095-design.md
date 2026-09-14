@@ -94,6 +94,7 @@ binaries.
 | round-trip | `table_cells_and_empty_paragraphs_preserve_serialized_coordinates` | Cell margins, empty cell content, historical grids, self-closing paragraphs, and dynamic TOC coordinates remain stable. |
 | workflow | `presentation_fidelity_uses_exact_linux_oracle` | The hosted job runs on Ubuntu 24.04 and installs exact LibreOffice and Poppler before the fidelity harness. |
 | binding | `test_render_errors_reacquire_and_map_cleanly` | The already integrated font-table-aware Python repair remains green. |
+| binding | `test_priority_word_operations_return_typed_snapshots_and_remain_atomic` | Comparing byte-identical Word stories is a true no-op and does not stale existing Python handles. |
 
 The **test gate** is regression: run every focused test above, the complete
 `rdocx-oxml` and `rdocx` suites, the Python `rdocx` binding suite,
@@ -141,6 +142,7 @@ PDF fingerprints must remain unchanged. Any other delta blocks integration.
 - [x] Integrate and harden PR 80's table-cell serialization and TOC coordinates.
 - [x] Move Presentation fidelity to the exact Ubuntu LibreOffice and Poppler oracle.
 - [x] Add the focused Rust, Python, and workflow mutation regressions.
+- [x] Preserve Python handle validity when comparison receives byte-identical Word stories.
 - [x] Record and review the exact seven-entry Word XML hash delta.
 - [x] Run the complete test gate, full verification, public API riders, and external-oracle gate.
 - [x] Update exactly the listed HLD files and retain contributor credit.
