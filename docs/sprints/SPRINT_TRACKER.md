@@ -428,6 +428,8 @@ defended.
 | F-X094a | S72 | M | 2 | 1 | 2026-09-14 | Exposed schema-versioned Word comments, revision resolution, comparison, and TOC rebuilding through atomic CLI commands |
 | F-X094b | S72 | L | 4 | 1 | 2026-09-14 | Added structured accepted-view text, direct body layout fragments, and expected-count guarded replacement to the Word CLI |
 | F-X094c | S72 | L | 4 | 1 | 2026-09-14 | Added frozen typed Python snapshots for Word comparison, comments, deterministic layout, page lookup, and TOC rebuilding |
+| F-X094d | S72 | L | 4 | 1 | 2026-09-14 | Added ordered typed Python snapshots for Word sections, styles, rich stories, header and footer variants, and relationship-scoped hyperlinks |
+| F-X094e | S72 | L | 4 | 1 | 2026-09-14 | Added deterministic PowerPoint and notes rendering plus frozen modern comment snapshots and atomic collaboration mutation to the Python binding |
 
 ## Velocity
 

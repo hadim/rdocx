@@ -13375,3 +13375,84 @@ regressions, 22 package dry runs, archive limits, and the supply-chain audit.
 route every long operation through the native facade. Optimized native calls
 can be shorter than one scheduler window, so GIL tests should repeat the exact
 detached call rather than weaken the concurrency assertion.
+
+### F-X094d, rdocx Python sections, styles, rich stories, and hyperlinks
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The `rdocx` Python binding now returns frozen typed
+snapshots for ordered sections, styles, stories, story items, effective header
+and footer variants, and hyperlinks. The native story facade exposes ordered
+hyperlinks through each checked physical owner, including nested content.
+
+**Non-obvious choices.** Returned records contain stable source paths and
+physical story identities rather than borrowed native handles. Hyperlinks with
+equal relationship ids resolve only through their owning story part, and later
+document mutation produces fresh snapshots without changing earlier values.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 found
+duplicate nested-link ownership, invalid section fixture child order, and an
+interleaved hyperlink ordering gap. Pass 3 reported zero defects, zero smells,
+and zero nitpicks after remediation.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `word_structure_snapshots_preserve_order_ownership_and_types` and
+`story_item_links_resolve_only_through_the_checked_owner` passed. The
+integrated `cp39-abi3` wheels installed together and passed 52 binding tests,
+strict mypy, and stubtest. The consolidated full gate passed workspace tests,
+deterministic viewer tooling, both WASM targets, rustdoc, README inventories,
+workflow regressions, package dry runs, archive limits, and the supply-chain
+audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep structured binding results immutable and
+resolve every story relationship through its physical owner. Extend the
+existing snapshot vocabulary when native ownership grows rather than parsing
+package XML in Python.
+
+### F-X094e, rpptx Python rendering, comments, and notes
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The `rpptx` Python binding now exposes deterministic
+presentation PDF, slide PNG, notes PDF and PNG, and speaker-note text. It also
+returns frozen typed modern comment authors, comments, and replies, and offers
+author creation plus comment, reply, and ordered move operations.
+
+**Non-obvious choices.** Additive native one-slide and all-slide PNG helpers
+own output validation and exact deterministic raster parity. Rendering releases
+the GIL, while collaboration mutations advance the binding revision only after
+the native staged operation succeeds.
+
+**Deviations from the design plan.** None. Microscope pass 2 found that the
+one-slide helper returned `None` for an absent slide before validating an
+invalid DPI. Pass 3 reported zero defects, zero smells, and zero nitpicks after
+validation was moved ahead of the total index result.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `presentation_render_comments_and_notes_match_native_snapshots` and
+`slide_png_conveniences_match_the_resolved_layout_raster_path` passed with
+exact native versus binding bytes, reopen, typing, invalid identity, invalid
+DPI, and concurrent GIL checks. The integrated `cp39-abi3` wheels installed
+together and passed 52 binding tests, strict mypy, and stubtest. The
+consolidated full gate passed workspace tests, deterministic viewer tooling,
+both WASM targets, rustdoc, README inventories, workflow regressions, package
+dry runs, archive limits, and the supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep rendering entry points on the native
+facade, keep returned collaboration values frozen, and validate arguments even
+when a total indexed lookup has no result.

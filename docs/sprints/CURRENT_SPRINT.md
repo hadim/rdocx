@@ -53,8 +53,8 @@ cross-part relationships while committing only complete validated candidates.
 | F-X094a | Expose Word collaboration and redline commands in rdocx-cli | M | done | - |
 | F-X094b | Structured CLI text and layout plus guarded replacement | L | done | - |
 | F-X094c | Priority rdocx Python collaboration, comparison, layout, and TOC | L | done | - |
-| F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | L | in-progress | codex |
-| F-X094e | rpptx Python rendering, comments, and notes | L | in-progress | codex |
+| F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | L | done | - |
+| F-X094e | rpptx Python rendering, comments, and notes | L | done | - |
 | F-X094f | Prepare the py-v0.13.1 release path | M | pending | - |
 | F-X092 | Preserve logical reading order in generated PDFs | L | pending | - |
 
