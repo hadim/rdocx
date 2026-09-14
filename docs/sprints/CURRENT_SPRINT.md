@@ -56,7 +56,7 @@ cross-part relationships while committing only complete validated candidates.
 | F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | L | done | - |
 | F-X094e | rpptx Python rendering, comments, and notes | L | done | - |
 | F-X094f | Prepare the py-v0.13.1 release path | M | in-progress | codex |
-| F-X092 | Preserve logical reading order in generated PDFs | L | pending | - |
+| F-X092 | Preserve logical reading order in generated PDFs | L | in-progress | codex |
 
 ## Sequencing note
 
