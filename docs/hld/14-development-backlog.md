@@ -4906,15 +4906,16 @@ built archive.
 
 Integrate the contributor outcomes from PRs 77 through 80 at pinned heads
 `aed8f14d826e43fee52b6da75c47fe2c5d37645a`,
-`10c3606b864d174ca1d1bcd90c26a156f7a69f51`,
+`4b8fd0d15b3920abf3e40f46f7752ade23589bf5`,
 `8ede12b4102fb8bdc9421c22e059b7df010e2113`, and
 `9a9d3e8eeab2a5b8f2088930beae50ebce918f23`. Preserve contributor credit while
 reconciling the changes against the completed S72 section, story, binding, and
 release work. Numbering reports only retained extra XML and attributes as
-unmodelled. Document, revision, marker, field, table-cell, and TOC reader facts
-remain namespace-aware, bounded, schema-ordered, and stable through save,
-reopen, and repeated save. Pedro Assumpcao is credited for the four pinned
-contributor heads in the sprint delivery record and release notes.
+unmodelled. Document, self-closing body, revision, marker, field, table-cell,
+and TOC reader facts remain namespace-aware, bounded, schema-ordered, and
+stable through save, reopen, and repeated save. Pedro Assumpcao is credited for
+the four pinned contributor heads in the sprint delivery record and release
+notes.
 
 Restore hosted Presentation fidelity by installing the exact reviewed
 LibreOffice 26.2.5.2 and Poppler 26.01.0 builds on Ubuntu 24.04. Package-manager

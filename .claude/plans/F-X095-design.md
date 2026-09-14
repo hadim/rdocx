@@ -36,7 +36,7 @@ official Linux archive and Ubuntu 24.04 environment.
   installer and dedicated Presentation fidelity job.
 - PRs 77 through 80 at source heads
   `aed8f14d826e43fee52b6da75c47fe2c5d37645a`,
-  `10c3606b864d174ca1d1bcd90c26a156f7a69f51`,
+  `4b8fd0d15b3920abf3e40f46f7752ade23589bf5`,
   `8ede12b4102fb8bdc9421c22e059b7df010e2113`, and
   `9a9d3e8eeab2a5b8f2088930beae50ebce918f23`.
 
@@ -51,9 +51,10 @@ apply cleanly, then keep maintainer reconciliation and hardening distinct.
 Adopt PR 77's narrowed numbering evidence contract. Adopt PR 78's strict
 document and body boundaries, first section-properties retention, modeled
 self-closing paragraphs and tables, bounded nested tables, author-optional
-revision projections, empty simple fields, and glossary body parsing. Resolve
-elements and relationship attributes by expanded name, preserve owner namespace
-bindings, enforce schema order, and fail closed on malformed or truncated XML.
+revision projections, empty simple fields, glossary body parsing, and
+self-closing document bodies. Resolve elements and relationship attributes by
+expanded name, preserve owner namespace bindings, enforce schema order, and
+fail closed on malformed or truncated XML.
 
 Adopt PR 79's marker child-content facts and public complex-field effective
 properties. Use parsed XML events for child-content detection and update every
