@@ -1,6 +1,6 @@
 [package]
 name = "rdocx-py"
-description = "Python bindings for rdocx"
+description = "Native DOCX creation, editing, comparison, layout, and rendering for Python"
 readme = "README.md"
 version.workspace = true
 publish = false

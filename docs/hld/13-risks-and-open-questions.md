@@ -290,12 +290,17 @@ release boundaries, while their twelve platform wheels and two source
 distributions share one build matrix. A count-only upload, manual publication
 path, stale artifact, mismatched project version, or unverified
 trusted-publisher identity could publish the wrong project or mix both families.
+A project that omits its README from package metadata can also publish working
+files whose PyPI page has no usable installation or API guidance. Published
+release files are immutable, so that omission requires a new version.
 
 *Mitigation*: `py-rdocx-vX.Y.Z` and `py-rpptx-vX.Y.Z` each select one
 distribution at its native crate version. Manual workflow dispatch has
 build-only authority for both distributions. The release preflight binds the
 selected seven downloaded artifacts to the reviewed SHA, validates exact names,
 embedded versions, `cp39-abi3` tags, platforms, and source distribution, and
+requires the reviewed summary, author, keywords, classifiers, project URLs,
+Markdown content type, and README guidance in wheel and source metadata. It
 installs the selected project under Python 3.9 and 3.12. The tag-only `pypi`
 environment receives OIDC authority after a separate final approval.
 Completion requires the selected PyPI version, all seven files, authenticated

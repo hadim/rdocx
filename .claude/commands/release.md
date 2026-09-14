@@ -48,6 +48,9 @@ artifact set is exactly six `cp39-abi3` wheels, one for each reviewed Linux,
 macOS, and Windows target in `wheels.yml`, plus exactly one source
 distribution. No crates.io package, WASM package, npm package, Rust release
 tag, or unselected Python distribution is in either family.
+Each selected project must publish its crate-local README as a Markdown long
+description with the reviewed summary, author, keywords, classifiers, and
+homepage, repository, issue tracker, and changelog links.
 
 ## Preconditions
 
@@ -72,7 +75,7 @@ Refuse before any tag or push if one check fails:
    outcome.
 4. The release F-ID assigned to the exact requested tag is `reviewed` in the
    sprint run state, remains `in-progress` in both delivery trackers, and every
-   dependency is completed. For `py-rdocx-v0.13.1` and
+   dependency is completed. For `py-rdocx-v0.13.2` and
    `py-rpptx-v0.11.0`, that release F-ID is F-X094f.
 5. The latest recorded `/verify --full` passed at the current HEAD with the
    declared hash-harness result.
@@ -83,8 +86,9 @@ Refuse before any tag or push if one check fails:
    publication eligibility, and internal pins. A Python family uses the
    selected binding `Cargo.toml`, its `pyproject.toml`, and the corresponding
    native crate manifest to confirm the exact distribution name, import name,
-   matching version, `>=3.9` floor, and `abi3-py39` contract. An unselected
-   family must not enter the selected workflow allowlist.
+   matching version, `>=3.9` floor, `abi3-py39` contract, README description,
+   author, keywords, classifiers, and project URLs. An unselected family must
+   not enter the selected workflow allowlist.
 8. For a Rust family, run the exact locally patched `cargo publish
    --workspace --dry-run` command in `/verify` step 10 from the clean tree.
    The 22 patches keep packaged internal dependencies on this reviewed source graph
@@ -147,9 +151,10 @@ After approval, preserve this order:
    distribution. Run `python3
    scripts/sprint_workflow.py python-release-artifacts <requested-tag>
    <download-directory>` to inspect every wheel and source distribution for
-   exact name and version metadata, and every wheel for a `cp39-abi3` tag and
-   one reviewed platform. Install the selected distribution in clean Python
-   3.9 and 3.12 environments. Run its priority runtime suite in both. Run
+   exact name, version, Markdown description, summary, author, keyword,
+   classifier, and project-link metadata, and every wheel for a `cp39-abi3`
+   tag and one reviewed platform. Install the selected distribution in clean
+   Python 3.9 and 3.12 environments. Run its priority runtime suite in both. Run
    exact `mypy==2.3.0 --strict` checks and stubtest under Python 3.12, because
    that mypy version requires Python 3.10 or newer. Verify again that the manual
    run created no tag, PyPI file, or GitHub release. Stop before tag creation if
@@ -214,6 +219,8 @@ matching GitHub release are verified:
 - The requested tag and prepared family do not match exactly.
 - The selected Python project version already exists on PyPI, the build-only run is
   missing or covers another SHA, or the artifact inventory is partial.
+- A selected Python artifact lacks the reviewed README long description,
+  project summary, author, keywords, classifiers, or project links.
 - PyPI trusted publisher identity or the recorded post-publication owner check
   is absent, ambiguous, or backed by a long-lived token.
 - The exact reviewed release-note section is missing, invalid, or differs from

@@ -109,7 +109,7 @@ before their separate publication gates.
 - CLI and Python users can reach the issue-defined collaboration, comparison,
   layout, text, story, hyperlink, rendering, comment, and note capabilities
   through exact typed or schema-versioned contracts.
-- The `py-rdocx-v0.13.1` and `py-rpptx-v0.11.0` release paths each validate six
+- The `py-rdocx-v0.13.2` and `py-rpptx-v0.11.0` release paths each validate six
   wheels and one source distribution, but create no tag and perform no
   publication without the separate `/release` approval for that exact tag.
 - Contributor PRs 77 through 80 retain credit while numbering facts, document

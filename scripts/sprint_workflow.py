@@ -24,6 +24,7 @@ Exit codes: 0 ok, 1 refused, 2 usage.
 from __future__ import annotations
 
 import argparse
+from email.message import Message
 from email.parser import Parser
 import json
 import re
@@ -83,6 +84,40 @@ PYTHON_RELEASE_PLATFORMS = (
     "macosx_11_0_arm64",
     "win_amd64",
 )
+PYTHON_RELEASE_METADATA = {
+    "rdocx": {
+        "readme": "crates/rdocx-py/README.md",
+        "summary": (
+            "Native DOCX creation, editing, comparison, layout, and "
+            "rendering for Python"
+        ),
+        "keywords": ("docx", "word", "ooxml", "documents", "pdf"),
+    },
+    "rpptx": {
+        "readme": "crates/rpptx-py/README.md",
+        "summary": (
+            "Native PPTX creation, editing, comments, notes, and rendering "
+            "for Python"
+        ),
+        "keywords": ("pptx", "powerpoint", "ooxml", "presentations", "pdf"),
+    },
+}
+PYTHON_RELEASE_CLASSIFIERS = {
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Topic :: Office/Business",
+    "Topic :: Software Development :: Libraries",
+}
+PYTHON_RELEASE_PROJECT_URLS = {
+    "Homepage, https://github.com/tensorbee/rdocx",
+    "Repository, https://github.com/tensorbee/rdocx",
+    "Issues, https://github.com/tensorbee/rdocx/issues",
+    "Changelog, https://github.com/tensorbee/rdocx/blob/main/CHANGELOG.md",
+}
 RELEASE_NOTE_PLACEHOLDER_RE = re.compile(
     r"\b(?:TBD|TODO|FIXME|CHANGEME|PLACEHOLDER)\b|\?\?\?|\[insert\b",
     re.IGNORECASE,
@@ -702,6 +737,54 @@ def cmd_release_notes(args: argparse.Namespace) -> int:
     return 0
 
 
+def validate_python_project_metadata(
+    metadata: object, distribution: str, artifact_name: str
+) -> None:
+    """Validate the user-facing metadata embedded in one Python artifact."""
+    if not isinstance(metadata, Message):
+        raise TypeError("metadata must be an email message")
+    contract = PYTHON_RELEASE_METADATA[distribution]
+    if metadata.get("Summary") != contract["summary"]:
+        raise ValueError(f"{artifact_name} has incomplete project summary")
+    description_content_type = metadata.get(
+        "Description-Content-Type", ""
+    ).partition(";")[0].strip().lower()
+    if description_content_type != "text/markdown":
+        raise ValueError(f"{artifact_name} lacks a Markdown long description")
+    if metadata.get("Author") != "Atul Sharma":
+        raise ValueError(f"{artifact_name} lacks the reviewed project author")
+    keywords = tuple(
+        keyword.strip()
+        for keyword in metadata.get("Keywords", "").split(",")
+        if keyword.strip()
+    )
+    if keywords != contract["keywords"]:
+        raise ValueError(f"{artifact_name} has incomplete project keywords")
+    if set(metadata.get_all("Classifier", [])) != PYTHON_RELEASE_CLASSIFIERS:
+        raise ValueError(f"{artifact_name} has incomplete project classifiers")
+    if set(metadata.get_all("Project-URL", [])) != PYTHON_RELEASE_PROJECT_URLS:
+        raise ValueError(f"{artifact_name} has incomplete project URLs")
+    description = metadata.get_payload()
+    for required in (
+        f"# {distribution}-py",
+        "## Installation",
+        f"python -m pip install {distribution}",
+        "## Quick start",
+        "## Type checking",
+        "## Project links",
+    ):
+        if required not in description:
+            raise ValueError(
+                f"{artifact_name} long description lacks {required!r}"
+            )
+    reviewed_description = (REPO / contract["readme"]).read_text(encoding="utf-8")
+    if description.rstrip("\n") != reviewed_description.rstrip("\n"):
+        raise ValueError(
+            f"{artifact_name} long description differs from the reviewed "
+            f"{contract['readme']}"
+        )
+
+
 def validate_python_release_artifacts(tag: str, directory: Path) -> dict[str, object]:
     """Validate the exact selected Python distribution artifact set."""
     match = PYTHON_RELEASE_TAG_RE.fullmatch(tag)
@@ -766,6 +849,7 @@ def validate_python_release_artifacts(tag: str, directory: Path) -> dict[str, ob
             raise ValueError(f"{name} has project name {metadata.get('Name')!r}")
         if metadata.get("Version") != version:
             raise ValueError(f"{name} has project version {metadata.get('Version')!r}")
+        validate_python_project_metadata(metadata, distribution, name)
         expected_tag = f"cp39-abi3-{platform}"
         if wheel.get_all("Tag", []) != [expected_tag]:
             raise ValueError(
@@ -805,6 +889,7 @@ def validate_python_release_artifacts(tag: str, directory: Path) -> dict[str, ob
             raise ValueError(f"{name} has project name {metadata.get('Name')!r}")
         if metadata.get("Version") != version:
             raise ValueError(f"{name} has project version {metadata.get('Version')!r}")
+        validate_python_project_metadata(metadata, distribution, name)
 
     return {
         "tag": tag,

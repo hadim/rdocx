@@ -4872,11 +4872,17 @@ no mutation.
 ### F-X094f, Prepare the version-aligned Python release paths (M)
 
 Extend the reviewed release ceremony with independent Python distributions.
-`py-rdocx-v0.13.1` selects `rdocx` at the matching stable crate version, while
+`py-rdocx-v0.13.2` selects `rdocx` at the matching stable source version, while
 `py-rpptx-v0.11.0` selects `rpptx` at the matching incubating crate version.
 Each release contains exactly six cp39-abi3 wheels and one source distribution,
 uses trusted PyPI publication, publishes byte-identical GitHub release notes,
-verifies registry ownership, and retains contribution evidence. A manual
+verifies registry ownership, and retains contribution evidence. Each project
+uses its crate-local README as the Markdown long description and supplies a
+specific summary, author, keywords, classifiers, and project URLs. The
+artifact gate verifies that metadata and required installation, quick-start,
+typing, and project-link guidance in both archive formats. The immutable PyPI
+`rdocx 0.13.1` release remains available, so the corrected metadata ships as
+0.13.2. A manual
 `wheels.yml` run at the reviewed SHA is build-only and supplies the exact
 artifacts for clean Python 3.9 and 3.12 install and runtime checks. Strict
 typing and stub checks run under Python 3.12. S72 prepares both contracts but
@@ -4892,6 +4898,9 @@ only the exact selected tag, distribution, six wheels, one source archive,
 matching native crate version, trusted publisher, reviewed-note, verification,
 and approval contract. Negative mutations reject every mixed, mismatched,
 partial, or manual-publication path.
+`python_release_contract_requires_complete_project_metadata` requires the
+reviewed long description and project metadata in each source project and
+built archive.
 
 ### F-X095, Integrate PRs 77 through 80 and restore deterministic CI (L)
 
@@ -4931,9 +4940,11 @@ unchanged.
 ### F-X096, Align Python distribution versions and release tags (M)
 
 Publish each Python distribution at the version of its corresponding native
-crate. `rdocx-py` and PyPI `rdocx` remain at 0.13.1 with native `rdocx`.
+crate. The corrective stable source, native `rdocx`, `rdocx-py`, and the next
+PyPI `rdocx` release use 0.13.2. The immutable PyPI `rdocx 0.13.1` release and
+the complete crates.io 0.13.1 family remain available.
 `rpptx-py` and PyPI `rpptx` use 0.11.0 with native `rpptx`, rather than
-inheriting the unrelated stable workspace version 0.13.1. Package metadata,
+inheriting the unrelated stable workspace version 0.13.2. Package metadata,
 wheel and source archive names, installed module versions, PyPI records, and
 GitHub releases must all agree.
 

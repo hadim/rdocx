@@ -395,7 +395,7 @@ registry `oxml-opc@0.10.0` lacks the F-238 Word main content-type constants.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace version 0.13.1, eight internal
+stable regression requires prepared workspace version 0.13.2, eight internal
 pins, ten inherited lockfile packages, the `rdocx` Python project version,
 unpublished `rdocx-wasm`, stable README requirements, and the exact
 seven-package crates.io set. The incubating regression requires the exact
@@ -482,11 +482,12 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
 That shared-version group, the `rdocx` Python project, and the rdocx WASM
-contract literals are at 0.13.1. The exact
-seven-package stable family is published from immutable annotated `v0.13.1`
+contract literals are prepared at 0.13.2. The exact
+seven-package stable family remains published from immutable annotated `v0.13.1`
 tag at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`. Its published
 archives require shared 0.11.0. The Python, binding, and WASM carriers remain
-unpublished.
+unpublished on crates.io. The source version move gives no Rust publication
+authority.
 The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
 before package verification failed against the published shared 0.7.0 API.
 The remaining five packages and GitHub release were not published at that
@@ -553,6 +554,10 @@ successful build-only `wheels.yml` run at that exact SHA before tag creation.
 It also requires exact artifact and metadata validation, clean Python 3.9 and
 3.12 installs and runtime checks, Python 3.12 typing and stub checks,
 trusted-publisher evidence, and absent target versions on PyPI.
+Exact metadata validation covers each crate-local Markdown README, the
+distribution-specific summary, author, keywords, classifiers, project URLs,
+and the required installation, quick-start, typing, and project-link sections
+embedded in wheel `METADATA` and source-distribution `PKG-INFO`.
 `/release` pushes only the requested tag. `/close-sprint` remains the only
 command allowed to merge `main` or create an `sNN` tag.
 

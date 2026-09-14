@@ -2318,7 +2318,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.13.1" "rdocx_wasm"',
+            '"0.13.2" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.11.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -4017,7 +4017,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 "hard-coded-rdocx-validation-tag",
                 wheels.replace(
                     'python-release-artifacts "${GITHUB_REF_NAME}" dist',
-                    'python-release-artifacts "py-rdocx-v0.13.1" dist',
+                    'python-release-artifacts "py-rdocx-v0.13.2" dist',
                     1,
                 ),
             ),
@@ -5033,8 +5033,8 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertNotIn("rpptx-v0.11.0", notes)
         return notes
 
-    def test_stable_release_family_is_prepared_at_0_13_1(self) -> None:
-        expected_version = "0.13.1"
+    def test_stable_release_family_is_prepared_at_0_13_2(self) -> None:
+        expected_version = "0.13.2"
         stable_members = (
             "oxml-py-support",
             "rdocx-opc",
@@ -5164,13 +5164,13 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.13.1"', 'version = "0.13.1"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.13.1'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.13.1"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.13.1"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.13.1"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.13.1"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.13.1"',),
+            "README.md": ('rdocx = "0.13.2"', 'version = "0.13.2"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.13.2'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.13.2"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.13.2"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.13.2"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.13.2"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.13.2"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -5204,7 +5204,7 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             publish.count(
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_13_1"
+                "test_stable_release_family_is_prepared_at_0_13_2"
             ),
             1,
         )
@@ -5225,7 +5225,7 @@ class SprintWorkflowTests(unittest.TestCase):
         os.environ.get("RDOCX_VERIFY_PUBLISHED_SHARED") == "1",
         "requires the separately published shared 0.11.0 family",
     )
-    def test_prepared_rdocx_0_13_1_requires_published_shared_0_11_0(self) -> None:
+    def test_prepared_rdocx_0_13_2_requires_published_shared_0_11_0(self) -> None:
         with tempfile.TemporaryDirectory(prefix="rdocx-registry-proof-") as temp:
             root = Path(temp)
             target = root / "package-target"
@@ -5261,11 +5261,11 @@ class SprintWorkflowTests(unittest.TestCase):
                     0,
                     packaged.stdout + packaged.stderr,
                 )
-                archive = target / "package" / f"{name}-0.13.1.crate"
+                archive = target / "package" / f"{name}-0.13.2.crate"
                 self.assertTrue(archive.is_file(), archive)
                 with tarfile.open(archive, mode="r:gz") as package:
                     package.extractall(target / "package", filter="data")
-                source = target / "package" / f"{name}-0.13.1"
+                source = target / "package" / f"{name}-0.13.2"
                 self.assertTrue(source.is_dir(), source)
                 return source
 
@@ -5758,13 +5758,13 @@ rdocx-layout = "=0.10.1"
         readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
         self.assertTrue(readme_doctests.validate_root_versions(readme, metadata))
         for requirement in (
-            'rdocx = "0.13.1"',
-            'rdocx = { version = "0.13.1", default-features = false }',
-            "cargo install rdocx-cli --version '^0.13.1'",
+            'rdocx = "0.13.2"',
+            'rdocx = { version = "0.13.2", default-features = false }',
+            "cargo install rdocx-cli --version '^0.13.2'",
         ):
             with self.subTest(requirement=requirement):
                 mutation = readme.replace(
-                    requirement, requirement.replace("0.13.1", "9.9.9")
+                    requirement, requirement.replace("0.13.2", "9.9.9")
                 )
                 self.assertFalse(
                     readme_doctests.validate_root_versions(mutation, metadata)
@@ -5905,7 +5905,7 @@ rdocx-layout = "=0.10.1"
         preparation_packages = (*incubating_packages, "rpptx-wasm")
         expected_version = "0.11.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.13.1")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.13.2")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -6419,7 +6419,7 @@ rdocx-layout = "=0.10.1"
         self,
     ) -> None:
         expected = {
-            "rdocx": ("rdocx-py", "0.13.1", "py-rdocx-v0.13.1"),
+            "rdocx": ("rdocx-py", "0.13.2", "py-rdocx-v0.13.2"),
             "rpptx": ("rpptx-py", "0.11.0", "py-rpptx-v0.11.0"),
         }
         workspace = tomllib.loads(
@@ -6472,6 +6472,75 @@ rdocx-layout = "=0.10.1"
             self.assertEqual(match.group("distribution"), distribution)
             self.assertEqual(match.group("version"), version)
 
+    def test_python_release_contract_requires_complete_project_metadata(
+        self,
+    ) -> None:
+        expected = {
+            "rdocx": {
+                "crate": "rdocx-py",
+                "summary": (
+                    "Native DOCX creation, editing, comparison, layout, and "
+                    "rendering for Python"
+                ),
+                "keywords": ["docx", "word", "ooxml", "documents", "pdf"],
+            },
+            "rpptx": {
+                "crate": "rpptx-py",
+                "summary": (
+                    "Native PPTX creation, editing, comments, notes, and "
+                    "rendering for Python"
+                ),
+                "keywords": [
+                    "pptx",
+                    "powerpoint",
+                    "ooxml",
+                    "presentations",
+                    "pdf",
+                ],
+            },
+        }
+        classifiers = {
+            "Development Status :: 4 - Beta",
+            "Intended Audience :: Developers",
+            "Programming Language :: Python :: 3",
+            "Programming Language :: Python :: 3 :: Only",
+            "Programming Language :: Python :: Implementation :: CPython",
+            "Programming Language :: Rust",
+            "Topic :: Office/Business",
+            "Topic :: Software Development :: Libraries",
+        }
+        project_urls = {
+            "Homepage": "https://github.com/tensorbee/rdocx",
+            "Repository": "https://github.com/tensorbee/rdocx",
+            "Issues": "https://github.com/tensorbee/rdocx/issues",
+            "Changelog": "https://github.com/tensorbee/rdocx/blob/main/CHANGELOG.md",
+        }
+
+        for distribution, contract in expected.items():
+            crate = contract["crate"]
+            package_dir = workflow.REPO / "crates" / crate
+            metadata = tomllib.loads(
+                (package_dir / "pyproject.toml").read_text(encoding="utf-8")
+            )["project"]
+            manifest = tomllib.loads(
+                (package_dir / "Cargo.toml").read_text(encoding="utf-8")
+            )
+            readme = (package_dir / "README.md").read_text(encoding="utf-8")
+
+            self.assertEqual(metadata["description"], contract["summary"])
+            self.assertEqual(metadata["dynamic"], ["readme"])
+            self.assertEqual(manifest["package"]["readme"], "README.md")
+            self.assertEqual(metadata["authors"], [{"name": "Atul Sharma"}])
+            self.assertEqual(metadata["keywords"], contract["keywords"])
+            self.assertEqual(set(metadata["classifiers"]), classifiers)
+            self.assertEqual(metadata["urls"], project_urls)
+            self.assertIn(f"# {distribution}-py", readme)
+            self.assertIn("## Installation", readme)
+            self.assertIn(f"python -m pip install {distribution}", readme)
+            self.assertIn("## Quick start", readme)
+            self.assertIn("## Type checking", readme)
+            self.assertIn("## Project links", readme)
+
     def test_python_release_contract_rejects_partial_or_unapproved_publication(
         self,
     ) -> None:
@@ -6512,8 +6581,10 @@ rdocx-layout = "=0.10.1"
                 "plus exactly one source distribution",
                 "manually dispatch `wheels.yml` at that exact branch and SHA",
                 "successful build-only run",
-                "inspect every wheel and source distribution for exact name "
-                "and version metadata",
+                "inspect every wheel and source distribution for exact name, "
+                "version, Markdown description, summary, author, keyword, "
+                "classifier, and project-link metadata",
+                "publish its crate-local README as a Markdown long description",
                 "python-release-artifacts <requested-tag> <download-directory>",
                 "Manual dispatch must create no tag, PyPI file, or GitHub release",
                 "query PyPI and refuse unless the selected project's target "
@@ -6543,7 +6614,7 @@ rdocx-layout = "=0.10.1"
 
             self.assert_wheels_workflow_contract(wheels_bytes)
             rdocx_notes = workflow.render_release_notes(
-                changelog_text, "py-rdocx-v0.13.1"
+                changelog_text, "py-rdocx-v0.13.2"
             )
             rpptx_notes = workflow.render_release_notes(
                 changelog_text, "py-rpptx-v0.11.0"
@@ -6557,7 +6628,7 @@ rdocx-layout = "=0.10.1"
                 self.assertIn("one source distribution", rendered)
 
             for crate, distribution, version, manifest_version in (
-                ("rdocx-py", "rdocx", "0.13.1", {"workspace": True}),
+                ("rdocx-py", "rdocx", "0.13.2", {"workspace": True}),
                 ("rpptx-py", "rpptx", "0.11.0", "0.11.0"),
             ):
                 manifest = tomllib.loads(
@@ -6587,7 +6658,7 @@ rdocx-layout = "=0.10.1"
                 ["abi3-py39"],
             )
 
-        for valid in ("py-rdocx-v0.13.1", "py-rpptx-v0.11.0"):
+        for valid in ("py-rdocx-v0.13.2", "py-rpptx-v0.11.0"):
             self.assertIsNotNone(workflow.RELEASE_TAG_RE.fullmatch(valid))
         for invalid in (
             "py-v0.13.1",
@@ -6602,7 +6673,32 @@ rdocx-layout = "=0.10.1"
 
         assert_contract(release, release_notes, wheels, changelog)
 
+        def artifact_metadata(distribution: str, version: str) -> bytes:
+            contract = workflow.PYTHON_RELEASE_METADATA[distribution]
+            description = (workflow.REPO / contract["readme"]).read_text(
+                encoding="utf-8"
+            )
+            lines = [
+                "Metadata-Version: 2.4",
+                f"Name: {distribution}",
+                f"Version: {version}",
+                f"Summary: {contract['summary']}",
+                "Description-Content-Type: text/markdown; charset=UTF-8; variant=GFM",
+                "Author: Atul Sharma",
+                f"Keywords: {','.join(contract['keywords'])}",
+            ]
+            lines.extend(
+                f"Classifier: {classifier}"
+                for classifier in sorted(workflow.PYTHON_RELEASE_CLASSIFIERS)
+            )
+            lines.extend(
+                f"Project-URL: {url}"
+                for url in sorted(workflow.PYTHON_RELEASE_PROJECT_URLS)
+            )
+            return ("\n".join(lines) + "\n\n" + description).encode()
+
         def write_artifacts(root: Path, distribution: str, version: str) -> None:
+            metadata = artifact_metadata(distribution, version)
             for platform in workflow.PYTHON_RELEASE_PLATFORMS:
                 wheel_path = root / (
                     f"{distribution}-{version}-cp39-abi3-{platform}.whl"
@@ -6611,8 +6707,7 @@ rdocx-layout = "=0.10.1"
                 with zipfile.ZipFile(wheel_path, mode="w") as archive:
                     archive.writestr(
                         f"{dist_info}/METADATA",
-                        "Metadata-Version: 2.1\n"
-                        f"Name: {distribution}\nVersion: {version}\n",
+                        metadata,
                     )
                     archive.writestr(
                         f"{dist_info}/WHEEL",
@@ -6622,17 +6717,13 @@ rdocx-layout = "=0.10.1"
                     )
 
             sdist_path = root / f"{distribution}-{version}.tar.gz"
-            metadata = (
-                "Metadata-Version: 2.1\n"
-                f"Name: {distribution}\nVersion: {version}\n"
-            ).encode()
             member = tarfile.TarInfo(f"{distribution}-{version}/PKG-INFO")
             member.size = len(metadata)
             with tarfile.open(sdist_path, mode="w:gz") as archive:
                 archive.addfile(member, io.BytesIO(metadata))
 
         for distribution, version, tag in (
-            ("rdocx", "0.13.1", "py-rdocx-v0.13.1"),
+            ("rdocx", "0.13.2", "py-rdocx-v0.13.2"),
             ("rpptx", "0.11.0", "py-rpptx-v0.11.0"),
         ):
             with tempfile.TemporaryDirectory(
@@ -6686,6 +6777,50 @@ rdocx-layout = "=0.10.1"
                     "Metadata-Version: 2.1\nName: other\nVersion: 0.13.1\n",
                 )
             with self.assertRaises(ValueError):
+                workflow.validate_python_release_artifacts(
+                    "py-rdocx-v0.13.1", artifacts
+                )
+
+            write_artifacts(artifacts, "rdocx", "0.13.1")
+            incomplete_description = artifacts / (
+                "rdocx-0.13.1-cp39-abi3-macosx_11_0_arm64.whl"
+            )
+            incomplete_metadata = artifact_metadata("rdocx", "0.13.1").replace(
+                b"## Installation", b"## Setup", 1
+            )
+            with zipfile.ZipFile(incomplete_description, mode="w") as archive:
+                archive.writestr(
+                    "rdocx-0.13.1.dist-info/METADATA", incomplete_metadata
+                )
+                archive.writestr(
+                    "rdocx-0.13.1.dist-info/WHEEL",
+                    "Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
+                    "Tag: cp39-abi3-macosx_11_0_arm64\n",
+                )
+            with self.assertRaisesRegex(ValueError, "long description lacks"):
+                workflow.validate_python_release_artifacts(
+                    "py-rdocx-v0.13.1", artifacts
+                )
+
+            write_artifacts(artifacts, "rdocx", "0.13.1")
+            unreviewed_description = artifacts / (
+                "rdocx-0.13.1-cp39-abi3-macosx_11_0_arm64.whl"
+            )
+            unreviewed_metadata = artifact_metadata("rdocx", "0.13.1").replace(
+                b"Native rdocx for Python",
+                b"Unreviewed rdocx for Python",
+                1,
+            )
+            with zipfile.ZipFile(unreviewed_description, mode="w") as archive:
+                archive.writestr(
+                    "rdocx-0.13.1.dist-info/METADATA", unreviewed_metadata
+                )
+                archive.writestr(
+                    "rdocx-0.13.1.dist-info/WHEEL",
+                    "Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
+                    "Tag: cp39-abi3-macosx_11_0_arm64\n",
+                )
+            with self.assertRaisesRegex(ValueError, "differs from the reviewed"):
                 workflow.validate_python_release_artifacts(
                     "py-rdocx-v0.13.1", artifacts
                 )
@@ -6791,7 +6926,6 @@ rdocx-layout = "=0.10.1"
                 changelog.replace(
                     "https://github.com/tensorbee/rdocx/issues/76",
                     "https://example.com/unreviewed",
-                    1,
                 ),
             ),
         )
@@ -7754,7 +7888,7 @@ Pedro Assumpcao and the rdocx maintainers.
                 "python3 -m unittest scripts.test_sprint_workflow",
                 "python3 -m unittest "
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_13_1",
+                "test_stable_release_family_is_prepared_at_0_13_2",
                 1,
             ),
             "job-condition": ci.replace(
@@ -7990,7 +8124,7 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_13_1"
+            "test_stable_release_family_is_prepared_at_0_13_2"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
@@ -7998,7 +8132,7 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         packaged_registry_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_prepared_rdocx_0_13_1_requires_published_shared_0_11_0"
+            "test_prepared_rdocx_0_13_2_requires_published_shared_0_11_0"
         )
         historical_registry_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
@@ -8558,7 +8692,7 @@ Pedro Assumpcao and the rdocx maintainers.
             ),
             "version": (
                 claude.replace(
-                    "prepared at\n  0.13.1",
+                    "prepared at\n  0.13.2",
                     "prepared at\n  0.2.0",
                     1,
                 ),

@@ -1,6 +1,6 @@
 [package]
 name = "rpptx-py"
-description = "Python bindings for rpptx"
+description = "Native PPTX creation, editing, comments, notes, and rendering for Python"
 readme = "README.md"
 version = "0.11.0"
 publish = false

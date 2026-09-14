@@ -33,7 +33,7 @@ assert!(package.parts.is_empty());
 
 ```toml
 [dependencies]
-rdocx-opc = "0.13.1"
+rdocx-opc = "0.13.2"
 ```
 
 For new code, replace both the dependency and the import with `oxml-opc` and

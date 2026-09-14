@@ -2238,7 +2238,7 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.13.1 carrier regression pins all ten inherited version carriers,
+The stable 0.13.2 carrier regression pins all ten inherited version carriers,
 the `rdocx` Python project version, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
@@ -2247,8 +2247,14 @@ The paired incubating regression pins all seventeen explicit manifests,
 sixteen workspace dependency requirements, seventeen lockfile entries,
 publication flags, README examples, Rust assertions, the CI WASM literal, and
 the exact 15-package publication preflight at 0.11.0. It separately proves the
-stable workspace remains at its prepared 0.13.1 boundary and both `rpptx-py`
+stable workspace remains at its prepared 0.13.2 boundary and both `rpptx-py`
 and `rpptx-wasm` remain ineligible for crates.io publication.
+The Python metadata regression requires both projects to name a crate-local
+Markdown README and provide their reviewed summary, author, keywords,
+classifiers, and project URLs. Artifact validation repeats that check against
+wheel `METADATA` and source-distribution `PKG-INFO`, including required
+installation, quick-start, typing, and project-link sections in the embedded
+long description.
 The immutable v0.13.0 shared-family gate packages and verifies
 `rdocx-layout@0.13.0`, requires its normalized archive dependency on
 `oxml-layout@0.10.0` to contain no local path, and compiles the packaged crate

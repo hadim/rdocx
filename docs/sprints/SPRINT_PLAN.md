@@ -1401,7 +1401,7 @@ existing S72 reader, CLI, and binding work. It is the only added story allowed
 to move the Word XML hashes, and its declared seven-entry delta must leave PDF
 and PNG fingerprints unchanged. F-X096 makes the Python distribution versions
 independent and reserves tag namespaces that cannot start a Rust publication.
-S72 prepares `py-rdocx-v0.13.1` and `py-rpptx-v0.11.0`, then each publication
+S72 prepares `py-rdocx-v0.13.2` and `py-rpptx-v0.11.0`, then each publication
 remains a separate `/release` action with fresh approval at the reviewed SHA.
 
 #### Sprint S73, Tables, rich content, and private corpus gate

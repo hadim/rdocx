@@ -1389,6 +1389,12 @@ honest. Do not auto-generate them from PyO3.
 
 **Distribution names `rdocx` and `rpptx`**, import names identical. The binding
 crates are `publish = false`, because a cdylib has no business on crates.io.
+Each Python project uses its crate-local `README.md` as a Markdown long
+description. The metadata also carries a distribution-specific summary,
+author, keywords, Python and topic classifiers, and project URLs. The README
+provides installation, compatibility, capability, quick-start, typing, and
+project-link guidance on PyPI. Wheel and source-distribution validation checks
+the embedded metadata and the required README sections before publication.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
 PowerPoint workspace family is published at 0.11.0 from immutable annotated tag
@@ -1407,7 +1413,10 @@ reviewed SHA `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published only
 `rdocx-opc` and `rdocx-oxml`. It created no GitHub release and posted no
 contribution notifications. The complete seven-package recovery is published
 at 0.11.1, and all six reviewed leave-open notifications are posted. The
-`rdocx` Python project and `rdocx-wasm` track stable workspace version 0.13.1.
+The immutable PyPI `rdocx 0.13.1` release remains available with its short
+summary. The corrective stable source, `rdocx` Python project, and
+`rdocx-wasm` track 0.13.2, while crates.io remains at the complete 0.13.1
+family until a separately authorized Rust release.
 The `rpptx` Python project and unpublished `rpptx-wasm` crate track the native
 incubating version 0.11.0. Every binding and WASM crate remains unpublished on
 crates.io. Neither Rust release
