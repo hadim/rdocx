@@ -1,6 +1,6 @@
 # F-X092, Preserve logical reading order in generated PDFs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-255
@@ -26,9 +26,10 @@ Emit one multilingual run as one positioned text object with one initial `Tm`
 and exact relative glyph positioning. Keep one run-wide `ActualText`. Where
 adjacent styled or bidirectional runs still fragment extraction, build a
 private PDF-local same-line plan from semantic ownership, transformed baseline,
-source spans, and logical indices. Wrap unchanged paint operators in one
-logical line span without reordering paint or adding an invisible second text
-layer. Source-less ambiguity prevents coalescing.
+source spans, and logical indices. Attach the complete logical line to the
+first painted run and empty replacement text to later painted runs without
+reordering paint or adding an invisible second text layer. Duplicate or gapped
+logical indices, mixed ownership, and baseline changes prevent coalescing.
 
 ## Rejected alternatives
 
@@ -47,6 +48,7 @@ layer. Source-less ambiguity prevents coalescing.
 | unit | `same_line_actual_text_uses_logical_source_order_without_repainting` | Logical extraction changes while glyph and nontext paint order does not. |
 | regression | `large_word_and_presentation_pdfs_preserve_logical_reading_order` | Pinned Poppler extracts every source-built substantial line once and in order from large DOCX and PPTX PDFs. |
 | regression | `logical_line_coalescing_respects_owner_and_baseline_boundaries` | Different lines, owners, cells, and ambiguous runs are not merged. |
+| compatibility | `handouts_follow_master_metadata_and_all_six_audience_layouts` | The existing handout date is extracted as one complete logical line rather than three run fragments. |
 | golden | deterministic raster and stream matrix | Raster and geometry remain identical, only declared text operators and PDF bytes move. |
 
 The test gate is `large_word_and_presentation_pdfs_preserve_logical_reading_order`.
@@ -66,20 +68,21 @@ The test gate is `large_word_and_presentation_pdfs_preserve_logical_reading_orde
 
 ## Hash harness
 
-An intentional isolated PDF delta is expected for the seven document cases.
-Only `pdf/bytes` and `pdf/pages` may change, for 14 declared entries. Every
-resource, raster, Word XML, numbering, style, or other delta blocks completion.
+The 49-entry hash harness remains unchanged. Its seven documents use the legacy
+Latin `GlyphRun` path, while F-X092 changes only `MultilingualGlyphRun` PDF
+emission. Any harness delta blocks completion. The source-built Word and
+PowerPoint gate exercises the changed rich path with pinned Poppler 26.01.0.
 
 ## Implementation checklist
 
-- [ ] Add the source-built large Word and PowerPoint reproduction first.
-- [ ] Emit rich runs with run-wide extraction geometry.
-- [ ] Add bounded same-line logical spans without repainting.
-- [ ] Validate logical extraction with pinned Poppler 26.01.0.
-- [ ] Prove raster and page geometry remain unchanged.
-- [ ] Review and record only the declared 14-entry hash delta in its own commit.
-- [ ] Run both facade and CLI PDF paths plus the full gate.
-- [ ] Update exactly the listed HLD files.
+- [x] Add the source-built large Word and PowerPoint reproduction first.
+- [x] Emit rich runs with run-wide extraction geometry.
+- [x] Add bounded same-line logical spans without repainting.
+- [x] Validate logical extraction with pinned Poppler 26.01.0.
+- [x] Prove pre-change rich PDF rasters and the 49-entry harness remain unchanged.
+- [x] Review the unchanged hash harness result.
+- [x] Run both facade and CLI PDF paths plus the complete non-fast gate.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

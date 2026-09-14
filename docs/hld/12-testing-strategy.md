@@ -2021,6 +2021,14 @@ required, and no binary fixture enters the repository.
   operators, mixed solid paint, and page-local pattern resources.
 - A 90 degree group rotation turns a linear gradient's sampled colour change
   vertical when rasterised at 72 dpi with the recorded Poppler 26.01.0.
+- Rich PDF text tests require one initial matrix per multilingual run and exact
+  relative glyph positioning. Same-line tests require one logical
+  `ActualText`, unchanged paint traversal, and hard boundaries at owner,
+  baseline, source, duplicate-index, and index-gap changes.
+- The public Word and PowerPoint regression builds 120 numbered Word lines and
+  48 numbered slide lines split across Latin and CJK runs. Pinned Poppler
+  26.01.0 must extract every complete line once and in source order. Its 72 DPI
+  first-page PNGs must retain the exact pre-change digests for both formats.
 - **`Group` containing `Text` finds the font.** The regression test for the
   recursion hazard.
 - Tagged-PDF structure tests cover headings, nested lists, table headers and

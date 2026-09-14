@@ -252,6 +252,13 @@ HarfRust shaping, and line-local UAX 9 visual ordering therefore remain shared
 by document formats. Logical order is the extraction contract. Visual order is
 applied only to completed lines for painting.
 
+The shared PDF backend owns the final extraction projection. It groups only
+adjacent rich runs with one semantic owner, one transformed baseline, and
+contiguous source spans or logical indices. The first painted run carries the
+complete logical line through `ActualText`, and later painted runs carry empty
+replacement text so extraction sees the line once. The backend retains paint
+traversal and exact glyph positions, including through nested group transforms.
+
 Word and Presentation both project complex text into those shared rich values.
 `rdocx-layout` selects the effective direct, bidirectional, or East Asian
 `w:lang` value for each logical run, retains its exact Word source interval,

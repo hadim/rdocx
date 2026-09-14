@@ -514,6 +514,14 @@ round-trip XML retain logical order.
 x and y advances, x and y offsets, logical clusters, direction, and extraction
 text. PDF paints those exact positions inside logical `ActualText`, raster
 applies the same per-glyph coordinates, and SVG emits searchable logical text.
+The PDF writer emits each rich run with one initial text matrix and relative
+glyph placement. Adjacent runs may share one extracted logical line only when
+their semantic owner, transformed baseline, and contiguous source or logical
+indices agree. The first run owns the complete `ActualText`, later runs use an
+empty replacement, and their paint operators stay in their original order.
+Ambiguous ownership, duplicate or gapped logical indices, and baseline changes
+end the line plan. Nested group transforms are cancelled only while expressing
+the same final glyph positions in page coordinates.
 Legacy Latin remains on `GlyphRun` so existing output bytes do not move.
 Non-negative leading is divided equally above and below the glyph box. A
 below-natural exact line keeps its stated height and places no negative leading

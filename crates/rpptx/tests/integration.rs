@@ -8968,9 +8968,7 @@ fn handouts_follow_master_metadata_and_all_six_audience_layouts() {
         assert_eq!(f226_pdf_page_count(&pdf, "handout-golden"), pages);
         let text = f226_pdf_text(&pdf, "handout-golden");
         let words = text.split_whitespace().collect::<Vec<_>>();
-        for expected in [
-            "one", "two", "handout", "header", "footer", "2030", "01", "02",
-        ] {
+        for expected in ["one", "two", "handout", "header", "footer", "2030-01-02"] {
             assert!(
                 words.contains(&expected),
                 "missing {expected:?} in {text:?}"

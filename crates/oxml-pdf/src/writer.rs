@@ -1038,6 +1038,7 @@ fn build_page_content(
 
     let mut state = EmitState {
         page_idx,
+        page_height: page.height,
         prepared_fonts: resources.prepared_fonts,
         font_refs: resources.font_refs,
         image_map: resources.image_map,
@@ -1047,7 +1048,13 @@ fn build_page_content(
         structure: resources.structure,
         next_mcid: 0,
     };
-    emit_elements(&mut content, &page.elements, &mut state);
+    emit_elements(
+        &mut content,
+        &page.elements,
+        &mut state,
+        Transform::IDENTITY,
+        None,
+    );
 
     content.restore_state();
     content.finish().to_vec()
@@ -1055,6 +1062,7 @@ fn build_page_content(
 
 struct EmitState<'a> {
     page_idx: usize,
+    page_height: f64,
     prepared_fonts: &'a BTreeMap<FontId, PreparedFont>,
     font_refs: &'a BTreeMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
     image_map: &'a HashMap<(usize, usize), usize>,
@@ -1065,19 +1073,157 @@ struct EmitState<'a> {
     next_mcid: i32,
 }
 
-fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &mut EmitState<'_>) {
-    for element in elements {
+struct LogicalLineSpan {
+    start: usize,
+    end: usize,
+    actual_text: String,
+}
+
+fn logical_line_run(
+    element: &PositionedElement,
+) -> Option<(
+    &oxml_layout::output::MultilingualGlyphRun,
+    Option<oxml_layout::StructureId>,
+)> {
+    match element {
+        PositionedElement::MultilingualText(run) => Some((run, None)),
+        PositionedElement::MarkedContent {
+            structure,
+            children,
+        } if children.len() == 1 => match &children[0] {
+            PositionedElement::MultilingualText(run) => Some((run, *structure)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn logical_line_spans(elements: &[PositionedElement]) -> Vec<LogicalLineSpan> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    while start < elements.len() {
+        let Some((first, first_owner)) = logical_line_run(&elements[start]) else {
+            start += 1;
+            continue;
+        };
+        if !first.is_valid() {
+            start += 1;
+            continue;
+        }
+        let first_source = first.source;
+
+        let mut runs = vec![(start, first)];
+        let mut cursor = start + 1;
+        while cursor < elements.len() {
+            match logical_line_run(&elements[cursor]) {
+                Some((run, owner))
+                    if run.is_valid()
+                        && first_owner == owner
+                        && match (first_source, run.source) {
+                            (Some(first), Some(current)) => current.node == first.node,
+                            (None, None) => match (first_owner, owner) {
+                                (Some(first), Some(current)) => first == current,
+                                (None, None) => true,
+                                _ => false,
+                            },
+                            _ => false,
+                        }
+                        && run.origin.y.to_bits() == first.origin.y.to_bits() =>
+                {
+                    if runs
+                        .iter()
+                        .any(|(_, existing)| existing.logical_index == run.logical_index)
+                    {
+                        break;
+                    }
+                    runs.push((cursor, run));
+                }
+                None if matches!(
+                    elements[cursor],
+                    PositionedElement::Line { .. } | PositionedElement::FilledRect { .. }
+                ) => {}
+                Some(_) | None => break,
+            }
+            cursor += 1;
+        }
+
+        if runs.len() > 1 {
+            let mut logical = runs.clone();
+            logical.sort_by_key(|(_, run)| run.logical_index);
+            let unique_indices = logical
+                .windows(2)
+                .all(|pair| pair[0].1.logical_index < pair[1].1.logical_index);
+            let contiguous_source =
+                logical
+                    .windows(2)
+                    .all(|pair| match (pair[0].1.source, pair[1].1.source) {
+                        (Some(left), Some(right)) => left.char_end == right.char_start,
+                        (None, None) => {
+                            pair[0].1.logical_index.checked_add(1) == Some(pair[1].1.logical_index)
+                        }
+                        _ => false,
+                    });
+            if unique_indices && contiguous_source {
+                let Some((end, _)) = runs.last() else {
+                    start += 1;
+                    continue;
+                };
+                spans.push(LogicalLineSpan {
+                    start,
+                    end: *end,
+                    actual_text: logical
+                        .into_iter()
+                        .map(|(_, run)| run.logical_text.as_str())
+                        .collect(),
+                });
+                start = *end + 1;
+                continue;
+            }
+        }
+        start += 1;
+    }
+    spans
+}
+
+fn emit_elements(
+    content: &mut Content,
+    elements: &[PositionedElement],
+    state: &mut EmitState<'_>,
+    accumulated_transform: Transform,
+    inherited_actual_text: Option<&str>,
+) {
+    let line_spans = if inherited_actual_text.is_some() {
+        Vec::new()
+    } else {
+        logical_line_spans(elements)
+    };
+    for (element_index, element) in elements.iter().enumerate() {
+        let planned_actual_text = line_spans
+            .iter()
+            .find(|span| {
+                span.start <= element_index
+                    && element_index <= span.end
+                    && logical_line_run(element).is_some()
+            })
+            .map(|span| {
+                if span.start == element_index {
+                    span.actual_text.as_str()
+                } else {
+                    ""
+                }
+            });
+        let actual_text = inherited_actual_text.or(planned_actual_text);
         if let PositionedElement::MarkedContent {
             structure,
             children,
         } = element
         {
             if state.structure.is_none() && structure.is_some() {
-                emit_elements(content, children, state);
+                emit_elements(content, children, state, accumulated_transform, actual_text);
                 continue;
             }
             if !has_content_stream_output(children) {
-                emit_elements(content, children, state);
+                emit_elements(content, children, state, accumulated_transform, actual_text);
                 continue;
             }
             match structure {
@@ -1096,7 +1242,7 @@ fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &
                     content.begin_marked_content(Name(b"Artifact"));
                 }
             }
-            emit_elements(content, children, state);
+            emit_elements(content, children, state, accumulated_transform, actual_text);
             content.end_marked_content();
             continue;
         }
@@ -1153,15 +1299,44 @@ fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &
             }
             PositionedElement::Text(_) => {}
             PositionedElement::MultilingualText(run) => {
-                content
-                    .begin_marked_content_with_properties(Name(b"Span"))
-                    .properties()
-                    .actual_text(TextStr(&run.logical_text));
                 if let Some(prepared) = state.prepared_fonts.get(&run.font_id)
                     && state.font_refs.contains_key(&run.font_id)
                 {
                     let font_name = format!("F{}", run.font_id.0);
                     content.save_state();
+                    let page_flip = Transform {
+                        a: 1.0,
+                        b: 0.0,
+                        c: 0.0,
+                        d: -1.0,
+                        e: 0.0,
+                        f: state.page_height,
+                    };
+                    let current_pdf_transform = page_flip.then(accumulated_transform);
+                    let text_matrix = Transform {
+                        a: 1.0,
+                        b: 0.0,
+                        c: 0.0,
+                        d: -1.0,
+                        e: run.origin.x,
+                        f: run.origin.y,
+                    };
+                    // Give ActualText page-oriented geometry, then restore the
+                    // current transform before painting the unchanged run.
+                    let corrected_actual_text =
+                        if let Some(current_inverse) = inverse_transform(current_pdf_transform) {
+                            content.transform(transform_array(current_inverse));
+                            true
+                        } else {
+                            false
+                        };
+                    content
+                        .begin_marked_content_with_properties(Name(b"Span"))
+                        .properties()
+                        .actual_text(TextStr(actual_text.unwrap_or(&run.logical_text)));
+                    if corrected_actual_text {
+                        content.transform(transform_array(current_pdf_transform));
+                    }
                     content.set_fill_rgb(
                         run.color.r as f32,
                         run.color.g as f32,
@@ -1170,11 +1345,17 @@ fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &
                     apply_alpha(content, run.color.a, state.alpha_states);
                     content.begin_text();
                     content.set_font(Name(font_name.as_bytes()), run.font_size as f32);
-                    emit_multilingual_glyphs(content, run, &prepared.remapper, &prepared.widths);
+                    emit_multilingual_glyphs(
+                        content,
+                        run,
+                        transform_array(text_matrix),
+                        &prepared.remapper,
+                        &prepared.widths,
+                    );
                     content.end_text();
+                    content.end_marked_content();
                     content.restore_state();
                 }
-                content.end_marked_content();
             }
             PositionedElement::Line {
                 start,
@@ -1258,7 +1439,13 @@ fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &
                     content.end_path();
                 }
                 apply_alpha(content, group.opacity, state.alpha_states);
-                emit_elements(content, &group.children, state);
+                emit_elements(
+                    content,
+                    &group.children,
+                    state,
+                    group.transform.then(accumulated_transform),
+                    actual_text,
+                );
                 content.restore_state();
             }
             _ => {
@@ -1509,27 +1696,95 @@ fn emit_glyphs(
     positioned.finish();
 }
 
+fn emit_horizontally_positioned_multilingual_glyphs(
+    content: &mut Content,
+    run: &oxml_layout::output::MultilingualGlyphRun,
+    remapper: &subsetter::GlyphRemapper,
+    widths: &[(u16, f64)],
+) {
+    let width_map: HashMap<u16, f64> = widths.iter().copied().collect();
+    let mut positioned = content.show_positioned();
+    let mut items = positioned.items();
+    let mut advance = 0.0;
+    let mut current = 0.0;
+    for (index, &glyph_id) in run.glyph_ids.iter().enumerate() {
+        let target = advance + run.x_offsets[index];
+        let adjustment = (current - target) / run.font_size * 1000.0;
+        if adjustment != 0.0 {
+            items.adjust(adjustment as f32);
+        }
+        let new_gid = remapper.get(glyph_id).unwrap_or(0);
+        let bytes = new_gid.to_be_bytes();
+        items.show(Str(&bytes));
+        current = target + width_map.get(&new_gid).copied().unwrap_or(0.0) / 1000.0 * run.font_size;
+        advance += run.x_advances[index];
+    }
+    items.finish();
+    positioned.finish();
+}
+
+fn transform_array(transform: Transform) -> [f32; 6] {
+    [
+        transform.a as f32,
+        transform.b as f32,
+        transform.c as f32,
+        transform.d as f32,
+        transform.e as f32,
+        transform.f as f32,
+    ]
+}
+
+fn inverse_transform(transform: Transform) -> Option<Transform> {
+    let determinant = transform.a * transform.d - transform.b * transform.c;
+    if !determinant.is_finite() || determinant == 0.0 {
+        return None;
+    }
+    let inverse = Transform {
+        a: transform.d / determinant,
+        b: -transform.b / determinant,
+        c: -transform.c / determinant,
+        d: transform.a / determinant,
+        e: (transform.c * transform.f - transform.d * transform.e) / determinant,
+        f: (transform.b * transform.e - transform.a * transform.f) / determinant,
+    };
+    [
+        inverse.a, inverse.b, inverse.c, inverse.d, inverse.e, inverse.f,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    .then_some(inverse)
+}
+
 /// Emit a rich run at its shaped per-glyph positions.
 fn emit_multilingual_glyphs(
     content: &mut Content,
     run: &oxml_layout::output::MultilingualGlyphRun,
+    text_matrix: [f32; 6],
     remapper: &subsetter::GlyphRemapper,
     widths: &[(u16, f64)],
 ) {
     if !run.is_valid() {
         return;
     }
-    let mut x = run.origin.x;
-    let mut y = run.origin.y;
+    content.set_text_matrix(text_matrix);
+    if run.y_advances.iter().all(|value| *value == 0.0)
+        && run.y_offsets.iter().all(|value| *value == 0.0)
+    {
+        emit_horizontally_positioned_multilingual_glyphs(content, run, remapper, widths);
+        return;
+    }
+    let mut advance_x = 0.0;
+    let mut advance_y = 0.0;
+    let mut positioned_x = 0.0;
+    let mut positioned_y = 0.0;
     for (index, &glyph_id) in run.glyph_ids.iter().enumerate() {
-        content.set_text_matrix([
-            1.0,
-            0.0,
-            0.0,
-            -1.0,
-            (x + run.x_offsets[index]) as f32,
-            (y - run.y_offsets[index]) as f32,
-        ]);
+        let target_x = advance_x + run.x_offsets[index];
+        let target_y = advance_y + run.y_offsets[index];
+        let delta_x = target_x - positioned_x;
+        let delta_y = target_y - positioned_y;
+        if delta_x != 0.0 || delta_y != 0.0 {
+            content.next_line(delta_x as f32, delta_y as f32);
+        }
         emit_glyphs(
             content,
             std::slice::from_ref(&glyph_id),
@@ -1538,8 +1793,10 @@ fn emit_multilingual_glyphs(
             remapper,
             widths,
         );
-        x += run.x_advances[index];
-        y -= run.y_advances[index];
+        positioned_x = target_x;
+        positioned_y = target_y;
+        advance_x += run.x_advances[index];
+        advance_y += run.y_advances[index];
     }
 }
 
@@ -1755,46 +2012,49 @@ mod tests {
         })
     }
 
-    #[test]
-    fn rtl_pdf_paints_visual_order_but_maps_search_text_logically() {
-        let font_id = FontId(9);
-        let run = MultilingualGlyphRun {
-            origin: Point { x: 10.0, y: 20.0 },
-            font_id,
+    fn multilingual_run(
+        text: &str,
+        logical_index: usize,
+        origin: Point,
+        source: Option<oxml_layout::SourceSpan>,
+    ) -> MultilingualGlyphRun {
+        let glyph_count = text.chars().count();
+        MultilingualGlyphRun {
+            origin,
+            font_id: FontId(9),
             font_size: 12.0,
-            glyph_ids: vec![2, 1],
-            x_advances: vec![6.0, 6.0],
-            y_advances: vec![0.0, 0.0],
-            x_offsets: vec![0.0, 0.0],
-            y_offsets: vec![0.0, 0.0],
+            glyph_ids: (1..=u16::try_from(glyph_count).unwrap()).collect(),
+            x_advances: vec![6.0; glyph_count],
+            y_advances: vec![0.0; glyph_count],
+            x_offsets: vec![0.0; glyph_count],
+            y_offsets: vec![0.0; glyph_count],
             clusters: vec![GlyphCluster {
                 glyph_start: 0,
-                glyph_end: 2,
+                glyph_end: u32::try_from(glyph_count).unwrap(),
                 char_start: 0,
-                char_end: 2,
+                char_end: u32::try_from(glyph_count).unwrap(),
             }],
-            logical_text: "אב".to_owned(),
-            logical_index: 0,
-            source: None,
+            logical_text: text.to_owned(),
+            logical_index,
+            source,
             script: TextScript::Hebrew,
             language: Some("he".to_owned()),
-            direction: TextDirection::RightToLeft,
-            bidi_level: 1,
+            direction: TextDirection::LeftToRight,
+            bidi_level: 0,
             color: Color::BLACK,
             bold: false,
             italic: false,
             field_kind: None,
             note: None,
-        };
-        assert!(run.is_valid());
-        let mut invalid = run.clone();
-        invalid.x_offsets.clear();
-        assert!(!invalid.is_valid());
-        assert_eq!(run.glyph_ids, [2, 1]);
+        }
+    }
 
+    fn content_for_multilingual_runs(elements: Vec<PositionedElement>) -> String {
+        let font_id = FontId(9);
         let mut remapper = subsetter::GlyphRemapper::new();
-        remapper.remap(1);
-        remapper.remap(2);
+        for glyph_id in 1..=64 {
+            remapper.remap(glyph_id);
+        }
         let prepared = PreparedFont {
             font_data: FontData {
                 id: font_id,
@@ -1807,9 +2067,9 @@ mod tests {
             subset_bytes: Vec::new(),
             remapper,
             cmap_bytes: Vec::new(),
-            widths: vec![(1, 500.0), (2, 500.0)],
+            widths: (1..=64).map(|glyph_id| (glyph_id, 500.0)).collect(),
         };
-        let page = Arc::new(page_with(vec![PositionedElement::MultilingualText(run)]));
+        let page = Arc::new(page_with(elements));
         let prepared_fonts = BTreeMap::from([(font_id, prepared)]);
         let font_refs = BTreeMap::from([(
             font_id,
@@ -1832,7 +2092,7 @@ mod tests {
             next_ref += 1;
             reference
         });
-        let content = String::from_utf8(build_page_content(
+        String::from_utf8(build_page_content(
             0,
             &page,
             PageContentResources {
@@ -1844,12 +2104,126 @@ mod tests {
                 structure: None,
             },
         ))
-        .expect("PDF content operators are ASCII");
+        .expect("PDF content operators are ASCII")
+    }
+
+    #[test]
+    fn multilingual_run_uses_one_positioned_text_object() {
+        let mut run = multilingual_run("אב", 0, Point { x: 10.0, y: 20.0 }, None);
+        run.glyph_ids = vec![2, 1];
+        run.direction = TextDirection::RightToLeft;
+        run.bidi_level = 1;
+        assert!(run.is_valid());
+        let mut invalid = run.clone();
+        invalid.x_offsets.clear();
+        assert!(!invalid.is_valid());
+
+        let content = content_for_multilingual_runs(vec![PositionedElement::MultilingualText(run)]);
 
         assert!(content.contains("/ActualText <FEFF05D005D1>"), "{content}");
         assert!(content.contains("/Span <<"), "{content}");
         assert!(content.contains("1 0 0 -1 10 20 Tm"), "{content}");
-        assert!(content.contains("1 0 0 -1 16 20 Tm"), "{content}");
+        assert_eq!(content.matches(" Tm\n").count(), 1, "{content}");
+    }
+
+    #[test]
+    fn same_line_actual_text_uses_logical_source_order_without_repainting() {
+        let source_node = oxml_layout::SourceNodeId::new(1).unwrap();
+        let right = multilingual_run(
+            "right",
+            1,
+            Point { x: 70.0, y: 20.0 },
+            Some(oxml_layout::SourceSpan {
+                node: source_node,
+                char_start: 5,
+                char_end: 10,
+            }),
+        );
+        let left = multilingual_run(
+            "left ",
+            0,
+            Point { x: 10.0, y: 20.0 },
+            Some(oxml_layout::SourceSpan {
+                node: source_node,
+                char_start: 0,
+                char_end: 5,
+            }),
+        );
+        let content = content_for_multilingual_runs(vec![
+            PositionedElement::MultilingualText(right),
+            PositionedElement::Line {
+                start: Point { x: 70.0, y: 22.0 },
+                end: Point { x: 100.0, y: 22.0 },
+                width: 1.0,
+                color: Color::BLACK,
+                dash_pattern: None,
+            },
+            PositionedElement::MultilingualText(left),
+        ]);
+
+        assert_eq!(content.matches("/ActualText").count(), 2, "{content}");
+        assert!(content.contains("/ActualText (left right)"), "{content}");
+        assert!(content.contains("/ActualText ()"), "{content}");
+        let right_matrix = content.find("1 0 0 -1 70 20 Tm").unwrap();
+        let underline = content.find("70 22 m").unwrap();
+        let left_matrix = content.find("1 0 0 -1 10 20 Tm").unwrap();
+        assert!(
+            right_matrix < underline && underline < left_matrix,
+            "{content}"
+        );
+    }
+
+    #[test]
+    fn logical_line_coalescing_respects_owner_and_baseline_boundaries() {
+        let first_node = oxml_layout::SourceNodeId::new(1).unwrap();
+        let second_node = oxml_layout::SourceNodeId::new(2).unwrap();
+        let first_owner = oxml_layout::StructureId::new(1).unwrap();
+        let second_owner = oxml_layout::StructureId::new(2).unwrap();
+        let sourced = |text, logical_index, x, y, node, start, end| {
+            PositionedElement::MultilingualText(multilingual_run(
+                text,
+                logical_index,
+                Point { x, y },
+                Some(oxml_layout::SourceSpan {
+                    node,
+                    char_start: start,
+                    char_end: end,
+                }),
+            ))
+        };
+        let content = content_for_multilingual_runs(vec![
+            sourced("one ", 0, 10.0, 20.0, first_node, 0, 4),
+            sourced("two", 1, 34.0, 20.0, first_node, 4, 7),
+            sourced("owner", 2, 60.0, 20.0, second_node, 7, 12),
+            sourced("baseline", 3, 10.0, 40.0, first_node, 7, 15),
+            PositionedElement::MultilingualText(multilingual_run(
+                "ambiguous",
+                4,
+                Point { x: 70.0, y: 40.0 },
+                None,
+            )),
+            PositionedElement::MultilingualText(multilingual_run(
+                "gap",
+                6,
+                Point { x: 125.0, y: 40.0 },
+                None,
+            )),
+            PositionedElement::MarkedContent {
+                structure: Some(first_owner),
+                children: vec![sourced("owned ", 0, 10.0, 60.0, first_node, 0, 6)],
+            },
+            PositionedElement::MarkedContent {
+                structure: Some(second_owner),
+                children: vec![sourced("boundary", 1, 46.0, 60.0, first_node, 6, 14)],
+            },
+        ]);
+
+        assert_eq!(content.matches("/ActualText").count(), 8, "{content}");
+        assert!(content.contains("/ActualText (one two)"), "{content}");
+        assert!(
+            !content.contains("/ActualText (owned boundary)"),
+            "{content}"
+        );
     }
 
     fn solid_stroke() -> Stroke {

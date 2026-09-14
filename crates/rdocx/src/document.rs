@@ -26080,6 +26080,131 @@ mod tests {
             .to_owned()
     }
 
+    fn extracted_logical_lines(label: &str, pdf: &[u8]) -> Vec<String> {
+        let path =
+            std::env::temp_dir().join(format!("rdocx-fx092-{label}-{}.pdf", std::process::id()));
+        fs::write(&path, pdf).expect("write logical-order PDF");
+        let output = Command::new("pdftotext")
+            .arg(&path)
+            .arg("-")
+            .output()
+            .expect("run pinned pdftotext");
+        fs::remove_file(path).expect("remove logical-order PDF");
+        assert!(
+            output.status.success(),
+            "pdftotext failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("pdftotext output is UTF-8")
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("FX092-"))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn rendered_pdf_page_sha(label: &str, pdf: &[u8]) -> String {
+        let prefix =
+            std::env::temp_dir().join(format!("rdocx-fx092-{label}-render-{}", std::process::id()));
+        let pdf_path = prefix.with_extension("pdf");
+        let png_path = prefix.with_extension("png");
+        fs::write(&pdf_path, pdf).expect("write PDF raster candidate");
+        let output = Command::new("pdftoppm")
+            .args(["-png", "-r", "72", "-f", "1", "-l", "1", "-singlefile"])
+            .arg(&pdf_path)
+            .arg(&prefix)
+            .output()
+            .expect("run pinned pdftoppm");
+        assert!(
+            output.status.success(),
+            "pdftoppm failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let digest = sha256(&png_path);
+        fs::remove_file(pdf_path).expect("remove PDF raster candidate");
+        fs::remove_file(png_path).expect("remove PDF raster output");
+        digest
+    }
+
+    #[test]
+    fn large_word_and_presentation_pdfs_preserve_logical_reading_order() {
+        let version = Command::new("pdftotext")
+            .arg("-v")
+            .output()
+            .expect("run pinned pdftotext version check");
+        assert_eq!(
+            String::from_utf8_lossy(&version.stderr).lines().next(),
+            Some("pdftotext version 26.01.0")
+        );
+        let version = Command::new("pdftoppm")
+            .arg("-v")
+            .output()
+            .expect("run pinned pdftoppm version check");
+        assert_eq!(
+            String::from_utf8_lossy(&version.stderr).lines().next(),
+            Some("pdftoppm version 26.01.0")
+        );
+
+        let mut word = Document::new();
+        let mut expected_word = Vec::new();
+        for index in 0..120 {
+            let first = format!("FX092-WORD-{index:03} alpha ");
+            let expected = format!("{first}中文 beta gamma");
+            let mut paragraph = word.add_paragraph("");
+            paragraph.add_run(&first);
+            paragraph.add_run("中文 ").bold(index % 2 == 0);
+            paragraph.add_run("beta gamma").italic(index % 2 == 1);
+            expected_word.push(expected);
+        }
+
+        let mut presentation = rpptx::Presentation::new().expect("create presentation");
+        let mut expected_presentation = Vec::new();
+        for slide_index in 0..12 {
+            presentation.add_slide(6).expect("add blank slide");
+            let mut slide = presentation.slide_mut(slide_index).expect("new slide");
+            for row in 0..4 {
+                let line_index = slide_index * 4 + row;
+                let first = format!("FX092-PPT-{line_index:03} alpha ");
+                let expected = format!("{first}中文 beta gamma");
+                let mut shape = slide
+                    .add_textbox(
+                        Length::inches(0.75).as_emu(),
+                        Length::inches(0.5 + row as f64 * 1.25).as_emu(),
+                        Length::inches(8.5).as_emu(),
+                        Length::inches(0.75).as_emu(),
+                    )
+                    .expect("add logical-order textbox");
+                shape.set_text(&first).expect("set first text run");
+                let mut frame = shape.text_frame().expect("textbox text frame");
+                let mut paragraph = frame.paragraph_mut(0).expect("textbox paragraph");
+                paragraph.add_run("中文 ");
+                paragraph.add_run("beta gamma");
+                expected_presentation.push(expected);
+            }
+        }
+
+        let word_pdf = word.to_pdf_deterministic().expect("render Word PDF");
+        assert_eq!(extracted_logical_lines("word", &word_pdf), expected_word);
+        // Recorded from the pre-F-X092 writer with the pinned Poppler build.
+        assert_eq!(
+            rendered_pdf_page_sha("word", &word_pdf),
+            "7d800158f0b87c9596f524c4bfc91fbfa53e949b2113d573a8fc0ce3a28f332c"
+        );
+
+        let presentation_pdf = presentation
+            .to_pdf_deterministic()
+            .expect("render presentation PDF");
+        assert_eq!(
+            extracted_logical_lines("presentation", &presentation_pdf),
+            expected_presentation
+        );
+        assert_eq!(
+            rendered_pdf_page_sha("presentation", &presentation_pdf),
+            "4fa599779bbeda5ad5a0d3c647c4a323f76dd151f2fffd9b51bff32382eab1d4"
+        );
+    }
+
     fn plist_value(path: &str, key: &str) -> String {
         let output = Command::new("defaults")
             .args(["read", path.trim_end_matches(".plist"), key])

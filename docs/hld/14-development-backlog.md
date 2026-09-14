@@ -4747,6 +4747,12 @@ run-fragmented extraction for large Word documents and PowerPoint
 presentations. Emit rich runs with run-wide extraction geometry and preserve
 logical source order across adjacent styled and bidirectional runs without
 changing glyph paint order, pagination, or raster geometry.
+The PDF-local line planner coalesces only adjacent runs with matching semantic
+ownership and baseline plus contiguous source spans or logical indices. One
+initial text matrix and relative glyph placement preserve exact paint, while
+the first run carries the complete logical line and later runs suppress
+duplicate extraction. Nested group transforms retain the same final page
+coordinates.
 
 **Depends on**: F-255.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/74>.
