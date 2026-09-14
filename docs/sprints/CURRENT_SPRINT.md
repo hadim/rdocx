@@ -6,7 +6,8 @@
 relationship-safe content model for the body and every related story required
 by from-scratch generation. The user-approved issue wave also restores
 producer-package compatibility, searchable PDF text, comparison with drawings,
-CLI automation, Python access, and a reviewed Python release path. Public
+CLI automation, Python access, a reviewed Python release path, and the hardened
+outcomes of contributor PRs 77 through 80. Public
 mutations must preserve schema order, unmodelled XML, story ownership, and
 cross-part relationships while committing only complete validated candidates.
 
@@ -31,8 +32,8 @@ cross-part relationships while committing only complete validated candidates.
 - `docs/hld/13-risks-and-open-questions.md`, for the rule that cross-part Word
   invariants are staged and validated as one operation.
 - `docs/hld/14-development-backlog.md`, for the F-250 through F-256 acceptance
-  contracts, the F-X090 through F-X094f issue contracts, dependencies, sizes,
-  and S72 sequencing.
+  contracts, the F-X090 through F-X095 issue and contributor contracts,
+  dependencies, sizes, and S72 sequencing.
 - `docs/hld/15-build-and-toolchain.md`, for Python wheel construction, trusted
   publication authority, artifact verification, and the separate release gate.
 
@@ -55,8 +56,10 @@ cross-part relationships while committing only complete validated candidates.
 | F-X094c | Priority rdocx Python collaboration, comparison, layout, and TOC | L | done | - |
 | F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | L | done | - |
 | F-X094e | rpptx Python rendering, comments, and notes | L | done | - |
-| F-X094f | Prepare the py-v0.13.1 release path | M | in-progress | codex |
 | F-X092 | Preserve logical reading order in generated PDFs | L | done | - |
+| F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | L | pending | - |
+| F-X096 | Align Python distribution versions and release tags | M | pending | - |
+| F-X094f | Prepare the version-aligned Python release paths | M | in-progress | codex |
 
 ## Sequencing note
 
@@ -71,8 +74,11 @@ the section and story tracks so each header and footer variant can own rich
 related content safely. F-X093 then protects drawings through comparison, and
 F-256 remaps the complete package dependency graph. F-X094a through F-X094e
 expose the reviewed native capabilities through the CLI and Python bindings.
-F-X094f prepares the Python release contract without publishing. F-X092 lands
-last because it exclusively owns the PDF writer and logical extraction boundary.
+F-X092 owns the PDF writer and logical extraction boundary. F-X095 adopts the
+four overlapping contributor reader changes at their pinned heads and restores
+the exact Presentation fidelity oracle. F-X096 then separates the two Python
+distribution versions and tag namespaces. F-X094f prepares both release paths
+before their separate publication gates.
 
 ## Definition of done for this sprint
 
@@ -103,9 +109,14 @@ last because it exclusively owns the PDF writer and logical extraction boundary.
 - CLI and Python users can reach the issue-defined collaboration, comparison,
   layout, text, story, hyperlink, rendering, comment, and note capabilities
   through exact typed or schema-versioned contracts.
-- The `py-v0.13.1` release path validates twelve wheels and two source
-  distributions, but creates no tag and performs no publication without a
-  separate `/release` approval.
+- The `py-rdocx-v0.13.1` and `py-rpptx-v0.11.0` release paths each validate six
+  wheels and one source distribution, but create no tag and perform no
+  publication without the separate `/release` approval for that exact tag.
+- Contributor PRs 77 through 80 retain credit while numbering facts, document
+  body parsing, marker and field projections, table-cell serialization, and
+  TOC coordinates survive malformed input, save, reopen, and repeated save.
+- Presentation fidelity installs the exact reviewed LibreOffice and Poppler
+  builds on Ubuntu 24.04 instead of accepting a moving package-manager build.
 - Every operation preserves unmodelled XML and schema child order, publishes
   only a complete staged document and package candidate, remains deterministic,
   and leaves the hash harness unchanged unless a separately labelled and

@@ -1365,7 +1365,8 @@ retaining compiled examples, package evidence, and honest boundaries.
 the body and every related story required by from-scratch generation. The
 user-approved issue wave also restores producer-package compatibility,
 searchable PDF text, comparison with drawings, CLI automation, Python access,
-and a reviewed Python release path.
+and a reviewed Python release path. The final contributor wave also integrates
+PRs 77 through 80 and restores the deterministic hosted render oracle.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -1385,7 +1386,9 @@ and a reviewed Python release path.
 | F-X094c | Priority rdocx Python collaboration, comparison, layout, and TOC | L |
 | F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | L |
 | F-X094e | rpptx Python rendering, comments, and notes | L |
-| F-X094f | Prepare the py-v0.13.1 release path | M |
+| F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | L |
+| F-X096 | Align Python distribution versions and release tags | M |
+| F-X094f | Prepare the version-aligned Python release paths | M |
 
 F-253 is the common owner model for every mutation. Section and relationship
 work then converges in F-252, while F-256 lands last against the complete
@@ -1393,8 +1396,13 @@ dependency-remapping surface. F-X090 through F-X093 are one-story corrections
 for Issues 72 through 75. F-X094a through F-X094f split Issue 76 into reviewable
 CLI, binding, and release-preparation contracts. F-X092 is the only wave that
 may move the PDF hash baseline and lands after every unchanged-baseline story.
-S72 prepares but does not create or publish `py-v0.13.1`. Publication remains a
-separate `/release` action with fresh approval at the reviewed SHA.
+F-X095 adopts the hardened outcomes of contributor PRs 77 through 80 after the
+existing S72 reader, CLI, and binding work. It is the only added story allowed
+to move the Word XML hashes, and its declared seven-entry delta must leave PDF
+and PNG fingerprints unchanged. F-X096 makes the Python distribution versions
+independent and reserves tag namespaces that cannot start a Rust publication.
+S72 prepares `py-rdocx-v0.13.1` and `py-rpptx-v0.11.0`, then each publication
+remains a separate `/release` action with fresh approval at the reviewed SHA.
 
 #### Sprint S73, Tables, rich content, and private corpus gate
 

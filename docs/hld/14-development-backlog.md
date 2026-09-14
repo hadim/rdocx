@@ -4869,25 +4869,86 @@ renders slide and notes outputs, reads notes text, mutates and reopens one
 comment thread, passes installed typing, and proves invalid identities publish
 no mutation.
 
-### F-X094f, Prepare the py-v0.13.1 release path (M)
+### F-X094f, Prepare the version-aligned Python release paths (M)
 
-Extend the reviewed release ceremony with a Python family containing `rdocx`
-and `rpptx` at one version, exactly twelve cp39-abi3 wheels and two source
-distributions, trusted PyPI publication, byte-identical GitHub release notes,
-registry ownership verification, and contribution evidence. A manual
+Extend the reviewed release ceremony with independent Python distributions.
+`py-rdocx-v0.13.1` selects `rdocx` at the matching stable crate version, while
+`py-rpptx-v0.11.0` selects `rpptx` at the matching incubating crate version.
+Each release contains exactly six cp39-abi3 wheels and one source distribution,
+uses trusted PyPI publication, publishes byte-identical GitHub release notes,
+verifies registry ownership, and retains contribution evidence. A manual
 `wheels.yml` run at the reviewed SHA is build-only and supplies the exact
 artifacts for clean Python 3.9 and 3.12 install and runtime checks. Strict
-typing and stub checks run under Python 3.12. S72 prepares this contract but
+typing and stub checks run under Python 3.12. S72 prepares both contracts but
 creates no tag, publishes nothing, posts no external comment, and does not
-close Issue 76. Those actions require fresh `/release py-v0.13.1` approval at
-the reviewed SHA.
+close Issue 76. Those actions require fresh `/release` approval for each exact
+tag at the reviewed SHA.
 
-**Depends on**: F-137, F-138, F-X094a, F-X094c, F-X094d, F-X094e.
+**Depends on**: F-137, F-138, F-X094a, F-X094c, F-X094d, F-X094e, F-X096.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
-**Test gate**: release preparation. `python_release_contract_rejects_partial_or_unapproved_publication`
-accepts only the exact tag, distribution, wheel, source archive, trusted
-publisher, reviewed-note, verification, and approval contract. Negative
-mutations reject every partial or manual-publication path.
+**Test gate**: release preparation.
+`python_release_contract_rejects_partial_or_unapproved_publication` accepts
+only the exact selected tag, distribution, six wheels, one source archive,
+matching native crate version, trusted publisher, reviewed-note, verification,
+and approval contract. Negative mutations reject every mixed, mismatched,
+partial, or manual-publication path.
+
+### F-X095, Integrate PRs 77 through 80 and restore deterministic CI (L)
+
+Integrate the contributor outcomes from PRs 77 through 80 at pinned heads
+`aed8f14d826e43fee52b6da75c47fe2c5d37645a`,
+`10c3606b864d174ca1d1bcd90c26a156f7a69f51`,
+`8ede12b4102fb8bdc9421c22e059b7df010e2113`, and
+`9a9d3e8eeab2a5b8f2088930beae50ebce918f23`. Preserve contributor credit while
+reconciling the changes against the completed S72 section, story, binding, and
+release work. Numbering reports only retained extra XML and attributes as
+unmodelled. Document, revision, marker, field, table-cell, and TOC reader facts
+remain namespace-aware, bounded, schema-ordered, and stable through save,
+reopen, and repeated save.
+
+Restore hosted Presentation fidelity by installing the exact reviewed
+LibreOffice 26.2.5.2 and Poppler 26.01.0 builds on Ubuntu 24.04. Package-manager
+LibreOffice is not an accepted substitute. Retain the existing S72 Python
+binding repair for documents that carry an authored font table and prove both
+reported hosted failures are absent on the integrated branch.
+
+**Depends on**: F-X071, F-253.
+**GitHub pull requests**: <https://github.com/tensorbee/rdocx/pull/77>,
+<https://github.com/tensorbee/rdocx/pull/78>,
+<https://github.com/tensorbee/rdocx/pull/79>, and
+<https://github.com/tensorbee/rdocx/pull/80>.
+**Test gate**: regression. The focused contributor reader tests cover narrowed
+numbering evidence, strict body boundaries, missing revision authors, marker
+child content, complex-field properties, cell margins, empty cells, nested
+tables, and self-closing TOC coordinates. The CI contract test rejects a moving
+LibreOffice installation or a non-Ubuntu Presentation fidelity runner. The
+complete `rdocx-oxml`, `rdocx`, Python binding, workflow regression, and hash
+harness gates must pass. Exactly seven `word/document.xml` hashes may change
+for self-closing empty paragraphs, while every PNG and PDF fingerprint remains
+unchanged.
+
+### F-X096, Align Python distribution versions and release tags (M)
+
+Publish each Python distribution at the version of its corresponding native
+crate. `rdocx-py` and PyPI `rdocx` remain at 0.13.1 with native `rdocx`.
+`rpptx-py` and PyPI `rpptx` use 0.11.0 with native `rpptx`, rather than
+inheriting the unrelated stable workspace version 0.13.1. Package metadata,
+wheel and source archive names, installed module versions, PyPI records, and
+GitHub releases must all agree.
+
+Use `py-rdocx-vX.Y.Z` and `py-rpptx-vX.Y.Z` as the Python tag namespaces. The
+existing `v*` stable Rust and `rpptx-v*` incubating Rust tag families remain
+unchanged, so neither Python tag can start crates.io publication. A tag build
+may build the complete matrix, but its trusted publish job selects exactly the
+one matching distribution. Manual dispatch remains build-only.
+
+**Depends on**: F-X094e.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: release preparation.
+`python_release_contract_keeps_distribution_versions_independent` proves exact
+crate and project version agreement, disjoint tag routing, six wheels and one
+source archive per selected distribution, manual build-only behavior, and
+fail-closed rejection of a version or family mismatch.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
