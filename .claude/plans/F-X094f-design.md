@@ -70,7 +70,7 @@ evidence. Manual dispatch remains unable to publish. The immutable
 |---|---|---|
 | release preparation | `python_release_contract_rejects_partial_or_unapproved_publication` | Exact selected tag, matching distribution and native version, six wheels, one sdist, trusted publisher, reviewed notes, verification, and approval. |
 | release preparation | `python_release_contract_keeps_distribution_versions_independent` | rdocx 0.13.2 and rpptx 0.11.0 remain independent across crates, project metadata, artifacts, tags, and PyPI. |
-| release preparation | `python_release_contract_requires_complete_project_metadata` | Both project files and both embedded artifact formats carry a Markdown README description, specific summary, authors, keywords, classifiers, and project URLs. |
+| release preparation | `python_release_contract_requires_complete_project_metadata` | Both project files and both embedded artifact formats carry a Markdown README description, specific summary, authors, keywords, classifiers, and project URLs. Full description comparison accepts only platform newline differences and terminal newline count. |
 | mutation | Python release negative matrix | Family mismatch, manual publication, missing artifacts, moved tag, missing owner, or absent approval all fail. |
 | install | clean Python 3.9 and 3.12 environments | Both distributions install together and pass priority runtime, typing, and stub smoke tests. |
 | workflow | build-only reviewed SHA | Manual dispatch builds and verifies but cannot publish or create a release. |

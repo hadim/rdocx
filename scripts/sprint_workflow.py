@@ -778,7 +778,9 @@ def validate_python_project_metadata(
                 f"{artifact_name} long description lacks {required!r}"
             )
     reviewed_description = (REPO / contract["readme"]).read_text(encoding="utf-8")
-    if description.rstrip("\n") != reviewed_description.rstrip("\n"):
+    normalized_description = description.replace("\r\n", "\n")
+    normalized_reviewed = reviewed_description.replace("\r\n", "\n")
+    if normalized_description.rstrip("\n") != normalized_reviewed.rstrip("\n"):
         raise ValueError(
             f"{artifact_name} long description differs from the reviewed "
             f"{contract['readme']}"

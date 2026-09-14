@@ -1395,6 +1395,8 @@ author, keywords, Python and topic classifiers, and project URLs. The README
 provides installation, compatibility, capability, quick-start, typing, and
 project-link guidance on PyPI. Wheel and source-distribution validation checks
 the embedded metadata and the required README sections before publication.
+Full-description comparison normalizes platform CRLF to LF and ignores terminal
+newline count. All prose and other metadata remain exact.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
 PowerPoint workspace family is published at 0.11.0 from immutable annotated tag

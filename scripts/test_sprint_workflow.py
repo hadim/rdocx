@@ -6738,6 +6738,30 @@ rdocx-layout = "=0.10.1"
 
         with tempfile.TemporaryDirectory(prefix="python-release-artifacts-") as temp:
             artifacts = Path(temp)
+            write_artifacts(artifacts, "rdocx", "0.13.2")
+            windows_wheel = artifacts / (
+                "rdocx-0.13.2-cp39-abi3-win_amd64.whl"
+            )
+            with zipfile.ZipFile(windows_wheel, mode="w") as archive:
+                archive.writestr(
+                    "rdocx-0.13.2.dist-info/METADATA",
+                    artifact_metadata("rdocx", "0.13.2").replace(
+                        b"\n", b"\r\n"
+                    ),
+                )
+                archive.writestr(
+                    "rdocx-0.13.2.dist-info/WHEEL",
+                    "Wheel-Version: 1.0\r\n"
+                    "Root-Is-Purelib: false\r\n"
+                    "Tag: cp39-abi3-win_amd64\r\n",
+                )
+            result = workflow.validate_python_release_artifacts(
+                "py-rdocx-v0.13.2", artifacts
+            )
+            self.assertEqual(result["wheels"], 6)
+
+        with tempfile.TemporaryDirectory(prefix="python-release-artifacts-") as temp:
+            artifacts = Path(temp)
             write_artifacts(artifacts, "rdocx", "0.13.1")
             missing = artifacts / (
                 "rdocx-0.13.1-cp39-abi3-manylinux_2_28_x86_64.whl"
