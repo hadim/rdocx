@@ -271,7 +271,13 @@ def test_poppler_version_pin_rejects_unreviewed_suffix():
 def test_to_bytes_releases_gil_for_python_worker():
     document = _nontrivial_document(10)
 
-    package = _assert_releases_gil(document.to_bytes)
+    def serialize_repeatedly():
+        package = b""
+        for _ in range(16):
+            package = document.to_bytes()
+        return package
+
+    package = _assert_releases_gil(serialize_repeatedly)
 
     assert package.startswith(b"PK")
 
