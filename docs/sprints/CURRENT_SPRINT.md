@@ -50,7 +50,7 @@ cross-part relationships while committing only complete validated candidates.
 | F-252 | Rich per-section headers and footers | L | done | - |
 | F-X093 | Preserve drawings through document comparison staging | M | done | - |
 | F-256 | Transactional cross-document fragment import | L | done | - |
-| F-X094a | Expose Word collaboration and redline commands in rdocx-cli | M | pending | - |
+| F-X094a | Expose Word collaboration and redline commands in rdocx-cli | M | in-progress | codex |
 | F-X094b | Structured CLI text and layout plus guarded replacement | L | pending | - |
 | F-X094c | Priority rdocx Python collaboration, comparison, layout, and TOC | L | pending | - |
 | F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | L | pending | - |
