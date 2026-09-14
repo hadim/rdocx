@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 17 | 0 | 7 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 102 | 96 | 0 | 2 |
-| **Total** | **420** | **339** | **0** | **77** |
+| X, Cross-cutting (opportunistic)            | 102 | 96 | 1 | 1 |
+| **Total** | **420** | **339** | **1** | **76** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -638,5 +638,5 @@ regenerated, never hand-edited.
 | F-X094c | Priority rdocx Python collaboration, comparison, layout, and TOC | S72 | L | done |
 | F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | S72 | L | done |
 | F-X094e | rpptx Python rendering, comments, and notes | S72 | L | done |
-| F-X094f | Prepare the py-v0.13.1 release path | S72 | M | pending |
+| F-X094f | Prepare the py-v0.13.1 release path | S72 | M | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
