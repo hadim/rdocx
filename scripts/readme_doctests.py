@@ -234,7 +234,9 @@ README_REQUIRED_TEXT = {
     REPO_ROOT / "crates/rpptx-py/README.md": (
         'Presentation("deck.pptx")',
         "len(presentation.slides)",
-        "The binding does not expose PDF or raster rendering.",
+        "presentation.to_pdf()",
+        "presentation.render_slide_to_png(0)",
+        "Read speaker-note text and inspect or mutate modern comment threads.",
     ),
     REPO_ROOT / "crates/rpptx-layout/README.md": ("ScopedMediaIds::default()",),
     REPO_ROOT / "crates/rpptx-oxml/README.md": (

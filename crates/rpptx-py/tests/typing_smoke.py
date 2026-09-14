@@ -1,7 +1,16 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from rpptx import Inches, Length, MSO_SHAPE, Presentation, Pt
+from rpptx import (
+    Comment,
+    CommentAuthor,
+    CommentReply,
+    Inches,
+    Length,
+    MSO_SHAPE,
+    Presentation,
+    Pt,
+)
 from rpptx._rpptx import (
     Cell,
     Column,
@@ -60,12 +69,53 @@ def exercise_rpptx_types(path: Path) -> None:
         for current_shape in current_slide.shapes:
             current_shape.has_text_frame
     package_bytes: bytes = presentation.to_bytes()
+    pdf_bytes: bytes = presentation.to_pdf()
+    slide_png: bytes | None = presentation.render_slide_to_png(0)
+    slide_pngs: list[bytes] = presentation.render_all_slides()
+    notes_pdf: bytes = presentation.to_notes_pdf()
+    notes_pngs: list[bytes] = presentation.render_all_notes()
+    notes_text: str | None = presentation.slides[0].notes_text
+    presentation.add_comment_author(
+        id="{11111111-1111-1111-1111-111111111111}",
+        name="Ada",
+        user_id="ada@example.com",
+        provider_id="local",
+    )
+    authors: tuple[CommentAuthor, ...] = presentation.comment_authors
+    current_slide = presentation.slides[0]
+    current_slide.add_comment(
+        id="{22222222-2222-2222-2222-222222222222}",
+        author_id=authors[0].id,
+        created="2026-09-14T10:30:00Z",
+        text="Review",
+    )
+    comments: tuple[Comment, ...] = presentation.slides[0].comments
+    reply: CommentReply = comments[0].replies[0]
     presentation.save(path)
-    package_bytes, shapes, returned_size, points, emu, broad_shape_factory
+    (
+        package_bytes,
+        pdf_bytes,
+        slide_png,
+        slide_pngs,
+        notes_pdf,
+        notes_pngs,
+        notes_text,
+        authors,
+        comments,
+        reply,
+        shapes,
+        returned_size,
+        points,
+        emu,
+        broad_shape_factory,
+    )
 
 
 if TYPE_CHECKING:
     Cell()  # type: ignore[call-arg]
+    Comment()  # type: ignore[call-arg]
+    CommentAuthor()  # type: ignore[call-arg]
+    CommentReply()  # type: ignore[call-arg]
     Column()  # type: ignore[call-arg]
     ColumnCollection()  # type: ignore[call-arg]
     Font()  # type: ignore[call-arg]

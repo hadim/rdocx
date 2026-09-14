@@ -239,6 +239,18 @@ intentionally stales every pre-write handle and collection. Pure-Python
 `Length`, `Inches`, `Pt` and the required `MSO_SHAPE` members keep native
 inheritance outside the limited ABI.
 
+The presentation binding exposes `to_pdf`, `render_slide_to_png`,
+`render_all_slides`, `to_notes_pdf`, and `render_all_notes` through the native
+deterministic facade. Every render call releases the GIL. A `Slide` exposes
+optional speaker-note text and an ordered tuple of frozen `Comment` snapshots.
+Each comment contains an ordered tuple of frozen `CommentReply` snapshots, and
+the presentation exposes an ordered tuple of frozen `CommentAuthor` snapshots.
+Author, comment, and reply additions accept native GUID and RFC 3339 strings.
+Comment and reply moves retain native final-position semantics. A successful
+collaboration operation advances the global revision once. Constructor or
+native validation failure publishes no candidate and leaves existing handles
+valid.
+
 ## Native Word facade stability
 
 The public `rdocx` facade is the common source for native, Python, WASM, and

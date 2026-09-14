@@ -2087,6 +2087,18 @@ readers, and directly compares the normalized rpptx-authored and
 python-pptx-authored records. It never compares package bytes and the oracle is
 not a runtime dependency.
 
+The rpptx extension gate
+`presentation_render_comments_and_notes_match_native_snapshots` compares the
+single-slide convenience with the ordered all-slide result, checks complete PDF
+and PNG signatures for slides and notes, and reads optional notes text. It adds
+an author, comments, and ordered replies through native GUID and RFC 3339
+validation, saves, reopens, and compares frozen snapshots exactly. A valid GUID
+that names an unknown author must fail without invalidating the held slide.
+Dedicated thread assertions prove both slide and notes raster calls release the
+GIL. The native companion gate compares every convenience PNG byte for byte
+with the resolved layout raster path and covers invalid DPI and missing slide
+indices.
+
 Both libraries are test-only CI dependencies. Neither oracle is a runtime or
 published-crate dependency, and neither differential compares package bytes or
 commits binary fixtures.

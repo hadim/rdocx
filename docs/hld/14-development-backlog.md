@@ -4850,7 +4850,11 @@ through save and reopen.
 Expose deterministic slide and speaker-note PDF and PNG rendering, notes text,
 and the current modern comment-author, thread, reply, and ordered mutation
 facade through precisely typed Python values. Rendering releases the GIL and
-collaboration mutation retains native identity and atomicity.
+collaboration mutation retains native identity and atomicity. The native
+facade adds one-slide and all-slide deterministic PNG conveniences over the
+same resolved layout path. Python returns frozen `CommentAuthor`, `Comment`,
+and `CommentReply` values, accepts native GUID and RFC 3339 strings, and
+advances its global revision only after a successful collaboration operation.
 
 **Depends on**: F-136, F-217, F-226.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.

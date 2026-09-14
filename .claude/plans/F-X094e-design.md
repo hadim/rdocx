@@ -1,6 +1,6 @@
 # F-X094e, rpptx Python rendering, comments, and notes
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-136, F-217, F-226
@@ -67,13 +67,13 @@ Expected unchanged across all 49 entries.
 
 ## Implementation checklist
 
-- [ ] Add native deterministic slide PNG conveniences.
-- [ ] Add frozen collaboration values in existing binding files.
-- [ ] Expose slide, notes, and comment operations.
-- [ ] Release the GIL and advance revision only on success.
-- [ ] Update exports, stubs, README, and installed tests.
-- [ ] Run native, render, binding, wheel, WASM, and full gates.
-- [ ] Update exactly the listed HLD files.
+- [x] Add native deterministic slide PNG conveniences.
+- [x] Add frozen collaboration values in existing binding files.
+- [x] Expose slide, notes, and comment operations.
+- [x] Release the GIL and advance revision only on success.
+- [x] Update exports, stubs, README, and installed tests.
+- [x] Run native, render, binding, wheel, WASM, and full gates.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

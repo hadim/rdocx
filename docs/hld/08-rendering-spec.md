@@ -685,6 +685,15 @@ page number and size metadata for one zero-based page index. Neither method
 exposes positioned renderer elements or permits mutation through a layout
 result.
 
+PowerPoint slide raster export also stays on the facade-owned deterministic
+path. `Presentation::slide_png_deterministic` renders one zero-based slide and
+returns `None` outside the presentation. `slide_pngs_deterministic` renders all
+slides in producer order. Both resolve the same staged package and layout as
+`to_pdf_deterministic`, enforce the existing finite 600 DPI ceiling and 256 MiB
+decoded-output ceiling, and call the shared PNG backend without introducing a
+binding-private render path. Python PDF, slide PNG, notes PDF, and notes PNG
+methods release the GIL around these native operations.
+
 Normal `FontManager` construction clones one process-lifetime snapshot of the
 bundled and system face table. Installing, removing, or replacing a system font
 therefore takes effect after process restart. File-backed faces share an

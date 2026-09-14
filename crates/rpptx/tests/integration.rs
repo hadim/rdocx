@@ -9018,6 +9018,40 @@ fn notes_and_handouts_export_pdf_and_png_with_deterministic_dimensions() {
 }
 
 #[test]
+fn slide_png_conveniences_match_the_resolved_layout_raster_path() {
+    let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    let (_, layout) = presentation.render_deterministic().unwrap();
+    let slides = presentation.slide_pngs_deterministic(72.0).unwrap();
+
+    assert_eq!(slides.len(), layout.pages.len());
+    for (index, slide) in slides.iter().enumerate() {
+        assert_eq!(
+            slide,
+            &oxml_pdf::render_page_to_png(&layout, index, 72.0).unwrap()
+        );
+        assert_eq!(
+            presentation.slide_png_deterministic(index, 72.0).unwrap(),
+            Some(slide.clone())
+        );
+    }
+    assert_eq!(
+        presentation
+            .slide_png_deterministic(slides.len(), 72.0)
+            .unwrap(),
+        None
+    );
+    for dpi in [-1.0, 0.0, f64::NAN, f64::INFINITY, 601.0] {
+        assert!(presentation.slide_pngs_deterministic(dpi).is_err());
+        assert!(presentation.slide_png_deterministic(0, dpi).is_err());
+        assert!(
+            presentation
+                .slide_png_deterministic(slides.len(), dpi)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn notes_and_handout_export_resolve_noncanonical_master_theme_and_media_targets() {
     let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
     assert!(

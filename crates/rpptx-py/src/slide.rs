@@ -2,11 +2,11 @@ use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::PyClass;
 use pyo3::exceptions::{PyIndexError, PyTypeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyList, PySlice};
+use pyo3::types::{PyAny, PyList, PySlice, PyTuple};
 use smallvec::smallvec;
 
 use crate::normalize_index;
-use crate::presentation::PyPresentation;
+use crate::presentation::{PyComment, PyPresentation};
 use crate::shape::{PyPlaceholderCollection, PyShapeCollection};
 use crate::validate_path;
 
@@ -178,6 +178,103 @@ impl PySlide {
             py,
             PyPlaceholderCollection::new(self.presentation.clone_ref(py), self.path.clone()),
         )
+    }
+
+    #[getter]
+    fn notes_text(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        let index = self.validate(py)?;
+        Ok(self
+            .presentation
+            .borrow(py)
+            .inner
+            .slide(index)
+            .and_then(|slide| slide.notes_text()))
+    }
+
+    #[getter]
+    fn comments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let index = self.validate(py)?;
+        let presentation = self.presentation.borrow(py);
+        PyTuple::new(
+            py,
+            presentation
+                .inner
+                .comments(index)
+                .unwrap_or_default()
+                .iter()
+                .map(PyComment::from),
+        )
+    }
+
+    #[pyo3(signature = (*, id, author_id, created, text))]
+    fn add_comment(
+        &self,
+        id: String,
+        author_id: String,
+        created: String,
+        text: &str,
+        py: Python<'_>,
+    ) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let comment = rpptx::Comment::new(id, author_id, created, text)
+            .map_err(|error| crate::rpptx_value_to_pyerr(py, error.to_string()))?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .add_comment(index, comment)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
+    #[pyo3(signature = (comment_id, *, id, author_id, created, text))]
+    fn reply_to_comment(
+        &self,
+        comment_id: &str,
+        id: String,
+        author_id: String,
+        created: String,
+        text: &str,
+        py: Python<'_>,
+    ) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let reply = rpptx::CommentReply::new(id, author_id, created, text)
+            .map_err(|error| crate::rpptx_value_to_pyerr(py, error.to_string()))?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .reply_to_comment(index, comment_id, reply)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
+    fn move_comment(&self, from_: usize, to: usize, py: Python<'_>) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .move_comment(index, from_, to)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
+    fn move_reply(
+        &self,
+        comment_id: &str,
+        from_: usize,
+        to: usize,
+        py: Python<'_>,
+    ) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .move_reply(index, comment_id, from_, to)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
     }
 }
 
