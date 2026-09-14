@@ -14,14 +14,14 @@ use quick_xml::events::Event as XmlEvent;
 use rdocx::{
     BarcodeField, BarcodeKind, BodyContentRef, BodyItemRef, BreakKind, CellItemRef, CellRef,
     ChartData, ChartKind, ContentFragment, ContentLocation, CustomProperty, CustomPropertyValue,
-    Document, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState, FieldDateTime,
-    FieldEvaluationContext, FieldOutcome, HdrFtrType, HeaderFooterKind, HyperlinkItemRef,
-    HyperlinkRef, Length, ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText,
-    MailMergeImage, MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat,
-    RasterOptions, RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange,
-    RunRef, StoryId, StoryItemKind, StoryKind, StyleBuilder, StyleType, TableRef, TcField,
-    TocEntrySelection, TocField, TocRebuildReport, UnsupportedXmlRef, WordCreationProfile,
-    WordPackageClass,
+    Document, DocumentFragment, EmbeddedContentKind, EmbeddedMutationPolicy,
+    EmbeddedSignatureState, FieldDateTime, FieldEvaluationContext, FieldOutcome,
+    FragmentConflictPolicy, HdrFtrType, HeaderFooterKind, HyperlinkItemRef, HyperlinkRef, Length,
+    ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText, MailMergeImage,
+    MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions,
+    RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange, RunRef, StoryId,
+    StoryItemKind, StoryKind, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection,
+    TocField, TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 use rdocx_oxml::content_control::SdtContent;
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
@@ -26614,4 +26614,556 @@ fn imported_and_preserved_collisions_fail_before_mutation() {
         error.contains("duplicate numbering instance id 1"),
         "{error}"
     );
+}
+
+fn f256_dependency_source() -> Document {
+    let mut source = Document::new();
+    source
+        .add_style(StyleBuilder::paragraph("FragmentStyle", "Fragment Style"))
+        .unwrap();
+    source
+        .add_style(StyleBuilder::paragraph(
+            "UnusedFragmentStyle",
+            "Unused Fragment Style",
+        ))
+        .unwrap();
+    source
+        .add_style(StyleBuilder::paragraph(
+            "FragmentNumberStyle",
+            "Fragment Number Style",
+        ))
+        .unwrap();
+    let unused_numbering = source.add_list_definition(&[ListLevel::decimal()]);
+    source
+        .add_paragraph("not selected")
+        .style("UnusedFragmentStyle")
+        .set_numbering(unused_numbering, 0);
+    source
+        .add_paragraph("selected styled")
+        .style("FragmentStyle");
+    source.add_paragraph("selected numbered");
+    source
+        .add_paragraph("selected style numbered")
+        .style("FragmentNumberStyle");
+    source.add_picture(
+        b"f256-image-payload",
+        "f256.png",
+        Length::pt(24.0),
+        Length::pt(18.0),
+    );
+    source
+        .add_chart(
+            ChartKind::Bar,
+            Length::pt(120.0),
+            Length::pt(72.0),
+            &ChartData {
+                categories: vec!["A".to_owned(), "B".to_owned()],
+                series: vec![("Series".to_owned(), vec![1.0, 2.0])],
+                ..ChartData::default()
+            },
+        )
+        .unwrap();
+    let selected = RunRange {
+        start: RunPosition {
+            body_index: 1,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index: 1,
+            run_index: 1,
+        },
+    };
+    source.add_bookmark("FragmentMark", selected).unwrap();
+    let comment_id = source
+        .add_comment(selected, "Reviewer", Some("R"), "fragment comment")
+        .unwrap();
+    source
+        .reply_to(comment_id, "Reply author", "fragment reply")
+        .unwrap();
+    assert!(source.resolve_comment(comment_id, true).unwrap());
+
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let styles_xml = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<w:name w:val=\"Fragment Number Style\"/>\n  </w:style>",
+            "<w:name w:val=\"Fragment Number Style\"/>\n    <w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"42\"/></w:numPr></w:pPr>\n  </w:style>",
+            1,
+        );
+    assert!(styles_xml.contains(r#"<w:numId w:val="42"/>"#));
+    package.set_part("/word/styles.xml", styles_xml.into_bytes());
+    package.set_part(
+        "/word/numbering.xml",
+        format!(
+            r#"<w:numbering xmlns:w="{W_NS}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="41"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:pStyle w:val="FragmentNumberStyle"/><w:lvlText w:val="•"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="42"><w:abstractNumId w:val="41"/></w:num></w:numbering>"#
+        )
+        .into_bytes(),
+    );
+    let document_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let selected_text = "<w:t>selected styled</w:t>";
+    let retained = r#"<f:producer xmlns:f="urn:f256" f:kept='exact'></f:producer><w:fldSimple w:instr=" REF FragmentMark \\h "><w:r><w:t>field result</w:t></w:r></w:fldSimple>"#;
+    let document_xml =
+        document_xml.replacen(selected_text, &format!("{selected_text}{retained}"), 1);
+    assert!(document_xml.contains(retained));
+    package.set_part("/word/document.xml", document_xml.into_bytes());
+    let comments_xml =
+        String::from_utf8(package.get_part("/word/comments.xml").unwrap().to_vec()).unwrap();
+    let comment_relationship = r#"<f:commentPayload xmlns:f="urn:f256-comment" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdF256"/>"#;
+    let comments_xml = comments_xml.replacen("</w:p>", &format!("{comment_relationship}</w:p>"), 1);
+    assert!(comments_xml.contains(comment_relationship));
+    package.set_part("/word/comments.xml", comments_xml.into_bytes());
+    package.set_part(
+        "/word/commentPayload.bin",
+        b"f256-comment-relationship-payload".to_vec(),
+    );
+    package
+        .content_types
+        .add_override("/word/commentPayload.bin", "application/octet-stream");
+    package
+        .get_or_create_part_rels("/word/comments.xml")
+        .add_with_id("rIdF256", "urn:f256-comment-payload", "commentPayload.bin");
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let reopened = Document::from_bytes(bytes.get_ref()).unwrap();
+    assert_eq!(reopened.numbering_is_bullet(42), Some(true));
+    reopened
+}
+
+fn f256_fragment(source: &Document) -> DocumentFragment {
+    let body = f254_story(source, StoryKind::Body);
+    let items = source.story_items(&body).unwrap();
+    DocumentFragment::from_range(
+        source,
+        items[1].location(),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap()
+}
+
+#[test]
+fn dependency_rich_fragment_imports_twice_without_collisions() {
+    let source = f256_dependency_source();
+    let fragment = f256_fragment(&source);
+    let mut destination = Document::new();
+    destination
+        .add_style(StyleBuilder::paragraph(
+            "FragmentStyle",
+            "Destination Style",
+        ))
+        .unwrap();
+
+    for _ in 0..2 {
+        let body = f254_story(&destination, StoryKind::Body);
+        destination
+            .import_fragment(
+                &ContentLocation::end(body),
+                &fragment,
+                FragmentConflictPolicy::reuse_equivalent(),
+            )
+            .unwrap();
+    }
+
+    let bytes = destination.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened
+            .paragraphs()
+            .into_iter()
+            .filter(|paragraph| paragraph.text() == "selected styled")
+            .count(),
+        2
+    );
+    assert_eq!(
+        reopened
+            .paragraphs()
+            .into_iter()
+            .filter(|paragraph| paragraph.text() == "selected style numbered")
+            .count(),
+        2
+    );
+    assert_eq!(
+        reopened
+            .paragraphs()
+            .into_iter()
+            .filter(|paragraph| paragraph.text() == "selected numbered")
+            .count(),
+        2
+    );
+    assert!(!reopened.text().contains("not selected"));
+    assert_eq!(reopened.bookmarks().len(), 2);
+    let comments = reopened.comments();
+    assert_eq!(comments.len(), 4);
+    assert_eq!(
+        comments.iter().filter(|comment| comment.resolved()).count(),
+        2
+    );
+    assert_eq!(
+        comments
+            .iter()
+            .filter(|comment| comment.parent_id().is_some())
+            .count(),
+        2
+    );
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(
+        document_xml
+            .matches(r#"<f:producer xmlns:f="urn:f256" f:kept='exact'></f:producer>"#)
+            .count(),
+        2,
+        "{document_xml}"
+    );
+    assert_eq!(document_xml.matches("<w:fldSimple ").count(), 2);
+    let bookmark_names = reopened
+        .bookmarks()
+        .into_iter()
+        .filter_map(|bookmark| bookmark.name().map(str::to_owned))
+        .collect::<HashSet<_>>();
+    let field_targets = document_xml
+        .split("<w:fldSimple ")
+        .skip(1)
+        .filter_map(|field| field.split("w:instr=\"").nth(1))
+        .filter_map(|instruction| instruction.split('"').next())
+        .filter_map(|instruction| instruction.split_whitespace().nth(1))
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
+    assert_eq!(field_targets, bookmark_names);
+    let styles_xml = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    assert!(styles_xml.contains("FragmentNumberStyle"), "{styles_xml}");
+    assert!(styles_xml.contains("<w:numId "), "{styles_xml}");
+    assert!(!styles_xml.contains("UnusedFragmentStyle"), "{styles_xml}");
+    let numbering_xml =
+        std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    let style_numbering_id = styles_xml
+        .split(r#"w:styleId="FragmentNumberStyle""#)
+        .nth(1)
+        .and_then(|style| style.split("</w:style>").next())
+        .and_then(|style| style.split(r#"<w:numId w:val=""#).nth(1))
+        .and_then(|value| value.split('"').next())
+        .unwrap();
+    assert!(
+        numbering_xml.contains(&format!(r#"<w:num w:numId="{style_numbering_id}""#)),
+        "{styles_xml}\n{numbering_xml}"
+    );
+    assert_eq!(
+        numbering_xml.matches("<w:num ").count(),
+        1,
+        "{numbering_xml}"
+    );
+    assert_eq!(
+        package
+            .parts
+            .values()
+            .filter(|bytes| bytes.as_slice() == b"f256-image-payload")
+            .count(),
+        1
+    );
+    assert_eq!(
+        package
+            .parts
+            .values()
+            .filter(|bytes| bytes.as_slice() == b"f256-comment-relationship-payload")
+            .count(),
+        1
+    );
+    let comments_part = package.get_part("/word/comments.xml").unwrap();
+    let comments_xml = std::str::from_utf8(comments_part).unwrap();
+    assert_eq!(comments_xml.matches("<f:commentPayload ").count(), 2);
+    let comment_relationships = package.get_part_rels("/word/comments.xml").unwrap();
+    for id in comments_xml
+        .split("<f:commentPayload ")
+        .skip(1)
+        .filter_map(|payload| payload.split("r:id=\"").nth(1))
+        .filter_map(|id| id.split('"').next())
+    {
+        assert!(comment_relationships.get_by_id(id).is_some(), "{id}");
+    }
+    assert_eq!(
+        package
+            .parts
+            .keys()
+            .filter(|part_name| part_name.starts_with("/word/charts/chart"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        package
+            .parts
+            .keys()
+            .filter(|part_name| part_name.starts_with("/word/embeddings/"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn fragment_conflict_policies_are_deterministic() {
+    let fragment = f256_fragment(&f256_dependency_source());
+    let build = |policy| {
+        let mut destination = f256_dependency_source();
+        let body = f254_story(&destination, StoryKind::Body);
+        destination
+            .import_fragment(&ContentLocation::end(body), &fragment, policy)
+            .unwrap();
+        destination.to_bytes().unwrap()
+    };
+    let rename_policy = FragmentConflictPolicy::rename_all()
+        .with_style_reuse(false)
+        .with_numbering_reuse(false)
+        .with_related_part_reuse(false);
+    assert_eq!(build(rename_policy), build(rename_policy));
+
+    let reused = build(FragmentConflictPolicy::reuse_equivalent());
+    let renamed = build(rename_policy);
+    let reused_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reused)).unwrap();
+    let renamed_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(renamed)).unwrap();
+    let reused_styles = String::from_utf8(
+        reused_package
+            .get_part("/word/styles.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let renamed_styles = String::from_utf8(
+        renamed_package
+            .get_part("/word/styles.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(!reused_styles.contains("FragmentStyleMerge"));
+    assert!(renamed_styles.contains("FragmentStyleMerge"));
+    let reused_numbering =
+        std::str::from_utf8(reused_package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    let renamed_numbering =
+        std::str::from_utf8(renamed_package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert_eq!(
+        reused_numbering.matches("<w:num ").count(),
+        2,
+        "{reused_numbering}"
+    );
+    assert_eq!(
+        renamed_numbering.matches("<w:num ").count(),
+        3,
+        "{renamed_numbering}"
+    );
+    let reused_style_numbering_id = reused_styles
+        .split(r#"w:styleId="FragmentNumberStyle""#)
+        .nth(1)
+        .and_then(|style| style.split("</w:style>").next())
+        .and_then(|style| style.split(r#"<w:numId w:val=""#).nth(1))
+        .and_then(|value| value.split('"').next())
+        .unwrap();
+    assert!(reused_numbering.contains(&format!(r#"<w:num w:numId="{reused_style_numbering_id}""#)));
+    assert_eq!(
+        reused_package
+            .parts
+            .values()
+            .filter(|bytes| bytes.as_slice() == b"f256-image-payload")
+            .count(),
+        1
+    );
+    assert_eq!(
+        renamed_package
+            .parts
+            .values()
+            .filter(|bytes| bytes.as_slice() == b"f256-image-payload")
+            .count(),
+        2
+    );
+
+    let mut section_source = Document::new();
+    section_source.add_paragraph("section fragment");
+    let body = f254_story(&section_source, StoryKind::Body);
+    let item = f254_item(&section_source, &body, 0);
+    let section_fragment =
+        DocumentFragment::from_range(&section_source, &item, &ContentLocation::end(body), true)
+            .unwrap();
+    let mut section_destination = Document::new();
+    let body = f254_story(&section_destination, StoryKind::Body);
+    section_destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &section_fragment,
+            FragmentConflictPolicy::reuse_equivalent(),
+        )
+        .unwrap();
+    assert_eq!(section_destination.sections().count(), 2);
+
+    let mut authored_source = Document::new();
+    let authored_source_numbering = authored_source.add_list_definition(&[ListLevel::bullet()]);
+    authored_source
+        .add_paragraph("authored equivalent")
+        .set_numbering(authored_source_numbering, 0);
+    let body = f254_story(&authored_source, StoryKind::Body);
+    let item = f254_item(&authored_source, &body, 0);
+    let authored_fragment =
+        DocumentFragment::from_range(&authored_source, &item, &ContentLocation::end(body), false)
+            .unwrap();
+    let mut authored_destination = Document::new();
+    authored_destination.add_list_definition(&[ListLevel::bullet()]);
+    let body = f254_story(&authored_destination, StoryKind::Body);
+    authored_destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &authored_fragment,
+            FragmentConflictPolicy::reuse_equivalent(),
+        )
+        .unwrap();
+    let authored_bytes = authored_destination.to_bytes().unwrap();
+    let authored_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(authored_bytes)).unwrap();
+    let authored_numbering =
+        std::str::from_utf8(authored_package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert_eq!(authored_numbering.matches("<w:num ").count(), 1);
+}
+
+#[test]
+fn unsupported_fragment_dependency_aborts_without_mutation() {
+    let mut source = Document::new();
+    let relationship = source.add_hyperlink_relationship("https://example.com/f256");
+    source
+        .add_paragraph("")
+        .add_hyperlink("external", &relationship);
+    let body = f254_story(&source, StoryKind::Body);
+    let item = f254_item(&source, &body, 0);
+    let fragment =
+        DocumentFragment::from_range(&source, &item, &ContentLocation::end(body), false).unwrap();
+
+    let mut destination = Document::new();
+    destination.add_paragraph("unchanged");
+    let before = destination.to_bytes().unwrap();
+    let body = f254_story(&destination, StoryKind::Body);
+    let error = destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::reuse_equivalent(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("non-internal"), "{error}");
+    assert_eq!(destination.to_bytes().unwrap(), before);
+
+    let mut split_bookmark = Document::new();
+    split_bookmark.add_paragraph("start");
+    split_bookmark.add_paragraph("end");
+    split_bookmark
+        .add_bookmark(
+            "Split",
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 1,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+    let body = f254_story(&split_bookmark, StoryKind::Body);
+    let items = split_bookmark.story_items(&body).unwrap();
+    let incomplete = DocumentFragment::from_range(
+        &split_bookmark,
+        items[0].location(),
+        items[1].location(),
+        false,
+    )
+    .unwrap();
+    let body = f254_story(&destination, StoryKind::Body);
+    let error = destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &incomplete,
+            FragmentConflictPolicy::reuse_equivalent(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("bookmark ownership"), "{error}");
+    assert_eq!(destination.to_bytes().unwrap(), before);
+
+    let mut dangling_source = Document::new();
+    dangling_source.add_picture(
+        b"f256-dangling-image",
+        "dangling.png",
+        Length::pt(12.0),
+        Length::pt(9.0),
+    );
+    let mut dangling_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        dangling_source.to_bytes().unwrap(),
+    ))
+    .unwrap();
+    let dangling_part = dangling_package
+        .parts
+        .iter()
+        .find_map(|(name, bytes)| {
+            (bytes.as_slice() == b"f256-dangling-image").then(|| name.clone())
+        })
+        .unwrap();
+    dangling_package.remove_part(&dangling_part);
+    let mut dangling_bytes = std::io::Cursor::new(Vec::new());
+    dangling_package.write_to(&mut dangling_bytes).unwrap();
+    let dangling_source = Document::from_bytes(dangling_bytes.get_ref()).unwrap();
+    let body = f254_story(&dangling_source, StoryKind::Body);
+    let item = f254_item(&dangling_source, &body, 0);
+    let dangling =
+        DocumentFragment::from_range(&dangling_source, &item, &ContentLocation::end(body), false)
+            .unwrap();
+    let body = f254_story(&destination, StoryKind::Body);
+    let error = destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &dangling,
+            FragmentConflictPolicy::reuse_equivalent(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("missing"), "{error}");
+    assert_eq!(destination.to_bytes().unwrap(), before);
+
+    let mut picture_source = Document::new();
+    picture_source.add_picture(
+        b"f256-exhausted-image",
+        "exhausted.png",
+        Length::pt(12.0),
+        Length::pt(9.0),
+    );
+    let body = f254_story(&picture_source, StoryKind::Body);
+    let item = f254_item(&picture_source, &body, 0);
+    let picture_fragment =
+        DocumentFragment::from_range(&picture_source, &item, &ContentLocation::end(body), false)
+            .unwrap();
+    let mut exhausted_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        Document::new().to_bytes().unwrap(),
+    ))
+    .unwrap();
+    exhausted_package.set_part("/word/unchanged.bin", b"unchanged".to_vec());
+    exhausted_package
+        .content_types
+        .add_override("/word/unchanged.bin", "application/octet-stream");
+    exhausted_package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            &format!("rId{}", u32::MAX),
+            "urn:f256-exhaustion",
+            "unchanged.bin",
+        );
+    let mut exhausted_bytes = std::io::Cursor::new(Vec::new());
+    exhausted_package.write_to(&mut exhausted_bytes).unwrap();
+    let mut exhausted = Document::from_bytes(exhausted_bytes.get_ref()).unwrap();
+    let before_exhausted = exhausted.to_bytes().unwrap();
+    let body = f254_story(&exhausted, StoryKind::Body);
+    let error = exhausted
+        .import_fragment(
+            &ContentLocation::end(body),
+            &picture_fragment,
+            FragmentConflictPolicy::reuse_equivalent(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("exhausted"), "{error}");
+    assert_eq!(exhausted.to_bytes().unwrap(), before_exhausted);
 }

@@ -230,6 +230,15 @@ Relationship-bearing content remains restricted to its unchanged story owner,
 and preserved identity ownership that cannot be proved rejects. Serialization
 and reopen complete before the candidate replaces live state.
 
+Cross-document main-body import removes that unchanged-owner restriction only
+through an owned `DocumentFragment`. The importer discovers selected body and
+comment dependencies before mutation, closes internal relationships
+recursively, reserves every destination identity, and rewrites exact retained
+XML only from complete maps. Caller policy may reuse equivalent styles,
+numbering, and related leaf parts. Unsupported external, dangling, malformed,
+split-range, and exhausted graphs fail without changing the live document.
+All-story import and the broader dependency classes remain owned by F-276.
+
 Picture, hyperlink, and relationship lookup operations resolve the exact OPC
 owner from `StoryId`. Cells and text boxes inherit their containing part, and
 related stories use their resolved part. Media, relationship, content-type,

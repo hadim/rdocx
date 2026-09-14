@@ -13208,3 +13208,51 @@ passed.
 whenever unchanged opaque content can own namespace scope. Preserve exact
 wrappers through the complete owner hierarchy rather than reconstructing a
 drawing from its typed projection.
+
+### F-256, Transactional cross-document fragment import
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now captures a nonempty half-open
+main-body range as an owned `DocumentFragment` and imports it at a checked body
+location. The importer closes selected styles, direct and style-carried
+numbering, bookmarks, comments and replies, drawings, media, charts, embedded
+workbooks, fields, and recursive internal relationships. Caller policy selects
+equivalent reuse independently for styles, numbering, and related parts.
+
+**Non-obvious choices.** Selected main-story and comment XML stays
+package-authoritative so unsupported producer payload remains exact. Style and
+numbering dependencies are discovered to a fixpoint, every destination
+identity and part name is allocated before rewriting, and the complete
+candidate serializes and reopens before publication. Final section properties
+are included only for an explicit selection ending at the body boundary.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 found
+unselected dependency copying, lost modern comment state, typed-body replay,
+style-carried numbering, comment-part relationship closure, and insufficient
+negative assertions. Pass 3 reported zero defects, zero smells, and zero
+nitpicks after remediation.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/09-charts-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `dependency_rich_fragment_imports_twice_without_collisions`,
+`fragment_conflict_policies_are_deterministic`,
+`unsupported_fragment_dependency_aborts_without_mutation`, and
+`malformed_fragment_relationship_xml_aborts_without_mutation` passed. The
+complete `rdocx` and workspace suites, pinned LibreOffice and PPTX corpus
+oracles, reduced-feature and WASM gates, rustdoc, README inventories, workflow
+regressions, package dry runs, and supply-chain audit passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep selected retained XML authoritative and
+build every remap from the complete staged dependency graph. F-276 owns
+all-story import and the broader custom XML, revision, note, diagram, and
+package-extension dependency policy.

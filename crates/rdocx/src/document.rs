@@ -401,6 +401,141 @@ pub struct ContentFragment {
     namespace_scope: BTreeMap<String, String>,
 }
 
+/// An owned main-body range and the package dependencies it can reach.
+#[derive(Debug, Clone)]
+pub struct DocumentFragment {
+    package: Vec<u8>,
+    include_final_section_properties: bool,
+}
+
+/// Conflict choices for one cross-document fragment import.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FragmentConflictPolicy {
+    reuse_equivalent_styles: bool,
+    reuse_equivalent_numbering: bool,
+    reuse_equivalent_related_parts: bool,
+}
+
+impl FragmentConflictPolicy {
+    /// Reuse equivalent supported dependencies and rename non-equivalent ones.
+    pub const fn reuse_equivalent() -> Self {
+        Self {
+            reuse_equivalent_styles: true,
+            reuse_equivalent_numbering: true,
+            reuse_equivalent_related_parts: true,
+        }
+    }
+
+    /// Allocate a fresh destination identity for every supported dependency.
+    pub const fn rename_all() -> Self {
+        Self {
+            reuse_equivalent_styles: false,
+            reuse_equivalent_numbering: false,
+            reuse_equivalent_related_parts: false,
+        }
+    }
+
+    /// Select whether equivalent style definitions are reused.
+    pub const fn with_style_reuse(mut self, reuse: bool) -> Self {
+        self.reuse_equivalent_styles = reuse;
+        self
+    }
+
+    /// Select whether equivalent numbering definitions are reused.
+    pub const fn with_numbering_reuse(mut self, reuse: bool) -> Self {
+        self.reuse_equivalent_numbering = reuse;
+        self
+    }
+
+    /// Select whether equivalent relationship-reached leaf parts are reused.
+    pub const fn with_related_part_reuse(mut self, reuse: bool) -> Self {
+        self.reuse_equivalent_related_parts = reuse;
+        self
+    }
+
+    pub(crate) const fn reuse_styles(self) -> bool {
+        self.reuse_equivalent_styles
+    }
+
+    pub(crate) const fn reuse_numbering(self) -> bool {
+        self.reuse_equivalent_numbering
+    }
+
+    pub(crate) const fn reuse_related_parts(self) -> bool {
+        self.reuse_equivalent_related_parts
+    }
+}
+
+impl Default for FragmentConflictPolicy {
+    fn default() -> Self {
+        Self::reuse_equivalent()
+    }
+}
+
+impl DocumentFragment {
+    /// Capture one non-empty, half-open range of direct main-body items.
+    ///
+    /// `start` is included and `end` is excluded. Section properties can be
+    /// included only when `end` is the main body's final boundary.
+    pub fn from_range(
+        document: &Document,
+        start: &ContentLocation,
+        end: &ContentLocation,
+        include_final_section_properties: bool,
+    ) -> Result<Self> {
+        let mut candidate = document.clone_for_staging();
+        candidate.prepare_staged_package()?;
+        if start.story != end.story
+            || start.story.kind != StoryKind::Body
+            || start.story.part_name != candidate.doc_part_name
+        {
+            return Err(Error::Other(
+                "document fragment ranges must share the checked main-body owner".to_owned(),
+            ));
+        }
+        let (source, owner) = candidate.story_source_and_owner(&start.story)?;
+        let source_xml = source.xml.into_owned();
+        let (_, start_index, item_count) = validated_content_boundary(&source_xml, &owner, start)?;
+        let (_, end_index, _) = validated_content_boundary(&source_xml, &owner, end)?;
+        if start_index >= end_index {
+            return Err(Error::Other(
+                "document fragment range must contain at least one direct body item".to_owned(),
+            ));
+        }
+        if include_final_section_properties && end_index != item_count {
+            return Err(Error::Other(
+                "section-inclusive document fragments must end at the main-body boundary"
+                    .to_owned(),
+            ));
+        }
+        let items = direct_story_content_items(&source_xml, &owner)?;
+        let content_start = items
+            .first()
+            .map(|item| item.full.start)
+            .ok_or_else(|| Error::Other("document fragment source body is empty".to_owned()))?;
+        let content_end = story_owner_content_end(&source_xml, &owner)?;
+        let selected_start = items[start_index].full.start;
+        let selected_end = if end_index == item_count {
+            content_end
+        } else {
+            items[end_index].full.start
+        };
+        let selected = source_xml[selected_start..selected_end].to_vec();
+        let mut updated = source_xml;
+        updated.splice(content_start..content_end, selected);
+        candidate
+            .package
+            .set_part(&candidate.doc_part_name, updated);
+        let mut output = std::io::Cursor::new(Vec::new());
+        candidate.package.write_to(&mut output)?;
+        Ok(Self {
+            package: output.into_inner(),
+            include_final_section_properties,
+        })
+    }
+}
+
 impl ContentFragment {
     /// Create a fixed-prefix paragraph fragment.
     pub fn paragraph(paragraph: CT_P) -> Result<Self> {
@@ -4086,6 +4221,29 @@ fn default_application_properties() -> AppProperties {
     properties
 }
 
+fn equivalent_abstract_numbering(left: &CT_AbstractNum, right: &CT_AbstractNum) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.abstract_num_id = 0;
+    right.abstract_num_id = 0;
+    left == right
+}
+
+fn equivalent_numbering_instance(left: &CT_Num, right: &CT_Num, abstract_num_id: u32) -> bool {
+    if left.abstract_num_id != abstract_num_id {
+        return false;
+    }
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.num_id = 0;
+    right.num_id = 0;
+    left.abstract_num_id = abstract_num_id;
+    right.abstract_num_id = abstract_num_id;
+    left.abstract_num_id_raw = None;
+    right.abstract_num_id_raw = None;
+    left == right
+}
+
 struct StorySource<'a> {
     root_kind: StoryKind,
     part_name: String,
@@ -4596,6 +4754,59 @@ fn story_owner_content_end(xml: &[u8], owner: &StoryOwnerSpan) -> Result<usize> 
         }
         buffer.clear();
     }
+}
+
+pub(crate) fn package_authoritative_body_fragment(
+    xml: &[u8],
+    include_final_section_properties: bool,
+    destination_scope: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let owner = scan_story_owners(xml, StoryKind::Body)?
+        .into_iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("document fragment has no main body".to_owned()))?;
+    let mut output = Vec::new();
+    let items = direct_story_content_items(xml, &owner)?;
+    let mut cursor = items
+        .first()
+        .map(|item| item.full.start)
+        .ok_or_else(|| Error::Other("document fragment main body is empty".to_owned()))?;
+    for item in items {
+        output.extend_from_slice(&xml[cursor..item.full.start]);
+        let scope = story_namespace_scope_at(xml, item.full.start)?;
+        let required = scope
+            .into_iter()
+            .filter(|(prefix, namespace)| destination_scope.get(prefix) != Some(namespace))
+            .collect();
+        output.extend(close_content_fragment_namespaces(
+            &xml[item.full.clone()],
+            &required,
+        )?);
+        cursor = item.full.end;
+    }
+    output.extend_from_slice(&xml[cursor..story_owner_content_end(xml, &owner)?]);
+    if include_final_section_properties {
+        let mut section = None;
+        for item in scan_story_items(xml, &owner)? {
+            if item.direct_owner_child && content_fragment_root_is_section_properties(xml, &item)? {
+                section = Some(item);
+                break;
+            }
+        }
+        let section = section.ok_or_else(|| {
+            Error::Other("section-inclusive document fragment has no final section".to_owned())
+        })?;
+        let scope = story_namespace_scope_at(xml, section.full.start)?;
+        let required = scope
+            .into_iter()
+            .filter(|(prefix, namespace)| destination_scope.get(prefix) != Some(namespace))
+            .collect();
+        let section = close_content_fragment_namespaces(&xml[section.full], &required)?;
+        output.extend_from_slice(format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:pPr>"#).as_bytes());
+        output.extend(section);
+        output.extend_from_slice(b"</w:pPr></w:p>");
+    }
+    Ok(output)
 }
 
 fn close_content_fragment_namespaces(
@@ -11370,6 +11581,50 @@ impl Document {
         Ok(())
     }
 
+    /// Import an owned cross-document main-body fragment at a checked boundary.
+    ///
+    /// The complete supported dependency closure is allocated on a staged
+    /// candidate. Unsupported or external relationships return an error before
+    /// the destination changes.
+    pub fn import_fragment(
+        &mut self,
+        destination: &ContentLocation,
+        fragment: &DocumentFragment,
+        policy: FragmentConflictPolicy,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        if destination.story.kind != StoryKind::Body
+            || destination.story.part_name != candidate.doc_part_name
+        {
+            return Err(Error::Other(
+                "document fragments can be imported only into the main body".to_owned(),
+            ));
+        }
+        let (source, owner) = candidate.story_source_and_owner(&destination.story)?;
+        let part_name = source.part_name.clone();
+        let mut source_xml = source.xml.into_owned();
+        let (boundary, _, _) = validated_content_boundary(&source_xml, &owner, destination)?;
+        let imported_document_xml = crate::field::import_document_fragment_content(
+            &mut candidate,
+            &fragment.package,
+            fragment.include_final_section_properties,
+            policy,
+        )?;
+        let destination_scope = story_namespace_scope_at(&source_xml, owner.full.start)?;
+        let imported_xml = package_authoritative_body_fragment(
+            &imported_document_xml,
+            fragment.include_final_section_properties,
+            &destination_scope,
+        )?;
+        insert_story_fragment(&mut source_xml, &owner, boundary, imported_xml)?;
+        candidate.prepare_staged_package()?;
+        set_story_source_xml(&mut candidate, &part_name, source_xml)?;
+        let reopened = candidate.reopen_prepared_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
     /// Remove one checked direct child and return it as an owned fragment.
     pub fn remove_content_at(&mut self, location: &ContentLocation) -> Result<ContentFragment> {
         let mut candidate = self.clone_for_staging();
@@ -16798,6 +17053,29 @@ impl Document {
         index: usize,
         other: &Document,
     ) -> Result<()> {
+        self.insert_document_content_staged_with_numbering_policy(index, other, false)
+            .map(|_| ())
+    }
+
+    pub(crate) fn insert_document_fragment_content_staged(
+        &mut self,
+        index: usize,
+        other: &Document,
+        reuse_equivalent_numbering: bool,
+    ) -> Result<HashMap<u32, u32>> {
+        self.insert_document_content_staged_with_numbering_policy(
+            index,
+            other,
+            reuse_equivalent_numbering,
+        )
+    }
+
+    fn insert_document_content_staged_with_numbering_policy(
+        &mut self,
+        index: usize,
+        other: &Document,
+        reuse_equivalent_numbering: bool,
+    ) -> Result<HashMap<u32, u32>> {
         self.reserve_merge_bundles(other)?;
         self.invalidate_layout();
         self.merge_styles(other)?;
@@ -16810,7 +17088,7 @@ impl Document {
                 .insert(insert_at + i, content.clone());
         }
 
-        self.remap_merged_numbering(other, insert_at)
+        self.remap_merged_numbering(other, insert_at, reuse_equivalent_numbering)
     }
 
     fn append_document_content(&mut self, other: &Document) -> Result<()> {
@@ -16822,7 +17100,8 @@ impl Document {
             .body
             .content
             .extend(other.document.body.content.iter().cloned());
-        self.remap_merged_numbering(other, start_idx)
+        self.remap_merged_numbering(other, start_idx, false)
+            .map(|_| ())
     }
 
     fn reserve_merge_bundles(&mut self, other: &Document) -> Result<()> {
@@ -16887,27 +17166,125 @@ impl Document {
         style::validate_style_graph(&self.styles)
     }
 
+    pub(crate) fn equivalent_numbering_dependency_id(
+        &self,
+        other: &Document,
+        num_id: u32,
+    ) -> Option<u32> {
+        let (left_numbering, right_numbering) =
+            self.numbering.as_ref().zip(other.numbering.as_ref())?;
+        let right = right_numbering
+            .nums
+            .iter()
+            .find(|instance| instance.num_id == num_id)?;
+        let right_abstract = right_numbering
+            .abstract_nums
+            .iter()
+            .find(|definition| definition.abstract_num_id == right.abstract_num_id)?;
+        left_numbering.nums.iter().find_map(|left| {
+            let left_abstract = left_numbering
+                .abstract_nums
+                .iter()
+                .find(|definition| definition.abstract_num_id == left.abstract_num_id)?;
+            (equivalent_abstract_numbering(left_abstract, right_abstract)
+                && equivalent_numbering_instance(left, right, left.abstract_num_id))
+            .then_some(left.num_id)
+        })
+    }
+
     /// Merge numbering from another document and remap IDs in the merged content.
     /// `start_idx` is the index where the other document's content starts in self.
-    fn remap_merged_numbering(&mut self, other: &Document, start_idx: usize) -> Result<()> {
+    fn remap_merged_numbering(
+        &mut self,
+        other: &Document,
+        start_idx: usize,
+        reuse_equivalent: bool,
+    ) -> Result<HashMap<u32, u32>> {
         let Some(other_numbering) = &other.numbering else {
-            return Ok(());
+            return Ok(HashMap::new());
         };
+        let existing_numbering = self.numbering.clone();
         let mut abstract_remap = HashMap::new();
+        let mut new_abstract_ids = HashSet::new();
         for abs_num in &other_numbering.abstract_nums {
-            let new_id = self.identifiers.reserve_abstract_numbering_id()?;
+            let new_id = existing_numbering
+                .as_ref()
+                .filter(|_| reuse_equivalent)
+                .and_then(|numbering| {
+                    numbering.abstract_nums.iter().find_map(|existing| {
+                        equivalent_abstract_numbering(existing, abs_num)
+                            .then_some(existing.abstract_num_id)
+                    })
+                })
+                .map(Ok)
+                .unwrap_or_else(|| self.identifiers.reserve_abstract_numbering_id())?;
+            if !existing_numbering.as_ref().is_some_and(|numbering| {
+                numbering
+                    .abstract_nums
+                    .iter()
+                    .any(|existing| existing.abstract_num_id == new_id)
+            }) {
+                new_abstract_ids.insert(abs_num.abstract_num_id);
+            }
             abstract_remap.insert(abs_num.abstract_num_id, new_id);
         }
         let mut num_remap = HashMap::new();
+        let mut new_num_ids = HashSet::new();
         for num in &other_numbering.nums {
-            num_remap.insert(
-                num.num_id,
-                self.identifiers.reserve_numbering_instance_id()?,
-            );
             if let std::collections::hash_map::Entry::Vacant(entry) =
                 abstract_remap.entry(num.abstract_num_id)
             {
-                entry.insert(self.identifiers.reserve_abstract_numbering_id()?);
+                let allocated = self.identifiers.reserve_abstract_numbering_id()?;
+                new_abstract_ids.insert(num.abstract_num_id);
+                entry.insert(allocated);
+            }
+            let mapped_abstract = abstract_remap[&num.abstract_num_id];
+            let new_id = existing_numbering
+                .as_ref()
+                .filter(|_| reuse_equivalent)
+                .and_then(|numbering| {
+                    numbering.nums.iter().find_map(|existing| {
+                        equivalent_numbering_instance(existing, num, mapped_abstract)
+                            .then_some(existing.num_id)
+                    })
+                })
+                .map(Ok)
+                .unwrap_or_else(|| self.identifiers.reserve_numbering_instance_id())?;
+            if !existing_numbering.as_ref().is_some_and(|numbering| {
+                numbering
+                    .nums
+                    .iter()
+                    .any(|existing| existing.num_id == new_id)
+            }) {
+                new_num_ids.insert(num.num_id);
+            }
+            num_remap.insert(num.num_id, new_id);
+        }
+
+        for source_style in &other.styles.styles {
+            let Some(source_num_id) = source_style
+                .ppr
+                .as_ref()
+                .and_then(|properties| properties.num_id)
+            else {
+                continue;
+            };
+            let Some(mapped_num_id) = num_remap.get(&source_num_id).copied() else {
+                continue;
+            };
+            let Some(destination_style) = self
+                .styles
+                .styles
+                .iter_mut()
+                .find(|style| style.style_id == source_style.style_id)
+            else {
+                continue;
+            };
+            if destination_style == source_style
+                && let Some(properties) = destination_style.ppr.as_mut()
+            {
+                properties.num_id = Some(mapped_num_id);
+                properties.num_id_raw = None;
             }
         }
 
@@ -16920,14 +17297,21 @@ impl Document {
                 extra_xml: Vec::new(),
             });
         for abs_num in &other_numbering.abstract_nums {
+            if !new_abstract_ids.contains(&abs_num.abstract_num_id) {
+                continue;
+            }
             let mut new_abs = abs_num.clone();
             new_abs.abstract_num_id = abstract_remap[&abs_num.abstract_num_id];
             numbering.abstract_nums.push(new_abs);
         }
         for num in &other_numbering.nums {
+            if !new_num_ids.contains(&num.num_id) {
+                continue;
+            }
             let mut new_num = num.clone();
             new_num.num_id = num_remap[&num.num_id];
             new_num.abstract_num_id = abstract_remap[&num.abstract_num_id];
+            new_num.abstract_num_id_raw = None;
             numbering.nums.push(new_num);
         }
         let incoming_count = other.document.body.content.len();
@@ -16944,7 +17328,7 @@ impl Document {
                 }
             },
         );
-        Ok(())
+        Ok(num_remap)
     }
 
     // ---- Table of Contents ----
@@ -31053,5 +31437,76 @@ mod odttf_tests {
                 "failed for {name}"
             );
         }
+    }
+
+    #[test]
+    fn malformed_fragment_relationship_xml_aborts_without_mutation() {
+        use std::io::{Cursor, Read, Write};
+        use zip::write::SimpleFileOptions;
+        use zip::{ZipArchive, ZipWriter};
+
+        let mut source = Document::new();
+        source.add_picture(
+            b"malformed-fragment-relationship",
+            "malformed.png",
+            Length::pt(12.0),
+            Length::pt(9.0),
+        );
+        let body = source
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == StoryKind::Body)
+            .unwrap();
+        let item = source.story_items(&body).unwrap()[0].location().clone();
+        let mut fragment =
+            DocumentFragment::from_range(&source, &item, &ContentLocation::end(body), false)
+                .unwrap();
+
+        let mut archive = ZipArchive::new(Cursor::new(fragment.package.as_slice())).unwrap();
+        let mut entries = Vec::new();
+        for index in 0..archive.len() {
+            let mut file = archive.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).unwrap();
+            if file.name() == "word/_rels/document.xml.rels" {
+                bytes = b"<Relationships".to_vec();
+            }
+            entries.push((file.name().to_owned(), file.compression(), bytes));
+        }
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, compression, bytes) in entries {
+            writer
+                .start_file(
+                    name,
+                    SimpleFileOptions::default().compression_method(compression),
+                )
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        fragment.package = writer.finish().unwrap().into_inner();
+
+        let mut destination = Document::new();
+        destination.add_paragraph("unchanged");
+        let before = destination.to_bytes().unwrap();
+        let body = destination
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == StoryKind::Body)
+            .unwrap();
+        let error = destination
+            .import_fragment(
+                &ContentLocation::end(body),
+                &fragment,
+                FragmentConflictPolicy::reuse_equivalent(),
+            )
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid document fragment")
+                && error.to_string().contains("XML error"),
+            "{error}"
+        );
+        assert_eq!(destination.to_bytes().unwrap(), before);
     }
 }

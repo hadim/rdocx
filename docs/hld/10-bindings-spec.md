@@ -344,6 +344,16 @@ freshen document identities, and relationship-bearing fragments require their
 unchanged owner scope. These are additive pre-1.0 native Rust APIs. Python,
 WASM, and CLI gain no corresponding binding surface.
 
+Native Rust also exposes owned `DocumentFragment` and non-exhaustive
+`FragmentConflictPolicy` values. `DocumentFragment::from_range` captures a
+nonempty half-open main-body selection and can include final body section
+properties only when explicitly requested at the body end.
+`Document::import_fragment` inserts at a checked main-body location and applies
+caller-selected equivalent reuse independently to styles, numbering, and
+related parts. The import remains package-authoritative and transactional.
+These are additive pre-1.0 APIs in the published `rdocx` crate. Python, WASM,
+and CLI gain no fragment-import surface here.
+
 Native Rust also exposes fallible story-scoped relationship operations on the
 same pre-1.0 `Document` facade. `add_picture_to_story` and
 `add_hyperlink_to_story` append namespace-complete paragraphs to a checked

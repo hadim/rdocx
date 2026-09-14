@@ -13,6 +13,7 @@ use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, NamespaceResolver, ResolveResult};
 use quick_xml::reader::NsReader;
+use rdocx_oxml::comments::CT_Comments;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
@@ -31,7 +32,7 @@ use rdocx_oxml::text::{
 
 pub use rdocx_oxml::text::{LegacyFormFieldKind, LegacyFormFieldValue};
 
-use crate::document::DocumentIdentifiers;
+use crate::document::{DocumentIdentifiers, FragmentConflictPolicy};
 use crate::{Document, Error, Result, style};
 
 /// One legacy form field and its stable story-part identity.
@@ -1598,21 +1599,85 @@ fn import_rich_fragment(
     bytes: &[u8],
     identity_state: &mut BodyIdentityState,
 ) -> Result<Vec<BodyContent>> {
+    import_fragment_content_with_state(
+        document,
+        bytes,
+        false,
+        FragmentConflictPolicy::rename_all().with_style_reuse(true),
+        identity_state,
+    )
+    .map(|imported| imported.typed)
+}
+
+pub(crate) fn import_document_fragment_content(
+    document: &mut Document,
+    bytes: &[u8],
+    include_final_section_properties: bool,
+    policy: FragmentConflictPolicy,
+) -> Result<Vec<u8>> {
+    let mut identity_state = BodyIdentityState::from_documents(std::slice::from_ref(document))?;
+    import_fragment_content_with_state(
+        document,
+        bytes,
+        include_final_section_properties,
+        policy,
+        &mut identity_state,
+    )
+    .map(|imported| imported.xml)
+}
+
+struct ImportedFragmentContent {
+    typed: Vec<BodyContent>,
+    xml: Vec<u8>,
+}
+
+fn import_fragment_content_with_state(
+    document: &mut Document,
+    bytes: &[u8],
+    include_final_section_properties: bool,
+    policy: FragmentConflictPolicy,
+    identity_state: &mut BodyIdentityState,
+) -> Result<ImportedFragmentContent> {
     let mut fragment = Document::from_bytes(bytes)
-        .map_err(|error| Error::Other(format!("invalid rich mail merge fragment: {error}")))?;
+        .map_err(|error| Error::Other(format!("invalid document fragment: {error}")))?;
+    let mut fragment_xml = fragment
+        .package
+        .get_part(&fragment.doc_part_name)
+        .ok_or_else(|| Error::Other("document fragment main part is missing".to_owned()))?
+        .to_vec();
     fragment.prepare_staged_package()?;
-    let mut fragment_xml = fragment.document.to_xml()?;
-    let styles_changed =
-        remap_fragment_style_collisions(document, &mut fragment, &mut fragment_xml)?;
-    let mut inserted_document = fragment.document.clone();
-    inserted_document.body.sect_pr = None;
-    let used_relationships = relationship_ids_in_xml(&inserted_document.to_xml()?)?;
+    let final_section_properties = fragment.document.body.sect_pr.take();
+    if include_final_section_properties && let Some(section_properties) = final_section_properties {
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            sect_pr: Some(section_properties),
+            ..Default::default()
+        });
+        fragment
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+    }
+    prune_document_fragment_dependencies(&mut fragment)?;
+    let fragment_identity_values = body_identity_values(&fragment.document.to_xml()?)?;
+    validate_fragment_identity_ownership(&fragment_identity_values)?;
+    let styles_changed = remap_fragment_style_collisions(
+        document,
+        &mut fragment,
+        &mut fragment_xml,
+        policy.reuse_styles(),
+        policy.reuse_numbering(),
+    )?;
+    let dependency_xml = fragment.document.to_xml()?;
+    let used_relationships = relationship_ids_in_xml(&dependency_xml)?;
     let source_rels = fragment
         .package
         .get_part_rels(&fragment.doc_part_name)
         .cloned()
         .unwrap_or_default();
     let mut relationship_map = BTreeMap::new();
+    let mut comment_relationship_map = BTreeMap::new();
     let mut part_map = HashMap::new();
     let mut imports = Vec::new();
     for relationship_id in used_relationships {
@@ -1628,22 +1693,72 @@ fn import_rich_fragment(
         }
         let source_part =
             OpcPackage::resolve_rel_target(&fragment.doc_part_name, &relationship.target);
-        imports.push((relationship_id, relationship.clone(), source_part));
+        imports.push((
+            document.doc_part_name.clone(),
+            relationship_id,
+            relationship.clone(),
+            source_part,
+        ));
+    }
+    if let Some(comment_xml) = Document::fragment_comment_dependency_xml(
+        fragment.comments.as_ref(),
+        fragment.comments_extended.as_ref(),
+        &fragment_identity_values.comment_ids,
+    )? {
+        let destination_owner = document.ensure_fragment_comment_models_staged()?;
+        let source_owner = fragment.comments_part_name.as_ref().ok_or_else(|| {
+            Error::Other("document fragment comments part name is missing".to_owned())
+        })?;
+        let source_rels = fragment
+            .package
+            .get_part_rels(source_owner)
+            .cloned()
+            .unwrap_or_default();
+        for relationship_id in relationship_ids_in_xml(&comment_xml)? {
+            let relationship = source_rels.get_by_id(&relationship_id).ok_or_else(|| {
+                Error::Other(format!(
+                    "document fragment comment relationship {relationship_id} is missing"
+                ))
+            })?;
+            if !crate::document::relationship_is_internal(relationship) {
+                return Err(Error::Other(format!(
+                    "document fragment comment relationship {relationship_id} is non-internal"
+                )));
+            }
+            let source_part = OpcPackage::resolve_rel_target(source_owner, &relationship.target);
+            imports.push((
+                destination_owner.clone(),
+                relationship_id,
+                relationship.clone(),
+                source_part,
+            ));
+        }
     }
     let mut closure = HashSet::new();
-    for (_, _, source_part) in &imports {
+    for (_, _, _, source_part) in &imports {
         discover_fragment_part_closure(&fragment.package, source_part, &mut closure)?;
     }
     let mut closure = closure.into_iter().collect::<Vec<_>>();
     closure.sort();
     for source_part in closure {
-        let destination_part = document
-            .identifiers
-            .reserve_fragment_part_name(&source_part)?;
+        let destination_part = if policy.reuse_related_parts() {
+            equivalent_fragment_leaf_part(&fragment.package, document, &source_part).map_or_else(
+                || {
+                    document
+                        .identifiers
+                        .reserve_fragment_part_name(&source_part)
+                },
+                Ok,
+            )?
+        } else {
+            document
+                .identifiers
+                .reserve_fragment_part_name(&source_part)?
+        };
         part_map.insert(source_part, destination_part);
     }
     let mut copied = HashSet::new();
-    for (relationship_id, relationship, source_part) in imports {
+    for (destination_owner, relationship_id, relationship, source_part) in imports {
         let destination_part = copy_fragment_part(
             &fragment.package,
             document,
@@ -1651,16 +1766,23 @@ fn import_rich_fragment(
             &part_map,
             &mut copied,
         )?;
-        let target = relative_fragment_target(&document.doc_part_name, &destination_part);
-        let owner = document.doc_part_name.clone();
+        let target = relative_fragment_target(&destination_owner, &destination_part);
         let destination_id = document
-            .add_internal_relationship_checked(&owner, &relationship.rel_type, &target)
+            .add_internal_relationship_checked(
+                &destination_owner,
+                &relationship.rel_type,
+                &target,
+            )
             .map_err(|error| {
                 Error::Other(format!(
-                    "rich mail merge relationship allocation failed for {owner}: {error}"
+                    "rich mail merge relationship allocation failed for {destination_owner}: {error}"
                 ))
             })?;
-        relationship_map.insert(relationship_id, destination_id);
+        if destination_owner == document.doc_part_name {
+            relationship_map.insert(relationship_id, destination_id);
+        } else {
+            comment_relationship_map.insert(relationship_id, destination_id);
+        }
     }
     if !relationship_map.is_empty() {
         fragment_xml = patch_relationship_ids(&fragment_xml, &relationship_map)?;
@@ -1668,19 +1790,206 @@ fn import_rich_fragment(
     if styles_changed || !relationship_map.is_empty() {
         fragment
             .package
-            .set_part(&fragment.doc_part_name, fragment_xml);
+            .set_part(&fragment.doc_part_name, fragment_xml.clone());
         fragment = reopen_staged_document(fragment)?;
+        prune_document_fragment_dependencies(&mut fragment)?;
     }
-    remap_body_identities(&mut fragment, &mut document.identifiers, identity_state)?;
+    let patched_comments = if comment_relationship_map.is_empty() {
+        None
+    } else {
+        let source = fragment.comments.as_ref().ok_or_else(|| {
+            Error::Other("document fragment references a missing comments part".to_owned())
+        })?;
+        Some(CT_Comments::from_xml(&patch_relationship_ids(
+            &source.to_xml()?,
+            &comment_relationship_map,
+        )?)?)
+    };
+    let comment_ids = document.import_fragment_comments_staged(
+        patched_comments.as_ref().or(fragment.comments.as_ref()),
+        fragment.comments_extended.as_ref(),
+        &fragment_identity_values.comment_ids,
+    )?;
+    if !comment_ids.is_empty() {
+        let comment_remap = BodyIdentityRemap {
+            comment_ids,
+            ..Default::default()
+        };
+        fragment_xml = patch_body_identity_attributes(&fragment_xml, &comment_remap)?;
+        let updated = patch_body_identity_attributes(&fragment.document.to_xml()?, &comment_remap)?;
+        fragment.document = CT_Document::from_xml(&updated)?;
+    }
+    let identity_remap =
+        remap_body_identities(&mut fragment, &mut document.identifiers, identity_state)?;
+    fragment_xml = patch_body_identity_attributes(&fragment_xml, &identity_remap)?;
     let insert_at = document.document.body.content.len();
-    document.insert_document_content_staged(insert_at, &fragment)?;
-    Ok(document.document.body.content.drain(insert_at..).collect())
+    let numbering_remap = document.insert_document_fragment_content_staged(
+        insert_at,
+        &fragment,
+        policy.reuse_numbering(),
+    )?;
+    let typed = document.document.body.content.drain(insert_at..).collect();
+    for (old, new) in numbering_remap {
+        patch_word_value(
+            &mut fragment_xml,
+            b"numId",
+            &old.to_string(),
+            &new.to_string(),
+        )?;
+    }
+    let xml = fragment_xml;
+    Ok(ImportedFragmentContent { typed, xml })
+}
+
+fn equivalent_fragment_leaf_part(
+    source: &OpcPackage,
+    destination: &Document,
+    source_part: &str,
+) -> Option<String> {
+    if source
+        .get_part_rels(source_part)
+        .is_some_and(|relationships| !relationships.items.is_empty())
+    {
+        return None;
+    }
+    let source_bytes = source.get_part(source_part)?;
+    let source_content_type = source.content_types.content_type_for(source_part)?;
+    destination
+        .package
+        .parts
+        .iter()
+        .find_map(|(part_name, bytes)| {
+            (bytes.as_slice() == source_bytes
+                && destination
+                    .package
+                    .content_types
+                    .content_type_for(part_name)
+                    == Some(source_content_type))
+            .then(|| part_name.clone())
+        })
+}
+
+fn prune_document_fragment_dependencies(fragment: &mut Document) -> Result<()> {
+    let body_xml = fragment.document.to_xml()?;
+    let mut used_numbering = word_value_attributes(&body_xml, &[b"numId"])?
+        .into_iter()
+        .filter_map(|value| value.parse::<u32>().ok())
+        .collect::<HashSet<_>>();
+    let mut used_styles = word_value_attributes(&body_xml, &[b"pStyle", b"rStyle", b"tblStyle"])?;
+    used_styles.extend(
+        fragment
+            .styles
+            .styles
+            .iter()
+            .filter(|style| style.is_default)
+            .map(|style| style.style_id.clone()),
+    );
+    loop {
+        let before = (used_styles.len(), used_numbering.len());
+        for style in &fragment.styles.styles {
+            if !used_styles.contains(&style.style_id) {
+                continue;
+            }
+            used_styles.extend(
+                [
+                    style.based_on.as_ref(),
+                    style.next_style.as_ref(),
+                    style.linked_style.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                .cloned(),
+            );
+        }
+        let mut retained_styles = fragment.styles.clone();
+        retained_styles
+            .styles
+            .retain(|style| used_styles.contains(&style.style_id));
+        used_numbering.extend(
+            word_value_attributes(&retained_styles.to_xml()?, &[b"numId"])?
+                .into_iter()
+                .filter_map(|value| value.parse::<u32>().ok()),
+        );
+        if let Some(numbering) = &fragment.numbering {
+            let mut retained_numbering = numbering.clone();
+            retained_numbering
+                .nums
+                .retain(|instance| used_numbering.contains(&instance.num_id));
+            let used_abstract = retained_numbering
+                .nums
+                .iter()
+                .map(|instance| instance.abstract_num_id)
+                .collect::<HashSet<_>>();
+            retained_numbering
+                .abstract_nums
+                .retain(|definition| used_abstract.contains(&definition.abstract_num_id));
+            used_styles.extend(word_value_attributes(
+                &retained_numbering.to_xml()?,
+                &[b"pStyle", b"rStyle", b"styleLink", b"numStyleLink"],
+            )?);
+        }
+        if (used_styles.len(), used_numbering.len()) == before {
+            break;
+        }
+    }
+    fragment
+        .styles
+        .styles
+        .retain(|style| used_styles.contains(&style.style_id));
+    if let Some(numbering) = fragment.numbering.as_mut() {
+        numbering
+            .nums
+            .retain(|instance| used_numbering.contains(&instance.num_id));
+        let used_abstract = numbering
+            .nums
+            .iter()
+            .map(|instance| instance.abstract_num_id)
+            .collect::<HashSet<_>>();
+        numbering
+            .abstract_nums
+            .retain(|definition| used_abstract.contains(&definition.abstract_num_id));
+        if numbering.nums.is_empty() {
+            fragment.numbering = None;
+        }
+    }
+    Ok(())
+}
+
+fn word_value_attributes(xml: &[u8], elements: &[&[u8]]) -> Result<HashSet<String>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut values = HashSet::new();
+    loop {
+        match reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("invalid document fragment dependency XML: {error}"))
+        })? {
+            Event::Start(element) | Event::Empty(element) => {
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                if namespace_is_word(&namespace)
+                    && elements.contains(&local.as_ref())
+                    && let Some((_, value)) = resolved_element_attribute(
+                        &element,
+                        reader.resolver(),
+                        b"val",
+                        AttributeNamespace::Word,
+                    )?
+                {
+                    values.insert(value);
+                }
+            }
+            Event::Eof => return Ok(values),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn remap_fragment_style_collisions(
     destination: &Document,
     fragment: &mut Document,
     fragment_xml: &mut Vec<u8>,
+    reuse_equivalent: bool,
+    reuse_equivalent_numbering: bool,
 ) -> Result<bool> {
     let mut replacements = BTreeMap::new();
     let mut used = destination
@@ -1694,7 +2003,29 @@ fn remap_fragment_style_collisions(
         let Some(existing) = destination.styles.get_by_id(&style.style_id) else {
             continue;
         };
-        if existing == style {
+        let mut comparable_existing = existing.clone();
+        let mut comparable_source = style.clone();
+        let numbering_is_reusable =
+            match style.ppr.as_ref().and_then(|properties| properties.num_id) {
+                None => true,
+                Some(num_id) if reuse_equivalent_numbering => destination
+                    .equivalent_numbering_dependency_id(fragment, num_id)
+                    .is_some_and(|destination_num_id| {
+                        if let Some(properties) = comparable_existing.ppr.as_mut() {
+                            properties.num_id_raw = None;
+                        }
+                        if let Some(properties) = comparable_source.ppr.as_mut() {
+                            properties.num_id = Some(destination_num_id);
+                            properties.num_id_raw = None;
+                        }
+                        true
+                    }),
+                Some(_) => false,
+            };
+        if comparable_existing == comparable_source
+            && (reuse_equivalent || style.is_default)
+            && numbering_is_reusable
+        {
             continue;
         }
         let mut ordinal = 1u64;
@@ -6201,6 +6532,8 @@ fn collect_merge_field_name(instruction: &str, names: &mut HashSet<String>) {
 struct BodyIdentityValues {
     bookmark_ids: Vec<String>,
     bookmark_events: Vec<(String, bool)>,
+    comment_ids: Vec<String>,
+    comment_events: Vec<(String, u8)>,
     content_control_ids: Vec<String>,
     drawing_ids: Vec<String>,
     non_visual_drawing_ids: Vec<String>,
@@ -6303,6 +6636,7 @@ fn allocate_merge_local_id(
 #[derive(Default)]
 struct BodyIdentityRemap {
     bookmark_ids: BTreeMap<String, String>,
+    comment_ids: BTreeMap<String, String>,
     content_control_ids: BTreeMap<String, String>,
     drawing_ids: BTreeMap<String, String>,
     non_visual_drawing_ids: BTreeMap<String, String>,
@@ -6313,7 +6647,7 @@ fn remap_body_identities(
     document: &mut Document,
     identifiers: &mut DocumentIdentifiers,
     state: &mut BodyIdentityState,
-) -> Result<()> {
+) -> Result<BodyIdentityRemap> {
     let xml = document.document.to_xml()?;
     let values = body_identity_values(&xml)?;
     let mut remap = BodyIdentityRemap::default();
@@ -6349,7 +6683,7 @@ fn remap_body_identities(
     }
     let updated = patch_body_identity_attributes(&xml, &remap)?;
     document.document = CT_Document::from_xml(&updated)?;
-    Ok(())
+    Ok(remap)
 }
 
 fn body_identity_values(xml: &[u8]) -> Result<BodyIdentityValues> {
@@ -6476,6 +6810,24 @@ fn collect_body_identity_values(
                 resolved_element_attribute(element, resolver, b"name", AttributeNamespace::Word)?
         {
             values.bookmark_names.push(value);
+        }
+    } else if namespace_is_word(&namespace)
+        && matches!(
+            local,
+            b"commentRangeStart" | b"commentRangeEnd" | b"commentReference"
+        )
+    {
+        if let Some((_, value)) =
+            resolved_element_attribute(element, resolver, b"id", AttributeNamespace::Word)?
+        {
+            let kind = match local {
+                b"commentRangeStart" => 0,
+                b"commentRangeEnd" => 1,
+                b"commentReference" => 2,
+                _ => unreachable!("comment identity element was matched"),
+            };
+            values.comment_ids.push(value.clone());
+            values.comment_events.push((value, kind));
         }
     } else if namespace_is_word(&namespace) && in_sdt_properties && local == b"id" {
         if let Some((_, value)) =
@@ -6846,6 +7198,41 @@ pub(crate) fn freshen_content_fragment_identities(
     patch_body_identity_attributes(wrapped_fragment, &remap)
 }
 
+fn validate_fragment_identity_ownership(values: &BodyIdentityValues) -> Result<()> {
+    let mut open_bookmarks = Vec::new();
+    let mut seen_bookmarks = HashSet::new();
+    for (id, start) in &values.bookmark_events {
+        if *start {
+            if !seen_bookmarks.insert(id.clone()) {
+                return Err(Error::Other(
+                    "document fragment bookmark ownership is incomplete or ambiguous".to_owned(),
+                ));
+            }
+            open_bookmarks.push(id.as_str());
+        } else if open_bookmarks.pop() != Some(id.as_str()) {
+            return Err(Error::Other(
+                "document fragment bookmark ownership is incomplete or ambiguous".to_owned(),
+            ));
+        }
+    }
+    if !open_bookmarks.is_empty() {
+        return Err(Error::Other(
+            "document fragment bookmark ownership is incomplete or ambiguous".to_owned(),
+        ));
+    }
+
+    let mut comment_counts = BTreeMap::<&str, [usize; 3]>::new();
+    for (id, kind) in &values.comment_events {
+        comment_counts.entry(id).or_default()[usize::from(*kind)] += 1;
+    }
+    if comment_counts.values().any(|counts| *counts != [1, 1, 1]) {
+        return Err(Error::Other(
+            "document fragment comment ownership is incomplete or ambiguous".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn collect_body_identity_edits(
     xml: &[u8],
@@ -6885,6 +7272,23 @@ fn collect_body_identity_edits(
                 edits,
             )?;
         }
+    } else if namespace.word
+        && matches!(
+            local,
+            b"commentRangeStart" | b"commentRangeEnd" | b"commentReference"
+        )
+    {
+        add_identity_attribute_edit(
+            xml,
+            start,
+            end,
+            element,
+            resolver,
+            b"id",
+            AttributeNamespace::Word,
+            &remap.comment_ids,
+            edits,
+        )?;
     } else if namespace.word && in_sdt_properties && local == b"id" {
         add_identity_attribute_edit(
             xml,

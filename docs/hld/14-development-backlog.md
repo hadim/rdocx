@@ -2437,10 +2437,13 @@ validated reopened candidate.
 box stories resolves only through its correct owner relationships.
 
 ### F-256, Transactional cross-document fragment import (L)
-Import a selected subtree while remapping styles, numbering, bookmarks,
-comments, media, drawings, charts, embedded parts, fields, and relationships.
-Caller-selected conflict policies are deterministic, and any unsupported
-dependency aborts without changing the destination.
+The native facade imports a nonempty half-open main-body selection while
+remapping selected styles, numbering, bookmarks, comments, media, drawings,
+charts, embedded workbooks, fields, and recursive internal relationships.
+Caller-selected equivalent reuse or renaming is deterministic for styles,
+numbering, and related parts. Exact retained body and comment XML remains
+package-authoritative, and unsupported, external, dangling, malformed,
+split-range, or exhausted dependencies abort without changing the destination.
 **Depends on**: F-246 through F-255.
 **Test gate**: regression. A dependency-rich fragment imports twice without
 collisions and reopens with every reference resolved.

@@ -1046,6 +1046,18 @@ owner. Clones allocate fresh document identities, while relationship-bearing
 fragments require the unchanged owner scope. Every operation serializes and
 reopens a staged candidate before publishing it.
 
+`DocumentFragment` owns a package-authoritative half-open main-body selection
+and its supported dependency source. Import closes only dependencies reachable
+from the selected body XML and selected comment threads. It computes style and
+numbering references to a fixpoint, preallocates relationship and part names,
+and rewrites bookmark, comment, drawing, field, style, numbering, and
+relationship identities only after every map exists. Exact retained body and
+comment XML remain authoritative. Reuse of equivalent style, numbering, and
+related-part graphs is caller-selected through `FragmentConflictPolicy`.
+Import applies all changes to one staged document and publishes only after the
+package serializes and reopens. External, dangling, malformed, incomplete, or
+exhausted dependency graphs leave the destination unchanged.
+
 Ordered Word section ownership also belongs to the `rdocx` facade. Concrete
 `SectionRef` and `Section` handles borrow the existing paragraph-level or
 schema-final `CT_SectPr` owner and carry its document-order ordinal and final

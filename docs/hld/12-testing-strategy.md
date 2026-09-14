@@ -500,6 +500,17 @@ relationship attributes in standalone footnotes and endnotes. Semantic reorder
 coverage extracts references from the exact body and text-box paragraphs and
 resolves them to their original media bytes and URLs.
 
+The cross-document fragment gate selects a main-body range containing custom
+styles, direct and style-carried numbering, a bookmark and REF field, a
+picture, an editable chart and workbook, an exact foreign subtree, and a
+resolved comment thread with a relationship-bearing payload. Two imports must
+reopen with all references resolved, exact selected raw XML retained twice,
+unused source dependencies absent, and collision-free package identities.
+Equivalent-reuse and rename policies must produce deterministic style,
+numbering, media, chart, and workbook results. Atomic negatives cover external
+relationships, split ownership, dangling targets, malformed relationship XML,
+and relationship-id exhaustion, with destination bytes unchanged.
+
 The RTF reader differential records Microsoft Word 16.104 build
 16.104.25121423 as the oracle. Its checked input is source-encoded RTF that
 covers body order, run and paragraph formatting, tables, list overrides, PNG

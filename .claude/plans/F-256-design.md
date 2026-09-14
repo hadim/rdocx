@@ -1,6 +1,6 @@
 # F-256, Transactional cross-document fragment import
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-246, F-247, F-248, F-249, F-250, F-251, F-252, F-253, F-254, F-255
@@ -84,12 +84,12 @@ compatible and no baseline is re-recorded.
 
 ## Implementation checklist
 
-- [ ] Add owned fragment selection and explicit conflict policy values.
-- [ ] Discover the complete supported dependency closure before mutation.
-- [ ] Reserve deterministic destination identities and build complete maps.
-- [ ] Rewrite typed and retained references with owner scope preserved.
-- [ ] Serialize, reopen, validate, and publish the staged candidate atomically.
-- [ ] Test repeated import, every supported dependency class, and rejection.
+- [x] Add owned fragment selection and explicit conflict policy values.
+- [x] Discover the complete supported dependency closure before mutation.
+- [x] Reserve deterministic destination identities and build complete maps.
+- [x] Rewrite typed and retained references with owner scope preserved.
+- [x] Serialize, reopen, validate, and publish the staged candidate atomically.
+- [x] Test repeated import, every supported dependency class, and rejection.
 
 ## Open questions
 

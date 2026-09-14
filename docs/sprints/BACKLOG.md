@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 16 | 0 | 8 |
+| M23, From-scratch business documents           | 24 | 17 | 0 | 7 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
 | X, Cross-cutting (opportunistic)            | 102 | 91 | 0 | 7 |
-| **Total** | **420** | **333** | **0** | **83** |
+| **Total** | **420** | **334** | **0** | **82** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -468,7 +468,7 @@ regenerated, never hand-edited.
 | F-253 | Container-neutral story editing | S72 | L | done |
 | F-254 | Generic insert, move, clone, and remove operations | S72 | L | done |
 | F-255 | Part-scoped assets, links, and relationships | S72 | M | done |
-| F-256 | Transactional cross-document fragment import | S72 | L | pending |
+| F-256 | Transactional cross-document fragment import | S72 | L | done |
 | F-257 | Complete M23 table authoring | S73 | L | pending |
 | F-258 | Complete M23 row and cell authoring | S73 | L | pending |
 | F-259 | Container measurement and equal-height layout | S73 | M | pending |
