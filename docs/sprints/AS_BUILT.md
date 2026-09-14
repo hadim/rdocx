@@ -13456,3 +13456,45 @@ dry runs, archive limits, and the supply-chain audit.
 **Notes for future sessions.** Keep rendering entry points on the native
 facade, keep returned collaboration values frozen, and validate arguments even
 when a total indexed lookup has no result.
+
+### F-X092, Preserve logical reading order in generated PDFs
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Generated Word and PowerPoint PDFs now expose complete
+logical lines to text extraction when multilingual shaping paints one source
+line as several visually ordered runs. The PDF writer combines only contiguous
+runs with the same semantic owner, source span, baseline, and transform while
+leaving the original paint order and raster output unchanged.
+
+**Non-obvious choices.** The first painted run owns the complete `ActualText`
+span and later runs own empty spans. Page-oriented extraction geometry is
+applied only around marked-content metadata, then the original transform is
+restored before glyph painting. Source-less PowerPoint runs use contiguous
+logical indexes, while owner, baseline, source, gap, and duplicate boundaries
+always stop coalescing.
+
+**Deviations from the design plan.** None. Microscope pass 1 required an
+independent pre-change raster proof. Pass 2 reported zero findings, and pass 3
+reported zero defects, zero smells, and zero nitpicks after the existing
+handout assertion was updated to require its complete logical date.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `large_word_and_presentation_pdfs_preserve_logical_reading_order`
+proved exact extraction for 120 Word lines and 48 PowerPoint text boxes under
+pinned Poppler 26.01.0. Page-one raster digests match the pre-change Word and
+PowerPoint outputs, the facade and CLI PDF paths pass, and the integrated full
+gate passed workspace tests, deterministic viewer tooling, both WASM targets,
+rustdoc, README inventories, workflow regressions, 22 package dry runs,
+archive limits, the supply-chain audit, and fresh Python 3.9 and 3.12 wheels.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep logical extraction grouping local to the
+PDF writer. Do not reorder positioned runs or add an invisible extraction
+layer, since either would risk visual or semantic drift.

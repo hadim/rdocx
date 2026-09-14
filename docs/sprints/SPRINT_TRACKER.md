@@ -430,6 +430,7 @@ defended.
 | F-X094c | S72 | L | 4 | 1 | 2026-09-14 | Added frozen typed Python snapshots for Word comparison, comments, deterministic layout, page lookup, and TOC rebuilding |
 | F-X094d | S72 | L | 4 | 1 | 2026-09-14 | Added ordered typed Python snapshots for Word sections, styles, rich stories, header and footer variants, and relationship-scoped hyperlinks |
 | F-X094e | S72 | L | 4 | 1 | 2026-09-14 | Added deterministic PowerPoint and notes rendering plus frozen modern comment snapshots and atomic collaboration mutation to the Python binding |
+| F-X092 | S72 | L | 4 | 1 | 2026-09-14 | Preserved complete logical reading order in generated Word and PowerPoint PDFs without changing painted output or the deterministic hash harness |
 
 ## Velocity
 
