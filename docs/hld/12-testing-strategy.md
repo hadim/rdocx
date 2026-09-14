@@ -180,7 +180,7 @@ Adjacent regressions prove integer segment sampling, cumulative GIF delay,
 single preparation with at most one retained resolved frame, output-cap failure
 during codec writes, validation before rendering, JPEG quality sensitivity,
 and unchanged static PDF and raster output. The same exact locked golden runs
-in the Ubuntu workspace job and the macOS presentation-fidelity job. Both use
+in the Ubuntu workspace job and the Ubuntu presentation-fidelity job. Both use
 deterministic bundled fonts and require identical reviewed constants.
 
 The ordered-body integration gate opens an in-code package through the public
@@ -1443,6 +1443,14 @@ fields, namespace-complete owned projections, borrowed subtree semantics,
 opaque preservation boundaries, separator-note filtering, lifecycle state,
 and mutation of empty text nodes.
 
+The contributor reader-fact regression combines strict document and body
+boundaries, first section properties, missing revision authors, empty simple
+fields, bounded nested tables, marker child-content facts, effective complex
+field properties, cell margins, empty cells, historical grid preservation, and
+self-closing TOC coordinates. Namespace aliases and decoys, malformed owners,
+schema order, repeated save and reopen, and the exact seven-entry Word XML hash
+delta are mandatory. Every PDF and PNG fingerprint remains unchanged.
+
 The generic content-mutation regression interleaves insert, remove, clone, and
 same-owner move operations across body and table-cell content. It asserts final
 direct-child order, fresh clone identities, valid relationship scope, exact
@@ -2379,7 +2387,7 @@ parallel, or failure-swallowing invocation.
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
 | release-regressions | Install cargo-release 1.1.3 with its locked dependency graph, then run `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
-| presentation-fidelity | Fetch the pinned corpus, run the exact locked deterministic animation golden, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
+| presentation-fidelity | Prime locked Cargo dependencies, install exact LibreOffice 26.2.5.2 and Poppler 26.01.0 on Ubuntu 24.04, fetch the pinned corpus, run the exact locked deterministic animation golden, then run `python3 scripts/pptx_ssim_harness.py --check` |
 | word-fidelity | Restore the pinned Rust cache, run `cargo fetch --locked`, fetch the pinned Word corpus, then run `python3 scripts/docx_ssim_harness.py --check` on pinned Ubuntu 24.04 LibreOffice and Poppler with its locked offline helper |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |

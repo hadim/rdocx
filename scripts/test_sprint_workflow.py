@@ -619,6 +619,7 @@ class SprintWorkflowTests(unittest.TestCase):
         consumers = {
             "test": "Run full workspace suite",
             "msrv": "Run full workspace suite",
+            "presentation-fidelity": "Run all-slide SSIM trend and completeness gate",
             "word-fidelity": "Run all-page Word SSIM trend and completeness gate",
         }
         for job_name, use_step in consumers.items():
@@ -633,7 +634,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertLess(job.index(install), job.index(test_step))
             self.assertNotIn("continue-on-error", install)
             self.assert_no_success_short_circuit(self.operative_lines(install))
-        self.assertEqual(ci.count("python3 scripts/install_pinned_libreoffice.py"), 3)
+        self.assertEqual(ci.count("python3 scripts/install_pinned_libreoffice.py"), 4)
 
     def assert_poppler_consumers_contract(self, ci: str) -> None:
         consumers = {
@@ -741,41 +742,44 @@ class SprintWorkflowTests(unittest.TestCase):
         wrong_job_test = test_job.replace(
             test_checkout, test_checkout + prime, 1
         )
+
+        def mutate_word(old: str, new: str) -> str:
+            return ci.replace(job, job.replace(old, new, 1), 1)
+
         mutations = {
-            "missing-fetch": ci.replace(prime, "", 1),
-            "unlocked-fetch": ci.replace(
-                prime, prime.replace("cargo fetch --locked", "cargo fetch", 1), 1
+            "missing-fetch": mutate_word(prime, ""),
+            "unlocked-fetch": mutate_word(
+                prime, prime.replace("cargo fetch --locked", "cargo fetch", 1)
             ),
-            "duplicate-fetch": ci.replace(prime, prime + prime, 1),
-            "misplaced-fetch": ci.replace(prime, "", 1).replace(
-                gate, gate + prime, 1
+            "duplicate-fetch": mutate_word(prime, prime + prime),
+            "misplaced-fetch": mutate_word(
+                job, job.replace(prime, "", 1).replace(gate, gate + prime, 1)
             ),
-            "wrong-job-fetch": ci.replace(prime, "", 1).replace(
+            "wrong-job-fetch": mutate_word(prime, "").replace(
                 test_job, wrong_job_test, 1
             ),
-            "missing-gate": ci.replace(gate, "", 1),
-            "self-test-only": ci.replace(
-                gate, gate.replace("--check", "--self-test", 1), 1
+            "missing-gate": mutate_word(gate, ""),
+            "self-test-only": mutate_word(
+                gate, gate.replace("--check", "--self-test", 1)
             ),
-            "no-evidence-output": ci.replace(
-                '          --output-dir "${RUNNER_TEMP}/word-fidelity"\n', "", 1
+            "no-evidence-output": mutate_word(
+                '          --output-dir "${RUNNER_TEMP}/word-fidelity"\n', ""
             ),
-            "swallowed": ci.replace(
+            "swallowed": mutate_word(
                 gate,
                 gate.replace(
                     "        run: >-\n",
                     "        continue-on-error: true\n        run: >-\n",
                     1,
                 ),
-                1,
             ),
-            "missing-json": ci.replace(
+            "missing-json": mutate_word(
                 "            ${{ runner.temp }}/word-fidelity/gate-evidence.json\n",
                 "",
-                1,
             ),
-            "warning-artifact": ci.replace(
-                upload, upload.replace("if-no-files-found: error", "if-no-files-found: warn"), 1
+            "warning-artifact": mutate_word(
+                upload,
+                upload.replace("if-no-files-found: error", "if-no-files-found: warn"),
             ),
         }
         for label, mutated in mutations.items():
@@ -1359,7 +1363,7 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_libreoffice_consumers_contract(ci)
-        for job_name in ("test", "msrv", "word-fidelity"):
+        for job_name in ("test", "msrv", "presentation-fidelity", "word-fidelity"):
             job = self.yaml_block(ci, f"  {job_name}:")
             install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
             for label, mutated_install in {
@@ -8901,6 +8905,28 @@ Pedro Assumpcao and the rdocx maintainers.
             "crates/rdocx-cli/src/main.rs",
         ):
             self.assertTrue((workflow.REPO / binding).is_file(), binding)
+
+
+    def test_presentation_fidelity_uses_exact_linux_oracle(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job = self.yaml_block(ci, "  presentation-fidelity:")
+        self.assertIn("runs-on: ubuntu-24.04", job)
+        libreoffice = self.yaml_step(
+            job, "Install pinned LibreOffice 26.2.5.2"
+        )
+        self.assertEqual(
+            self.yaml_direct_lines(libreoffice, 8),
+            ("run: python3 scripts/install_pinned_libreoffice.py",),
+        )
+        poppler = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+        harness = self.yaml_step(
+            job, "Run all-slide SSIM trend and completeness gate"
+        )
+        self.assertLess(job.index(libreoffice), job.index(harness))
+        self.assertLess(job.index(poppler), job.index(harness))
+        self.assertNotIn("brew install --cask libreoffice", job)
 
 
 class DocxAuthoringConformanceTests(unittest.TestCase):

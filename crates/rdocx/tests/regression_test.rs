@@ -10775,12 +10775,12 @@ fn ordered_reader_items_keep_every_direct_child_and_preserved_boundary() {
             }
             ParagraphItemRef::ContentControl(control) => format!("control:{}", control.text()),
             ParagraphItemRef::Revision(revision) => format!("revision:{}", revision.id()),
-            ParagraphItemRef::CommentRangeStart(id) => format!("comment-start:{id}"),
-            ParagraphItemRef::CommentRangeEnd(id) => format!("comment-end:{id}"),
-            ParagraphItemRef::BookmarkStart { id, name } => {
+            ParagraphItemRef::CommentRangeStart { id, .. } => format!("comment-start:{id}"),
+            ParagraphItemRef::CommentRangeEnd { id, .. } => format!("comment-end:{id}"),
+            ParagraphItemRef::BookmarkStart { id, name, .. } => {
                 format!("bookmark-start:{}:{}", id.unwrap(), name.unwrap())
             }
-            ParagraphItemRef::BookmarkEnd { id } => {
+            ParagraphItemRef::BookmarkEnd { id, .. } => {
                 format!("bookmark-end:{}", id.unwrap())
             }
             ParagraphItemRef::UnsupportedXml(raw) => {
@@ -12103,6 +12103,41 @@ fn unrendered_number_formats_survive_without_decimal_coercion() {
 }
 
 #[test]
+fn paragraph_markers_report_whether_their_source_elements_contain_children() {
+    let document = document_with_content_controls(
+        r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <q:body><q:p>
+            <q:commentRangeStart q:id="1"><q:r><q:t>unexpected</q:t></q:r></q:commentRangeStart>
+            <q:commentRangeEnd q:id="1"/>
+            <q:bookmarkStart q:id="2" q:name="target"><q:r><q:t>unexpected</q:t></q:r></q:bookmarkStart>
+            <q:bookmarkEnd q:id="2"/>
+          </q:p></q:body>
+        </q:document>"#,
+    );
+    let paragraph = document.paragraph(0).expect("paragraph");
+    let markers = paragraph
+        .items()
+        .filter_map(|item| match item {
+            ParagraphItemRef::CommentRangeStart {
+                has_child_content, ..
+            }
+            | ParagraphItemRef::CommentRangeEnd {
+                has_child_content, ..
+            }
+            | ParagraphItemRef::BookmarkStart {
+                has_child_content, ..
+            }
+            | ParagraphItemRef::BookmarkEnd {
+                has_child_content, ..
+            } => Some(has_child_content),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(markers, [true, false, true, false]);
+}
+
+#[test]
 fn legacy_flattened_accessors_keep_their_recursive_results() {
     let xml = wrap_word_body(
         "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>direct</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc></w:tr></w:tbl>",
@@ -12223,12 +12258,12 @@ fn paragraph_snapshot(paragraph: ParagraphRef<'_>, raw_subtrees: &mut Vec<Vec<u8
                 revision.author(),
                 revision.kind(),
             ),
-            ParagraphItemRef::CommentRangeStart(id) => format!("comment-start:{id}"),
-            ParagraphItemRef::CommentRangeEnd(id) => format!("comment-end:{id}"),
-            ParagraphItemRef::BookmarkStart { id, name } => {
+            ParagraphItemRef::CommentRangeStart { id, .. } => format!("comment-start:{id}"),
+            ParagraphItemRef::CommentRangeEnd { id, .. } => format!("comment-end:{id}"),
+            ParagraphItemRef::BookmarkStart { id, name, .. } => {
                 format!("bookmark-start:{id:?}:{name:?}")
             }
-            ParagraphItemRef::BookmarkEnd { id } => format!("bookmark-end:{id:?}"),
+            ParagraphItemRef::BookmarkEnd { id, .. } => format!("bookmark-end:{id:?}"),
             ParagraphItemRef::UnsupportedXml(raw) => {
                 raw_subtrees.push(raw.to_vec());
                 format!("raw:{}", std::str::from_utf8(raw).unwrap())
@@ -27166,4 +27201,37 @@ fn unsupported_fragment_dependency_aborts_without_mutation() {
         .unwrap_err();
     assert!(error.to_string().contains("exhausted"), "{error}");
     assert_eq!(exhausted.to_bytes().unwrap(), before_exhausted);
+}
+
+#[test]
+fn contributor_document_body_reader_semantics_survive_reopen() {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(r#"<w:document xmlns:w="{W_NS}"><w:body><w:p/><w:sectPr/></w:body></w:document>"#)
+            .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let first = document.to_bytes().unwrap();
+    let first_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&first)).unwrap();
+    let first_xml = first_package.get_part("/word/document.xml").unwrap();
+    assert!(
+        first_xml
+            .windows(b"<w:p/>".len())
+            .any(|window| window == b"<w:p/>"),
+        "modeled empty paragraphs must retain the self-closing form"
+    );
+
+    let mut reopened = Document::from_bytes(&first).unwrap();
+    let second = reopened.to_bytes().unwrap();
+    let second_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(second)).unwrap();
+    assert_eq!(
+        second_package.get_part("/word/document.xml"),
+        Some(first_xml)
+    );
 }

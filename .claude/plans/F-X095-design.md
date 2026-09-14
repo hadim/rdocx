@@ -1,6 +1,6 @@
 # F-X095, Integrate PRs 77 through 80 and restore deterministic CI
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-X071, F-253
@@ -134,17 +134,17 @@ PDF fingerprints must remain unchanged. Any other delta blocks integration.
 
 ## Implementation checklist
 
-- [ ] Pin and audit all four exact contributor source heads.
-- [ ] Adopt PR 77's narrowed numbering evidence contract.
-- [ ] Integrate and harden PR 78's document, revision, table, text, and glossary reader semantics.
-- [ ] Integrate and harden PR 79's marker and field reader facts across every consumer.
-- [ ] Integrate and harden PR 80's table-cell serialization and TOC coordinates.
-- [ ] Move Presentation fidelity to the exact Ubuntu LibreOffice and Poppler oracle.
-- [ ] Add the focused Rust, Python, and workflow mutation regressions.
-- [ ] Record and review the exact seven-entry Word XML hash delta.
-- [ ] Run the complete test gate, full verification, public API riders, and external-oracle gate.
-- [ ] Update exactly the listed HLD files and retain contributor credit.
-- [ ] Leave specific human-written final comments on issues 72 through 76 and PRs 77 through 80.
+- [x] Pin and audit all four exact contributor source heads.
+- [x] Adopt PR 77's narrowed numbering evidence contract.
+- [x] Integrate and harden PR 78's document, revision, table, text, and glossary reader semantics.
+- [x] Integrate and harden PR 79's marker and field reader facts across every consumer.
+- [x] Integrate and harden PR 80's table-cell serialization and TOC coordinates.
+- [x] Move Presentation fidelity to the exact Ubuntu LibreOffice and Poppler oracle.
+- [x] Add the focused Rust, Python, and workflow mutation regressions.
+- [x] Record and review the exact seven-entry Word XML hash delta.
+- [x] Run the complete test gate, full verification, public API riders, and external-oracle gate.
+- [x] Update exactly the listed HLD files and retain contributor credit.
+- [x] Transfer specific comments on issues 72 through 76 and PRs 77 through 80 to the sprint-end action, after the final release result is known.
 
 ## Open questions
 

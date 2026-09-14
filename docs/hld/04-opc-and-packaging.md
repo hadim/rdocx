@@ -90,6 +90,23 @@ Story-wide hyperlink projection retains the source byte position only while
 building its result, then returns existing locations and link records in that
 physical order. Relationship lookup remains scoped to the owning story part.
 
+The main Word document reader accepts one namespace-correct `document` root
+and one namespace-correct `body` child, rejects truncation, duplicate roots,
+foreign lookalikes, and non-whitespace content outside that root, and retains
+the first body `sectPr`. Later section owners remain opaque rather than
+disappearing. Self-closing paragraphs, tables, and cells are modeled as empty
+typed owners. Start-and-end forms are modeled only when their complete
+attributes and content satisfy the same grammar. Otherwise their exact
+namespace-complete subtree remains opaque. Header and footer references
+recognize `r:id` only when the attribute is bound to the package relationships
+namespace.
+Body comparison excludes the source's direct final `sectPr` from its
+interleaved content before appending the compared section properties. This
+keeps the strict first-section reader from selecting a stale duplicate and
+retains the tracked `sectPrChange` as the only final section owner. Comparison
+wrappers for extracted body XML declare the standard relationships namespace,
+so namespace-aware section parsing retains header and footer references.
+
 Story text replacement runs on a staged clone. It resolves the owner,
 fingerprint, one-element index path, item kind, and text-bearing capability,
 patches only the selected owner, then serializes and reopens the complete
@@ -875,9 +892,11 @@ stored bytes.
 Word table grids recognize `tblGrid`, active `gridCol` children, their width
 attributes, and `tblGridChange` by the bound WordprocessingML namespace.
 Foreign same-local children remain unmodelled and retain their exact bytes.
-One historical grid-change subtree is preserved, while a second modeled change
-fails parsing rather than discarding history. Serialization writes active
-columns first and the historical change after them in schema order.
+One nonempty historical grid-change subtree is preserved, while a second
+modeled change fails parsing rather than discarding history. A structurally
+empty `tblGridChange` remains unmodelled in its original slot. Serialization
+writes active columns first and the modeled historical change after them in
+schema order.
 
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML

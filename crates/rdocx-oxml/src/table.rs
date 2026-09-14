@@ -21,6 +21,8 @@ use crate::shared::ST_Jc;
 use crate::text::CT_P;
 use crate::units::Twips;
 
+const MAX_RECOGNIZED_TABLE_NESTING: usize = 32;
+
 /// Write any captured raw XML that belongs immediately before position `pos`.
 ///
 /// Table children we do not model are stored as `(position, raw)` pairs so
@@ -265,7 +267,10 @@ impl CT_TblCellMar {
                         mar.right = Self::parse_edge(e, &prefixes)?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblCellMar") => {
+                Ok(Event::End(ref e))
+                    if matches_local_name(e.name().as_ref(), b"tblCellMar")
+                        || matches_local_name(e.name().as_ref(), b"tcMar") =>
+                {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -279,7 +284,11 @@ impl CT_TblCellMar {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        writer.write_event(Event::Start(BytesStart::new("w:tblCellMar")))?;
+        self.to_xml_with_tag(writer, "w:tblCellMar")
+    }
+
+    fn to_xml_with_tag<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
+        writer.write_event(Event::Start(BytesStart::new(tag)))?;
 
         fn write_edge<W: std::io::Write>(
             writer: &mut Writer<W>,
@@ -307,7 +316,7 @@ impl CT_TblCellMar {
             write_edge(writer, "w:right", r)?;
         }
 
-        writer.write_event(Event::End(BytesEnd::new("w:tblCellMar")))?;
+        writer.write_event(Event::End(BytesEnd::new(tag)))?;
         Ok(())
     }
 }
@@ -811,17 +820,6 @@ impl CT_TblGrid {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(e.name().as_ref(), b"gridCol", &prefixes) {
                         columns.push(Self::parse_grid_column(e, &prefixes)?);
-                    } else if is_word_element(e.name().as_ref(), b"tblGridChange", &prefixes) {
-                        if grid_change_xml.is_some() {
-                            return Err(OxmlError::InvalidValue(
-                                "duplicate w:tblGridChange".to_owned(),
-                            ));
-                        }
-                        let raw = capture_empty_element(e)?;
-                        grid_change_xml = Some(crate::text::raw_with_external_bindings(
-                            &raw,
-                            &preserved_table_raw_bindings(&prefixes),
-                        )?);
                     } else {
                         let raw = capture_empty_element(e)?;
                         extra_xml.push(crate::text::raw_with_external_bindings(
@@ -1276,6 +1274,8 @@ pub struct CT_TcPr {
     pub v_align: Option<ST_VerticalJc>,
     /// No-wrap text
     pub no_wrap: Option<bool>,
+    /// Per-cell margins.
+    pub cell_margin: Option<CT_TblCellMar>,
     /// Text direction
     pub text_direction: Option<String>,
     /// `w:cnfStyle` — which conditional parts of the table style this cell is.
@@ -1339,6 +1339,10 @@ impl CT_TcPr {
                                 &prefixes,
                                 &border_bindings,
                             )?);
+                        boundary = next;
+                    } else if is_word_element(name.as_ref(), b"tcMar", &prefixes) {
+                        pr.cell_margin =
+                            Some(CT_TblCellMar::from_xml_with_prefixes(reader, &prefixes)?);
                         boundary = next;
                     } else if Self::parse_property_element(e, &mut pr, &prefixes)? {
                         reader.read_to_end_into(name, &mut Vec::new())?;
@@ -1482,8 +1486,10 @@ impl CT_TcPr {
             writer.write_event(Event::Empty(BytesStart::new("w:noWrap")))?;
         }
 
-        // Unmodelled w:tcMar is preserved at boundary 8.
         write_extras_at(writer, &self.extra_xml, 8)?;
+        if let Some(ref cell_margin) = self.cell_margin {
+            cell_margin.to_xml_with_tag(writer, "w:tcMar")?;
+        }
         write_extras_at(writer, &self.extra_xml, 9)?;
         if let Some(ref td) = self.text_direction {
             let mut e = BytesStart::new("w:textDirection");
@@ -1518,6 +1524,7 @@ impl CT_TcPr {
             && self.shading.is_none()
             && self.v_align.is_none()
             && self.no_wrap.is_none()
+            && self.cell_margin.is_none()
             && self.text_direction.is_none()
             && self.cnf_style.is_none()
             && self.extra_xml.is_empty()
@@ -1636,6 +1643,20 @@ impl CT_Tc {
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings_at_depth(
+            reader,
+            word_prefixes,
+            owner_bindings,
+            0,
+        )
+    }
+
+    fn from_xml_with_prefixes_and_owner_bindings_at_depth(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+        table_depth: usize,
+    ) -> Result<Self> {
         let mut properties = None;
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1663,10 +1684,11 @@ impl CT_Tc {
                         let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                         let table_bindings = merged_owner_bindings(owner_bindings, &local_bindings);
                         content.push(CellContent::Table(
-                            CT_Tbl::from_xml_with_prefixes_and_owner_bindings(
+                            CT_Tbl::from_xml_with_prefixes_and_owner_bindings_at_depth(
                                 reader,
                                 &prefixes,
                                 &table_bindings,
+                                table_depth.saturating_add(1),
                             )?,
                         ));
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
@@ -1696,7 +1718,11 @@ impl CT_Tc {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if !is_word_element(name.as_ref(), b"tcPr", &prefixes) {
+                    if is_word_element(name.as_ref(), b"p", &prefixes) {
+                        content.push(CellContent::Paragraph(CT_P::new()));
+                    } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
+                        content.push(CellContent::Table(CT_Tbl::new()));
+                    } else if !is_word_element(name.as_ref(), b"tcPr", &prefixes) {
                         extra_xml.push((
                             content.len(),
                             crate::text::raw_with_external_bindings(
@@ -1827,6 +1853,20 @@ impl CT_Row {
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings_at_depth(
+            reader,
+            word_prefixes,
+            owner_bindings,
+            0,
+        )
+    }
+
+    fn from_xml_with_prefixes_and_owner_bindings_at_depth(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+        table_depth: usize,
+    ) -> Result<Self> {
         let mut table_property_exception = None;
         let mut properties = None;
         let mut cells = Vec::new();
@@ -1858,10 +1898,11 @@ impl CT_Row {
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
                         let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                         let cell_bindings = merged_owner_bindings(owner_bindings, &local_bindings);
-                        cells.push(CT_Tc::from_xml_with_prefixes_and_owner_bindings(
+                        cells.push(CT_Tc::from_xml_with_prefixes_and_owner_bindings_at_depth(
                             reader,
                             &prefixes,
                             &cell_bindings,
+                            table_depth,
                         )?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
@@ -1899,6 +1940,8 @@ impl CT_Row {
                             &capture_empty_element(e)?,
                             owner_bindings,
                         )?);
+                    } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
+                        cells.push(CT_Tc::new());
                     } else if !is_word_element(name.as_ref(), b"trPr", &prefixes) {
                         extra_xml.push((
                             cells.len(),
@@ -2058,6 +2101,25 @@ impl CT_Tbl {
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings_at_depth(
+            reader,
+            word_prefixes,
+            owner_bindings,
+            0,
+        )
+    }
+
+    fn from_xml_with_prefixes_and_owner_bindings_at_depth(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+        table_depth: usize,
+    ) -> Result<Self> {
+        if table_depth >= MAX_RECOGNIZED_TABLE_NESTING {
+            return Err(OxmlError::InvalidValue(
+                "recognized model nesting exceeds table limit".to_owned(),
+            ));
+        }
         let mut properties = None;
         let mut grid = None;
         let mut rows = Vec::new();
@@ -2084,10 +2146,11 @@ impl CT_Tbl {
                     } else if is_word_element(name.as_ref(), b"tr", &prefixes) {
                         let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                         let row_bindings = merged_owner_bindings(owner_bindings, &local_bindings);
-                        rows.push(CT_Row::from_xml_with_prefixes_and_owner_bindings(
+                        rows.push(CT_Row::from_xml_with_prefixes_and_owner_bindings_at_depth(
                             reader,
                             &prefixes,
                             &row_bindings,
+                            table_depth,
                         )?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
@@ -2130,6 +2193,8 @@ impl CT_Tbl {
                     // so a self-closing one must not be re-emitted from here.
                     if is_word_element(name.as_ref(), b"tblGrid", &prefixes) {
                         grid = Some(CT_TblGrid::default());
+                    } else if is_word_element(name.as_ref(), b"tr", &prefixes) {
+                        rows.push(CT_Row::new());
                     } else if matches_local_name(name.as_ref(), b"tblGrid") {
                         let raw = capture_empty_element(e)?;
                         let raw_bindings = merged_owner_bindings(
@@ -2449,6 +2514,17 @@ mod tests {
     }
 
     #[test]
+    fn empty_table_grid_changes_remain_unmodeled() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/><w:tblGridChange w:id="3"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr>"#,
+        );
+        let grid = table.grid.expect("table grid parses");
+
+        assert!(grid.grid_change_xml.is_none());
+        assert_eq!(grid.extra_xml.len(), 1);
+    }
+
+    #[test]
     fn whole_valued_decimal_table_measurements_parse_exactly() {
         let table = parse_table(
             r#"<w:tblPr>
@@ -2461,7 +2537,7 @@ mod tests {
                    <w:right w:w="180" w:type="dxa"/>
                  </w:tblCellMar>
                </w:tblPr>
-               <w:tr><w:tc><w:tcPr><w:tcW w:w="4675.00" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+               <w:tr><w:tc><w:tcPr><w:tcW w:w="4675.00" w:type="dxa"/><w:tcMar><w:top w:w="80.0" w:type="dxa"/></w:tcMar></w:tcPr><w:p/></w:tc></w:tr>"#,
         );
 
         let properties = table.properties.as_ref().expect("table properties");
@@ -2484,6 +2560,18 @@ mod tests {
                 .map(|width| width.w),
             Some(4675)
         );
+        let cell_properties = table.rows[0].cells[0]
+            .properties
+            .as_ref()
+            .expect("cell properties");
+        assert_eq!(
+            cell_properties
+                .cell_margin
+                .as_ref()
+                .and_then(|margins| margins.top),
+            Some(Twips(80))
+        );
+        assert!(cell_properties.extra_xml.is_empty());
     }
 
     #[test]
@@ -3774,6 +3862,18 @@ mod tests {
 
         // text() should concat paragraph text with newline separator
         assert_eq!(cell.text(), "First\nSecond");
+    }
+
+    #[test]
+    fn self_closing_cell_paragraph_is_modeled() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr>"#,
+        );
+        let cell = &table.rows[0].cells[0];
+
+        assert_eq!(cell.paragraphs().len(), 1);
+        assert!(cell.paragraphs()[0].text().is_empty());
+        assert!(table_to_xml(&table).contains("<w:p/>"));
     }
 
     /// Serialize a table and return the XML, for the fidelity tests below.

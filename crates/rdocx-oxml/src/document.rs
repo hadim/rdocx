@@ -4,7 +4,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::content_control::{CT_Sdt, SdtOwner};
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::{
@@ -378,7 +378,12 @@ impl CT_SectPr {
                             let val = std::str::from_utf8(&attr.value)?;
                             if is_word_attribute(key, b"type", &prefixes) {
                                 hdr_type = HdrFtrType::from_str(val);
-                            } else if matches_local_name(key, b"id") {
+                            } else if attribute_in_namespace(
+                                key,
+                                b"id",
+                                crate::namespace::R_NS,
+                                &prefixes,
+                            ) {
                                 rel_id = val.to_string();
                             }
                         }
@@ -399,7 +404,12 @@ impl CT_SectPr {
                             let val = std::str::from_utf8(&attr.value)?;
                             if is_word_attribute(key, b"type", &prefixes) {
                                 ftr_type = HdrFtrType::from_str(val);
-                            } else if matches_local_name(key, b"id") {
+                            } else if attribute_in_namespace(
+                                key,
+                                b"id",
+                                crate::namespace::R_NS,
+                                &prefixes,
+                            ) {
                                 rel_id = val.to_string();
                             }
                         }
@@ -454,7 +464,61 @@ impl CT_SectPr {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"cols", &prefixes) {
+                    if is_word_element(name.as_ref(), b"pgSz", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        if raw_element_has_child_content(&raw)?
+                            || !page_size_attributes_are_modeled(e, &prefixes)?
+                        {
+                            sect.push_extra_xml(raw, 4, 0);
+                        } else {
+                            Self::parse_page_size_attributes(&mut sect, e, &prefixes)?;
+                        }
+                        raw_position = (4, 0);
+                    } else if is_word_element(name.as_ref(), b"pgMar", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        if raw_element_has_child_content(&raw)?
+                            || !page_margin_attributes_are_modeled(e, &prefixes)?
+                        {
+                            sect.push_extra_xml(raw, 5, 0);
+                        } else {
+                            Self::parse_page_margin_attributes(&mut sect, e, &prefixes)?;
+                        }
+                        raw_position = (5, 0);
+                    } else if is_word_element(name.as_ref(), b"headerReference", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        if raw_element_has_child_content(&raw)?
+                            || !story_reference_attributes_are_modeled(e, &prefixes)?
+                        {
+                            sect.push_extra_xml(raw, 0, header_count);
+                        } else if let Some(reference) = Self::parse_story_reference(e, &prefixes)? {
+                            sect.header_refs.push(reference);
+                            header_count += 1;
+                        }
+                        raw_position = (0, header_count);
+                    } else if is_word_element(name.as_ref(), b"footerReference", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        if raw_element_has_child_content(&raw)?
+                            || !story_reference_attributes_are_modeled(e, &prefixes)?
+                        {
+                            sect.push_extra_xml(raw, 1, footer_count);
+                        } else if let Some(reference) = Self::parse_story_reference(e, &prefixes)? {
+                            sect.footer_refs.push(reference);
+                            footer_count += 1;
+                        }
+                        raw_position = (1, footer_count);
+                    } else if is_word_element(name.as_ref(), b"cols", &prefixes) {
                         sect.columns = Some(Self::parse_cols_start(reader, e, &prefixes)?);
                         raw_position = (7, 0);
                     } else if is_word_element(name.as_ref(), b"pgNumType", &prefixes) {
@@ -515,6 +579,91 @@ impl CT_SectPr {
 
         sect.bind_story_reference_positions();
         Ok(sect)
+    }
+
+    fn parse_page_size_attributes(
+        sect: &mut Self,
+        element: &BytesStart<'_>,
+        word_prefixes: &[String],
+    ) -> Result<()> {
+        for attribute in element.attributes() {
+            let attribute = attribute?;
+            let value = std::str::from_utf8(&attribute.value)?;
+            if is_word_attribute(attribute.key.as_ref(), b"w", word_prefixes) {
+                sect.page_width = Some(Twips(value.parse()?));
+            } else if is_word_attribute(attribute.key.as_ref(), b"h", word_prefixes) {
+                sect.page_height = Some(Twips(value.parse()?));
+            } else if is_word_attribute(attribute.key.as_ref(), b"orient", word_prefixes) {
+                sect.orientation = ST_PageOrientation::from_str(value).ok();
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_page_margin_attributes(
+        sect: &mut Self,
+        element: &BytesStart<'_>,
+        word_prefixes: &[String],
+    ) -> Result<()> {
+        for attribute in element.attributes() {
+            let attribute = attribute?;
+            let key = attribute.key.as_ref();
+            if is_word_attribute(key, b"top", word_prefixes) {
+                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
+                sect.margin_top = Some(value);
+            } else if is_word_attribute(key, b"right", word_prefixes)
+                || is_word_attribute(key, b"end", word_prefixes)
+            {
+                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
+                sect.margin_right = Some(value);
+            } else if is_word_attribute(key, b"bottom", word_prefixes) {
+                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
+                sect.margin_bottom = Some(value);
+            } else if is_word_attribute(key, b"left", word_prefixes)
+                || is_word_attribute(key, b"start", word_prefixes)
+            {
+                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
+                sect.margin_left = Some(value);
+            } else if is_word_attribute(key, b"gutter", word_prefixes) {
+                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
+                sect.gutter = Some(value);
+            } else if is_word_attribute(key, b"header", word_prefixes) {
+                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
+                sect.header_distance = Some(value);
+            } else if is_word_attribute(key, b"footer", word_prefixes) {
+                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
+                sect.footer_distance = Some(value);
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_story_reference(
+        element: &BytesStart<'_>,
+        word_prefixes: &[String],
+    ) -> Result<Option<HdrFtrRef>> {
+        let mut hdr_ftr_type = HdrFtrType::Default;
+        let mut relationship_id = None;
+        for attribute in element.attributes() {
+            let attribute = attribute?;
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+                .into_owned();
+            if is_word_attribute(attribute.key.as_ref(), b"type", word_prefixes) {
+                hdr_ftr_type = HdrFtrType::from_str(&value);
+            } else if attribute_in_namespace(
+                attribute.key.as_ref(),
+                b"id",
+                crate::namespace::R_NS,
+                word_prefixes,
+            ) {
+                relationship_id = Some(value);
+            }
+        }
+        Ok(relationship_id.map(|rel_id| HdrFtrRef {
+            hdr_ftr_type,
+            rel_id,
+        }))
     }
 
     fn parse_page_number(
@@ -1050,6 +1199,156 @@ fn unused_page_number_prefix(
     unreachable!("the finite start tag cannot use every generated prefix")
 }
 
+fn attribute_in_namespace(
+    name: &[u8],
+    local_name: &[u8],
+    namespace: &str,
+    scope: &[String],
+) -> bool {
+    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+        return false;
+    };
+    if name.get(separator + 1..) != Some(local_name) {
+        return false;
+    }
+    let prefix = &name[..separator];
+    scope.iter().any(|binding| {
+        binding
+            .strip_prefix('\0')
+            .and_then(|binding| binding.split_once('\0'))
+            .is_some_and(|(candidate, value)| candidate.as_bytes() == prefix && value == namespace)
+    })
+}
+
+fn page_size_attributes_are_modeled(
+    element: &BytesStart<'_>,
+    word_prefixes: &[String],
+) -> Result<bool> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        if namespace_declaration(key) {
+            continue;
+        }
+        let value = std::str::from_utf8(&attribute.value)?;
+        if is_word_attribute(key, b"w", word_prefixes)
+            || is_word_attribute(key, b"h", word_prefixes)
+        {
+            if value.parse::<i64>().is_err() {
+                return Ok(false);
+            }
+        } else if is_word_attribute(key, b"orient", word_prefixes) {
+            if ST_PageOrientation::from_str(value).is_err() {
+                return Ok(false);
+            }
+        } else {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn page_margin_attributes_are_modeled(
+    element: &BytesStart<'_>,
+    word_prefixes: &[String],
+) -> Result<bool> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        if namespace_declaration(key) {
+            continue;
+        }
+        let modeled = [
+            b"top".as_slice(),
+            b"right".as_slice(),
+            b"end".as_slice(),
+            b"bottom".as_slice(),
+            b"left".as_slice(),
+            b"start".as_slice(),
+            b"gutter".as_slice(),
+            b"header".as_slice(),
+            b"footer".as_slice(),
+        ]
+        .iter()
+        .any(|local| is_word_attribute(key, local, word_prefixes));
+        if !modeled
+            || std::str::from_utf8(&attribute.value)?
+                .parse::<i64>()
+                .is_err()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn story_reference_attributes_are_modeled(
+    element: &BytesStart<'_>,
+    word_prefixes: &[String],
+) -> Result<bool> {
+    let mut type_count = 0usize;
+    let mut relationship_count = 0usize;
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        if namespace_declaration(key) {
+            continue;
+        }
+        let value = std::str::from_utf8(&attribute.value)?;
+        if is_word_attribute(key, b"type", word_prefixes) {
+            type_count += 1;
+            if type_count > 1 || !matches!(value, "default" | "first" | "even") {
+                return Ok(false);
+            }
+        } else if attribute_in_namespace(key, b"id", crate::namespace::R_NS, word_prefixes) {
+            relationship_count += 1;
+            if relationship_count > 1 || value.is_empty() {
+                return Ok(false);
+            }
+        } else {
+            return Ok(false);
+        }
+    }
+    Ok(relationship_count == 1)
+}
+
+fn namespace_declaration(name: &[u8]) -> bool {
+    name == b"xmlns" || name.starts_with(b"xmlns:")
+}
+
+fn raw_element_has_child_content(raw: &[u8]) -> Result<bool> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(_) => {
+                if depth > 0 {
+                    return Ok(true);
+                }
+                depth += 1;
+            }
+            Event::Empty(_) if depth > 0 => return Ok(true),
+            Event::Text(text)
+                if depth > 0 && text.as_ref().iter().any(|byte| !byte.is_ascii_whitespace()) =>
+            {
+                return Ok(true);
+            }
+            Event::CData(text)
+                if depth > 0 && text.as_ref().iter().any(|byte| !byte.is_ascii_whitespace()) =>
+            {
+                return Ok(true);
+            }
+            Event::GeneralRef(_) if depth > 0 => return Ok(true),
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 type AttributeSpans = (
     std::ops::Range<usize>,
     std::ops::Range<usize>,
@@ -1283,6 +1582,20 @@ impl CT_Body {
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings_until(
+            reader,
+            word_prefixes,
+            owner_bindings,
+            b"body",
+        )
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings_until(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+        end_local_name: &[u8],
+    ) -> Result<Self> {
         let mut content = Vec::new();
         let mut sect_pr = None;
         let mut buf = Vec::new();
@@ -1317,14 +1630,23 @@ impl CT_Body {
                             content.push(BodyContent::RawXml(raw));
                         }
                     } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
-                        let local_bindings = local_namespace_overrides(e, word_prefixes)?;
-                        let section_bindings =
-                            merged_owner_bindings(owner_bindings, &local_bindings);
-                        sect_pr = Some(CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
-                            reader,
-                            &prefixes,
-                            &section_bindings,
-                        )?);
+                        if sect_pr.is_none() {
+                            let local_bindings = local_namespace_overrides(e, word_prefixes)?;
+                            let section_bindings =
+                                merged_owner_bindings(owner_bindings, &local_bindings);
+                            sect_pr = Some(CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
+                                reader,
+                                &prefixes,
+                                &section_bindings,
+                            )?);
+                        } else {
+                            content.push(BodyContent::RawXml(
+                                crate::text::raw_with_external_bindings(
+                                    &capture_element(reader, e)?,
+                                    owner_bindings,
+                                )?,
+                            ));
+                        }
                     } else {
                         // Capture unknown elements as raw XML
                         content.push(BodyContent::RawXml(
@@ -1343,7 +1665,16 @@ impl CT_Body {
                     } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
                         content.push(BodyContent::Table(CT_Tbl::new()));
                     } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
-                        sect_pr = Some(CT_SectPr::empty());
+                        if sect_pr.is_none() {
+                            sect_pr = Some(CT_SectPr::empty());
+                        } else {
+                            content.push(BodyContent::RawXml(
+                                crate::text::raw_with_external_bindings(
+                                    &capture_empty_element(e)?,
+                                    owner_bindings,
+                                )?,
+                            ));
+                        }
                     } else {
                         content.push(BodyContent::RawXml(
                             crate::text::raw_with_external_bindings(
@@ -1353,10 +1684,15 @@ impl CT_Body {
                         ));
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"body") => {
+                Ok(Event::End(ref e))
+                    if is_word_element(e.name().as_ref(), end_local_name, word_prefixes) =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    let end = String::from_utf8_lossy(end_local_name);
+                    return Err(OxmlError::MissingElement(format!("w:{end} end")));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -1432,6 +1768,8 @@ impl CT_Document {
         let mut background_extra_xml = Vec::new();
         let mut buf = Vec::new();
         let mut word_prefixes = Vec::new();
+        let mut document_open = false;
+        let mut document_closed = false;
 
         // Known namespace prefixes that we always emit ourselves
         let known_ns: &[&[u8]] = &[b"xmlns:w", b"xmlns:r", b"xmlns:mc", b"xmlns"];
@@ -1441,15 +1779,10 @@ impl CT_Document {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, &word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"body") {
-                        let owner_bindings = local_namespace_overrides(e, &word_prefixes)?;
-                        body = Some(CT_Body::from_xml_with_prefixes_and_owner_bindings(
-                            &mut reader,
-                            &prefixes,
-                            &owner_bindings,
-                        )?);
-                    } else if matches_local_name(name.as_ref(), b"document") {
-                        // Capture extra namespace declarations from the document element
+                    if is_word_element(name.as_ref(), b"document", &prefixes) {
+                        if document_open || document_closed {
+                            return Err(OxmlError::UnexpectedElement("w:document".to_owned()));
+                        }
                         for attr in e.attributes().flatten() {
                             let key = attr.key.as_ref();
                             if (key.starts_with(b"xmlns:") || key == b"xmlns")
@@ -1465,8 +1798,22 @@ impl CT_Document {
                                 extra_namespaces.push((key_str, val_str));
                             }
                         }
-                        // Continue into document element
+                        document_open = true;
                         word_prefixes = prefixes;
+                    } else if !document_open || document_closed {
+                        return Err(OxmlError::UnexpectedElement(
+                            String::from_utf8_lossy(name.as_ref()).into_owned(),
+                        ));
+                    } else if is_word_element(name.as_ref(), b"body", &prefixes) {
+                        if !document_open || document_closed || body.is_some() {
+                            return Err(OxmlError::UnexpectedElement("w:body".to_owned()));
+                        }
+                        let owner_bindings = local_namespace_overrides(e, &word_prefixes)?;
+                        body = Some(CT_Body::from_xml_with_prefixes_and_owner_bindings(
+                            &mut reader,
+                            &prefixes,
+                            &owner_bindings,
+                        )?);
                     } else if is_word_element(name.as_ref(), b"background", &prefixes) {
                         background_xml = Some(capture_element(&mut reader, e)?);
                     } else if matches_local_name(name.as_ref(), b"background") {
@@ -1477,13 +1824,44 @@ impl CT_Document {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let prefixes = word_prefixes_at(e, &word_prefixes)?;
-                    if is_word_element(e.name().as_ref(), b"background", &prefixes) {
+                    if is_word_element(e.name().as_ref(), b"document", &prefixes)
+                        || !document_open
+                        || document_closed
+                    {
+                        return Err(OxmlError::UnexpectedElement(
+                            String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        ));
+                    } else if is_word_element(e.name().as_ref(), b"body", &prefixes) {
+                        if body.is_some() {
+                            return Err(OxmlError::UnexpectedElement("w:body".to_owned()));
+                        }
+                        body = Some(CT_Body::new());
+                    } else if is_word_element(e.name().as_ref(), b"background", &prefixes) {
                         background_xml = Some(capture_empty_element(e)?);
                     } else if matches_local_name(e.name().as_ref(), b"background") {
                         background_extra_xml.push(capture_empty_element(e)?);
                     }
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::End(ref e))
+                    if is_word_element(e.name().as_ref(), b"document", &word_prefixes) =>
+                {
+                    if !document_open {
+                        return Err(OxmlError::UnexpectedElement("w:document end".to_owned()));
+                    }
+                    document_open = false;
+                    document_closed = true;
+                }
+                Ok(Event::Text(ref text)) if !text.as_ref().iter().all(u8::is_ascii_whitespace) => {
+                    return Err(OxmlError::UnexpectedElement(
+                        "text outside w:body".to_owned(),
+                    ));
+                }
+                Ok(Event::Eof) => {
+                    if document_open || !document_closed {
+                        return Err(OxmlError::MissingElement("w:document end".to_owned()));
+                    }
+                    break;
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -1491,7 +1869,7 @@ impl CT_Document {
         }
 
         Ok(CT_Document {
-            body: body.unwrap_or_default(),
+            body: body.ok_or_else(|| OxmlError::MissingElement("w:body".to_owned()))?,
             extra_namespaces,
             background_xml,
             background_extra_xml,
@@ -1645,6 +2023,83 @@ mod tests {
         assert_eq!(paragraph.properties.as_ref().unwrap().jc, None);
     }
     use super::*;
+
+    #[test]
+    fn parses_empty_body_paragraph_and_first_section_properties_as_modeled_content() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p/><w:sectPr/><w:sectPr><w:titlePg/></w:sectPr></w:body></w:document>"#
+        );
+
+        let document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        assert!(matches!(
+            document.body.content.as_slice(),
+            [BodyContent::Paragraph(_), BodyContent::RawXml(raw)]
+                if raw.windows(b"<w:titlePg/>".len())
+                    .any(|window| window == b"<w:titlePg/>")
+        ));
+        let section = document.body.sect_pr.expect("first section is retained");
+        assert_eq!(section.title_pg, None);
+    }
+
+    #[test]
+    fn start_end_section_leaves_keep_unsupported_attributes_opaque() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="{}" xmlns:x="urn:producer"><w:body><w:sectPr><w:headerReference r:id="rId1" x:flag="keep"></w:headerReference><w:pgSz w:w="12240" w:h="15840" x:flag="keep"></w:pgSz><w:pgMar w:top="720" x:flag="not-a-number"></w:pgMar></w:sectPr></w:body></w:document>"#,
+            crate::namespace::R_NS,
+        );
+
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+        let section = document.body.sect_pr.expect("section is retained");
+        assert!(section.header_refs.is_empty());
+        assert_eq!(section.page_width, None);
+        assert_eq!(section.margin_top, None);
+        assert_eq!(section.extra_xml.len(), 3);
+        assert!(section.extra_xml.iter().all(|raw| {
+            raw.windows(b"x:flag=\"".len())
+                .any(|window| window == b"x:flag=\"")
+        }));
+    }
+
+    #[test]
+    fn expanded_section_children_preserve_modeled_facts_and_relationship_namespaces() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:q="{}" xmlns:x="urn:foreign"><w:body><w:sectPr><w:headerReference w:type="default" q:id="rId1"></w:headerReference><w:footerReference w:type="even" x:id="decoy"></w:footerReference><w:pgSz w:w="12240" w:h="15840"></w:pgSz><w:pgMar w:top="720"></w:pgMar></w:sectPr></w:body></w:document>"#,
+            crate::namespace::R_NS,
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+        let section = document.body.sect_pr.expect("section is retained");
+        assert_eq!(section.page_width, Some(Twips(12240)));
+        assert_eq!(section.page_height, Some(Twips(15840)));
+        assert_eq!(section.margin_top, Some(Twips(720)));
+        assert_eq!(section.header_refs[0].rel_id, "rId1");
+        assert!(section.footer_refs.is_empty());
+    }
+
+    #[test]
+    fn document_reader_rejects_truncated_multiple_and_foreign_roots() {
+        let truncated = format!(r#"<w:document xmlns:w="{W_NS}"><w:body><w:p/>"#);
+        assert!(CT_Document::from_xml(truncated.as_bytes()).is_err());
+
+        let multiple_roots = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body/></w:document><w:document xmlns:w="{W_NS}"><w:body/></w:document>"#
+        );
+        assert!(CT_Document::from_xml(multiple_roots.as_bytes()).is_err());
+
+        let foreign =
+            format!(r#"<x:document xmlns:x="urn:foreign" xmlns:w="{W_NS}"><x:body/></x:document>"#);
+        assert!(CT_Document::from_xml(foreign.as_bytes()).is_err());
+
+        let text_outside = format!(r#"outside<w:document xmlns:w="{W_NS}"><w:body/></w:document>"#);
+        assert!(CT_Document::from_xml(text_outside.as_bytes()).is_err());
+
+        let empty_body = format!(r#"<w:document xmlns:w="{W_NS}"><w:body/></w:document>"#);
+        assert_eq!(
+            CT_Document::from_xml(empty_body.as_bytes())
+                .expect("self-closing body parses")
+                .body,
+            CT_Body::new()
+        );
+    }
 
     #[test]
     fn round_trip_document() {

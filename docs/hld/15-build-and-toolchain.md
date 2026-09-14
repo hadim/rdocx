@@ -757,7 +757,8 @@ pin makes the python-pptx oracle executable available on a clean Ubuntu host.
 The stack budget is scoped to these two corpus-heavy jobs and does not alter
 product runtime behavior.
 
-The same two clean Ubuntu 24.04 jobs and the Word fidelity job install
+The same two clean Ubuntu 24.04 jobs plus the Presentation and Word fidelity
+jobs install
 LibreOffice 26.2.5.2 from the official Linux x86-64 Debian archive before the
 oracle-dependent command. The archive SHA-256 is
 `2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`.
@@ -768,8 +769,8 @@ requires exact identity
 It installs the explicit Ubuntu NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS,
 font, and Kerberos runtime-library set needed by that official build. This
 makes the unconditional `oxml-chart` viewer tests and the `rdocx` ODT
-structural differential self-contained without changing the separate macOS
-Presentation fidelity setup. The ODT gate uses an isolated LibreOffice profile
+structural differential and both fidelity gates self-contained. The ODT gate
+uses an isolated LibreOffice profile
 and rejects any runtime identity other than the exact pinned build.
 
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
@@ -782,9 +783,11 @@ condition, successful fallback or `continue-on-error`. The complete module is
 the pull-request gate for release-family version carriers and their workflow
 contracts.
 
-**A dedicated Presentation fidelity job** fetches the pinned 50-deck corpus,
-installs LibreOffice and Poppler, and runs `scripts/pptx_ssim_harness.py
---check` on macOS. The harness rejects any LibreOffice version other than
+**A dedicated Presentation fidelity job** runs on Ubuntu 24.04, primes locked
+Cargo dependencies, fetches the pinned 50-deck corpus, installs LibreOffice and
+Poppler through the shared checksum-pinned installers, and runs
+`scripts/pptx_ssim_harness.py --check`. The harness rejects any LibreOffice
+version other than
 26.2.5.2 build `cd7284b4cbbfeb507e630c1aac019f4157393acb` and any pdftoppm
 version other than 26.01.0 before rendering begins. This turns a package-manager
 upgrade into an explicit pin review rather than an unexplained score delta. The

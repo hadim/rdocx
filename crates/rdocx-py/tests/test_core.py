@@ -308,10 +308,7 @@ def test_priority_word_operations_return_typed_snapshots_and_remain_atomic():
     assert unchanged.compare(
         identical, author="Ada", timestamp="2026-09-14T09:02:00Z"
     ) == ()
-    with pytest.raises(
-        rdocx.StaleElementError, match=r"revision 1, but the document is now at revision 2"
-    ):
-        _ = held_before_identical_compare.text
+    assert held_before_identical_compare.text == "same"
 
     laid_out = rdocx.Document()
     laid_out.add_paragraph("A deterministic layout fragment")

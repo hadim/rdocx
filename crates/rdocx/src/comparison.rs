@@ -331,7 +331,6 @@ impl Document {
         let tracked_xml = replace_body_inner(original_xml, &tracked_body)?;
         let tracked = CT_Document::from_xml(tracked_xml.as_bytes())?;
         tracked.to_xml()?;
-
         let mut candidate = original.clone_for_staging();
         candidate.document = tracked;
         candidate
@@ -1314,7 +1313,7 @@ fn element_inner_range_any_prefix(xml: &str, local: &str) -> Result<Range<usize>
 
 fn story_document(inner: &str) -> Result<CT_Document> {
     let xml = format!(
-        r#"<rdocxcmp:document xmlns:rdocxcmp="{W_NS}" xmlns:w="{W_NS}"><rdocxcmp:body>{inner}</rdocxcmp:body></rdocxcmp:document>"#
+        r#"<rdocxcmp:document xmlns:rdocxcmp="{W_NS}" xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><rdocxcmp:body>{inner}</rdocxcmp:body></rdocxcmp:document>"#
     );
     CT_Document::from_xml(xml.as_bytes()).map_err(Into::into)
 }
@@ -1698,17 +1697,23 @@ fn compare_body(
         }
     }
     let mut output = if let Some((source, spans)) = original_source {
-        interleave_story_source(source, spans, &aligned, output)?
+        let section_start = if original.body.sect_pr.is_some() {
+            direct_word_child_start(source, "w", b"sectPr")?
+        } else {
+            None
+        };
+        interleave_story_source(source, spans, &aligned, output, section_start)?
     } else {
         output.into_iter().map(|(_, xml)| xml).collect::<String>()
     };
-    output.push_str(&section_properties_xml(
+    let section_xml = section_properties_xml(
         original.body.sect_pr.as_ref(),
         edited.body.sect_pr.as_ref(),
         "section",
         metadata,
         diagnostics,
-    )?);
+    )?;
+    output.push_str(&section_xml);
     Ok(output)
 }
 
@@ -1717,6 +1722,7 @@ fn interleave_story_source(
     spans: &[Range<usize>],
     aligned: &[(Option<usize>, Option<usize>)],
     output: Vec<(bool, String)>,
+    section_start: Option<usize>,
 ) -> Result<String> {
     if spans.len() != aligned.iter().filter(|(left, _)| left.is_some()).count()
         || aligned.len() != output.len()
@@ -1725,11 +1731,12 @@ fn interleave_story_source(
             "comparison source spans do not match related-story owners".to_owned(),
         ));
     }
+    let content_end = section_start.unwrap_or(source.len());
     let mut tracked = String::new();
     if let Some(first) = spans.first() {
         tracked.push_str(&source[..first.start]);
     } else {
-        tracked.push_str(source);
+        tracked.push_str(&source[..content_end]);
     }
     let mut next_original = 0usize;
     for ((left, _), (_, xml)) in aligned.iter().zip(output) {
@@ -1747,9 +1754,57 @@ fn interleave_story_source(
         tracked.push_str(&xml);
     }
     if let Some(last) = spans.last() {
-        tracked.push_str(&source[last.end..]);
+        if last.end > content_end {
+            return Err(Error::Other(
+                "comparison section properties overlap body content".to_owned(),
+            ));
+        }
+        tracked.push_str(&source[last.end..content_end]);
     }
     Ok(tracked)
+}
+
+fn direct_word_child_start(
+    xml: &str,
+    word_prefix: &str,
+    local_name: &[u8],
+) -> Result<Option<usize>> {
+    let open = format!(
+        r#"<rdocxcmp:root xmlns:rdocxcmp="urn:rdocx-compare" xmlns:{word_prefix}="{W_NS}">"#
+    );
+    let wrapped = format!("{open}{xml}</rdocxcmp:root>");
+    let offset = open.len();
+    let mut reader = NsReader::from_reader(wrapped.as_bytes());
+    reader.config_mut().trim_text(false);
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comparison XML scan failed: {error}")))?;
+        let is_word = matches!(
+            namespace,
+            ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes()
+        );
+        match event {
+            Event::Start(element) => {
+                if depth == 1 && is_word && element.local_name().as_ref() == local_name {
+                    return Ok(Some(before.saturating_sub(offset)));
+                }
+                depth += 1;
+            }
+            Event::Empty(element)
+                if depth == 1 && is_word && element.local_name().as_ref() == local_name =>
+            {
+                return Ok(Some(before.saturating_sub(offset)));
+            }
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn moved_body_content(

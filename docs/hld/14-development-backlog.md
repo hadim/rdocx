@@ -4904,7 +4904,8 @@ reconciling the changes against the completed S72 section, story, binding, and
 release work. Numbering reports only retained extra XML and attributes as
 unmodelled. Document, revision, marker, field, table-cell, and TOC reader facts
 remain namespace-aware, bounded, schema-ordered, and stable through save,
-reopen, and repeated save.
+reopen, and repeated save. Pedro Assumpcao is credited for the four pinned
+contributor heads in the sprint delivery record and release notes.
 
 Restore hosted Presentation fidelity by installing the exact reviewed
 LibreOffice 26.2.5.2 and Poppler 26.01.0 builds on Ubuntu 24.04. Package-manager

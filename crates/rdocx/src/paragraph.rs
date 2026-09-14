@@ -38,20 +38,34 @@ pub enum ParagraphItemRef<'a> {
     /// A tracked insertion, deletion, or move.
     Revision(RevisionRef<'a>),
     /// The start of a comment range.
-    CommentRangeStart(i32),
+    CommentRangeStart {
+        /// The comment ID.
+        id: i32,
+        /// Whether the marker wraps content instead of being empty.
+        has_child_content: bool,
+    },
     /// The end of a comment range.
-    CommentRangeEnd(i32),
+    CommentRangeEnd {
+        /// The comment ID.
+        id: i32,
+        /// Whether the marker wraps content instead of being empty.
+        has_child_content: bool,
+    },
     /// The start of a bookmark.
     BookmarkStart {
         /// The bookmark ID, when present.
         id: Option<i32>,
         /// The bookmark name, when present.
         name: Option<&'a str>,
+        /// Whether the marker wraps content instead of being empty.
+        has_child_content: bool,
     },
     /// The end of a bookmark.
     BookmarkEnd {
         /// The bookmark ID, when present.
         id: Option<i32>,
+        /// Whether the marker wraps content instead of being empty.
+        has_child_content: bool,
     },
     /// A preserved paragraph child that rdocx does not model.
     UnsupportedXml(&'a [u8]),
@@ -1029,12 +1043,22 @@ impl<'a> ParagraphRef<'a> {
                     );
                     if let Some(marker) = markers.get(marker_index) {
                         items.push(match marker {
-                            CommentRangeMarker::Start { id, .. } => {
-                                ParagraphItemRef::CommentRangeStart(*id)
-                            }
-                            CommentRangeMarker::End { id, .. } => {
-                                ParagraphItemRef::CommentRangeEnd(*id)
-                            }
+                            CommentRangeMarker::Start {
+                                id,
+                                has_child_content,
+                                ..
+                            } => ParagraphItemRef::CommentRangeStart {
+                                id: *id,
+                                has_child_content: *has_child_content,
+                            },
+                            CommentRangeMarker::End {
+                                id,
+                                has_child_content,
+                                ..
+                            } => ParagraphItemRef::CommentRangeEnd {
+                                id: *id,
+                                has_child_content: *has_child_content,
+                            },
                         });
                     }
                 }
@@ -1074,9 +1098,13 @@ impl<'a> ParagraphRef<'a> {
                             ParagraphItemRef::BookmarkStart {
                                 id: bookmark.id(),
                                 name: bookmark.name(),
+                                has_child_content: bookmark.has_child_content(),
                             }
                         } else {
-                            ParagraphItemRef::BookmarkEnd { id: bookmark.id() }
+                            ParagraphItemRef::BookmarkEnd {
+                                id: bookmark.id(),
+                                has_child_content: bookmark.has_child_content(),
+                            }
                         }
                     } else if let Some((index, _)) = empty_hyperlink {
                         ParagraphItemRef::Hyperlink(HyperlinkRef {

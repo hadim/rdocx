@@ -756,6 +756,13 @@ struct literal. The new `FieldOutcome` variants are also a pre-1.0 source break
 for exhaustive native matches. Python, WASM, and CLI surfaces gain no evaluator
 methods and continue to preserve the same package content.
 
+Native paragraph item inspection reports whether comment-range and bookmark
+marker source elements contained child elements or visible text. Complex-field
+display segments expose their effective direct run properties in source order.
+Both are additive pre-1.0 Rust reader facts. Python, WASM, and CLI surfaces do
+not gain new methods, and their existing exhaustive consumers preserve the new
+variants without changing output.
+
 Native Word callers opt into cache materialization with
 `Document::update_fields`, `Document::save_with_field_updates`, or
 `Document::to_bytes_with_field_updates`. The facade stages the full evaluation

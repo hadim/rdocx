@@ -53,20 +53,28 @@ pub struct CT_Revision {
 
 impl CT_Revision {
     pub(crate) fn from_raw(raw_xml: Vec<u8>, word_prefixes: &[String]) -> Option<Self> {
-        Self::try_from_raw(raw_xml, word_prefixes).ok()
+        Self::try_from_raw(raw_xml, word_prefixes, true).ok()
+    }
+
+    pub(crate) fn from_raw_content(raw_xml: Vec<u8>, word_prefixes: &[String]) -> Option<Self> {
+        Self::try_from_raw(raw_xml, word_prefixes, false).ok()
     }
 
     /// Whether a preserved wrapper is admitted by the complete typed parser.
     #[doc(hidden)]
     pub fn story_raw_is_typed(raw_xml: &[u8], word_prefixes: &[String]) -> bool {
-        Self::try_from_raw(raw_xml.to_vec(), word_prefixes).is_ok()
+        Self::try_from_raw(raw_xml.to_vec(), word_prefixes, true).is_ok()
     }
 
     pub(crate) fn into_raw_xml(self) -> Vec<u8> {
         self.raw_xml
     }
 
-    fn try_from_raw(raw_xml: Vec<u8>, word_prefixes: &[String]) -> crate::Result<Self> {
+    fn try_from_raw(
+        raw_xml: Vec<u8>,
+        word_prefixes: &[String],
+        require_author: bool,
+    ) -> crate::Result<Self> {
         validate_revision_nesting_depth(&raw_xml, word_prefixes)?;
         let mut reader = Reader::from_reader(raw_xml.as_slice());
         reader.config_mut().trim_text(false);
@@ -82,7 +90,12 @@ impl CT_Revision {
                             )
                         })?;
                     let id = required_word_attribute(&start, b"id", &prefixes)?.parse()?;
-                    let author = required_word_attribute(&start, b"author", &prefixes)?;
+                    let author = optional_word_attribute(&start, b"author", &prefixes)?;
+                    let author = match (author, require_author) {
+                        (Some(author), _) => author,
+                        (None, true) => required_word_attribute(&start, b"author", &prefixes)?,
+                        (None, false) => String::new(),
+                    };
                     let timestamp = optional_word_attribute(&start, b"date", &prefixes)?;
                     break ((kind, id, author, timestamp), prefixes);
                 }
@@ -95,7 +108,12 @@ impl CT_Revision {
                             )
                         })?;
                     let id = required_word_attribute(&start, b"id", &prefixes)?.parse()?;
-                    let author = required_word_attribute(&start, b"author", &prefixes)?;
+                    let author = optional_word_attribute(&start, b"author", &prefixes)?;
+                    let author = match (author, require_author) {
+                        (Some(author), _) => author,
+                        (None, true) => required_word_attribute(&start, b"author", &prefixes)?,
+                        (None, false) => String::new(),
+                    };
                     let timestamp = optional_word_attribute(&start, b"date", &prefixes)?;
                     return Ok(Self {
                         kind,
