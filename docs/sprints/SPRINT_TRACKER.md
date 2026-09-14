@@ -427,6 +427,7 @@ defended.
 | F-256 | S72 | L | 4 | 1 | 2026-09-13 | Added transactional package-authoritative main-body fragment import with complete selected dependency closure and deterministic conflict policies |
 | F-X094a | S72 | M | 2 | 1 | 2026-09-14 | Exposed schema-versioned Word comments, revision resolution, comparison, and TOC rebuilding through atomic CLI commands |
 | F-X094b | S72 | L | 4 | 1 | 2026-09-14 | Added structured accepted-view text, direct body layout fragments, and expected-count guarded replacement to the Word CLI |
+| F-X094c | S72 | L | 4 | 1 | 2026-09-14 | Added frozen typed Python snapshots for Word comparison, comments, deterministic layout, page lookup, and TOC rebuilding |
 
 ## Velocity
 

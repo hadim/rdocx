@@ -13334,3 +13334,44 @@ and the supply-chain audit.
 **Notes for future sessions.** Keep body layout fragments as a result sidecar.
 Do not derive body boxes from glyph baselines or add source ownership to shared
 positioned elements unless a separate reviewed contract requires it.
+
+### F-X094c, Priority rdocx Python collaboration, comparison, layout, and TOC
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The `rdocx` Python `Document` now exposes native tracked
+comparison, main-body comment threads, deterministic layout fragments, page
+metadata, and TOC rebuilding. Constructible ranges and every returned record
+are frozen typed values, while package mutations preserve stale-handle
+revision semantics and failed staged operations remain atomic.
+
+**Non-obvious choices.** Comparison and TOC rebuild compare serialized package
+state before advancing the binding revision. Layout snapshots use bundled
+deterministic fonts and never expose native handles. Comparison, layout, TOC,
+save, and byte serialization release the GIL.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks. The integrated optimized wheel exposed
+a scheduler-sensitive serialization GIL check, so the same detached call now
+repeats inside one observation window. Microscope pass 2 reported zero defects,
+zero smells, and zero nitpicks for that test-only hardening.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `priority_word_operations_return_typed_snapshots_and_remain_atomic`
+passed with exact revision, reopen, typing, layout, and atomic-failure checks.
+The installed `cp39-abi3` wheel passed 41 binding tests, strict mypy, and
+stubtest. The consolidated full gate passed workspace tests, deterministic
+viewer tooling, both WASM targets, rustdoc, README inventories, workflow
+regressions, 22 package dry runs, archive limits, and the supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep Python results as immutable snapshots and
+route every long operation through the native facade. Optimized native calls
+can be shorter than one scheduler window, so GIL tests should repeat the exact
+detached call rather than weaken the concurrency assertion.
