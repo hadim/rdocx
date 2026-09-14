@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-py"
-version = "0.13.1"
+version = "0.11.0"
 dependencies = [
  "oxml-py-support",
  "pyo3",

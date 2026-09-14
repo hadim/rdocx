@@ -1,13 +1,14 @@
 ---
-description: Release an already prepared and reviewed Rust or Python package family. The only command that creates and pushes v*, rpptx-v*, or py-v* release tags or starts registry publication.
+description: Release an already prepared and reviewed Rust or Python package family. The only command that creates and pushes v*, rpptx-v*, py-rdocx-v*, or py-rpptx-v* release tags or starts registry publication.
 ---
 
-# /release {vX.Y.Z | rpptx-vX.Y.Z | py-vX.Y.Z}
+# /release {vX.Y.Z | rpptx-vX.Y.Z | py-rdocx-vX.Y.Z | py-rpptx-vX.Y.Z}
 
 Release the exact reviewed sprint SHA for one package family. This is the only
 command allowed to create or push a stable `v*` tag, an incubating `rpptx-v*`
-tag, or a Python `py-v*` tag, or to start crates.io or PyPI publication. It
-never merges to `main` and never creates an `sNN` sprint tag.
+tag, or a Python `py-rdocx-v*` or `py-rpptx-v*` tag, or to start crates.io or
+PyPI publication. It never merges to `main` and never creates an `sNN` sprint
+tag.
 
 The version preparation is committed through its F-ID before this command
 runs. This command does not edit versions, create a release commit, repair a
@@ -38,20 +39,23 @@ not in this set. Binding, WASM, and unimplemented CLI crates remain outside it.
 
 ### Python family
 
-For `py-vX.Y.Z`, the exact two-distribution set is `rdocx` from `rdocx-py`
-and `rpptx` from `rpptx-py`. Both `pyproject.toml` project versions must be
-exactly `X.Y.Z`, and their Rust binding crates must share that version. The
-artifact set is exactly twelve `cp39-abi3` wheels, one per distribution for
-each of the six reviewed Linux, macOS, and Windows targets in `wheels.yml`,
-plus exactly one source distribution per distribution. No crates.io package,
-WASM package, npm package, or Rust release tag is in this family.
+For `py-rdocx-vX.Y.Z`, the exact selected distribution is `rdocx` from
+`rdocx-py`. Its binding crate and `pyproject.toml` must resolve to the native
+`rdocx` crate version `X.Y.Z`. For `py-rpptx-vX.Y.Z`, the exact selected
+distribution is `rpptx` from `rpptx-py`. Its binding crate and
+`pyproject.toml` must equal the native `rpptx` crate version `X.Y.Z`. Each
+artifact set is exactly six `cp39-abi3` wheels, one for each reviewed Linux,
+macOS, and Windows target in `wheels.yml`, plus exactly one source
+distribution. No crates.io package, WASM package, npm package, Rust release
+tag, or unselected Python distribution is in either family.
 
 ## Preconditions
 
 Refuse before any tag or push if one check fails:
 
-1. The argument is exactly `vX.Y.Z`, `rpptx-vX.Y.Z`, or `py-vX.Y.Z`, and the
-   selected family satisfies its complete version and package contract above.
+1. The argument is exactly `vX.Y.Z`, `rpptx-vX.Y.Z`,
+   `py-rdocx-vX.Y.Z`, or `py-rpptx-vX.Y.Z`, and the selected family satisfies
+   its complete version and package contract above.
    Reject any other prefix, suffix, mixed family, or partial version
    preparation.
 2. The current branch is the active `sprint/sNN` branch and the tree is clean.
@@ -68,18 +72,19 @@ Refuse before any tag or push if one check fails:
    outcome.
 4. The release F-ID assigned to the exact requested tag is `reviewed` in the
    sprint run state, remains `in-progress` in both delivery trackers, and every
-   dependency is completed. For `py-v0.13.1`, that release F-ID is F-X094f.
+   dependency is completed. For `py-rdocx-v0.13.1` and
+   `py-rpptx-v0.11.0`, that release F-ID is F-X094f.
 5. The latest recorded `/verify --full` passed at the current HEAD with the
    declared hash-harness result.
 6. The latest recorded `/sprint-review SNN` is clean at the current HEAD, and
    its review file reports zero blocking findings.
 7. At the reviewed HEAD, inspect the selected family metadata. Rust families
    use `cargo metadata --no-deps` to confirm their exact package set, versions,
-   publication eligibility, and internal pins. The Python family uses both
-   binding `Cargo.toml` files and both `pyproject.toml` files to confirm the
-   exact distribution names, import names, shared version, `>=3.9` floor, and
-   `abi3-py39` contract. An unselected family must not enter the selected
-   workflow allowlist.
+   publication eligibility, and internal pins. A Python family uses the
+   selected binding `Cargo.toml`, its `pyproject.toml`, and the corresponding
+   native crate manifest to confirm the exact distribution name, import name,
+   matching version, `>=3.9` floor, and `abi3-py39` contract. An unselected
+   family must not enter the selected workflow allowlist.
 8. For a Rust family, run the exact locally patched `cargo publish
    --workspace --dry-run` command in `/verify` step 10 from the clean tree.
    The 22 patches keep packaged internal dependencies on this reviewed source graph
@@ -91,8 +96,9 @@ Refuse before any tag or push if one check fails:
    assets. The `rpptx` archive must contain `assets/default.pptx`.
 
    For the Python family, run the local binding, typing, stub, and clean-install
-   gates from `/verify`. Confirm that the manual `wheels.yml` path is
-   build-only. Manual dispatch must create no tag, PyPI file, or GitHub release.
+   gates from `/verify`. Confirm that the manual `wheels.yml` path builds both
+   distributions but is build-only. Manual dispatch must create no tag, PyPI
+   file, or GitHub release.
    The hosted build-only run cannot precede the sprint-branch push at the
    reviewed SHA, so it is the first post-push release gate and still precedes
    tag creation.
@@ -101,16 +107,17 @@ Refuse before any tag or push if one check fails:
    in dependency order. Every real crates.io publish command is the bare
    verified form `cargo publish -p <package>`, failures propagate, and registry
    waits remain between dependency layers. `.github/workflows/wheels.yml`
-   binds Python publication to a pushed `py-v*` tag, builds exactly the twelve
-   wheels and two source distributions, and gives `id-token: write` only to
-   the `pypi` environment publish job. Its manual path is build-only and every
-   action is pinned to a reviewed immutable SHA.
-10. For the Python family, query PyPI and refuse unless both target project
-    versions are absent. Verify that the `pypi` environment has trusted
-    publisher entries for both exact project names, this repository, the
+   binds Python publication to pushed `py-rdocx-v*` and `py-rpptx-v*` tags,
+   builds and publishes exactly the selected distribution's six wheels and one
+   source distribution, and gives `id-token: write` only to the `pypi`
+   environment publish job. Its manual path is build-only and every action is
+   pinned to a reviewed immutable SHA.
+10. For a Python family, query PyPI and refuse unless the selected project's
+    target version is absent. Verify that the `pypi` environment has a trusted
+    publisher entry for the exact selected project name, this repository, the
     `wheels.yml` workflow, and the `pypi` environment, with no long-lived token.
-    Record the authenticated PyPI owner or maintainer roles that will be
-    checked again after publication.
+    Record the selected project's authenticated PyPI owner or maintainer roles
+    that will be checked again after publication.
 11. Fetch the remote release-tag namespaces. The exact requested tag must be
    absent locally and from `origin`. Refuse a conflicting or already-published
    version rather than treating it as success.
@@ -136,13 +143,13 @@ After approval, preserve this order:
 1. Push the active `sprint/sNN` branch at the reviewed HEAD.
 2. For the Python family, manually dispatch `wheels.yml` at that exact branch
    and SHA, then wait for the successful build-only run. Download its artifacts
-   and reject anything except the complete two-distribution set of twelve
-   wheels and two source distributions. Run `python3
+   and select only the requested distribution's six wheels and one source
+   distribution. Run `python3
    scripts/sprint_workflow.py python-release-artifacts <requested-tag>
    <download-directory>` to inspect every wheel and source distribution for
    exact name and version metadata, and every wheel for a `cp39-abi3` tag and
-   one reviewed platform. Install both distributions together in clean Python
-   3.9 and 3.12 environments. Run the priority runtime suites in both. Run
+   one reviewed platform. Install the selected distribution in clean Python
+   3.9 and 3.12 environments. Run its priority runtime suite in both. Run
    exact `mypy==2.3.0 --strict` checks and stubtest under Python 3.12, because
    that mypy version requires Python 3.10 or newer. Verify again that the manual
    run created no tag, PyPI file, or GitHub release. Stop before tag creation if
@@ -153,17 +160,17 @@ After approval, preserve this order:
    `.github/workflows/publish.yml`, whose matching predicate publishes only the
    selected Rust family with verification and then creates the GitHub release.
    A Python tag starts `.github/workflows/wheels.yml`, whose tag-only publish
-   job publishes only the complete two-distribution artifact set through PyPI
-   trusted publishing. Manual dispatch never reaches that job.
+   job publishes only the selected distribution's seven-file artifact set
+   through PyPI trusted publishing. Manual dispatch never reaches that job.
 5. Watch the workflow through completion. A failed job is a failed release.
    Do not rerun blindly and do not convert an authentication, network,
    compilation, duplicate-version, or registry failure into success.
 6. For a Rust family, verify `cargo info <package>@X.Y.Z` for every package in
    the selected set and verify each crates.io owner. For the Python family,
-   verify both exact project versions and all fourteen files through PyPI,
-   reinstall both exact versions together from PyPI in clean Python 3.9 and
-   3.12 environments, rerun the priority runtime suites in both, rerun typing
-   and stub checks under Python 3.12, and verify the recorded owner or
+   verify the selected exact project version and all seven files through PyPI,
+   reinstall that exact version from PyPI in clean Python 3.9 and 3.12
+   environments, rerun its priority runtime suite in both, rerun typing and
+   stub checks under Python 3.12, and verify the recorded owner or
    maintainer roles. Then create the GitHub release
    from a freshly rendered reviewed body if the selected workflow did not
    create it. Inspect the release tag and target SHA. Fetch the published
@@ -205,7 +212,7 @@ matching GitHub release are verified:
 - A version bump or uncommitted change is still required.
 - Verification or sprint review covers a different SHA.
 - The requested tag and prepared family do not match exactly.
-- Either Python project version already exists on PyPI, the build-only run is
+- The selected Python project version already exists on PyPI, the build-only run is
   missing or covers another SHA, or the artifact inventory is partial.
 - PyPI trusted publisher identity or the recorded post-publication owner check
   is absent, ambiguous, or backed by a long-lived token.

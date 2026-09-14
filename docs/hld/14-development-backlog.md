@@ -1087,9 +1087,9 @@ Build `rdocx` and `rpptx` with maturin as abi3-py39 wheels for
 manylinux_2_28 x86_64 and aarch64, musllinux_1_2 x86_64, macOS x86_64 and
 arm64, and Windows x86_64. Build one source distribution per package. Every
 compatible wheel is installed and tested in a fresh environment. A separate
-job collects the exact twelve wheels and two source distributions and receives
-PyPI OIDC authority only for the `py-v*` tag namespace. Manual dispatch never
-publishes.
+job selects the exact six wheels and one source distribution for either
+`py-rdocx-v*` or `py-rpptx-v*` and receives PyPI OIDC authority only for those
+tag namespaces. Manual dispatch builds both projects and never publishes.
 **Depends on**: F-134, F-136.
 **Test gate**: the local exact-product contract and its negative mutations
 pass, both native wheels and source distributions build, and both native wheels

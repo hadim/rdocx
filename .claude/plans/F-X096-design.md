@@ -1,6 +1,6 @@
 # F-X096, Align Python distribution versions and release tags
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: M
 **Depends on**: F-X094e
@@ -21,6 +21,8 @@ disjoint from both Rust workflows.
 ## Spec reference
 
 - `docs/hld/10-bindings-spec.md`, Python packaging, CI, and version carriers.
+- `docs/hld/03-architecture.md`, native and binding version-family boundaries.
+- `docs/hld/12-testing-strategy.md`, Python wheel and release-version gates.
 - `docs/hld/13-risks-and-open-questions.md`, PyPI authority and partial-release
   risk.
 - `docs/hld/14-development-backlog.md`, "F-X096, Align Python distribution
@@ -80,6 +82,8 @@ workflow and artifact mutation matrices.
 ## HLD impact
 
 - `docs/hld/10-bindings-spec.md`
+- `docs/hld/03-architecture.md`
+- `docs/hld/12-testing-strategy.md`
 - `docs/hld/13-risks-and-open-questions.md`
 - `docs/hld/14-development-backlog.md`
 - `docs/hld/15-build-and-toolchain.md`
@@ -106,16 +110,16 @@ Expected unchanged across all 49 entries.
 
 ## Implementation checklist
 
-- [ ] Align `rdocx-py` with native `rdocx` 0.13.1.
-- [ ] Align `rpptx-py` with native `rpptx` 0.11.0.
-- [ ] Add disjoint `py-rdocx-v*` and `py-rpptx-v*` release parsing.
-- [ ] Route each Python tag to exactly one wheel and source distribution set.
-- [ ] Keep manual dispatch build-only and both Rust tag families PyPI-free.
-- [ ] Validate one selected distribution's exact artifact inventory.
-- [ ] Split release notes, PyPI preflight, owner checks, and notifications by distribution.
-- [ ] Add positive and negative workflow, metadata, and artifact tests.
-- [ ] Synchronize generated adapters and update exactly the listed HLD files.
-- [ ] Run the full release, binding, WASM, package, and unchanged-harness gates.
+- [x] Align `rdocx-py` with native `rdocx` 0.13.1.
+- [x] Align `rpptx-py` with native `rpptx` 0.11.0.
+- [x] Add disjoint `py-rdocx-v*` and `py-rpptx-v*` release parsing.
+- [x] Route each Python tag to exactly one wheel and source distribution set.
+- [x] Keep manual dispatch build-only and both Rust tag families PyPI-free.
+- [x] Validate one selected distribution's exact artifact inventory.
+- [x] Split release notes, PyPI preflight, owner checks, and notifications by distribution.
+- [x] Add positive and negative workflow, metadata, and artifact tests.
+- [x] Synchronize generated adapters and update exactly the listed HLD files.
+- [x] Run the full release, binding, WASM, package, and unchanged-harness gates.
 
 ## Open questions
 

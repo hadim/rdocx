@@ -2,7 +2,7 @@
 name = "rpptx-py"
 description = "Python bindings for rpptx"
 readme = "README.md"
-version.workspace = true
+version = "0.11.0"
 publish = false
 edition.workspace = true
 license.workspace = true
@@ -12,8 +12,8 @@ repository.workspace = true
 homepage.workspace = true
 
 [package.metadata.release]
-shared-version = "workspace"
-tag-name = "v{{version}}"
+shared-version = "incubating"
+tag-name = "rpptx-v{{version}}"
 pre-release-replacements = [
     { file = "pyproject.toml", search = 'version = "[^"]+"', replace = 'version = "{{version}}"', exactly = 1 },
 ]

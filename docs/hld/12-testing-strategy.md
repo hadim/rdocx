@@ -2238,17 +2238,17 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.13.1 carrier regression pins all eleven inherited version
-carriers, both Python project versions, both rdocx WASM dependency assertions,
+The stable 0.13.1 carrier regression pins all ten inherited version carriers,
+the `rdocx` Python project version, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
 are 0.11.0 while `rpptx-wasm` remains ineligible for publication.
-The paired incubating regression pins all sixteen explicit manifests, fifteen
-workspace dependency requirements, sixteen lockfile entries, publication
-flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.11.0. It separately proves the stable
-workspace remains at its prepared 0.13.1 boundary and `rpptx-wasm` remains
-ineligible for publication.
+The paired incubating regression pins all seventeen explicit manifests,
+sixteen workspace dependency requirements, seventeen lockfile entries,
+publication flags, README examples, Rust assertions, the CI WASM literal, and
+the exact 15-package publication preflight at 0.11.0. It separately proves the
+stable workspace remains at its prepared 0.13.1 boundary and both `rpptx-py`
+and `rpptx-wasm` remain ineligible for crates.io publication.
 The immutable v0.13.0 shared-family gate packages and verifies
 `rdocx-layout@0.13.0`, requires its normalized archive dependency on
 `oxml-layout@0.10.0` to contain no local path, and compiles the packaged crate
@@ -2397,7 +2397,7 @@ parallel, or failure-swallowing invocation.
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
 | ci-gate | Always validate that every selected filtered job succeeded and every unselected filtered job was skipped |
-| python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
+| python-wheels | On manual dispatch, build six cp39-abi3 wheels and one source distribution for each Python package. On a `py-rdocx-v*` or `py-rpptx-v*` tag, build, validate, and publish only the selected package's seven artifacts. Install and test every compatible built artifact in a fresh environment. |
 
 MHTML uses the existing test, clippy, fmt, doc, wasm, hash-harness, and package
 routes. Its Microsoft Word differential remains an explicit ignored local

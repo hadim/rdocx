@@ -1406,10 +1406,11 @@ the GitHub release remain absent. The immutable v0.11.0 attempt at
 reviewed SHA `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published only
 `rdocx-opc` and `rdocx-oxml`. It created no GitHub release and posted no
 contribution notifications. The complete seven-package recovery is published
-at 0.11.1, and all six reviewed leave-open notifications are posted. Both
-Python project versions and `rdocx-wasm` track stable workspace version 0.13.1,
-but every binding and WASM crate remains unpublished on crates.io. The incubating
-group places the unpublished `rpptx-wasm` crate at 0.11.0. Neither Rust release
+at 0.11.1, and all six reviewed leave-open notifications are posted. The
+`rdocx` Python project and `rdocx-wasm` track stable workspace version 0.13.1.
+The `rpptx` Python project and unpublished `rpptx-wasm` crate track the native
+incubating version 0.11.0. Every binding and WASM crate remains unpublished on
+crates.io. Neither Rust release
 gives binding, WASM, npm, or Python package publication authority. Every later
 release still requires its selected-family gate and a separate final approval
 at the reviewed SHA. Complete coherent stable releases remain live and
@@ -1420,37 +1421,40 @@ remain unchanged.
 
 ## CI
 
-`wheels.yml` on a **`py-v*` tag namespace**, separate from `publish.yml` on
-`v*`, so a Rust patch release does not rebuild twelve wheels and a binding-only
-fix does not force a crates.io release. Publishing uses PyPI trusted publishing
-via OIDC, with no long-lived token in secrets. The workflow builds `rdocx` and
-`rpptx` across the six declared targets, produces one source distribution per
-package, and uploads each matrix product independently. Every native wheel is
+`wheels.yml` on **`py-rdocx-v*` and `py-rpptx-v*` tag namespaces**, separate
+from `publish.yml` on `v*` and `rpptx-v*`, so a Rust release does not rebuild
+Python wheels and a binding-only fix does not force a crates.io release.
+Publishing uses PyPI trusted publishing via OIDC, with no long-lived token in
+secrets. Manual dispatch builds `rdocx` and `rpptx` across the six declared
+targets. A tag build runs only the selected distribution cells. Each package
+produces one source distribution and uploads each matrix product independently.
+Every native wheel is
 installed into a fresh environment for its compatible pytest, exact
 `mypy==2.3.0 --strict`, and `stubtest` gates. Each musllinux wheel is installed
 in a fresh Python 3.9 Alpine environment and runs the same package parity suite
 as the native cells.
 
 The build jobs have only repository read permission. A separate publish job
-depends on all wheel and source-distribution jobs, requires exactly twelve
-wheels and two source distributions, and receives `id-token: write` only for a
-`py-v*` tag event in the `pypi` environment. Manual dispatch builds and tests
-artifacts but cannot publish them. Every external action and the maturin tool
-version are pinned to reviewed immutable versions.
+depends on all wheel and source-distribution jobs, selects exactly six wheels
+and one source distribution for the tag's project, and receives
+`id-token: write` only for a `py-rdocx-v*` or `py-rpptx-v*` tag event in the
+`pypi` environment. Manual dispatch builds and tests both distributions but
+cannot publish them. Every external action and the maturin tool version are
+pinned to reviewed immutable versions.
 
-The Python release family is the exact pair of `rdocx` and `rpptx`
-distributions at one version. After the reviewed SHA is pushed but before a
-`py-vX.Y.Z` tag is created, a manual build-only run at that SHA must produce
-twelve `cp39-abi3` wheels and two source distributions. Every artifact name
-and embedded metadata must name one selected distribution at `X.Y.Z`. The
-downloaded pair is installed
-together under clean Python 3.9 and 3.12 environments for the priority runtime
+Each Python release family contains one distribution at its native crate
+version. After the reviewed SHA is pushed but before either Python tag is
+created, a manual build-only run at that SHA must produce twelve `cp39-abi3`
+wheels and two source distributions across both projects. The selected six
+wheels and one source distribution must name the selected project and version
+in both filenames and embedded metadata. The selected distribution is
+installed under clean Python 3.9 and 3.12 environments for the priority runtime
 gate. Exact `mypy==2.3.0 --strict` and stubtest run under Python 3.12 because
 that mypy version requires Python 3.10 or newer. The tag-only publish job uses
-PyPI trusted publishing. Successful publication is not complete until both project
-versions, all fourteen files, authenticated owner or maintainer roles, the
-exact reviewed GitHub release body, and every contribution notification are
-verified.
+PyPI trusted publishing. Successful publication is not complete until the
+selected project version, all seven files, authenticated owner or maintainer
+roles, the exact reviewed GitHub release body, and every contribution
+notification are verified.
 
 **A PR-time job that builds the wheel and runs pytest is mandatory.** The
 absence of exactly this job for wasm is why `rdocx-wasm` rotted.

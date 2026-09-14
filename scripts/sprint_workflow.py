@@ -16,7 +16,7 @@ Subcommands:
     close-preflight SNN          the checks /close-sprint requires
     release-notes TAG            validate or render reviewed release notes
     python-release-artifacts TAG DIR
-                                 validate the complete Python release set
+                                 validate one selected Python release set
 
 Exit codes: 0 ok, 1 refused, 2 usage.
 """
@@ -68,14 +68,13 @@ SPRINT_ID_RE = re.compile(r"^S\d+(?:\.\d+)?$")
 HANDOFF_FIELD_RE = re.compile(r"^\*\*([A-Za-z][A-Za-z -]*)\*\*:\s*(.+?)\s*$", re.MULTILINE)
 SEMVER_COMPONENT_RE = r"(?:0|[1-9][0-9]*)"
 RELEASE_TAG_RE = re.compile(
-    rf"^(?:(?:rpptx|py)-)?v{SEMVER_COMPONENT_RE}\."
+    rf"^(?:(?:rpptx|py-(?:rdocx|rpptx))-)?v{SEMVER_COMPONENT_RE}\."
     rf"{SEMVER_COMPONENT_RE}\.{SEMVER_COMPONENT_RE}$"
 )
 PYTHON_RELEASE_TAG_RE = re.compile(
-    rf"^py-v(?P<version>{SEMVER_COMPONENT_RE}\."
+    rf"^py-(?P<distribution>rdocx|rpptx)-v(?P<version>{SEMVER_COMPONENT_RE}\."
     rf"{SEMVER_COMPONENT_RE}\.{SEMVER_COMPONENT_RE})$"
 )
-PYTHON_RELEASE_DISTRIBUTIONS = ("rdocx", "rpptx")
 PYTHON_RELEASE_PLATFORMS = (
     "manylinux_2_28_x86_64",
     "manylinux_2_28_aarch64",
@@ -631,7 +630,7 @@ def render_release_notes(changelog: str, tag: str) -> str:
     if not RELEASE_TAG_RE.fullmatch(tag):
         raise ValueError(
             f"{tag!r} is not a release tag, expected vX.Y.Z, rpptx-vX.Y.Z, "
-            "or py-vX.Y.Z"
+            "py-rdocx-vX.Y.Z, or py-rpptx-vX.Y.Z"
         )
 
     lines = changelog.splitlines(keepends=True)
@@ -704,23 +703,23 @@ def cmd_release_notes(args: argparse.Namespace) -> int:
 
 
 def validate_python_release_artifacts(tag: str, directory: Path) -> dict[str, object]:
-    """Validate the exact paired Python distribution artifact set."""
+    """Validate the exact selected Python distribution artifact set."""
     match = PYTHON_RELEASE_TAG_RE.fullmatch(tag)
     if match is None:
-        raise ValueError(f"{tag!r} is not a Python release tag, expected py-vX.Y.Z")
+        raise ValueError(
+            f"{tag!r} is not a Python release tag, expected "
+            "py-rdocx-vX.Y.Z or py-rpptx-vX.Y.Z"
+        )
+    distribution = match.group("distribution")
     version = match.group("version")
     if not directory.is_dir():
         raise ValueError(f"Python release artifact directory is missing: {directory}")
 
     expected_wheels = {
         f"{distribution}-{version}-cp39-abi3-{platform}.whl"
-        for distribution in PYTHON_RELEASE_DISTRIBUTIONS
         for platform in PYTHON_RELEASE_PLATFORMS
     }
-    expected_sdists = {
-        f"{distribution}-{version}.tar.gz"
-        for distribution in PYTHON_RELEASE_DISTRIBUTIONS
-    }
+    expected_sdists = {f"{distribution}-{version}.tar.gz"}
     expected_names = expected_wheels | expected_sdists
     entries = sorted(directory.iterdir(), key=lambda path: path.name)
     actual_names = {path.name for path in entries}
@@ -810,7 +809,7 @@ def validate_python_release_artifacts(tag: str, directory: Path) -> dict[str, ob
     return {
         "tag": tag,
         "version": version,
-        "distributions": PYTHON_RELEASE_DISTRIBUTIONS,
+        "distributions": (distribution,),
         "wheels": len(expected_wheels),
         "sdists": len(expected_sdists),
     }

@@ -285,20 +285,22 @@ agree, and a focused regression guards the approved concrete-instance rule.
 
 ### R14, Python publication exposes a partial or unaudited package family
 
-The `rdocx` and `rpptx` distributions share one user-facing release boundary,
-but their twelve platform wheels and two source distributions are built by
-independent matrix jobs. A count-only upload, manual publication path, stale
-artifact, mismatched project version, or unverified trusted-publisher identity
-could make one project appear released while the paired family is incomplete.
+The `rdocx` and `rpptx` distributions have independent native versions and
+release boundaries, while their twelve platform wheels and two source
+distributions share one build matrix. A count-only upload, manual publication
+path, stale artifact, mismatched project version, or unverified
+trusted-publisher identity could publish the wrong project or mix both families.
 
-*Mitigation*: `py-vX.Y.Z` selects exactly both distributions at one version.
-Manual workflow dispatch has build-only authority. The release preflight binds
-its downloaded artifacts to the reviewed SHA, validates exact names, embedded
-versions, `cp39-abi3` tags, platforms, and source distributions, and installs
-the pair together under Python 3.9 and 3.12. The tag-only `pypi` environment
-receives OIDC authority after a separate final approval. Completion requires
-both PyPI versions, all files, authenticated owner or maintainer roles, an
-exact reviewed GitHub release body, and every planned contributor comment.
+*Mitigation*: `py-rdocx-vX.Y.Z` and `py-rpptx-vX.Y.Z` each select one
+distribution at its native crate version. Manual workflow dispatch has
+build-only authority for both distributions. The release preflight binds the
+selected seven downloaded artifacts to the reviewed SHA, validates exact names,
+embedded versions, `cp39-abi3` tags, platforms, and source distribution, and
+installs the selected project under Python 3.9 and 3.12. The tag-only `pypi`
+environment receives OIDC authority after a separate final approval.
+Completion requires the selected PyPI version, all seven files, authenticated
+owner or maintainer roles, an exact reviewed GitHub release body, and every
+planned contributor comment.
 
 ## Assumptions that would invalidate the plan if wrong
 

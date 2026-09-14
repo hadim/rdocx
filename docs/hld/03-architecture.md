@@ -915,8 +915,9 @@ unpublished at 0.11.0. The earlier 0.10.0 family remains available. The family
 includes `oxml-chart` as the format-neutral owner while
 retaining `rpptx-chart` as a source-compatible deprecated shim. The released
 `rdocx-*` crates use the separate workspace version. The stable workspace, its
-nine internal pins, eleven inherited lockfile packages, two Python project
-versions, and unpublished `rdocx-wasm` package are at 0.13.1. The exact
+eight stable-version internal pins, ten inherited lockfile packages, the
+`rdocx` Python project, and unpublished `rdocx-wasm` package are at 0.13.1.
+The `rpptx` Python project follows the native incubating version 0.11.0. The exact
 seven-package stable crates.io family is published from immutable annotated
 `v0.13.1` tag at reviewed SHA
 `c391d12422c288be5db314bad8338dd08bb47d9a`. Every registry entry and its sole

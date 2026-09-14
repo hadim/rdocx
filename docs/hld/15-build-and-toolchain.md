@@ -395,11 +395,12 @@ registry `oxml-opc@0.10.0` lacks the F-238 Word main content-type constants.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace version 0.13.1, nine internal
-pins, eleven inherited lockfile packages, two Python project versions, unpublished
-`rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.11.0 versions, pins,
-lockfile entries, publication flags, and non-empty package descriptions.
+stable regression requires prepared workspace version 0.13.1, eight internal
+pins, ten inherited lockfile packages, the `rdocx` Python project version,
+unpublished `rdocx-wasm`, stable README requirements, and the exact
+seven-package crates.io set. The incubating regression requires the exact
+0.11.0 versions including `rpptx-py`, pins, lockfile entries, publication
+flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
 `python3 -m unittest scripts.test_sprint_workflow`, the module holding both
@@ -450,22 +451,24 @@ subset for the approved fixture repertoire. The source and output hashes,
 subset command, licence, and notice ship with `oxml-layout`. Package checks
 verify that inventory and keep the archive below the same 10 MiB ceiling.
 
-Two tag namespaces:
+Four tag namespaces:
 
 | Tag | Workflow | Publishes |
 |---|---|---|
 | `v*` | `publish.yml` | crates.io, the exact seven-package stable family |
 | `rpptx-v*` | `publish.yml` | crates.io, the exact 15-package incubating family |
-| `py-v*` | `wheels.yml` | PyPI via OIDC trusted publishing |
+| `py-rdocx-v*` | `wheels.yml` | PyPI `rdocx` via OIDC trusted publishing |
+| `py-rpptx-v*` | `wheels.yml` | PyPI `rpptx` via OIDC trusted publishing |
 
-Wheels are separate so a Rust patch release does not rebuild twelve wheels, and
-a binding-only fix does not force a crates.io release. `wheels.yml` builds and
-uploads each of the twelve cp39-abi3 wheels and both source distributions
-without publication authority. Its separate publish job depends on the whole
-artifact graph, checks the exact artifact counts, binds to the `pypi`
-environment, and receives `id-token: write` only for a `py-v*` tag event.
-Manual dispatch exercises the build graph without publishing. All actions and
-the maturin version are pinned, and no long-lived PyPI secret is present.
+Wheels are separate so a Rust patch release does not rebuild Python wheels, and
+a binding-only fix does not force a crates.io release. Manual `wheels.yml`
+dispatch builds and uploads all twelve cp39-abi3 wheels and both source
+distributions without publication authority. A Python tag runs only the
+selected project cells. Its separate publish job depends on the artifact graph,
+checks the selected six wheels and one source distribution, binds to the
+`pypi` environment, and receives `id-token: write` only for a
+`py-rdocx-v*` or `py-rpptx-v*` tag event. All actions and the maturin version
+are pinned, and no long-lived PyPI secret is present.
 
 ## Release process
 
@@ -474,12 +477,12 @@ edits to `[workspace.package]`, the internal pins in
 `[workspace.dependencies]`, and `Cargo.lock`. They are reviewed before a tag is
 possible and never rewrite README prose by pattern.
 
-`cargo-release` preparation is configured in Cargo metadata. The eleven packages
+`cargo-release` preparation is configured in Cargo metadata. The ten packages
 that inherit `[workspace.package].version`, including the unpublished
-`rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
-cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template. That shared-version group, its two Python project
-versions, and the rdocx WASM contract literals are at 0.13.1. The exact
+`rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
+effective `workspace` shared-version group and the `v{{version}}` tag template.
+That shared-version group, the `rdocx` Python project, and the rdocx WASM
+contract literals are at 0.13.1. The exact
 seven-package stable family is published from immutable annotated `v0.13.1`
 tag at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`. Its published
 archives require shared 0.11.0. The Python, binding, and WASM carriers remain
@@ -494,9 +497,9 @@ remain live and unyanked. The current complete stable family is 0.13.1. Earlier
 immutable registry releases, including the complete 0.12.0 family, remain
 available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
-The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
+The 17 implemented `oxml-*` and `rpptx*` package manifests use explicit version
 0.11.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
-preparation group contains unpublished `rpptx-wasm`, while the crates.io
+preparation group contains unpublished `rpptx-py` and `rpptx-wasm`, while the crates.io
 allowlist remains exactly 15 packages. The latest published complete family is
 the immutable `rpptx-v0.11.0` release at reviewed SHA
 `0b6bd622f8a14189d7d1281d011f81319ef8ad2a`, and earlier registry releases
@@ -511,17 +514,17 @@ Preparation changes release carriers, assertions, and selected-family notes
 without changing runtime behavior.
 External release actions remain owned by `/release`.
 
-`/release {vX.Y.Z | rpptx-vX.Y.Z | py-vX.Y.Z}` is the only command allowed to
+`/release {vX.Y.Z | rpptx-vX.Y.Z | py-rdocx-vX.Y.Z | py-rpptx-vX.Y.Z}` is the only command allowed to
 create or push a registry release tag or start crates.io or PyPI publication.
 It selects exactly one namespace. The stable path validates the workspace
 version, its internal pins, and the exact seven-package stable set. The
 incubating path validates the common explicit version, workspace pins, and the
-exact 15-package incubating set. The Python path validates the exact `rdocx`
-and `rpptx` distribution pair, twelve `cp39-abi3` wheels, two source
-distributions, trusted-publisher identity, installed runtime and typing gates,
-and absent target versions on PyPI.
+exact 15-package incubating set. Each Python path validates its selected
+distribution at the matching native crate version, six `cp39-abi3` wheels, one
+source distribution, trusted-publisher identity, installed runtime and typing
+gates, and an absent target version on PyPI.
 
-`/release-notes TAG` is the deliberate preparation ceremony for the same three
+`/release-notes TAG` is the deliberate preparation ceremony for the same four
 namespaces. It derives human-written highlights, additions, fixes,
 compatibility guidance, and contributor credit from reviewed repository
 evidence, then updates the exact changelog section for review with the code.

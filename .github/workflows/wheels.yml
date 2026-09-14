@@ -2,7 +2,7 @@ name: Python wheels
 
 on:
   push:
-    tags: ["py-v*"]
+    tags: ["py-rdocx-v*", "py-rpptx-v*"]
   workflow_dispatch:
 
 permissions:
@@ -27,11 +27,14 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))
       - id: cp39
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.9"
       - name: Build cp39-abi3 wheel
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))
         uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
         with:
           command: build
@@ -41,6 +44,7 @@ jobs:
           working-directory: crates/${{ matrix.package.crate }}
           args: --release --locked --compatibility pypi --out ../../dist
       - name: Validate wheel metadata
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))
         shell: bash
         run: |
           python - <<'PY'
@@ -56,7 +60,7 @@ jobs:
           assert "Tag: cp39-abi3-" in metadata, metadata
           PY
       - name: Install and test native wheel
-        if: matrix.platform.install == 'native'
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))) && matrix.platform.install == 'native'
         shell: bash
         run: |
           "${{ steps.cp39.outputs.python-path }}" -m venv .wheel-venv
@@ -78,12 +82,12 @@ jobs:
             "$venv_python" -m pytest crates/rpptx-py/tests/test_documented_examples.py
           fi
       - id: cp312
-        if: matrix.platform.install == 'native'
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))) && matrix.platform.install == 'native'
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
       - name: Validate installed typing surface
-        if: matrix.platform.install == 'native'
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))) && matrix.platform.install == 'native'
         shell: bash
         run: |
           "${{ steps.cp312.outputs.python-path }}" -m venv .typing-venv
@@ -103,7 +107,7 @@ jobs:
             "$typing_python" -m mypy.stubtest rpptx
           fi
       - name: Install and test musllinux wheel
-        if: matrix.platform.install == 'musl'
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))) && matrix.platform.install == 'musl'
         shell: bash
         run: |
           docker run --rm \
@@ -130,6 +134,7 @@ jobs:
               fi
             '
       - name: Upload wheel
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: artifact-wheel-${{ matrix.package.distribution }}-${{ matrix.platform.label }}
@@ -147,10 +152,13 @@ jobs:
           - { distribution: rpptx, crate: rpptx-py, module: rpptx }
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))
         with:
           python-version: "3.9"
       - name: Build source distribution
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))
         uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
         with:
           command: sdist
@@ -158,6 +166,7 @@ jobs:
           working-directory: crates/${{ matrix.package.crate }}
           args: --out ../../dist
       - name: Upload source distribution
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, format('refs/tags/py-{0}-v', matrix.package.distribution))
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: artifact-sdist-${{ matrix.package.distribution }}
@@ -165,8 +174,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish Python distributions
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/py-v')
+    name: Publish selected Python distribution
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/py-rdocx-v') || startsWith(github.ref, 'refs/tags/py-rpptx-v'))
     needs: [build-wheels, build-sdists]
     runs-on: ubuntu-24.04
     environment: pypi
@@ -174,23 +183,27 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Download all distributions
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Select tagged distribution
+        id: selected
+        shell: bash
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            py-rdocx-v*) distribution=rdocx ;;
+            py-rpptx-v*) distribution=rpptx ;;
+            *) exit 1 ;;
+          esac
+          echo "distribution=${distribution}" >> "${GITHUB_OUTPUT}"
+      - name: Download selected distribution
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
-          pattern: artifact-*
+          pattern: artifact-*-${{ steps.selected.outputs.distribution }}*
           merge-multiple: true
-      - name: Validate complete publication set
+      - name: Validate selected publication set
         shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          wheels = list(Path("dist").glob("*.whl"))
-          sdists = list(Path("dist").glob("*.tar.gz"))
-          assert len(wheels) == 12, wheels
-          assert len(sdists) == 2, sdists
-          PY
+          python3 scripts/sprint_workflow.py python-release-artifacts "${GITHUB_REF_NAME}" dist
       - name: Publish to PyPI with trusted publishing
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:

@@ -2,7 +2,7 @@
 description: Prepare and validate meaningful reviewed release notes in CHANGELOG.md for one Rust or Python release tag.
 ---
 
-# /release-notes {vX.Y.Z | rpptx-vX.Y.Z | py-vX.Y.Z}
+# /release-notes {vX.Y.Z | rpptx-vX.Y.Z | py-rdocx-vX.Y.Z | py-rpptx-vX.Y.Z}
 
 Prepare the human-written release record that `/release` publishes unchanged.
 This ceremony edits only `CHANGELOG.md`, including the matching section and
@@ -15,12 +15,13 @@ Choose exactly one release family from the requested tag:
 
 - `vX.Y.Z` is the stable rdocx family.
 - `rpptx-vX.Y.Z` is the incubating OOXML and PowerPoint family.
-- `py-vX.Y.Z` is the paired `rdocx` and `rpptx` Python distribution family.
+- `py-rdocx-vX.Y.Z` is the `rdocx` Python distribution family.
+- `py-rpptx-vX.Y.Z` is the `rpptx` Python distribution family.
 
 Find the current sprint story assigned to the exact requested tag. Read its
-design plan and dependencies before collecting claims. For `py-v0.13.1`, that
-story is F-X094f. Refuse a tag that has no release story in the active sprint
-or whose plan is not approved.
+design plan and dependencies before collecting claims. For
+`py-rdocx-v0.13.1` and `py-rpptx-v0.11.0`, that story is F-X094f. Refuse a tag
+that has no release story in the active sprint or whose plan is not approved.
 
 ## Evidence
 
@@ -40,9 +41,10 @@ Build the notes from reviewed repository evidence, not memory:
 4. Read the current compatibility and migration contract in `CHANGELOG.md`,
    the release plan, and the relevant HLD sections.
 5. Separate changes for the selected family from changes for the other
-   families. Python notes cover the two Python distributions and their public
-   binding surfaces, not crates.io or npm packages. Exclude internal workflow
-   work unless it changes a user-visible release or compatibility promise.
+   families. Python notes cover only the selected Python distribution and its
+   public binding surface, not the other Python distribution, crates.io, or npm
+   packages. Exclude internal workflow work unless it changes a user-visible
+   release or compatibility promise.
 6. Build one contribution inventory for the selected family. For each included
    GitHub record, capture its URL, authenticated author handle, user-visible
    outcome, whether it landed directly or through a hardened equivalent, and
@@ -131,7 +133,8 @@ conclusion, and the successful check and render commands.
 
 ## Refused situations
 
-- The tag is not exactly `vX.Y.Z`, `rpptx-vX.Y.Z`, or `py-vX.Y.Z`.
+- The tag is not exactly `vX.Y.Z`, `rpptx-vX.Y.Z`,
+  `py-rdocx-vX.Y.Z`, or `py-rpptx-vX.Y.Z`.
 - The active sprint has no approved release story for the exact tag.
 - The versioned heading is missing, duplicated, incomplete, empty, or contains
   a placeholder.
