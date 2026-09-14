@@ -13256,3 +13256,81 @@ regressions, package dry runs, and supply-chain audit passed.
 build every remap from the complete staged dependency graph. F-276 owns
 all-story import and the broader custom XML, revision, note, diagram, and
 package-extension dependency policy.
+
+### F-X094a, Expose Word collaboration and redline commands in rdocx-cli
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rdocx-cli` now exposes schema-versioned commands for
+listing, adding, replying to, resolving, and removing comments. It also lists
+and selectively accepts or rejects revisions, creates comparison documents,
+and rebuilds tables of contents. Every mutation requires an explicit output
+and publishes only a complete staged document.
+
+**Non-obvious choices.** Comment ranges use zero-based half-open body
+coordinates. Revision listing declares main-story scope, while resolution
+declares the broader scope already supported by the native facade. Comparison
+remains distinct from structural diff because it authors tracked revisions.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `cli_collaboration_commands_are_schema_stable_and_atomic`,
+`comment_commands_round_trip_one_resolved_thread`,
+`revision_filters_change_only_matching_revisions`, and
+`compare_accept_and_reject_reproduce_each_input` passed. The consolidated full
+gate passed with workspace tests, deterministic viewer tooling, WASM, rustdoc,
+README inventories, workflow regressions, package dry runs, archive limits,
+and the supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the CLI on the native collaboration and
+comparison facades. New mutations must retain the staged output boundary and
+must not expose raw XML as a second automation model.
+
+### F-X094b, Structured CLI text and layout plus guarded replacement
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The Word CLI now emits schema-versioned accepted-view text
+records with nested source paths, style and numbering facts, and nullable
+direct run formatting. It also emits one-based physical and displayed page
+geometry for every direct body item and supports replacement guarded by an
+exact expected match count.
+
+**Non-obvious choices.** Layout carries a private top-level body owner through
+existing blocks and publishes additive `WordBodyLayoutFragment` records on
+`WordLayoutResult`. This preserves the positioned element contract while
+giving paragraphs, empty tables, images, controls, and page-spanning items
+real point-space extents. Expected-count mismatch is checked before any staged
+output is published.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `cli_structured_text_layout_and_guarded_replace_preserve_exact_contracts`,
+`layout_json_keeps_page_spanning_body_elements_as_multiple_fragments`,
+`empty_table_and_image_blocks_keep_real_geometry`, and
+`text_json_preserves_nested_paths_styles_numbering_and_run_formatting` passed.
+Warm restart layout equals fresh pagination, and the consolidated full gate
+passed with deterministic viewer tooling, package dry runs, archive limits,
+and the supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep body layout fragments as a result sidecar.
+Do not derive body boxes from glyph baselines or add source ownership to shared
+positioned elements unless a separate reviewed contract requires it.

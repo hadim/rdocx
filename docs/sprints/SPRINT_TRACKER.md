@@ -425,6 +425,8 @@ defended.
 | F-252 | S72 | L | 4 | 1 | 2026-09-13 | Added transactional rich default, first, and even header and footer lifecycle operations for every section with exact Word selection parity |
 | F-X093 | S72 | M | 2 | 1 | 2026-09-13 | Preserved exact drawing wrappers and package graphs through comparison, save, reopen, accept, and reject |
 | F-256 | S72 | L | 4 | 1 | 2026-09-13 | Added transactional package-authoritative main-body fragment import with complete selected dependency closure and deterministic conflict policies |
+| F-X094a | S72 | M | 2 | 1 | 2026-09-14 | Exposed schema-versioned Word comments, revision resolution, comparison, and TOC rebuilding through atomic CLI commands |
+| F-X094b | S72 | L | 4 | 1 | 2026-09-14 | Added structured accepted-view text, direct body layout fragments, and expected-count guarded replacement to the Word CLI |
 
 ## Velocity
 
