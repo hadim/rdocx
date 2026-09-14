@@ -431,6 +431,8 @@ defended.
 | F-X094d | S72 | L | 4 | 1 | 2026-09-14 | Added ordered typed Python snapshots for Word sections, styles, rich stories, header and footer variants, and relationship-scoped hyperlinks |
 | F-X094e | S72 | L | 4 | 1 | 2026-09-14 | Added deterministic PowerPoint and notes rendering plus frozen modern comment snapshots and atomic collaboration mutation to the Python binding |
 | F-X092 | S72 | L | 4 | 1 | 2026-09-14 | Preserved complete logical reading order in generated Word and PowerPoint PDFs without changing painted output or the deterministic hash harness |
+| F-X095 | S72 | L | 4 | 1 | 2026-09-14 | Integrated hardened equivalents of PRs 77 through 80, restored pinned Presentation fidelity CI, and preserved no-op comparison handles |
+| F-X096 | S72 | M | 2 | 1 | 2026-09-14 | Aligned each Python distribution with its native crate version and gave rdocx and rpptx independent PyPI tag routes |
 
 ## Velocity
 

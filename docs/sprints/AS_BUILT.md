@@ -13498,3 +13498,87 @@ archive limits, the supply-chain audit, and fresh Python 3.9 and 3.12 wheels.
 **Notes for future sessions.** Keep logical extraction grouping local to the
 PDF writer. Do not reorder positioned runs or add an invisible extraction
 layer, since either would risk visual or semantic drift.
+
+### F-X095, Integrate PRs 77 through 80 and restore deterministic CI
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Hardened equivalents of contributor PRs 77 through 80 now
+expose narrowed numbering facts, strict document and body boundaries, modeled
+empty content, revision authors, marker and field facts, safe table-cell
+serialization, and TOC coordinates. Presentation fidelity CI now uses the
+pinned Ubuntu LibreOffice and Poppler oracle. Byte-identical Word comparison
+also preserves existing Python document handles.
+
+**Non-obvious choices.** The PRs were not merged directly because their
+pre-S72 bases would overwrite newer section, story, binding, and preservation
+work. Their intended outcomes were reconciled against the current
+namespace-aware, schema-ordered, and raw XML preserving implementation while
+retaining Pedro Assumpcao's contribution credit.
+
+**Deviations from the design plan.** The clean-wheel regression exposed a
+no-op comparison handle invalidation after the feature review. Sprint
+integration fixed it and added a focused regression before the consolidated
+gate.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Focused numbering, document, revision, marker, field, table, TOC,
+and no-op comparison regressions passed. Exact LibreOffice 26.2.5.2 and
+Poppler 26.01.0 rendering checks passed, both pinned python-pptx 1.0.2 oracle
+tests passed, and the consolidated full gate passed workspace tests, both WASM
+targets, rustdoc, README inventories, workflow regressions, 22 package dry
+runs, archive limits, and the supply-chain audit.
+
+**Hash harness.** Seven Word `document.xml` entries changed intentionally
+because modeled empty paragraphs now serialize as self-closing elements. All
+PNG and PDF entries were unchanged. The reviewed current baseline passed 49 of
+49 in the final consolidated gate.
+
+**Notes for future sessions.** Keep contributor credit attached to the
+hardened equivalent when a stale contribution cannot be merged directly. Keep
+the Presentation fidelity runner on the exact supported Linux oracle.
+
+### F-X096, Align Python distribution versions and release tags
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native `rdocx`, `rdocx-py`, and PyPI `rdocx` now share
+version 0.13.1. Native `rpptx`, `rpptx-py`, and PyPI `rpptx` now share version
+0.11.0. Disjoint `py-rdocx-v*` and `py-rpptx-v*` tags each select one source
+distribution and six cp39-abi3 wheels, while manual dispatch remains
+build-only.
+
+**Non-obvious choices.** The existing `rpptx-v*` namespace remains exclusive
+to incubating Rust releases. Separate Python tag families prevent a Python
+publication from starting crates.io publication and keep the two independent
+native version lines from being coupled.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Positive and negative version-contract matrices passed for both
+tag families, including exact selected artifact inventories and clean installs
+of six wheels plus one source distribution per package. The consolidated full
+gate passed workspace tests, both WASM targets, rustdoc, README inventories,
+workflow regressions, 22 package dry runs, archive limits, and the
+supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat `rdocx` and `rpptx` as independent version
+lines. A Python package version must match its corresponding native facade,
+not the other distribution released from the same repository.
