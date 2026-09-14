@@ -72,7 +72,7 @@ related content safely. F-X093 then protects drawings through comparison, and
 F-256 remaps the complete package dependency graph. F-X094a through F-X094e
 expose the reviewed native capabilities through the CLI and Python bindings.
 F-X094f prepares the Python release contract without publishing. F-X092 lands
-last because it exclusively owns the declared PDF baseline change.
+last because it exclusively owns the PDF writer and logical extraction boundary.
 
 ## Definition of done for this sprint
 
