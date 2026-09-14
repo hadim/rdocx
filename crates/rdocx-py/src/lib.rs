@@ -12,7 +12,10 @@ use pyo3::types::{PyAny, PyType};
 
 use oxml_py_support::StaleElementError;
 
-use document::PyDocument;
+use document::{
+    PyBoundingBox, PyComment, PyComparisonDiagnostic, PyDocument, PyLayoutFragment, PyLayoutPage,
+    PyRunPosition, PyRunRange, PyTocRebuildReport,
+};
 use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
@@ -85,6 +88,14 @@ pub(crate) fn rdocx_to_pyerr(py: Python<'_>, error: rdocx::Error) -> PyErr {
 #[pymodule]
 fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDocument>()?;
+    module.add_class::<PyRunPosition>()?;
+    module.add_class::<PyRunRange>()?;
+    module.add_class::<PyComment>()?;
+    module.add_class::<PyComparisonDiagnostic>()?;
+    module.add_class::<PyBoundingBox>()?;
+    module.add_class::<PyLayoutFragment>()?;
+    module.add_class::<PyLayoutPage>()?;
+    module.add_class::<PyTocRebuildReport>()?;
     module.add_class::<PyParagraph>()?;
     module.add_class::<PyParagraphCollection>()?;
     module.add_class::<PyRun>()?;

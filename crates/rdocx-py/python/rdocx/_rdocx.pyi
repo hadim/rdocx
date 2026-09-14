@@ -8,10 +8,136 @@ from .enum import text as _text
 
 _Path = str | _os.PathLike[str]
 __all__ = [
-    "Document", "Paragraph", "ParagraphCollection", "Run", "RunCollection",
-    "Font", "ParagraphFormat", "Table", "TableCollection", "Row",
-    "RowCollection", "Cell", "CellCollection", "CellParagraphCollection",
+    "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
+    "Comment", "ComparisonDiagnostic", "Document", "Font", "LayoutFragment",
+    "LayoutPage", "Paragraph", "ParagraphCollection", "ParagraphFormat", "Row",
+    "RowCollection", "Run", "RunCollection", "RunPosition", "RunRange", "Table",
+    "TableCollection", "TocRebuildReport",
 ]
+
+
+@_final
+class RunPosition:
+    def __new__(cls, *, body_index: int, run_index: int) -> RunPosition: ...
+    @property
+    def body_index(self) -> int: ...
+    @property
+    def run_index(self) -> int: ...
+
+
+@_final
+class RunRange:
+    def __new__(cls, *, start: RunPosition, end: RunPosition) -> RunRange: ...
+    @property
+    def start(self) -> RunPosition: ...
+    @property
+    def end(self) -> RunPosition: ...
+
+
+@_final
+class Comment:
+    def __new__(
+        cls,
+        *,
+        id: int,
+        author: str | None,
+        initials: str | None,
+        date: str | None,
+        text: str,
+        parent_id: int | None,
+        resolved: bool,
+    ) -> Comment: ...
+    @property
+    def id(self) -> int: ...
+    @property
+    def author(self) -> str | None: ...
+    @property
+    def initials(self) -> str | None: ...
+    @property
+    def date(self) -> str | None: ...
+    @property
+    def text(self) -> str: ...
+    @property
+    def parent_id(self) -> int | None: ...
+    @property
+    def resolved(self) -> bool: ...
+
+
+@_final
+class ComparisonDiagnostic:
+    def __new__(cls, *, location: str, message: str) -> ComparisonDiagnostic: ...
+    @property
+    def location(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+
+
+@_final
+class BoundingBox:
+    def __new__(
+        cls, *, x: float, y: float, width: float, height: float
+    ) -> BoundingBox: ...
+    @property
+    def x(self) -> float: ...
+    @property
+    def y(self) -> float: ...
+    @property
+    def width(self) -> float: ...
+    @property
+    def height(self) -> float: ...
+
+
+@_final
+class LayoutFragment:
+    def __new__(
+        cls,
+        *,
+        body_index: int,
+        physical_page: int,
+        displayed_page: int,
+        bounds: BoundingBox,
+    ) -> LayoutFragment: ...
+    @property
+    def body_index(self) -> int: ...
+    @property
+    def physical_page(self) -> int: ...
+    @property
+    def displayed_page(self) -> int: ...
+    @property
+    def bounds(self) -> BoundingBox: ...
+
+
+@_final
+class LayoutPage:
+    def __new__(
+        cls,
+        *,
+        page_number: int,
+        displayed_page_number: int,
+        width: float,
+        height: float,
+    ) -> LayoutPage: ...
+    @property
+    def page_number(self) -> int: ...
+    @property
+    def displayed_page_number(self) -> int: ...
+    @property
+    def width(self) -> float: ...
+    @property
+    def height(self) -> float: ...
+
+
+@_final
+class TocRebuildReport:
+    def __new__(
+        cls, *, entry_count: int, bookmark_count: int, diagnostic_count: int
+    ) -> TocRebuildReport: ...
+    @property
+    def entry_count(self) -> int: ...
+    @property
+    def bookmark_count(self) -> int: ...
+    @property
+    def diagnostic_count(self) -> int: ...
 
 
 @_final
@@ -35,6 +161,25 @@ class Document:
         transparent: bool = False,
         pages: list[int] | None = None,
     ) -> list[bytes] | bytes: ...
+    def compare(
+        self, edited: Document, author: str, timestamp: str
+    ) -> tuple[ComparisonDiagnostic, ...]: ...
+    @property
+    def comments(self) -> tuple[Comment, ...]: ...
+    def add_comment(
+        self,
+        range: RunRange,
+        *,
+        author: str,
+        text: str,
+        initials: str | None = None,
+    ) -> int: ...
+    def reply_to(self, parent_id: int, *, author: str, text: str) -> int: ...
+    def resolve_comment(self, id: int, *, resolved: bool = True) -> bool: ...
+    def remove_comment(self, id: int) -> bool: ...
+    def layout(self) -> tuple[LayoutFragment, ...]: ...
+    def layout_page(self, page_index: int) -> LayoutPage | None: ...
+    def rebuild_toc(self) -> TocRebuildReport: ...
     @property
     def paragraphs(self) -> ParagraphCollection: ...
     @property

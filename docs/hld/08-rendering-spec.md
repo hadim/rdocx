@@ -677,6 +677,14 @@ bundle. Every PDF and raster path borrows its `LayoutResult` field from the same
 bundle that owns the exact font data and Word source map. Cloning a completed
 result shares each immutable page frame and font byte buffer.
 
+The Python `Document.layout()` method always reads the bundled-font-only
+snapshot. It returns immutable main-body fragments with their zero-based body
+index, one-based physical and displayed page numbers, and point-space bounds.
+`Document.layout_page()` uses the same deterministic cache and returns immutable
+page number and size metadata for one zero-based page index. Neither method
+exposes positioned renderer elements or permits mutation through a layout
+result.
+
 Normal `FontManager` construction clones one process-lifetime snapshot of the
 bundled and system face table. Installing, removing, or replacing a system font
 therefore takes effect after process restart. File-backed faces share an

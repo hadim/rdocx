@@ -8,6 +8,8 @@ DOCX packages, and renders PDF or page images.
 
 - File and byte-based DOCX input and output.
 - Paragraphs, runs, fonts, tables, rows, and cells.
+- Tracked comparison, main-body comment threads, and TOC rebuilding.
+- Immutable deterministic layout fragments and page geometry.
 - PDF plus PNG, JPEG, and TIFF page output.
 - Pythonic collections, negative indexes, iteration, and stale-handle errors.
 

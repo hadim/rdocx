@@ -2,12 +2,252 @@ use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyList};
+use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
 
 use crate::paragraph::{PyParagraph, PyParagraphCollection};
 use crate::rdocx_to_pyerr;
 use crate::table::{PyTable, PyTableCollection};
+
+#[pyclass(name = "RunPosition", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PyRunPosition {
+    pub body_index: usize,
+    pub run_index: usize,
+}
+
+#[pymethods]
+impl PyRunPosition {
+    #[new]
+    #[pyo3(signature = (*, body_index, run_index))]
+    fn new(body_index: usize, run_index: usize) -> Self {
+        Self {
+            body_index,
+            run_index,
+        }
+    }
+}
+
+impl From<PyRunPosition> for rdocx::RunPosition {
+    fn from(value: PyRunPosition) -> Self {
+        Self {
+            body_index: value.body_index,
+            run_index: value.run_index,
+        }
+    }
+}
+
+#[pyclass(name = "RunRange", frozen, eq, skip_from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PyRunRange {
+    start: PyRunPosition,
+    end: PyRunPosition,
+}
+
+#[pymethods]
+impl PyRunRange {
+    #[new]
+    #[pyo3(signature = (*, start, end))]
+    fn new(start: PyRef<'_, PyRunPosition>, end: PyRef<'_, PyRunPosition>) -> Self {
+        Self {
+            start: *start,
+            end: *end,
+        }
+    }
+
+    #[getter]
+    fn start(&self) -> PyRunPosition {
+        self.start
+    }
+
+    #[getter]
+    fn end(&self) -> PyRunPosition {
+        self.end
+    }
+}
+
+impl From<PyRunRange> for rdocx::RunRange {
+    fn from(value: PyRunRange) -> Self {
+        Self {
+            start: value.start.into(),
+            end: value.end.into(),
+        }
+    }
+}
+
+#[pyclass(name = "Comment", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyComment {
+    pub id: i32,
+    pub author: Option<String>,
+    pub initials: Option<String>,
+    pub date: Option<String>,
+    pub text: String,
+    pub parent_id: Option<i32>,
+    pub resolved: bool,
+}
+
+#[pymethods]
+impl PyComment {
+    #[new]
+    #[pyo3(signature = (*, id, author, initials, date, text, parent_id, resolved))]
+    fn new(
+        id: i32,
+        author: Option<String>,
+        initials: Option<String>,
+        date: Option<String>,
+        text: String,
+        parent_id: Option<i32>,
+        resolved: bool,
+    ) -> Self {
+        Self {
+            id,
+            author,
+            initials,
+            date,
+            text,
+            parent_id,
+            resolved,
+        }
+    }
+}
+
+#[pyclass(
+    name = "ComparisonDiagnostic",
+    frozen,
+    get_all,
+    eq,
+    skip_from_py_object
+)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyComparisonDiagnostic {
+    pub location: String,
+    pub message: String,
+}
+
+#[pymethods]
+impl PyComparisonDiagnostic {
+    #[new]
+    #[pyo3(signature = (*, location, message))]
+    fn new(location: String, message: String) -> Self {
+        Self { location, message }
+    }
+}
+
+#[pyclass(name = "BoundingBox", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct PyBoundingBox {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[pymethods]
+impl PyBoundingBox {
+    #[new]
+    #[pyo3(signature = (*, x, y, width, height))]
+    fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+#[pyclass(name = "LayoutFragment", frozen, eq, skip_from_py_object)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct PyLayoutFragment {
+    body_index: usize,
+    physical_page: usize,
+    displayed_page: usize,
+    bounds: PyBoundingBox,
+}
+
+#[pymethods]
+impl PyLayoutFragment {
+    #[new]
+    #[pyo3(signature = (*, body_index, physical_page, displayed_page, bounds))]
+    fn new(
+        body_index: usize,
+        physical_page: usize,
+        displayed_page: usize,
+        bounds: PyRef<'_, PyBoundingBox>,
+    ) -> Self {
+        Self {
+            body_index,
+            physical_page,
+            displayed_page,
+            bounds: *bounds,
+        }
+    }
+
+    #[getter]
+    fn body_index(&self) -> usize {
+        self.body_index
+    }
+
+    #[getter]
+    fn physical_page(&self) -> usize {
+        self.physical_page
+    }
+
+    #[getter]
+    fn displayed_page(&self) -> usize {
+        self.displayed_page
+    }
+
+    #[getter]
+    fn bounds(&self) -> PyBoundingBox {
+        self.bounds
+    }
+}
+
+#[pyclass(name = "LayoutPage", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct PyLayoutPage {
+    pub page_number: usize,
+    pub displayed_page_number: usize,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[pymethods]
+impl PyLayoutPage {
+    #[new]
+    #[pyo3(signature = (*, page_number, displayed_page_number, width, height))]
+    fn new(page_number: usize, displayed_page_number: usize, width: f64, height: f64) -> Self {
+        Self {
+            page_number,
+            displayed_page_number,
+            width,
+            height,
+        }
+    }
+}
+
+#[pyclass(name = "TocRebuildReport", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PyTocRebuildReport {
+    pub entry_count: usize,
+    pub bookmark_count: usize,
+    pub diagnostic_count: usize,
+}
+
+#[pymethods]
+impl PyTocRebuildReport {
+    #[new]
+    #[pyo3(signature = (*, entry_count, bookmark_count, diagnostic_count))]
+    fn new(entry_count: usize, bookmark_count: usize, diagnostic_count: usize) -> Self {
+        Self {
+            entry_count,
+            bookmark_count,
+            diagnostic_count,
+        }
+    }
+}
 
 #[pyclass(name = "Document")]
 pub struct PyDocument {
@@ -52,8 +292,7 @@ impl PyDocument {
     }
 
     fn save(&mut self, path: PathBuf, py: Python<'_>) -> PyResult<()> {
-        self.inner
-            .save(path)
+        py.detach(|| self.inner.save(path))
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
@@ -120,6 +359,168 @@ impl PyDocument {
                 Ok(PyBytes::new(py, &tiff).into_any().unbind())
             }
         }
+    }
+
+    fn compare<'py>(
+        &mut self,
+        edited: &PyDocument,
+        author: &str,
+        timestamp: &str,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let (diagnostics, changed) = py
+            .detach(|| {
+                let before = self.inner.to_bytes()?;
+                let diagnostics = self.inner.compare(&edited.inner, author, timestamp)?;
+                let changed = self.inner.to_bytes()? != before;
+                Ok::<_, rdocx::Error>((diagnostics, changed))
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if changed {
+            self.revisions.bump();
+        }
+        PyTuple::new(
+            py,
+            diagnostics.into_iter().map(|item| PyComparisonDiagnostic {
+                location: item.location,
+                message: item.message,
+            }),
+        )
+    }
+
+    #[getter]
+    fn comments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner.comments().into_iter().map(|comment| PyComment {
+                id: comment.id(),
+                author: comment.author().map(str::to_owned),
+                initials: comment.initials().map(str::to_owned),
+                date: comment.date().map(str::to_owned),
+                text: comment.text(),
+                parent_id: comment.parent_id(),
+                resolved: comment.resolved(),
+            }),
+        )
+    }
+
+    #[pyo3(signature = (range, *, author, text, initials = None))]
+    fn add_comment(
+        &mut self,
+        range: PyRef<'_, PyRunRange>,
+        author: &str,
+        text: &str,
+        initials: Option<&str>,
+        py: Python<'_>,
+    ) -> PyResult<i32> {
+        let id = self
+            .inner
+            .add_comment((*range).into(), author, initials, text)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(id)
+    }
+
+    #[pyo3(signature = (parent_id, *, author, text))]
+    fn reply_to(
+        &mut self,
+        parent_id: i32,
+        author: &str,
+        text: &str,
+        py: Python<'_>,
+    ) -> PyResult<i32> {
+        let id = self
+            .inner
+            .reply_to(parent_id, author, text)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(id)
+    }
+
+    #[pyo3(signature = (id, *, resolved = true))]
+    fn resolve_comment(&mut self, id: i32, resolved: bool, py: Python<'_>) -> PyResult<bool> {
+        let updated = self
+            .inner
+            .resolve_comment(id, resolved)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if updated {
+            self.revisions.bump();
+        }
+        Ok(updated)
+    }
+
+    fn remove_comment(&mut self, id: i32, py: Python<'_>) -> PyResult<bool> {
+        let removed = self
+            .inner
+            .remove_comment(id)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if removed {
+            self.revisions.bump();
+        }
+        Ok(removed)
+    }
+
+    fn layout<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let fragments = py
+            .detach(|| {
+                let layout = self.inner.layout_deterministic()?;
+                let mut fragments = Vec::new();
+                for body_index in 0..self.inner.content_count() {
+                    let Some(body_fragments) = layout.body_layout_fragments(body_index) else {
+                        continue;
+                    };
+                    fragments.extend(body_fragments.iter().map(|fragment| PyLayoutFragment {
+                        body_index,
+                        physical_page: fragment.physical_page,
+                        displayed_page: fragment.displayed_page,
+                        bounds: PyBoundingBox {
+                            x: fragment.x,
+                            y: fragment.y,
+                            width: fragment.width,
+                            height: fragment.height,
+                        },
+                    }));
+                }
+                Ok::<_, rdocx::Error>(fragments)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        PyTuple::new(py, fragments)
+    }
+
+    fn layout_page(&self, page_index: usize, py: Python<'_>) -> PyResult<Option<PyLayoutPage>> {
+        py.detach(|| {
+            let layout = self.inner.layout_deterministic()?;
+            Ok(layout
+                .layout
+                .pages
+                .get(page_index)
+                .map(|page| PyLayoutPage {
+                    page_number: page.page_number,
+                    displayed_page_number: page.displayed_page_number,
+                    width: page.width,
+                    height: page.height,
+                }))
+        })
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn rebuild_toc(&mut self, py: Python<'_>) -> PyResult<PyTocRebuildReport> {
+        let (report, changed) = py
+            .detach(|| {
+                let before = self.inner.to_bytes()?;
+                let report = self.inner.rebuild_toc()?;
+                let changed = self.inner.to_bytes()? != before;
+                Ok::<_, rdocx::Error>((report, changed))
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if changed {
+            self.revisions.bump();
+        }
+        Ok(PyTocRebuildReport {
+            entry_count: report.entry_count,
+            bookmark_count: report.bookmark_count,
+            diagnostic_count: report.diagnostic_count,
+        })
     }
 
     #[getter]

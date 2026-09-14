@@ -211,6 +211,23 @@ alignment and width, plus cell text, width and vertical alignment. These
 handles use `Body`, `Row`, `Cell`, `Para` and `Run` path segments and reach the
 document only through the public `rdocx` facade.
 
+The Python `Document` also exposes the current native comparison, main-body
+comment, deterministic layout, and TOC rebuild operations. `RunPosition` and
+`RunRange` are constructible frozen values for zero-based half-open run ranges.
+`Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
+`LayoutPage`, and `TocRebuildReport` are frozen typed snapshots. Comments are
+returned as a tuple in package order, comparison diagnostics are returned as a
+tuple, and layout fragments are returned in body and page order. No operation
+returns a borrowed native handle or an untyped dictionary.
+
+Comparison, deterministic layout, TOC rebuild, path save, and byte
+serialization release the GIL. A successful comment addition or reply advances
+the document revision once. Comment resolution and removal advance it once
+only when they update the document. Comparison and TOC rebuild compare their
+serialized package state around the successful staged operation and advance
+the revision once only when that state changes. A native error publishes no
+candidate and does not advance the binding revision.
+
 `rpptx` mirrors python-pptx through an unpublished mixed-layout `rpptx-py`
 crate. `Presentation` owns the Rust facade and one revision counter. Lazy
 layouts, slides, shapes, placeholders, text frames, paragraphs, runs, columns

@@ -2,12 +2,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, assert_type
 
 from rdocx import (
+    BoundingBox,
     Cell,
     CellCollection,
     CellParagraphCollection,
+    Comment,
+    ComparisonDiagnostic,
     Document,
     Font,
     Inches,
+    LayoutFragment,
+    LayoutPage,
     RGBColor,
     Paragraph,
     ParagraphCollection,
@@ -16,8 +21,11 @@ from rdocx import (
     RowCollection,
     Run,
     RunCollection,
+    RunPosition,
+    RunRange,
     Table,
     TableCollection,
+    TocRebuildReport,
 )
 
 
@@ -50,6 +58,26 @@ def exercise_rdocx_types(path: Path) -> None:
     maybe_page: bytes | None = opened.render_page_to_png(0)
     document.save(path)
     document.remove_content(0)
+    position = RunPosition(body_index=0, run_index=0)
+    range_ = RunRange(start=position, end=RunPosition(body_index=0, run_index=1))
+    comment_id: int = document.add_comment(
+        range_, author="Ada", text="review", initials=None
+    )
+    reply_id: int = document.reply_to(comment_id, author="Grace", text="done")
+    comments: tuple[Comment, ...] = document.comments
+    resolved: bool = document.resolve_comment(comment_id)
+    removed: bool = document.remove_comment(reply_id)
+    diagnostics: tuple[ComparisonDiagnostic, ...] = document.compare(
+        opened, author="Ada", timestamp="2026-09-14T09:00:00Z"
+    )
+    fragments: tuple[LayoutFragment, ...] = document.layout()
+    maybe_layout_page: LayoutPage | None = document.layout_page(0)
+    report: TocRebuildReport = document.rebuild_toc()
+    if fragments:
+        bounds: BoundingBox = fragments[0].bounds
+        assert_type(bounds.width, float)
+    assert_type(comments[0].date, str | None)
+    assert_type(report.entry_count, int)
     package_bytes, pdf_bytes, pages, maybe_page, sliced, channels
 
 

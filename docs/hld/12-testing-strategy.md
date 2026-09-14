@@ -2085,6 +2085,17 @@ pure-Python source in each installed wheel. Representative enum-input,
 return-type, inline-source, constructor, and member mutations must make those
 gates fail, so hand-written stubs cannot drift.
 
+The rdocx binding gate
+`priority_word_operations_return_typed_snapshots_and_remain_atomic` exercises
+frozen range and result values, comment threads, redline comparison,
+deterministic layout fragments, page lookup, and TOC counts through save and
+reopen. Exact stale-handle revisions prove that each successful structural
+mutation advances the binding revision once. Invalid ranges and comparison
+metadata prove that failed staged operations preserve both package bytes and
+live handles. Dedicated thread tests cover comparison, layout, TOC rebuild,
+and serialization GIL release. The installed strict mypy and stubtest gates
+cover every added class, nullable field, tuple return, and method signature.
+
 The document WASM wrapper has a package-preservation Node gate and a PDF gate
 in its single defaults-off profile. The PDF gate calls generated `toPdf`
 through reflection and requires `%PDF-` through `%%EOF`, a Type 0 font, a

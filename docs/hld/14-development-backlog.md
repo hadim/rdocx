@@ -4812,10 +4812,12 @@ image extents, and an exact-count mismatch that creates no output.
 
 ### F-X094c, Priority rdocx Python collaboration, comparison, layout, and TOC (L)
 
-Expose current comparison, main-body comments, deterministic layout and page
-lookup, and TOC rebuild through precisely typed immutable Python snapshots.
-Structural mutations advance binding revision only after success. The surface
-does not complete the future all-story work in F-291, F-293, F-295, or F-310.
+The Python `Document` exposes current comparison, main-body comments,
+deterministic layout and page lookup, and TOC rebuild through precisely typed
+immutable snapshots. Structural mutations advance binding revision once only
+after success. Comparison, layout, TOC rebuild, and serialization release the
+GIL. The surface does not complete the future all-story work in F-291, F-293,
+F-295, or F-310.
 
 **Depends on**: F-X094b, F-148, F-232, F-234, F-235.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.

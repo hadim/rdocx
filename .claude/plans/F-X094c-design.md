@@ -1,6 +1,6 @@
 # F-X094c, Priority rdocx Python collaboration, comparison, layout, and TOC
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: L
 **Depends on**: F-X094b, F-148, F-232, F-234, F-235
@@ -69,12 +69,12 @@ Expected unchanged across all 49 entries.
 
 ## Implementation checklist
 
-- [ ] Add and register frozen value classes in existing files.
-- [ ] Implement detached methods and exact error mapping.
-- [ ] Advance binding revision only after successful mutation.
-- [ ] Update exports, stubs, README, typing, and thread tests.
-- [ ] Run native, binding, wheel, WASM, and full gates.
-- [ ] Update exactly the listed HLD files.
+- [x] Add and register frozen value classes in existing files.
+- [x] Implement detached methods and exact error mapping.
+- [x] Advance binding revision only after successful mutation.
+- [x] Update exports, stubs, README, typing, and thread tests.
+- [x] Run native, binding, wheel, WASM, and full gates.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 
