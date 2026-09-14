@@ -1,6 +1,6 @@
 # F-X094a, Expose Word collaboration and redline commands in rdocx-cli
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: M
 **Depends on**: F-148, F-150, F-234, F-235
@@ -63,13 +63,13 @@ Expected unchanged across all 49 entries.
 
 ## Implementation checklist
 
-- [ ] Add the nested Clap graph and exact validation.
-- [ ] Add schema-1 serializers with explicit scope fields.
-- [ ] Route every mutation through staged output.
-- [ ] Document coordinates, filters, JSON, and output rules.
-- [ ] Add exact compiled-binary and atomic-failure tests.
-- [ ] Run the full gate and unchanged hash harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Add the nested Clap graph and exact validation.
+- [x] Add schema-1 serializers with explicit scope fields.
+- [x] Route every mutation through staged output.
+- [x] Document coordinates, filters, JSON, and output rules.
+- [x] Add exact compiled-binary and atomic-failure tests.
+- [x] Run the full gate and unchanged hash harness.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

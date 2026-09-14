@@ -4775,10 +4775,13 @@ still rejects atomically.
 ### F-X094a, Expose Word collaboration and redline commands in rdocx-cli (M)
 
 Expose shipped comment, revision-resolution, and comparison facades through
-nested `rdocx comment`, `rdocx revision`, and `rdocx compare` commands. Every
-mutation requires an explicit output, publishes atomically, and returns exact
-schema-1 JSON when requested. Revision inspection remains explicitly scoped to
-the main story.
+nested `rdocx comment`, `rdocx revision`, `rdocx compare`, and
+`rdocx toc rebuild` commands. Comment additions use zero-based half-open body
+paragraph and run coordinates. Revision filters select at most one id, exact
+author, or paired inclusive RFC 3339 date range. Every mutation requires an
+explicit output, publishes atomically, and returns exact schema-1 JSON when
+requested. Revision inspection remains explicitly scoped to the main story,
+while resolution and comparison declare their all-supported-story scope.
 
 **Depends on**: F-148, F-150, F-234, F-235.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.

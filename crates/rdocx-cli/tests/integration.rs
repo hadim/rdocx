@@ -69,6 +69,45 @@ fn write_document(path: &Path, paragraphs: &[&str]) {
         .expect("write DOCX fixture");
 }
 
+fn write_revision_fixture(path: &Path) {
+    let mut document = fixture_document(&[]);
+    let mut paragraph = document.add_paragraph("");
+    paragraph.add_run("Alpha");
+    paragraph.add_run("Bravo");
+    paragraph.add_run("Charlie");
+    document.save(path).unwrap();
+
+    let mut package = OpcPackage::open(path).unwrap();
+    let part = package.main_document_part().unwrap();
+    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    let revisions = [
+        ("Alpha", 10, "Alice", "2026-01-01T00:00:00Z"),
+        ("Bravo", 20, "Bob", "2026-01-02T00:00:00Z"),
+        ("Charlie", 30, "Alice", "2026-01-03T00:00:00Z"),
+    ];
+    let mut xml = xml;
+    for (text, id, author, timestamp) in revisions {
+        let marker = format!(">{text}</w:t>");
+        let text_position = xml.find(&marker).expect("fixture text is present");
+        let run_start = xml[..text_position]
+            .rfind("<w:r")
+            .expect("fixture run starts before text");
+        let run_end = text_position
+            + xml[text_position..]
+                .find("</w:r>")
+                .expect("fixture run ends after text")
+            + "</w:r>".len();
+        let run = xml[run_start..run_end].to_owned();
+        let revision = format!(
+            "<w:ins w:id=\"{id}\" w:author=\"{author}\" w:date=\"{timestamp}\">{run}</w:ins>"
+        );
+        xml.replace_range(run_start..run_end, &revision);
+    }
+    package.set_part(&part, xml.into_bytes());
+    package.save(path).unwrap();
+    assert_eq!(Document::open(path).unwrap().revisions().len(), 3);
+}
+
 fn path_text(path: &Path) -> &str {
     path.to_str().expect("temporary path is UTF-8")
 }
@@ -645,5 +684,434 @@ fn multi_file_image_export_preserves_existing_outputs_and_streams_separate_pages
     assert!(
         !commands.contains("zip(images.iter())"),
         "separate PNG and JPEG export must not retain every encoded page"
+    );
+}
+
+#[test]
+fn cli_collaboration_commands_are_schema_stable_and_atomic() {
+    let temp = TempWorkspace::new("collaboration-schema");
+    let input = temp.path.join("input.docx");
+    write_document(&input, &["Comment target"]);
+
+    let listed = cli(&["comment", "list", path_text(&input), "--json"]);
+    assert_success(&listed, "comment list");
+    let value: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "comments": [],
+        })
+    );
+
+    let invalid_output = temp.path.join("invalid-comment.docx");
+    let invalid = cli(&[
+        "comment",
+        "add",
+        path_text(&input),
+        "--start-paragraph",
+        "99",
+        "--start-run",
+        "0",
+        "--end-paragraph",
+        "99",
+        "--end-run",
+        "1",
+        "--author",
+        "Alice",
+        "--text",
+        "Invalid",
+        "--output",
+        path_text(&invalid_output),
+        "--json",
+    ]);
+    assert_eq!(invalid.status.code(), Some(1));
+    assert!(invalid.stdout.is_empty());
+    assert!(!invalid_output.exists());
+
+    let edited = temp.path.join("edited.docx");
+    let redline = temp.path.join("redline.docx");
+    write_document(&edited, &["Edited target"]);
+    let compared = cli(&[
+        "compare",
+        path_text(&input),
+        path_text(&edited),
+        "--author",
+        "Alice",
+        "--timestamp",
+        "2026-09-13T12:00:00Z",
+        "--output",
+        path_text(&redline),
+        "--json",
+    ]);
+    assert_success(&compared, "compare JSON");
+    let value: serde_json::Value = serde_json::from_slice(&compared.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "all-supported-stories",
+            "main_story_revisions": 2,
+            "diagnostics": [],
+            "output": path_text(&redline),
+        })
+    );
+
+    let revisions = cli(&["revision", "list", path_text(&redline), "--json"]);
+    assert_success(&revisions, "revision list JSON");
+    let value: serde_json::Value = serde_json::from_slice(&revisions.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "revisions": [
+                {
+                    "id": 0,
+                    "author": "Alice",
+                    "timestamp": "2026-09-13T12:00:00Z",
+                    "kind": "deletion",
+                },
+                {
+                    "id": 1,
+                    "author": "Alice",
+                    "timestamp": "2026-09-13T12:00:00Z",
+                    "kind": "insertion",
+                },
+            ],
+        })
+    );
+
+    let toc_output = temp.path.join("toc.docx");
+    let rebuilt = cli(&[
+        "toc",
+        "rebuild",
+        path_text(&input),
+        "--output",
+        path_text(&toc_output),
+        "--json",
+    ]);
+    assert_success(&rebuilt, "toc rebuild JSON");
+    let value: serde_json::Value = serde_json::from_slice(&rebuilt.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "entry_count": 0,
+            "bookmark_count": 0,
+            "diagnostic_count": 0,
+            "output": path_text(&toc_output),
+        })
+    );
+    assert_eq!(
+        Document::open(toc_output).unwrap().text(),
+        "Comment target\n"
+    );
+}
+
+#[test]
+fn comment_commands_round_trip_one_resolved_thread() {
+    let temp = TempWorkspace::new("comment-round-trip");
+    let input = temp.path.join("input.docx");
+    let added_path = temp.path.join("added.docx");
+    let replied_path = temp.path.join("replied.docx");
+    let resolved_path = temp.path.join("resolved.docx");
+    let removed_path = temp.path.join("removed.docx");
+    write_document(&input, &["Comment target"]);
+
+    let added = cli(&[
+        "comment",
+        "add",
+        path_text(&input),
+        "--start-paragraph",
+        "0",
+        "--start-run",
+        "0",
+        "--end-paragraph",
+        "0",
+        "--end-run",
+        "1",
+        "--author",
+        "Alice",
+        "--initials",
+        "AL",
+        "--text",
+        "Review this",
+        "--output",
+        path_text(&added_path),
+        "--json",
+    ]);
+    assert_success(&added, "comment add");
+    let value: serde_json::Value = serde_json::from_slice(&added.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "action": "add",
+            "comment_id": 0,
+            "output": path_text(&added_path),
+        })
+    );
+
+    let replied = cli(&[
+        "comment",
+        "reply",
+        path_text(&added_path),
+        "--id",
+        "0",
+        "--author",
+        "Bob",
+        "--text",
+        "Agreed",
+        "--output",
+        path_text(&replied_path),
+        "--json",
+    ]);
+    assert_success(&replied, "comment reply");
+    let value: serde_json::Value = serde_json::from_slice(&replied.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "action": "reply",
+            "comment_id": 1,
+            "parent_id": 0,
+            "output": path_text(&replied_path),
+        })
+    );
+
+    let resolved = cli(&[
+        "comment",
+        "resolve",
+        path_text(&replied_path),
+        "--id",
+        "0",
+        "--output",
+        path_text(&resolved_path),
+        "--json",
+    ]);
+    assert_success(&resolved, "comment resolve");
+    let value: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "action": "resolve",
+            "comment_id": 0,
+            "output": path_text(&resolved_path),
+        })
+    );
+    let listed = cli(&["comment", "list", path_text(&resolved_path), "--json"]);
+    assert_success(&listed, "comment list resolved thread");
+    let value: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "comments": [
+                {
+                    "id": 0,
+                    "author": "Alice",
+                    "initials": "AL",
+                    "date": null,
+                    "text": "Review this",
+                    "parent_id": null,
+                    "resolved": true,
+                },
+                {
+                    "id": 1,
+                    "author": "Bob",
+                    "initials": null,
+                    "date": null,
+                    "text": "Agreed",
+                    "parent_id": 0,
+                    "resolved": false,
+                },
+            ],
+        })
+    );
+
+    let removed = cli(&[
+        "comment",
+        "remove",
+        path_text(&resolved_path),
+        "--id",
+        "0",
+        "--output",
+        path_text(&removed_path),
+        "--json",
+    ]);
+    assert_success(&removed, "comment remove");
+    let value: serde_json::Value = serde_json::from_slice(&removed.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "action": "remove",
+            "comment_id": 0,
+            "output": path_text(&removed_path),
+        })
+    );
+    assert!(Document::open(&removed_path).unwrap().comments().is_empty());
+    assert_eq!(Document::open(&input).unwrap().comments().len(), 0);
+}
+
+#[test]
+fn revision_filters_change_only_matching_revisions() {
+    let temp = TempWorkspace::new("revision-filters");
+    let input = temp.path.join("input.docx");
+    let by_id = temp.path.join("by-id.docx");
+    let by_author = temp.path.join("by-author.docx");
+    let by_date = temp.path.join("by-date.docx");
+    write_revision_fixture(&input);
+
+    let accepted = cli(&[
+        "revision",
+        "accept",
+        path_text(&input),
+        "--id",
+        "10",
+        "--output",
+        path_text(&by_id),
+        "--json",
+    ]);
+    assert_success(&accepted, "revision accept");
+    let value: serde_json::Value = serde_json::from_slice(&accepted.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "all-supported-stories",
+            "action": "accept",
+            "selector": { "kind": "id", "id": 10 },
+            "resolved": 1,
+            "output": path_text(&by_id),
+        })
+    );
+    assert_eq!(
+        Document::open(&by_id)
+            .unwrap()
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        vec![20, 30]
+    );
+
+    let rejected = cli(&[
+        "revision",
+        "reject",
+        path_text(&input),
+        "--author",
+        "Alice",
+        "--output",
+        path_text(&by_author),
+    ]);
+    assert_success(&rejected, "revision reject by author");
+    assert_eq!(
+        Document::open(&by_author)
+            .unwrap()
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        vec![20]
+    );
+
+    let dated = cli(&[
+        "revision",
+        "accept",
+        path_text(&input),
+        "--start-date",
+        "2026-01-02T00:00:00Z",
+        "--end-date",
+        "2026-01-02T00:00:00Z",
+        "--output",
+        path_text(&by_date),
+    ]);
+    assert_success(&dated, "revision accept by date");
+    assert_eq!(
+        Document::open(&by_date)
+            .unwrap()
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        vec![10, 30]
+    );
+
+    let invalid_output = temp.path.join("invalid.docx");
+    let invalid = cli(&[
+        "revision",
+        "accept",
+        path_text(&input),
+        "--start-date",
+        "2026-01-01T00:00:00Z",
+        "--output",
+        path_text(&invalid_output),
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(!invalid_output.exists());
+
+    let conflicting_output = temp.path.join("conflicting.docx");
+    let conflicting = cli(&[
+        "revision",
+        "reject",
+        path_text(&input),
+        "--id",
+        "10",
+        "--author",
+        "Alice",
+        "--output",
+        path_text(&conflicting_output),
+    ]);
+    assert_eq!(conflicting.status.code(), Some(2));
+    assert!(!conflicting_output.exists());
+}
+
+#[test]
+fn compare_accept_and_reject_reproduce_each_input() {
+    let temp = TempWorkspace::new("compare-round-trip");
+    let original = temp.path.join("original.docx");
+    let edited = temp.path.join("edited.docx");
+    let redline = temp.path.join("redline.docx");
+    let accepted_path = temp.path.join("accepted.docx");
+    let rejected_path = temp.path.join("rejected.docx");
+    write_document(&original, &["Original"]);
+    write_document(&edited, &["Edited"]);
+
+    let compared = cli(&[
+        "compare",
+        path_text(&original),
+        path_text(&edited),
+        "--author",
+        "Alice",
+        "--timestamp",
+        "2026-09-13T12:00:00Z",
+        "--output",
+        path_text(&redline),
+    ]);
+    assert_success(&compared, "compare");
+    let mut accepted = Document::open(&redline).unwrap();
+    assert_eq!(accepted.accept_all().unwrap(), 2);
+    accepted.save(&accepted_path).unwrap();
+    let mut rejected = Document::open(&redline).unwrap();
+    assert_eq!(rejected.reject_all().unwrap(), 2);
+    rejected.save(&rejected_path).unwrap();
+
+    assert_eq!(
+        Document::open(accepted_path).unwrap().text(),
+        Document::open(edited).unwrap().text()
+    );
+    assert_eq!(
+        Document::open(rejected_path).unwrap().text(),
+        Document::open(original).unwrap().text()
     );
 }

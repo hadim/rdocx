@@ -400,8 +400,9 @@ render behavior.
 updates only supported existing main-story TOC fields with deterministic
 bundled-font page targets and returns `TocRebuildReport` with entry, newly
 allocated bookmark, and retained-field diagnostic counts. A document without
-a TOC is unchanged and returns zero counts. Python, WASM, and CLI surfaces do
-not gain this operation or a parallel report type.
+a TOC is unchanged and returns zero counts. `rdocx-cli toc rebuild` publishes
+the validated result to an explicit output and reports these counts through a
+schema-1 main-story record. Python and WASM do not expose this operation.
 
 The native facade re-exports the concrete OfficeMath tree from `rdocx-oxml`.
 `Paragraph::equations`, `Paragraph::equation`, and their read-only equivalents
@@ -659,10 +660,10 @@ author threads through `add_comment`, `reply_to`, `resolve_comment`, and
 `remove_comment`. `RunPosition` and `RunRange` define top-level paragraph run
 boundaries with an inclusive start and exclusive end. `CommentRef` exposes
 comment metadata, text, parent identity, and resolved state without permitting
-part-local mutation. These additions do not implicitly expand the Python,
-WASM, or CLI surfaces. Those consumers continue to own the same
-package-preserving `Document`, so native comment edits remain intact when a
-binding subsequently saves it.
+part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
+removes comments. Add ranges use explicit zero-based, half-open body paragraph
+and run coordinates. Every mutation publishes a complete validated document
+to an explicit output. Python and WASM keep their package-preserving owners.
 
 Native Word callers remove one exact non-empty literal with
 `Document::redact_text`. The returned `RedactionReport` separates Word story,
@@ -795,9 +796,9 @@ Each immutable `RevisionRef` exposes the revision id, author, optional
 timestamp, and `RevisionKind`. Results recursively cover the main document
 body in document order, including tables, cells, and content controls. The
 facade reads a typed projection while serialization continues to use the
-captured raw WordprocessingML subtree. This is an additive native Rust API.
-Python, WASM, and CLI surfaces do not gain revision methods, and their existing
-load and save paths preserve the revision XML.
+captured raw WordprocessingML subtree. `rdocx-cli revision list` exposes this
+main-story projection with an explicit scope field. Python and WASM load and
+save paths preserve the revision XML without a revision inspection method.
 
 Native Word paragraph handles expose
 `Paragraph::add_run_inheriting_mark(&mut self, text)`. The method appends one
@@ -866,7 +867,9 @@ missing dates do not match a date range. Invalid bounds and malformed selected
 changes return an error before mutation. Resolution covers the main document,
 headers, footers, comments, normal footnotes, endnotes, and nested text boxes.
 `Document::revisions` remains main-story-only. These eight methods are additive
-on `rdocx::Document` only. Python, WASM, and CLI surfaces remain unchanged and
+on `rdocx::Document`. `rdocx-cli revision accept|reject` exposes the all-story
+resolution boundary with mutually exclusive id, exact-author, or paired date
+selectors. An omitted selector resolves all modeled revisions. Python and WASM
 continue to preserve the resulting document when they save it.
 
 Native callers generate tracked changes with `Document::compare`, supplying an
@@ -889,9 +892,9 @@ paragraph, table, cell, or control changes. Accepting and rejecting the result
 retain the drawing payload, relationship graph, and media bytes.
 It emits same-story moves and supported run, paragraph, table, and section
 property revisions. Diagnostic locations retain the actual story identity and
-stable owner path. This API is native Rust only. Python, WASM, and CLI surfaces
-gain no comparison method and preserve comparison output when they save their
-owned document.
+stable owner path. `rdocx-cli compare` exposes the source-compatible whole-run
+comparison with explicit author, RFC 3339 timestamp, and output. Python and
+WASM preserve comparison output when they save their owned document.
 
 Native Word rendering exposes `rdocx::RevisionView` and the concrete
 `rdocx::RenderOptions`, whose default selects the accepted view. Additive
@@ -1505,5 +1508,11 @@ raster backend. The legacy `--page 0` default PNG path and single-line stdout
 remain unchanged. The `text` command emits paragraphs and table cells in
 document order through the facade plain-text representation. Both the selected
 page and all-page `render` paths use bundled deterministic fonts. The compiled
-seven-command surface is covered by one integration binary, with fixtures
-constructed in code and no command-only test dependency.
+surface also includes nested comment thread commands, main-story revision
+inspection, all-story filtered revision resolution, whole-run comparison, and
+TOC rebuild. Every new mutation requires an explicit output and publishes
+through the shared staged output set. Their schema-1 records state `main` or
+`all-supported-stories` scope. Revision selectors are mutually exclusive, and
+RFC 3339 start and end bounds must be paired. The complete compiled surface is
+covered by one integration binary, with fixtures constructed in code and no
+command-only test dependency.

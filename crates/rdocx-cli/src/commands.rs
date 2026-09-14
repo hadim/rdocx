@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use oxml_cli_support::{
     StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
 };
-use rdocx::{Document, RasterFormat, RasterOptions, RasterOutput};
+use rdocx::{Document, RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange};
 use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -22,6 +22,19 @@ pub struct RenderOptions<'a> {
     pub format: &'a str,
     pub quality: u8,
     pub transparent: bool,
+}
+
+#[derive(Clone, Copy)]
+pub enum RevisionAction {
+    Accept,
+    Reject,
+}
+
+pub struct RevisionSelector<'a> {
+    pub id: Option<i32>,
+    pub author: Option<&'a str>,
+    pub start_date: Option<&'a str>,
+    pub end_date: Option<&'a str>,
 }
 
 /// Inspect a DOCX file and print structure information.
@@ -290,6 +303,360 @@ pub fn diff(file_a: &Path, file_b: &Path) -> Result<()> {
         println!("\n{changes} paragraph(s) differ.");
     }
 
+    Ok(())
+}
+
+/// List Word comments in their package order.
+pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
+    let doc = Document::open(file)?;
+    let comments = doc.comments();
+    let records = comments
+        .iter()
+        .map(|comment| {
+            json!({
+                "id": comment.id(),
+                "author": comment.author(),
+                "initials": comment.initials(),
+                "date": comment.date(),
+                "text": comment.text(),
+                "parent_id": comment.parent_id(),
+                "resolved": comment.resolved(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if json_output {
+        print_json(json!({
+            "scope": "main",
+            "comments": records,
+        }))?;
+    } else if comments.is_empty() {
+        println!("(no comments)");
+    } else {
+        for comment in comments {
+            println!(
+                "{}\t{}\t{}\t{}",
+                comment.id(),
+                comment.author().unwrap_or(""),
+                if comment.resolved() {
+                    "resolved"
+                } else {
+                    "open"
+                },
+                comment.text().replace('\n', " ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Add one Word comment and publish the complete mutated document atomically.
+pub fn comment_add(
+    file: &Path,
+    range: RunRange,
+    author: &str,
+    initials: Option<&str>,
+    text: &str,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    let mut doc = Document::open(file)?;
+    let id = doc.add_comment(range, author, initials, text)?;
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "main",
+        "add",
+        json!({ "comment_id": id }),
+        output,
+    )
+}
+
+/// Add one reply and publish the complete mutated document atomically.
+pub fn comment_reply(
+    file: &Path,
+    parent_id: i32,
+    author: &str,
+    text: &str,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    let mut doc = Document::open(file)?;
+    let id = doc.reply_to(parent_id, author, text)?;
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "main",
+        "reply",
+        json!({ "comment_id": id, "parent_id": parent_id }),
+        output,
+    )
+}
+
+/// Resolve one comment thread and publish the complete document atomically.
+pub fn comment_resolve(file: &Path, id: i32, output: &Path, json_output: bool) -> Result<()> {
+    let mut doc = Document::open(file)?;
+    if !doc.resolve_comment(id, true)? {
+        return Err(format!("comment id {id} does not exist").into());
+    }
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "main",
+        "resolve",
+        json!({ "comment_id": id }),
+        output,
+    )
+}
+
+/// Remove one comment thread and publish the complete document atomically.
+pub fn comment_remove(file: &Path, id: i32, output: &Path, json_output: bool) -> Result<()> {
+    let mut doc = Document::open(file)?;
+    if !doc.remove_comment(id)? {
+        return Err(format!("comment id {id} does not exist").into());
+    }
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "main",
+        "remove",
+        json!({ "comment_id": id }),
+        output,
+    )
+}
+
+/// List modeled revisions from the main story.
+pub fn revision_list(file: &Path, json_output: bool) -> Result<()> {
+    let doc = Document::open(file)?;
+    let revisions = doc.revisions();
+    let records = revisions
+        .iter()
+        .map(|revision| {
+            json!({
+                "id": revision.id(),
+                "author": revision.author(),
+                "timestamp": revision.timestamp(),
+                "kind": revision_kind_label(revision.kind()),
+            })
+        })
+        .collect::<Vec<_>>();
+    if json_output {
+        print_json(json!({
+            "scope": "main",
+            "revisions": records,
+        }))?;
+    } else if revisions.is_empty() {
+        println!("(no revisions in main story)");
+    } else {
+        for revision in revisions {
+            println!(
+                "{}\t{}\t{}\t{}",
+                revision.id(),
+                revision.author(),
+                revision.timestamp().unwrap_or(""),
+                revision_kind_label(revision.kind())
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Accept or reject a validated revision selection across every supported story.
+pub fn resolve_revisions(
+    file: &Path,
+    action: RevisionAction,
+    selector: RevisionSelector<'_>,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    validate_revision_selector(&selector)?;
+    let mut doc = Document::open(file)?;
+    let count = match (
+        action,
+        selector.id,
+        selector.author,
+        selector.start_date,
+        selector.end_date,
+    ) {
+        (RevisionAction::Accept, Some(id), None, None, None) => doc.accept_revision_id(id)?,
+        (RevisionAction::Reject, Some(id), None, None, None) => doc.reject_revision_id(id)?,
+        (RevisionAction::Accept, None, Some(author), None, None) => {
+            doc.accept_revisions_by_author(author)?
+        }
+        (RevisionAction::Reject, None, Some(author), None, None) => {
+            doc.reject_revisions_by_author(author)?
+        }
+        (RevisionAction::Accept, None, None, Some(start), Some(end)) => {
+            doc.accept_revisions_in_date_range(start, end)?
+        }
+        (RevisionAction::Reject, None, None, Some(start), Some(end)) => {
+            doc.reject_revisions_in_date_range(start, end)?
+        }
+        (RevisionAction::Accept, None, None, None, None) => doc.accept_all()?,
+        (RevisionAction::Reject, None, None, None, None) => doc.reject_all()?,
+        _ => return Err("revision selector is invalid".into()),
+    };
+    publish_document(&mut doc, output)?;
+    let action_label = action.label();
+    if json_output {
+        print_json(json!({
+            "scope": "all-supported-stories",
+            "action": action_label,
+            "selector": selector_json(&selector),
+            "resolved": count,
+            "output": output.display().to_string(),
+        }))?;
+    } else {
+        println!("{action_label}: {count} revision element(s)");
+        println!("Written to {}", output.display());
+    }
+    Ok(())
+}
+
+/// Create a tracked-changes document from an original and edited input.
+pub fn compare(
+    original: &Path,
+    edited: &Path,
+    author: &str,
+    timestamp: &str,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    let mut original_doc = Document::open(original)?;
+    let edited_doc = Document::open(edited)?;
+    let diagnostics = original_doc.compare(&edited_doc, author, timestamp)?;
+    let revision_count = original_doc.revisions().len();
+    let records = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            json!({
+                "location": diagnostic.location,
+                "message": diagnostic.message,
+            })
+        })
+        .collect::<Vec<_>>();
+    publish_document(&mut original_doc, output)?;
+    if json_output {
+        print_json(json!({
+            "scope": "all-supported-stories",
+            "main_story_revisions": revision_count,
+            "diagnostics": records,
+            "output": output.display().to_string(),
+        }))?;
+    } else {
+        println!("Created {revision_count} main-story revision element(s)");
+        println!("Diagnostics: {}", diagnostics.len());
+        println!("Written to {}", output.display());
+    }
+    Ok(())
+}
+
+/// Rebuild supported existing table-of-contents fields.
+pub fn toc_rebuild(file: &Path, output: &Path, json_output: bool) -> Result<()> {
+    let mut doc = Document::open(file)?;
+    let report = doc.rebuild_toc()?;
+    publish_document(&mut doc, output)?;
+    if json_output {
+        print_json(json!({
+            "scope": "main",
+            "entry_count": report.entry_count,
+            "bookmark_count": report.bookmark_count,
+            "diagnostic_count": report.diagnostic_count,
+            "output": output.display().to_string(),
+        }))?;
+    } else {
+        println!("Entries: {}", report.entry_count);
+        println!("Bookmarks: {}", report.bookmark_count);
+        println!("Diagnostics: {}", report.diagnostic_count);
+        println!("Written to {}", output.display());
+    }
+    Ok(())
+}
+
+impl RevisionAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Accept => "accept",
+            Self::Reject => "reject",
+        }
+    }
+}
+
+fn validate_revision_selector(selector: &RevisionSelector<'_>) -> Result<()> {
+    let date_count =
+        usize::from(selector.start_date.is_some()) + usize::from(selector.end_date.is_some());
+    if date_count == 1 {
+        return Err("--start-date and --end-date must be provided together".into());
+    }
+    let selector_count = usize::from(selector.id.is_some())
+        + usize::from(selector.author.is_some())
+        + usize::from(date_count == 2);
+    if selector_count > 1 {
+        return Err("--id, --author, and the date range are mutually exclusive".into());
+    }
+    Ok(())
+}
+
+fn selector_json(selector: &RevisionSelector<'_>) -> Value {
+    if let Some(id) = selector.id {
+        json!({ "kind": "id", "id": id })
+    } else if let Some(author) = selector.author {
+        json!({ "kind": "author", "author": author })
+    } else if let (Some(start), Some(end)) = (selector.start_date, selector.end_date) {
+        json!({ "kind": "date-range", "start": start, "end": end })
+    } else {
+        json!({ "kind": "all" })
+    }
+}
+
+fn revision_kind_label(kind: RevisionKind) -> &'static str {
+    match kind {
+        RevisionKind::Insertion => "insertion",
+        RevisionKind::Deletion => "deletion",
+        RevisionKind::MoveFrom => "move-from",
+        RevisionKind::MoveTo => "move-to",
+        RevisionKind::RunPropertyChange => "run-property-change",
+        RevisionKind::ParagraphPropertyChange => "paragraph-property-change",
+        RevisionKind::TablePropertyChange => "table-property-change",
+        RevisionKind::SectionPropertyChange => "section-property-change",
+    }
+}
+
+fn publish_document(doc: &mut Document, output: &Path) -> Result<()> {
+    let bytes = doc.to_bytes()?;
+    stage_and_publish(&[(output.to_path_buf(), bytes)])
+}
+
+fn mutation_record(
+    json_output: bool,
+    scope: &str,
+    action: &str,
+    detail: Value,
+    output: &Path,
+) -> Result<()> {
+    if json_output {
+        let mut payload = json!({
+            "scope": scope,
+            "action": action,
+            "output": output.display().to_string(),
+        });
+        let object = payload.as_object_mut().expect("literal is an object");
+        let Value::Object(detail) = detail else {
+            return Err("mutation detail must be an object".into());
+        };
+        object.extend(detail);
+        print_json(payload)?;
+    } else {
+        println!("{action}");
+        println!("Written to {}", output.display());
+    }
+    Ok(())
+}
+
+fn print_json(payload: Value) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json_envelope(payload)?)?
+    );
     Ok(())
 }
 

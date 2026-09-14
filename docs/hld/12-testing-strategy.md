@@ -2120,13 +2120,15 @@ identity so the title appears exactly once.
 
 The `rdocx` CLI has one integration binary that invokes the compiled executable
 through `CARGO_BIN_EXE_rdocx`. Its tests cover `inspect`, `text`, `convert`,
-`diff`, `replace`, `validate`, and `render` with in-code DOCX and
-corrupt-package fixtures. The assertions bind schema 1, default paths, exact
-stdout, exit-status verdicts, output validity, replacement persistence,
-document-order text, bundled-font deterministic render bytes, legacy
-zero-based `render --page`, one-based `render --pages`, shared image format
-extensions, invalid range rejection and no partial output. Process ID and an
-atomic counter isolate temporary workspaces across concurrent runs.
+`diff`, `replace`, `validate`, `render`, nested comment and revision commands,
+comparison, and TOC rebuild with in-code DOCX and corrupt-package fixtures. The
+assertions bind schema 1, explicit story scope, default paths, exact stdout,
+exit-status verdicts, output validity, replacement persistence, comment thread
+round trips, id, author, and paired date revision filters, accept and reject
+comparison equivalence, document-order text, bundled-font deterministic render
+bytes, legacy zero-based `render --page`, one-based `render --pages`, shared
+image format extensions, invalid range rejection and no partial output. Process
+ID and an atomic counter isolate temporary workspaces across concurrent runs.
 
 All 27 workspace packages explicitly declare one distinct README. The root
 README is the high-level `rdocx` guide. It leads with the complete native
