@@ -57,7 +57,7 @@ cross-part relationships while committing only complete validated candidates.
 | F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | L | done | - |
 | F-X094e | rpptx Python rendering, comments, and notes | L | done | - |
 | F-X092 | Preserve logical reading order in generated PDFs | L | done | - |
-| F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | L | pending | - |
+| F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | L | in-progress | codex |
 | F-X096 | Align Python distribution versions and release tags | M | pending | - |
 | F-X094f | Prepare the version-aligned Python release paths | M | in-progress | codex |
 

@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 17 | 0 | 7 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 104 | 97 | 1 | 2 |
-| **Total** | **422** | **340** | **1** | **77** |
+| X, Cross-cutting (opportunistic)            | 104 | 97 | 2 | 1 |
+| **Total** | **422** | **340** | **2** | **76** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -639,6 +639,6 @@ regenerated, never hand-edited.
 | F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | S72 | L | done |
 | F-X094e | rpptx Python rendering, comments, and notes | S72 | L | done |
 | F-X094f | Prepare the version-aligned Python release paths | S72 | M | in-progress |
-| F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | S72 | L | pending |
+| F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | S72 | L | in-progress |
 | F-X096 | Align Python distribution versions and release tags | S72 | M | pending |
 <!-- AUTOGEN:backlog-MX END -->
