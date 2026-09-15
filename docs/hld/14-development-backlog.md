@@ -5044,7 +5044,9 @@ into Word pagination. A page break in its own paragraph or between two pieces
 of text ends the current physical page immediately. Line breaks keep their
 current line-only behavior, and column breaks remain separately classified for
 the existing single-column limitation rather than silently becoming page
-breaks.
+breaks. `LayoutLine::forced_break_after` carries the non-exhaustive
+`ForcedBreakKind`, and overflow pagination chooses the earlier of its ordinary
+fit boundary and the next page break.
 
 **Depends on**: F-260.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/88>.

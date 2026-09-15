@@ -221,6 +221,15 @@ impl LineItem {
     }
 }
 
+/// The kind of explicit break that ended a laid-out line.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForcedBreakKind {
+    Line,
+    Page,
+    Column,
+}
+
 /// A laid-out line within a paragraph.
 #[derive(Debug, Clone)]
 pub struct LayoutLine {
@@ -241,6 +250,8 @@ pub struct LayoutLine {
     pub available_width: f64,
     /// Whether this is the last line of the paragraph.
     pub is_last: bool,
+    /// The explicit break that ended this line, when present.
+    pub forced_break_after: Option<ForcedBreakKind>,
 }
 
 impl LayoutLine {
@@ -318,6 +329,7 @@ pub fn break_into_lines(
             indent_left: line_indent_at(params, 0, true),
             available_width: line_width_at(params, 0, true),
             is_last: true,
+            forced_break_after: None,
         }]);
     }
 
@@ -386,6 +398,7 @@ pub fn break_into_lines(
                         indent_left: indent,
                         available_width: line_avail,
                         is_last: false,
+                        forced_break_after: None,
                     });
                     current_width = 0.0;
                     current_ascent = 0.0;
@@ -493,6 +506,7 @@ pub fn break_into_lines(
                         indent_left: indent,
                         available_width: line_avail,
                         is_last: false,
+                        forced_break_after: None,
                     });
                     current_width = 0.0;
                     current_ascent = 0.0;
@@ -528,6 +542,7 @@ pub fn break_into_lines(
                         indent_left: indent,
                         available_width: line_avail,
                         is_last: false,
+                        forced_break_after: None,
                     });
                     current_width = 0.0;
                     current_ascent = 0.0;
@@ -561,7 +576,7 @@ pub fn break_into_lines(
                     ));
                 }
             }
-            BreakableSegment::ForcedBreak(break_type) => {
+            BreakableSegment::ForcedBreak(break_kind) => {
                 let indent = line_indent_at(params, line_index, is_first_line);
                 let line_gap =
                     effective_line_gap(current_ascent, current_descent, current_natural_height);
@@ -580,7 +595,8 @@ pub fn break_into_lines(
                     ),
                     indent_left: indent,
                     available_width: line_avail,
-                    is_last: matches!(break_type, ForcedBreakType::Page | ForcedBreakType::Column),
+                    is_last: matches!(break_kind, ForcedBreakKind::Page | ForcedBreakKind::Column),
+                    forced_break_after: Some(break_kind),
                 });
                 current_width = 0.0;
                 current_ascent = 0.0;
@@ -613,6 +629,7 @@ pub fn break_into_lines(
         indent_left: indent,
         available_width: line_avail,
         is_last: true,
+        forced_break_after: None,
     });
 
     Ok(lines)
@@ -796,7 +813,7 @@ enum BreakableSegment {
     /// One language-aware text chunk and its byte-index break candidates.
     Hyphenated(Box<HyphenatedSegment>),
     /// A forced break.
-    ForcedBreak(ForcedBreakType),
+    ForcedBreak(ForcedBreakKind),
 }
 
 #[derive(Debug)]
@@ -810,13 +827,6 @@ struct FittingHyphenation {
     hyphen: TextSegment,
     remainder: TextSegment,
     remaining_points: Vec<usize>,
-}
-
-#[derive(Debug)]
-enum ForcedBreakType {
-    Line,
-    Page,
-    Column,
 }
 
 /// Whether a complex-script line may break between two logical characters.
@@ -847,19 +857,19 @@ fn build_breakable_segments(
                 if !current_group.is_empty() {
                     segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
                 }
-                segments.push(BreakableSegment::ForcedBreak(ForcedBreakType::Line));
+                segments.push(BreakableSegment::ForcedBreak(ForcedBreakKind::Line));
             }
             InlineItem::PageBreak => {
                 if !current_group.is_empty() {
                     segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
                 }
-                segments.push(BreakableSegment::ForcedBreak(ForcedBreakType::Page));
+                segments.push(BreakableSegment::ForcedBreak(ForcedBreakKind::Page));
             }
             InlineItem::ColumnBreak => {
                 if !current_group.is_empty() {
                     segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
                 }
-                segments.push(BreakableSegment::ForcedBreak(ForcedBreakType::Column));
+                segments.push(BreakableSegment::ForcedBreak(ForcedBreakKind::Column));
             }
             InlineItem::Tab => {
                 // Tab is a break opportunity
@@ -2238,6 +2248,31 @@ mod tests {
     }
 
     #[test]
+    fn line_page_and_column_breaks_retain_their_kind() {
+        let fm = deterministic_font_manager();
+        let items = vec![
+            InlineItem::LineBreak,
+            InlineItem::PageBreak,
+            InlineItem::ColumnBreak,
+            InlineItem::Text(make_text_segment("after", 30.0)),
+        ];
+        let lines = break_into_lines(&items, &LineBreakParams::default(), &fm).unwrap();
+
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.forced_break_after)
+                .collect::<Vec<_>>(),
+            [
+                Some(ForcedBreakKind::Line),
+                Some(ForcedBreakKind::Page),
+                Some(ForcedBreakKind::Column),
+                None,
+            ]
+        );
+    }
+
+    #[test]
     fn line_height_exact() {
         let params = LineBreakParams {
             line_spacing: LineSpacing::Exact(24.0),
@@ -2411,6 +2446,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 100.0,
             is_last: true,
+            forced_break_after: None,
         };
         let below_natural = LayoutLine {
             height: 8.0,

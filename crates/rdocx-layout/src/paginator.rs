@@ -12,8 +12,8 @@ use std::collections::HashMap;
 #[cfg(test)]
 use oxml_layout::TextDirection;
 use oxml_layout::{
-    Align, Color, FontManager, GlyphRun, GroupElement, LayoutLine, LineItem, MediaId,
-    MultilingualGlyphRun, NoteRef, NoteStream, OutlineEntry, PageFrame, Path, Point,
+    Align, Color, FontManager, ForcedBreakKind, GlyphRun, GroupElement, LayoutLine, LineItem,
+    MediaId, MultilingualGlyphRun, NoteRef, NoteStream, OutlineEntry, PageFrame, Path, Point,
     PositionedElement, Rect, Transform, Underline, break_into_lines, break_multilingual_into_lines,
 };
 
@@ -2116,6 +2116,20 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         reflow_allowed: false,
     });
 
+    // A page break inside the paragraph ends the page after its line, whatever
+    // widow control or keep-lines would decide. When the lines up to the break
+    // do not fit, the checks below split or move the paragraph first, and the
+    // continuation meets the break again.
+    if let Some(split_at) = forced_page_split(&para.lines)
+        && pager.count_lines_that_fit_with_notes(
+            &para.lines[..split_at],
+            pager.cursor_y + space_before + para.content_offset_top,
+        ) == split_at
+    {
+        render_para_split(para, body_index, split_at, space_before, pager, block_idx);
+        return;
+    }
+
     // Check if paragraph fits on current page. The note area its references
     // will demand is priced in, but not claimed: the paragraph may yet move to
     // the next page, and its notes must move with it.
@@ -2287,6 +2301,16 @@ fn paginate_paragraph<B: LayoutBlockLike>(
     pager.mark_content();
 }
 
+/// Return the line boundary immediately after the first page break that has a
+/// continuation. A trailing page break has no following content to move.
+fn forced_page_split(lines: &[LayoutLine]) -> Option<usize> {
+    lines
+        .iter()
+        .position(|line| line.forced_break_after == Some(ForcedBreakKind::Page))
+        .map(|index| index + 1)
+        .filter(|&split_at| split_at < lines.len())
+}
+
 /// Split a paragraph at the given line index, rendering first part on current page
 /// and continuing the rest on a new page (recursively if needed).
 fn render_para_split(
@@ -2344,52 +2368,57 @@ fn render_para_split(
     let remaining_lines = &para.lines[split_at..];
     let remaining_height: f64 = remaining_lines.iter().map(|l| l.height).sum();
 
-    if remaining_height > pager.available_height_for(remaining_lines) {
-        // Still too tall — split again
-        let lines_that_fit = pager.count_lines_that_fit_with_notes(remaining_lines, 0.0);
-        if lines_that_fit > 0 && lines_that_fit < remaining_lines.len() {
-            // Build a temporary para with remaining lines
-            let temp_para = ParagraphBlock {
-                // The anchors were placed with the first part of the
-                // paragraph, so the continuation must not place them again.
-                anchored: Vec::new(),
-                has_visible_revision: para.has_visible_revision,
-                lines: remaining_lines.to_vec(),
-                space_before: 0.0,
-                space_after: para.space_after,
-                borders: para.borders.clone(),
-                shading: para.shading,
-                indent_left: para.indent_left,
-                indent_right: para.indent_right,
-                jc: para.jc,
-                keep_next: para.keep_next,
-                keep_lines: false,
-                page_break_before: false,
-                widow_control: para.widow_control,
-                heading_level: None,
-                heading_text: None,
-                list: para.list,
-                structure_id: para.structure_id(),
-                // The continuation keeps the logical input sequence for text
-                // extraction. `reflow_allowed` below prevents a second break.
-                reflow: para.reflow.clone(),
-                content_offset_top: 0.0,
-            };
-            render_para_split(
-                ParagraphView {
-                    block: &temp_para,
-                    semantics: para.semantics,
-                    reflow_direction: para.reflow_direction,
-                    reflow_allowed: false,
-                },
-                body_index,
-                lines_that_fit,
-                0.0,
-                pager,
-                block_idx,
-            );
-            return;
-        }
+    // Split again where the remaining lines are still too tall, or at a page
+    // break among them, whichever comes first.
+    let overflow_split = (remaining_height > pager.available_height_for(remaining_lines))
+        .then(|| pager.count_lines_that_fit_with_notes(remaining_lines, 0.0))
+        .filter(|&fit| fit > 0 && fit < remaining_lines.len());
+    let next_split = match (overflow_split, forced_page_split(remaining_lines)) {
+        (Some(fit), Some(forced)) => Some(fit.min(forced)),
+        (fit, forced) => fit.or(forced),
+    };
+    if let Some(lines_that_fit) = next_split {
+        // Build a temporary paragraph with the remaining lines.
+        let temp_para = ParagraphBlock {
+            // The anchors were placed with the first part of the paragraph, so
+            // the continuation must not place them again.
+            anchored: Vec::new(),
+            has_visible_revision: para.has_visible_revision,
+            lines: remaining_lines.to_vec(),
+            space_before: 0.0,
+            space_after: para.space_after,
+            borders: para.borders.clone(),
+            shading: para.shading,
+            indent_left: para.indent_left,
+            indent_right: para.indent_right,
+            jc: para.jc,
+            keep_next: para.keep_next,
+            keep_lines: false,
+            page_break_before: false,
+            widow_control: para.widow_control,
+            heading_level: None,
+            heading_text: None,
+            list: para.list,
+            structure_id: para.structure_id(),
+            // The continuation keeps the logical input sequence for text
+            // extraction. `reflow_allowed` below prevents a second break.
+            reflow: para.reflow.clone(),
+            content_offset_top: 0.0,
+        };
+        render_para_split(
+            ParagraphView {
+                block: &temp_para,
+                semantics: para.semantics,
+                reflow_direction: para.reflow_direction,
+                reflow_allowed: false,
+            },
+            body_index,
+            lines_that_fit,
+            0.0,
+            pager,
+            block_idx,
+        );
+        return;
     }
 
     // Remaining fits on the new page
@@ -3940,6 +3969,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         }
     }
 
@@ -4884,6 +4914,50 @@ mod tests {
     }
 
     #[test]
+    fn line_page_breaks_start_new_pages_inside_a_paragraph() {
+        let fm = FontManager::new();
+        let page_count = |para: ParagraphBlock| {
+            let blocks = vec![LayoutBlock::Paragraph(para)];
+            paginate(
+                &blocks,
+                PageGeometry::default(),
+                None,
+                false,
+                &fm,
+                &empty_media(),
+                &NoteRegistry::default(),
+            )
+            .0
+            .len()
+        };
+
+        let mut two_breaks = make_para(3, 14.0);
+        two_breaks.lines[0].forced_break_after = Some(ForcedBreakKind::Page);
+        two_breaks.lines[1].forced_break_after = Some(ForcedBreakKind::Page);
+        assert_eq!(page_count(two_breaks), 3);
+
+        let mut kept = make_para(2, 14.0);
+        kept.keep_lines = true;
+        kept.lines[0].forced_break_after = Some(ForcedBreakKind::Page);
+        assert_eq!(page_count(kept), 2);
+
+        let mut overflowing = make_para(80, 14.0);
+        assert_eq!(page_count(overflowing.clone()), 2);
+        overflowing.lines[60].forced_break_after = Some(ForcedBreakKind::Page);
+        assert_eq!(page_count(overflowing), 3);
+
+        let mut trailing = make_para(3, 14.0);
+        trailing.lines[2].forced_break_after = Some(ForcedBreakKind::Page);
+        assert_eq!(page_count(trailing), 1);
+
+        for kind in [ForcedBreakKind::Line, ForcedBreakKind::Column] {
+            let mut paragraph = make_para(2, 14.0);
+            paragraph.lines[0].forced_break_after = Some(kind);
+            assert_eq!(page_count(paragraph), 1);
+        }
+    }
+
+    #[test]
     fn page_dimensions() {
         let fm = FontManager::new();
         let blocks = vec![LayoutBlock::Paragraph(make_para(1, 14.0))];
@@ -4937,6 +5011,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         }
     }
 
@@ -5070,6 +5145,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         };
         let para = ParagraphBlock {
             anchored: Vec::new(),
@@ -5296,6 +5372,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last,
+            forced_break_after: None,
         }
     }
 
@@ -5337,6 +5414,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         };
         let para = ParagraphBlock {
             anchored: Vec::new(),

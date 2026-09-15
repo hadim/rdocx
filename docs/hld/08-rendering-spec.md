@@ -992,6 +992,17 @@ drawing element, and fields contribute one cached display. Schema-required
 physical run splitting does not change that logical order. Deterministic font
 mode is the acceptance path for the resulting PDF.
 
+Line breaking records the exact explicit break that ended each `LayoutLine` as
+`ForcedBreakKind::Line`, `Page`, or `Column`. Word pagination splits a paragraph
+immediately after a page-marked line when continuation content exists, before
+widow and keep decisions can move that continuation back onto the same page.
+Overflow splitting chooses the earlier of the next page break and the number of
+lines that fit, then applies the same rule recursively. A trailing page break
+has no continuation to move. Line breaks remain line-only, and column breaks
+remain distinguishable without becoming page breaks while layout is
+single-column. Body fragments, page fields, cross-reference targets, PDF, and
+raster output all consume the resulting shared page sequence.
+
 A tracked paragraph with visible revised content or a property-only revision
 carries a changed marker into pagination. Visible-revision detection follows
 the same typed paragraph projection through revisions inside controls and

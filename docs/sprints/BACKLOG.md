@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 18 | 0 | 6 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 122 | 108 | 1 | 9 |
-| **Total** | **440** | **352** | **1** | **83** |
+| X, Cross-cutting (opportunistic)            | 122 | 109 | 1 | 8 |
+| **Total** | **440** | **353** | **1** | **82** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -645,7 +645,7 @@ regenerated, never hand-edited.
 | F-X098 | Preserve content-control type payloads | S73 | M | done |
 | F-X099 | Expose direct body ownership for story items | S73 | M | done |
 | F-X100 | Preserve explicit false table toggles | S73 | S | done |
-| F-X101 | Honor run-level page breaks during pagination | S73 | M | pending |
+| F-X101 | Honor run-level page breaks during pagination | S73 | M | done |
 | F-X102 | Resolve header and footer pictures in their story scope | S73 | M | done |
 | F-X103 | Accept standard TOC switches and report rebuild diagnostics | S73 | M | done |
 | F-X104 | Render DrawingML picture transparency | S73 | M | done |

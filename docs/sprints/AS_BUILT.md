@@ -14157,3 +14157,45 @@ commit. All 22 archives verified and remained below 10 MiB.
 from the physical OOXML run boundaries required by fields. Reject ambiguous
 producer ownership before mutation, and keep F-X101 responsible for page-break
 pagination behavior.
+
+### F-X101, Honor run-level page breaks during pagination
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Run-level Word page breaks now retain their identity through
+shared line breaking and end the current physical page at the exact run
+boundary. The corrected pagination is shared by layout fragments, PDF, PNG,
+PAGE, NUMPAGES, PAGEREF, and TOC page targets.
+
+**Non-obvious choices.** Contributor PR 102 supplied the recursive pagination
+algorithm and initial regressions. The integrated implementation replaces its
+boolean marker with a non-exhaustive `ForcedBreakKind`, so line, page, and
+column boundaries remain distinguishable. The required public `LayoutLine`
+field is a pre-1.0 struct-literal source break and was covered by rustdoc and
+package verification.
+
+**Deviations from the design plan.** None. Microscope pass 1 requested direct
+TOC-target coverage, which was added before the clean pass.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, modern DOCX
+pagination capability, `docs/hld/08-rendering-spec.md`, forced-break line and
+page behavior, `docs/hld/12-testing-strategy.md`, deterministic Word comparison,
+and the F-X101 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `run_level_page_breaks_match_word_pagination` first failed with one
+physical page and passes with the implementation. Unit coverage distinguishes
+line, page, and column breaks, paginator coverage exercises inline page splits,
+and the consumer regression proves fragments, fields, TOC targets, PDF, and PNG
+share the result. The full workspace, no-default-font, WASM, docs, README,
+package, archive-size, and supply-chain gates pass. The package dry run used
+`--allow-dirty` because `/complete-feature` verifies before creating the story
+commit. All package archives remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the typed boundary in shared layout.
+Only Word pagination interprets a page marker as a physical page split, while
+the single-column limitation continues to retain column identity without
+inventing page behavior.

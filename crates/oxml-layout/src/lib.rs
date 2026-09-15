@@ -15,8 +15,8 @@ pub use font::{
     TextDirection, TextScript,
 };
 pub use line::{
-    Align, InlineItem, LayoutLine, LineBreakParams, LineItem, LineSpacing, NoteRef, NoteStream,
-    TabAlign, TabLeader, TabStop, TextSegment, Underline, break_into_lines,
+    Align, ForcedBreakKind, InlineItem, LayoutLine, LineBreakParams, LineItem, LineSpacing,
+    NoteRef, NoteStream, TabAlign, TabLeader, TabStop, TextSegment, Underline, break_into_lines,
     break_multilingual_into_lines,
 };
 pub use output::{

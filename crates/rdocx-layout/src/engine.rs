@@ -15337,6 +15337,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         }];
         let cell = |is_first_row: bool| table::TableCell {
             structure_id: None,
@@ -15569,6 +15570,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         };
         let mut paragraph = block::build_paragraph_block(
             vec![line],
@@ -15715,6 +15717,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         };
         let paragraph = block::build_paragraph_block(
             vec![line],

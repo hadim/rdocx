@@ -53,6 +53,9 @@ fn f254_paragraph(text: &str) -> ContentFragment {
 
 const WORD_F252_ORACLE: &str = "Microsoft Word 16.112.4 build 16.112.26090911";
 const WORD_F252_ENVIRONMENT: &str = "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f252-section-story-pdf-v1; pdftotext=26.09.0; pdfinfo=26.09.0";
+const WORD_FX101_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+const WORD_FX101_ENVIRONMENT: &str =
+    "macOS; locale=en-GB; normalization=fx101-run-page-break-pages-v1";
 const WORD_F252_RECORDS: [&str; 9] = [
     "page=1 | width_pt=612 | header=H-FIRST | body=S0-FIRST | footer=F-FIRST",
     "page=2 | width_pt=612 | header=H-EVEN | body=S0-EVEN | footer=F-EVEN",
@@ -12435,6 +12438,112 @@ fn mixed_run_content_reopens_and_renders_in_source_order() {
             .unwrap()
             .starts_with(b"%PDF-")
     );
+}
+
+#[test]
+fn run_level_page_breaks_match_word_pagination() {
+    assert_eq!(
+        WORD_FX101_ORACLE,
+        "Microsoft Word 16.104 build 16.104.25121423"
+    );
+    assert_eq!(
+        WORD_FX101_ENVIRONMENT,
+        "macOS; locale=en-GB; normalization=fx101-run-page-break-pages-v1"
+    );
+
+    let page_texts = |document: &mut Document| {
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        reopened
+            .layout_deterministic()
+            .unwrap()
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<Vec<_>>()
+    };
+
+    let mut inline = Document::new();
+    {
+        let mut paragraph = inline.add_paragraph("");
+        let mut run = paragraph.add_run("Alpha");
+        run.add_break(BreakKind::Page);
+        run.add_text("Bravo");
+    }
+    assert_eq!(page_texts(&mut inline), ["Alpha", "Bravo"]);
+
+    let mut own_paragraph = Document::new();
+    own_paragraph.add_paragraph("Alpha");
+    {
+        let mut paragraph = own_paragraph.add_paragraph("");
+        paragraph.add_run("").add_break(BreakKind::Page);
+    }
+    own_paragraph.add_paragraph("Bravo");
+    assert_eq!(page_texts(&mut own_paragraph), ["Alpha", "Bravo"]);
+}
+
+#[test]
+fn run_page_break_pagination_reaches_fragments_fields_pdf_and_png() {
+    let source = wrap_word_body(
+        r#"<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:t>TOC</w:t></w:r><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>stored TOC target</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t>Alpha</w:t><w:br w:type="page"/></w:r><w:bookmarkStart w:id="7" w:name="destination"/><w:r><w:t>Bravo</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>stored page</w:t></w:r></w:fldSimple><w:r><w:t>/</w:t></w:r><w:fldSimple w:instr="NUMPAGES"><w:r><w:t>stored count</w:t></w:r></w:fldSimple><w:r><w:t>/</w:t></w:r><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>stored reference</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="7"/></w:p>"#,
+    );
+    let document = document_with_content_controls(&source);
+    let layout = document.layout_deterministic().unwrap();
+    let page_text = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| f252_page_text(page))
+        .collect::<Vec<_>>();
+    assert_eq!(page_text, ["TOC2Alpha", "Bravo2/2/2"]);
+    assert_eq!(
+        layout
+            .body_layout_fragments(1)
+            .unwrap()
+            .iter()
+            .map(|fragment| fragment.physical_page)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+
+    for page_index in 0..2 {
+        assert!(
+            document
+                .render_page_to_png_deterministic(page_index, 24.0)
+                .unwrap()
+                .unwrap()
+                .starts_with(b"\x89PNG\r\n\x1a\n")
+        );
+    }
+    assert!(
+        document
+            .render_page_to_png_deterministic(2, 24.0)
+            .unwrap()
+            .is_none()
+    );
+
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory =
+        std::env::temp_dir().join(format!("rdocx-fx101-pdf-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("run-page-break.pdf");
+    std::fs::write(&path, pdf).unwrap();
+    let info = std::process::Command::new("pdfinfo")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(info.status.success());
+    let info = String::from_utf8(info.stdout).unwrap();
+    let pages = info
+        .lines()
+        .find_map(|line| line.strip_prefix("Pages:").map(str::trim))
+        .unwrap();
+    assert_eq!(pages, "2");
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

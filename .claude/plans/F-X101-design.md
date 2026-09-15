@@ -1,6 +1,6 @@
 # F-X101, Honor run-level page breaks during pagination
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-260
@@ -15,6 +15,7 @@ boundary and keeps following text on the same page.
 
 ## Spec reference
 
+- `docs/hld/02-scope-and-non-goals.md`, modern DOCX capability matrix.
 - `docs/hld/08-rendering-spec.md`, Word line breaking and pagination.
 - `docs/hld/12-testing-strategy.md`, deterministic Word render comparison.
 - `docs/hld/14-development-backlog.md`, F-X101.
@@ -49,6 +50,7 @@ The **test gate** is the differential test named in the backlog.
 
 ## HLD impact
 
+- `docs/hld/02-scope-and-non-goals.md`
 - `docs/hld/08-rendering-spec.md`
 - `docs/hld/12-testing-strategy.md`
 - `docs/hld/14-development-backlog.md`
@@ -70,11 +72,11 @@ break. Any delta requires separate review.
 
 ## Implementation checklist
 
-- [ ] Add failing own-paragraph and inline page-break regressions.
-- [ ] Preserve forced-break identity in line output.
-- [ ] Split Word paragraphs at page-marked lines during pagination.
-- [ ] Verify every pagination consumer and the focused oracle comparison.
-- [ ] Run the layout, public API, hash harness, full verification, and microscope gates.
+- [x] Add failing own-paragraph and inline page-break regressions.
+- [x] Preserve forced-break identity in line output.
+- [x] Split Word paragraphs at page-marked lines during pagination.
+- [x] Verify every pagination consumer and the focused oracle comparison.
+- [x] Run the layout, public API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

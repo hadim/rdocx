@@ -1474,6 +1474,19 @@ positioned foreign run child, proves the raw bytes stay on their original side
 of the field boundary, and proves an invalid field instruction is atomic. The
 reopened document must render through deterministic bundled fonts.
 
+The run-level page-break differential gate authors both the break-only
+paragraph written by python-docx and a break between two pieces of text. Its
+source-built record pins Microsoft Word 16.104 build 16.104.25121423, the
+en-GB locale, and deterministic bundled fonts, then compares page count and
+page text. A line-layer unit matrix retains distinct line, page, and column
+break kinds. Paginator regressions cover two breaks, keep-lines, an overflow
+continuation, a trailing break, and the non-page break kinds. The consumer
+regression proves one split paragraph produces ordered body fragments on two
+physical pages, resolves PAGE, NUMPAGES, and PAGEREF from that sequence, emits
+two deterministic PNG pages, and reports two pages from the deterministic PDF
+through pinned Poppler. No binary fixture or runtime oracle dependency enters
+the published crates.
+
 The contributor reader-fact regression combines strict document and body
 boundaries, first section properties, missing revision authors, empty simple
 fields, bounded nested tables, marker child-content facts, effective complex

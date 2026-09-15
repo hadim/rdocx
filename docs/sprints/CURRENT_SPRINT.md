@@ -56,7 +56,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X110 | Control field updates on document open | S | done | codex |
 | F-X111 | Attach portable CLI binaries to Rust releases | L | in-progress | codex |
 | F-258 | Complete M23 row and cell authoring | L | pending | - |
-| F-X101 | Honor run-level page breaks during pagination | M | pending | - |
+| F-X101 | Honor run-level page breaks during pagination | M | done | codex |
 | F-X103 | Accept standard TOC switches and report rebuild diagnostics | M | done | codex |
 | F-X106a | Expose indexed content mutation and counted replacement in Python | L | done | codex |
 | F-X106b | Expose paragraph and run formatting mutations in Python | M | pending | - |
