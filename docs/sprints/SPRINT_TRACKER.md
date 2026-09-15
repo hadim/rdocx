@@ -86,6 +86,7 @@ defended.
 | S69 | M22, X | 8 | 7 | 1 | 11 | 2 | Completed M22 with shared strict XML validation, Flat OPC and modern Word package variants, bounded MHTML interchange, and restored hosted CI release readiness. Published and verified the shared 0.10.0 and 0.11.0 families and the stable 0.13.1 recovery. F-X078 records the immutable partial v0.13.0 attempt. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 23 clean |
 | S70 | M23, X | 7 | 7 | 0 | 19 | 2 | Established the modern DOCX capability matrix and private-corpus policy, added public from-scratch authoring conformance, replaced volatile README claims with evidence-backed coverage, and closed the three Issue 69 cache and restart gaps. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 5 clean. M23 continues in S71 with public API completion |
 | S71 | M23, X | 10 | 10 | 0 | 35 | 3 | Added complete blank-package, property, theme, font, style, numbering, and deterministic identifier foundations. Folded Kevin Brown's authored Word charts into the sprint, closed Issue 69 with measured evidence and reporter credit, and made the root and all 26 crate READMEs capability-led. The full close gate passed with all 49 reviewed hashes, every package archive below 10 MiB, and final sprint review pass 9 clean. M23 continues in S72 with sections, stories, and content ownership |
+| S72 | M23, X | 19 | 19 | 0 | 61 | 7 | Added ordered sections, relationship-safe story editing, transactional fragment import, searchable PDF text, CLI and Python surfaces, hardened outcomes from PRs 77 through 80, and deterministic hosted CI. Published metadata-complete `rdocx 0.13.2` and `rpptx 0.11.0` distributions with reporter and contributor credit. The full close gate passed with all 49 reviewed hashes, the declared seven-entry Word XML delta, every package archive below 10 MiB, and final sprint review pass 24 clean. M23 continues in S73 with tables, rich content, and the private corpus gate |
 
 ## Completed features
 
@@ -520,6 +521,7 @@ five working days.
 | S69 | 7 | 2 | 17.50 |
 | S70 | 7 | 2 | 17.50 |
 | S71 | 10 | 3 | 16.67 |
+| S72 | 19 | 7 | 13.57 |
 
 ## Escalation record
 
@@ -594,3 +596,4 @@ was done about it. Empty is the expected state.
 | 2026-09-06 | Sprint estimate variance exceeded 30 percent | S69 | Record 2 actual days against 11 estimated. Isolated workers, established package and release workflows, and two recovery releases allowed implementation, review, and publication work to overlap safely. The resulting 17.50 stories per week is not a sustainable forecast, so retain the dependency-defined S70 decision boundary |
 | 2026-09-07 | Sprint estimate variance exceeded 30 percent | S70 | Record 2 actual days against 19 estimated. Isolated workers and established conformance, documentation, and cache verification paths allowed independent audit and implementation work to overlap safely. The resulting 17.50 stories per week is not a sustainable forecast, so retain the dependency-defined S71 boundary |
 | 2026-09-09 | Sprint estimate variance exceeded 30 percent | S71 | Record 3 actual days against 35 estimated. Isolated workers, dependency-prefix reviews, and established package, Word, Pages, layout, and README gates allowed independent work and contribution hardening to overlap safely. The resulting 16.67 stories per week is not a sustainable forecast, so retain the dependency-defined S72 boundary |
+| 2026-09-15 | Sprint estimate variance exceeded 30 percent | S72 | Record 7 actual days against 61 estimated. Parallel isolated workers, dependency-prefix reviews, established release workflows, and issue and contribution hardening allowed independent work and publication checks to overlap safely. The resulting 13.57 stories per week is not a sustainable forecast, so retain the dependency-defined S73 boundary |
