@@ -1420,10 +1420,37 @@ document.
 | F-261 | Rich HTML fragments in arbitrary containers | L |
 | F-262 | Corpus drawings, text boxes, and watermarks | L |
 | F-263 | Layout-backed fields and M23 corpus gate | L |
+| F-X097 | Preserve namespace-scoped drawings and complex fields in comparison | M |
+| F-X098 | Preserve content-control type payloads | M |
+| F-X099 | Expose direct body ownership for story items | M |
+| F-X100 | Preserve explicit false table toggles | S |
+| F-X101 | Honor run-level page breaks during pagination | M |
+| F-X102 | Resolve header and footer pictures in their story scope | M |
+| F-X103 | Accept standard TOC switches and report rebuild diagnostics | M |
+| F-X104 | Render DrawingML picture transparency | M |
+| F-X105 | Separate slide-owned placeholders from master header flags | M |
+| F-X106a | Expose indexed content mutation and counted replacement in Python | L |
+| F-X106b | Expose paragraph and run formatting mutations in Python | M |
+| F-X106c | Expose story mutation, hyperlinks, revisions, fields, and XML in Python | L |
+| F-X107 | Clone and remove existing table rows | M |
+| F-X108 | Replace an existing picture atomically | M |
+| F-X109 | Split text runs at Unicode character offsets | M |
+| F-X110 | Control field updates on document open | S |
+| F-X111 | Attach portable CLI binaries to Rust releases | L |
+| F-X112 | Publish the complete S73 package families | L |
 
-The model stories land before layout and conversion consumers. F-263 is the
-milestone gate and starts only after every other M23 story is integrated. The
-five client documents and their renders remain private and uncommitted.
+The model stories land before layout and conversion consumers. F-X100 lands
+before F-258 so the row and cell setters inherit lossless toggle semantics.
+F-X101 and F-X109 follow ordered runs, F-X102 precedes corpus drawings, and
+F-X103 precedes layout-backed fields. F-X106a through F-X106c serialize the
+second Python binding round, then the row and image mutations consume that
+surface. F-263 remains the private-corpus milestone gate. F-X111 prepares
+portable CLI assets before F-X112 releases the exact two Rust and two Python
+families through separate approvals. PR 101 contributes the F-X100 explicit
+false table-toggle fix and the F-X103 TOC `\\z` support. Its current two-commit
+shape is incorporated directly where conflict-free or through a reviewed
+hardened equivalent, with contributor credit retained. The five client
+documents and their renders remain private and uncommitted.
 
 ### M24, Modern DOCX authoring completeness
 
