@@ -263,23 +263,26 @@ pub struct PyStoryItem {
     story: PyStory,
     kind: String,
     index_path: Vec<usize>,
+    direct_body_index: Option<usize>,
     text: Option<String>,
 }
 
 #[pymethods]
 impl PyStoryItem {
     #[new]
-    #[pyo3(signature = (*, story, kind, index_path, text))]
+    #[pyo3(signature = (*, story, kind, index_path, text, direct_body_index=None))]
     fn new(
         story: PyRef<'_, PyStory>,
         kind: String,
         index_path: Vec<usize>,
         text: Option<String>,
+        direct_body_index: Option<usize>,
     ) -> Self {
         Self {
             story: story.clone(),
             kind,
             index_path,
+            direct_body_index,
             text,
         }
     }
@@ -297,6 +300,11 @@ impl PyStoryItem {
     #[getter]
     fn index_path<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         PyTuple::new(py, self.index_path.iter().copied())
+    }
+
+    #[getter]
+    fn direct_body_index(&self) -> Option<usize> {
+        self.direct_body_index
     }
 
     #[getter]
@@ -865,6 +873,9 @@ impl PyDocument {
                     story: story_snapshot.clone(),
                     kind: story_item_kind_name(item.kind()).to_owned(),
                     index_path: item.location().index_path().to_vec(),
+                    direct_body_index: item
+                        .direct_body_index()
+                        .map_err(|error| rdocx_to_pyerr(py, error))?,
                     text: item.text().map_err(|error| rdocx_to_pyerr(py, error))?,
                 });
             }

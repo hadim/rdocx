@@ -13747,3 +13747,41 @@ also pass.
 **Notes for future sessions.** Preserve opaque type payload content only while
 the discriminator matches the parsed type. A caller-selected replacement must
 not accidentally reuse producer-specific children from the prior type.
+
+### F-X099, Expose direct body ownership for story items
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native `StoryItemRef` and frozen Python `StoryItem`
+snapshots now expose an optional checked direct main-body owner index. Direct
+and nested body items identify the paragraph, table, or body-level control that
+can safely seed direct-body APIs. Related-story items and final section
+properties expose no owner. Existing recursive item paths remain unchanged.
+
+**Non-obvious choices.** The native accessor resolves source spans through the
+existing checked story scanner rather than deriving an index from the flat
+ordinal. Python materializes the value in each immutable snapshot so it cannot
+become stale through a borrowed native handle.
+
+**Deviations from the design plan.** The direct `cargo publish --dry-run` found
+the expected unpublished internal `rdocx-html 0.13.2` dependency. The complete
+package inventory and README archive gate passed with the workspace patch
+configuration, and coordinated publication remains owned by F-X112.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Container-neutral
+Word story editing also belongs to the `rdocx` facade",
+`docs/hld/10-bindings-spec.md`, the native story and Python snapshot contracts,
+`docs/hld/12-testing-strategy.md`, the story traversal matrix, and the F-X099
+entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `story_items_expose_safe_direct_body_owners` is the native gate. The
+installed Python runtime matrix, strict mypy, stubtest, full workspace suite,
+and both WASM target checks pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** A story scan ordinal is not a direct body index.
+Always resolve the containing checked span, especially for fields, drawings,
+and controls nested inside a paragraph.

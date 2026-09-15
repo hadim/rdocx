@@ -16627,6 +16627,52 @@ fn comparison_preserves_inherited_drawing_namespaces_and_complex_fields() {
 }
 
 #[test]
+fn story_items_expose_safe_direct_body_owners() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>first</w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple><w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:inline><wp:docPr id="41" name="item"/></wp:inline></w:drawing></w:r><w:sdt><w:sdtContent><w:r><w:t>nested control</w:t></w:r></w:sdtContent></w:sdt></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtContent><w:p><w:r><w:t>body control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>second</w:t></w:r></w:p>"#,
+    );
+    let document = document_with_content_controls(&xml);
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Body)
+        .unwrap();
+    let items = document.story_items(&body).unwrap();
+    let owners = items
+        .iter()
+        .map(|item| item.direct_body_index().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        owners,
+        [
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+        ]
+    );
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.location().index_path().to_vec())
+            .collect::<Vec<_>>(),
+        [
+            vec![0],
+            vec![1],
+            vec![2],
+            vec![3],
+            vec![4],
+            vec![5],
+            vec![6],
+        ]
+    );
+}
+
+#[test]
 fn comparison_drawings_survive_accept_and_reject() {
     for granularity in [
         rdocx::ComparisonGranularity::Run,

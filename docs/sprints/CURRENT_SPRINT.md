@@ -48,7 +48,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-260 | Ordered run content authoring | L | pending | - |
 | F-X097 | Preserve namespace-scoped drawings and complex fields in comparison | M | done | codex |
 | F-X098 | Preserve content-control type payloads | M | done | codex |
-| F-X099 | Expose direct body ownership for story items | M | in-progress | codex |
+| F-X099 | Expose direct body ownership for story items | M | done | codex |
 | F-X100 | Preserve explicit false table toggles | S | in-progress | codex |
 | F-X102 | Resolve header and footer pictures in their story scope | M | pending | - |
 | F-X104 | Render DrawingML picture transparency | M | pending | - |

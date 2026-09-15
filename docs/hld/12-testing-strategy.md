@@ -1510,7 +1510,11 @@ identifiers in the body and two headers. It proves exact frozen records,
 source order, physical ownership, item paths, owner-scoped URL resolution,
 single ownership for a hyperlink in nested content controls, physical ordering
 when a nested link precedes an ancestor-owned link, snapshot stability after
-mutation, strict mypy, and stubtest after reopen.
+mutation, strict mypy, and stubtest after reopen. The body-owner matrix adds a
+direct paragraph, table, and body-level control plus nested field, drawing, and
+run-level control items. Native and installed Python assertions keep the flat
+path while returning the containing direct body coordinate. Header items and
+final section properties remain unanchored.
 The native companion
 `story_item_links_resolve_only_through_the_checked_owner` resolves an equal
 identifier to distinct body and header targets and checks the same interleaved

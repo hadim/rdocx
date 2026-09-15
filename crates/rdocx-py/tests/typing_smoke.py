@@ -75,6 +75,7 @@ def exercise_rdocx_types(path: Path) -> None:
     styles: tuple[Style, ...] = document.styles
     stories: tuple[Story, ...] = document.stories
     story_items: tuple[StoryItem, ...] = document.story_items
+    direct_body_index: int | None = story_items[0].direct_body_index if story_items else None
     variants: tuple[HeaderFooterVariant, ...] = document.header_footer_variants
     hyperlinks: tuple[Hyperlink, ...] = document.hyperlinks
     resolved: bool = document.resolve_comment(comment_id)

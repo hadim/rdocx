@@ -635,6 +635,33 @@ impl<'a> StoryItemRef<'a> {
         self.location.item_kind
     }
 
+    /// Return the containing direct main-body child when this item has one.
+    ///
+    /// The recursive story-item path remains unchanged. This value is the
+    /// coordinate accepted by direct-body APIs such as `RunPosition`.
+    pub fn direct_body_index(&self) -> Result<Option<usize>> {
+        if self.location.story.kind != StoryKind::Body {
+            return Ok(None);
+        }
+        let (source, owner) = self.document.story_source_and_owner(&self.location.story)?;
+        let [index] = self.location.index_path.as_slice() else {
+            return Err(StoryError::InvalidPath {
+                path: self.location.index_path.clone(),
+            }
+            .into());
+        };
+        let items = scan_story_items(source.xml.as_ref(), &owner)?;
+        let item = items.get(*index).ok_or(StoryError::OutOfBounds {
+            index: *index,
+            len: items.len(),
+        })?;
+        Ok(direct_story_content_items(source.xml.as_ref(), &owner)?
+            .iter()
+            .position(|candidate| {
+                candidate.full.start <= item.full.start && item.full.end <= candidate.full.end
+            }))
+    }
+
     pub fn text(&self) -> Result<Option<String>> {
         let (source, item) = self.document.story_item_source(&self.location)?;
         story_item_text(source.xml.as_ref(), &item)

@@ -1215,7 +1215,10 @@ The same ordered compatibility view extends through `CellRef::items`,
 non-exhaustive borrowed item enums retain each typed child and unsupported raw
 subtree at its direct source boundary, including borrowed drawing and field
 facts. Existing flattened run, paragraph, table, and body accessors keep their
-established semantics. `Document::body_content` reports unsupported modeled
+established semantics. `StoryItemRef::direct_body_index` returns the containing
+direct main-body child for any safely anchored body item while preserving the
+flat recursive `index_path`. Items from another story and final section
+properties return no body coordinate. `Document::body_content` reports unsupported modeled
 content through `UnsupportedXmlRef` name, namespace, and child-content facts,
 while exposing raw bytes only when the facade owns an actual preserved raw
 subtree. Save replays the namespace scope required by retained raw content and

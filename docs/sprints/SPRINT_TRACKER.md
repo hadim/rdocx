@@ -437,6 +437,7 @@ defended.
 | F-X094f | S72 | M | 2 | 2 | 2026-09-15 | Published and verified metadata-complete rdocx 0.13.2 and rpptx 0.11.0 Python distributions, then notified and closed every included issue and pull request |
 | F-X097 | S73 | M | 2 | 1 | 2026-09-15 | Preserved ancestor-scoped drawing namespaces and exact complex-field ownership through comparison, accept, and reject |
 | F-X098 | S73 | M | 2 | 1 | 2026-09-15 | Preserved attributes and ordered child payloads on modeled content-control type elements until explicit type replacement |
+| F-X099 | S73 | M | 2 | 1 | 2026-09-15 | Added checked direct-body ownership to native and frozen Python story-item snapshots without changing recursive paths |
 
 ## Velocity
 

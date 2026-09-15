@@ -362,10 +362,14 @@ and comment owners in deterministic order. `Document::story_items` returns
 paragraph, table, content-control, field, drawing, and preserved-node items in
 source order. Its `xml` result is borrowed for exact package-backed subtrees and
 owned for typed body or comment sources and namespace-complete complex-field
-projections. `Document::set_story_text` resolves a checked operation-scoped
+projections. `StoryItemRef::direct_body_index` adds the safe direct body owner
+coordinate without changing the recursive `index_path`. Python frozen
+`StoryItem` snapshots expose the same optional integer. Items outside the main
+story and final section properties expose no coordinate.
+`Document::set_story_text` resolves a checked operation-scoped
 location against a staged package and publishes only a serialized and reopened
 candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
-Python, WASM, and CLI gain no story traversal or mutation entry point.
+WASM and CLI gain no story traversal or mutation entry point.
 
 Native Rust also exposes the owned `ContentFragment` value and
 `ContentLocation::end`. Paragraph, table, and block content-control

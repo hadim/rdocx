@@ -1,6 +1,6 @@
 # F-X099, Expose direct body ownership for story items
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-253, F-X094d
@@ -66,11 +66,11 @@ Expected to be unchanged. This adds inspection metadata only.
 
 ## Implementation checklist
 
-- [ ] Add failing native and Python body-owner regressions.
-- [ ] Resolve the containing direct owner through existing checked spans.
-- [ ] Expose the additive native and frozen Python properties.
-- [ ] Update stubs, typing coverage, and public binding specification.
-- [ ] Run binding gates, package dry run, hash harness, full verification, and microscope.
+- [x] Add failing native and Python body-owner regressions.
+- [x] Resolve the containing direct owner through existing checked spans.
+- [x] Expose the additive native and frozen Python properties.
+- [x] Update stubs, typing coverage, and public binding specification.
+- [x] Run binding gates, package dry run, hash harness, full verification, and microscope.
 
 ## Open questions
 

@@ -439,6 +439,37 @@ def test_word_structure_snapshots_preserve_order_ownership_and_types():
     ]
     assert all(isinstance(item, rdocx.StoryItem) for item in reopened.story_items)
     assert all(isinstance(story, rdocx.Story) for story in reopened.stories)
+    assert all(item.direct_body_index is None for item in header_items)
+    body_items = [item for item in reopened.story_items if item.story.kind == "body"]
+    assert [item.direct_body_index for item in body_items] == [0, 1, 2, 3, None]
+
+    owned = _replace_document_body(
+        rdocx.Document(),
+        """
+        <w:p><w:r><w:t>first</w:t></w:r>
+          <w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple>
+          <w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:inline><wp:docPr id="41" name="item"/></wp:inline></w:drawing></w:r>
+          <w:sdt><w:sdtContent><w:r><w:t>nested control</w:t></w:r></w:sdtContent></w:sdt>
+        </w:p>
+        <w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+        <w:sdt><w:sdtContent><w:p><w:r><w:t>body control</w:t></w:r></w:p></w:sdtContent></w:sdt>
+        <w:p><w:r><w:t>second</w:t></w:r></w:p>
+        <w:sectPr/>
+        """,
+    )
+    owned_body_items = [
+        item for item in owned.story_items if item.story.kind == "body"
+    ]
+    assert [item.direct_body_index for item in owned_body_items] == [
+        0,
+        0,
+        0,
+        0,
+        1,
+        2,
+        3,
+        None,
+    ]
 
     assert [link.relationship_id for link in reopened.hyperlinks] == [
         "rIdScoped",
