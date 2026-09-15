@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 17 | 0 | 7 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 122 | 101 | 3 | 14 |
-| **Total** | **440** | **344** | **3** | **89** |
+| X, Cross-cutting (opportunistic)            | 122 | 102 | 2 | 14 |
+| **Total** | **440** | **345** | **2** | **89** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -642,7 +642,7 @@ regenerated, never hand-edited.
 | F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | S72 | L | done |
 | F-X096 | Align Python distribution versions and release tags | S72 | M | done |
 | F-X097 | Preserve namespace-scoped drawings and complex fields in comparison | S73 | M | done |
-| F-X098 | Preserve content-control type payloads | S73 | M | in-progress |
+| F-X098 | Preserve content-control type payloads | S73 | M | done |
 | F-X099 | Expose direct body ownership for story items | S73 | M | in-progress |
 | F-X100 | Preserve explicit false table toggles | S73 | S | in-progress |
 | F-X101 | Honor run-level page breaks during pagination | S73 | M | pending |

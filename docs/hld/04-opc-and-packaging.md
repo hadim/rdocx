@@ -1145,6 +1145,11 @@ Each modeled content control owns only its first `w:sdtContent` child. A later
 same-namespace content container remains opaque. The scan applies typed block
 grammar and the 32-level revision nesting bound, counting property-change
 revision elements as well as content revisions.
+The first supported `w:sdtPr` type child also owns its producer attributes and
+ordered child payload. Prefix-tolerant parsing records the typed discriminator,
+while serialization uses the fixed type prefix and retains that payload only
+when the discriminator is unchanged. Duplicate type children remain ordered
+raw properties.
 When a supported instruction is wrapped by inline ownership elements, staged
 parsing and replacement close that exact balanced owner chain before emitting
 the following paragraph content. Isolated instruction-run projection injects

@@ -13706,3 +13706,44 @@ suite.
 **Notes for future sessions.** Do not read a fresh document's main package part
 before staged preparation. A package-backed document may still supply producer
 namespace context needed by a dirty typed comparison candidate.
+
+### F-X098, Preserve content-control type payloads
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The first supported content-control type child now retains
+its producer attributes, local namespace declarations, and ordered child
+payload while continuing to expose the existing typed discriminator. An
+unchanged type writes that payload under the fixed output prefix. An explicit
+type change writes one canonical empty replacement in the original property
+slot.
+
+**Non-obvious choices.** Duplicate supported type children remain raw ordered
+properties under the existing first-modeled rule. The retained payload is not
+promoted into a public model because the product does not edit those extension
+children.
+
+**Deviations from the design plan.** The accepted implementation preserves the
+payload under the canonical fixed type prefix rather than promising whole-type
+element byte identity. This matches the repository's fixed-prefix writer
+contract. Contributor PR 103 supplied the core preservation direction and was
+reviewed and hardened to this boundary.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Low-level
+content-control traversal is recursive and ordered",
+`docs/hld/04-opc-and-packaging.md`, "Story items are projections over the
+existing typed and retained package sources", `docs/hld/12-testing-strategy.md`,
+the content-control preservation coverage, and the F-X098 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `content_control_type_payload_round_trips_until_type_changes` is the
+story gate. The complete 488-test `rdocx-oxml` suite and full workspace gate
+also pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve opaque type payload content only while
+the discriminator matches the parsed type. A caller-selected replacement must
+not accidentally reuse producer-specific children from the prior type.

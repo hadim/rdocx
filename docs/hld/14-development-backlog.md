@@ -4988,19 +4988,20 @@ and changed text without a count mismatch or partial mutation.
 
 ### F-X098, Preserve content-control type payloads (M)
 
-Retain the complete selected content-control type element, including attributes,
-children, prefixes, and local namespace bindings, while exposing the existing
-typed discriminator. An unchanged type writes its preserved payload. Changing
-the public discriminator replaces that payload with the canonical empty element
-for the selected type, without disturbing other `w:sdtPr` children.
+Retain the selected content-control type element's attributes, ordered children,
+and local namespace bindings while exposing the existing typed discriminator.
+An unchanged type writes its preserved payload under the fixed output prefix.
+Changing the public discriminator replaces that payload with the canonical
+empty element for the selected type, without disturbing other `w:sdtPr`
+children.
 
 **Depends on**: F-253.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/84>.
 **Test gate**: round-trip.
 `content_control_type_payload_round_trips_until_type_changes` preserves reported
-checkbox, date, combo-box, repeating-section, citation, and equation payloads
-byte for byte, then proves an explicit type mutation emits only the canonical
-replacement in schema order.
+checkbox, date, combo-box, repeating-section, citation, and equation attributes
+and child payloads, then proves an explicit type mutation emits only the
+canonical replacement in schema order.
 
 ### F-X099, Expose direct body ownership for story items (M)
 

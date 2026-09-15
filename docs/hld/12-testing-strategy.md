@@ -447,6 +447,10 @@ discovery and layout.
 An alias-prefixed self-closing paragraph-property element retains exact producer
 attributes. An end-marker content control retains modeled identity, binding,
 type, end properties, and ordered raw property slots after save and reopen.
+The content-control type-payload gate covers Word and extension namespace type
+children with producer attributes and nested children. It proves unchanged
+payload retention under the fixed output prefix, canonical replacement after a
+typed discriminator change, and stable ordering of the other property slots.
 
 Word identifier allocation has a source-built regression gate. Two documents
 created through different request orders must produce identical complete DOCX

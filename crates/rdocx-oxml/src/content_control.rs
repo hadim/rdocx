@@ -150,6 +150,14 @@ pub struct CT_SdtPr {
     pub data_binding: Option<CT_DataBinding>,
     extra_attributes: Vec<(String, String)>,
     slots: Vec<PropertySlot>,
+    type_element: Option<TypeElement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TypeElement {
+    control_type: SdtType,
+    attributes: Vec<(String, String)>,
+    children: Vec<u8>,
 }
 
 impl CT_SdtPr {
@@ -169,7 +177,29 @@ impl CT_SdtPr {
                 Ok(Event::Start(child)) => {
                     let child_prefixes = word_prefixes_at(&child, &prefixes)?;
                     if properties.parse_modelled(&child, &child_prefixes)? {
-                        reader.read_to_end_into(child.name(), &mut Vec::new())?;
+                        if let (Some(control_type), Some(PropertySlot::Type)) =
+                            (properties.control_type, properties.slots.last())
+                        {
+                            let raw = capture_element(reader, &child)?;
+                            let open = [b"<".as_slice(), &*child, b">"].concat();
+                            let close = [b"</".as_slice(), child.name().as_ref(), b">"].concat();
+                            let children = raw
+                                .strip_prefix(open.as_slice())
+                                .and_then(|rest| rest.strip_suffix(close.as_slice()))
+                                .ok_or_else(|| {
+                                    OxmlError::MissingElement(format!(
+                                        "{} end",
+                                        String::from_utf8_lossy(child.name().as_ref())
+                                    ))
+                                })?;
+                            properties.type_element = Some(TypeElement {
+                                control_type,
+                                attributes: capture_attributes(&child, &child_prefixes, &[])?,
+                                children: children.to_vec(),
+                            });
+                        } else {
+                            reader.read_to_end_into(child.name(), &mut Vec::new())?;
+                        }
                     } else {
                         properties
                             .slots
@@ -178,7 +208,17 @@ impl CT_SdtPr {
                 }
                 Ok(Event::Empty(child)) => {
                     let child_prefixes = word_prefixes_at(&child, &prefixes)?;
-                    if !properties.parse_modelled(&child, &child_prefixes)? {
+                    if properties.parse_modelled(&child, &child_prefixes)? {
+                        if let (Some(control_type), Some(PropertySlot::Type)) =
+                            (properties.control_type, properties.slots.last())
+                        {
+                            properties.type_element = Some(TypeElement {
+                                control_type,
+                                attributes: capture_attributes(&child, &child_prefixes, &[])?,
+                                children: Vec::new(),
+                            });
+                        }
+                    } else {
                         properties
                             .slots
                             .push(PropertySlot::Raw(capture_empty_element(&child)?));
@@ -259,11 +299,7 @@ impl CT_SdtPr {
                     id_written = true;
                 }
                 PropertySlot::Type if !type_written => {
-                    if let Some(control_type) = self.control_type {
-                        writer.write_event(Event::Empty(BytesStart::new(
-                            control_type.element_name(),
-                        )))?;
-                    }
+                    self.write_type(writer)?;
                     type_written = true;
                 }
                 PropertySlot::DataBinding if !binding_written => {
@@ -286,13 +322,40 @@ impl CT_SdtPr {
             let value = id.to_string();
             write_val_element(writer, "w:id", Some(&value))?;
         }
-        if !type_written && let Some(control_type) = self.control_type {
-            writer.write_event(Event::Empty(BytesStart::new(control_type.element_name())))?;
+        if !type_written {
+            self.write_type(writer)?;
         }
         if !binding_written && let Some(binding) = &self.data_binding {
             binding.to_xml(writer)?;
         }
         writer.write_event(Event::End(BytesEnd::new("w:sdtPr")))?;
+        Ok(())
+    }
+
+    fn write_type<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let Some(control_type) = self.control_type else {
+            return Ok(());
+        };
+        let name = control_type.element_name();
+        let mut start = BytesStart::new(name);
+        let children = match &self.type_element {
+            Some(element) if element.control_type == control_type => {
+                for (key, value) in &element.attributes {
+                    start.push_attribute((key.as_str(), value.as_str()));
+                }
+                element.children.as_slice()
+            }
+            _ => &[],
+        };
+        if children.is_empty() {
+            writer.write_event(Event::Empty(start))?;
+        } else {
+            let mut element = Writer::new(Vec::new());
+            element.write_event(Event::Start(start))?;
+            element.get_mut().write_all(children)?;
+            element.write_event(Event::End(BytesEnd::new(name)))?;
+            writer.get_mut().write_all(&element.into_inner())?;
+        }
         Ok(())
     }
 }
@@ -1332,6 +1395,74 @@ mod tests {
         let typed = xml.find("<w:text").expect("typed marker");
         let unknown = xml.find("<x:temporary").expect("unknown property");
         assert!(typed < unknown, "unmodelled property moved");
+    }
+
+    #[test]
+    fn content_control_type_payload_round_trips_until_type_changes() {
+        let cases = [
+            (
+                r#"<w14:checkbox w14:custom="kept"><w14:checked w14:val="1"/></w14:checkbox>"#,
+                SdtType::CheckBox,
+                "w14:checked",
+            ),
+            (
+                r#"<w:date w:fullDate="2026-09-15T00:00:00Z"><w:dateFormat w:val="yyyy-MM-dd"/></w:date>"#,
+                SdtType::Date,
+                "w:dateFormat",
+            ),
+            (
+                r#"<w:comboBox w:lastValue="B"><w:listItem w:displayText="A" w:value="a"/></w:comboBox>"#,
+                SdtType::ComboBox,
+                "w:listItem",
+            ),
+            (
+                r#"<w15:repeatingSection w15:sectionTitle="Rows"><w15:doNotAllowInsertDeleteSection w15:val="1"/></w15:repeatingSection>"#,
+                SdtType::RepeatingSection,
+                "w15:doNotAllowInsertDeleteSection",
+            ),
+            (
+                r#"<w:citation w:val="source"><w:customXml w:uri="urn:citation"/></w:citation>"#,
+                SdtType::Citation,
+                "w:customXml",
+            ),
+            (
+                r#"<w:equation w:val="inline"><w:proofErr w:type="spellStart"/></w:equation>"#,
+                SdtType::Equation,
+                "w:proofErr",
+            ),
+        ];
+
+        for (type_xml, expected_type, retained_child) in cases {
+            let xml = format!(
+                r#"<w:sdt xmlns:w="{W_NS}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdtPr>{type_xml}<w:tag w:val="kept"/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt>"#,
+            );
+            let mut control = parse_standalone_control(&xml);
+            assert_eq!(
+                control.properties.as_ref().unwrap().control_type,
+                Some(expected_type)
+            );
+
+            let mut preserved = Vec::new();
+            control
+                .to_xml(&mut Writer::new(&mut preserved))
+                .expect("control writes");
+            let preserved = String::from_utf8(preserved).expect("control XML is UTF-8");
+            assert!(
+                preserved.contains(retained_child),
+                "payload was lost: {preserved}"
+            );
+            assert!(preserved.contains("custom=\"kept\"") || expected_type != SdtType::CheckBox);
+
+            control.properties.as_mut().unwrap().control_type = Some(SdtType::PlainText);
+            let mut changed = Vec::new();
+            control
+                .to_xml(&mut Writer::new(&mut changed))
+                .expect("changed control writes");
+            let changed = String::from_utf8(changed).expect("changed control XML is UTF-8");
+            assert!(changed.contains("<w:text/>"));
+            assert!(!changed.contains(retained_child));
+            assert!(changed.contains("<w:tag w:val=\"kept\"/>"));
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # F-X098, Preserve content-control type payloads
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-253
@@ -20,12 +20,12 @@ discarding producer attributes and children.
 
 ## Approach
 
-Retain one namespace-complete raw payload with the selected control type and the
-type value observed when it was parsed. Serialization reuses that payload only
-while the public `control_type` remains equal to the parsed value. A changed type
-writes the existing canonical empty type element at the original slot. Duplicate
-type elements stay preserved as raw children under the existing first-modeled
-rule.
+Retain the unmodelled attributes and children of the first supported type
+element with the type value observed when it was parsed. Serialization writes
+those payload bytes under the fixed-prefix type element only while the public
+`control_type` remains equal to the parsed value. A changed type writes the
+existing canonical empty type element at the original slot. Duplicate type
+elements stay preserved as raw children under the existing first-modeled rule.
 
 ## Rejected alternatives
 
@@ -64,10 +64,10 @@ content-control type payloads.
 
 ## Implementation checklist
 
-- [ ] Add the failing type-payload round-trip regression.
-- [ ] Capture the first supported type element with inherited bindings.
-- [ ] Reuse it only while the discriminator is unchanged.
-- [ ] Run focused low-level tests, hash harness, full verification, and microscope.
+- [x] Add the failing type-payload round-trip regression.
+- [x] Capture the first supported type element payload.
+- [x] Reuse it only while the discriminator is unchanged.
+- [x] Run focused low-level tests, hash harness, full verification, and microscope.
 
 ## Open questions
 

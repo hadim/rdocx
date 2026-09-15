@@ -1197,7 +1197,10 @@ Low-level content-control traversal is recursive and ordered. Body, table,
 row, cell, and paragraph accessors expose each wrapped ordinary paragraph,
 table, row, cell, and run once while retaining the surrounding `CT_Sdt` for
 metadata lookup. The facade consumes this single WordprocessingML ownership
-tree and does not maintain a second content-control representation.
+tree and does not maintain a second content-control representation. The first
+supported type child keeps its unmodelled attributes and ordered child bytes.
+Its typed discriminator selects a fixed-prefix type wrapper on output, and a
+discriminator change replaces only that payload with the canonical empty type.
 
 `Document::body_items` exposes the direct body ownership vector without
 flattening it. Its borrowed items distinguish paragraphs, tables, body-level

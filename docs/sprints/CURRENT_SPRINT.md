@@ -47,7 +47,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-257 | Complete M23 table authoring | L | pending | - |
 | F-260 | Ordered run content authoring | L | pending | - |
 | F-X097 | Preserve namespace-scoped drawings and complex fields in comparison | M | done | codex |
-| F-X098 | Preserve content-control type payloads | M | in-progress | codex |
+| F-X098 | Preserve content-control type payloads | M | done | codex |
 | F-X099 | Expose direct body ownership for story items | M | in-progress | codex |
 | F-X100 | Preserve explicit false table toggles | S | in-progress | codex |
 | F-X102 | Resolve header and footer pictures in their story scope | M | pending | - |
