@@ -24,6 +24,43 @@ def _document_xml(document):
         return archive.read("word/document.xml")
 
 
+def _replace_settings_xml(document, settings):
+    source = io.BytesIO(document.to_bytes())
+    result = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip:
+        with zipfile.ZipFile(result, "w") as result_zip:
+            for info in source_zip.infolist():
+                data = source_zip.read(info.filename)
+                if info.filename == "word/settings.xml":
+                    data = settings.encode()
+                result_zip.writestr(info, data)
+    return type(document).from_bytes(result.getvalue())
+
+
+def test_update_fields_on_open_sets_clears_and_removes_the_setting():
+    import rdocx
+
+    document = rdocx.Document()
+    assert document.update_fields_on_open is None
+    for value in (True, False, None):
+        document.update_fields_on_open = value
+        assert document.update_fields_on_open is value
+        document = rdocx.Document.from_bytes(document.to_bytes())
+        assert document.update_fields_on_open is value
+
+    word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    for settings in (
+        f'<w:settings xmlns:w="{word}"><w:updateFields/><w:updateFields w:val="false"/></w:settings>',
+        f'<w:settings xmlns:w="{word}"><w:updateFields w:val="invalid"/></w:settings>',
+    ):
+        document = _replace_settings_xml(rdocx.Document(), settings)
+        before = document.to_bytes()
+        assert document.update_fields_on_open is None
+        with pytest.raises(rdocx.XmlError, match="ambiguous or malformed"):
+            document.update_fields_on_open = True
+        assert document.to_bytes() == before
+
+
 def _document_with_structure_snapshots(document):
     word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"

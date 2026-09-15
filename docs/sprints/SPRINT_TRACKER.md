@@ -443,6 +443,7 @@ defended.
 | F-X103 | S73 | M | 2 | 1 | 2026-09-15 | Accepted Word-default TOC web layout switches and exposed ordered native and Python rebuild diagnostics from contributor PR 101 |
 | F-X104 | S73 | M | 2 | 1 | 2026-09-15 | Rendered namespace-aware DrawingML picture transparency through every presentation output backend from contributor PR 105 |
 | F-X105 | S73 | M | 2 | 1 | 2026-09-15 | Separated slide-owned latent placeholders from source-specific layout and master header-footer policy |
+| F-X110 | S73 | S | 1 | 1 | 2026-09-15 | Added lossless native and Python control of the Word update-fields-on-open setting from contributor PR 104 |
 
 ## Velocity
 

@@ -13982,3 +13982,43 @@ tests, the full workspace, WASM, docs, package, and supply-chain gates pass.
 the placeholder. Keep direct slide placeholders outside template `p:hf`
 policy, and do not let an ineligible deeper source reveal stale shallower
 content.
+
+### F-X110, Control field updates on document open
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Word settings now expose the optional
+`w:updateFields` policy through staged Rust accessors and a matching Python
+property. The model reads namespace aliases and all valid on-off forms, writes
+the fixed Word prefix in schema order, and removes an unambiguous modeled
+setting without disturbing neighboring XML.
+
+**Non-obvious choices.** Duplicate or malformed producer occurrences remain
+raw and cannot be rewritten through the typed setter. Removing an already
+absent setting is byte-identical and does not allocate a settings relationship,
+which keeps no-op calls safe even when relationship IDs are exhausted.
+
+**Deviations from the design plan.** None. Contributor PR 104 supplied the
+native and Python API direction. The integrated implementation hardened it
+with duplicate and malformed ownership checks, absent-setting no-op behavior,
+relationship-exhaustion rollback, namespace aliases, typing, and complete save
+and reopen coverage.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, field update policy,
+`docs/hld/04-opc-and-packaging.md`, settings ordering and preservation,
+`docs/hld/10-bindings-spec.md`, native and Python optional accessors,
+`docs/hld/12-testing-strategy.md`, settings binding coverage, and the F-X110
+entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `update_fields_on_open_is_typed_optional_and_schema_ordered` is the
+story gate. All 44 Python tests, strict mypy, stubtest, the full workspace,
+WASM, docs, package, and supply-chain gates pass. The package dry run used
+`--allow-dirty` because `/complete-feature` verifies before creating the story
+commit. All 22 archives verified and remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve ambiguous settings as raw producer
+XML. Keep absent optional-setting removals allocation-free and byte-identical.

@@ -86,6 +86,9 @@ def exercise_rdocx_types(path: Path) -> None:
     fragments: tuple[LayoutFragment, ...] = document.layout()
     maybe_layout_page: LayoutPage | None = document.layout_page(0)
     report: TocRebuildReport = document.rebuild_toc()
+    update_fields_on_open: bool | None = document.update_fields_on_open
+    document.update_fields_on_open = True
+    document.update_fields_on_open = None
     if fragments:
         bounds: BoundingBox = fragments[0].bounds
         assert_type(bounds.width, float)
@@ -99,7 +102,7 @@ def exercise_rdocx_types(path: Path) -> None:
     assert_type(report.entry_count, int)
     assert_type(report.diagnostics, tuple[str, ...])
     assert_type(report.diagnostic_count, int)
-    package_bytes, pdf_bytes, pages, maybe_page, sliced, channels
+    package_bytes, pdf_bytes, pages, maybe_page, sliced, channels, update_fields_on_open
 
 
 if TYPE_CHECKING:

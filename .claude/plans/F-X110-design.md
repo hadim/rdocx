@@ -1,6 +1,6 @@
 # F-X110, Control field updates on document open
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: S
 **Depends on**: F-244, F-X100
@@ -69,10 +69,10 @@ Expected to be unchanged because no sample calls the new setting accessor.
 
 ## Implementation checklist
 
-- [ ] Add failing low-level, native, and Python optional-setting tests.
-- [ ] Model the setting with lossless duplicate and namespace behavior.
-- [ ] Add staged native and Python accessors.
-- [ ] Run parser, binding, API, hash harness, full verification, and microscope gates.
+- [x] Add failing low-level, native, and Python optional-setting tests.
+- [x] Model the setting with lossless duplicate and namespace behavior.
+- [x] Add staged native and Python accessors.
+- [x] Run parser, binding, API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

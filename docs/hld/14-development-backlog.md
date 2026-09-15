@@ -5237,9 +5237,10 @@ typing, rollback, and save-reopen order.
 
 Model `w:updateFields` in settings with the shared Word on-off vocabulary and
 preserve its schema slot. Native and Python accessors return `None` when the
-element is absent and accept `None`, true, or false to remove or set it through
-the existing staged settings mutation boundary. No field update operation
-changes this policy implicitly.
+element is absent or unmodelled and accept `None`, true, or false to remove or
+set one modeled occurrence through the existing staged settings mutation
+boundary. Duplicate and malformed forms remain byte-preserved and reject
+ambiguous mutation. No field update operation changes this policy implicitly.
 
 **Depends on**: F-244, F-X100.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/98>.

@@ -175,6 +175,63 @@ fn f252_page_text(page: &oxml_layout::PageFrame) -> String {
 }
 
 #[test]
+fn update_fields_on_open_is_typed_optional_and_schema_ordered() {
+    let with_settings = |xml: &str| {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/settings.xml", xml.as_bytes().to_vec());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    };
+    let settings_xml = |document: &mut Document| {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap()
+    };
+
+    let mut document = with_settings(&format!(
+        r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:foreign"><q:characterSpacingControl q:val="doNotCompress"/><q:updateFields q:val="off"/><x:updateFields/><q:compat/></q:settings>"#,
+    ));
+    assert_eq!(document.update_fields_on_open(), Some(false));
+    document.set_update_fields_on_open(Some(true)).unwrap();
+    let xml = settings_xml(&mut document);
+    assert!(xml.contains("<w:updateFields/>"), "{xml}");
+    assert!(xml.contains("<x:updateFields/>"), "{xml}");
+    assert!(xml.find("characterSpacingControl").unwrap() < xml.find("<w:updateFields").unwrap());
+    assert!(xml.find("<w:updateFields").unwrap() < xml.find("<q:compat").unwrap());
+
+    for value in [Some(false), None] {
+        document.set_update_fields_on_open(value).unwrap();
+        assert_eq!(document.update_fields_on_open(), value);
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(document.update_fields_on_open(), value);
+    }
+
+    let mut minimal =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+    let before = minimal.to_bytes().unwrap();
+    minimal.set_update_fields_on_open(None).unwrap();
+    assert_eq!(minimal.to_bytes().unwrap(), before);
+
+    for xml in [
+        format!(
+            r#"<w:settings xmlns:w="{W_NS}"><w:updateFields/><w:updateFields w:val="false"/></w:settings>"#,
+        ),
+        format!(r#"<w:settings xmlns:w="{W_NS}"><w:updateFields w:val="invalid"/></w:settings>"#,),
+    ] {
+        let mut ambiguous = with_settings(&xml);
+        assert_eq!(ambiguous.update_fields_on_open(), None);
+        let before = ambiguous.to_bytes().unwrap();
+        assert!(ambiguous.set_update_fields_on_open(Some(true)).is_err());
+        assert_eq!(ambiguous.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
 fn header_and_footer_pictures_render_from_story_relationships() {
     let marker_png = |marker: &str| {
         let mut image = Document::new();
@@ -267,6 +324,18 @@ fn header_and_footer_pictures_render_from_story_relationships() {
             .unwrap()
             .unwrap()
     );
+}
+
+#[test]
+fn update_fields_on_open_is_set_cleared_and_removed_through_the_settings_part() {
+    let mut document = Document::new();
+    assert_eq!(document.update_fields_on_open(), None);
+    for value in [Some(true), Some(false), None] {
+        document.set_update_fields_on_open(value).unwrap();
+        assert_eq!(document.update_fields_on_open(), value);
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(document.update_fields_on_open(), value);
+    }
 }
 
 #[test]

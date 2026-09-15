@@ -16284,6 +16284,28 @@ impl Document {
         Ok(())
     }
 
+    /// Return whether the settings part asks Word to update fields when it
+    /// opens the document, or `None` when the part does not say.
+    pub fn update_fields_on_open(&self) -> Option<bool> {
+        self.settings.as_ref()?.update_fields()
+    }
+
+    /// Ask Word to update fields when it opens the document, stop asking with
+    /// `Some(false)`, or remove the setting with `None`.
+    pub fn set_update_fields_on_open(&mut self, value: Option<bool>) -> Result<()> {
+        if value.is_none() && self.settings.is_none() {
+            return Ok(());
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_update_fields(value)?;
+        candidate.prune_empty_owned_settings();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
     /// Return document-wide OfficeMath defaults from the settings part.
     pub fn math_properties(&self) -> Option<&MathProperties> {
         self.settings.as_ref()?.math_properties()
@@ -28611,6 +28633,25 @@ mod tests {
         );
         assert_eq!(package_bytes(&math), before);
         assert!(math.settings_part_name.is_none());
+
+        let mut update_fields = exhausted_document();
+        let before = package_bytes(&update_fields);
+        update_fields.set_update_fields_on_open(None).unwrap();
+        assert_eq!(package_bytes(&update_fields), before);
+        assert!(update_fields.settings_part_name.is_none());
+
+        let mut update_fields = exhausted_document();
+        let before = package_bytes(&update_fields);
+        let error = update_fields
+            .set_update_fields_on_open(Some(true))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("settings relationship allocation failed")
+        );
+        assert_eq!(package_bytes(&update_fields), before);
+        assert!(update_fields.settings_part_name.is_none());
     }
 
     #[test]

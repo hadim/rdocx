@@ -1668,6 +1668,15 @@ foreign subtree bytes after mutation and assert the schema order of default tab
 stop, character spacing control, compatibility settings, document variables,
 and theme font language.
 
+`update_fields_on_open_is_typed_optional_and_schema_ordered` adds absent, bare
+true, explicit false, namespace alias, foreign lookalike, set, clear, remove,
+and save-reopen coverage for `w:updateFields`. Companion low-level cases keep
+duplicate and malformed producer forms byte-identical and reject mutation.
+The native allocation test exhausts the relationship identifier space and
+proves setting a value fails atomically while removing an absent value remains
+a successful byte-identical no-op. Installed Python tests, strict mypy, and
+stubtest cover the optional property and XML error surface.
+
 The theme and font feature gate authors a shared DrawingML theme, language
 defaults, descriptive font records, and an explicitly licensed caller font
 through public `rdocx` APIs. Save and reopen must return the same typed values,

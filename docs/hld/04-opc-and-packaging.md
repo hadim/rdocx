@@ -491,6 +491,16 @@ uses fixed `w:` prefixes for new XML, and inserts at the schema position.
 Unmodeled children inside `w:compat` and `w:docVars`, plus every unrelated
 top-level settings child, retain their bytes and namespace context.
 
+One valid `w:updateFields` child is a typed optional on-off value. Absence reads
+as `None`, a bare element reads as true, and the complete shared false
+vocabulary reads as false. Setting a value writes one fixed-prefix child after
+`w:characterSpacingControl` and before `w:compat`. Setting `None` removes only
+the modeled occurrence, while an already absent value is byte-identical and
+does not allocate a settings graph. Duplicate or malformed producer forms remain
+unmodelled and byte-identical, and their mutation returns an error rather than
+collapsing ownership. Every facade change uses the staged settings candidate,
+including collision-safe part and relationship allocation, before commit.
+
 The font-table reader accepts any in-scope Word and relationship namespace
 prefixes. It models font names, alternate names, family, pitch, and the four
 embedded-face slots. New XML uses fixed `w:`, `r:`, `rdocx:`, and `mc:`

@@ -577,7 +577,12 @@ retry them. Only validated staged XML
 is committed, then both layout caches are invalidated once. Existing save and
 byte methods remain leave alone operations that preserve cache content and
 dirty spelling. Update-aware save methods opt into the same atomic operation
-before writing. The settings-level `w:updateFields` value remains untouched.
+before writing. The settings-level `w:updateFields` value remains untouched by
+these updates. Callers read, set, or remove it explicitly through
+`Document::update_fields_on_open` and `set_update_fields_on_open`. A duplicate
+or malformed producer value stays unmodelled and byte-preserved, and an
+explicit mutation rejects that ambiguous ownership before publication. The two
+methods are additive pre-1.0 `rdocx` API.
 
 The native facade also rebuilds supported existing main-story table of
 contents fields. It reparses each owned instruction through the same recursive
