@@ -444,6 +444,7 @@ defended.
 | F-X104 | S73 | M | 2 | 1 | 2026-09-15 | Rendered namespace-aware DrawingML picture transparency through every presentation output backend from contributor PR 105 |
 | F-X105 | S73 | M | 2 | 1 | 2026-09-15 | Separated slide-owned latent placeholders from source-specific layout and master header-footer policy |
 | F-X110 | S73 | S | 1 | 1 | 2026-09-15 | Added lossless native and Python control of the Word update-fields-on-open setting from contributor PR 104 |
+| F-X111 | S73 | L | 4 | 1 | 2026-09-15 | Added selected-family six-target CLI release archives, exact checksums, cargo-binstall metadata, and pre-publication asset validation |
 
 ## Velocity
 

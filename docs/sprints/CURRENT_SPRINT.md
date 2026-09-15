@@ -54,7 +54,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X104 | Render DrawingML picture transparency | M | done | codex |
 | F-X105 | Separate slide-owned placeholders from master header flags | M | done | codex |
 | F-X110 | Control field updates on document open | S | done | codex |
-| F-X111 | Attach portable CLI binaries to Rust releases | L | pending | - |
+| F-X111 | Attach portable CLI binaries to Rust releases | L | in-progress | codex |
 | F-258 | Complete M23 row and cell authoring | L | pending | - |
 | F-X101 | Honor run-level page breaks during pagination | M | pending | - |
 | F-X103 | Accept standard TOC switches and report rebuild diagnostics | M | done | codex |

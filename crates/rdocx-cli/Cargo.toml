@@ -16,6 +16,20 @@ categories.workspace = true
 shared-version = "workspace"
 tag-name = "v{{version}}"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/rdocx-{ target }.tar.gz"
+bin-dir = "rdocx{ binary-ext }"
+pkg-fmt = "tgz"
+disabled-strategies = ["quick-install", "compile"]
+
+[package.metadata.binstall.overrides.'x86_64-pc-windows-msvc']
+pkg-url = "{ repo }/releases/download/v{ version }/rdocx-{ target }.zip"
+pkg-fmt = "zip"
+
+[features]
+default = ["system-fonts"]
+system-fonts = ["rdocx/system-fonts"]
+
 [[bin]]
 name = "rdocx"
 path = "src/main.rs"
@@ -25,7 +39,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-rdocx = { workspace = true, features = ["system-fonts"] }
+rdocx.workspace = true
 rdocx-oxml = { workspace = true }
 oxml-layout = { workspace = true }
 oxml-pdf = { workspace = true }

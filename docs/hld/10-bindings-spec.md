@@ -1639,3 +1639,14 @@ through the shared staged output set. Their schema-1 records state `main` or
 RFC 3339 start and end bounds must be paired. The complete compiled surface is
 covered by one integration binary, with fixtures constructed in code and no
 command-only test dependency.
+
+Rust release tags also distribute the selected CLI as prebuilt archives.
+Stable `v*` tags carry only `rdocx`, and incubating `rpptx-v*` tags carry only
+`rpptx`. Each family has native archives for GNU Linux x86-64 and arm64,
+static musl Linux x86-64, macOS Intel and arm64, and Windows x86-64. Every
+archive contains exactly the executable, its crate README, and the workspace
+licence. The two CLI manifests expose cargo-binstall metadata that resolves
+these target-specific archives without selecting source compilation or an
+unreviewed quick-install source. Native builds retain the CLI default system
+font feature. The static musl build disables host discovery and retains bundled
+fonts.

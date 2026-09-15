@@ -4476,6 +4476,119 @@ class SprintWorkflowTests(unittest.TestCase):
         ]
         self.assertEqual(actual_publish_commands, expected_publish_commands)
 
+    def assert_rust_release_assets_contract(self, publish: str) -> None:
+        build = self.yaml_block(publish, "  build-cli-assets:")
+        publish_job = self.yaml_block(publish, "  publish:")
+        aggregate = self.yaml_block(publish, "  cli-assets:")
+        release = self.yaml_block(publish, "  release:")
+
+        expected_platforms = (
+            ("linux-x86_64", "ubuntu-24.04", "x86_64-unknown-linux-gnu", "tar.gz"),
+            ("linux-aarch64", "ubuntu-24.04-arm", "aarch64-unknown-linux-gnu", "tar.gz"),
+            ("linux-musl-x86_64", "ubuntu-24.04", "x86_64-unknown-linux-musl", "tar.gz"),
+            ("macos-x86_64", "macos-15-intel", "x86_64-apple-darwin", "tar.gz"),
+            ("macos-arm64", "macos-14", "aarch64-apple-darwin", "tar.gz"),
+            ("windows-x86_64", "windows-2025", "x86_64-pc-windows-msvc", "zip"),
+        )
+        rows = tuple(
+            re.findall(
+                r"- \{ label: ([^,]+), runner: ([^,]+), target: ([^,]+), archive: ([^ }]+) \}",
+                build,
+            )
+        )
+        self.assertEqual(rows, expected_platforms)
+        self.assertIn("fail-fast: false", build)
+        self.assertIn("runs-on: ${{ matrix.platform.runner }}", build)
+        self.assertIn("targets: ${{ matrix.platform.target }}", build)
+        self.assertIn("v*) package=rdocx-cli; binary=rdocx; version=${GITHUB_REF_NAME#v} ;;", build)
+        self.assertIn("rpptx-v*) package=rpptx-cli; binary=rpptx; version=${GITHUB_REF_NAME#rpptx-v} ;;", build)
+        self.assertIn("cargo build --release --locked", build)
+        self.assertIn('--package "${{ steps.selected.outputs.package }}"', build)
+        self.assertIn('--target "${{ matrix.platform.target }}"', build)
+        self.assertIn('"$binary_path" --version', build)
+        self.assertIn('"$binary_path" --help', build)
+        self.assertIn('"$binary_path" inspect --help', build)
+        self.assertIn('cp "crates/${{ steps.selected.outputs.package }}/README.md" "$stage/README.md"', build)
+        self.assertIn('cp LICENSE "$stage/LICENSE"', build)
+        self.assertIn('tar -C "$stage" -czf "$archive_path" "$binary" README.md LICENSE', build)
+        self.assertIn('7z a -tzip "$archive_path" "${binary}.exe" README.md LICENSE', build)
+        self.assertIn("sudo apt-get install --yes musl-tools", build)
+        self.assertIn('build_args+=(--no-default-features)', build)
+        self.assertIn("if-no-files-found: error", build)
+        self.assertNotIn("continue-on-error", build)
+        self.assert_no_success_short_circuit(self.operative_lines(build))
+        self.assertEqual(publish.count("CARGO_REGISTRY_TOKEN:"), 1)
+        self.assertIn("CARGO_REGISTRY_TOKEN:", publish_job)
+        self.assertNotIn("CARGO_REGISTRY_TOKEN:", build + aggregate + release)
+        self.assertIn("needs: cli-assets", publish_job)
+
+        actions = tuple(
+            match.group(1)
+            for match in re.finditer(
+                r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", publish, re.MULTILINE
+            )
+        )
+        self.assertTrue(actions)
+        self.assertTrue(
+            all(re.search(r"@[0-9a-f]{40}$", action) for action in actions),
+            actions,
+        )
+
+        self.assertIn("needs: build-cli-assets", aggregate)
+        self.assertIn("pattern: cli-asset-*", aggregate)
+        self.assertIn("merge-multiple: true", aggregate)
+        self.assertIn("expected_targets = {", aggregate)
+        self.assertIn('"x86_64-pc-windows-msvc": ".zip"', aggregate)
+        self.assertIn('"aarch64-unknown-linux-gnu": ".tar.gz"', aggregate)
+        self.assertIn('expected_members = {executable, "README.md", "LICENSE"}', aggregate)
+        self.assertIn('checksum_lines.append(f"{digest}  {archive.name}")', aggregate)
+        self.assertIn('write_text("\\n".join(checksum_lines) + "\\n"', aggregate)
+        self.assertIn("sha256sum --check SHA256SUMS", aggregate)
+        self.assertIn("if-no-files-found: error", aggregate)
+        self.assertNotIn("continue-on-error", aggregate)
+        validate = self.yaml_step(aggregate, "Validate archives and write checksums")
+        self.assert_no_success_short_circuit(self.yaml_run_lines(validate))
+
+        self.assertIn("needs: [publish, cli-assets]", release)
+        download = self.yaml_step(release, "Download reviewed CLI assets")
+        create = self.yaml_step(release, "Create GitHub Release from reviewed notes")
+        self.assertIn("cli-release-assets-${{ github.ref_name }}", download)
+        self.assertIn('"${RUNNER_TEMP}/cli-assets/"*', create)
+        self.assertLess(release.index(download), release.index(create))
+        self.assertNotIn("py-rdocx", publish)
+        self.assertNotIn("py-rpptx", publish)
+
+        for crate, tag, binary in (
+            ("rdocx-cli", "v{ version }", "rdocx"),
+            ("rpptx-cli", "rpptx-v{ version }", "rpptx"),
+        ):
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{crate}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            metadata = manifest["package"]["metadata"]["binstall"]
+            self.assertEqual(
+                metadata["pkg-url"],
+                f"{{ repo }}/releases/download/{tag}/{binary}-{{ target }}.tar.gz",
+            )
+            self.assertEqual(metadata["bin-dir"], f"{binary}{{ binary-ext }}")
+            self.assertEqual(metadata["pkg-fmt"], "tgz")
+            self.assertEqual(
+                metadata["disabled-strategies"], ["quick-install", "compile"]
+            )
+            windows = metadata["overrides"]["x86_64-pc-windows-msvc"]
+            self.assertEqual(
+                windows["pkg-url"],
+                f"{{ repo }}/releases/download/{tag}/{binary}-{{ target }}.zip",
+            )
+            self.assertEqual(windows["pkg-fmt"], "zip")
+            self.assertEqual(manifest["features"]["default"], ["system-fonts"])
+            self.assertEqual(
+                manifest["features"]["system-fonts"],
+                [f"{binary}/system-fonts"],
+            )
+
     def assert_release_notes_publish_contract(self, publish: str) -> None:
         publish_job = self.yaml_block(publish, "  publish:")
         prepublish = self.yaml_step(publish_job, "Verify reviewed release notes")
@@ -4505,7 +4618,11 @@ class SprintWorkflowTests(unittest.TestCase):
                 self.yaml_step_identity(step, index)
                 for index, step in enumerate(steps, 1)
             ),
-            ("step:1", "Create GitHub Release from reviewed notes"),
+            (
+                "step:1",
+                "Download reviewed CLI assets",
+                "Create GitHub Release from reviewed notes",
+            ),
         )
         create = self.yaml_step(release, "Create GitHub Release from reviewed notes")
         self.assertEqual(
@@ -4525,7 +4642,8 @@ class SprintWorkflowTests(unittest.TestCase):
             "python3 scripts/sprint_workflow.py release-notes "
             '"${{ github.ref_name }}" --render | cmp - '
             '"$RUNNER_TEMP/release-notes.md"',
-            'gh release create "${{ github.ref_name }}" --notes-file '
+            'gh release create "${{ github.ref_name }}" '
+            '"${RUNNER_TEMP}/cli-assets/"* --notes-file '
             '"$RUNNER_TEMP/release-notes.md"',
         )
         self.assertEqual(self.yaml_run_lines(create), commands)
@@ -7711,7 +7829,8 @@ Pedro Assumpcao and the rdocx maintainers.
             '"$RUNNER_TEMP/release-notes.md"\n'
         )
         release_line = (
-            '          gh release create "${{ github.ref_name }}" --notes-file '
+            '          gh release create "${{ github.ref_name }}" '
+            '"${RUNNER_TEMP}/cli-assets/"* --notes-file '
             '"$RUNNER_TEMP/release-notes.md"\n'
         )
         mutations = {
@@ -8075,6 +8194,34 @@ Pedro Assumpcao and the rdocx maintainers.
             encoding="utf-8"
         )
         self.assert_publish_workflow_contract(publish)
+
+    def test_rust_release_assets_are_complete_family_scoped_and_installable(
+        self,
+    ) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_rust_release_assets_contract(publish)
+
+        mutations = {
+            "missing-target": publish.replace(
+                "          - { label: linux-aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, archive: tar.gz }\n",
+                "",
+                1,
+            ),
+            "wrong-family": publish.replace("package=rpptx-cli", "package=rdocx-cli", 1),
+            "missing-checksums": publish.replace("sha256sum --check SHA256SUMS", "true", 1),
+            "publish-before-assets": publish.replace(
+                "    needs: cli-assets\n", "", 1
+            ),
+            "release-before-assets": publish.replace(
+                "needs: [publish, cli-assets]", "needs: publish", 1
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, publish, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_rust_release_assets_contract(mutated)
 
     def test_publish_workflow_rejects_swapped_namespace_predicates(self) -> None:
         publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(

@@ -2538,6 +2538,18 @@ tag can reach the publication workflow. The same module holds the reviewed
 release-notes parser, command, publication-order, exact-body, and generated
 skill contracts.
 
+The Rust CLI release-preparation contract parses `publish.yml` and both CLI
+manifests. It requires the six exact native runner and target pairs, selected
+family package and binary names, version and help smoke commands, exact archive
+members, executable mode for tar archives, README and licence byte equality,
+the complete sorted SHA-256 manifest, and full commit pins for every external
+action. It also proves the registry token exists only in the crates.io publish
+job. Negative mutations remove a target, swap a family, bypass checksum
+verification, start publication before asset validation, or start release
+creation before publication and assets. Each mutation must fail the contract.
+The hosted matrix remains the execution proof for platforms unavailable to one
+local machine.
+
 Every Poppler-dependent CI job builds the reviewed 26.01.0 command-line oracle
 from the official source archive. `scripts/install_pinned_poppler.py` enforces
 the exact source SHA-256, an 8 MiB download ceiling, streaming extraction with

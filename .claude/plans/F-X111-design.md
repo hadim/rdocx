@@ -1,6 +1,6 @@
 # F-X111, Attach portable CLI binaries to Rust releases
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-X095
@@ -72,12 +72,12 @@ no document output.
 
 ## Implementation checklist
 
-- [ ] Add failing workflow mutation and manifest metadata tests.
-- [ ] Add selected-family six-target native build and smoke jobs.
-- [ ] Package exact archives and aggregate checksums.
-- [ ] Gate release creation on publication and asset completeness.
-- [ ] Add and test cargo-binstall metadata for both CLIs.
-- [ ] Run workflow, archive, dry-run, hash harness, full verification, and microscope gates.
+- [x] Add failing workflow mutation and manifest metadata tests.
+- [x] Add selected-family six-target native build and smoke jobs.
+- [x] Package exact archives and aggregate checksums.
+- [x] Gate release creation on publication and asset completeness.
+- [x] Add and test cargo-binstall metadata for both CLIs.
+- [x] Run workflow, archive, dry-run, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

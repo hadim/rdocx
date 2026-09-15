@@ -5253,11 +5253,14 @@ allocation failure.
 ### F-X111, Attach portable CLI binaries to Rust releases (L)
 
 Build `rdocx` for stable tags and `rpptx` for incubating tags on the six
-reviewed Linux, macOS, and Windows targets. Package one executable per
-target-specific archive, produce a complete SHA-256 checksum manifest, and
-attach only the selected CLI family to the GitHub release after crates.io
-publication succeeds. Add exact `cargo-binstall` metadata that resolves the
-same archives. Python releases remain unchanged and carry no CLI assets.
+reviewed Linux, macOS, and Windows targets. Package one executable, its crate
+README, and the workspace licence per target-specific archive. The aggregate
+job rejects missing, extra, empty, non-executable, or byte-mismatched members
+and produces the complete SHA-256 checksum manifest. Asset validation completes
+before crates.io publication can start, and the GitHub release waits for both.
+Exact `cargo-binstall` metadata resolves the same selected-family archives.
+The static musl binary disables system font discovery while retaining bundled
+fonts. Python releases remain unchanged and carry no CLI assets.
 
 **Depends on**: F-X095.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/100>.

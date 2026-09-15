@@ -14022,3 +14022,49 @@ commit. All 22 archives verified and remained below 10 MiB.
 
 **Notes for future sessions.** Preserve ambiguous settings as raw producer
 XML. Keep absent optional-setting removals allocation-free and byte-identical.
+
+### F-X111, Attach portable CLI binaries to Rust releases
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Rust release tags now build only their selected `rdocx` or
+`rpptx` CLI family on six native Linux, macOS, and Windows targets. Each archive
+contains one executable, the selected crate README, and the workspace licence.
+A separate aggregate job validates the exact inventory and executable mode,
+writes `SHA256SUMS`, and must finish before crates.io publication can begin.
+GitHub release creation waits for publication and the complete asset set.
+
+**Non-obvious choices.** The Linux musl binary disables system font discovery
+through a CLI-local feature while keeping bundled fonts. All other targets keep
+the existing system font default. Registry authentication is scoped only to the
+publish job. Both CLI manifests disable cargo-binstall quick-install and source
+fallbacks so installation resolves the reviewed target archive.
+
+**Deviations from the design plan.** None. Release publication is ordered after
+asset validation as additional protection against an irreversible partial
+release. The local macOS arm64 release binaries passed version, help, inspect,
+archive inventory, executable-mode, and checksum checks. The complete hosted
+matrix remains the tag workflow execution proof.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, CLI binary
+distribution, `docs/hld/12-testing-strategy.md`, release asset mutation tests,
+the F-X111 entry in `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`, archive construction and publication DAG.
+
+**Tests.**
+`rust_release_assets_are_complete_family_scoped_and_installable` first failed
+without the asset job and passes with the implementation. It rejects missing
+targets, wrong family routing, missing checksums, early publication, and early
+release creation. The complete 120-test workflow module, both CLI suites and
+feature graphs, full workspace, WASM, docs, all 22 package dry runs, and
+supply-chain gates pass. The package dry run used `--allow-dirty` because
+`/complete-feature` verifies before creating the story commit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep selected-family assets free of Python
+artifacts and registry credentials. Add any future target to the matrix,
+archive validator, checksum inventory, cargo-binstall contract, and mutation
+gate together.

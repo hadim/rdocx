@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 17 | 0 | 7 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 122 | 107 | 0 | 11 |
-| **Total** | **440** | **350** | **0** | **86** |
+| X, Cross-cutting (opportunistic)            | 122 | 107 | 1 | 10 |
+| **Total** | **440** | **350** | **1** | **85** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -657,6 +657,6 @@ regenerated, never hand-edited.
 | F-X108 | Replace an existing picture atomically | S73 | M | pending |
 | F-X109 | Split text runs at Unicode character offsets | S73 | M | pending |
 | F-X110 | Control field updates on document open | S73 | S | done |
-| F-X111 | Attach portable CLI binaries to Rust releases | S73 | L | pending |
+| F-X111 | Attach portable CLI binaries to Rust releases | S73 | L | in-progress |
 | F-X112 | Publish the complete S73 package families | S73 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

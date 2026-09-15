@@ -323,6 +323,16 @@ command depends only on facade traversal. The package dry run and archive-size
 gate therefore cover the complete command surface without adding runtime
 assets to the CLI crate.
 
+Rust tags build one selected CLI family across six native targets. GNU Linux
+x86-64 and arm64, macOS Intel and arm64, and Windows x86-64 use the CLI default
+system font feature. Linux x86-64 musl builds with that feature disabled so the
+binary is static and uses the bundled font inventory. Tar archives contain an
+executable named `rdocx` or `rpptx`, while the Windows ZIP contains the matching
+`.exe`. Every archive also contains the selected CLI crate README as
+`README.md` and the workspace `LICENSE`. The aggregate job checks that exact
+inventory and the executable mode, byte-compares both prose files with the
+reviewed sources, and writes `SHA256SUMS` over all six archives.
+
 Every bundled font family has its licence under the crate's `fonts/` directory.
 Caladea ships with the full Apache License 2.0 text in `LICENSE-Caladea` and its
 copyright, trademark and designer attribution in `NOTICE-Caladea`. The
@@ -439,6 +449,17 @@ publishes only the 15 candidates above in dependency order. Every real command
 keeps archive verification enabled. Registry waits separate dependency layers,
 and authentication, network, compilation and duplicate-version failures fail
 the job.
+
+CLI asset construction and aggregation have repository content read permission
+and no registry token. The aggregate asset job must pass before the crates.io
+publish job receives `CARGO_REGISTRY_TOKEN` or can begin. GitHub release
+creation then waits for both the completed publish job and the reviewed asset
+artifact, downloads exactly that artifact, and attaches its six selected-family
+archives plus `SHA256SUMS` beside the reviewed notes. Every external action in
+these jobs is bound to a full reviewed commit SHA. The CLI crate manifests map
+cargo-binstall directly to the same stable or incubating tag namespace and
+target archive names. Python tags use their separate wheel workflow and never
+carry these executable assets.
 
 The generated archives remain subject to the crates.io 10 MiB ceiling.
 `oxml-layout` contains all 24 bundled fonts and their required legal files, and
