@@ -1,6 +1,6 @@
 # F-X102, Resolve header and footer pictures in their story scope
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-255
@@ -62,15 +62,16 @@ The **test gate** is the differential test named in the backlog.
 
 ## Hash harness
 
-Expected to be unchanged because existing samples do not render ordinary
-header or footer pictures. Any changed output must be isolated and reviewed.
+The feature-showcase PDF byte, page-stream, and resource fingerprints change
+because its existing 400 by 40 header logo is now rendered on page 11. The
+page-one PNG and every other sample fingerprint remain unchanged.
 
 ## Implementation checklist
 
-- [ ] Add a failing scoped header and footer image regression.
-- [ ] Carry relationship scope through paragraph drawing resolution.
-- [ ] Cover inline, anchor, cache, collision, and diagnostic paths.
-- [ ] Run deterministic PNG and PDF comparison plus full verification and microscope.
+- [x] Add a failing scoped header and footer image regression.
+- [x] Carry relationship scope through paragraph drawing resolution.
+- [x] Cover inline, anchor, cache, collision, and diagnostic paths.
+- [x] Run deterministic PNG and PDF comparison plus full verification and microscope.
 
 ## Open questions
 

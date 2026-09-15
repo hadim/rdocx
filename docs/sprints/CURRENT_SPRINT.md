@@ -50,7 +50,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X098 | Preserve content-control type payloads | M | done | codex |
 | F-X099 | Expose direct body ownership for story items | M | done | codex |
 | F-X100 | Preserve explicit false table toggles | S | done | codex |
-| F-X102 | Resolve header and footer pictures in their story scope | M | pending | - |
+| F-X102 | Resolve header and footer pictures in their story scope | M | done | codex |
 | F-X104 | Render DrawingML picture transparency | M | pending | - |
 | F-X105 | Separate slide-owned placeholders from master header flags | M | pending | - |
 | F-X110 | Control field updates on document open | S | pending | - |

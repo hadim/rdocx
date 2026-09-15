@@ -1502,6 +1502,17 @@ route pins Microsoft Word 16.112.4 build 16.112.26090911 on macOS 26.6.2 build
 25G83 and Poppler 26.09.0. It requires all nine exact page records and removes
 its unique artifact directory on success and unwind.
 
+The related-story picture gate is
+`header_and_footer_pictures_render_from_story_relationships`. It reserves the
+same local image relationship identifier in the main story, a header, and a
+footer, then proves layout returns each owner's exact bytes after save and
+reopen. Companion layout tests cover inline and anchored scoped identifiers,
+collision-safe media identities, and one deterministic diagnostic for a
+missing scoped relationship without body fallback. The sample harness records
+the existing 400 by 40 feature-showcase header logo as a PDF image, while the
+pinned LibreOffice 26.2.5.2 and Poppler checks confirm the same logo dimensions
+and 200 DPI placement in the external render.
+
 The installed Python structure gate is
 `word_structure_snapshots_preserve_order_ownership_and_types`. A source-built
 three-section package includes inherited and independent header and footer

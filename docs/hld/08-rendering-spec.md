@@ -1052,6 +1052,15 @@ retain their part-local images, links, drawings, fields, tables, and supported
 nested content, so layout receives the same relationship-resolved content at
 the geometry of the section that selects it.
 
+Inline and anchored pictures in a selected header or footer resolve only
+through that physical story's relationship scope. The scoped registry shares
+the immutable image map without copying bytes, but exposes only keys prefixed
+by the selected main-part relationship. A missing, external, or wrong-owner
+image relationship produces one stable diagnostic and the empty-media
+sentinel. It never falls back to a body image with an equal local identifier.
+The complete relationship identity and resolved part bytes remain part of the
+header and footer cache key.
+
 Every public document mutation and mutable-accessor entry point clears both
 completed result caches before changing or exposing content. It preserves the
 normal engine so safe paragraph and shaping work can be reused after an edit.

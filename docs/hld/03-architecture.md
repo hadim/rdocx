@@ -1106,6 +1106,13 @@ is controlled separately by the typed document setting. Rich edits continue
 through the container-neutral story operations rather than a second header or
 footer content model.
 
+Word layout retains that physical ownership. The facade loads header and
+footer images under the main-part relationship that selects the story plus the
+story-local image relationship. `MediaRegistry` exposes a scoped view for each
+selected part while sharing one immutable media payload map. An equal local
+relationship identifier in the body, a header, and a footer therefore resolves
+to three independent images.
+
 The Python facade projects sections, styles, stories, story items, effective
 header and footer variants, and hyperlinks into detached frozen records.
 Document accessors return tuples in native source order. Records retain the

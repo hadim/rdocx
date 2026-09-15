@@ -1,10 +1,12 @@
 //! Input types for the layout engine.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use oxml_chart::CT_ChartSpace;
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
+use oxml_layout::Diagnostic;
 pub use oxml_layout::FontFile;
 use oxml_layout::MediaId;
 use rdocx_oxml::core_properties::CoreProperties;
@@ -39,8 +41,9 @@ pub struct ImageData {
 #[derive(Debug, Clone)]
 pub struct MediaRegistry {
     relationship_ids: HashMap<String, MediaId>,
-    media: HashMap<MediaId, ImageData>,
+    media: Arc<HashMap<MediaId, ImageData>>,
     missing_id: MediaId,
+    scope: Option<String>,
 }
 
 impl MediaRegistry {
@@ -55,6 +58,46 @@ impl MediaRegistry {
             .get(relationship_id)
             .copied()
             .unwrap_or(self.missing_id)
+    }
+
+    pub(crate) fn id_for_relationship_with_diagnostic(
+        &self,
+        relationship_id: &str,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> MediaId {
+        let Some(media_id) = self.relationship_ids.get(relationship_id).copied() else {
+            if let Some(scope) = self.scope.as_deref() {
+                let message = format!(
+                    "image relationship {relationship_id} in related story {scope} was not resolved"
+                );
+                if !diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message == message)
+                {
+                    diagnostics.push(Diagnostic { message });
+                }
+            }
+            return self.missing_id;
+        };
+        media_id
+    }
+
+    /// Return a registry that resolves relationships owned by one related
+    /// story while sharing the immutable media payloads.
+    pub(crate) fn scoped_to_part(&self, part_relationship_id: &str) -> Self {
+        let prefix = format!("{part_relationship_id}\0");
+        Self {
+            relationship_ids: self
+                .relationship_ids
+                .iter()
+                .filter_map(|(id, media_id)| {
+                    Some((id.strip_prefix(&prefix)?.to_owned(), *media_id))
+                })
+                .collect(),
+            media: Arc::clone(&self.media),
+            missing_id: self.missing_id,
+            scope: Some(part_relationship_id.to_owned()),
+        }
     }
 
     /// Return the image bytes and content types keyed by resolved media ID.
@@ -100,8 +143,9 @@ impl MediaRegistry {
 
         Self {
             relationship_ids,
-            media,
+            media: Arc::new(media),
             missing_id,
+            scope: None,
         }
     }
 }
@@ -146,4 +190,45 @@ pub struct LayoutInput {
     /// User-provided or DOCX-embedded font files.
     /// These are loaded before system fonts, so they take priority.
     pub fonts: Vec<FontFile>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scoped_media_never_falls_back_and_reports_a_missing_relationship_once() {
+        let images = HashMap::from([
+            (
+                "rId7".to_owned(),
+                ImageData {
+                    data: b"body".to_vec(),
+                    content_type: "image/png".to_owned(),
+                },
+            ),
+            (
+                "ownerHeader\0rId7".to_owned(),
+                ImageData {
+                    data: b"header".to_vec(),
+                    content_type: "image/png".to_owned(),
+                },
+            ),
+        ]);
+        let media = MediaRegistry::new(&images);
+        let header = media.scoped_to_part("ownerHeader");
+        let header_id = header.id_for_relationship("rId7");
+        assert_eq!(header.media()[&header_id].data, b"header");
+
+        let footer = media.scoped_to_part("ownerFooter");
+        let mut diagnostics = Vec::new();
+        let first = footer.id_for_relationship_with_diagnostic("rId7", &mut diagnostics);
+        let second = footer.id_for_relationship_with_diagnostic("rId7", &mut diagnostics);
+        assert_eq!(first, second);
+        assert!(footer.media()[&first].data.is_empty());
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "image relationship rId7 in related story ownerFooter was not resolved"
+        );
+    }
 }

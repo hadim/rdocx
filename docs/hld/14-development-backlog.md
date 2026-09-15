@@ -5060,6 +5060,12 @@ relationship identifiers may collide without sharing media. Missing or
 external story relationships produce one stable diagnostic and never fall
 back to a document-level image with the same identifier.
 
+The layout input keys related images by selecting main-part relationship and
+story-local relationship. Each header or footer lowers its paragraphs through
+a scoped `MediaRegistry` view that shares the immutable media payload map.
+Footer loading follows the same internal-target rules as header loading, and
+ordinary drawing diagnostics are deduplicated by scoped relationship.
+
 **Depends on**: F-255.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/89>.
 **Test gate**: differential.
@@ -5067,6 +5073,8 @@ back to a document-level image with the same identifier.
 header, and footer pictures with colliding local relationship identifiers,
 then compares deterministic PNG and PDF output with the pinned LibreOffice
 render and verifies the expected image objects and alternate text.
+The deterministic sample baseline changes only for the feature-showcase PDF.
+The existing 400 by 40 header logo is now present on page 11.
 
 ### F-X103, Accept standard TOC switches and report rebuild diagnostics (M)
 

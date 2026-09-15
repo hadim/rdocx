@@ -175,6 +175,101 @@ fn f252_page_text(page: &oxml_layout::PageFrame) -> String {
 }
 
 #[test]
+fn header_and_footer_pictures_render_from_story_relationships() {
+    let marker_png = |marker: &str| {
+        let mut image = Document::new();
+        image.add_paragraph(marker);
+        image
+            .render_page_to_png_deterministic(0, 24.0)
+            .unwrap()
+            .unwrap()
+    };
+    let body_image = marker_png("body image");
+    let header_image = marker_png("header image");
+    let footer_image = marker_png("footer image");
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        f255_story_document().to_bytes().unwrap(),
+    ))
+    .unwrap();
+    for part in ["/word/stories/header.xml", "/word/stories/footer.xml"] {
+        package
+            .get_or_create_part_rels(part)
+            .items
+            .push(oxml_opc::relationship::Relationship {
+                id: "rId0".to_owned(),
+                rel_type: oxml_opc::relationship::rel_types::HYPERLINK.to_owned(),
+                target: "https://example.invalid/reserved".to_owned(),
+                target_mode: Some("External".to_owned()),
+            });
+    }
+    let mut serialized = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut serialized).unwrap();
+    let mut document = Document::from_bytes(&serialized.into_inner()).unwrap();
+    for (kind, bytes, name) in [
+        (StoryKind::Body, body_image.as_slice(), "body.png"),
+        (StoryKind::Header, header_image.as_slice(), "header.png"),
+        (StoryKind::Footer, footer_image.as_slice(), "footer.png"),
+    ] {
+        let story = f254_story(&document, kind);
+        document
+            .add_picture_to_story(&story, bytes, name, Length::pt(20.0), Length::pt(20.0))
+            .unwrap();
+    }
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let body_ids = f255_relationship_ids(
+        &package,
+        "/word/document.xml",
+        oxml_opc::relationship::rel_types::IMAGE,
+    );
+    let header_ids = f255_relationship_ids(
+        &package,
+        "/word/stories/header.xml",
+        oxml_opc::relationship::rel_types::IMAGE,
+    );
+    let footer_ids = f255_relationship_ids(
+        &package,
+        "/word/stories/footer.xml",
+        oxml_opc::relationship::rel_types::IMAGE,
+    );
+    assert_eq!(body_ids, header_ids);
+    assert_eq!(header_ids, footer_ids);
+
+    let document = Document::from_bytes(&bytes).unwrap();
+
+    let page = document
+        .layout_page(0)
+        .unwrap()
+        .expect("story document produces a page");
+    let mut images = Vec::new();
+    oxml_layout::walk(&page.elements, &mut |element, _| {
+        if let oxml_layout::PositionedElement::Image { data, .. } = element {
+            images.push(data.clone());
+        }
+    });
+    images.sort();
+    let mut expected = vec![body_image, header_image, footer_image];
+    expected.sort();
+    assert_eq!(images, expected);
+
+    let pdf = document.to_pdf_deterministic().unwrap();
+    assert!(pdf.starts_with(b"%PDF-"));
+    assert_eq!(pdf, document.to_pdf_deterministic().unwrap());
+    let png = document
+        .render_page_to_png_deterministic(0, 96.0)
+        .unwrap()
+        .unwrap();
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(
+        png,
+        document
+            .render_page_to_png_deterministic(0, 96.0)
+            .unwrap()
+            .unwrap()
+    );
+}
+
+#[test]
 fn section_header_footer_variants_match_word_width_and_inheritance() {
     assert_eq!(
         WORD_F252_ORACLE,

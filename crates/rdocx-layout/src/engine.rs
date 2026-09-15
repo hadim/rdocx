@@ -5973,7 +5973,10 @@ fn layout_paragraph_with_source_and_table(
                             InlineItem::Image {
                                 width,
                                 height,
-                                media_id: media.id_for_relationship(&inline.embed_id),
+                                media_id: media.id_for_relationship_with_diagnostic(
+                                    &inline.embed_id,
+                                    diagnostics,
+                                ),
                             }
                         };
                         if let Some(alternate_text) = inline
@@ -6924,7 +6927,8 @@ fn collect_anchored_drawings(
                     }
                     None if anchor.embed_id.is_empty() => continue,
                     None => block::AnchoredContent::Image {
-                        media_id: media.id_for_relationship(&anchor.embed_id),
+                        media_id: media
+                            .id_for_relationship_with_diagnostic(&anchor.embed_id, diagnostics),
                     },
                 }
             };
@@ -7500,6 +7504,7 @@ fn layout_header_footer_variant_uncached(
             relationship_id: relationship_id.to_owned(),
         },
     };
+    let part_media = media.scoped_to_part(relationship_id);
     let mut blocks = Vec::with_capacity(part.paragraphs.len());
     let mut directions = Vec::with_capacity(part.paragraphs.len());
     for (paragraph_index, paragraph) in part.paragraphs.iter().enumerate() {
@@ -7513,7 +7518,7 @@ fn layout_header_footer_variant_uncached(
             width,
             styles,
             input,
-            media,
+            &part_media,
             fm,
             num_state,
             diagnostics,
@@ -15527,17 +15532,17 @@ mod tests {
     }
 
     #[test]
-    fn colliding_media_ids_keep_inline_and_anchored_image_bytes_distinct() {
+    fn story_scoped_media_keeps_inline_and_anchored_image_bytes_distinct() {
         let mut input = make_input_with_text("");
         input.images.insert(
-            "rIdInline".to_string(),
+            "rIdStory\0rIdInline".to_string(),
             ImageData {
                 data: vec![1, 2, 3],
                 content_type: "image/png".to_string(),
             },
         );
         input.images.insert(
-            "rIdAnchor".to_string(),
+            "rIdStory\0rIdAnchor".to_string(),
             ImageData {
                 data: vec![4, 5, 6],
                 content_type: "image/jpeg".to_string(),
@@ -15545,8 +15550,9 @@ mod tests {
         );
 
         let media = MediaRegistry::with_hasher(&input.images, |_| MediaId(7));
-        let inline_id = media.id_for_relationship("rIdInline");
-        let anchor_id = media.id_for_relationship("rIdAnchor");
+        let part_media = media.scoped_to_part("rIdStory");
+        let inline_id = part_media.id_for_relationship("rIdInline");
+        let anchor_id = part_media.id_for_relationship("rIdAnchor");
         assert_ne!(inline_id, anchor_id);
 
         let line = oxml_layout::LayoutLine {

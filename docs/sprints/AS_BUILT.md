@@ -13820,3 +13820,47 @@ tests also pass.
 **Notes for future sessions.** Do not model an OOXML on-off element by presence
 alone. Explicit false and inherited absence are distinct states required by
 later authoring setters.
+
+### F-X102, Resolve header and footer pictures in their story scope
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Word layout now resolves inline and anchored pictures
+against the physical body, header, or footer relationship scope that owns the
+drawing. Footer images join header images in the prepared layout media, and a
+missing scoped target produces one stable diagnostic without falling back to a
+same-named body relationship.
+
+**Non-obvious choices.** Scoped registries share one immutable media map and
+carry only the owning story relationship identifier. Media identity continues
+to depend on bytes rather than relationship names, so caches retain the
+existing deduplication boundary while relationship collisions remain isolated.
+
+**Deviations from the design plan.** The focused oracle comparison used exact
+image dimensions and DPI rather than a whole-page pixel tolerance because
+LibreOffice paginated the feature showcase to 12 pages while native layout used
+11. Both outputs contain the same 400 by 40 header image at 200 DPI. Contributor
+PR 102 supplied the core scoped lookup and footer-loading implementation, which
+was hardened with shared storage, anchored-picture coverage, and deduplicated
+diagnostics.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the physical story
+ownership boundary, `docs/hld/08-rendering-spec.md`, header and footer drawing
+resolution, `docs/hld/12-testing-strategy.md`, story-scoped render coverage,
+and the F-X102 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `header_and_footer_pictures_render_from_story_relationships` is the
+story gate. Scoped inline and anchored collision tests, the complete workspace
+suite, deterministic LibreOffice comparison, and every regular verification
+gate also pass.
+
+**Hash harness.** The feature-showcase PDF byte, page-stream, and resource
+fingerprints changed because its existing header logo now renders on page 11.
+The page-one PNG and all other fingerprints are unchanged, 49 of 49 match.
+
+**Notes for future sessions.** Resolve a related-story drawing with both its
+story relationship identifier and its local image relationship identifier.
+Never insert a duplicate unscoped key for convenience because local identifiers
+may collide across physical parts.
