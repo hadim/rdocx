@@ -385,8 +385,18 @@ preserved direct child. `Document::insert_content`, `remove_content_at`,
 or the explicit end boundary. The end boundary is after final direct content
 and before body section properties. Moves stay within one story owner. Clones
 freshen document identities, and relationship-bearing fragments require their
-unchanged owner scope. These are additive pre-1.0 native Rust APIs. Python,
-WASM, and CLI gain no corresponding binding surface.
+unchanged owner scope. The Python `Document` binds direct-body
+`insert_paragraph`, `pop_content`, `insert_content`, `clone_content`,
+`move_content`, and handle-based `find_content_index`. Paragraph and Table
+sources must be live direct children of the same Python document. Coordinates
+are zero-based insertion boundaries, and a popped `ContentFragment` exposes
+only its typed kind and remains reusable because insertion clones the native
+value. `try_replace_text` and `replace_all_regex` return exact native counts.
+Successful structural mutations stale handles once, successful replacements
+stale them only when their count is nonzero, and every rejected operation
+leaves package bytes and handle revisions unchanged. The native and Python
+changes are additive pre-1.0 surfaces scheduled for `rdocx` 0.14.0. WASM and
+CLI gain no corresponding surface.
 
 Native Rust also exposes owned `DocumentFragment` and non-exhaustive
 `FragmentConflictPolicy` values. `DocumentFragment::from_range` captures a

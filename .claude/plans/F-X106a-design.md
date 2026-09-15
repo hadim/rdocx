@@ -1,6 +1,6 @@
 # F-X106a, Expose indexed content mutation and counted replacement in Python
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-254, F-X099
@@ -67,11 +67,11 @@ mutation APIs.
 
 ## Implementation checklist
 
-- [ ] Add failing runtime and typing tests for every requested method.
-- [ ] Bind opaque fragment pop and insert plus indexed paragraph insert, clone, move, and lookup.
-- [ ] Bind counted literal and regex replacement.
-- [ ] Prove exact revision bump and failure atomicity.
-- [ ] Run binding, WASM, hash harness, full verification, and microscope gates.
+- [x] Add failing runtime and typing tests for every requested method.
+- [x] Bind opaque fragment pop and insert plus indexed paragraph insert, clone, move, and lookup.
+- [x] Bind counted literal and regex replacement.
+- [x] Prove exact revision bump and failure atomicity.
+- [x] Run binding, WASM, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

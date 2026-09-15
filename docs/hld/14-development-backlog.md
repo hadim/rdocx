@@ -5137,12 +5137,16 @@ and raster visibility match LibreOffice 26.2.5.2 through Poppler 26.01.0.
 Expose native direct-body paragraph insertion, content cloning and movement,
 content-index lookup, counted run-aware literal replacement, and counted regex
 replacement through the existing Python `Document` and content handles.
-Inputs use existing body coordinates and typed handles. Each successful
-structural mutation advances the binding revision exactly once, while a failed
-preflight leaves the document and all handles unchanged.
+Inputs use existing body coordinates and live Paragraph or Table handles.
+Popping returns an opaque reusable `ContentFragment` whose typed kind is its
+only exposed content. Each successful structural mutation advances the binding
+revision exactly once. Counted replacements advance it only for a nonzero
+count, while a failed preflight leaves the document and all handles unchanged.
 
 **Depends on**: F-254, F-X099.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/94>.
+**GitHub pull requests**: <https://github.com/tensorbee/rdocx/pull/109>,
+<https://github.com/tensorbee/rdocx/pull/111>.
 **Test gate**: binding.
 `python_indexed_content_mutation_is_counted_and_atomic` inserts, clones, moves,
 locates, and replaces content split across runs, then verifies exact counts,

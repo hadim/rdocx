@@ -83,6 +83,10 @@ impl PyParagraph {
             .map_err(|error| stale_to_pyerr(py, error))?;
         Ok(location)
     }
+
+    pub(crate) fn belongs_to(&self, py: Python<'_>, document: &Py<PyDocument>) -> bool {
+        self.document.bind(py).is(document.bind(py))
+    }
 }
 
 #[pymethods]

@@ -1127,6 +1127,15 @@ Document accessors return tuples in native source order. Records retain the
 physical story owner, item index path, inheritance source, and relationship
 identifier without exposing raw XML or adding a second binding-side tree.
 
+The Python document facade also exposes direct-body structural editing through
+live Paragraph and Table handles. Native identity mapping converts their lazy
+paragraph or table ordinal to the interleaved body coordinate and rejects a
+nested, stale, or foreign handle. Popping returns one opaque owned
+`ContentFragment`, and insertion clones that value without exposing its XML.
+Insert, pop, clone, and move publish their native staged result before advancing
+the binding revision once. Counted literal and regular-expression replacement
+advance the revision only when the native operation reports a nonzero count.
+
 `rdocx-oxml` authors only `w:pgNumType/@w:start` for M23. Number format,
 chapter style, chapter separator, and every other unsupported attribute or
 child remain in the retained source for M24. Section serialization replays raw

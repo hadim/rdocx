@@ -203,6 +203,106 @@ def test_failed_removal_does_not_stale_live_handles():
     assert held.text == "live"
 
 
+def test_python_indexed_content_mutation_is_counted_and_atomic():
+    import rdocx
+
+    document = rdocx.Document()
+    first = document.add_paragraph("alpha {{TOKEN")
+    first.add_run("}}")
+    document.add_table(1, 1)
+    document.add_paragraph("omega")
+
+    first = document.paragraphs[0]
+    table = document.tables[0]
+    assert document.find_content_index(first) == 0
+    assert document.find_content_index(table) == 1
+
+    held = document.paragraphs[0]
+    inserted = document.insert_paragraph(1, "middle")
+    assert inserted.text == "middle"
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+
+    fragment = document.pop_content(document.find_content_index(inserted))
+    assert fragment.kind == "paragraph"
+    with pytest.raises(rdocx.StaleElementError):
+        _ = inserted.text
+
+    document.insert_content(2, fragment)
+    middle = document.paragraphs[1]
+    document.clone_content(middle, 0)
+    with pytest.raises(rdocx.StaleElementError):
+        _ = middle.text
+
+    table = document.tables[0]
+    document.move_content(table, 5)
+    with pytest.raises(rdocx.StaleElementError):
+        _ = table.style
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [paragraph.text for paragraph in reopened.paragraphs] == [
+        "middle",
+        "alpha {{TOKEN}}",
+        "middle",
+        "omega",
+    ]
+    assert reopened.find_content_index(reopened.tables[0]) == 4
+
+    held = reopened.paragraphs[1]
+    assert reopened.try_replace_text("{{TOKEN}}", "done") == 1
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+
+    held = reopened.paragraphs[1]
+    before = reopened.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        reopened.replace_all_regex([(r"[", "broken")])
+    assert reopened.to_bytes() == before
+    assert held.text == "alpha done"
+
+    assert reopened.replace_all_regex([(r"middle", "center")]) == 2
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+    held = reopened.paragraphs[1]
+    assert reopened.try_replace_text("not present", "ignored") == 0
+    assert held.text == "alpha done"
+
+    before = reopened.to_bytes()
+    held = reopened.paragraphs[0]
+    with pytest.raises(IndexError):
+        reopened.pop_content(99)
+    with pytest.raises(IndexError):
+        reopened.move_content(reopened.tables[0], 99)
+    foreign_document = rdocx.Document()
+    foreign = foreign_document.add_paragraph("foreign")
+    with pytest.raises(ValueError, match="different document"):
+        reopened.clone_content(foreign, 0)
+    assert reopened.to_bytes() == before
+    assert held.text == "center"
+
+    fragment_document = rdocx.Document()
+    fragment_document.add_paragraph("reusable")
+    reusable = fragment_document.pop_content(0)
+    assert reusable.kind == "paragraph"
+    with pytest.raises(TypeError):
+        rdocx.ContentFragment()
+    fragment_document.insert_content(0, reusable)
+    fragment_document.insert_content(1, reusable)
+    assert [paragraph.text for paragraph in fragment_document.paragraphs] == [
+        "reusable",
+        "reusable",
+    ]
+
+    nested = _replace_document_body(
+        rdocx.Document(),
+        "<w:sdt><w:sdtContent><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+    )
+    nested_paragraph = nested.paragraphs[0]
+    with pytest.raises(ValueError, match="not a direct body child"):
+        nested.find_content_index(nested_paragraph)
+    assert nested_paragraph.text == "nested"
+
+
 def test_core_text_mutations_survive_bytes_round_trip():
     import rdocx
 

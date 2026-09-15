@@ -8,6 +8,7 @@ from rdocx import (
     CellParagraphCollection,
     Comment,
     ComparisonDiagnostic,
+    ContentFragment,
     Document,
     Font,
     HeaderFooterVariant,
@@ -89,6 +90,15 @@ def exercise_rdocx_types(path: Path) -> None:
     update_fields_on_open: bool | None = document.update_fields_on_open
     document.update_fields_on_open = True
     document.update_fields_on_open = None
+    content_index: int = document.find_content_index(first)
+    inserted: Paragraph = document.insert_paragraph(content_index, "inserted")
+    fragment: ContentFragment = document.pop_content(content_index)
+    fragment_kind: str = fragment.kind
+    document.insert_content(content_index, fragment)
+    document.clone_content(inserted, content_index)
+    document.move_content(table, content_index)
+    replacement_count: int = document.try_replace_text("old", "new")
+    regex_count: int = document.replace_all_regex([("old", "new")])
     if fragments:
         bounds: BoundingBox = fragments[0].bounds
         assert_type(bounds.width, float)
@@ -102,7 +112,18 @@ def exercise_rdocx_types(path: Path) -> None:
     assert_type(report.entry_count, int)
     assert_type(report.diagnostics, tuple[str, ...])
     assert_type(report.diagnostic_count, int)
-    package_bytes, pdf_bytes, pages, maybe_page, sliced, channels, update_fields_on_open
+    (
+        package_bytes,
+        pdf_bytes,
+        pages,
+        maybe_page,
+        sliced,
+        channels,
+        update_fields_on_open,
+        replacement_count,
+        regex_count,
+        fragment_kind,
+    )
 
 
 if TYPE_CHECKING:

@@ -12443,6 +12443,43 @@ impl Document {
         self.document.body.find_paragraph_index(text)
     }
 
+    /// Return the paragraph index of the direct body child at `content_index`.
+    ///
+    /// The result addresses that paragraph through [`Self::paragraph`] and
+    /// [`Self::paragraph_mut`], whose index also counts paragraphs inside block
+    /// content controls. Returns `None` when the index is out of bounds or the
+    /// direct child is not a paragraph.
+    pub fn paragraph_index_of_content(&self, content_index: usize) -> Option<usize> {
+        let BodyContent::Paragraph(target) = self.document.body.content.get(content_index)? else {
+            return None;
+        };
+        self.document
+            .body
+            .paragraphs()
+            .position(|paragraph| std::ptr::eq(paragraph, target))
+    }
+
+    /// Return the direct body index of the paragraph addressed by `paragraph_index`.
+    ///
+    /// A paragraph nested in a block content control is not a direct body child
+    /// and therefore returns `None`.
+    pub fn content_index_of_paragraph(&self, paragraph_index: usize) -> Option<usize> {
+        let target = self.paragraph(paragraph_index)?.inner;
+        self.document
+            .body
+            .content
+            .iter()
+            .position(|content| matches!(content, BodyContent::Paragraph(paragraph) if std::ptr::eq(paragraph, target)))
+    }
+
+    /// Return the direct body index of the table addressed by `table_index`.
+    pub fn content_index_of_table(&self, table_index: usize) -> Option<usize> {
+        let target = self.table(table_index)?.inner;
+        self.document.body.content.iter().position(
+            |content| matches!(content, BodyContent::Table(table) if std::ptr::eq(table, target)),
+        )
+    }
+
     /// Remove the content at the given body index.
     ///
     /// Returns `true` if an element was removed, `false` if the index was out of bounds.

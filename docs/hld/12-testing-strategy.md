@@ -1545,6 +1545,19 @@ The native companion
 identifier to distinct body and header targets and checks the same interleaved
 source order. All 49 hash entries remain unchanged.
 
+The indexed Python content gate is
+`python_indexed_content_mutation_is_counted_and_atomic`. It maps live direct
+Paragraph and Table handles across interleaved content, inserts a paragraph,
+pops and reuses an opaque fragment, clones and moves content, then reopens the
+package in final source order. Nested, stale, foreign, and out-of-range inputs
+must fail without changing bytes or invalidating a live handle. Literal and
+regular-expression replacements return exact cross-run counts, a zero count
+keeps handles live, and invalid syntax is atomic. A native companion covers
+paragraph ordinals that include nested block-control paragraphs. The complete
+45-test installed cp39-abi3 wheel suite, strict mypy, stubtest, both WASM
+checks, the workspace gate, and the unchanged 49-entry hash set complete the
+binding proof.
+
 Table-property round-trip coverage opens `0`, `false`, and `off` for
 `w:tblHeader`, `w:cantSplit`, and `w:noWrap`, then saves and reopens the table.
 Existing bare-element and absent-property cases retain true and inherited

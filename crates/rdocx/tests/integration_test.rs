@@ -9574,6 +9574,50 @@ fn empty_document_insert_and_remove() {
     assert_eq!(doc.content_count(), 0);
 }
 
+#[test]
+fn direct_content_indices_map_across_block_content_control_paragraphs() {
+    let mut seed = Document::new();
+    seed.add_paragraph("first");
+    seed.add_paragraph("last");
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+        .expect("open seed package");
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let body = body.replacen(
+        "<w:body>",
+        "<w:body><w:sdt><w:sdtContent><w:p><w:r><w:t>control one</w:t></w:r></w:p><w:p><w:r><w:t>control two</w:t></w:r></w:p></w:sdtContent></w:sdt><w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+        1,
+    );
+    package.set_part("/word/document.xml", body.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+
+    assert_eq!(document.content_count(), 4);
+    assert_eq!(document.paragraph_index_of_content(0), None);
+    assert_eq!(document.paragraph_index_of_content(1), None);
+    assert_eq!(document.paragraph_index_of_content(2), Some(2));
+    assert_eq!(document.content_index_of_paragraph(0), None);
+    assert_eq!(document.content_index_of_paragraph(1), None);
+    assert_eq!(document.content_index_of_paragraph(2), Some(2));
+    assert_eq!(document.content_index_of_table(0), Some(1));
+
+    document.insert_paragraph(3, "middle");
+    let paragraph_index = document.paragraph_index_of_content(3).unwrap();
+    assert_eq!(paragraph_index, 3);
+    assert_eq!(
+        document.content_index_of_paragraph(paragraph_index),
+        Some(3)
+    );
+    document
+        .paragraph_mut(paragraph_index)
+        .unwrap()
+        .add_run("!");
+    assert_eq!(
+        document.paragraph(paragraph_index).unwrap().text(),
+        "middle!"
+    );
+}
+
 // ---- PDF rendering tests ----
 
 #[test]

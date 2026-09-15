@@ -14068,3 +14068,45 @@ supply-chain gates pass. The package dry run used `--allow-dirty` because
 artifacts and registry credentials. Add any future target to the matrix,
 archive validator, checksum inventory, cargo-binstall contract, and mutation
 gate together.
+
+### F-X106a, Expose indexed content mutation and counted replacement in Python
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Python `Document` now maps live direct-body Paragraph and
+Table handles to interleaved content indices, inserts paragraphs, pops opaque
+owned fragments, reinserts reusable fragments, and clones or moves existing
+content. Counted literal and regular-expression replacements expose their exact
+native results. Successful structural mutations stale handles once, while
+zero-count and rejected operations leave live handles and package bytes intact.
+
+**Non-obvious choices.** Contributor PR 111 supplied the insertion, fragment,
+clone, move, native mapping, and binding tests. Its stacked Story snapshot API
+was reconciled to the approved direct-handle contract with same-document and
+direct-child checks. The counted replacement slice of contributor PR 109 was
+integrated without pulling its revision and field work ahead of F-X106c.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, staged Python
+mutation ownership, `docs/hld/10-bindings-spec.md`, direct-handle APIs and
+revision rules, `docs/hld/12-testing-strategy.md`, installed wheel and
+atomicity coverage, and the F-X106a entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_indexed_content_mutation_is_counted_and_atomic` first failed
+because the binding had no indexed lookup and passes against the implementation.
+The native nested-control mapping test, all 45 installed wheel tests, strict
+mypy, stubtest, both WASM checks, the full workspace, docs, all package dry
+runs, archive ceilings, and supply-chain gates pass. The cp39-abi3 wheel was
+archive-validated and imported from an isolated Python 3.12 site-packages
+environment.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep direct body coordinates distinct from
+recursive story paths. Resolve and validate every handle before borrowing the
+document mutably, and bump the shared revision only after the native operation
+publishes successfully.

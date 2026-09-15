@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter};
+use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
@@ -313,6 +314,19 @@ impl PyStoryItem {
     }
 }
 
+#[pyclass(name = "ContentFragment", frozen, skip_from_py_object)]
+pub struct PyContentFragment {
+    inner: rdocx::ContentFragment,
+}
+
+#[pymethods]
+impl PyContentFragment {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        story_item_kind_name(self.inner.kind())
+    }
+}
+
 #[pyclass(name = "Hyperlink", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyHyperlink {
@@ -613,6 +627,111 @@ impl PyDocument {
             inner,
             revisions: RevisionCounter::new(),
         }
+    }
+
+    fn body_story(&self, py: Python<'_>) -> PyResult<rdocx::StoryId> {
+        self.inner
+            .stories()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .find(|story| story.kind() == rdocx::StoryKind::Body)
+            .ok_or_else(|| {
+                rdocx_to_pyerr(
+                    py,
+                    rdocx::Error::Other("document body story is missing".to_owned()),
+                )
+            })
+    }
+
+    fn body_location(&self, py: Python<'_>, index: usize) -> PyResult<rdocx::ContentLocation> {
+        let content_count = self.inner.content_count();
+        if index > content_count {
+            return Err(PyIndexError::new_err("content index out of range"));
+        }
+        let story = self.body_story(py)?;
+        if index == content_count {
+            return Ok(rdocx::ContentLocation::end(story));
+        }
+        for item in self
+            .inner
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+        {
+            let direct_body_index = item
+                .direct_body_index()
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            if direct_body_index == Some(index) && item.location().index_path().len() == 1 {
+                return Ok(item.location().clone());
+            }
+        }
+        Err(rdocx_to_pyerr(
+            py,
+            rdocx::Error::Other(format!(
+                "direct body content at index {index} has no checked location"
+            )),
+        ))
+    }
+
+    fn direct_content_index(
+        slf: &Py<Self>,
+        py: Python<'_>,
+        content: &Bound<'_, PyAny>,
+    ) -> PyResult<usize> {
+        if let Ok(paragraph) = content.cast::<PyParagraph>() {
+            let paragraph = paragraph.borrow();
+            if !paragraph.belongs_to(py, slf) {
+                return Err(PyValueError::new_err(
+                    "content handle belongs to a different document",
+                ));
+            }
+            let paragraph_index = match paragraph.validate(py)? {
+                crate::paragraph::ParagraphLocation::Body(index) => index,
+                crate::paragraph::ParagraphLocation::Cell { .. } => {
+                    return Err(PyValueError::new_err(
+                        "content handle is not a direct body child",
+                    ));
+                }
+            };
+            return slf
+                .borrow(py)
+                .inner
+                .content_index_of_paragraph(paragraph_index)
+                .ok_or_else(|| PyValueError::new_err("content handle is not a direct body child"));
+        }
+        if let Ok(table) = content.cast::<PyTable>() {
+            let table = table.borrow();
+            if !table.belongs_to(py, slf) {
+                return Err(PyValueError::new_err(
+                    "content handle belongs to a different document",
+                ));
+            }
+            let table_index = table.validate(py)?;
+            return slf
+                .borrow(py)
+                .inner
+                .content_index_of_table(table_index)
+                .ok_or_else(|| PyValueError::new_err("content handle is not a direct body child"));
+        }
+        Err(PyTypeError::new_err(
+            "content must be a Paragraph or Table handle",
+        ))
+    }
+
+    /// Run a native mutation that reports how many things it changed.
+    ///
+    /// The GIL is released while it runs, and live handles are staled only
+    /// when the count is nonzero.
+    fn counted_mutation<F>(&mut self, py: Python<'_>, mutation: F) -> PyResult<usize>
+    where
+        F: FnOnce(&mut rdocx::Document) -> rdocx::Result<usize> + Send,
+    {
+        let count = py
+            .detach(|| mutation(&mut self.inner))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if count > 0 {
+            self.revisions.bump();
+        }
+        Ok(count)
     }
 }
 
@@ -1092,6 +1211,25 @@ impl PyDocument {
         })
     }
 
+    fn try_replace_text(
+        &mut self,
+        py: Python<'_>,
+        placeholder: &str,
+        replacement: &str,
+    ) -> PyResult<usize> {
+        self.counted_mutation(py, |document| {
+            document.try_replace_text(placeholder, replacement)
+        })
+    }
+
+    fn replace_all_regex(
+        &mut self,
+        py: Python<'_>,
+        patterns: Vec<(String, String)>,
+    ) -> PyResult<usize> {
+        self.counted_mutation(py, |document| document.replace_all_regex(&patterns))
+    }
+
     #[getter]
     fn paragraphs(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyParagraphCollection>> {
         Py::new(py, PyParagraphCollection::new(slf))
@@ -1137,6 +1275,112 @@ impl PyDocument {
             self.revisions.bump();
         }
         removed
+    }
+
+    fn find_content_index(
+        slf: Py<Self>,
+        py: Python<'_>,
+        content: &Bound<'_, PyAny>,
+    ) -> PyResult<usize> {
+        Self::direct_content_index(&slf, py, content)
+    }
+
+    fn insert_paragraph(
+        slf: Py<Self>,
+        py: Python<'_>,
+        index: usize,
+        text: &str,
+    ) -> PyResult<Py<PyParagraph>> {
+        let path = {
+            let mut document = slf.borrow_mut(py);
+            if index > document.inner.content_count() {
+                return Err(PyIndexError::new_err("content index out of range"));
+            }
+            document.inner.insert_paragraph(index, text);
+            let paragraph = document
+                .inner
+                .paragraph_index_of_content(index)
+                .expect("an inserted body paragraph has a paragraph index");
+            document.revisions.bump();
+            document
+                .revisions
+                .capture(smallvec![PathSeg::Body(0), PathSeg::Para(paragraph)])
+        };
+        Py::new(py, PyParagraph::new(slf, path))
+    }
+
+    fn pop_content(slf: Py<Self>, py: Python<'_>, index: usize) -> PyResult<PyContentFragment> {
+        let location = slf.borrow(py).body_location(py, index)?;
+        if index == slf.borrow(py).inner.content_count() {
+            return Err(PyIndexError::new_err("content index out of range"));
+        }
+        let fragment = slf
+            .borrow_mut(py)
+            .inner
+            .remove_content_at(&location)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        slf.borrow_mut(py).revisions.bump();
+        Ok(PyContentFragment { inner: fragment })
+    }
+
+    fn insert_content(
+        slf: Py<Self>,
+        py: Python<'_>,
+        destination: usize,
+        fragment: PyRef<'_, PyContentFragment>,
+    ) -> PyResult<()> {
+        let location = slf.borrow(py).body_location(py, destination)?;
+        let fragment = fragment.inner.clone();
+        slf.borrow_mut(py)
+            .inner
+            .insert_content(&location, fragment)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        slf.borrow_mut(py).revisions.bump();
+        Ok(())
+    }
+
+    fn clone_content(
+        slf: Py<Self>,
+        py: Python<'_>,
+        source: &Bound<'_, PyAny>,
+        destination: usize,
+    ) -> PyResult<()> {
+        let source_index = Self::direct_content_index(&slf, py, source)?;
+        let (source, destination) = {
+            let document = slf.borrow(py);
+            (
+                document.body_location(py, source_index)?,
+                document.body_location(py, destination)?,
+            )
+        };
+        slf.borrow_mut(py)
+            .inner
+            .clone_content(&source, &destination)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        slf.borrow_mut(py).revisions.bump();
+        Ok(())
+    }
+
+    fn move_content(
+        slf: Py<Self>,
+        py: Python<'_>,
+        source: &Bound<'_, PyAny>,
+        destination: usize,
+    ) -> PyResult<()> {
+        let source_index = Self::direct_content_index(&slf, py, source)?;
+        let (source, destination) = {
+            let document = slf.borrow(py);
+            (
+                document.body_location(py, source_index)?,
+                document.body_location(py, destination)?,
+            )
+        };
+        slf.borrow_mut(py)
+            .inner
+            .move_content(&source, &destination)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        slf.borrow_mut(py).revisions.bump();
+        Ok(())
     }
 }
 

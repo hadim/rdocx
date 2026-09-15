@@ -182,7 +182,7 @@ impl PyTable {
         Self { document, path }
     }
 
-    fn validate(&self, py: Python<'_>) -> PyResult<usize> {
+    pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<usize> {
         let document = self.document.borrow(py);
         self.path
             .validate_revision(
@@ -192,6 +192,10 @@ impl PyTable {
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
         table_index(&self.path)
+    }
+
+    pub(crate) fn belongs_to(&self, py: Python<'_>, document: &Py<PyDocument>) -> bool {
+        self.document.bind(py).is(document.bind(py))
     }
 }
 
