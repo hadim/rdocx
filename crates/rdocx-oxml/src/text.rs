@@ -108,6 +108,7 @@ impl Field {
         raw_xml: Vec<u8>,
         word_prefixes: Vec<String>,
     ) -> Self {
+        let source_id = NEXT_FIELD_SOURCE_ID.fetch_add(1, Ordering::Relaxed);
         let original_instruction = instruction.clone();
         let original_cached_result = cached_result.clone();
         let (legacy_form, legacy_form_parse_error) = match parse_legacy_form_data(
@@ -127,7 +128,8 @@ impl Field {
             legacy_form_parse_error,
             nested_order: Vec::new(),
             source: FieldSource::Parsed {
-                source_id: NEXT_FIELD_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
+                source_id,
+                owner_id: source_id,
                 form,
                 raw_xml,
                 original_instruction,
@@ -390,6 +392,15 @@ impl Field {
         Ok(Some((raw_xml, writer.into_inner())))
     }
 
+    /// Return the retained physical XML owner identity for a parsed field.
+    #[doc(hidden)]
+    pub fn source_owner_id(&self) -> Option<u64> {
+        match self.source {
+            FieldSource::Parsed { owner_id, .. } => Some(owner_id),
+            FieldSource::New { .. } => None,
+        }
+    }
+
     /// Change the typed value of a legacy form field and its cached display.
     #[doc(hidden)]
     pub fn set_legacy_form_value(&mut self, value: LegacyFormFieldValue) -> Result<()> {
@@ -468,6 +479,7 @@ enum FieldSource {
     },
     Parsed {
         source_id: u64,
+        owner_id: u64,
         form: FieldForm,
         raw_xml: Vec<u8>,
         original_instruction: FieldInstruction,
@@ -2601,12 +2613,21 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
             continue;
         }
         let raw_xml = complex_field_source(start, end, run_sources, extra_xml, hyperlinks);
+        let owner_id = fields.iter().find_map(|(field, _)| match field.source {
+            FieldSource::Parsed { source_id, .. } => Some(source_id),
+            FieldSource::New { .. } => None,
+        });
         for (field, _) in &mut fields {
             if let FieldSource::Parsed {
-                raw_xml: source, ..
+                raw_xml: source,
+                owner_id: field_owner_id,
+                ..
             } = &mut field.source
             {
                 *source = raw_xml.clone();
+                if let Some(owner_id) = owner_id {
+                    *field_owner_id = owner_id;
+                }
             }
         }
         extra_xml.retain(|(at, _)| !(*at > start && *at <= end));
@@ -4100,6 +4121,7 @@ impl CT_P {
         }
 
         let mut current_hyperlink: Option<usize> = None;
+        let mut written_field_owner = None;
         for (run_idx, run) in self.runs.iter().enumerate() {
             let in_hl = hyperlink_runs.get(&run_idx).copied();
 
@@ -4158,6 +4180,34 @@ impl CT_P {
             if run.content.len() == 1
                 && let RunContent::Field(field) = &run.content[0]
             {
+                let owner_id = field.source_owner_id();
+                if owner_id.is_some() && owner_id == written_field_owner {
+                    continue;
+                }
+                let field = if let Some(owner_id) = owner_id {
+                    let owner_fields = self.runs[run_idx..]
+                        .iter()
+                        .map_while(|run| match run.content.as_slice() {
+                            [RunContent::Field(field)]
+                                if field.source_owner_id() == Some(owner_id) =>
+                            {
+                                Some(field)
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let owner_changed = owner_fields.iter().any(|field| !field.is_unchanged());
+                    if owner_fields.len() > 1 && owner_changed {
+                        return Err(OxmlError::InvalidValue(
+                            "a field sharing one physical run was changed".to_owned(),
+                        ));
+                    }
+                    written_field_owner = Some(owner_id);
+                    field
+                } else {
+                    written_field_owner = None;
+                    field
+                };
                 write_field(
                     writer,
                     field,
@@ -4166,6 +4216,8 @@ impl CT_P {
                 )?;
                 continue;
             }
+
+            written_field_owner = None;
 
             if let Some(hyperlink_index) = current_hyperlink {
                 run.to_xml_with_word_override(
@@ -7980,7 +8032,9 @@ mod tests {
         assert_eq!(fields[0].cached_result, "first");
         assert_eq!(fields[1].instruction.name, "PAGE");
         assert_eq!(fields[1].cached_result, "second");
+        assert_eq!(fields[0].source_owner_id(), fields[1].source_owner_id());
         let serialized = serialized_paragraph(&paragraph);
+        assert_eq!(serialized.matches("<w:r>").count(), 1, "{serialized}");
         assert!(
             serialized.find("PAGE").unwrap() < serialized.find("bookmarkStart").unwrap(),
             "{serialized}"
@@ -7990,6 +8044,20 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+
+        let mut changed = paragraph;
+        let RunContent::Field(field) = &mut changed.runs[1].content[0] else {
+            panic!("expected second sibling field")
+        };
+        field.cached_result = "changed".to_owned();
+        let mut output = Vec::new();
+        let error = changed.to_xml(&mut Writer::new(&mut output)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("field sharing one physical run was changed"),
+            "{error}"
         );
     }
 

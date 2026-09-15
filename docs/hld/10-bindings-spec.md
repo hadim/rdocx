@@ -948,6 +948,11 @@ The native facade stages the main story from package-authoritative XML and
 preserves exact unchanged drawing wrappers even when sibling text in the same
 paragraph, table, cell, or control changes. Accepting and rejecting the result
 retain the drawing payload, relationship graph, and media bytes.
+Detached inline and anchor wrappers retain only the inherited namespace
+bindings they use and that are not already carried by the story root. Dirty
+typed inputs recover matching package drawing payloads before serialization.
+Complex fields map every physical source run to one modeled comparison owner,
+and sibling fields from one physical run share that owner.
 It emits same-story moves and supported run, paragraph, table, and section
 property revisions. Diagnostic locations retain the actual story identity and
 stable owner path. `rdocx-cli compare` exposes the source-compatible whole-run

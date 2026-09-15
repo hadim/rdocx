@@ -4640,7 +4640,10 @@ fn story_element_end(xml: &[u8], start: usize) -> Result<usize> {
     }
 }
 
-fn story_namespace_scope_at(xml: &[u8], offset: usize) -> Result<BTreeMap<String, String>> {
+pub(crate) fn story_namespace_scope_at(
+    xml: &[u8],
+    offset: usize,
+) -> Result<BTreeMap<String, String>> {
     let mut reader = quick_xml::Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut scopes = vec![BTreeMap::<String, String>::new()];
@@ -4828,7 +4831,7 @@ pub(crate) fn package_authoritative_body_fragment(
     Ok(output)
 }
 
-fn close_content_fragment_namespaces(
+pub(crate) fn close_content_fragment_namespaces(
     xml: &[u8],
     scope: &BTreeMap<String, String>,
 ) -> Result<Vec<u8>> {
@@ -8478,7 +8481,7 @@ fn collect_sdt_relationship_ids(control: &CT_Sdt, output: &mut Vec<String>) {
     }
 }
 
-fn visit_authored_drawings(content: &[BodyContent], visitor: &mut impl FnMut(&CT_Drawing)) {
+pub(crate) fn visit_all_drawings(content: &[BodyContent], visitor: &mut impl FnMut(&CT_Drawing)) {
     for item in content {
         match item {
             BodyContent::Paragraph(paragraph) => visit_paragraph_drawings(paragraph, visitor),
@@ -8489,7 +8492,7 @@ fn visit_authored_drawings(content: &[BodyContent], visitor: &mut impl FnMut(&CT
     }
 }
 
-fn visit_authored_drawings_mut(
+pub(crate) fn visit_all_drawings_mut(
     content: &mut [BodyContent],
     visitor: &mut impl FnMut(&mut CT_Drawing),
 ) {
@@ -8503,6 +8506,25 @@ fn visit_authored_drawings_mut(
     }
 }
 
+fn visit_authored_drawings(content: &[BodyContent], visitor: &mut impl FnMut(&CT_Drawing)) {
+    visit_all_drawings(content, &mut |drawing| {
+        if authored_drawing(drawing) {
+            visitor(drawing);
+        }
+    });
+}
+
+fn visit_authored_drawings_mut(
+    content: &mut [BodyContent],
+    visitor: &mut impl FnMut(&mut CT_Drawing),
+) {
+    visit_all_drawings_mut(content, &mut |drawing| {
+        if authored_drawing(drawing) {
+            visitor(drawing);
+        }
+    });
+}
+
 fn close_typed_story_drawing_namespaces(paragraph: &mut CT_P) -> Result<()> {
     let scope = BTreeMap::from([
         ("r".to_owned(), drawing_ns::R.to_owned()),
@@ -8510,7 +8532,7 @@ fn close_typed_story_drawing_namespaces(paragraph: &mut CT_P) -> Result<()> {
     ]);
     let mut error = None;
     visit_paragraph_drawings_mut(paragraph, &mut |drawing| {
-        if error.is_some() {
+        if error.is_some() || !authored_drawing(drawing) {
             return;
         }
         if let Some(inline) = &mut drawing.inline {
@@ -8551,9 +8573,7 @@ fn authored_drawing(drawing: &CT_Drawing) -> bool {
 
 fn visit_run_drawings(run: &CT_R, visitor: &mut impl FnMut(&CT_Drawing)) {
     for content in &run.content {
-        if let RunContent::Drawing(drawing) = content
-            && authored_drawing(drawing)
-        {
+        if let RunContent::Drawing(drawing) = content {
             visitor(drawing);
         }
     }
@@ -8561,9 +8581,7 @@ fn visit_run_drawings(run: &CT_R, visitor: &mut impl FnMut(&CT_Drawing)) {
 
 fn visit_run_drawings_mut(run: &mut CT_R, visitor: &mut impl FnMut(&mut CT_Drawing)) {
     for content in &mut run.content {
-        if let RunContent::Drawing(drawing) = content
-            && authored_drawing(drawing)
-        {
+        if let RunContent::Drawing(drawing) = content {
             visitor(drawing);
         }
     }

@@ -1024,6 +1024,12 @@ rejected independently to prove both package-wide policy postconditions. Any
 metadata, policy, alignment, unsupported-shell, parse, serialization, or
 postcondition failure leaves the original package, typed state, and caches
 unchanged.
+Comparison staging closes only the inherited bindings used by detached inline
+and anchor wrappers. Bindings already present on the story root remain there,
+while bindings declared on an outer drawing owner travel with the detached
+wrapper. Dirty typed inputs recover matching package drawing payloads before
+their staged flush. Physical complex-field runs project onto one modeled owner,
+including several sibling fields that share one physical run.
 
 Literal redaction also uses the complete package boundary. The Word facade
 flushes a staged clone, removes one non-empty exact literal from relationship-

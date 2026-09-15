@@ -13665,3 +13665,44 @@ and comments.
 exact PyPI project name before pushing a first-release tag. Keep distribution
 versions aligned with their own native facade and treat release tags and PyPI
 files as immutable after the first external mutation.
+
+### F-X097, Preserve namespace-scoped drawings and complex fields in comparison
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Document comparison now closes only the inherited namespace
+bindings required by detached inline and anchored drawing wrappers. It also
+projects physical complex-field runs onto their modeled comparison owners, so
+nested and sibling fields remain independently editable through comparison,
+save, reopen, accept, and reject.
+
+**Non-obvious choices.** Ordinary open and save retain their exact producer
+bytes. Namespace closure occurs only on isolated comparison candidates. Dirty
+typed inputs recover matching drawing wrapper context from package bytes, while
+fresh documents prepare their package before any main-story lookup.
+
+**Deviations from the design plan.** The completed implementation added an
+explicit fresh-document staging branch after full verification exposed that a
+new document has no serialized main part before preparation. Contributor PR 106
+was reviewed, but its field correlation and namespace closure were narrower
+than the approved story contract, so the broader reviewed implementation was
+retained.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, "Document
+comparison uses the same package boundary", `docs/hld/10-bindings-spec.md`,
+"Native callers generate tracked changes", `docs/hld/12-testing-strategy.md`,
+"Drawing preservation coverage", and the F-X097 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `comparison_preserves_inherited_drawing_namespaces_and_complex_fields`
+is the story gate. Existing comparison, field, namespace, accept, reject, and
+fresh-document mutation-history regressions also pass in the full workspace
+suite.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not read a fresh document's main package part
+before staged preparation. A package-backed document may still supply producer
+namespace context needed by a dirty typed comparison candidate.

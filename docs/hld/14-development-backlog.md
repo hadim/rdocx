@@ -4978,6 +4978,7 @@ Malformed drawings still fail atomically.
 **Depends on**: F-X093, F-234.
 **GitHub issues**: <https://github.com/tensorbee/rdocx/issues/75> and
 <https://github.com/tensorbee/rdocx/issues/85>.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/106>.
 **Test gate**: regression.
 `comparison_preserves_inherited_drawing_namespaces_and_complex_fields` compares
 body and header drawings with declarations at each reported ancestor scope,

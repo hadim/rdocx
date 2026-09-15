@@ -1,6 +1,6 @@
 # F-X097, Preserve namespace-scoped drawings and complex fields in comparison
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-X093, F-234
@@ -23,11 +23,14 @@ collapses several physical runs.
 
 ## Approach
 
-Store the namespace-complete captured inline or anchor wrapper already used by
-the typed drawing parser. Replace the comparison-only physical-run scanner with
-an ownership projection that groups the begin, instruction, separator, result,
-and end runs of a complex field into the modeled owner emitted by the paragraph
-parser. Reuse that projection in whole-run and granular replacement paths.
+Before comparison flushes its staging copies, close only the inherited bindings
+used by detached inline or anchor wrappers. Keep the ordinary parser's retained
+bytes unchanged so open and save, mail merge, and hash-bound chart artifacts do
+not gain redundant declarations. Replace the comparison-only physical-run
+scanner with an ownership projection that groups the begin, instruction,
+separator, result, and end runs of a complex field into the modeled owner
+emitted by the paragraph parser. Reuse that projection in whole-run and granular
+replacement paths.
 
 ## Rejected alternatives
 
@@ -64,10 +67,10 @@ Expected to be unchanged. The samples do not invoke comparison.
 
 ## Implementation checklist
 
-- [ ] Add failing ancestor-namespace and complex-field comparison regressions.
-- [ ] Retain namespace-complete drawing wrapper bytes.
-- [ ] Project physical complex-field runs onto modeled comparison owners.
-- [ ] Run focused comparison tests, hash harness, full verification, and microscope.
+- [x] Add failing ancestor-namespace and complex-field comparison regressions.
+- [x] Retain namespace-complete drawing wrapper bytes in comparison staging.
+- [x] Project physical complex-field runs onto modeled comparison owners.
+- [x] Run focused comparison tests, hash harness, full verification, and microscope.
 
 ## Open questions
 

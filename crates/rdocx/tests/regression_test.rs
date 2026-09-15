@@ -16359,14 +16359,14 @@ fn f_x093_comparison_document_with_drawings(
     package.set_part(
         "/word/document.xml",
         format!(
-            r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>{value} body</w:t></w:r><w:r><w:t>stable body words</w:t></w:r><w:r>{body_drawing}</w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
+            r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body><w:p><w:r><w:t>{value} body</w:t></w:r><w:r><w:t>stable body words</w:t></w:r><w:r>{body_drawing}</w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
         )
         .into_bytes(),
     );
     package.set_part(
         "/word/header1.xml",
         format!(
-            r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:r><w:t>{value} header</w:t></w:r><w:r><w:t>stable header words</w:t></w:r><w:r>{header_drawing}</w:r></w:p></w:hdr>"#,
+            r#"<w:hdr xmlns:w="{W_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:p><w:r><w:t>{value} header</w:t></w:r><w:r><w:t>stable header words</w:t></w:r><w:r>{header_drawing}</w:r></w:p></w:hdr>"#,
         )
         .into_bytes(),
     );
@@ -16394,6 +16394,12 @@ fn f_x093_comparison_document(value: &str) -> Document {
         value,
         &f_x093_inline_drawing("bodyImage", "body-exact"),
         &f_x093_inline_drawing("headerImage", "header-exact"),
+    )
+}
+
+fn f_x097_inherited_drawing(relationship_id: &str) -> String {
+    format!(
+        r#"<w:drawing xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:inline><wp:extent cx="1" cy="1"/><wp:docPr id="31" name="Inherited picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{relationship_id}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#,
     )
 }
 
@@ -16476,6 +16482,148 @@ fn document_compare_preserves_inline_drawings_through_staging() {
         Some(&b"header image"[..])
     );
     Document::from_bytes(&bytes).expect("reopen tracked comparison document");
+}
+
+#[test]
+fn comparison_preserves_inherited_drawing_namespaces_and_complex_fields() {
+    let mut original = f_x093_comparison_document_with_drawings(
+        "original",
+        &f_x097_inherited_drawing("bodyImage"),
+        &f_x097_inherited_drawing("headerImage"),
+    );
+    let mut edited = f_x093_comparison_document_with_drawings(
+        "edited",
+        &f_x097_inherited_drawing("bodyImage"),
+        &f_x097_inherited_drawing("headerImage"),
+    );
+    original.add_paragraph("typed before comparison");
+    edited.add_paragraph("typed before comparison");
+    original
+        .compare(&edited, "Ada", "2026-09-15T09:00:00Z")
+        .expect("ancestor-scoped drawings compare");
+    let bytes = original.to_bytes().expect("comparison writes");
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    for (part, relationship_id) in [
+        ("/word/document.xml", "bodyImage"),
+        ("/word/header1.xml", "headerImage"),
+    ] {
+        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+        assert!(xml.contains(r#"<wp:docPr id="31""#), "{xml}");
+        assert!(
+            xml.contains(&format!(r#"r:embed="{relationship_id}""#)),
+            "{xml}"
+        );
+        assert!(xml.contains("xmlns:wp="), "{xml}");
+        assert!(xml.contains("xmlns:a="), "{xml}");
+        assert!(xml.contains("xmlns:pic="), "{xml}");
+    }
+    Document::from_bytes(&bytes).expect("comparison with inherited drawings reopens");
+    for (accept, expected, unexpected) in [
+        (true, "edited body", "original body"),
+        (false, "original body", "edited body"),
+    ] {
+        let mut finalized =
+            Document::from_bytes(&bytes).expect("reopen inherited drawing comparison");
+        if accept {
+            assert!(finalized.accept_all().unwrap() > 0);
+        } else {
+            assert!(finalized.reject_all().unwrap() > 0);
+        }
+        let finalized_bytes = finalized.to_bytes().expect("write finalized comparison");
+        let finalized =
+            Document::from_bytes(&finalized_bytes).expect("reopen finalized comparison");
+        assert!(finalized.text().contains(expected));
+        assert!(!finalized.text().contains(unexpected));
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(finalized_bytes)).unwrap();
+        for (part, relationship_id) in [
+            ("/word/document.xml", "bodyImage"),
+            ("/word/header1.xml", "headerImage"),
+        ] {
+            let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+            assert!(xml.contains(&format!(r#"r:embed="{relationship_id}""#)));
+            assert!(xml.contains("xmlns:wp="), "{xml}");
+            assert!(xml.contains("xmlns:a="), "{xml}");
+            assert!(xml.contains("xmlns:pic="), "{xml}");
+        }
+    }
+
+    let complex = |tail: &str| {
+        format!(
+            r#"<w:p><w:r><w:t>before </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> DATE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>2026-09-15</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>{tail}</w:t></w:r></w:p>"#,
+        )
+    };
+    let mut field_original = document_with_content_controls(&wrap_word_body(&complex("old")));
+    let field_edited = document_with_content_controls(&wrap_word_body(&complex("new")));
+    field_original
+        .compare(&field_edited, "Ada", "2026-09-15T09:01:00Z")
+        .expect("complex field paragraph compares");
+    let field_bytes = field_original.to_bytes().expect("field comparison writes");
+    let reopened = Document::from_bytes(&field_bytes).expect("field comparison reopens");
+    assert!(reopened.text().contains("2026-09-15"));
+    let field_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&field_bytes)).unwrap();
+    let field_xml = std::str::from_utf8(
+        field_package
+            .get_part("/word/document.xml")
+            .expect("field document part"),
+    )
+    .unwrap();
+    assert!(field_xml.contains("<w:ins"), "{field_xml}");
+    assert!(field_xml.contains(">new</w:t>"), "{field_xml}");
+    for (accept, expected, unexpected) in [(true, "new", "old"), (false, "old", "new")] {
+        let mut finalized =
+            Document::from_bytes(&field_bytes).expect("reopen complex field comparison");
+        if accept {
+            assert!(finalized.accept_all().unwrap() > 0);
+        } else {
+            assert!(finalized.reject_all().unwrap() > 0);
+        }
+        let finalized_bytes = finalized
+            .to_bytes()
+            .expect("write finalized field comparison");
+        let finalized =
+            Document::from_bytes(&finalized_bytes).expect("reopen finalized field comparison");
+        assert!(finalized.text().contains("2026-09-15"));
+        assert!(finalized.text().contains(expected));
+        assert!(!finalized.text().contains(unexpected));
+    }
+
+    let sibling_fields = |tail: &str| {
+        format!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText>DATE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>first</w:t><w:fldChar w:fldCharType="end"/><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>second</w:t><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>{tail}</w:t></w:r></w:p>"#,
+        )
+    };
+    let mut sibling_original =
+        document_with_content_controls(&wrap_word_body(&sibling_fields("old sibling tail")));
+    let sibling_edited =
+        document_with_content_controls(&wrap_word_body(&sibling_fields("new sibling tail")));
+    sibling_original
+        .compare(&sibling_edited, "Ada", "2026-09-15T09:02:00Z")
+        .expect("same-run sibling fields compare");
+    let sibling_bytes = sibling_original
+        .to_bytes()
+        .expect("write sibling field comparison");
+    for (accept, expected, unexpected) in [
+        (true, "new sibling tail", "old sibling tail"),
+        (false, "old sibling tail", "new sibling tail"),
+    ] {
+        let mut finalized =
+            Document::from_bytes(&sibling_bytes).expect("reopen sibling field comparison");
+        if accept {
+            assert!(finalized.accept_all().unwrap() > 0);
+        } else {
+            assert!(finalized.reject_all().unwrap() > 0);
+        }
+        let finalized_bytes = finalized
+            .to_bytes()
+            .expect("write finalized sibling fields");
+        let finalized =
+            Document::from_bytes(&finalized_bytes).expect("reopen finalized sibling fields");
+        assert!(finalized.text().contains("firstsecond"));
+        assert!(finalized.text().contains(expected));
+        assert!(!finalized.text().contains(unexpected));
+    }
 }
 
 #[test]

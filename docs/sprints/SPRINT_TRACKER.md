@@ -435,6 +435,7 @@ defended.
 | F-X095 | S72 | L | 4 | 1 | 2026-09-14 | Integrated hardened equivalents of PRs 77 through 80, restored pinned Presentation fidelity CI, and preserved no-op comparison handles |
 | F-X096 | S72 | M | 2 | 1 | 2026-09-14 | Aligned each Python distribution with its native crate version and gave rdocx and rpptx independent PyPI tag routes |
 | F-X094f | S72 | M | 2 | 2 | 2026-09-15 | Published and verified metadata-complete rdocx 0.13.2 and rpptx 0.11.0 Python distributions, then notified and closed every included issue and pull request |
+| F-X097 | S73 | M | 2 | 1 | 2026-09-15 | Preserved ancestor-scoped drawing namespaces and exact complex-field ownership through comparison, accept, and reject |
 
 ## Velocity
 

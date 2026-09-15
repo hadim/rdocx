@@ -735,6 +735,9 @@ schema child order through compare, save, reopen, accept, and reject. Run,
 word, and character granularity each retain a stable multi-unit sibling once.
 A malformed drawing without `docPr/@id` fails before the original document or
 package changes.
+Inherited-binding coverage adds story-root and outer-drawing declarations plus
+an unrelated typed edit before comparison. It checks dirty staging, complex
+fields, sibling fields sharing one physical run, and both revision outcomes.
 
 The source-built external differential pins Microsoft Word 16.104 build
 16.104.25121423 and locale `en-US`. Its 24 normalized records cover every
