@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S73
 **Size**: L
-**Depends on**: F-257 through F-263, F-X097 through F-X111
+**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X119
 
 ## Problem
 
@@ -11,7 +11,8 @@ The stable Rust crates remain at unpublished 0.13.2 while PyPI rdocx already
 serves 0.13.2. The incubating Rust and Python families remain at 0.11.0. S73 is
 a milestone release and the user requested every standard publishable Rust
 package plus both version-aligned Python distributions, with comments on all
-included issues and pull requests.
+included issues and pull requests, including the later Issue 115 through Issue
+121 intake and its contributor discussions.
 
 ## Spec reference
 
@@ -32,6 +33,8 @@ four separate `/release` actions with a fresh immediate approval before each
 tag: stable Rust, incubating Rust, Python rdocx, and Python rpptx. Verify all 22
 Rust crates, both seven-file Python distributions, both GitHub CLI asset sets,
 owners, releases, and human notification comments before completing the F-ID.
+The notification inventory includes every issue and pull request incorporated
+through F-X119, whether it is open or closed at publication time.
 
 ## Rejected alternatives
 
@@ -47,7 +50,7 @@ owners, releases, and human notification comments before completing the F-ID.
 
 | Category | Test | Asserts |
 |---|---|---|
-| release preparation | `s73_release_contract_requires_four_version_aligned_families` | Exact versions, 7 stable crates, 15 incubating crates, two Python distributions, four tags, and selected assets. |
+| release preparation | `s73_release_contract_requires_four_version_aligned_families` | Exact versions, 7 stable crates, 15 incubating crates, two Python distributions, four tags, selected assets, and the through-F-X119 notification inventory. |
 | package | patched workspace dry-run | All 22 publishable Rust archives stage from the reviewed source graph and remain within size limits. |
 | Python | build-only wheel matrix | Each selected distribution has six cp39-abi3 wheels and one source archive with complete metadata. |
 | release | registry and notification verification | Every package, owner, release body, CLI asset, issue, PR, and comment URL is verified before completion. |

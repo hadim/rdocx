@@ -8,9 +8,10 @@
 ## Problem
 
 Python Paragraph objects cannot read or write style and numbering, Run objects
-cannot read or write character style, and Font objects omit highlight even
-though each operation exists in the native facade. This forces users to rebuild
-formatting or edit XML for ordinary automation.
+cannot read or write character style, and Font objects omit coherent highlight
+mutation even though each operation exists in the native facade. The current
+contributor implementation reads Word highlight names but accepts only RGB hex
+on write and emits `w:shd`, which changes shading rather than highlight.
 
 ## Spec reference
 
@@ -22,9 +23,11 @@ formatting or edit XML for ordinary automation.
 
 Add nullable paragraph `style` and `numbering` properties with typed setters,
 nullable run `style_id`, and nullable Font `highlight` using the existing Word
-enumeration module. Call the established native readers and setters directly.
-Formatting changes preserve all non-text run children and do not stale handles
-whose structural coordinates remain valid.
+`ST_HighlightColor` names in both directions. Keep run shading as a separate
+property rather than treating a hex fill as highlight. Call the established
+native readers and setters directly. Formatting changes preserve all non-text
+run children and do not stale handles whose structural coordinates remain
+valid.
 
 ## Rejected alternatives
 
@@ -37,7 +40,7 @@ whose structural coordinates remain valid.
 
 | Category | Test | Asserts |
 |---|---|---|
-| binding | `python_paragraph_and_run_formatting_matches_native_facades` | Paragraph style, numbering, run style, and highlight read and write like the native facade after reopen. |
+| binding | `python_paragraph_and_run_formatting_matches_native_facades` | Paragraph style, numbering, run style, named highlight, and separate shading read and write like the native facade after reopen. |
 | regression | mixed run content | Formatting setters preserve tabs, breaks, fields, symbols, drawings, and text order. |
 | typing | installed mypy and stubtest | Nullable IDs, numbering values, and highlight enumeration match runtime descriptors. |
 
@@ -63,7 +66,7 @@ setters.
 
 - [ ] Add runtime and typing failures for all four property groups.
 - [ ] Bind paragraph style and numbering.
-- [ ] Bind run style and font highlight.
+- [ ] Bind run style, named highlight, and separate shading semantics.
 - [ ] Prove mixed content and handle identity remain intact.
 - [ ] Run binding, WASM, hash harness, full verification, and microscope gates.
 

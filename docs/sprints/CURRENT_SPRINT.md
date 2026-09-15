@@ -2,9 +2,9 @@
 
 **Milestone**: M23 From-scratch business documents.
 
-**Goal**: close M23 with complete corpus authoring, resolve Issues 75 and 83
-through 100, and incorporate PR 101 through verified native, binding,
-rendering, and release outcomes.
+**Goal**: close M23 with complete corpus authoring, resolve Issues 75, 83
+through 100, and 115 through 121, and incorporate PR 101 onward through
+verified native, binding, rendering, and release outcomes.
 Five generators must start from `Document::new()`, use only the public `rdocx`
 facade, and reproduce the required private references without templates, raw
 XML injection, or post-processing. The reviewed result prepares and publishes
@@ -35,7 +35,7 @@ both Rust package families and both version-aligned Python distributions.
   vocabulary, private-corpus confidentiality boundary, and atomic cross-part
   invariant rule.
 - `docs/hld/14-development-backlog.md`, for the F-257 through F-263 and
-  F-X097 through F-X112 acceptance contracts, dependencies, sizes, issue
+  F-X097 through F-X119 acceptance contracts, dependencies, sizes, issue
   mappings, and release gate.
 - `docs/hld/15-build-and-toolchain.md`, for package-family allowlists, portable
   CLI assets, version alignment, trusted publication, and release approval.
@@ -68,6 +68,13 @@ both Rust package families and both version-aligned Python distributions.
 | F-X108 | Replace an existing picture atomically | M | pending | - |
 | F-X109 | Split text runs at Unicode character offsets | M | pending | - |
 | F-263 | Layout-backed fields and M23 corpus gate | L | pending | - |
+| F-X113 | Preserve appended paragraphs in document comparison | M | pending | - |
+| F-X114 | Rebuild TOC entries with document styles and geometry | M | pending | - |
+| F-X115 | Preserve modern comment metadata and identity | M | pending | - |
+| F-X116 | Make Python story reads linear and complete | L | pending | - |
+| F-X117 | Render transparent and large raster pictures safely | M | pending | - |
+| F-X118 | Make notes rendering and replacement safe | L | pending | - |
+| F-X119 | Complete round-three Python authoring and inspection | L | pending | - |
 | F-X112 | Publish the complete S73 package families | L | pending | - |
 
 ## Sequencing note
@@ -82,10 +89,14 @@ F-X106a through F-X106c are serialized because they share the Python document
 surface. F-258 builds on F-257 and F-X100, then F-X107 adds row cloning and
 removal. F-X108 follows the completed story binding and relationship surface.
 F-259 and F-261 consume the complete table and run models. F-262 consumes
-F-X102 and F-260. F-263 starts after every behavior needed by the private
-corpus and reported pagination fields is integrated. F-X112 is the final
-release boundary after every non-release story. The five client documents and
-all derived evidence remain private and uncommitted.
+F-X102 and F-260. F-X113 and F-X117 are independent correction stories.
+F-X114 follows the completed field and corpus layout path. F-X115 follows exact
+comment anchoring, F-X116 follows the complete story binding and split-run
+paths, and F-X118 establishes notes mutation before F-X119 completes the
+round-three binding surface. F-263 starts after every behavior needed by the
+private corpus and reported pagination fields is integrated. F-X112 is the
+final release boundary after every non-release story. The five client
+documents and all derived evidence remain private and uncommitted.
 
 ## Definition of done for this sprint
 
@@ -142,6 +153,19 @@ all derived evidence remain private and uncommitted.
 - Existing table rows clone and remove safely, pictures replace with
   relationship-local copy-on-write behavior, and runs split at checked Unicode
   character offsets for exact comment anchoring.
+- Terminal comparison insertions accept and reject without synthetic empty
+  paragraphs, and rebuilt TOCs retain localized styles, section-width tabs, and
+  structural numbering suffixes.
+- Modern comments use the standard content type, stable rdocx ids, optional
+  dates, and typed table-cell comment paths.
+- Python story inventory is linear and exposes visible runs inside accepted
+  insertions and inline controls through checked live handles.
+- Transparent raster pixels compose correctly, ordinary large pictures render,
+  and every over-limit image reports a stable visible failure.
+- Notes render without a redundant reverse relationship, notes text is
+  editable, and rpptx replacement is guarded, counted, and includes notes.
+- Python can insert Word pictures and inspect or edit the requested PowerPoint
+  geometry, identity, font, autofit, notes, and property-preserving run text.
 - `w:updateFields` is a typed optional native and Python setting.
 - Stable and incubating Rust releases attach six portable CLI archives and a
   verified checksum manifest with working cargo-binstall metadata.

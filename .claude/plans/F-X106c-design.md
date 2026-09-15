@@ -11,7 +11,10 @@ Python now reads sections, stories, links, comments, comparison, layout, and TOC
 reports, but it cannot replace story text, set simple headers or footers, create
 story links, inspect or resolve revisions, update field caches, or read one
 story item's exact XML. These native capabilities are the remaining cohesive
-read and mutation boundary from Issue 94.
+read and mutation boundary from Issue 94. Contributor testing also found that
+story replacement retains empty hyperlinks, cloned content duplicates comment
+anchors, stale StoryItem snapshots can target different content, and text
+lookup prefers an enclosing TOC control over the direct heading.
 
 ## Spec reference
 
@@ -26,8 +29,12 @@ Add frozen revision snapshots and bind the existing native revision filters and
 accept or reject methods. Add `set_story_text`, `set_header`, `set_footer`, and
 `add_hyperlink_to_story` using frozen Story identifiers. Expose `update_fields`
 with typed outcomes or counts from the native method and expose StoryItem `xml`
-as immutable bytes. Release the GIL for package-wide field or revision work and
-bump binding revision exactly once after a successful mutation.
+as immutable bytes. Sanitize cloned comment anchors, remove empty hyperlinks
+created by story replacement, carry the document revision in every StoryItem,
+and make content lookup prefer direct paragraph matches while exposing all
+matches when ambiguity remains. Release the GIL for package-wide field or
+revision work and bump binding revision exactly once after a successful
+mutation.
 
 ## Rejected alternatives
 
@@ -42,8 +49,9 @@ bump binding revision exactly once after a successful mutation.
 
 | Category | Test | Asserts |
 |---|---|---|
-| binding | `python_story_revision_field_and_xml_operations_are_typed_and_atomic` | Story text, headers, footers, hyperlinks, revisions, fields, and exact item XML match native results and reopen. |
+| binding | `python_story_revision_field_and_xml_operations_are_typed_and_atomic` | Story text, headers, footers, hyperlinks, revisions, fields, exact item XML, clean clone anchors, and direct-match lookup reopen correctly. |
 | lifecycle | revision and GIL | Mutations bump once after success, failures bump none, and long native work permits Python thread progress. |
+| regression | contributor Issue 94 cases | Empty links are pruned, stale StoryItems fail loudly, comment anchors do not duplicate, and a heading wins over enclosing TOC text. |
 | typing | installed mypy and stubtest | Frozen revisions, Story inputs, field results, bytes, and filters match runtime. |
 
 The **test gate** is the binding test named in the backlog.
@@ -71,6 +79,7 @@ story, revision, or field mutations.
 - [ ] Bind story text, header, footer, and story hyperlink mutations.
 - [ ] Bind revision inspection and resolution filters.
 - [ ] Bind field updates and read-only StoryItem XML.
+- [ ] Sanitize cloned anchors, empty links, stale StoryItems, and ambiguous lookup.
 - [ ] Verify GIL release, revision bumps, runtime, typing, WASM, full verification, and microscope.
 
 ## Open questions

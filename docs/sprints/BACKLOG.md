@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 18 | 0 | 6 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 122 | 109 | 1 | 8 |
-| **Total** | **440** | **353** | **1** | **82** |
+| X, Cross-cutting (opportunistic)            | 129 | 109 | 1 | 15 |
+| **Total** | **447** | **353** | **1** | **89** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -659,4 +659,11 @@ regenerated, never hand-edited.
 | F-X110 | Control field updates on document open | S73 | S | done |
 | F-X111 | Attach portable CLI binaries to Rust releases | S73 | L | in-progress |
 | F-X112 | Publish the complete S73 package families | S73 | L | pending |
+| F-X113 | Preserve appended paragraphs in document comparison | S73 | M | pending |
+| F-X114 | Rebuild TOC entries with document styles and geometry | S73 | M | pending |
+| F-X115 | Preserve modern comment metadata and identity | S73 | M | pending |
+| F-X116 | Make Python story reads linear and complete | S73 | L | pending |
+| F-X117 | Render transparent and large raster pictures safely | S73 | M | pending |
+| F-X118 | Make notes rendering and replacement safe | S73 | L | pending |
+| F-X119 | Complete round-three Python authoring and inspection | S73 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

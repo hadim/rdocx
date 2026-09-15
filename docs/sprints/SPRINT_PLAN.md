@@ -1437,6 +1437,13 @@ document.
 | F-X109 | Split text runs at Unicode character offsets | M |
 | F-X110 | Control field updates on document open | S |
 | F-X111 | Attach portable CLI binaries to Rust releases | L |
+| F-X113 | Preserve appended paragraphs in document comparison | M |
+| F-X114 | Rebuild TOC entries with document styles and geometry | M |
+| F-X115 | Preserve modern comment metadata and identity | M |
+| F-X116 | Make Python story reads linear and complete | L |
+| F-X117 | Render transparent and large raster pictures safely | M |
+| F-X118 | Make notes rendering and replacement safe | L |
+| F-X119 | Complete round-three Python authoring and inspection | L |
 | F-X112 | Publish the complete S73 package families | L |
 
 The model stories land before layout and conversion consumers. F-X100 lands
@@ -1444,9 +1451,14 @@ before F-258 so the row and cell setters inherit lossless toggle semantics.
 F-X101 and F-X109 follow ordered runs, F-X102 precedes corpus drawings, and
 F-X103 precedes layout-backed fields. F-X106a through F-X106c serialize the
 second Python binding round, then the row and image mutations consume that
+surface. F-X113 and F-X117 are independent corrections. F-X114 follows the
+field and private-corpus layout foundations. F-X115 follows exact comment
+anchoring, F-X116 follows the complete story binding and split-run paths, and
+F-X118 establishes notes mutation before F-X119 closes the round-three binding
 surface. F-263 remains the private-corpus milestone gate. F-X111 prepares
 portable CLI assets before F-X112 releases the exact two Rust and two Python
-families through separate approvals. PR 101 contributes the F-X100 explicit
+families after F-X113 through F-X119 are complete, using separate approvals.
+PR 101 contributes the F-X100 explicit
 false table-toggle fix and the F-X103 TOC `\\z` support. Its current two-commit
 shape is incorporated directly where conflict-free or through a reviewed
 hardened equivalent, with contributor credit retained. The five client
