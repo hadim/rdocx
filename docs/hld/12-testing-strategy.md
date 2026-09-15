@@ -2640,6 +2640,15 @@ setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
 revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.
 
+The rdocx binding formatting gate sets and reopens paragraph style and
+numbering, run character style, named Word highlight, and independent shading.
+Its mixed-content run includes text, a tab, a page break, a field, a drawing,
+a raw symbol, and trailing text, all of which retain their order after every
+formatting mutation. Invalid highlight names leave the run unchanged. The
+gate also runs strict typing and stub parity against a freshly installed
+`cp39-abi3` wheel so the runtime properties and their nullable declarations
+cannot drift apart.
+
 The Word namespace regression matrix covers an unused unknown default on the
 document root, an inherited use by an unprefixed element, unprefixed
 attributes, nested different-URI and same-URI shadows, explicit undeclaration,

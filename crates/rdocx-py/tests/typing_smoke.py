@@ -42,9 +42,17 @@ def exercise_rdocx_types(path: Path) -> None:
     loaded: Document = Document.from_bytes(b"")
     paragraph: Paragraph = document.add_paragraph("typed")
     run: Run = paragraph.add_run(" run")
+    paragraph.style = "Heading1"
+    paragraph.numbering = (1, 2)
+    assert_type(paragraph.style, str)
+    assert_type(paragraph.numbering, tuple[int, int])
+    run.style_id = "Strong"
+    assert_type(run.style_id, str)
     font: Font = run.font
     font.bold = True
     font.size = Inches(1)
+    font.highlight = "yellow"
+    font.shading = "FFFF00"
     color = RGBColor(1, 2, 3)
     assert_type(color[0], int)
     channels: tuple[int, int, int] = color

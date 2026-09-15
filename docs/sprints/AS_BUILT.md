@@ -14199,3 +14199,46 @@ commit. All package archives remained below 10 MiB.
 Only Word pagination interprets a page marker as a physical page split, while
 the single-column limitation continues to retain column identity without
 inventing page behavior.
+
+### F-X106b, Expose paragraph and run formatting mutations in Python
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Python paragraphs now expose nullable style and numbering
+properties, runs expose nullable character `style_id`, and fonts expose named
+Word highlight independently from hexadecimal or automatic shading. Every
+setter delegates to the native facade, preserves mixed ordered run content,
+and leaves structural handle revisions unchanged.
+
+**Non-obvious choices.** Contributor PR 108 supplied the initial properties
+and tests. The integrated implementation corrects its hexadecimal highlight
+setter to use Word's named `ST_HighlightColor` vocabulary, retains hexadecimal
+fills as a separate shading property, canonicalizes `AUTO` to `auto`, and
+rejects invalid highlight names without changing the run.
+
+**Deviations from the design plan.** None. Microscope pass 1 found five
+contract and gate gaps covering the property name, exact regression name,
+complete mixed content, typing coverage, and automatic shading normalization.
+All five were corrected, and pass 2 reports zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, Python formatting
+properties and semantics, `docs/hld/12-testing-strategy.md`, the mixed-content
+installed-wheel gate, and the F-X106b entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_paragraph_and_run_formatting_matches_native_facades` would
+fail against the story baseline because none of its paragraph, run, or font
+properties existed there, and passes against the implementation. The complete
+47-test binding suite, native formatting regressions, strict mypy, stubtest,
+both WASM checks, the full workspace, docs, README doctests, package dry runs,
+archive ceilings, and supply-chain gates pass. A fresh `cp39-abi3` wheel
+installed on Python 3.14 and passed the exact runtime, typing, and stub gates.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep Word highlight names and arbitrary shading
+fills as separate properties. Formatting mutation must preserve unmodelled run
+children in place and must not stale handles whose structural coordinates do
+not change.

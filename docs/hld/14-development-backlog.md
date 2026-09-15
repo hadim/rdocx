@@ -5159,20 +5159,23 @@ coordinates or replacement syntax.
 
 ### F-X106b, Expose paragraph and run formatting mutations in Python (M)
 
-Expose paragraph style and numbering readers and setters, run style readers
-and setters, and highlight read and write access through the existing Python
-paragraph, run, and font handles. Highlight uses Word's named
+Expose paragraph style and numbering readers and setters, run `style_id`
+readers and setters, and highlight read and write access through the existing
+Python paragraph, run, and font handles. Highlight uses Word's named
 `ST_HighlightColor` vocabulary in both directions, while run shading remains a
-separate property. Values use the established typed enums and nullable
-property conventions. Setters preserve unrelated ordered run content and
-advance binding revision only when structural identity changes.
+separate six-digit hexadecimal or `auto` property. Values use the established
+typed enums and nullable property conventions. Setters preserve unrelated
+ordered run content and do not advance the binding revision because formatting
+mutation does not change structural identity.
 
 **Depends on**: F-X106a.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/94>.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/108>.
 **Test gate**: binding.
 `python_paragraph_and_run_formatting_matches_native_facades` applies styles,
-numbering, and highlights to mixed-content runs, checks native-equivalent
-values after reopen, and passes installed strict typing and stub checks.
+numbering, named highlights, and shading to mixed-content runs, checks
+native-equivalent values after reopen, rejects invalid names without mutation,
+and passes installed strict typing and stub checks.
 
 ### F-X106c, Expose story mutation, hyperlinks, revisions, fields, and XML in Python (L)
 

@@ -448,6 +448,7 @@ defended.
 | F-X106a | S73 | L | 4 | 1 | 2026-09-15 | Added owner-checked indexed Python content mutation and counted replacement from contributor PRs 109 and 111 |
 | F-260 | S73 | L | 4 | 1 | 2026-09-15 | Added ordered mixed run content authoring with schema-valid field segmentation and exact raw boundary preservation |
 | F-X101 | S73 | M | 2 | 1 | 2026-09-15 | Honored run-level page breaks in physical pagination and every page-dependent output from contributor PR 102 |
+| F-X106b | S73 | M | 2 | 1 | 2026-09-15 | Added paragraph and run formatting mutation with named Word highlights and separate shading from contributor PR 108 |
 
 ## Velocity
 

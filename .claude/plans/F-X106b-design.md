@@ -1,6 +1,6 @@
 # F-X106b, Expose paragraph and run formatting mutations in Python
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-X106a
@@ -64,11 +64,11 @@ setters.
 
 ## Implementation checklist
 
-- [ ] Add runtime and typing failures for all four property groups.
-- [ ] Bind paragraph style and numbering.
-- [ ] Bind run style, named highlight, and separate shading semantics.
-- [ ] Prove mixed content and handle identity remain intact.
-- [ ] Run binding, WASM, hash harness, full verification, and microscope gates.
+- [x] Add runtime and typing failures for all four property groups.
+- [x] Bind paragraph style and numbering.
+- [x] Bind run style, named highlight, and separate shading semantics.
+- [x] Prove mixed content and handle identity remain intact.
+- [x] Run binding, WASM, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

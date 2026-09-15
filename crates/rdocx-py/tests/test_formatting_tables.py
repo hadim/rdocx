@@ -279,3 +279,78 @@ def test_automatic_font_color_reads_as_none_after_reopen():
     reopened = Document.from_bytes(automatic)
 
     assert reopened.paragraphs[0].runs[0].font.color is None
+
+
+def test_python_paragraph_and_run_formatting_matches_native_facades():
+    from rdocx import Document
+
+    document = Document()
+    paragraph = document.add_paragraph("Title")
+    assert paragraph.style is None
+    assert paragraph.numbering is None
+    paragraph.style = "Heading1"
+    paragraph.numbering = (1, 2)
+    assert paragraph.text == "Title"
+
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.paragraphs[0].style == "Heading1"
+    assert reopened.paragraphs[0].numbering == (1, 2)
+
+    with pytest.raises(ValueError, match="numbering level"):
+        paragraph.numbering = (1, 9)
+    paragraph.style = None
+    paragraph.numbering = None
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.paragraphs[0].style is None
+    assert reopened.paragraphs[0].numbering is None
+
+    document = Document()
+    run = document.add_paragraph("").add_run("marked")
+    assert run.style_id is None
+    assert run.font.highlight is None
+    assert run.font.shading is None
+    run.style_id = "Strong"
+    run.font.highlight = "yellow"
+    run.font.shading = "FFFF00"
+
+    reopened = Document.from_bytes(document.to_bytes()).paragraphs[0].runs[0]
+    assert reopened.style_id == "Strong"
+    assert reopened.font.highlight == "yellow"
+    assert reopened.font.shading == "FFFF00"
+
+    run.font.shading = "AUTO"
+    reopened = Document.from_bytes(document.to_bytes()).paragraphs[0].runs[0]
+    assert reopened.font.shading == "auto"
+
+    with pytest.raises(ValueError, match="highlight"):
+        run.font.highlight = "FFFF00"
+    with pytest.raises(ValueError, match="hexadecimal"):
+        run.font.shading = "yellow"
+    run.style_id = None
+    run.font.highlight = None
+    run.font.shading = None
+    reopened = Document.from_bytes(document.to_bytes()).paragraphs[0].runs[0]
+    assert reopened.style_id is None
+    assert reopened.font.highlight is None
+    assert reopened.font.shading is None
+
+
+def test_word_highlight_keywords_round_trip_and_clear():
+    from rdocx import Document, RGBColor
+
+    document = Document()
+    document.add_paragraph("").add_run("marked").font.color = RGBColor(0x12, 0x34, 0x56)
+    keyword = _replace_document_xml(
+        document.to_bytes(),
+        b'<w:color w:val="123456"/>',
+        b'<w:color w:val="123456"/><w:highlight w:val="darkBlue"/>',
+    )
+    reopened = Document.from_bytes(keyword)
+    font = reopened.paragraphs[0].runs[0].font
+    assert font.highlight == "darkBlue"
+
+    font.highlight = "yellow"
+    reopened = Document.from_bytes(reopened.to_bytes())
+    assert reopened.paragraphs[0].runs[0].font.highlight == "yellow"
+    reopened.paragraphs[0].runs[0].font.highlight = None
+    assert Document.from_bytes(reopened.to_bytes()).paragraphs[0].runs[0].font.highlight is None
