@@ -4885,10 +4885,12 @@ typing, and project-link guidance in both archive formats. The immutable PyPI
 0.13.2. A manual
 `wheels.yml` run at the reviewed SHA is build-only and supplies the exact
 artifacts for clean Python 3.9 and 3.12 install and runtime checks. Strict
-typing and stub checks run under Python 3.12. S72 prepares both contracts but
-creates no tag, publishes nothing, posts no external comment, and does not
-close Issue 76. Those actions require fresh `/release` approval for each exact
-tag at the reviewed SHA.
+typing and stub checks run under Python 3.12. After separate exact-tag
+approvals, S72 published and verified `rdocx 0.13.2` and `rpptx 0.11.0` from
+reviewed SHA `2b009243ed39ab66470d7484d490985368e865a8`. Both GitHub release
+bodies match their reviewed notes byte for byte. The completed release gate
+notified and closed Issues 72 through 76, contributor PRs 77 through 80, and
+the unmerged verification PR 82.
 
 **Depends on**: F-137, F-138, F-X094a, F-X094c, F-X094d, F-X094e, F-X096.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.

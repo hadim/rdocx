@@ -13582,3 +13582,86 @@ supply-chain audit.
 **Notes for future sessions.** Treat `rdocx` and `rpptx` as independent version
 lines. A Python package version must match its corresponding native facade,
 not the other distribution released from the same repository.
+
+### F-X094f, Prepare the version-aligned Python release paths
+
+**Sprint.** S72
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 2 days
+
+**What was built.** Metadata-complete `rdocx 0.13.2` and `rpptx 0.11.0`
+Python distributions are published on PyPI at versions matching their native
+facades. Each immutable release contains six `cp39-abi3` platform wheels and
+one source distribution, uses its crate-local README as the Markdown long
+description, and has a matching reviewed GitHub release. The tags both
+dereference to reviewed SHA `2b009243ed39ab66470d7484d490985368e865a8`.
+
+**Non-obvious choices.** `rdocx` moved to 0.13.2 because immutable 0.13.1 lacks
+the complete PyPI description. `rpptx` retained native version 0.11.0. Each tag
+selected only one distribution even though the build-only matrix verified
+both. The first rpptx upload obtained a valid OIDC identity but exposed a
+mismatched pending PyPI project name. The publisher entry was corrected before
+the failed job alone was retried against the unchanged tag and reviewed SHA.
+
+**Deviations from the design plan.** The release recovery added one diagnosed
+trusted-publisher retry. No tag moved, no artifact was accepted by the failed
+attempt, and the successful retry used the exact reviewed source and artifact
+contract. The latest PR 78 head added a self-closing body case already covered
+by the integrated namespace-aware implementation and focused regression.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full local and hosted verification passed at the reviewed SHA with
+49 of 49 hash entries matching. Build-only run
+https://github.com/tensorbee/rdocx/actions/runs/34907492958 validated both
+seven-file families. Tag runs
+https://github.com/tensorbee/rdocx/actions/runs/34934221487 and
+https://github.com/tensorbee/rdocx/actions/runs/34939929652 published the exact
+rdocx and rpptx sets through trusted publishing. Every live PyPI file passed
+the artifact validator. Clean canonical-PyPI installs passed 29 rdocx tests
+and 12 rpptx tests under Python 3.9 and 3.12. Exact `mypy==2.3.0 --strict` and
+`stubtest` passed under Python 3.12 for both distributions. The rdocx and rpptx
+GitHub release bodies match their reviewed renders with SHA-256 digests
+`3bf361a6fcc5a858d1f315f07ea766b0e60e3c0b3c7930a777e643f1bf62b728`
+and `60fad5ee4003448082f1c14d0d7b3a5e9d159b21fa1ca7c07b0c7ac64300197f`.
+
+**Contribution inventory.** Issues
+[72](https://github.com/tensorbee/rdocx/issues/72),
+[73](https://github.com/tensorbee/rdocx/issues/73),
+[74](https://github.com/tensorbee/rdocx/issues/74),
+[75](https://github.com/tensorbee/rdocx/issues/75), and
+[76](https://github.com/tensorbee/rdocx/issues/76) were reported by `@hadim`
+and landed as direct fixes. PRs
+[77](https://github.com/tensorbee/rdocx/pull/77),
+[78](https://github.com/tensorbee/rdocx/pull/78),
+[79](https://github.com/tensorbee/rdocx/pull/79), and
+[80](https://github.com/tensorbee/rdocx/pull/80) were contributed by
+`@pedroassumpcao` and landed through hardened equivalents. Draft PR
+[82](https://github.com/tensorbee/rdocx/pull/82) from `@mantissaman` served as
+the unmerged verification surface.
+
+**Notifications.** The verified release comments are
+[Issue 72](https://github.com/tensorbee/rdocx/issues/72#issuecomment-5676481224),
+[Issue 73](https://github.com/tensorbee/rdocx/issues/73#issuecomment-5676482036),
+[Issue 74](https://github.com/tensorbee/rdocx/issues/74#issuecomment-5676482919),
+[Issue 75](https://github.com/tensorbee/rdocx/issues/75#issuecomment-5676483829),
+[Issue 76](https://github.com/tensorbee/rdocx/issues/76#issuecomment-5676484782),
+[PR 77](https://github.com/tensorbee/rdocx/pull/77#issuecomment-5676485736),
+[PR 78](https://github.com/tensorbee/rdocx/pull/78#issuecomment-5676486460),
+[PR 79](https://github.com/tensorbee/rdocx/pull/79#issuecomment-5676487339),
+[PR 80](https://github.com/tensorbee/rdocx/pull/80#issuecomment-5676488369),
+and [PR 82](https://github.com/tensorbee/rdocx/pull/82#issuecomment-5676489503).
+Every record was closed after its comment was posted. The authenticated
+external reporter and contributor handles are preserved in the release notes
+and comments.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Configure one pending trusted publisher per
+exact PyPI project name before pushing a first-release tag. Keep distribution
+versions aligned with their own native facade and treat release tags and PyPI
+files as immutable after the first external mutation.

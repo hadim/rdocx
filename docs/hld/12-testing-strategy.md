@@ -2498,6 +2498,20 @@ parse the exact two-package, six-target product and use negative mutations to
 prove that package, target, clean-install, parity, artifact dependency, and
 tag-only OIDC requirements are sensitive before the hosted matrix runs.
 
+The S72 publication proof is bound to reviewed SHA
+`2b009243ed39ab66470d7484d490985368e865a8`. Manual build-only run
+`34907492958` produced and validated both seven-file sets without publication.
+Tag runs `34934221487` and `34939929652` published `rdocx 0.13.2` and
+`rpptx 0.11.0` respectively through the `pypi` environment. Every live file
+passed exact artifact validation. Fresh canonical-PyPI installs passed the
+priority runtime suites under Python 3.9 and 3.12, and exact `mypy==2.3.0`
+strict checks plus `stubtest` passed under Python 3.12. The release-note body
+digests are
+`3bf361a6fcc5a858d1f315f07ea766b0e60e3c0b3c7930a777e643f1bf62b728`
+for rdocx and
+`60fad5ee4003448082f1c14d0d7b3a5e9d159b21fa1ca7c07b0c7ac64300197f`
+for rpptx.
+
 The pull-request binding job has one matrix row for `rdocx` and one for
 `rpptx`. It uses Python 3.12.9 with exact `maturin==1.13.3` and
 `pytest==9.1.1`, installs `python-docx==1.2.0` or `python-pptx==1.0.2` for the

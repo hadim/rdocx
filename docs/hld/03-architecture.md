@@ -916,10 +916,13 @@ includes `oxml-chart` as the format-neutral owner while
 retaining `rpptx-chart` as a source-compatible deprecated shim. The released
 `rdocx-*` crates use the separate workspace version. The stable workspace, its
 eight stable-version internal pins, ten inherited lockfile packages, the
-`rdocx` Python project, and unpublished `rdocx-wasm` package are prepared at
-0.13.2. The source version supports the metadata-complete corrective Python
-release and does not authorize a crates.io publication.
-The `rpptx` Python project follows the native incubating version 0.11.0. The exact
+`rdocx` Python project, and unpublished `rdocx-wasm` package are at 0.13.2. The
+metadata-complete `rdocx` Python distribution is published at 0.13.2 from
+immutable annotated tag `py-rdocx-v0.13.2` at reviewed SHA
+`2b009243ed39ab66470d7484d490985368e865a8`. This source version does not
+authorize a crates.io publication. The `rpptx` Python project follows the
+native incubating version 0.11.0 and is published from immutable annotated tag
+`py-rpptx-v0.11.0` at the same reviewed SHA. The exact
 seven-package stable crates.io family is published from immutable annotated
 `v0.13.1` tag at reviewed SHA
 `c391d12422c288be5db314bad8338dd08bb47d9a`. Every registry entry and its sole
@@ -938,9 +941,10 @@ The separately approved cleanup yanked exactly the incomplete
 releases remain live and unyanked. The v0.11.0 tag remains immutable, and no
 v0.11.0 GitHub release exists. Earlier immutable registry releases, including
 the complete 0.12.0 family, remain available. The immutable `rdocx 0.13.1`
-PyPI release remains available, while corrective Python source is prepared at
-0.13.2 with its crate-local README as the long description. Version
-preparation and manifest eligibility do not authorize any later publication.
+PyPI release remains available. PyPI `rdocx 0.13.2` and `rpptx 0.11.0` each
+contain six `cp39-abi3` wheels and one source distribution with their
+crate-local README as the Markdown long description. Version preparation and
+manifest eligibility do not authorize any later publication.
 `oxml-cli-support` is the
 format-neutral owner of range parsing,
 JSON envelope, and output-path contracts. It has no dependency on either

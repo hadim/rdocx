@@ -59,7 +59,7 @@ cross-part relationships while committing only complete validated candidates.
 | F-X092 | Preserve logical reading order in generated PDFs | L | done | - |
 | F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | L | done | - |
 | F-X096 | Align Python distribution versions and release tags | M | done | - |
-| F-X094f | Prepare the version-aligned Python release paths | M | in-progress | codex |
+| F-X094f | Prepare the version-aligned Python release paths | M | done | - |
 
 ## Sequencing note
 
@@ -109,9 +109,9 @@ before their separate publication gates.
 - CLI and Python users can reach the issue-defined collaboration, comparison,
   layout, text, story, hyperlink, rendering, comment, and note capabilities
   through exact typed or schema-versioned contracts.
-- The `py-rdocx-v0.13.2` and `py-rpptx-v0.11.0` release paths each validate six
-  wheels and one source distribution, but create no tag and perform no
-  publication without the separate `/release` approval for that exact tag.
+- The `py-rdocx-v0.13.2` and `py-rpptx-v0.11.0` release paths each published
+  six wheels and one source distribution after separate exact-tag approval,
+  with complete PyPI descriptions and native-aligned versions.
 - Contributor PRs 77 through 80 retain credit while numbering facts, document
   body parsing, marker and field projections, table-cell serialization, and
   TOC coordinates survive malformed input, save, reopen, and repeated save.

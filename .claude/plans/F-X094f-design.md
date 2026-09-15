@@ -1,6 +1,6 @@
 # F-X094f, Prepare the version-aligned Python release paths
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S72
 **Size**: M
 **Depends on**: F-137, F-138, F-X094a, F-X094c, F-X094d, F-X094e, F-X096
@@ -112,7 +112,7 @@ Expected unchanged across all 49 entries.
 - [x] Bump the stable and rdocx Python source carriers to 0.13.2 while retaining rpptx 0.11.0.
 - [x] Reject artifacts without the reviewed Markdown description and project links.
 - [x] Replace the rdocx release-note target with py-rdocx-v0.13.2.
-- [ ] Re-run full local and hosted build-only verification.
+- [x] Re-run full local and hosted build-only verification.
 - [x] Stop before tag, push, PyPI, external comment, or issue closure.
 - [x] Update exactly the listed HLD files.
 

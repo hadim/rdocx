@@ -24,15 +24,17 @@ outside the repository's approved licensing model. Derivation from the
 specification text remains the fallback if the official archive, count, digest,
 or notice cannot be reproduced exactly.
 
+### PyPI distribution names
+
+The `rdocx` and `rpptx` distribution names are controlled by the authenticated
+publisher and are live on PyPI at 0.13.2 and 0.11.0 respectively. Both use the
+`tensorbee/rdocx` repository, `wheels.yml` workflow, and `pypi` environment as
+their trusted-publisher identity. The distribution and import names are the
+same for each project.
+
 ## Open questions, to settle before the milestone that needs them
 
-### Q2, PyPI name availability
-
-The future crates.io names in the publishing graph are controlled by
-`mantissaman` through 0.0.0 placeholders. PyPI has not been checked. If either
-`rdocx` or `rpptx` is taken there, maturin's `module-name` allows shipping a
-distribution such as `rdocx-python` while keeping `import rdocx`. Claim both
-PyPI names as soon as the decision to ship wheels is confirmed.
+None.
 
 ## Risks, ranked
 

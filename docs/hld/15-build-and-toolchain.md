@@ -587,6 +587,15 @@ plus a matching GitHub release targeting the reviewed SHA. `rdocx-wasm`
 inherits the stable workspace version but stays `publish = false` because its
 distribution path is npm.
 
+The current Python release boundary is reviewed SHA
+`2b009243ed39ab66470d7484d490985368e865a8`. Immutable tags
+`py-rdocx-v0.13.2` and `py-rpptx-v0.11.0` select only `rdocx 0.13.2` and
+`rpptx 0.11.0` respectively. Each live PyPI version contains six `cp39-abi3`
+wheels and one source distribution. Tag workflows `34934221487` and
+`34939929652` passed exact publication-set validation and trusted publishing,
+and each matching GitHub release uses the byte-identical reviewed changelog
+body.
+
 Both Python `pyproject.toml` versions and their Rust binding crate versions are
 exact release carriers. The Python preflight checks all four values instead of
 rewriting them during the release ceremony.

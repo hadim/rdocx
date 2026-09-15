@@ -1467,6 +1467,14 @@ selected project version, all seven files, authenticated owner or maintainer
 roles, the exact reviewed GitHub release body, and every contribution
 notification are verified.
 
+The current reviewed Python releases are `rdocx 0.13.2` from
+`py-rdocx-v0.13.2` and `rpptx 0.11.0` from `py-rpptx-v0.11.0`, both at SHA
+`2b009243ed39ab66470d7484d490985368e865a8`. Each PyPI release contains the
+exact six platform wheels and one source distribution, exposes its complete
+crate-local README and project metadata, and passes clean Python 3.9 and 3.12
+runtime checks plus Python 3.12 strict typing and stub checks. Their GitHub
+release bodies match the reviewed changelog text byte for byte.
+
 **A PR-time job that builds the wheel and runs pytest is mandatory.** The
 absence of exactly this job for wasm is why `rdocx-wasm` rotted.
 
