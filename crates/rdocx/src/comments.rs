@@ -1,6 +1,6 @@
 //! Public comment handles and atomic document comment mutations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use oxml_opc::OpcPackage;
 use rdocx_oxml::comments::{CT_Comment, CT_Comments};
@@ -117,6 +117,127 @@ impl CommentRef<'_> {
 }
 
 impl Document {
+    pub(crate) fn ensure_fragment_comment_models_staged(&mut self) -> Result<String> {
+        self.ensure_comment_models()?;
+        self.ensure_comment_relationships()?;
+        self.comments_part_name
+            .clone()
+            .ok_or_else(|| Error::Other("comments part name is missing".to_owned()))
+    }
+
+    pub(crate) fn fragment_comment_dependency_xml(
+        source: Option<&CT_Comments>,
+        source_extended: Option<&CT_CommentsEx>,
+        ids: &[String],
+    ) -> Result<Option<Vec<u8>>> {
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        let source = source.ok_or_else(|| {
+            Error::Other("document fragment references a missing comments part".to_owned())
+        })?;
+        let included_ids = selected_fragment_comment_ids(source, source_extended, ids)?;
+        let mut selected = source.clone();
+        selected
+            .comments
+            .retain(|comment| included_ids.contains(&comment.id));
+        selected.extra_xml.clear();
+        Ok(Some(selected.to_xml()?))
+    }
+
+    pub(crate) fn import_fragment_comments_staged(
+        &mut self,
+        source: Option<&CT_Comments>,
+        source_extended: Option<&CT_CommentsEx>,
+        ids: &[String],
+    ) -> Result<BTreeMap<String, String>> {
+        if ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let source = source.ok_or_else(|| {
+            Error::Other("document fragment references a missing comments part".to_owned())
+        })?;
+        self.ensure_comment_models()?;
+        self.ensure_comment_relationships()?;
+        let included_ids = selected_fragment_comment_ids(source, source_extended, ids)?;
+
+        let mut remap = BTreeMap::<String, String>::new();
+        let mut paragraph_remap = HashMap::<String, String>::new();
+        let mut reserved_para_ids =
+            occupied_para_ids(self.comments.as_ref(), self.comments_extended.as_ref());
+        for comment in source
+            .comments
+            .iter()
+            .filter(|comment| included_ids.contains(&comment.id))
+        {
+            let new_id = self.identifiers.reserve_comment_id()?;
+            remap.insert(comment.id.to_string(), new_id.to_string());
+            for old_para_id in comment.paragraph_ids.iter().flatten() {
+                let new_para_id = allocate_para_id_from_occupied(&mut reserved_para_ids)?;
+                paragraph_remap.insert(old_para_id.clone(), new_para_id);
+            }
+        }
+
+        let mut imported_comments = Vec::new();
+        for source_comment in source
+            .comments
+            .iter()
+            .filter(|comment| included_ids.contains(&comment.id))
+        {
+            let new_id = remap
+                .get(&source_comment.id.to_string())
+                .and_then(|id| id.parse::<i32>().ok())
+                .ok_or_else(|| {
+                    Error::Other("document fragment comment remap is incomplete".to_owned())
+                })?;
+            let mut imported = source_comment.clone();
+            imported.id = new_id;
+            for para_id in imported.paragraph_ids.iter_mut().flatten() {
+                *para_id = paragraph_remap.get(para_id).cloned().ok_or_else(|| {
+                    Error::Other("document fragment paragraph remap is incomplete".to_owned())
+                })?;
+            }
+            imported_comments.push(imported);
+        }
+        self.comments
+            .as_mut()
+            .expect("fragment comment models were initialized")
+            .comments
+            .extend(imported_comments);
+
+        if let Some(source_extended) = source_extended {
+            let mut imported_extended = Vec::new();
+            for extension in &source_extended.comments {
+                let Some(para_id) = paragraph_remap.get(&extension.para_id).cloned() else {
+                    continue;
+                };
+                let para_id_parent = extension
+                    .para_id_parent
+                    .as_ref()
+                    .map(|parent| {
+                        paragraph_remap.get(parent).cloned().ok_or_else(|| {
+                            Error::Other(
+                                "document fragment comment parent is outside the selected closure"
+                                    .to_owned(),
+                            )
+                        })
+                    })
+                    .transpose()?;
+                let mut imported = extension.clone();
+                imported.para_id = para_id;
+                imported.para_id_parent = para_id_parent;
+                imported_extended.push(imported);
+            }
+            self.comments_extended
+                .as_mut()
+                .expect("fragment comment extension model was initialized")
+                .comments
+                .extend(imported_extended);
+        }
+        self.comments_dirty = true;
+        Ok(remap)
+    }
+
     /// Return bookmarks and malformed marker reports in main-story paragraph order.
     ///
     /// Reported body indexes count typed paragraphs recursively through tables and
@@ -355,6 +476,7 @@ impl Document {
     ) -> Result<i32> {
         let mut candidate = self.clone_for_staging();
         let id = candidate.add_comment_staged(range, author, initials, text)?;
+        candidate.flush_dirty_related_story_models()?;
         self.commit_staged_mutation(candidate);
         Ok(id)
     }
@@ -409,6 +531,7 @@ impl Document {
             id,
             run_index: range.start.run_index,
             raw_before: raw_count_at(start, range.start.run_index),
+            has_child_content: false,
         });
         let end = body_paragraph_mut(&mut self.document.body.content, range.end.body_index)
             .expect("range was validated");
@@ -416,8 +539,10 @@ impl Document {
             id,
             run_index: range.end.run_index,
             raw_before: raw_count_at(end, range.end.run_index),
+            has_child_content: false,
         });
         self.identifiers = identifiers;
+        self.comments_dirty = true;
         self.invalidate_layout();
         Ok(id)
     }
@@ -426,6 +551,7 @@ impl Document {
     pub fn reply_to(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
         let mut candidate = self.clone_for_staging();
         let id = candidate.reply_to_staged(parent_id, author, text)?;
+        candidate.flush_dirty_related_story_models()?;
         self.commit_staged_mutation(candidate);
         Ok(id)
     }
@@ -506,6 +632,7 @@ impl Document {
             done: None,
             extra_attributes: Vec::new(),
         });
+        self.comments_dirty = true;
         self.invalidate_layout();
         Ok(id)
     }
@@ -515,6 +642,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         let updated = candidate.resolve_comment_staged(id, resolved)?;
         if updated {
+            candidate.flush_dirty_related_story_models()?;
             self.commit_staged_mutation(candidate);
         }
         Ok(updated)
@@ -573,6 +701,7 @@ impl Document {
                 extra_attributes: Vec::new(),
             });
         }
+        self.comments_dirty = true;
         self.invalidate_layout();
         Ok(true)
     }
@@ -582,6 +711,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         let removed = candidate.remove_comment_staged(id)?;
         if removed {
+            candidate.flush_dirty_related_story_models()?;
             self.commit_staged_mutation(candidate);
         }
         Ok(removed)
@@ -663,6 +793,7 @@ impl Document {
         self.identifiers
             .retire_authored_comment_ids(removed_ids.iter().copied());
         self.remove_owned_empty_comment_parts();
+        self.comments_dirty = self.comments.is_some();
         self.invalidate_layout();
         Ok(true)
     }
@@ -773,6 +904,55 @@ impl Document {
             self.comments_extended_owned = false;
         }
     }
+}
+
+fn selected_fragment_comment_ids(
+    source: &CT_Comments,
+    source_extended: Option<&CT_CommentsEx>,
+    ids: &[String],
+) -> Result<HashSet<i32>> {
+    let mut included_ids = ids
+        .iter()
+        .map(|id| {
+            id.parse::<i32>()
+                .map_err(|_| Error::Other(format!("document fragment comment id {id} is invalid")))
+        })
+        .collect::<Result<HashSet<_>>>()?;
+    for id in &included_ids {
+        if !source.comments.iter().any(|comment| comment.id == *id) {
+            return Err(Error::Other(format!(
+                "document fragment comment id {id} has no definition"
+            )));
+        }
+    }
+    if let Some(extended) = source_extended {
+        loop {
+            let included_para_ids = source
+                .comments
+                .iter()
+                .filter(|comment| included_ids.contains(&comment.id))
+                .filter_map(first_para_id)
+                .collect::<HashSet<_>>();
+            let before = included_ids.len();
+            for extension in &extended.comments {
+                if extension
+                    .para_id_parent
+                    .as_deref()
+                    .is_some_and(|parent| included_para_ids.contains(parent))
+                    && let Some(comment) = source
+                        .comments
+                        .iter()
+                        .find(|comment| first_para_id(comment) == Some(&extension.para_id))
+                {
+                    included_ids.insert(comment.id);
+                }
+            }
+            if included_ids.len() == before {
+                break;
+            }
+        }
+    }
+    Ok(included_ids)
 }
 
 fn first_para_id(comment: &CT_Comment) -> Option<&str> {
@@ -1137,6 +1317,17 @@ fn allocate_para_id_with_reserved(
     extended: Option<&CT_CommentsEx>,
     reserved: Option<&str>,
 ) -> Result<String> {
+    let mut occupied = occupied_para_ids(comments, extended);
+    if let Some(reserved) = reserved.and_then(parse_para_id) {
+        occupied.insert(reserved);
+    }
+    allocate_para_id_from_occupied(&mut occupied)
+}
+
+fn occupied_para_ids(
+    comments: Option<&CT_Comments>,
+    extended: Option<&CT_CommentsEx>,
+) -> HashSet<u32> {
     let mut occupied = comments
         .into_iter()
         .flat_map(|comments| comments.comments.iter())
@@ -1150,18 +1341,22 @@ fn allocate_para_id_with_reserved(
             .flat_map(|extended| extended.comments.iter())
             .filter_map(|entry| parse_para_id(&entry.para_id)),
     );
-    if let Some(reserved) = reserved.and_then(parse_para_id) {
-        occupied.insert(reserved);
-    }
+    occupied
+}
+
+fn allocate_para_id_from_occupied(occupied: &mut HashSet<u32>) -> Result<String> {
     if let Some(max) = occupied.iter().copied().max()
         && max < u32::MAX
     {
-        return Ok(format!("{:08X}", max + 1));
+        let allocated = max + 1;
+        occupied.insert(allocated);
+        return Ok(format!("{allocated:08X}"));
     }
-    (1..=u32::MAX)
+    let allocated = (1..=u32::MAX)
         .find(|candidate| !occupied.contains(candidate))
-        .map(|candidate| format!("{candidate:08X}"))
-        .ok_or_else(|| Error::Other("no available comment paragraph id remains".to_owned()))
+        .ok_or_else(|| Error::Other("no available comment paragraph id remains".to_owned()))?;
+    occupied.insert(allocated);
+    Ok(format!("{allocated:08X}"))
 }
 
 fn parse_para_id(value: &str) -> Option<u32> {

@@ -1,6 +1,9 @@
 import importlib.metadata
 import re
 import struct
+import sys
+import threading
+import zipfile
 import zlib
 
 import pytest
@@ -690,3 +693,229 @@ def test_pinned_python_pptx_bidirectional_seven_example_records(tmp_path):
     assert normalized[0] == normalized[1]
     assert writer_contracts[0] == writer_contracts[1]
     assert normalized[0]["extract"] == ("Adding a Table",)
+
+
+def _add_speaker_notes(source, target, text):
+    with zipfile.ZipFile(source) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+
+    content_types = parts["[Content_Types].xml"].decode()
+    parts["[Content_Types].xml"] = content_types.replace(
+        "</Types>",
+        '<Override PartName="/ppt/notesSlides/notesSlide1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>'
+        "</Types>",
+    ).encode()
+    slide_rels = parts["ppt/slides/_rels/slide1.xml.rels"].decode()
+    parts["ppt/slides/_rels/slide1.xml.rels"] = slide_rels.replace(
+        "</Relationships>",
+        '<Relationship Id="rId2" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" '
+        'Target="../notesSlides/notesSlide1.xml"/>'
+        "</Relationships>",
+    ).encode()
+    parts["ppt/notesSlides/notesSlide1.xml"] = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+        "<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/>"
+        "<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"
+        "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Notes Placeholder\"/>"
+        "<p:cNvSpPr/><p:nvPr><p:ph type=\"body\" idx=\"1\"/></p:nvPr>"
+        "</p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p>"
+        f"<a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"
+        "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/>"
+        "</p:clrMapOvr></p:notes>"
+    ).encode()
+    parts["ppt/notesSlides/_rels/notesSlide1.xml.rels"] = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster" '
+        'Target="../notesMasters/notesMaster1.xml"/>'
+        '<Relationship Id="rId2" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" '
+        'Target="../slides/slide1.xml"/></Relationships>'
+    ).encode()
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in parts.items():
+            archive.writestr(name, data)
+
+
+def test_presentation_render_comments_and_notes_match_native_snapshots(tmp_path):
+    import rpptx
+
+    author_id = "{11111111-1111-1111-1111-111111111111}"
+    comment_id = "{22222222-2222-2222-2222-222222222222}"
+    reply_id = "{33333333-3333-3333-3333-333333333333}"
+    second_reply_id = "{44444444-4444-4444-4444-444444444444}"
+    second_comment_id = "{55555555-5555-5555-5555-555555555555}"
+    created = "2026-09-14T10:30:00Z"
+
+    presentation = rpptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    source = tmp_path / "source.pptx"
+    with_notes = tmp_path / "with-notes.pptx"
+    presentation.save(source)
+    _add_speaker_notes(source, with_notes, "F-X094e speaker note")
+    presentation = rpptx.Presentation(with_notes)
+    slide = presentation.slides[0]
+
+    pdf = presentation.to_pdf()
+    slide_png = presentation.render_slide_to_png(0, dpi=72.0)
+    assert pdf.startswith(b"%PDF-")
+    assert slide_png is not None
+    assert slide_png.startswith(b"\x89PNG\r\n\x1a\n")
+    assert presentation.render_all_slides(dpi=72.0) == [slide_png]
+    assert presentation.to_notes_pdf().startswith(b"%PDF-")
+    assert presentation.render_all_notes(dpi=72.0)[0].startswith(
+        b"\x89PNG\r\n\x1a\n"
+    )
+    assert slide.notes_text == "F-X094e speaker note"
+
+    with pytest.raises(rpptx.RpptxError, match="GUID"):
+        presentation.add_comment_author(
+            id="not-a-guid",
+            name="Invalid",
+            user_id="invalid@example.com",
+            provider_id="local",
+        )
+    assert slide.notes_text == "F-X094e speaker note"
+    with pytest.raises(rpptx.RpptxError, match="unknown comment author"):
+        slide.add_comment(
+            id=comment_id,
+            author_id="{99999999-9999-9999-9999-999999999999}",
+            created=created,
+            text="Must remain atomic",
+        )
+    assert slide.notes_text == "F-X094e speaker note"
+
+    presentation.add_comment_author(
+        id=author_id,
+        name="Ada Lovelace",
+        initials="AL",
+        user_id="ada@example.com",
+        provider_id="local",
+    )
+    author = presentation.comment_authors[0]
+    assert (
+        author.id,
+        author.name,
+        author.initials,
+        author.user_id,
+        author.provider_id,
+    ) == (author_id, "Ada Lovelace", "AL", "ada@example.com", "local")
+    with pytest.raises(AttributeError):
+        author.name = "mutated"
+
+    slide = presentation.slides[0]
+    slide.add_comment(
+        id=comment_id,
+        author_id=author_id,
+        created=created,
+        text="Review this slide",
+    )
+    slide = presentation.slides[0]
+    slide.reply_to_comment(
+        comment_id,
+        id=reply_id,
+        author_id=author_id,
+        created=created,
+        text="First reply",
+    )
+    slide = presentation.slides[0]
+    slide.reply_to_comment(
+        comment_id,
+        id=second_reply_id,
+        author_id=author_id,
+        created=created,
+        text="Second reply",
+    )
+    slide = presentation.slides[0]
+    slide.add_comment(
+        id=second_comment_id,
+        author_id=author_id,
+        created=created,
+        text="Move me first",
+    )
+    slide = presentation.slides[0]
+    slide.move_comment(1, 0)
+    slide = presentation.slides[0]
+    slide.move_reply(comment_id, 1, 0)
+
+    comments = presentation.slides[0].comments
+    assert tuple(comment.id for comment in comments) == (second_comment_id, comment_id)
+    comment = comments[1]
+    assert (comment.id, comment.author_id, comment.status, comment.created, comment.text) == (
+        comment_id,
+        author_id,
+        None,
+        created,
+        "Review this slide",
+    )
+    assert tuple(reply.id for reply in comment.replies) == (second_reply_id, reply_id)
+    assert comment.replies[0].text == "Second reply"
+    with pytest.raises(AttributeError):
+        comment.text = "mutated"
+
+    output = tmp_path / "comments.pptx"
+    presentation.save(output)
+    reopened = rpptx.Presentation(output)
+    assert reopened.comment_authors == presentation.comment_authors
+    assert reopened.slides[0].comments == presentation.slides[0].comments
+
+
+def _assert_rpptx_releases_gil(operation):
+    gate = threading.Lock()
+    gate.acquire()
+    ready = threading.Event()
+    progressed = threading.Event()
+
+    def wait_for_detached_call():
+        ready.set()
+        gate.acquire()
+        progressed.set()
+
+    old_switch_interval = sys.getswitchinterval()
+    sys.setswitchinterval(60.0)
+    worker = threading.Thread(target=wait_for_detached_call)
+    try:
+        worker.start()
+        assert ready.wait(timeout=5.0)
+        gate.release()
+        result = None
+        for _ in range(64):
+            result = operation()
+            if progressed.is_set():
+                break
+        progressed_during_call = progressed.is_set()
+    finally:
+        if not worker.is_alive() and gate.locked():
+            gate.release()
+        worker.join(timeout=5.0)
+        if gate.locked():
+            gate.release()
+        sys.setswitchinterval(old_switch_interval)
+
+    assert not worker.is_alive()
+    assert progressed_during_call, "Python worker made no progress during native call"
+    assert result is not None
+    return result
+
+
+def test_slide_and_notes_rendering_release_the_gil():
+    import rpptx
+
+    presentation = rpptx.Presentation()
+    for _ in range(3):
+        presentation.slides.add_slide(presentation.slide_layouts[6])
+
+    slides = _assert_rpptx_releases_gil(
+        lambda: presentation.render_all_slides(dpi=72.0)
+    )
+    notes = _assert_rpptx_releases_gil(
+        lambda: presentation.render_all_notes(dpi=72.0)
+    )
+
+    assert len(slides) == 3
+    assert len(notes) == 3

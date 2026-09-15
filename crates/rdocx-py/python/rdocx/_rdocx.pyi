@@ -8,10 +8,329 @@ from .enum import text as _text
 
 _Path = str | _os.PathLike[str]
 __all__ = [
-    "Document", "Paragraph", "ParagraphCollection", "Run", "RunCollection",
-    "Font", "ParagraphFormat", "Table", "TableCollection", "Row",
-    "RowCollection", "Cell", "CellCollection", "CellParagraphCollection",
+    "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
+    "Comment", "ComparisonDiagnostic", "Document", "Font", "HeaderFooterVariant",
+    "Hyperlink", "LayoutFragment", "LayoutPage", "Paragraph", "ParagraphCollection",
+    "ParagraphFormat", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
+    "RunRange", "Section", "Story", "StoryItem", "Style", "Table", "TableCollection",
+    "TocRebuildReport",
 ]
+
+
+@_final
+class RunPosition:
+    def __new__(cls, *, body_index: int, run_index: int) -> RunPosition: ...
+    @property
+    def body_index(self) -> int: ...
+    @property
+    def run_index(self) -> int: ...
+
+
+@_final
+class RunRange:
+    def __new__(cls, *, start: RunPosition, end: RunPosition) -> RunRange: ...
+    @property
+    def start(self) -> RunPosition: ...
+    @property
+    def end(self) -> RunPosition: ...
+
+
+@_final
+class Comment:
+    def __new__(
+        cls,
+        *,
+        id: int,
+        author: str | None,
+        initials: str | None,
+        date: str | None,
+        text: str,
+        parent_id: int | None,
+        resolved: bool,
+    ) -> Comment: ...
+    @property
+    def id(self) -> int: ...
+    @property
+    def author(self) -> str | None: ...
+    @property
+    def initials(self) -> str | None: ...
+    @property
+    def date(self) -> str | None: ...
+    @property
+    def text(self) -> str: ...
+    @property
+    def parent_id(self) -> int | None: ...
+    @property
+    def resolved(self) -> bool: ...
+
+
+@_final
+class ComparisonDiagnostic:
+    def __new__(cls, *, location: str, message: str) -> ComparisonDiagnostic: ...
+    @property
+    def location(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+
+
+@_final
+class BoundingBox:
+    def __new__(
+        cls, *, x: float, y: float, width: float, height: float
+    ) -> BoundingBox: ...
+    @property
+    def x(self) -> float: ...
+    @property
+    def y(self) -> float: ...
+    @property
+    def width(self) -> float: ...
+    @property
+    def height(self) -> float: ...
+
+
+@_final
+class LayoutFragment:
+    def __new__(
+        cls,
+        *,
+        body_index: int,
+        physical_page: int,
+        displayed_page: int,
+        bounds: BoundingBox,
+    ) -> LayoutFragment: ...
+    @property
+    def body_index(self) -> int: ...
+    @property
+    def physical_page(self) -> int: ...
+    @property
+    def displayed_page(self) -> int: ...
+    @property
+    def bounds(self) -> BoundingBox: ...
+
+
+@_final
+class LayoutPage:
+    def __new__(
+        cls,
+        *,
+        page_number: int,
+        displayed_page_number: int,
+        width: float,
+        height: float,
+    ) -> LayoutPage: ...
+    @property
+    def page_number(self) -> int: ...
+    @property
+    def displayed_page_number(self) -> int: ...
+    @property
+    def width(self) -> float: ...
+    @property
+    def height(self) -> float: ...
+
+
+@_final
+class TocRebuildReport:
+    def __new__(
+        cls, *, entry_count: int, bookmark_count: int, diagnostic_count: int
+    ) -> TocRebuildReport: ...
+    @property
+    def entry_count(self) -> int: ...
+    @property
+    def bookmark_count(self) -> int: ...
+    @property
+    def diagnostic_count(self) -> int: ...
+
+
+@_final
+class Story:
+    def __new__(cls, *, kind: str, part_name: str, owner_index: int) -> Story: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def part_name(self) -> str: ...
+    @property
+    def owner_index(self) -> int: ...
+
+
+@_final
+class StoryItem:
+    def __new__(
+        cls,
+        *,
+        story: Story,
+        kind: str,
+        index_path: tuple[int, ...],
+        text: str | None,
+    ) -> StoryItem: ...
+    @property
+    def story(self) -> Story: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def index_path(self) -> tuple[int, ...]: ...
+    @property
+    def text(self) -> str | None: ...
+
+
+@_final
+class Hyperlink:
+    def __new__(
+        cls,
+        *,
+        story: Story,
+        index_path: tuple[int, ...],
+        text: str,
+        url: str | None,
+        anchor: str | None,
+        relationship_id: str | None,
+    ) -> Hyperlink: ...
+    @property
+    def story(self) -> Story: ...
+    @property
+    def index_path(self) -> tuple[int, ...]: ...
+    @property
+    def text(self) -> str: ...
+    @property
+    def url(self) -> str | None: ...
+    @property
+    def anchor(self) -> str | None: ...
+    @property
+    def relationship_id(self) -> str | None: ...
+
+
+@_final
+class HeaderFooterVariant:
+    def __new__(
+        cls,
+        *,
+        section_index: int,
+        kind: str,
+        variant: str,
+        story: Story | None,
+        source_section: int | None,
+        inherited: bool,
+    ) -> HeaderFooterVariant: ...
+    @property
+    def section_index(self) -> int: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def variant(self) -> str: ...
+    @property
+    def story(self) -> Story | None: ...
+    @property
+    def source_section(self) -> int | None: ...
+    @property
+    def inherited(self) -> bool: ...
+
+
+@_final
+class Section:
+    def __new__(
+        cls,
+        *,
+        ordinal: int,
+        is_final: bool,
+        orientation: str | None,
+        page_width: int | None,
+        page_height: int | None,
+        margin_top: int | None,
+        margin_right: int | None,
+        margin_bottom: int | None,
+        margin_left: int | None,
+        gutter: int | None,
+        column_count: int | None,
+        column_spacing: int | None,
+        page_number_start: int | None,
+        header_distance: int | None,
+        footer_distance: int | None,
+        different_first_page: bool | None,
+        break_type: str | None,
+    ) -> Section: ...
+    @property
+    def ordinal(self) -> int: ...
+    @property
+    def is_final(self) -> bool: ...
+    @property
+    def orientation(self) -> str | None: ...
+    @property
+    def page_width(self) -> int | None: ...
+    @property
+    def page_height(self) -> int | None: ...
+    @property
+    def margin_top(self) -> int | None: ...
+    @property
+    def margin_right(self) -> int | None: ...
+    @property
+    def margin_bottom(self) -> int | None: ...
+    @property
+    def margin_left(self) -> int | None: ...
+    @property
+    def gutter(self) -> int | None: ...
+    @property
+    def column_count(self) -> int | None: ...
+    @property
+    def column_spacing(self) -> int | None: ...
+    @property
+    def page_number_start(self) -> int | None: ...
+    @property
+    def header_distance(self) -> int | None: ...
+    @property
+    def footer_distance(self) -> int | None: ...
+    @property
+    def different_first_page(self) -> bool | None: ...
+    @property
+    def break_type(self) -> str | None: ...
+
+
+@_final
+class Style:
+    def __new__(
+        cls,
+        *,
+        style_id: str,
+        name: str | None,
+        based_on: str | None,
+        style_type: str,
+        linked_style: str | None,
+        next_style: str | None,
+        priority: int | None,
+        auto_redefine: bool | None,
+        hidden: bool | None,
+        semi_hidden: bool | None,
+        unhide_when_used: bool | None,
+        quick_format: bool | None,
+        locked: bool | None,
+        is_default: bool,
+    ) -> Style: ...
+    @property
+    def style_id(self) -> str: ...
+    @property
+    def name(self) -> str | None: ...
+    @property
+    def based_on(self) -> str | None: ...
+    @property
+    def style_type(self) -> str: ...
+    @property
+    def linked_style(self) -> str | None: ...
+    @property
+    def next_style(self) -> str | None: ...
+    @property
+    def priority(self) -> int | None: ...
+    @property
+    def auto_redefine(self) -> bool | None: ...
+    @property
+    def hidden(self) -> bool | None: ...
+    @property
+    def semi_hidden(self) -> bool | None: ...
+    @property
+    def unhide_when_used(self) -> bool | None: ...
+    @property
+    def quick_format(self) -> bool | None: ...
+    @property
+    def locked(self) -> bool | None: ...
+    @property
+    def is_default(self) -> bool: ...
 
 
 @_final
@@ -35,6 +354,37 @@ class Document:
         transparent: bool = False,
         pages: list[int] | None = None,
     ) -> list[bytes] | bytes: ...
+    def compare(
+        self, edited: Document, author: str, timestamp: str
+    ) -> tuple[ComparisonDiagnostic, ...]: ...
+    @property
+    def comments(self) -> tuple[Comment, ...]: ...
+    @property
+    def sections(self) -> tuple[Section, ...]: ...
+    @property
+    def styles(self) -> tuple[Style, ...]: ...
+    @property
+    def stories(self) -> tuple[Story, ...]: ...
+    @property
+    def story_items(self) -> tuple[StoryItem, ...]: ...
+    @property
+    def header_footer_variants(self) -> tuple[HeaderFooterVariant, ...]: ...
+    @property
+    def hyperlinks(self) -> tuple[Hyperlink, ...]: ...
+    def add_comment(
+        self,
+        range: RunRange,
+        *,
+        author: str,
+        text: str,
+        initials: str | None = None,
+    ) -> int: ...
+    def reply_to(self, parent_id: int, *, author: str, text: str) -> int: ...
+    def resolve_comment(self, id: int, *, resolved: bool = True) -> bool: ...
+    def remove_comment(self, id: int) -> bool: ...
+    def layout(self) -> tuple[LayoutFragment, ...]: ...
+    def layout_page(self, page_index: int) -> LayoutPage | None: ...
+    def rebuild_toc(self) -> TocRebuildReport: ...
     @property
     def paragraphs(self) -> ParagraphCollection: ...
     @property

@@ -24,15 +24,17 @@ outside the repository's approved licensing model. Derivation from the
 specification text remains the fallback if the official archive, count, digest,
 or notice cannot be reproduced exactly.
 
+### PyPI distribution names
+
+The `rdocx` and `rpptx` distribution names are controlled by the authenticated
+publisher and are live on PyPI at 0.13.2 and 0.11.0 respectively. Both use the
+`tensorbee/rdocx` repository, `wheels.yml` workflow, and `pypi` environment as
+their trusted-publisher identity. The distribution and import names are the
+same for each project.
+
 ## Open questions, to settle before the milestone that needs them
 
-### Q2, PyPI name availability
-
-The future crates.io names in the publishing graph are controlled by
-`mantissaman` through 0.0.0 placeholders. PyPI has not been checked. If either
-`rdocx` or `rpptx` is taken there, maturin's `module-name` allows shipping a
-distribution such as `rdocx-python` while keeping `import rdocx`. Claim both
-PyPI names as soon as the decision to ship wheels is confirmed.
+None.
 
 ## Risks, ranked
 
@@ -104,8 +106,31 @@ blobs.
 *Mitigation*: `rewrite_rel_ids`, and `add_slide` synthesising rather than
 deep-copying so the common path never needs it. The Word facade scans
 relationship definitions by owner and identifier definitions by expanded XML
-name before it allocates. Authored DrawingML is remapped only on staged typed
-state, while imported raw owners and their identifiers remain unchanged.
+name before it allocates. Story-scoped authored occurrences are registered only
+after insertion and reconciled against live expanded-name XML on each staged
+serialization. Zero-use occurrence provenance retires without deleting its
+relationship definition. Same-owner clones may share a relationship, every
+live reference is remapped simultaneously, and each live authored picture gets
+a distinct global drawing identity. Imported raw owners and their identifiers
+remain fixed occupants. Producer drawing-definition uniqueness is checked per
+physical XML part, then every accepted value joins package-global authored
+occupancy. This accepts legitimate cross-part reuse without permitting authored
+collisions or same-part aliases. Ambiguous preserved identity ranges and
+relationship ownership reject before publication.
+
+Comparison and revision resolution treat prepared package XML as authoritative
+for the main story. Exact source spans pass through every changed owner so a
+stable drawing run keeps namespace scope and opaque payload even when a sibling
+changes. Staged accept and reject checks cover the package graph, and malformed
+drawing identity fails without publishing candidate state.
+
+An unknown root default namespace is safe to omit only when namespace-aware
+scope analysis proves that no unprefixed element inherits it. Nested default
+declarations shadow the root even when their URI is identical, while
+unprefixed attributes do not consume it. Used, malformed, or ambiguous cases
+reject before publication. Successful canonical serialization refreshes the
+cached namespace facts from the emitted main-story bytes, which keeps repeated
+saves consistent after an unused declaration is omitted.
 
 ### R7, scope
 
@@ -131,14 +156,18 @@ The bundled fonts are 6.8 MB outside `src/`, published today only because
 size against the 10 MiB crates.io limit in CI. Roughly 3.5 to 4 MB compressed is
 expected, but verify rather than assume.
 
-### R9, index-path aliasing in the Python bindings
+### R9, index-path aliasing in bindings and story locations
 
 An index path addresses a position, not an object, so a handle held across a
 structural mutation would silently read the wrong element.
 
 *Mitigation*: the revision counter making it a loud `StaleElementError`, lazy
 collections so the idiomatic loop never holds a stale handle, and stable ids in
-v0.2.
+v0.2. Native story locations also carry the owner fingerprint and item kind.
+Structural operations accept an existing boundary only from the canonical
+flattened item that resolves to an actual direct owner child. The separate
+`ContentLocation::end` marker represents the boundary after final content
+without aliasing an item path.
 
 ### R10, the `rpptx-oxml` scope surface
 
@@ -197,6 +226,45 @@ relationship, content-type, and XML identities together. Final-order
 canonicalization runs on a staged clone, so a collision or exhausted range
 cannot publish half of a package invariant.
 
+Generic content insertion, removal, cloning, and movement use the same staged
+boundary. A clone freshens known document identities before insertion.
+Relationship-bearing content remains restricted to its unchanged story owner,
+and preserved identity ownership that cannot be proved rejects. Serialization
+and reopen complete before the candidate replaces live state.
+
+Cross-document main-body import removes that unchanged-owner restriction only
+through an owned `DocumentFragment`. The importer discovers selected body and
+comment dependencies before mutation, closes internal relationships
+recursively, reserves every destination identity, and rewrites exact retained
+XML only from complete maps. Caller policy may reuse equivalent styles,
+numbering, and related leaf parts. Unsupported external, dangling, malformed,
+split-range, and exhausted graphs fail without changing the live document.
+All-story import and the broader dependency classes remain owned by F-276.
+
+Picture, hyperlink, and relationship lookup operations resolve the exact OPC
+owner from `StoryId`. Cells and text boxes inherit their containing part, and
+related stories use their resolved part. Media, relationship, content-type,
+XML, and drawing changes publish together only after the complete candidate
+reopens. Shared same-owner clone relationships and per-occurrence drawing
+identities are canonicalized from final serialized order.
+
+Ordered section removal uses that same staged boundary. Before removing a
+non-final owner, it resolves the first usable same-variant internal header and
+footer relationship and materializes inherited behavior on the following
+section. It prunes only facade-owned parts that no modeled or opaque reference
+can reach. Missing, malformed, cross-type, external, shared, and producer-owned
+edges cannot publish a half-updated section and story graph.
+
+Per-section header and footer mutations use the same invariant boundary.
+Lookup follows only the requested variant through preceding sections. Link
+accepts only an existing internal exact-type story. Unlink and replace copy the
+story XML and complete part-local relationship set, rebase internal relative
+targets, and freshen drawing identities before publication. Inherit removes the
+direct reference, while remove installs an explicit empty story. Pruning is
+limited to facade-owned graph nodes that are unreachable from modeled and
+opaque references. The document-wide even-page setting is an explicit typed
+operation, and first-page creation enables the section title-page state.
+
 Style graph mutations use the same rule. Adding or updating one side of a
 legal paragraph and character link updates the reciprocal edge in the staged
 candidate. Missing targets, incompatible types, duplicate defaults, cycles,
@@ -216,6 +284,30 @@ Word 16.112.3 continues one captured shared-definition sequence across distinct
 instances, so that behavior is an intentional documented divergence. The
 pinned differential uses separate abstract definitions where both systems
 agree, and a focused regression guards the approved concrete-instance rule.
+
+### R14, Python publication exposes a partial or unaudited package family
+
+The `rdocx` and `rpptx` distributions have independent native versions and
+release boundaries, while their twelve platform wheels and two source
+distributions share one build matrix. A count-only upload, manual publication
+path, stale artifact, mismatched project version, or unverified
+trusted-publisher identity could publish the wrong project or mix both families.
+A project that omits its README from package metadata can also publish working
+files whose PyPI page has no usable installation or API guidance. Published
+release files are immutable, so that omission requires a new version.
+
+*Mitigation*: `py-rdocx-vX.Y.Z` and `py-rpptx-vX.Y.Z` each select one
+distribution at its native crate version. Manual workflow dispatch has
+build-only authority for both distributions. The release preflight binds the
+selected seven downloaded artifacts to the reviewed SHA, validates exact names,
+embedded versions, `cp39-abi3` tags, platforms, and source distribution, and
+requires the reviewed summary, author, keywords, classifiers, project URLs,
+Markdown content type, and README guidance in wheel and source metadata. It
+installs the selected project under Python 3.9 and 3.12. The tag-only `pypi`
+environment receives OIDC authority after a separate final approval.
+Completion requires the selected PyPI version, all seven files, authenticated
+owner or maintainer roles, an exact reviewed GitHub release body, and every
+planned contributor comment.
 
 ## Assumptions that would invalidate the plan if wrong
 

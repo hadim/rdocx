@@ -19,6 +19,22 @@ and its tint and shade maths follow Word's convention. It **stays in
 `rdocx-oxml`** for this phase. `oxml-drawing` writes its own canonical theme and
 rdocx adopts it later through the `From` adapter.
 
+Word picture authoring keeps the WordprocessingDrawing wrapper in
+`rdocx-oxml` and resolves its `r:embed` through the OPC part that owns the
+selected story. Authored picture fragments carry local standard `r` and `wp`
+bindings when their surrounding story retains producer-shadowed prefixes.
+Standalone footnote and endnote roots declare the standard relationship
+namespace. The `rdocx` facade may replay a producer root binding, but it keeps
+each authored picture namespace-complete and rewrites only the exact expanded
+name attributes it owns.
+
+Cross-document body-fragment import treats each selected picture or chart
+drawing as the root of a part-local relationship closure. It assigns fresh
+package-global drawing identities, rewrites only schema-owned relationship
+attributes in the exact retained wrapper, and copies reachable media, chart,
+and embedded parts before publication. Repeated import therefore preserves the
+producer drawing payload while preventing destination identity collisions.
+
 ## Modules
 
 | Module | Contents |

@@ -22,6 +22,7 @@ use rdocx_oxml::drawing::{
 };
 use rdocx_oxml::shared::ST_Border;
 
+use crate::WordBodyLayoutFragment;
 use crate::input::{ImageData, MediaRegistry};
 use crate::notes::{
     NOTE_INDENT, NOTE_SEPARATOR_OFFSET, NoteLayout, NoteRegistry, NoteRenderParagraph,
@@ -157,8 +158,15 @@ pub(crate) struct PaginationCheckpoint {
 pub(crate) struct RecordedPagination {
     pub pages: Vec<PageFrame>,
     pub outlines: Vec<OutlineEntry>,
+    pub body_fragments: Vec<(usize, WordBodyLayoutFragment)>,
     pub checkpoints: Vec<PaginationCheckpoint>,
     pub stopped_at: Option<PaginationCheckpoint>,
+}
+
+pub(crate) struct SharedPagination {
+    pub pages: Vec<PageFrame>,
+    pub outlines: Vec<OutlineEntry>,
+    pub body_fragments: Vec<(usize, WordBodyLayoutFragment)>,
 }
 
 /// Paginate across multiple sections, each with its own geometry and header/footer.
@@ -236,17 +244,18 @@ pub(crate) fn paginate_shared_sections(
     fm: &FontManager,
     media: &MediaRegistry,
     notes: &NoteRegistry,
-) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
+) -> SharedPagination {
     let media = media.media();
     if sections.is_empty() {
-        return (
-            vec![PageFrame::new(1, 612.0, 792.0, Vec::new())],
-            Vec::new(),
-        );
+        return SharedPagination {
+            pages: vec![PageFrame::new(1, 612.0, 792.0, Vec::new())],
+            outlines: Vec::new(),
+            body_fragments: Vec::new(),
+        };
     }
     if sections.len() == 1 {
         let section = &sections[0];
-        return paginate_with_media(
+        let result = paginate_with_media_recorded(
             &section.blocks,
             section.geometry,
             section.header_footer.as_ref(),
@@ -258,17 +267,23 @@ pub(crate) fn paginate_shared_sections(
             1,
             section.page_number_start.unwrap_or(1),
         );
+        return SharedPagination {
+            pages: result.pages,
+            outlines: result.outlines,
+            body_fragments: result.body_fragments,
+        };
     }
 
     let mut pages = Vec::new();
     let mut outlines = Vec::new();
+    let mut body_fragments = Vec::new();
     let mut page_offset = 0;
     let mut next_section_page_number = 1usize;
     for section in sections {
         let section_page_number = section
             .page_number_start
             .unwrap_or(next_section_page_number);
-        let (mut section_pages, mut section_outlines) = paginate_with_media(
+        let mut result = paginate_with_media_recorded(
             &section.blocks,
             section.geometry,
             section.header_footer.as_ref(),
@@ -280,15 +295,20 @@ pub(crate) fn paginate_shared_sections(
             page_offset + 1,
             section_page_number,
         );
-        next_section_page_number = section_page_number.saturating_add(section_pages.len());
-        page_offset += section_pages.len();
-        pages.append(&mut section_pages);
-        outlines.append(&mut section_outlines);
+        next_section_page_number = section_page_number.saturating_add(result.pages.len());
+        page_offset += result.pages.len();
+        pages.append(&mut result.pages);
+        outlines.append(&mut result.outlines);
+        body_fragments.append(&mut result.body_fragments);
     }
     for (index, page) in pages.iter_mut().enumerate() {
         page.page_number = index + 1;
     }
-    (pages, outlines)
+    SharedPagination {
+        pages,
+        outlines,
+        body_fragments,
+    }
 }
 
 pub(crate) fn paginate_shared_single_section_recorded(
@@ -330,6 +350,7 @@ pub(crate) fn paginate_shared_single_section_recorded(
     RecordedPagination {
         pages: result.pages,
         outlines: result.outlines,
+        body_fragments: result.body_fragments,
         checkpoints,
         stopped_at: result.stopped_at,
     }
@@ -400,6 +421,34 @@ fn paginate_with_media<B: LayoutBlockLike>(
     first_page_number: usize,
     first_header_page_number: usize,
 ) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
+    let result = paginate_with_media_recorded(
+        blocks,
+        geometry,
+        header_footer,
+        header_footer_semantics,
+        title_pg,
+        _fm,
+        media,
+        notes,
+        first_page_number,
+        first_header_page_number,
+    );
+    (result.pages, result.outlines)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paginate_with_media_recorded<B: LayoutBlockLike>(
+    blocks: &[B],
+    geometry: PageGeometry,
+    header_footer: Option<&HeaderFooterContent>,
+    header_footer_semantics: Option<&HeaderFooterSemantics>,
+    title_pg: bool,
+    _fm: &FontManager,
+    media: &HashMap<MediaId, ImageData>,
+    notes: &NoteRegistry,
+    first_page_number: usize,
+    first_header_page_number: usize,
+) -> PassResult {
     let context = PassContext {
         geometry,
         header_footer,
@@ -423,17 +472,17 @@ fn paginate_with_media<B: LayoutBlockLike>(
     // paragraph can push a drawing to the next page, which shrinks the
     // paragraph, which pulls it back.
     if !has_paragraph_relative_wrap(blocks) {
-        return (first.pages, first.outlines);
+        return first;
     }
 
-    let second = paginate_pass(blocks, &context, &first.resolved);
-    (second.pages, second.outlines)
+    paginate_pass(blocks, &context, &first.resolved)
 }
 
 /// One pagination pass, and what it learned about paragraph-relative wraps.
 struct PassResult {
     pages: Vec<PageFrame>,
     outlines: Vec<OutlineEntry>,
+    body_fragments: Vec<(usize, WordBodyLayoutFragment)>,
     resolved: ResolvedWraps,
     checkpoints: Vec<PaginationCheckpoint>,
     stopped_at: Option<PaginationCheckpoint>,
@@ -476,6 +525,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
             pages: Vec::new(),
             outlines: Vec::new(),
             resolved: resolved_in.clone(),
+            body_fragments: Vec::new(),
             checkpoints: Vec::new(),
             stopped_at: None,
         };
@@ -515,13 +565,14 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                     y_position: pager.geometry.margin_top + pager.cursor_y,
                 });
             }
-            paginate_paragraph(para, block_idx, blocks, &mut pager);
+            paginate_paragraph(para, block.body_index(), block_idx, blocks, &mut pager);
             if pager.stopped_at.is_some() {
                 break;
             }
         } else if let Some(table) = block.table() {
             let table_x = geometry.margin_left + table.table_indent;
             let tbl_borders = table.borders.as_ref();
+            let body_index = block.body_index();
 
             for (row_idx, row) in table.rows.iter().enumerate() {
                 let row_semantics = table
@@ -534,6 +585,15 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                     for &hdr_idx in &table.header_row_indices {
                         if hdr_idx < row_idx {
                             let hdr_row = &table.rows[hdr_idx];
+                            if let Some(body_index) = body_index {
+                                pager.record_body_fragment(
+                                    body_index,
+                                    table_x,
+                                    pager.geometry.margin_top + pager.cursor_y,
+                                    table.table_width,
+                                    hdr_row.height,
+                                );
+                            }
                             render_table_row(
                                 hdr_row,
                                 table
@@ -555,6 +615,15 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                     }
                 }
 
+                if let Some(body_index) = body_index {
+                    pager.record_body_fragment(
+                        body_index,
+                        table_x,
+                        pager.geometry.margin_top + pager.cursor_y,
+                        table.table_width,
+                        row.height,
+                    );
+                }
                 render_table_row(
                     row,
                     row_semantics,
@@ -575,6 +644,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
     }
 
     let resolved = std::mem::take(&mut pager.resolved_out);
+    let body_fragments = std::mem::take(&mut pager.body_fragments);
     let checkpoints = std::mem::take(&mut pager.checkpoints);
     let stopped_at = pager.stopped_at;
     let (pages, outlines) = if stopped_at.is_some() {
@@ -588,6 +658,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
     PassResult {
         pages,
         outlines,
+        body_fragments,
         resolved,
         checkpoints,
         stopped_at,
@@ -643,6 +714,7 @@ struct Pager<'a> {
     resolved_in: &'a ResolvedWraps,
     /// Where this pass is placing them, for the pass that follows.
     resolved_out: ResolvedWraps,
+    body_fragments: Vec<(usize, WordBodyLayoutFragment)>,
     checkpoints: Vec<PaginationCheckpoint>,
     stop_at: Option<PaginationCheckpoint>,
     stopped_at: Option<PaginationCheckpoint>,
@@ -687,6 +759,7 @@ impl<'a> Pager<'a> {
             ink_bottom: 0.0,
             resolved_in,
             resolved_out: ResolvedWraps::new(),
+            body_fragments: Vec::new(),
             checkpoints: Vec::new(),
             stop_at,
             stopped_at: None,
@@ -810,6 +883,35 @@ impl<'a> Pager<'a> {
 
     fn mark_content(&mut self) {
         self.has_content_flag = true;
+    }
+
+    fn record_body_fragment(&mut self, body_index: usize, x: f64, y: f64, width: f64, height: f64) {
+        if width <= 0.0 || height <= 0.0 {
+            return;
+        }
+        if let Some((previous_body, previous)) = self.body_fragments.last_mut()
+            && *previous_body == body_index
+            && previous.physical_page == self.page_number
+        {
+            let right = (previous.x + previous.width).max(x + width);
+            let bottom = (previous.y + previous.height).max(y + height);
+            previous.x = previous.x.min(x);
+            previous.y = previous.y.min(y);
+            previous.width = right - previous.x;
+            previous.height = bottom - previous.y;
+            return;
+        }
+        self.body_fragments.push((
+            body_index,
+            WordBodyLayoutFragment {
+                physical_page: self.page_number,
+                displayed_page: self.header_page_number,
+                x,
+                y,
+                width,
+                height,
+            },
+        ));
     }
 
     /// Resolve the wrapping drawings a paragraph carries, without placing
@@ -1171,12 +1273,14 @@ impl<'a> Pager<'a> {
             }
         }
 
-        self.pages.push(PageFrame::new(
+        let mut page = PageFrame::new(
             self.page_number,
             self.geometry.page_width,
             self.geometry.page_height,
             all_elements,
-        ));
+        );
+        page.displayed_page_number = self.header_page_number;
+        self.pages.push(page);
         self.page_number += 1;
         self.header_page_number += 1;
         self.cursor_y = 0.0;
@@ -1570,7 +1674,7 @@ pub fn append_endnote_pages(
         });
     }
 
-    append_ordered_endnote_pages(pages, &ordered, notes, geometry, 0);
+    append_ordered_endnote_pages(pages, &ordered, notes, geometry, 0, 1);
 }
 
 pub(crate) fn append_endnote_pages_for_references(
@@ -1579,6 +1683,7 @@ pub(crate) fn append_endnote_pages_for_references(
     notes: &NoteRegistry,
     geometry: PageGeometry,
     preceding_page_count: usize,
+    next_displayed_page_number: usize,
 ) {
     let mut ordered = Vec::new();
     for &note in references {
@@ -1590,7 +1695,14 @@ pub(crate) fn append_endnote_pages_for_references(
         }
     }
 
-    append_ordered_endnote_pages(pages, &ordered, notes, geometry, preceding_page_count);
+    append_ordered_endnote_pages(
+        pages,
+        &ordered,
+        notes,
+        geometry,
+        preceding_page_count,
+        next_displayed_page_number,
+    );
 }
 
 fn append_ordered_endnote_pages(
@@ -1599,6 +1711,7 @@ fn append_ordered_endnote_pages(
     notes: &NoteRegistry,
     geometry: PageGeometry,
     preceding_page_count: usize,
+    next_displayed_page_number: usize,
 ) {
     if ordered.is_empty() {
         return;
@@ -1608,15 +1721,21 @@ fn append_ordered_endnote_pages(
     let mut elements: Vec<PositionedElement> = Vec::new();
     let mut cursor_y = 0.0;
     let mut page_number = preceding_page_count + pages.len() + 1;
+    let mut displayed_page_number = pages.last().map_or(next_displayed_page_number, |page| {
+        page.displayed_page_number.saturating_add(1)
+    });
 
     let mut flush = |elements: &mut Vec<PositionedElement>, page_number: &mut usize| {
-        pages.push(PageFrame::new(
+        let mut page = PageFrame::new(
             *page_number,
             geometry.page_width,
             geometry.page_height,
             std::mem::take(elements),
-        ));
+        );
+        page.displayed_page_number = displayed_page_number;
+        pages.push(page);
         *page_number += 1;
+        displayed_page_number = displayed_page_number.saturating_add(1);
     };
 
     for &note_ref in ordered {
@@ -1958,6 +2077,7 @@ fn reflow_around_wraps(
 
 fn paginate_paragraph<B: LayoutBlockLike>(
     para: ParagraphView<'_>,
+    body_index: Option<usize>,
     block_idx: usize,
     blocks: &[B],
     pager: &mut Pager,
@@ -2010,7 +2130,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
                 return;
             }
             // Re-call with fresh page
-            paginate_paragraph(para, block_idx, blocks, pager);
+            paginate_paragraph(para, body_index, block_idx, blocks, pager);
             return;
         }
 
@@ -2027,7 +2147,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
             if pager.stopped_at.is_some() {
                 return;
             }
-            paginate_paragraph(para, block_idx, blocks, pager);
+            paginate_paragraph(para, body_index, block_idx, blocks, pager);
             return;
         }
 
@@ -2035,12 +2155,19 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         if para.widow_control && lines_remaining < 2 && lines_that_fit >= 3 {
             // Would leave orphan — move one line to next page
             let split_at = lines_that_fit - 1;
-            render_para_split(para, split_at, space_before, pager, block_idx);
+            render_para_split(para, body_index, split_at, space_before, pager, block_idx);
             return;
         }
 
         if lines_that_fit > 0 {
-            render_para_split(para, lines_that_fit, space_before, pager, block_idx);
+            render_para_split(
+                para,
+                body_index,
+                lines_that_fit,
+                space_before,
+                pager,
+                block_idx,
+            );
             return;
         }
 
@@ -2049,7 +2176,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         if pager.stopped_at.is_some() {
             return;
         }
-        paginate_paragraph(para, block_idx, blocks, pager);
+        paginate_paragraph(para, body_index, block_idx, blocks, pager);
         return;
     }
 
@@ -2060,7 +2187,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         let lines_that_fit =
             pager.count_lines_that_fit_with_notes(&para.lines, para.content_offset_top);
         if lines_that_fit > 0 && lines_that_fit < para.lines.len() {
-            render_para_split(para, lines_that_fit, 0.0, pager, block_idx);
+            render_para_split(para, body_index, lines_that_fit, 0.0, pager, block_idx);
             return;
         }
     }
@@ -2094,6 +2221,16 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         para.space_before
     };
     pager.cursor_y += space;
+
+    if let Some(body_index) = body_index {
+        pager.record_body_fragment(
+            body_index,
+            pager.geometry.margin_left + para.indent_left,
+            pager.geometry.margin_top + pager.cursor_y,
+            pager.geometry.content_width() - para.indent_left - para.indent_right,
+            para.content_height(),
+        );
+    }
 
     if let Some(shading) = para.shading {
         pager.elements.push(PositionedElement::FilledRect {
@@ -2154,6 +2291,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
 /// and continuing the rest on a new page (recursively if needed).
 fn render_para_split(
     para: ParagraphView<'_>,
+    body_index: Option<usize>,
     split_at: usize,
     space_before: f64,
     pager: &mut Pager,
@@ -2176,6 +2314,15 @@ fn render_para_split(
             .iter()
             .map(|line| line.height)
             .sum::<f64>();
+    if let Some(body_index) = body_index {
+        pager.record_body_fragment(
+            body_index,
+            pager.geometry.margin_left + para.indent_left,
+            pager.geometry.margin_top + pager.cursor_y,
+            pager.geometry.content_width() - para.indent_left - para.indent_right,
+            first_height,
+        );
+    }
     render_change_bar(
         para.block,
         pager.cursor_y,
@@ -2235,6 +2382,7 @@ fn render_para_split(
                     reflow_direction: para.reflow_direction,
                     reflow_allowed: false,
                 },
+                body_index,
                 lines_that_fit,
                 0.0,
                 pager,
@@ -2245,6 +2393,15 @@ fn render_para_split(
     }
 
     // Remaining fits on the new page
+    if let Some(body_index) = body_index {
+        pager.record_body_fragment(
+            body_index,
+            pager.geometry.margin_left + para.indent_left,
+            pager.geometry.margin_top,
+            pager.geometry.content_width() - para.indent_left - para.indent_right,
+            remaining_height,
+        );
+    }
     render_paragraph_lines(
         remaining_lines,
         para,

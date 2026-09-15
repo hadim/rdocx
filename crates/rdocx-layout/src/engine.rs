@@ -35,7 +35,7 @@ use crate::notes::NoteRegistry;
 use crate::paginator::{self, HeaderFooterContent, HeaderFooterSemantics, PageGeometry};
 use crate::style_resolver::{self, NumberingState, ResolvedNumbering};
 use crate::table;
-use crate::{WordSourcePath, WordStory};
+use crate::{WordBodyLayoutFragment, WordSourcePath, WordStory};
 use oxml_layout::{
     Color, Diagnostic, DocumentMetadata, DocumentStructure, FieldKind, FontId, FontManager,
     GlyphRun, GroupElement, InlineItem, LayoutResult, LineItem, NoteRef, NoteStream, PageFrame,
@@ -877,6 +877,7 @@ pub struct Engine {
     header_footer_cache_reads_enabled: bool,
     restart_cache: Option<RestartCache>,
     numbering_by_source: HashMap<SourceNodeId, ResolvedNumbering>,
+    last_body_fragments: Vec<Vec<WordBodyLayoutFragment>>,
     #[cfg(test)]
     owned_context_builds: usize,
     #[cfg(test)]
@@ -1156,6 +1157,7 @@ struct HeaderFooterCacheEntry {
 struct RestartCache {
     body: Vec<RestartBodyEntry>,
     with_provenance: bool,
+    body_fragments: Vec<Vec<WordBodyLayoutFragment>>,
     raw_pages: Vec<Arc<PageFrame>>,
     pages: Vec<Arc<PageFrame>>,
     substitution_inputs: Vec<Option<FieldSubstitutionInputs>>,
@@ -1553,6 +1555,7 @@ impl Engine {
             header_footer_cache_reads_enabled: false,
             restart_cache: None,
             numbering_by_source: HashMap::new(),
+            last_body_fragments: Vec::new(),
             #[cfg(test)]
             owned_context_builds: 0,
             #[cfg(test)]
@@ -1646,6 +1649,10 @@ impl Engine {
         Ok((result, nodes))
     }
 
+    pub(crate) fn take_body_fragments(&mut self) -> Vec<Vec<WordBodyLayoutFragment>> {
+        std::mem::take(&mut self.last_body_fragments)
+    }
+
     pub(crate) fn numbering_by_source(
         &self,
         source_count: usize,
@@ -1665,6 +1672,7 @@ impl Engine {
         sources: Option<&SourceRegistry>,
     ) -> Result<LayoutResult> {
         self.numbering_by_source.clear();
+        self.last_body_fragments.clear();
         let needs_ref_projection = document_has_ref_projection(input);
         let generated_sources =
             (sources.is_none() && needs_ref_projection).then(|| SourceRegistry::for_input(input));
@@ -1923,6 +1931,7 @@ impl Engine {
                             SharedLayoutBlock::Paragraph {
                                 block: shared,
                                 semantics,
+                                ..
                             } => {
                                 let mut paragraph = shared.as_ref().clone();
                                 rebind_paragraph_source(&mut paragraph, semantics.source_node)?;
@@ -1931,6 +1940,7 @@ impl Engine {
                                 Some(SharedLayoutBlock::Owned {
                                     block: Box::new(LayoutBlock::Paragraph(paragraph)),
                                     reflow_direction: semantics.reflow_direction,
+                                    body_index: None,
                                 })
                             }
                             SharedLayoutBlock::Table { .. } => unreachable!(),
@@ -1938,6 +1948,10 @@ impl Engine {
                         if let Some(replacement) = replacement {
                             block = replacement;
                         }
+                    }
+
+                    if sources.is_some() {
+                        block.set_body_index(path[0]);
                     }
 
                     current_blocks.push(block);
@@ -1978,7 +1992,7 @@ impl Engine {
                     let sect_pr_for_layout = current_sect_pr.as_ref().unwrap_or(&final_sect_pr);
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);
 
-                    let table_block = self.layout_body_table(
+                    let mut table_block = self.layout_body_table(
                         tbl,
                         geometry.content_width(),
                         styles,
@@ -1990,6 +2004,9 @@ impl Engine {
                         &WordStory::Document,
                         &path,
                     )?;
+                    if sources.is_some() {
+                        table_block.set_body_index(path[0]);
+                    }
                     current_blocks.push(table_block);
                 }
             }
@@ -2198,7 +2215,7 @@ impl Engine {
                     })
             });
 
-        let (mut pages, mut outlines, mut checkpoints) = if restart_eligible {
+        let (mut pages, mut outlines, mut checkpoints, mut body_fragments) = if restart_eligible {
             let mut recorded = paginator::paginate_shared_single_section_recorded(
                 &sections[0],
                 &self.font_manager,
@@ -2220,6 +2237,7 @@ impl Engine {
                         &notes,
                         final_geometry,
                         checkpoint.page_count,
+                        checkpoint.next_header_page_number,
                     );
                 } else {
                     paginator::append_endnote_pages(&mut recorded.pages, &notes, final_geometry);
@@ -2227,6 +2245,24 @@ impl Engine {
             }
             for page in &mut recorded.pages {
                 mark_remaining_artifacts(&mut page.elements);
+            }
+            let mut body_fragments = vec![Vec::new(); input.document.body.content.len()];
+            if let Some(checkpoint) = restart_checkpoint
+                && let Some(cache) = self.restart_cache.as_ref()
+            {
+                for (body_index, fragments) in cache
+                    .body_fragments
+                    .iter()
+                    .enumerate()
+                    .take(checkpoint.next_block_index)
+                {
+                    body_fragments[body_index].clone_from(fragments);
+                }
+            }
+            for (body_index, fragment) in recorded.body_fragments.drain(..) {
+                if let Some(fragments) = body_fragments.get_mut(body_index) {
+                    fragments.push(fragment);
+                }
             }
             let mut pages = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
                 self.restart_cache
@@ -2291,28 +2327,45 @@ impl Engine {
                             next_header_page_number: candidate.next_header_page_number,
                         }),
                 );
+                for (body_index, fragments) in cache
+                    .body_fragments
+                    .iter()
+                    .enumerate()
+                    .skip(old_tail.next_block_index)
+                {
+                    if let Some(destination) = body_fragments.get_mut(body_index) {
+                        destination.clone_from(fragments);
+                    }
+                }
             }
             checkpoints.sort_unstable_by_key(|checkpoint| checkpoint.next_block_index);
             checkpoints.dedup();
-            (pages, outlines, checkpoints)
+            (pages, outlines, checkpoints, body_fragments)
         } else {
-            let (mut pages, outlines) =
+            let mut pagination =
                 paginator::paginate_shared_sections(&sections, &self.font_manager, &media, &notes);
             #[cfg(test)]
             {
-                self.page_layout_invocations = pages.len();
+                self.page_layout_invocations = pagination.pages.len();
             }
             // Endnotes read at the end of the document, so they follow the last
             // body page rather than sitting at the foot of their reference's page.
-            paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
-            apply_page_background(&mut pages, input);
-            for page in &mut pages {
+            paginator::append_endnote_pages(&mut pagination.pages, &notes, final_geometry);
+            apply_page_background(&mut pagination.pages, input);
+            for page in &mut pagination.pages {
                 mark_remaining_artifacts(&mut page.elements);
             }
+            let mut body_fragments = vec![Vec::new(); input.document.body.content.len()];
+            for (body_index, fragment) in pagination.body_fragments {
+                if let Some(fragments) = body_fragments.get_mut(body_index) {
+                    fragments.push(fragment);
+                }
+            }
             (
-                pages.into_iter().map(Arc::new).collect(),
-                outlines,
+                pagination.pages.into_iter().map(Arc::new).collect(),
+                pagination.outlines,
                 Vec::new(),
+                body_fragments,
             )
         };
         if body_unchanged
@@ -2322,6 +2375,12 @@ impl Engine {
             for (page, retained) in pages.iter_mut().zip(&cache.raw_pages) {
                 *page = Arc::clone(retained);
             }
+            if cache.body_fragments.len() == body_fragments.len() {
+                body_fragments.clone_from(&cache.body_fragments);
+            }
+        }
+        if sources.is_none() {
+            body_fragments.clear();
         }
         let mut raw_pages = restart_record_eligible.then(|| pages.clone());
 
@@ -2387,7 +2446,7 @@ impl Engine {
             }
             let inputs = FieldSubstitutionInputs {
                 page_index,
-                page_number: page.page_number,
+                page_number: page.displayed_page_number,
                 total_pages,
                 bookmark_pages: bookmark_identity.clone(),
                 font_identity: font_trace.clone(),
@@ -2410,7 +2469,7 @@ impl Engine {
                 continue;
             }
             let page = Arc::make_mut(page);
-            let page_num = page.page_number;
+            let page_num = page.displayed_page_number;
             substitute_fields(
                 &mut page.elements,
                 page_num,
@@ -2555,9 +2614,14 @@ impl Engine {
             outlines.shrink_to_fit();
             checkpoints.shrink_to_fit();
             font_trace.shrink_to_fit();
+            for fragments in &mut body_fragments {
+                fragments.shrink_to_fit();
+            }
+            body_fragments.shrink_to_fit();
             let mut candidate = RestartCache {
                 body,
                 with_provenance: sources.is_some(),
+                body_fragments: body_fragments.clone(),
                 raw_pages: std::mem::take(raw_pages),
                 pages: std::mem::take(retained_pages),
                 substitution_inputs,
@@ -2601,6 +2665,7 @@ impl Engine {
         result.structure = Some(structure);
         let references = num_state.references_only();
         self.numbering_by_source.extend(num_state.take_resolved());
+        self.last_body_fragments = body_fragments;
         Ok((result, references))
     }
 
@@ -2635,6 +2700,7 @@ impl Engine {
             return Ok(SharedLayoutBlock::Owned {
                 block: Box::new(LayoutBlock::Paragraph(block)),
                 reflow_direction,
+                body_index: None,
             });
         }
 
@@ -2661,6 +2727,7 @@ impl Engine {
                     structure_id: None,
                     reflow_direction: entry.reflow_direction,
                 },
+                body_index: None,
             });
         }
 
@@ -2710,6 +2777,7 @@ impl Engine {
                     structure_id: None,
                     reflow_direction,
                 },
+                body_index: None,
             });
         }
 
@@ -2717,6 +2785,7 @@ impl Engine {
         Ok(SharedLayoutBlock::Owned {
             block: Box::new(LayoutBlock::Paragraph(block)),
             reflow_direction,
+            body_index: None,
         })
     }
 
@@ -2752,6 +2821,7 @@ impl Engine {
             .map(|(block, semantics)| SharedLayoutBlock::Table {
                 block: Arc::new(block),
                 semantics,
+                body_index: None,
             });
         }
 
@@ -2780,6 +2850,7 @@ impl Engine {
                     story,
                     path,
                 ),
+                body_index: None,
             });
         }
 
@@ -2828,11 +2899,16 @@ impl Engine {
                 font_trace,
                 bytes,
             });
-            return Ok(SharedLayoutBlock::Table { block, semantics });
+            return Ok(SharedLayoutBlock::Table {
+                block,
+                semantics,
+                body_index: None,
+            });
         }
         Ok(SharedLayoutBlock::Table {
             block: Arc::new(block),
             semantics,
+            body_index: None,
         })
     }
 
@@ -4115,6 +4191,23 @@ fn restart_cache_bytes(cache: &RestartCache) -> usize {
         .saturating_mul(std::mem::size_of::<RestartBodyEntry>())
         .saturating_add(
             cache
+                .body_fragments
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Vec<WordBodyLayoutFragment>>()),
+        )
+        .saturating_add(
+            cache
+                .body_fragments
+                .iter()
+                .map(|fragments| {
+                    fragments
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<WordBodyLayoutFragment>())
+                })
+                .fold(0usize, usize::saturating_add),
+        )
+        .saturating_add(
+            cache
                 .raw_pages
                 .capacity()
                 .saturating_add(cache.pages.capacity())
@@ -5038,14 +5131,18 @@ fn assign_shared_document_structure(
         let mut lists: Vec<ListFrame> = Vec::new();
         for block in &mut section.blocks {
             match block {
-                SharedLayoutBlock::Paragraph { block, semantics } => {
+                SharedLayoutBlock::Paragraph {
+                    block, semantics, ..
+                } => {
                     lists.clear();
                     let paragraph_id = builder.add(StructureRole::Paragraph, Some(root));
                     semantics.structure_id = Some(paragraph_id);
                     debug_assert!(block.list.is_none());
                     debug_assert!(block.anchored.is_empty());
                 }
-                SharedLayoutBlock::Table { block, semantics } => {
+                SharedLayoutBlock::Table {
+                    block, semantics, ..
+                } => {
                     lists.clear();
                     assign_shared_table_structure(&mut builder, block, semantics, root);
                 }
@@ -6942,30 +7039,11 @@ fn sect_pr_to_geometry(sect_pr: &CT_SectPr) -> PageGeometry {
 }
 
 fn section_page_number_start(sect_pr: &CT_SectPr) -> Option<usize> {
-    for raw in &sect_pr.extra_xml {
-        let Some((name, raw_attributes)) = raw_root_start_tag(raw) else {
-            continue;
-        };
-        let Some(attributes) = parse_raw_attributes(raw_attributes) else {
-            continue;
-        };
-        if xml_local_name(name) != b"pgNumType"
-            || !raw_name_has_namespace(name, &attributes, rdocx_oxml::namespace::W_NS, false)
-        {
-            continue;
-        }
-        let (_, value) = attributes.iter().find(|(attribute_name, _)| {
-            xml_local_name(attribute_name) == b"start"
-                && raw_name_has_namespace(
-                    attribute_name,
-                    &attributes,
-                    rdocx_oxml::namespace::W_NS,
-                    true,
-                )
-        })?;
-        return decode_xml_attribute(value)?.parse().ok();
-    }
-    None
+    sect_pr
+        .page_number
+        .as_ref()?
+        .start
+        .map(|value| value as usize)
 }
 
 fn xml_local_name(name: &[u8]) -> &[u8] {
@@ -13395,6 +13473,60 @@ mod tests {
     }
 
     #[test]
+    fn endnote_pages_continue_restarted_display_numbers_and_page_fields() {
+        let mut input = related_story_restart_input(700);
+        input.document.body.sect_pr.as_mut().unwrap().page_number =
+            Some(rdocx_oxml::document::CT_PageNumberType::new(27));
+        let endnote = &mut input.endnotes.as_mut().unwrap().footnotes[0].paragraphs[0];
+        endnote.add_run(" ENDNOTE_PAGE=");
+        let mut page_run = CT_R::new("");
+        page_run.content = vec![RunContent::Field(Field::new("PAGE", "0"))];
+        endnote.runs.push(page_run);
+
+        let assert_endnote_page = |result: &LayoutResult| {
+            let rendered_text = |page: &PageFrame| {
+                compatibility_page_elements(page)
+                    .into_iter()
+                    .filter_map(|element| match element {
+                        PositionedElement::Text(run) => Some(run.text.as_str()),
+                        PositionedElement::MultilingualText(run) => Some(run.logical_text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>()
+            };
+            let (index, page) = result
+                .pages
+                .iter()
+                .enumerate()
+                .find(|(_, page)| rendered_text(page).contains("stable endnote text"))
+                .expect("endnote page");
+            let expected = result.pages[index - 1]
+                .displayed_page_number
+                .saturating_add(1);
+            assert_eq!(page.page_number, index + 1);
+            assert_eq!(page.displayed_page_number, expected);
+            assert!(
+                rendered_text(page).contains(&format!("ENDNOTE_PAGE={expected}")),
+                "PAGE substitution must use the continued displayed number"
+            );
+        };
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let initial = engine.layout(&input).expect("initial endnote layout");
+        assert_endnote_page(&initial);
+        set_body_paragraph_text(&mut input, 350, "paragraph 350 changed line");
+        let warm = engine.layout(&input).expect("warm endnote layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh endnote layout");
+        assert_layout_results_equal(&warm, &fresh);
+        assert_endnote_page(&warm);
+        assert_endnote_page(&fresh);
+        assert!((1..=2).contains(&engine.page_layout_invocation_count()));
+    }
+
+    #[test]
     fn restarted_body_completion_appends_prefix_and_suffix_endnotes_with_final_page_numbers() {
         use rdocx_oxml::footnotes::{CT_Footnote, NoteType};
 
@@ -13853,6 +13985,7 @@ mod tests {
             let mut candidate = RestartCache {
                 body: Vec::new(),
                 with_provenance: false,
+                body_fragments: Vec::new(),
                 raw_pages: Vec::new(),
                 pages: Vec::new(),
                 substitution_inputs: Vec::new(),
@@ -15731,22 +15864,9 @@ mod tests {
     }
 
     #[test]
-    fn section_page_number_start_requires_a_direct_word_child_and_decodes_entities() {
+    fn section_page_number_start_uses_the_typed_section_property() {
         let mut section = CT_SectPr::default_letter();
-        section.extra_xml = vec![
-            br#"<x:pgNumType xmlns:x="urn:producer" x:start="2"/>"#.to_vec(),
-            br#"<w:pgNumType xmlns:w="urn:producer" w:start="2"/>"#.to_vec(),
-            format!(
-                r#"<w:wrapper xmlns:w="{}"><w:pgNumType w:start="2"/></w:wrapper>"#,
-                rdocx_oxml::namespace::W_NS
-            )
-            .into_bytes(),
-            format!(
-                r#"<q:pgNumType xmlns:q="{}" q:start="&#x31;"/>"#,
-                rdocx_oxml::namespace::W_NS
-            )
-            .into_bytes(),
-        ];
+        section.page_number = Some(rdocx_oxml::document::CT_PageNumberType::new(1));
 
         assert_eq!(section_page_number_start(&section), Some(1));
     }
@@ -17965,5 +18085,114 @@ mod tests {
         let text = output_text(&deterministic_layout(&input));
         assert!(text.iter().any(|value| value == "2"), "{text:?}");
         assert!(!text.iter().any(|value| value == "cached"), "{text:?}");
+    }
+
+    #[test]
+    fn layout_json_keeps_page_spanning_body_elements_as_multiple_fragments() {
+        let mut input = make_input_with_text(&"one body item must span pages ".repeat(800));
+        input.document.body.sect_pr = Some(CT_SectPr {
+            page_width: Some(rdocx_oxml::units::Twips(4_000)),
+            page_height: Some(rdocx_oxml::units::Twips(4_000)),
+            margin_top: Some(rdocx_oxml::units::Twips(200)),
+            margin_right: Some(rdocx_oxml::units::Twips(200)),
+            margin_bottom: Some(rdocx_oxml::units::Twips(200)),
+            margin_left: Some(rdocx_oxml::units::Twips(200)),
+            ..CT_SectPr::default_letter()
+        });
+
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("page-spanning paragraph lays out");
+        let fragments = result
+            .body_layout_fragments(0)
+            .expect("top-level body item is represented");
+        assert!(fragments.len() > 1, "{fragments:?}");
+        assert!(
+            fragments
+                .windows(2)
+                .all(|pair| pair[0].physical_page < pair[1].physical_page)
+        );
+        assert!(fragments.iter().all(|fragment| {
+            fragment.physical_page >= 1
+                && fragment.displayed_page >= 1
+                && fragment.width > 0.0
+                && fragment.height > 0.0
+        }));
+    }
+
+    #[test]
+    fn empty_table_and_image_blocks_keep_real_geometry() {
+        use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
+        use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc};
+
+        let mut input = make_input_with_text("");
+        let mut table = CT_Tbl::new();
+        let mut row = CT_Row::new();
+        row.cells.push(CT_Tc::new());
+        table.rows.push(row);
+        let mut image_paragraph = CT_P::new();
+        let mut image_run = CT_R::new("");
+        image_run.content = vec![RunContent::Drawing(CT_Drawing {
+            inline: Some(CT_Inline::new("rIdImage", 508_000, 254_000)),
+            anchor: None,
+        })];
+        image_paragraph.runs.push(image_run);
+        input.document.body.content = vec![
+            BodyContent::Table(table),
+            BodyContent::Paragraph(image_paragraph),
+            BodyContent::RawXml(br#"<w:custom/>"#.to_vec()),
+        ];
+        input.images.insert(
+            "rIdImage".to_owned(),
+            ImageData {
+                data: vec![0u8; 8],
+                content_type: "image/png".to_owned(),
+            },
+        );
+
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("empty table and image paragraph lay out");
+        for body_index in 0..2 {
+            let fragments = result
+                .body_layout_fragments(body_index)
+                .expect("top-level body item is represented");
+            assert!(!fragments.is_empty(), "body item {body_index}");
+            assert!(
+                fragments
+                    .iter()
+                    .all(|fragment| { fragment.width > 0.0 && fragment.height > 0.0 })
+            );
+        }
+        assert_eq!(result.body_layout_fragments(2), Some([].as_slice()));
+        assert_eq!(result.body_layout_fragments(3), None);
+    }
+
+    #[test]
+    fn warm_restart_body_fragments_match_fresh_pagination() {
+        let mut input = restart_input();
+        let mut warm_engine = Engine::new_deterministic().expect("bundled fonts load");
+        warm_engine
+            .layout_with_provenance(&input)
+            .expect("prime sourced restart layout");
+        let primed = warm_engine.take_body_fragments();
+        assert_eq!(primed.len(), input.document.body.content.len());
+        assert!(primed.iter().all(|fragments| !fragments.is_empty()));
+
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[70] else {
+            panic!("restart fixture body item is a paragraph");
+        };
+        paragraph.runs[0].content = vec![RunContent::Text(rdocx_oxml::text::CT_Text::new(
+            "paragraph 070 changed line",
+        ))];
+
+        warm_engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced restart layout");
+        let warm = warm_engine.take_body_fragments();
+        let mut fresh_engine = Engine::new_deterministic().expect("bundled fonts load");
+        fresh_engine
+            .layout_with_provenance(&input)
+            .expect("fresh sourced layout");
+        let fresh = fresh_engine.take_body_fragments();
+        assert_eq!(warm, fresh);
     }
 }

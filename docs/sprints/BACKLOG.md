@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 10 | 0 | 14 |
+| M23, From-scratch business documents           | 24 | 17 | 0 | 7 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 92 | 88 | 0 | 0  |
-| **Total** | **410** | **324** | **0** | **82** |
+| X, Cross-cutting (opportunistic)            | 104 | 100 | 0 | 0 |
+| **Total** | **422** | **343** | **0** | **75** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -462,13 +462,13 @@ regenerated, never hand-edited.
 | F-247 | Complete numbering level and instance model | S71 | L | done |
 | F-248 | Style-linked numbering, counters, TOC, and REF | S71 | L | done |
 | F-249 | Deterministic package identifier allocation | S71 | M | done |
-| F-250 | Ordered mutable section facade | S72 | L | pending |
-| F-251 | Complete section and page geometry | S72 | L | pending |
-| F-252 | Rich per-section headers and footers | S72 | L | pending |
-| F-253 | Container-neutral story editing | S72 | L | pending |
-| F-254 | Generic insert, move, clone, and remove operations | S72 | L | pending |
-| F-255 | Part-scoped assets, links, and relationships | S72 | M | pending |
-| F-256 | Transactional cross-document fragment import | S72 | L | pending |
+| F-250 | Ordered mutable section facade | S72 | L | done |
+| F-251 | Complete section and page geometry | S72 | L | done |
+| F-252 | Rich per-section headers and footers | S72 | L | done |
+| F-253 | Container-neutral story editing | S72 | L | done |
+| F-254 | Generic insert, move, clone, and remove operations | S72 | L | done |
+| F-255 | Part-scoped assets, links, and relationships | S72 | M | done |
+| F-256 | Transactional cross-document fragment import | S72 | L | done |
 | F-257 | Complete M23 table authoring | S73 | L | pending |
 | F-258 | Complete M23 row and cell authoring | S73 | L | pending |
 | F-259 | Container measurement and equal-height layout | S73 | M | pending |
@@ -629,4 +629,16 @@ regenerated, never hand-edited.
 | F-X087 | Portable authored Word charts from PR 71 | S71 | L | done |
 | F-X088 | Verify and close Issue 69 after S70 fixes | S71 | S | done |
 | F-X089 | Capability-led README family | S71 | L | done |
+| F-X090 | Accept part-local producer drawing identities | S72 | S | done |
+| F-X091 | Serialize unused root default namespaces safely | S72 | M | done |
+| F-X092 | Preserve logical reading order in generated PDFs | S72 | L | done |
+| F-X093 | Preserve drawings through document comparison staging | S72 | M | done |
+| F-X094a | Expose Word collaboration and redline commands in rdocx-cli | S72 | M | done |
+| F-X094b | Structured CLI text and layout plus guarded replacement | S72 | L | done |
+| F-X094c | Priority rdocx Python collaboration, comparison, layout, and TOC | S72 | L | done |
+| F-X094d | rdocx Python sections, styles, rich stories, and hyperlinks | S72 | L | done |
+| F-X094e | rpptx Python rendering, comments, and notes | S72 | L | done |
+| F-X094f | Prepare the version-aligned Python release paths | S72 | M | done |
+| F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | S72 | L | done |
+| F-X096 | Align Python distribution versions and release tags | S72 | M | done |
 <!-- AUTOGEN:backlog-MX END -->

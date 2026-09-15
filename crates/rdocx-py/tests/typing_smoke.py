@@ -2,12 +2,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING, assert_type
 
 from rdocx import (
+    BoundingBox,
     Cell,
     CellCollection,
     CellParagraphCollection,
+    Comment,
+    ComparisonDiagnostic,
     Document,
     Font,
+    HeaderFooterVariant,
+    Hyperlink,
     Inches,
+    LayoutFragment,
+    LayoutPage,
     RGBColor,
     Paragraph,
     ParagraphCollection,
@@ -16,8 +23,15 @@ from rdocx import (
     RowCollection,
     Run,
     RunCollection,
+    RunPosition,
+    RunRange,
+    Section,
+    Story,
+    StoryItem,
+    Style,
     Table,
     TableCollection,
+    TocRebuildReport,
 )
 
 
@@ -50,6 +64,38 @@ def exercise_rdocx_types(path: Path) -> None:
     maybe_page: bytes | None = opened.render_page_to_png(0)
     document.save(path)
     document.remove_content(0)
+    position = RunPosition(body_index=0, run_index=0)
+    range_ = RunRange(start=position, end=RunPosition(body_index=0, run_index=1))
+    comment_id: int = document.add_comment(
+        range_, author="Ada", text="review", initials=None
+    )
+    reply_id: int = document.reply_to(comment_id, author="Grace", text="done")
+    comments: tuple[Comment, ...] = document.comments
+    sections: tuple[Section, ...] = document.sections
+    styles: tuple[Style, ...] = document.styles
+    stories: tuple[Story, ...] = document.stories
+    story_items: tuple[StoryItem, ...] = document.story_items
+    variants: tuple[HeaderFooterVariant, ...] = document.header_footer_variants
+    hyperlinks: tuple[Hyperlink, ...] = document.hyperlinks
+    resolved: bool = document.resolve_comment(comment_id)
+    removed: bool = document.remove_comment(reply_id)
+    diagnostics: tuple[ComparisonDiagnostic, ...] = document.compare(
+        opened, author="Ada", timestamp="2026-09-14T09:00:00Z"
+    )
+    fragments: tuple[LayoutFragment, ...] = document.layout()
+    maybe_layout_page: LayoutPage | None = document.layout_page(0)
+    report: TocRebuildReport = document.rebuild_toc()
+    if fragments:
+        bounds: BoundingBox = fragments[0].bounds
+        assert_type(bounds.width, float)
+    assert_type(comments[0].date, str | None)
+    assert_type(sections[0].page_width, int | None)
+    assert_type(styles[0].style_type, str)
+    assert_type(stories[0].owner_index, int)
+    assert_type(story_items[0].index_path, tuple[int, ...])
+    assert_type(variants[0].story, Story | None)
+    assert_type(hyperlinks[0].url, str | None)
+    assert_type(report.entry_count, int)
     package_bytes, pdf_bytes, pages, maybe_page, sliced, channels
 
 

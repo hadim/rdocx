@@ -211,6 +211,23 @@ alignment and width, plus cell text, width and vertical alignment. These
 handles use `Body`, `Row`, `Cell`, `Para` and `Run` path segments and reach the
 document only through the public `rdocx` facade.
 
+The Python `Document` also exposes the current native comparison, main-body
+comment, deterministic layout, and TOC rebuild operations. `RunPosition` and
+`RunRange` are constructible frozen values for zero-based half-open run ranges.
+`Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
+`LayoutPage`, and `TocRebuildReport` are frozen typed snapshots. Comments are
+returned as a tuple in package order, comparison diagnostics are returned as a
+tuple, and layout fragments are returned in body and page order. No operation
+returns a borrowed native handle or an untyped dictionary.
+
+Comparison, deterministic layout, TOC rebuild, path save, and byte
+serialization release the GIL. A successful comment addition or reply advances
+the document revision once. Comment resolution and removal advance it once
+only when they update the document. Comparison and TOC rebuild compare their
+serialized package state around the successful staged operation and advance
+the revision once only when that state changes. A native error publishes no
+candidate and does not advance the binding revision.
+
 `rpptx` mirrors python-pptx through an unpublished mixed-layout `rpptx-py`
 crate. `Presentation` owns the Rust facade and one revision counter. Lazy
 layouts, slides, shapes, placeholders, text frames, paragraphs, runs, columns
@@ -221,6 +238,18 @@ path after each structural write, because strict global revision invalidation
 intentionally stales every pre-write handle and collection. Pure-Python
 `Length`, `Inches`, `Pt` and the required `MSO_SHAPE` members keep native
 inheritance outside the limited ABI.
+
+The presentation binding exposes `to_pdf`, `render_slide_to_png`,
+`render_all_slides`, `to_notes_pdf`, and `render_all_notes` through the native
+deterministic facade. Every render call releases the GIL. A `Slide` exposes
+optional speaker-note text and an ordered tuple of frozen `Comment` snapshots.
+Each comment contains an ordered tuple of frozen `CommentReply` snapshots, and
+the presentation exposes an ordered tuple of frozen `CommentAuthor` snapshots.
+Author, comment, and reply additions accept native GUID and RFC 3339 strings.
+Comment and reply moves retain native final-position semantics. A successful
+collaboration operation advances the global revision once. Constructor or
+native validation failure publishes no candidate and leaves existing handles
+valid.
 
 ## Native Word facade stability
 
@@ -261,6 +290,11 @@ literals in pre-1.0 Rust consumers. They add no Python, WASM, or CLI surface.
 `document_paragraph_numbering`, and `document_body_paragraph_numbering` as
 result-local native Rust numbering lookups. The latter two remain hidden from
 generated documentation but are still additive public Rust APIs.
+`WordBodyLayoutFragment` and `WordLayoutResult::body_layout_fragments` add a
+public pre-1.0 point-space extent lookup for each direct main-body item. The
+record uses one-based physical and displayed page numbers. Preserved unlaid
+content resolves to an empty slice, while an invalid body index resolves to
+`None`.
 
 Native Rust also exposes `WordPackageClass` for DOCX, DOCM, DOTX, and DOTM.
 `Document::package_class` reads the exact main-part override.
@@ -312,17 +346,114 @@ method signatures stay unchanged, but fallible operations can report imported,
 preserved, overflow, and pending-collision errors before publication. Save and
 byte serialization use a staged clone and assign authored relationship,
 bookmark, comment, drawing, numbering, part, and content-type identities in
-final recursive document order. `CT_Inline` and `CT_Anchor` expose their parsed
-`doc_pr_id` on the pre-1.0 Rust model so callers no longer receive an invented
-constant for a drawing. Python, WASM, and CLI gain the deterministic behavior
-through the native facade without adding binding methods.
+final recursive document order. Producer drawing definitions are checked for
+uniqueness per physical XML part, then their package-wide union remains occupied
+for globally fresh authored drawing allocation. `CT_Inline` and `CT_Anchor`
+expose their parsed `doc_pr_id` on the pre-1.0 Rust model so callers no longer
+receive an invented constant for a drawing. Python, WASM, and CLI gain the
+deterministic behavior through the native facade without adding binding
+methods.
+
+Native Rust also exposes the concrete non-exhaustive `StoryKind` and
+`StoryItemKind` enums, owned `StoryId` and `ContentLocation` paths, borrowed
+`StoryItemRef` views, and the concrete `StoryError` resolution failures.
+`Document::stories` returns body, cell, text-box, header, footer, ordinary note,
+and comment owners in deterministic order. `Document::story_items` returns
+paragraph, table, content-control, field, drawing, and preserved-node items in
+source order. Its `xml` result is borrowed for exact package-backed subtrees and
+owned for typed body or comment sources and namespace-complete complex-field
+projections. `Document::set_story_text` resolves a checked operation-scoped
+location against a staged package and publishes only a serialized and reopened
+candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
+Python, WASM, and CLI gain no story traversal or mutation entry point.
+
+Native Rust also exposes the owned `ContentFragment` value and
+`ContentLocation::end`. Paragraph, table, and block content-control
+constructors create fixed-prefix fragments, while removal can return one exact
+preserved direct child. `Document::insert_content`, `remove_content_at`,
+`clone_content`, and `move_content` accept only canonical actual-item locations
+or the explicit end boundary. The end boundary is after final direct content
+and before body section properties. Moves stay within one story owner. Clones
+freshen document identities, and relationship-bearing fragments require their
+unchanged owner scope. These are additive pre-1.0 native Rust APIs. Python,
+WASM, and CLI gain no corresponding binding surface.
+
+Native Rust also exposes owned `DocumentFragment` and non-exhaustive
+`FragmentConflictPolicy` values. `DocumentFragment::from_range` captures a
+nonempty half-open main-body selection and can include final body section
+properties only when explicitly requested at the body end.
+`Document::import_fragment` inserts at a checked main-body location and applies
+caller-selected equivalent reuse independently to styles, numbering, and
+related parts. The import remains package-authoritative and transactional.
+These are additive pre-1.0 APIs in the published `rdocx` crate. Python, WASM,
+and CLI gain no fragment-import surface here.
+
+Native Rust also exposes fallible story-scoped relationship operations on the
+same pre-1.0 `Document` facade. `add_picture_to_story` and
+`add_hyperlink_to_story` append namespace-complete paragraphs to a checked
+`StoryId`. `add_hyperlink_relationship_to_story` allocates one external link
+without inserting content. `validate_internal_relationship_for_story`,
+`image_data_for_story`, and `hyperlink_url_for_story` resolve only through the
+story owner's relationship set and reject stale owners, missing identifiers,
+wrong types, wrong target modes, and missing internal targets. These additions
+do not add a trait, generic parameter, or WASM or CLI surface.
+`StoryItemRef::links` inventories modeled links in source order and returns the
+existing `LinkInfo` values after checked owner-scoped resolution.
+`Document::story_links` pairs those records with their existing
+`ContentLocation` owners and merges nested and ancestor-owned links by physical
+source position.
+
+Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
+Each handle reports its zero-based document ordinal, schema-final ownership,
+and configured geometry while retaining access to the complete section
+properties. Both handles read page size, orientation, margins, gutter,
+equal-width columns, page-number start, header and footer distance, title-page
+state, and break type. The mutable handle adds checked setters for every value,
+normalizes page dimensions when setting orientation, and rejects invalid or
+out-of-range inputs before changing any field. `Document` adds `section_count`,
+`sections`, total `section` and `section_mut` lookup, and fallible staged
+`insert_section` and `remove_section` operations. Its older final-section
+geometry convenience setters remain infallible and unchecked.
+
+Native Rust also exposes non-exhaustive `HeaderFooterKind`, the existing
+`HdrFtrType`, and owned `SectionStory`. `Document::section_story` resolves one
+effective default, first, or even header or footer and reports its source
+section and inherited state. `create_section_story`, `link_section_story`,
+`inherit_section_story`, `unlink_section_story`, `replace_section_story`, and
+`remove_section_story` are staged fallible operations. Rich content remains
+addressed by the returned `StoryId` through the common story API. The facade
+also exposes `even_and_odd_headers` and `set_even_and_odd_headers`, while first
+story creation enables section `titlePg`. These are additive pre-1.0 native
+Rust APIs. Python exposes immutable inspection snapshots but no corresponding
+mutation entry point. WASM and CLI gain no corresponding binding surface.
+
+`CT_SectPr` adds typed page-number start and raw child-position state, while
+`PageFrame` adds `displayed_page_number` beside its physical `page_number`.
+These model and handle additions are additive APIs on the published pre-1.0
+Rust crates, though exhaustive struct literals can require new fields. The
+published `CT_SectPr.header_refs` and `footer_refs` types remain
+`Vec<HdrFtrRef>` with the complete native vector surface. Python, WASM, and CLI
+gain no section mutation entry point and retain their existing package and
+render behavior.
+
+Python `Document.sections`, `styles`, `stories`, `story_items`,
+`header_footer_variants`, and `hyperlinks` return tuples of frozen typed
+records. Section lengths are integer EMU values. Story records retain kind,
+normalized part name, and owner index. Item and hyperlink records retain tuple
+index paths, while variant records retain section, source section, inheritance,
+kind, and default, first, or even selection. Hyperlink URLs are resolved by the
+native checked story API. Their order comes from the story-wide native
+projection, including when a nested control precedes a link owned by its
+ancestor item. Returned records are detached snapshots, so later document
+mutation cannot alter an earlier result.
 
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic
 bundled-font page targets and returns `TocRebuildReport` with entry, newly
 allocated bookmark, and retained-field diagnostic counts. A document without
-a TOC is unchanged and returns zero counts. Python, WASM, and CLI surfaces do
-not gain this operation or a parallel report type.
+a TOC is unchanged and returns zero counts. `rdocx-cli toc rebuild` publishes
+the validated result to an explicit output and reports these counts through a
+schema-1 main-story record. Python and WASM do not expose this operation.
 
 The native facade re-exports the concrete OfficeMath tree from `rdocx-oxml`.
 `Paragraph::equations`, `Paragraph::equation`, and their read-only equivalents
@@ -483,6 +614,13 @@ shadows override document-root bindings during that correlation. Python,
 WASM, and CLI surfaces gain no EPUB entry point and retain their existing error
 contracts.
 
+The native Word facade provides additive `Document::try_replace_text` beside
+the legacy infallible `replace_text` method. The fallible method stages the
+replacement and publishes it only after namespace-safe serialization succeeds.
+The command-line `replace` operation uses this boundary, reports the stable
+serialization error, and creates no partial output. Python and WASM bindings
+gain no corresponding method.
+
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
 backend, but the native method signatures, returned byte type, binding method
@@ -573,10 +711,10 @@ author threads through `add_comment`, `reply_to`, `resolve_comment`, and
 `remove_comment`. `RunPosition` and `RunRange` define top-level paragraph run
 boundaries with an inclusive start and exclusive end. `CommentRef` exposes
 comment metadata, text, parent identity, and resolved state without permitting
-part-local mutation. These additions do not implicitly expand the Python,
-WASM, or CLI surfaces. Those consumers continue to own the same
-package-preserving `Document`, so native comment edits remain intact when a
-binding subsequently saves it.
+part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
+removes comments. Add ranges use explicit zero-based, half-open body paragraph
+and run coordinates. Every mutation publishes a complete validated document
+to an explicit output. Python and WASM keep their package-preserving owners.
 
 Native Word callers remove one exact non-empty literal with
 `Document::redact_text`. The returned `RedactionReport` separates Word story,
@@ -617,6 +755,13 @@ pre-1.0 source break for native callers that construct the context with a
 struct literal. The new `FieldOutcome` variants are also a pre-1.0 source break
 for exhaustive native matches. Python, WASM, and CLI surfaces gain no evaluator
 methods and continue to preserve the same package content.
+
+Native paragraph item inspection reports whether comment-range and bookmark
+marker source elements contained child elements or visible text. Complex-field
+display segments expose their effective direct run properties in source order.
+Both are additive pre-1.0 Rust reader facts. Python, WASM, and CLI surfaces do
+not gain new methods, and their existing exhaustive consumers preserve the new
+variants without changing output.
 
 Native Word callers opt into cache materialization with
 `Document::update_fields`, `Document::save_with_field_updates`, or
@@ -709,9 +854,9 @@ Each immutable `RevisionRef` exposes the revision id, author, optional
 timestamp, and `RevisionKind`. Results recursively cover the main document
 body in document order, including tables, cells, and content controls. The
 facade reads a typed projection while serialization continues to use the
-captured raw WordprocessingML subtree. This is an additive native Rust API.
-Python, WASM, and CLI surfaces do not gain revision methods, and their existing
-load and save paths preserve the revision XML.
+captured raw WordprocessingML subtree. `rdocx-cli revision list` exposes this
+main-story projection with an explicit scope field. Python and WASM load and
+save paths preserve the revision XML without a revision inspection method.
 
 Native Word paragraph handles expose
 `Paragraph::add_run_inheriting_mark(&mut self, text)`. The method appends one
@@ -780,7 +925,9 @@ missing dates do not match a date range. Invalid bounds and malformed selected
 changes return an error before mutation. Resolution covers the main document,
 headers, footers, comments, normal footnotes, endnotes, and nested text boxes.
 `Document::revisions` remains main-story-only. These eight methods are additive
-on `rdocx::Document` only. Python, WASM, and CLI surfaces remain unchanged and
+on `rdocx::Document`. `rdocx-cli revision accept|reject` exposes the all-story
+resolution boundary with mutually exclusive id, exact-author, or paired date
+selectors. An omitted selector resolves all modeled revisions. Python and WASM
 continue to preserve the resulting document when they save it.
 
 Native callers generate tracked changes with `Document::compare`, supplying an
@@ -797,11 +944,15 @@ formatting, textual whitespace, fields, comments, and any public
 `ComparisonStoryKind`. The non-exhaustive story enum names the main, header,
 footer, comment, text-box, footnote, and endnote categories. The comparison
 surface covers relationship-resolved stories, fields, and nested text boxes.
+The native facade stages the main story from package-authoritative XML and
+preserves exact unchanged drawing wrappers even when sibling text in the same
+paragraph, table, cell, or control changes. Accepting and rejecting the result
+retain the drawing payload, relationship graph, and media bytes.
 It emits same-story moves and supported run, paragraph, table, and section
 property revisions. Diagnostic locations retain the actual story identity and
-stable owner path. This API is native Rust only. Python, WASM, and CLI surfaces
-gain no comparison method and preserve comparison output when they save their
-owned document.
+stable owner path. `rdocx-cli compare` exposes the source-compatible whole-run
+comparison with explicit author, RFC 3339 timestamp, and output. Python and
+WASM preserve comparison output when they save their owned document.
 
 Native Word rendering exposes `rdocx::RevisionView` and the concrete
 `rdocx::RenderOptions`, whose default selects the accepted view. Additive
@@ -1238,6 +1389,14 @@ honest. Do not auto-generate them from PyO3.
 
 **Distribution names `rdocx` and `rpptx`**, import names identical. The binding
 crates are `publish = false`, because a cdylib has no business on crates.io.
+Each Python project uses its crate-local `README.md` as a Markdown long
+description. The metadata also carries a distribution-specific summary,
+author, keywords, Python and topic classifiers, and project URLs. The README
+provides installation, compatibility, capability, quick-start, typing, and
+project-link guidance on PyPI. Wheel and source-distribution validation checks
+the embedded metadata and the required README sections before publication.
+Full-description comparison normalizes platform CRLF to LF and ignores terminal
+newline count. All prose and other metadata remain exact.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
 PowerPoint workspace family is published at 0.11.0 from immutable annotated tag
@@ -1255,10 +1414,14 @@ the GitHub release remain absent. The immutable v0.11.0 attempt at
 reviewed SHA `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published only
 `rdocx-opc` and `rdocx-oxml`. It created no GitHub release and posted no
 contribution notifications. The complete seven-package recovery is published
-at 0.11.1, and all six reviewed leave-open notifications are posted. Both
-Python project versions and `rdocx-wasm` track stable workspace version 0.13.1,
-but every binding and WASM crate remains unpublished on crates.io. The incubating
-group places the unpublished `rpptx-wasm` crate at 0.11.0. Neither Rust release
+at 0.11.1, and all six reviewed leave-open notifications are posted. The
+The immutable PyPI `rdocx 0.13.1` release remains available with its short
+summary. The corrective stable source, `rdocx` Python project, and
+`rdocx-wasm` track 0.13.2, while crates.io remains at the complete 0.13.1
+family until a separately authorized Rust release.
+The `rpptx` Python project and unpublished `rpptx-wasm` crate track the native
+incubating version 0.11.0. Every binding and WASM crate remains unpublished on
+crates.io. Neither Rust release
 gives binding, WASM, npm, or Python package publication authority. Every later
 release still requires its selected-family gate and a separate final approval
 at the reviewed SHA. Complete coherent stable releases remain live and
@@ -1269,23 +1432,48 @@ remain unchanged.
 
 ## CI
 
-`wheels.yml` on a **`py-v*` tag namespace**, separate from `publish.yml` on
-`v*`, so a Rust patch release does not rebuild twelve wheels and a binding-only
-fix does not force a crates.io release. Publishing uses PyPI trusted publishing
-via OIDC, with no long-lived token in secrets. The workflow builds `rdocx` and
-`rpptx` across the six declared targets, produces one source distribution per
-package, and uploads each matrix product independently. Every native wheel is
+`wheels.yml` on **`py-rdocx-v*` and `py-rpptx-v*` tag namespaces**, separate
+from `publish.yml` on `v*` and `rpptx-v*`, so a Rust release does not rebuild
+Python wheels and a binding-only fix does not force a crates.io release.
+Publishing uses PyPI trusted publishing via OIDC, with no long-lived token in
+secrets. Manual dispatch builds `rdocx` and `rpptx` across the six declared
+targets. A tag build runs only the selected distribution cells. Each package
+produces one source distribution and uploads each matrix product independently.
+Every native wheel is
 installed into a fresh environment for its compatible pytest, exact
 `mypy==2.3.0 --strict`, and `stubtest` gates. Each musllinux wheel is installed
 in a fresh Python 3.9 Alpine environment and runs the same package parity suite
 as the native cells.
 
 The build jobs have only repository read permission. A separate publish job
-depends on all wheel and source-distribution jobs, requires exactly twelve
-wheels and two source distributions, and receives `id-token: write` only for a
-`py-v*` tag event in the `pypi` environment. Manual dispatch builds and tests
-artifacts but cannot publish them. Every external action and the maturin tool
-version are pinned to reviewed immutable versions.
+depends on all wheel and source-distribution jobs, selects exactly six wheels
+and one source distribution for the tag's project, and receives
+`id-token: write` only for a `py-rdocx-v*` or `py-rpptx-v*` tag event in the
+`pypi` environment. Manual dispatch builds and tests both distributions but
+cannot publish them. Every external action and the maturin tool version are
+pinned to reviewed immutable versions.
+
+Each Python release family contains one distribution at its native crate
+version. After the reviewed SHA is pushed but before either Python tag is
+created, a manual build-only run at that SHA must produce twelve `cp39-abi3`
+wheels and two source distributions across both projects. The selected six
+wheels and one source distribution must name the selected project and version
+in both filenames and embedded metadata. The selected distribution is
+installed under clean Python 3.9 and 3.12 environments for the priority runtime
+gate. Exact `mypy==2.3.0 --strict` and stubtest run under Python 3.12 because
+that mypy version requires Python 3.10 or newer. The tag-only publish job uses
+PyPI trusted publishing. Successful publication is not complete until the
+selected project version, all seven files, authenticated owner or maintainer
+roles, the exact reviewed GitHub release body, and every contribution
+notification are verified.
+
+The current reviewed Python releases are `rdocx 0.13.2` from
+`py-rdocx-v0.13.2` and `rpptx 0.11.0` from `py-rpptx-v0.11.0`, both at SHA
+`2b009243ed39ab66470d7484d490985368e865a8`. Each PyPI release contains the
+exact six platform wheels and one source distribution, exposes its complete
+crate-local README and project metadata, and passes clean Python 3.9 and 3.12
+runtime checks plus Python 3.12 strict typing and stub checks. Their GitHub
+release bodies match the reviewed changelog text byte for byte.
 
 **A PR-time job that builds the wheel and runs pytest is mandatory.** The
 absence of exactly this job for wasm is why `rdocx-wasm` rotted.
@@ -1413,7 +1601,23 @@ mutually exclusive with the one-based `render --pages` range. Both flags select
 against the same deterministic layout snapshot that is passed to the shared
 raster backend. The legacy `--page 0` default PNG path and single-line stdout
 remain unchanged. The `text` command emits paragraphs and table cells in
-document order through the facade plain-text representation. Both the selected
-page and all-page `render` paths use bundled deterministic fonts. The compiled
-seven-command surface is covered by one integration binary, with fixtures
-constructed in code and no command-only test dependency.
+document order through the facade plain-text representation. `text --json`
+emits schema-1 accepted-view paragraphs with a zero-based direct body index,
+typed zero-based nested path, direct style and numbering, text, and ordered
+runs. Run formatting is null when no direct run properties exist. Otherwise it
+contains nullable direct bold, italic, strike, underline, font, point size,
+colour, highlight, language, and character style fields. `layout --json` uses
+bundled deterministic fonts and reports every direct body item. Its point-space
+fragments carry one-based physical and displayed page numbers, and preserved
+unlaid items retain an empty fragment list. `replace --expect N` checks the
+run-aware replacement count before staged publication. A mismatch creates no
+output and leaves an existing destination untouched. Both the selected page
+and all-page `render` paths use bundled deterministic fonts. The compiled
+surface also includes nested comment thread commands, main-story revision
+inspection, all-story filtered revision resolution, whole-run comparison, and
+TOC rebuild. Every new mutation requires an explicit output and publishes
+through the shared staged output set. Their schema-1 records state `main` or
+`all-supported-stories` scope. Revision selectors are mutually exclusive, and
+RFC 3339 start and end bounds must be paired. The complete compiled surface is
+covered by one integration binary, with fixtures constructed in code and no
+command-only test dependency.

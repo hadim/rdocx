@@ -403,6 +403,8 @@ pub fn walk(elements: &[PositionedElement], f: &mut impl FnMut(&PositionedElemen
 pub struct PageFrame {
     /// 1-based page number.
     pub page_number: usize,
+    /// 1-based displayed page number after a section restart.
+    pub displayed_page_number: usize,
     /// Page width in points.
     pub width: f64,
     /// Page height in points.
@@ -430,6 +432,7 @@ impl PageFrame {
     ) -> Self {
         Self {
             page_number,
+            displayed_page_number: page_number,
             width,
             height,
             elements,

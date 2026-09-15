@@ -20,13 +20,16 @@ class StaleElementError(RpptxError):
     """A held content handle was invalidated by structural mutation."""
 
 
-from ._rpptx import Presentation
+from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation
 
 __all__ = [
     "Inches",
     "Length",
     "MSO_SHAPE",
     "PackageError",
+    "Comment",
+    "CommentAuthor",
+    "CommentReply",
     "Presentation",
     "Pt",
     "RpptxError",

@@ -12,7 +12,11 @@ use pyo3::types::{PyAny, PyType};
 
 use oxml_py_support::StaleElementError;
 
-use document::PyDocument;
+use document::{
+    PyBoundingBox, PyComment, PyComparisonDiagnostic, PyDocument, PyHeaderFooterVariant,
+    PyHyperlink, PyLayoutFragment, PyLayoutPage, PyRunPosition, PyRunRange, PySection, PyStory,
+    PyStoryItem, PyStyle, PyTocRebuildReport,
+};
 use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
@@ -76,6 +80,7 @@ pub(crate) fn rdocx_to_pyerr(py: Python<'_>, error: rdocx::Error) -> PyErr {
         | rdocx::Error::Mhtml { .. }
         | rdocx::Error::Odt { .. }
         | rdocx::Error::InvalidEmbeddedMutation { .. }
+        | rdocx::Error::Story(_)
         | rdocx::Error::Other(_) => "RdocxError",
     };
     public_error(py, class_name, error.to_string())
@@ -84,6 +89,20 @@ pub(crate) fn rdocx_to_pyerr(py: Python<'_>, error: rdocx::Error) -> PyErr {
 #[pymodule]
 fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDocument>()?;
+    module.add_class::<PyRunPosition>()?;
+    module.add_class::<PyRunRange>()?;
+    module.add_class::<PyComment>()?;
+    module.add_class::<PyComparisonDiagnostic>()?;
+    module.add_class::<PyBoundingBox>()?;
+    module.add_class::<PyLayoutFragment>()?;
+    module.add_class::<PyLayoutPage>()?;
+    module.add_class::<PyTocRebuildReport>()?;
+    module.add_class::<PyStory>()?;
+    module.add_class::<PyStoryItem>()?;
+    module.add_class::<PyHyperlink>()?;
+    module.add_class::<PyHeaderFooterVariant>()?;
+    module.add_class::<PySection>()?;
+    module.add_class::<PyStyle>()?;
     module.add_class::<PyParagraph>()?;
     module.add_class::<PyParagraphCollection>()?;
     module.add_class::<PyRun>()?;
@@ -166,6 +185,9 @@ mod tests {
                     operation: "replace",
                     message: "invalid embedded mutation".to_owned(),
                 },
+                rdocx::Error::Story(rdocx::StoryError::InvalidPath {
+                    path: vec![usize::MAX],
+                }),
             ] {
                 assert!(rdocx_to_pyerr(py, error).get_type(py).is(&expected));
             }

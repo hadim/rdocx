@@ -12783,3 +12783,885 @@ The integrated `/verify --full` gate passed at
 **Notes for future sessions.** Keep the root README focused on outcomes and
 keep every crate page specific to its direct consumer. Extend the existing
 validator whenever the public message gains a new claim or comparison row.
+
+### F-253, Container-neutral story editing
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** The native Word facade now exposes one deterministic
+`StoryId`, `ContentLocation`, and item traversal model across the body, table
+cells, headers, footers, ordinary footnotes and endnotes, comments, and text
+boxes. The same staged text mutation resolves locations and reports uniform
+owner, path, bounds, kind, and stale errors without publishing a partial
+document or package candidate.
+
+**Non-obvious choices.** Locations are operation-scoped index paths into the
+existing typed and package-backed sources rather than durable node handles or
+a cloned second document tree. Complex fields are projected as owned,
+namespace-complete XML only when an exact borrowed source slice would depend on
+ancestor declarations. Admission remains grammar-owned and fails closed at
+raw, malformed, or unsafe boundaries.
+
+**Deviations from the design plan.** The approved surface remained unchanged.
+Microscope passes strengthened namespace alias handling, nested and same-run
+complex fields, lifecycle provenance, malformed note identities, and atomic
+failure coverage. The integrated workspace gate also required the existing
+Python error classifier to map the new native story error to `RdocxError`.
+Pass 21 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `one_generic_mutation_edits_the_same_shape_in_every_story`,
+`story_traversal_preserves_owner_order_and_raw_nodes`, and
+`invalid_story_locations_are_atomic` passed. The changed `rdocx-oxml`, `rdocx`,
+and `rdocx-py` suites passed, including the exhaustive Python story-error
+mapping. The integrated `/verify --full` gate passed at
+`035b74a3d83f`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Re-resolve every location after mutation. The
+owner and item ordinals intentionally describe one observed operation state.
+F-254 and F-255 may extend mutation and relationship behavior through this
+model, but they must preserve its staged publication and fail-closed typed
+admission boundaries.
+
+### F-250, Ordered mutable section facade
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now exposes ordered concrete
+`SectionRef` and `Section` handles for every paragraph-owned boundary and the
+final body-owned section. Callers can inspect and mutate section properties,
+insert or remove section boundaries atomically, and retain independent header
+and footer ownership across those structural changes.
+
+**Non-obvious choices.** Section identity is an operation-scoped ordinal plus
+its paragraph or final-body owner. Removing a predecessor materializes the
+effective inherited references before the boundary disappears. Empty boundary
+paragraphs are cleaned up, the final owner is promoted safely, and only facade
+owned story parts that become unreachable are pruned. Effective story lookup
+uses the first usable eligible reference, so malformed, external, cross-type,
+missing, and unparsable references cannot displace valid inheritance.
+
+**Deviations from the design plan.** The approved public surface remained
+unchanged. Microscope passes repaired inherited story loss after predecessor
+removal and hardened duplicate and unusable reference handling. Pass 4 reported
+zero defects, zero smells, and zero nitpicks on the prepared feature tree.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `ordered_section_mutations_preserve_independent_story_references`,
+`removing_a_predecessor_materializes_inherited_header_and_footer_references`,
+and `removing_a_section_never_orphans_a_shared_story` passed with the malformed,
+external, cross-type, duplicate, and pruning hazard regressions. The integrated
+`/verify --full` gate passed at
+`dc0f4f44c2baa85401da5ed098cfe643a8956c33`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Re-resolve section handles after structural
+mutation. F-251 and F-252 build on the same concrete handle and must preserve
+the staged publication, effective reference, and ownership rules.
+
+### F-251, Complete section and page geometry
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Ordered section handles now expose checked accessors and
+setters for page size, orientation, margins, gutter, equal-width columns,
+page-number restart, header and footer distance, title-page state, and break
+type. Layout carries displayed page numbers separately from physical page
+identity, including restarted sections and continued endnote pages.
+
+**Non-obvious choices.** M23 authors only `w:pgNumType/@w:start` and preserves
+number format, chapter style, chapter separator, and other M24 state exactly.
+The published header and footer reference fields remain ordinary
+`Vec<HdrFtrRef>` values. Distinguishable repeated references retain their
+source anchors, while indistinguishable equal values resolve deterministically
+by source ordinal. Legacy final-section setters retain their historical
+unchecked and infallible behavior for source compatibility.
+
+**Deviations from the design plan.** The approved plan's broad page-number
+format wording was reconciled with its explicit M23 boundary so only the start
+value is authored. Six microscope passes repaired raw page-number scanning,
+duplicate and foreign XML ordering, arithmetic overflow, endnote numbering,
+atomic legacy behavior, oracle completeness, and public `Vec` compatibility.
+Pass 6 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/01-glossary.md`,
+`docs/hld/02-scope-and-non-goals.md`, `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `mixed_orientation_sections_match_word_geometry_and_page_numbers`,
+`section_geometry_round_trips_with_unsupported_children_in_order`, and
+`rejected_section_geometry_is_atomic` passed. The genuine Microsoft Word
+16.112.3 build 16.112.26083020 oracle produced physical pages 1, 2, and 3 with
+page sizes 612 by 792, 792 by 612, and 595 by 842 points and displayed PAGE
+values 1, 12, and 27. The integrated `/verify --full` gate passed at
+`dc5d802291737ae4cc7ca8673ee52c4599572f0f`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Re-resolve section handles after structural
+mutation. PageFrame physical identity is zero-based and independent from its
+one-based displayed section sequence. F-252 must preserve the same staged
+section and story ownership boundary.
+
+### F-254, Generic insert, move, clone, and remove operations
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now exposes an owned concrete
+`ContentFragment` and transactional insertion, removal, cloning, and
+same-owner movement at canonical `ContentLocation` anchors. Operations cover
+direct body, cell, header, footer, note, comment, and text-box content while
+preserving schema order, namespaces, references, and untouched raw XML.
+Cloning assigns fresh document identities before publishing the staged result.
+
+**Non-obvious choices.** Ordinary locations remain genuine direct owner-child
+anchors from the flattened traversal. End insertion is an explicit location
+that resolves before a body section-properties tail and also works for empty
+owners. Cross-owner transfer remains rejected for F-256, while same-owner
+relationships remain in scope. Block content controls validate their complete
+grammar, retained raw slots, entity references, and XML 1.0 legal characters.
+
+**Deviations from the design plan.** Destination and end semantics were made
+explicit without expanding the approved operation set. Six microscope passes
+repaired flattened indexing, self-closing and sole-paragraph owners, identity
+rewrites, bookmark structure, content-control grammar, and namespace replay.
+Pass 6 reported zero defects, zero smells, and zero nitpicks. The bare package
+command selected older same-version registry dependencies, so the required
+package verification used the canonical reviewed local dependency graph.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `interleaved_content_operations_preserve_order_references_and_raw_xml`,
+`same_owner_move_adjusts_destination_after_removal`, and
+`invalid_or_stale_content_operations_are_atomic` passed with the complete
+content-control, namespace, identity, relationship, and package-story riders.
+The `rdocx` regression suite passed 424 tests with 4 ignored. The integrated
+`/verify --full` gate passed at
+`c0186096e6005544daa01134404ce62c34347a89` with exactly 22 package archives,
+all below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Re-resolve content locations after structural
+mutation. Keep story-owner transfer separate from OPC part-scoped relationship
+resolution. F-255 adds the latter, while F-256 owns complete cross-owner and
+cross-document dependency remapping.
+
+### F-255, Part-scoped assets, links, and relationships
+
+**Sprint.** S72
+**Completed.** 2026-09-10
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native Word facade now routes picture, hyperlink,
+relationship validation, image lookup, and hyperlink lookup operations through
+the concrete `StoryId` relationship owner. Body, cell, header, footer, note,
+comment, and text-box content resolve only through their own OPC part, while
+authored media and drawing identifiers remain deterministic.
+
+**Non-obvious choices.** Relationship occurrence provenance is reconciled
+against final serialized XML rather than retained as construction history.
+Zero-use provenance is retired, repeated relationship references remain valid,
+and each live picture occurrence receives a fresh package-global drawing
+identifier. Producer-shadowed namespaces and unmodelled XML remain verbatim,
+while newly authored fragments carry the standard namespace bindings they need.
+
+**Deviations from the design plan.** The approved public surface remained
+unchanged. Five microscope passes hardened typed note publication, producer
+namespace shadows, main-part nested-story provenance, simultaneous identifier
+cycles, removal, cloning, and semantic reorder behavior. Pass 5 reported zero
+defects, zero smells, and zero nitpicks. Sprint review passes 8 through 13 then
+made physical package XML authoritative across producer related stories,
+typed note and comment mutation, field updates, signature invalidation, and
+repeated publication. ZIP, package-class, signing, encryption, and Flat OPC
+outputs share the same canonical comment boundary. Pass 13 reported zero
+blocking and zero should-fix findings.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/09-charts-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `equal_related_content_resolves_only_through_its_story_owner`,
+`wrong_scope_relationships_are_rejected_atomically`, and
+`nested_story_assets_survive_enclosing_owner_insert_remove_clone_and_move`
+passed with the lifecycle, namespace, relationship, media, and
+drawing-identifier riders. The complete `rdocx` suite passed 450 library tests
+with 6 ignored, 222 integration tests with 4 ignored, 439 regression tests with
+4 ignored, and 2 doctests. The integrated `/verify --full` gate passed at
+`009e5c4d16a5517cd215d0dd97d7fc7bea569b8e`. All 22 package dry runs succeeded,
+and every archive remained below 10 MiB. The post-review amendment regression
+suite passed 445 tests with 4 ignored.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep relationship identifiers part-local and
+drawing identifiers package-global. Re-resolve story and content locations
+after structural mutation. F-256 owns cross-owner and cross-document remapping
+and must carry complete owned relationship and media dependencies
+transactionally.
+
+### F-X090, Accept part-local producer drawing identities
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Producer `wp:docPr` definitions are now checked for
+uniqueness within each physical XML part. Every accepted value then joins the
+package-wide occupied set, so body and header parts may reuse a producer value
+while later facade-authored drawings remain globally fresh.
+
+**Non-obvious choices.** Opening never renumbers producer XML. The scanner uses
+a fresh drawing set for each part, then merges it only after that part validates.
+Other identifier categories retain their existing scope and allocation rules.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that the
+repeated-save test counted drawings without comparing their values. Pass 2
+reported zero defects, zero smells, and zero nitpicks after both parts were
+bound to the original reused identity on every reopen.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `cross_part_producer_drawing_ids_do_not_block_document_open`,
+`same_part_normalized_drawing_ids_remain_invalid`,
+`part_local_drawing_identity_scope_survives_story_round_trip`, and
+`foreign_doc_pr_does_not_enter_drawing_identity_scope` passed. The complete
+`/verify` gate passed with pinned LibreOffice and Poppler, including full
+workspace tests, WASM, rustdoc, README package inventories, and release
+workflow regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep producer drawing validation part-local and
+authored drawing allocation package-global. Same-part normalized aliases remain
+invalid, and foreign same-local-name elements remain outside this scope.
+
+### F-X091, Serialize unused root default namespaces safely
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The Word serializer now classifies an unknown default
+namespace on the document root by effective lexical use. An unused declaration
+no longer blocks typed mutation or save, while an inherited unprefixed element,
+malformed scope, or ambiguous declaration still fails closed. The native facade
+adds atomic `try_replace_text`, and the CLI uses it to report serialization
+errors without panicking or creating partial output.
+
+**Non-obvious choices.** Nested default declarations shadow the root even when
+they repeat the same URI, and unprefixed attributes do not consume a default
+namespace. Successful canonical serialization refreshes cached namespace facts
+from the emitted main-story bytes so repeated saves remain consistent after an
+unused declaration is omitted.
+
+**Deviations from the design plan.** None. Microscope pass 1 requested explicit
+coverage for same-URI nested shadowing and duplicate default declarations. Pass
+2 reported zero defects, zero smells, and zero nitpicks after those cases were
+added.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `unused_root_default_namespace_allows_atomic_save`,
+`used_root_default_namespace_still_fails_atomically`,
+`default_namespace_use_respects_element_scope`,
+`try_replace_text_publishes_only_a_preflighted_candidate`, and
+`cli_replace_reports_namespace_preflight_errors_without_panicking` passed. The
+exact Issue 73 attachment was replaced, saved, and reopened. The complete
+`/verify` gate passed with pinned LibreOffice, Poppler, and python-pptx oracles,
+including full workspace tests, WASM, rustdoc, README inventories, and workflow
+regressions. All 22 package dry runs succeeded, and every archive remained
+below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve lexical declaration provenance rather
+than comparing namespace URIs alone. Keep modified serialization fail-closed
+for every used, malformed, or ambiguous producer default.
+
+### F-252, Rich per-section headers and footers
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now resolves and reports effective
+default, first, and even header and footer stories for every section. It
+creates, links, inherits, unlinks, replaces, and removes each variant through a
+staged package boundary. Rich content remains editable through the common story
+model, including paragraphs, tables, fields, block controls, hyperlinks,
+images, and drawings. The settings model also exposes typed even-page header
+selection.
+
+**Non-obvious choices.** Missing references inherit only the same variant.
+Inheritance removes the direct reference, while removal authors an explicit
+empty story so inherited content cannot reappear. Unlink and replacement clone
+the effective story XML and its part-local relationship set, rebase internal
+relative targets, and allocate fresh drawing identities. First-page creation
+enables `titlePg`, while even-page story creation leaves the document-wide
+selection setting to an explicit operation.
+
+**Deviations from the design plan.** None. Microscope pass 1 found three
+completion defects in title-page enablement, public even-page setting control,
+and unwind cleanup for oracle artifacts. Pass 2 reported zero defects, zero
+smells, and zero nitpicks after remediation.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `section_header_footer_variants_match_word_width_and_inheritance`,
+`rich_section_stories_survive_reopen_replace_and_unlink`,
+`removing_one_variant_retains_shared_and_inherited_stories`,
+`f252_oracle_artifacts_are_removed_during_unwind`, and
+`even_and_odd_headers_are_alias_safe_and_rewrite_in_schema_order` passed. The
+live Microsoft Word 16.112.4 build 16.112.26090911 differential reproduced all
+nine expected page records with Poppler 26.09.0. The complete `/verify` gate
+passed with workspace tests, pinned LibreOffice, WASM, rustdoc, README package
+inventories, and workflow regressions. The exact reviewed `rdocx` archive
+verified at 886,690 bytes, below the 10 MiB limit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep header and footer relationship ownership
+part-local and resolve each section's effective variant before cloning. Prune
+only unreachable facade-owned graphs, and use the common story operations for
+rich edits rather than introducing another content model.
+
+### F-X093, Preserve drawings through document comparison staging
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Document comparison and tracked-revision resolution now
+stage the main story from package-authoritative XML. Exact source spans pass
+through changed paragraphs, tables, rows, cells, controls, and runs so stable
+inline and anchored drawings retain their complete wrapper, namespace scope,
+extended payload, relationships, and media.
+
+**Non-obvious choices.** Granular comparison reuses an exact whole run only
+when each aligned owner contributes one unit. This preserves stable drawing
+runs without duplicating a multi-unit text run at word or character
+granularity. Staged accept and reject checks remain the package-wide commit
+boundary.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that exact
+source was not threaded through changed owners. Pass 2 found that whole-run
+reuse could duplicate multi-unit runs. Pass 3 reported zero defects, zero
+smells, and zero nitpicks after both corrections.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `document_compare_preserves_inline_drawings_through_staging`,
+`comparison_drawings_survive_accept_and_reject`,
+`comparison_preserves_anchored_and_extended_doc_pr_payloads`, and
+`comparison_rejects_a_genuinely_missing_doc_pr_atomically` passed. The full
+workspace, WASM, rustdoc, README, workflow, package, and supply-chain gates
+passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat prepared package bytes as authoritative
+whenever unchanged opaque content can own namespace scope. Preserve exact
+wrappers through the complete owner hierarchy rather than reconstructing a
+drawing from its typed projection.
+
+### F-256, Transactional cross-document fragment import
+
+**Sprint.** S72
+**Completed.** 2026-09-13
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now captures a nonempty half-open
+main-body range as an owned `DocumentFragment` and imports it at a checked body
+location. The importer closes selected styles, direct and style-carried
+numbering, bookmarks, comments and replies, drawings, media, charts, embedded
+workbooks, fields, and recursive internal relationships. Caller policy selects
+equivalent reuse independently for styles, numbering, and related parts.
+
+**Non-obvious choices.** Selected main-story and comment XML stays
+package-authoritative so unsupported producer payload remains exact. Style and
+numbering dependencies are discovered to a fixpoint, every destination
+identity and part name is allocated before rewriting, and the complete
+candidate serializes and reopens before publication. Final section properties
+are included only for an explicit selection ending at the body boundary.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 found
+unselected dependency copying, lost modern comment state, typed-body replay,
+style-carried numbering, comment-part relationship closure, and insufficient
+negative assertions. Pass 3 reported zero defects, zero smells, and zero
+nitpicks after remediation.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/09-charts-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `dependency_rich_fragment_imports_twice_without_collisions`,
+`fragment_conflict_policies_are_deterministic`,
+`unsupported_fragment_dependency_aborts_without_mutation`, and
+`malformed_fragment_relationship_xml_aborts_without_mutation` passed. The
+complete `rdocx` and workspace suites, pinned LibreOffice and PPTX corpus
+oracles, reduced-feature and WASM gates, rustdoc, README inventories, workflow
+regressions, package dry runs, and supply-chain audit passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep selected retained XML authoritative and
+build every remap from the complete staged dependency graph. F-276 owns
+all-story import and the broader custom XML, revision, note, diagram, and
+package-extension dependency policy.
+
+### F-X094a, Expose Word collaboration and redline commands in rdocx-cli
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rdocx-cli` now exposes schema-versioned commands for
+listing, adding, replying to, resolving, and removing comments. It also lists
+and selectively accepts or rejects revisions, creates comparison documents,
+and rebuilds tables of contents. Every mutation requires an explicit output
+and publishes only a complete staged document.
+
+**Non-obvious choices.** Comment ranges use zero-based half-open body
+coordinates. Revision listing declares main-story scope, while resolution
+declares the broader scope already supported by the native facade. Comparison
+remains distinct from structural diff because it authors tracked revisions.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `cli_collaboration_commands_are_schema_stable_and_atomic`,
+`comment_commands_round_trip_one_resolved_thread`,
+`revision_filters_change_only_matching_revisions`, and
+`compare_accept_and_reject_reproduce_each_input` passed. The consolidated full
+gate passed with workspace tests, deterministic viewer tooling, WASM, rustdoc,
+README inventories, workflow regressions, package dry runs, archive limits,
+and the supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the CLI on the native collaboration and
+comparison facades. New mutations must retain the staged output boundary and
+must not expose raw XML as a second automation model.
+
+### F-X094b, Structured CLI text and layout plus guarded replacement
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The Word CLI now emits schema-versioned accepted-view text
+records with nested source paths, style and numbering facts, and nullable
+direct run formatting. It also emits one-based physical and displayed page
+geometry for every direct body item and supports replacement guarded by an
+exact expected match count.
+
+**Non-obvious choices.** Layout carries a private top-level body owner through
+existing blocks and publishes additive `WordBodyLayoutFragment` records on
+`WordLayoutResult`. This preserves the positioned element contract while
+giving paragraphs, empty tables, images, controls, and page-spanning items
+real point-space extents. Expected-count mismatch is checked before any staged
+output is published.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `cli_structured_text_layout_and_guarded_replace_preserve_exact_contracts`,
+`layout_json_keeps_page_spanning_body_elements_as_multiple_fragments`,
+`empty_table_and_image_blocks_keep_real_geometry`, and
+`text_json_preserves_nested_paths_styles_numbering_and_run_formatting` passed.
+Warm restart layout equals fresh pagination, and the consolidated full gate
+passed with deterministic viewer tooling, package dry runs, archive limits,
+and the supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep body layout fragments as a result sidecar.
+Do not derive body boxes from glyph baselines or add source ownership to shared
+positioned elements unless a separate reviewed contract requires it.
+
+### F-X094c, Priority rdocx Python collaboration, comparison, layout, and TOC
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The `rdocx` Python `Document` now exposes native tracked
+comparison, main-body comment threads, deterministic layout fragments, page
+metadata, and TOC rebuilding. Constructible ranges and every returned record
+are frozen typed values, while package mutations preserve stale-handle
+revision semantics and failed staged operations remain atomic.
+
+**Non-obvious choices.** Comparison and TOC rebuild compare serialized package
+state before advancing the binding revision. Layout snapshots use bundled
+deterministic fonts and never expose native handles. Comparison, layout, TOC,
+save, and byte serialization release the GIL.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks. The integrated optimized wheel exposed
+a scheduler-sensitive serialization GIL check, so the same detached call now
+repeats inside one observation window. Microscope pass 2 reported zero defects,
+zero smells, and zero nitpicks for that test-only hardening.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `priority_word_operations_return_typed_snapshots_and_remain_atomic`
+passed with exact revision, reopen, typing, layout, and atomic-failure checks.
+The installed `cp39-abi3` wheel passed 41 binding tests, strict mypy, and
+stubtest. The consolidated full gate passed workspace tests, deterministic
+viewer tooling, both WASM targets, rustdoc, README inventories, workflow
+regressions, 22 package dry runs, archive limits, and the supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep Python results as immutable snapshots and
+route every long operation through the native facade. Optimized native calls
+can be shorter than one scheduler window, so GIL tests should repeat the exact
+detached call rather than weaken the concurrency assertion.
+
+### F-X094d, rdocx Python sections, styles, rich stories, and hyperlinks
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The `rdocx` Python binding now returns frozen typed
+snapshots for ordered sections, styles, stories, story items, effective header
+and footer variants, and hyperlinks. The native story facade exposes ordered
+hyperlinks through each checked physical owner, including nested content.
+
+**Non-obvious choices.** Returned records contain stable source paths and
+physical story identities rather than borrowed native handles. Hyperlinks with
+equal relationship ids resolve only through their owning story part, and later
+document mutation produces fresh snapshots without changing earlier values.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 found
+duplicate nested-link ownership, invalid section fixture child order, and an
+interleaved hyperlink ordering gap. Pass 3 reported zero defects, zero smells,
+and zero nitpicks after remediation.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `word_structure_snapshots_preserve_order_ownership_and_types` and
+`story_item_links_resolve_only_through_the_checked_owner` passed. The
+integrated `cp39-abi3` wheels installed together and passed 52 binding tests,
+strict mypy, and stubtest. The consolidated full gate passed workspace tests,
+deterministic viewer tooling, both WASM targets, rustdoc, README inventories,
+workflow regressions, package dry runs, archive limits, and the supply-chain
+audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep structured binding results immutable and
+resolve every story relationship through its physical owner. Extend the
+existing snapshot vocabulary when native ownership grows rather than parsing
+package XML in Python.
+
+### F-X094e, rpptx Python rendering, comments, and notes
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The `rpptx` Python binding now exposes deterministic
+presentation PDF, slide PNG, notes PDF and PNG, and speaker-note text. It also
+returns frozen typed modern comment authors, comments, and replies, and offers
+author creation plus comment, reply, and ordered move operations.
+
+**Non-obvious choices.** Additive native one-slide and all-slide PNG helpers
+own output validation and exact deterministic raster parity. Rendering releases
+the GIL, while collaboration mutations advance the binding revision only after
+the native staged operation succeeds.
+
+**Deviations from the design plan.** None. Microscope pass 2 found that the
+one-slide helper returned `None` for an absent slide before validating an
+invalid DPI. Pass 3 reported zero defects, zero smells, and zero nitpicks after
+validation was moved ahead of the total index result.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `presentation_render_comments_and_notes_match_native_snapshots` and
+`slide_png_conveniences_match_the_resolved_layout_raster_path` passed with
+exact native versus binding bytes, reopen, typing, invalid identity, invalid
+DPI, and concurrent GIL checks. The integrated `cp39-abi3` wheels installed
+together and passed 52 binding tests, strict mypy, and stubtest. The
+consolidated full gate passed workspace tests, deterministic viewer tooling,
+both WASM targets, rustdoc, README inventories, workflow regressions, package
+dry runs, archive limits, and the supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep rendering entry points on the native
+facade, keep returned collaboration values frozen, and validate arguments even
+when a total indexed lookup has no result.
+
+### F-X092, Preserve logical reading order in generated PDFs
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Generated Word and PowerPoint PDFs now expose complete
+logical lines to text extraction when multilingual shaping paints one source
+line as several visually ordered runs. The PDF writer combines only contiguous
+runs with the same semantic owner, source span, baseline, and transform while
+leaving the original paint order and raster output unchanged.
+
+**Non-obvious choices.** The first painted run owns the complete `ActualText`
+span and later runs own empty spans. Page-oriented extraction geometry is
+applied only around marked-content metadata, then the original transform is
+restored before glyph painting. Source-less PowerPoint runs use contiguous
+logical indexes, while owner, baseline, source, gap, and duplicate boundaries
+always stop coalescing.
+
+**Deviations from the design plan.** None. Microscope pass 1 required an
+independent pre-change raster proof. Pass 2 reported zero findings, and pass 3
+reported zero defects, zero smells, and zero nitpicks after the existing
+handout assertion was updated to require its complete logical date.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `large_word_and_presentation_pdfs_preserve_logical_reading_order`
+proved exact extraction for 120 Word lines and 48 PowerPoint text boxes under
+pinned Poppler 26.01.0. Page-one raster digests match the pre-change Word and
+PowerPoint outputs, the facade and CLI PDF paths pass, and the integrated full
+gate passed workspace tests, deterministic viewer tooling, both WASM targets,
+rustdoc, README inventories, workflow regressions, 22 package dry runs,
+archive limits, the supply-chain audit, and fresh Python 3.9 and 3.12 wheels.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep logical extraction grouping local to the
+PDF writer. Do not reorder positioned runs or add an invisible extraction
+layer, since either would risk visual or semantic drift.
+
+### F-X095, Integrate PRs 77 through 80 and restore deterministic CI
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Hardened equivalents of contributor PRs 77 through 80 now
+expose narrowed numbering facts, strict document and body boundaries, modeled
+empty content, revision authors, marker and field facts, safe table-cell
+serialization, and TOC coordinates. Presentation fidelity CI now uses the
+pinned Ubuntu LibreOffice and Poppler oracle. Byte-identical Word comparison
+also preserves existing Python document handles.
+
+**Non-obvious choices.** The PRs were not merged directly because their
+pre-S72 bases would overwrite newer section, story, binding, and preservation
+work. Their intended outcomes were reconciled against the current
+namespace-aware, schema-ordered, and raw XML preserving implementation while
+retaining Pedro Assumpcao's contribution credit.
+
+**Deviations from the design plan.** The clean-wheel regression exposed a
+no-op comparison handle invalidation after the feature review. Sprint
+integration fixed it and added a focused regression before the consolidated
+gate.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Focused numbering, document, revision, marker, field, table, TOC,
+and no-op comparison regressions passed. Exact LibreOffice 26.2.5.2 and
+Poppler 26.01.0 rendering checks passed, both pinned python-pptx 1.0.2 oracle
+tests passed, and the consolidated full gate passed workspace tests, both WASM
+targets, rustdoc, README inventories, workflow regressions, 22 package dry
+runs, archive limits, and the supply-chain audit.
+
+**Hash harness.** Seven Word `document.xml` entries changed intentionally
+because modeled empty paragraphs now serialize as self-closing elements. All
+PNG and PDF entries were unchanged. The reviewed current baseline passed 49 of
+49 in the final consolidated gate.
+
+**Notes for future sessions.** Keep contributor credit attached to the
+hardened equivalent when a stale contribution cannot be merged directly. Keep
+the Presentation fidelity runner on the exact supported Linux oracle.
+
+### F-X096, Align Python distribution versions and release tags
+
+**Sprint.** S72
+**Completed.** 2026-09-14
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native `rdocx`, `rdocx-py`, and PyPI `rdocx` now share
+version 0.13.1. Native `rpptx`, `rpptx-py`, and PyPI `rpptx` now share version
+0.11.0. Disjoint `py-rdocx-v*` and `py-rpptx-v*` tags each select one source
+distribution and six cp39-abi3 wheels, while manual dispatch remains
+build-only.
+
+**Non-obvious choices.** The existing `rpptx-v*` namespace remains exclusive
+to incubating Rust releases. Separate Python tag families prevent a Python
+publication from starting crates.io publication and keep the two independent
+native version lines from being coupled.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Positive and negative version-contract matrices passed for both
+tag families, including exact selected artifact inventories and clean installs
+of six wheels plus one source distribution per package. The consolidated full
+gate passed workspace tests, both WASM targets, rustdoc, README inventories,
+workflow regressions, 22 package dry runs, archive limits, and the
+supply-chain audit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat `rdocx` and `rpptx` as independent version
+lines. A Python package version must match its corresponding native facade,
+not the other distribution released from the same repository.
+
+### F-X094f, Prepare the version-aligned Python release paths
+
+**Sprint.** S72
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 2 days
+
+**What was built.** Metadata-complete `rdocx 0.13.2` and `rpptx 0.11.0`
+Python distributions are published on PyPI at versions matching their native
+facades. Each immutable release contains six `cp39-abi3` platform wheels and
+one source distribution, uses its crate-local README as the Markdown long
+description, and has a matching reviewed GitHub release. The tags both
+dereference to reviewed SHA `2b009243ed39ab66470d7484d490985368e865a8`.
+
+**Non-obvious choices.** `rdocx` moved to 0.13.2 because immutable 0.13.1 lacks
+the complete PyPI description. `rpptx` retained native version 0.11.0. Each tag
+selected only one distribution even though the build-only matrix verified
+both. The first rpptx upload obtained a valid OIDC identity but exposed a
+mismatched pending PyPI project name. The publisher entry was corrected before
+the failed job alone was retried against the unchanged tag and reviewed SHA.
+
+**Deviations from the design plan.** The release recovery added one diagnosed
+trusted-publisher retry. No tag moved, no artifact was accepted by the failed
+attempt, and the successful retry used the exact reviewed source and artifact
+contract. The latest PR 78 head added a self-closing body case already covered
+by the integrated namespace-aware implementation and focused regression.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full local and hosted verification passed at the reviewed SHA with
+49 of 49 hash entries matching. Build-only run
+https://github.com/tensorbee/rdocx/actions/runs/34907492958 validated both
+seven-file families. Tag runs
+https://github.com/tensorbee/rdocx/actions/runs/34934221487 and
+https://github.com/tensorbee/rdocx/actions/runs/34939929652 published the exact
+rdocx and rpptx sets through trusted publishing. Every live PyPI file passed
+the artifact validator. Clean canonical-PyPI installs passed 29 rdocx tests
+and 12 rpptx tests under Python 3.9 and 3.12. Exact `mypy==2.3.0 --strict` and
+`stubtest` passed under Python 3.12 for both distributions. The rdocx and rpptx
+GitHub release bodies match their reviewed renders with SHA-256 digests
+`3bf361a6fcc5a858d1f315f07ea766b0e60e3c0b3c7930a777e643f1bf62b728`
+and `60fad5ee4003448082f1c14d0d7b3a5e9d159b21fa1ca7c07b0c7ac64300197f`.
+
+**Contribution inventory.** Issues
+[72](https://github.com/tensorbee/rdocx/issues/72),
+[73](https://github.com/tensorbee/rdocx/issues/73),
+[74](https://github.com/tensorbee/rdocx/issues/74),
+[75](https://github.com/tensorbee/rdocx/issues/75), and
+[76](https://github.com/tensorbee/rdocx/issues/76) were reported by `@hadim`
+and landed as direct fixes. PRs
+[77](https://github.com/tensorbee/rdocx/pull/77),
+[78](https://github.com/tensorbee/rdocx/pull/78),
+[79](https://github.com/tensorbee/rdocx/pull/79), and
+[80](https://github.com/tensorbee/rdocx/pull/80) were contributed by
+`@pedroassumpcao` and landed through hardened equivalents. Draft PR
+[82](https://github.com/tensorbee/rdocx/pull/82) from `@mantissaman` served as
+the unmerged verification surface.
+
+**Notifications.** The verified release comments are
+[Issue 72](https://github.com/tensorbee/rdocx/issues/72#issuecomment-5676481224),
+[Issue 73](https://github.com/tensorbee/rdocx/issues/73#issuecomment-5676482036),
+[Issue 74](https://github.com/tensorbee/rdocx/issues/74#issuecomment-5676482919),
+[Issue 75](https://github.com/tensorbee/rdocx/issues/75#issuecomment-5676483829),
+[Issue 76](https://github.com/tensorbee/rdocx/issues/76#issuecomment-5676484782),
+[PR 77](https://github.com/tensorbee/rdocx/pull/77#issuecomment-5676485736),
+[PR 78](https://github.com/tensorbee/rdocx/pull/78#issuecomment-5676486460),
+[PR 79](https://github.com/tensorbee/rdocx/pull/79#issuecomment-5676487339),
+[PR 80](https://github.com/tensorbee/rdocx/pull/80#issuecomment-5676488369),
+and [PR 82](https://github.com/tensorbee/rdocx/pull/82#issuecomment-5676489503).
+Every record was closed after its comment was posted. The authenticated
+external reporter and contributor handles are preserved in the release notes
+and comments.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Configure one pending trusted publisher per
+exact PyPI project name before pushing a first-release tag. Keep distribution
+versions aligned with their own native facade and treat release tags and PyPI
+files as immutable after the first external mutation.

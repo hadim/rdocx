@@ -86,6 +86,7 @@ defended.
 | S69 | M22, X | 8 | 7 | 1 | 11 | 2 | Completed M22 with shared strict XML validation, Flat OPC and modern Word package variants, bounded MHTML interchange, and restored hosted CI release readiness. Published and verified the shared 0.10.0 and 0.11.0 families and the stable 0.13.1 recovery. F-X078 records the immutable partial v0.13.0 attempt. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 23 clean |
 | S70 | M23, X | 7 | 7 | 0 | 19 | 2 | Established the modern DOCX capability matrix and private-corpus policy, added public from-scratch authoring conformance, replaced volatile README claims with evidence-backed coverage, and closed the three Issue 69 cache and restart gaps. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 5 clean. M23 continues in S71 with public API completion |
 | S71 | M23, X | 10 | 10 | 0 | 35 | 3 | Added complete blank-package, property, theme, font, style, numbering, and deterministic identifier foundations. Folded Kevin Brown's authored Word charts into the sprint, closed Issue 69 with measured evidence and reporter credit, and made the root and all 26 crate READMEs capability-led. The full close gate passed with all 49 reviewed hashes, every package archive below 10 MiB, and final sprint review pass 9 clean. M23 continues in S72 with sections, stories, and content ownership |
+| S72 | M23, X | 19 | 19 | 0 | 61 | 7 | Added ordered sections, relationship-safe story editing, transactional fragment import, searchable PDF text, CLI and Python surfaces, hardened outcomes from PRs 77 through 80, and deterministic hosted CI. Published metadata-complete `rdocx 0.13.2` and `rpptx 0.11.0` distributions with reporter and contributor credit. The full close gate passed with all 49 reviewed hashes, the declared seven-entry Word XML delta, every package archive below 10 MiB, and final sprint review pass 24 clean. M23 continues in S73 with tables, rich content, and the private corpus gate |
 
 ## Completed features
 
@@ -415,6 +416,25 @@ defended.
 | F-X087 | S71 | L | 4 | 1 | 2026-09-09 | Folded Kevin Brown's PR 71 into portable editable Word charts with atomic theme ownership and verified Word and Pages interoperability |
 | F-X088 | S71 | S | 1 | 1 | 2026-09-09 | Verified all Issue 69 fixes with six regressions and 21-sample timing evidence, credited the reporter, and closed the issue |
 | F-X089 | S71 | L | 4 | 1 | 2026-09-09 | Reframed the root and all 26 crate READMEs around implemented outcomes, checked examples, and bounded official comparisons |
+| F-253 | S72 | L | 4 | 2 | 2026-09-10 | Added one deterministic story identity, traversal, and staged text-mutation model across body, cell, related, note, comment, and text-box content |
+| F-250 | S72 | L | 4 | 1 | 2026-09-10 | Added ordered mutable section handles, atomic boundary edits, effective story inheritance, and safe orphan pruning |
+| F-251 | S72 | L | 4 | 1 | 2026-09-10 | Added checked section geometry, source-preserving section XML mutation, and restart-aware displayed page numbering |
+| F-254 | S72 | L | 4 | 1 | 2026-09-10 | Added transactional generic content insertion, removal, cloning, and same-owner movement with exact XML preservation |
+| F-255 | S72 | M | 2 | 1 | 2026-09-10 | Added story-scoped picture, hyperlink, lookup, and validation operations with part-local relationship ownership and deterministic global drawing allocation |
+| F-X090 | S72 | S | 1 | 1 | 2026-09-13 | Accepted reused producer drawing identities across physical XML parts while retaining package-global authored allocation |
+| F-X091 | S72 | M | 2 | 1 | 2026-09-13 | Allowed safe serialization of unused root defaults and added atomic fallible text replacement for the CLI |
+| F-252 | S72 | L | 4 | 1 | 2026-09-13 | Added transactional rich default, first, and even header and footer lifecycle operations for every section with exact Word selection parity |
+| F-X093 | S72 | M | 2 | 1 | 2026-09-13 | Preserved exact drawing wrappers and package graphs through comparison, save, reopen, accept, and reject |
+| F-256 | S72 | L | 4 | 1 | 2026-09-13 | Added transactional package-authoritative main-body fragment import with complete selected dependency closure and deterministic conflict policies |
+| F-X094a | S72 | M | 2 | 1 | 2026-09-14 | Exposed schema-versioned Word comments, revision resolution, comparison, and TOC rebuilding through atomic CLI commands |
+| F-X094b | S72 | L | 4 | 1 | 2026-09-14 | Added structured accepted-view text, direct body layout fragments, and expected-count guarded replacement to the Word CLI |
+| F-X094c | S72 | L | 4 | 1 | 2026-09-14 | Added frozen typed Python snapshots for Word comparison, comments, deterministic layout, page lookup, and TOC rebuilding |
+| F-X094d | S72 | L | 4 | 1 | 2026-09-14 | Added ordered typed Python snapshots for Word sections, styles, rich stories, header and footer variants, and relationship-scoped hyperlinks |
+| F-X094e | S72 | L | 4 | 1 | 2026-09-14 | Added deterministic PowerPoint and notes rendering plus frozen modern comment snapshots and atomic collaboration mutation to the Python binding |
+| F-X092 | S72 | L | 4 | 1 | 2026-09-14 | Preserved complete logical reading order in generated Word and PowerPoint PDFs without changing painted output or the deterministic hash harness |
+| F-X095 | S72 | L | 4 | 1 | 2026-09-14 | Integrated hardened equivalents of PRs 77 through 80, restored pinned Presentation fidelity CI, and preserved no-op comparison handles |
+| F-X096 | S72 | M | 2 | 1 | 2026-09-14 | Aligned each Python distribution with its native crate version and gave rdocx and rpptx independent PyPI tag routes |
+| F-X094f | S72 | M | 2 | 2 | 2026-09-15 | Published and verified metadata-complete rdocx 0.13.2 and rpptx 0.11.0 Python distributions, then notified and closed every included issue and pull request |
 
 ## Velocity
 
@@ -501,6 +521,7 @@ five working days.
 | S69 | 7 | 2 | 17.50 |
 | S70 | 7 | 2 | 17.50 |
 | S71 | 10 | 3 | 16.67 |
+| S72 | 19 | 7 | 13.57 |
 
 ## Escalation record
 
@@ -575,3 +596,4 @@ was done about it. Empty is the expected state.
 | 2026-09-06 | Sprint estimate variance exceeded 30 percent | S69 | Record 2 actual days against 11 estimated. Isolated workers, established package and release workflows, and two recovery releases allowed implementation, review, and publication work to overlap safely. The resulting 17.50 stories per week is not a sustainable forecast, so retain the dependency-defined S70 decision boundary |
 | 2026-09-07 | Sprint estimate variance exceeded 30 percent | S70 | Record 2 actual days against 19 estimated. Isolated workers and established conformance, documentation, and cache verification paths allowed independent audit and implementation work to overlap safely. The resulting 17.50 stories per week is not a sustainable forecast, so retain the dependency-defined S71 boundary |
 | 2026-09-09 | Sprint estimate variance exceeded 30 percent | S71 | Record 3 actual days against 35 estimated. Isolated workers, dependency-prefix reviews, and established package, Word, Pages, layout, and README gates allowed independent work and contribution hardening to overlap safely. The resulting 16.67 stories per week is not a sustainable forecast, so retain the dependency-defined S72 boundary |
+| 2026-09-15 | Sprint estimate variance exceeded 30 percent | S72 | Record 7 actual days against 61 estimated. Parallel isolated workers, dependency-prefix reviews, established release workflows, and issue and contribution hardening allowed independent work and publication checks to overlap safely. The resulting 13.57 stories per week is not a sustainable forecast, so retain the dependency-defined S73 boundary |

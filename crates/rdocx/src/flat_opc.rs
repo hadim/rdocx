@@ -83,7 +83,7 @@ impl Document {
     /// Serialize a staged copy as deterministic Flat OPC XML.
     pub fn to_flat_opc_bytes(&self) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
             &mut candidate.package,
             candidate.package_signatures_invalidated,

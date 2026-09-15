@@ -69,6 +69,88 @@ declare macro-capable main-part identity without inventing a VBA project. Empty
 core properties omit created and modified timestamps, so equivalent fresh
 constructions remain byte-identical.
 
+Word story discovery begins with the main body and its nested cell and text-box
+owners, then follows header and footer references in document order and note
+and comment relationships in package relationship order. Ordinary footnotes
+and endnotes keep their source order, while conventional nonpositive separator
+records are not public story owners. Each `StoryId` includes the normalized
+source part, owner kind, source-order ordinal, and a structural fingerprint.
+Any changed owner makes a retained identity stale before indexed content can be
+resolved.
+
+Story items are projections over the existing typed and retained package
+sources. Body and comment items can expose owned XML serialized from their
+typed owners. Other package-backed items borrow their exact subtree bytes and
+can depend on namespace declarations on retained ancestors. A complex field
+instead exposes one owned, namespace-complete paragraph projection because its
+source can span sibling runs. Complete typed admission decides whether
+controls, revisions, simple fields, and complex fields cross the preservation
+boundary. Unmodelled and rejected subtrees remain opaque and byte-preserved.
+Story-wide hyperlink projection retains the source byte position only while
+building its result, then returns existing locations and link records in that
+physical order. Relationship lookup remains scoped to the owning story part.
+
+The main Word document reader accepts one namespace-correct `document` root
+and one namespace-correct `body` child, rejects truncation, duplicate roots,
+foreign lookalikes, and non-whitespace content outside that root, and retains
+the first body `sectPr`. Later section owners remain opaque rather than
+disappearing. Self-closing paragraphs, tables, and cells are modeled as empty
+typed owners. Start-and-end forms are modeled only when their complete
+attributes and content satisfy the same grammar. Otherwise their exact
+namespace-complete subtree remains opaque. Header and footer references
+recognize `r:id` only when the attribute is bound to the package relationships
+namespace.
+Body comparison excludes the source's direct final `sectPr` from its
+interleaved content before appending the compared section properties. This
+keeps the strict first-section reader from selecting a stale duplicate and
+retains the tracked `sectPrChange` as the only final section owner. Comparison
+wrappers for extracted body XML declare the standard relationships namespace,
+so namespace-aware section parsing retains header and footer references.
+
+Story text replacement runs on a staged clone. It resolves the owner,
+fingerprint, one-element index path, item kind, and text-bearing capability,
+patches only the selected owner, then serializes and reopens the complete
+candidate before one commit. Missing or wrong owners, stale fingerprints,
+invalid paths, bounds failures, kind mismatches, non-text items, XML failures,
+and reopen failures leave the original document bytes and facade-owned package
+state unchanged.
+
+Generic story content mutation uses the same package boundary. Existing-item
+destinations are canonical flattened locations that must resolve to actual
+direct owner children. The explicit story-end destination remains before body
+section properties and expands a self-closing owner into a complete element.
+Removal returns one namespace-aware owned fragment. Same-owner moves retain
+its exact bytes, and clones rewrite document identities before insertion.
+Relationship references can move or clone only when their original owner scope
+is unchanged and complete. Content-control fragments validate the complete
+serialized block grammar by expanded name, including retained root slots and
+raw direct Word children. Foreign raw subtrees stay opaque. Invalid locations,
+relationships, identities, XML, and reopen results discard the staged
+candidate without changing the live document.
+
+Story-scoped picture and hyperlink authoring resolves the relationship owner
+from the checked `StoryId`. Body, cell, and text-box stories use the main
+document relationship set. Headers, footers, notes, and comments use the
+relationship set of their resolved part. Internal relationship validation
+checks exact type, internal mode, normalized target, and target existence.
+Image and hyperlink lookup applies the same owner boundary. New relationships,
+media parts, content types, XML, and drawing identities publish only after the
+staged package serializes and reopens.
+
+Hyperlink inventory follows the same rule. Each modeled story item discovers
+its own hyperlink elements, then resolves each relationship identifier through
+the checked story owner. Equal identifiers in the main part and a header or
+footer therefore remain distinct package relationships.
+
+Main-document authored occurrence provenance is derived from live
+namespace-aware XML on every canonicalization. Removing a paragraph retires a
+zero-use occurrence without deleting the relationship definition retained by
+its owned fragment. Same-owner clones keep a shared relationship definition
+and remap every live reference simultaneously. Each live authored picture
+occurrence receives its own global `wp:docPr` identity. Producer-owned raw
+references remain fixed occupants, and image part naming follows final
+serialized relationship order.
+
 Theme and font authoring retain the relationship-resolved targets already in a
 package. A missing theme or font table receives one collision-safe part,
 content-type override, and internal main-document relationship on the staged
@@ -316,6 +398,16 @@ namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
 
+An unknown default namespace declared on the document root is classified by
+its effective lexical scope before canonical serialization. An unused root
+default may be omitted without blocking a typed mutation. An unprefixed element
+that inherits it keeps the binding live and blocks modified serialization.
+Nested default declarations shadow the root declaration, including when they
+repeat the same URI, and unprefixed attributes never use a default namespace.
+Malformed or ambiguous declarations fail closed. After a successful canonical
+publication, the document refreshes its root and body namespace facts from the
+published main-story bytes so a later save applies the same classification.
+
 Direct paragraph `m:oMath` and `m:oMathPara` children use that same owner and
 boundary discipline. The reader accepts any prefix bound to the Transitional
 OfficeMath namespace. Canonical typed writes use `m:` and replay the inherited
@@ -421,6 +513,32 @@ untouched and cannot shadow a later valid relationship. Text, raw XML, image,
 and background-image setters apply the same eligibility rule before reusing a
 referenced part. An ineligible slot receives a fresh collision-safe part name.
 
+Per-section story operations resolve only internal relationships whose type and
+target root match the requested header or footer family. Linking reuses one
+exact-type relationship. Inheritance removes the direct reference and exposes
+the preceding same-type story. Unlink and replacement copy the effective story
+XML into a collision-safe part, copy its part-local relationship set, rebase
+internal relative targets, and allocate fresh drawing identities. Removal
+installs an explicit empty story so it cannot expose inherited content. Pruning
+removes only unreachable facade-owned relationships, parts, content types, and
+media. Shared, producer-owned, opaque, and still-reachable graphs remain intact.
+Every operation publishes only after the staged package serializes and reopens.
+The typed `w:evenAndOddHeaders` setting reads namespace aliases and writes a
+fixed `w:` prefix in its schema slot.
+
+Section removal preserves the following section's effective header and footer
+behavior before deleting a non-final boundary. For each default, first, and even
+variant, resolution takes the first reference whose relationship has the exact
+header or footer type, is internal, reaches an existing part with the expected
+story root, and parses successfully. Missing, external, cross-type, absent-part,
+malformed-target, and later duplicate references cannot displace an earlier
+usable story. A missing usable override on the following section receives the
+effective reference before package pruning. Pruning deletes only a facade-owned
+header or footer relationship and part that no modeled or opaque reference can
+still reach. Shared and producer-owned targets remain intact. The boundary,
+relationship, part, content-type, and authored-identity changes publish only
+after the staged package serializes and reopens successfully.
+
 An authored watermark owns only a VML shape whose expanded name is `v:shape`
 and whose unqualified id is `rdocx-watermark`. Replacement patches that exact
 byte range in the original header, leaves tables, controls, root attributes,
@@ -500,8 +618,12 @@ continues after its greatest numeric identifier and avoids nonnumeric producer
 identities. Bookmark and comment identifiers start at zero. Drawing and
 numbering-instance identifiers start at one, and abstract-numbering identifiers
 start at zero. Imported definitions are scanned by expanded XML name, including
-the unqualified `id` attribute on `wp:docPr`. Duplicate definitions, exhausted
-ranges, and pending collisions fail before a staged candidate is published.
+the unqualified `id` attribute on `wp:docPr`. Producer `wp:docPr` definitions
+must be unique within one physical XML part, but the same normalized value may
+occur in another part. Every accepted value joins the package-wide occupied set
+so later authored drawings remain globally fresh. Other duplicate definitions,
+exhausted ranges, and pending collisions fail before a staged candidate is
+published.
 
 Canonical part layouts:
 
@@ -770,9 +892,11 @@ stored bytes.
 Word table grids recognize `tblGrid`, active `gridCol` children, their width
 attributes, and `tblGridChange` by the bound WordprocessingML namespace.
 Foreign same-local children remain unmodelled and retain their exact bytes.
-One historical grid-change subtree is preserved, while a second modeled change
-fails parsing rather than discarding history. Serialization writes active
-columns first and the historical change after them in schema order.
+One nonempty historical grid-change subtree is preserved, while a second
+modeled change fails parsing rather than discarding history. A structurally
+empty `tblGridChange` remains unmodelled in its original slot. Serialization
+writes active columns first and the modeled historical change after them in
+schema order.
 
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
@@ -868,8 +992,10 @@ Tracked-revision resolution is also staged above the package boundary. The
 facade resolves selected revision placements in the main document, headers,
 footers, comments, normal footnotes, endnotes, and nested text boxes. It patches
 each affected source part once and reparses the complete candidate package
-before replacing live typed state. Namespace declarations carried only by a
-removed revision or property owner are promoted to retained raw descendants.
+before replacing live typed state. Main-story resolution starts from the
+prepared package's authoritative document bytes rather than a typed
+reserialization. Namespace declarations carried only by a removed revision or
+property owner remain available to retained raw descendants.
 Any selector, revision-shape, namespace, parse, or serialization failure leaves
 all package part bytes and live document state unchanged. The ordinary
 deterministic save path writes the validated result later and preserves every
@@ -877,7 +1003,12 @@ unrelated part and relationship.
 
 Document comparison uses the same package boundary. It clones the complete
 typed document and package state, resolves identical story shells and
-relationships, and aligns modeled owners in each nonignored story. Policy
+relationships, and aligns modeled owners in each nonignored story. The prepared
+package's main-document bytes are authoritative. Exact source spans flow through
+body items, paragraphs, tables, rows, cells, controls, and runs, including when
+another child of the same owner changes. An unchanged drawing-bearing run keeps
+its complete wrapper, local namespace declarations, extended drawing children,
+and relationship identifier. Policy
 projection removes only the selected comparison facts. Ignored formatting,
 textual whitespace, fields, comments, and story categories retain the original
 bytes. Character and word alignment carries source ownership and raw-child
@@ -962,6 +1093,18 @@ collision maps, and each repeated region or fragment occurrence receives fresh
 document identities before insertion. Any value-kind, marker, relationship,
 identity, callback, allocation, serialization, or reopen failure discards the
 entire prospective result.
+
+Cross-document body fragments carry their source package so retained XML stays
+authoritative while the selected closure is rebuilt in the destination. The
+closure starts from selected main-story and comment-story relationship
+references, follows internal targets recursively, and copies only reachable
+parts with their exact content types. Style and numbering graphs are pruned to
+the selected references and their transitive links before deterministic reuse
+or renaming. Every destination relationship id, part name, comment id,
+bookmark id, drawing id, style id, and numbering id is reserved before any
+selected XML is rewritten. An external edge, missing target, malformed
+relationship part, invalid ownership range, or exhausted allocator rejects the
+candidate without publishing package or typed state.
 
 Dynamic table-of-contents rebuild uses the same staged package rule. It scans
 the relationship-resolved main document by expanded WordprocessingML names,

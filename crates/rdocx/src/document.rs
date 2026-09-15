@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -16,11 +18,12 @@ use oxml_opc::{OpcPackage, PackageReadLimits};
 use oxml_sml::Workbook;
 use quick_xml::Writer;
 use quick_xml::XmlVersion;
+use quick_xml::escape::resolve_xml_entity;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
-use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline, drawing_ns};
 use rdocx_oxml::font_table::{EmbeddedFontReference, FontFaceKind, FontTable};
@@ -32,6 +35,7 @@ use rdocx_oxml::numbering::{
     CT_AbstractNum, CT_Lvl, CT_Num, CT_NumLvl, CT_Numbering, ST_LvlSuffix, ST_NumberFormat,
 };
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::revision::CT_Revision;
 use rdocx_oxml::settings::{
     CT_Settings, CharacterSpacingControl, CompatibilitySetting, DocumentProtection,
     ThemeFontLanguage,
@@ -39,7 +43,10 @@ use rdocx_oxml::settings::{
 use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
-use rdocx_oxml::text::{CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{
+    CT_P, CT_R, RunContent, story_field_instruction_has_name, story_simple_field_is_typed,
+};
+use rdocx_oxml::units::Twips;
 
 use oxml_core::custom_properties::{CustomProperties, CustomProperty};
 use rdocx_oxml::core_properties::CoreProperties;
@@ -49,7 +56,7 @@ use crate::content_control::ContentControlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
 use crate::revision::RevisionRef;
-use crate::run::RunRef;
+use crate::run::{FieldDisplaySegmentRef, RunRef};
 use crate::style::{self, Style, StyleBuilder};
 use crate::table::{Table, TableRef};
 
@@ -230,6 +237,511 @@ pub enum BodyItemRef<'a> {
     /// A preserved body child that rdocx does not model.
     UnsupportedXml(&'a [u8]),
 }
+
+/// A container in the WordprocessingML story graph.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StoryKind {
+    Body,
+    TableCell,
+    Header,
+    Footer,
+    Footnote,
+    Endnote,
+    Comment,
+    TextBox,
+}
+
+/// Whether a section story is a header or a footer.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HeaderFooterKind {
+    Header,
+    Footer,
+}
+
+impl HeaderFooterKind {
+    fn story_kind(self) -> StoryKind {
+        match self {
+            Self::Header => StoryKind::Header,
+            Self::Footer => StoryKind::Footer,
+        }
+    }
+
+    fn relationship_type(self) -> &'static str {
+        match self {
+            Self::Header => rel_types::HEADER,
+            Self::Footer => rel_types::FOOTER,
+        }
+    }
+
+    fn content_type(self) -> &'static str {
+        match self {
+            Self::Header => {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"
+            }
+            Self::Footer => {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"
+            }
+        }
+    }
+
+    fn part_stem(self) -> &'static str {
+        match self {
+            Self::Header => "header",
+            Self::Footer => "footer",
+        }
+    }
+
+    fn is_header(self) -> bool {
+        self == Self::Header
+    }
+}
+
+/// The effective header or footer story selected for one section variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionStory {
+    story: StoryId,
+    source_section: usize,
+    inherited: bool,
+}
+
+impl SectionStory {
+    /// Return the physical story owner.
+    pub fn story(&self) -> &StoryId {
+        &self.story
+    }
+
+    /// Return the section that supplies the effective reference.
+    pub fn source_section(&self) -> usize {
+        self.source_section
+    }
+
+    /// Return whether the selected section inherits this story.
+    pub fn is_inherited(&self) -> bool {
+        self.inherited
+    }
+}
+
+/// The supported kind of one item in a story.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StoryItemKind {
+    Paragraph,
+    Table,
+    ContentControl,
+    Field,
+    Drawing,
+    PreservedNode,
+}
+
+/// Stable owner identity for one operation over an opened document.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StoryId {
+    kind: StoryKind,
+    part_name: String,
+    owner_index: usize,
+    fingerprint: u64,
+}
+
+impl StoryId {
+    /// Construct an unfingerprinted owner identity for checked lookup.
+    ///
+    /// Identities returned by [`Document::stories`] are required for a
+    /// successful mutation. This constructor lets callers deserialize or
+    /// validate external paths without granting unchecked access.
+    pub fn new(kind: StoryKind, part_name: impl Into<String>, owner_index: usize) -> Self {
+        Self {
+            kind,
+            part_name: part_name.into(),
+            owner_index,
+            fingerprint: 0,
+        }
+    }
+
+    /// Construct the conventional main-body identity for checked lookup.
+    ///
+    /// Prefer an identity returned by [`Document::stories`]. This constructor
+    /// is useful when validating externally retained locations and deliberately
+    /// carries no structural fingerprint.
+    pub fn body() -> Self {
+        Self::new(StoryKind::Body, "/word/document.xml", 0)
+    }
+
+    pub fn kind(&self) -> StoryKind {
+        self.kind
+    }
+
+    pub fn part_name(&self) -> &str {
+        &self.part_name
+    }
+
+    pub fn owner_index(&self) -> usize {
+        self.owner_index
+    }
+}
+
+/// A checked path to one item inside a story owner.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContentLocation {
+    story: StoryId,
+    item_kind: StoryItemKind,
+    index_path: Vec<usize>,
+    is_end: bool,
+}
+
+/// Owned direct story content that can be inserted without a second document tree.
+#[derive(Debug, Clone)]
+pub struct ContentFragment {
+    kind: StoryItemKind,
+    xml: Vec<u8>,
+    source_part_name: Option<String>,
+    source_story_kind: Option<StoryKind>,
+    source_owner_index: Option<usize>,
+    namespace_scope: BTreeMap<String, String>,
+}
+
+/// An owned main-body range and the package dependencies it can reach.
+#[derive(Debug, Clone)]
+pub struct DocumentFragment {
+    package: Vec<u8>,
+    include_final_section_properties: bool,
+}
+
+/// Conflict choices for one cross-document fragment import.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FragmentConflictPolicy {
+    reuse_equivalent_styles: bool,
+    reuse_equivalent_numbering: bool,
+    reuse_equivalent_related_parts: bool,
+}
+
+impl FragmentConflictPolicy {
+    /// Reuse equivalent supported dependencies and rename non-equivalent ones.
+    pub const fn reuse_equivalent() -> Self {
+        Self {
+            reuse_equivalent_styles: true,
+            reuse_equivalent_numbering: true,
+            reuse_equivalent_related_parts: true,
+        }
+    }
+
+    /// Allocate a fresh destination identity for every supported dependency.
+    pub const fn rename_all() -> Self {
+        Self {
+            reuse_equivalent_styles: false,
+            reuse_equivalent_numbering: false,
+            reuse_equivalent_related_parts: false,
+        }
+    }
+
+    /// Select whether equivalent style definitions are reused.
+    pub const fn with_style_reuse(mut self, reuse: bool) -> Self {
+        self.reuse_equivalent_styles = reuse;
+        self
+    }
+
+    /// Select whether equivalent numbering definitions are reused.
+    pub const fn with_numbering_reuse(mut self, reuse: bool) -> Self {
+        self.reuse_equivalent_numbering = reuse;
+        self
+    }
+
+    /// Select whether equivalent relationship-reached leaf parts are reused.
+    pub const fn with_related_part_reuse(mut self, reuse: bool) -> Self {
+        self.reuse_equivalent_related_parts = reuse;
+        self
+    }
+
+    pub(crate) const fn reuse_styles(self) -> bool {
+        self.reuse_equivalent_styles
+    }
+
+    pub(crate) const fn reuse_numbering(self) -> bool {
+        self.reuse_equivalent_numbering
+    }
+
+    pub(crate) const fn reuse_related_parts(self) -> bool {
+        self.reuse_equivalent_related_parts
+    }
+}
+
+impl Default for FragmentConflictPolicy {
+    fn default() -> Self {
+        Self::reuse_equivalent()
+    }
+}
+
+impl DocumentFragment {
+    /// Capture one non-empty, half-open range of direct main-body items.
+    ///
+    /// `start` is included and `end` is excluded. Section properties can be
+    /// included only when `end` is the main body's final boundary.
+    pub fn from_range(
+        document: &Document,
+        start: &ContentLocation,
+        end: &ContentLocation,
+        include_final_section_properties: bool,
+    ) -> Result<Self> {
+        let mut candidate = document.clone_for_staging();
+        candidate.prepare_staged_package()?;
+        if start.story != end.story
+            || start.story.kind != StoryKind::Body
+            || start.story.part_name != candidate.doc_part_name
+        {
+            return Err(Error::Other(
+                "document fragment ranges must share the checked main-body owner".to_owned(),
+            ));
+        }
+        let (source, owner) = candidate.story_source_and_owner(&start.story)?;
+        let source_xml = source.xml.into_owned();
+        let (_, start_index, item_count) = validated_content_boundary(&source_xml, &owner, start)?;
+        let (_, end_index, _) = validated_content_boundary(&source_xml, &owner, end)?;
+        if start_index >= end_index {
+            return Err(Error::Other(
+                "document fragment range must contain at least one direct body item".to_owned(),
+            ));
+        }
+        if include_final_section_properties && end_index != item_count {
+            return Err(Error::Other(
+                "section-inclusive document fragments must end at the main-body boundary"
+                    .to_owned(),
+            ));
+        }
+        let items = direct_story_content_items(&source_xml, &owner)?;
+        let content_start = items
+            .first()
+            .map(|item| item.full.start)
+            .ok_or_else(|| Error::Other("document fragment source body is empty".to_owned()))?;
+        let content_end = story_owner_content_end(&source_xml, &owner)?;
+        let selected_start = items[start_index].full.start;
+        let selected_end = if end_index == item_count {
+            content_end
+        } else {
+            items[end_index].full.start
+        };
+        let selected = source_xml[selected_start..selected_end].to_vec();
+        let mut updated = source_xml;
+        updated.splice(content_start..content_end, selected);
+        candidate
+            .package
+            .set_part(&candidate.doc_part_name, updated);
+        let mut output = std::io::Cursor::new(Vec::new());
+        candidate.package.write_to(&mut output)?;
+        Ok(Self {
+            package: output.into_inner(),
+            include_final_section_properties,
+        })
+    }
+}
+
+impl ContentFragment {
+    /// Create a fixed-prefix paragraph fragment.
+    pub fn paragraph(paragraph: CT_P) -> Result<Self> {
+        Self::from_body_content(BodyContent::Paragraph(paragraph))
+    }
+
+    /// Create a fixed-prefix table fragment.
+    pub fn table(table: CT_Tbl) -> Result<Self> {
+        Self::from_body_content(BodyContent::Table(table))
+    }
+
+    /// Create a fixed-prefix block content-control fragment.
+    pub fn content_control(control: CT_Sdt) -> Result<Self> {
+        Self::from_body_content(BodyContent::ContentControl(control))
+    }
+
+    /// Return the direct story-item kind carried by this fragment.
+    pub fn kind(&self) -> StoryItemKind {
+        self.kind
+    }
+
+    fn from_body_content(content: BodyContent) -> Result<Self> {
+        let kind = match &content {
+            BodyContent::Paragraph(_) => StoryItemKind::Paragraph,
+            BodyContent::Table(_) => StoryItemKind::Table,
+            BodyContent::ContentControl(_) => StoryItemKind::ContentControl,
+            BodyContent::RawXml(_) => StoryItemKind::PreservedNode,
+        };
+        let xml = serialize_content_fragment(content)?;
+        if kind == StoryItemKind::ContentControl {
+            validate_serialized_block_content_control(&xml)?;
+        }
+        Ok(Self {
+            kind,
+            xml,
+            source_part_name: None,
+            source_story_kind: None,
+            source_owner_index: None,
+            namespace_scope: BTreeMap::new(),
+        })
+    }
+}
+
+impl ContentLocation {
+    pub fn new(story: StoryId, item_kind: StoryItemKind, index_path: Vec<usize>) -> Self {
+        Self {
+            story,
+            item_kind,
+            index_path,
+            is_end: false,
+        }
+    }
+
+    /// Construct the insertion boundary after a story's final direct content.
+    ///
+    /// For the document body, this boundary remains before section properties.
+    pub fn end(story: StoryId) -> Self {
+        Self {
+            story,
+            item_kind: StoryItemKind::PreservedNode,
+            index_path: Vec::new(),
+            is_end: true,
+        }
+    }
+
+    pub fn story(&self) -> &StoryId {
+        &self.story
+    }
+
+    pub fn item_kind(&self) -> StoryItemKind {
+        self.item_kind
+    }
+
+    pub fn index_path(&self) -> &[usize] {
+        &self.index_path
+    }
+}
+
+/// A borrowed view of one supported story item.
+///
+/// The view owns its checked location. Body and comment items can use owned XML
+/// serialized from their typed sources. Other package-backed items can borrow
+/// exact subtree slices whose namespace bindings depend on retained ancestors.
+/// A complex field uses an owned, namespace-complete paragraph projection
+/// because its source can span several sibling runs.
+pub struct StoryItemRef<'a> {
+    document: &'a Document,
+    location: ContentLocation,
+}
+
+impl<'a> StoryItemRef<'a> {
+    pub fn location(&self) -> &ContentLocation {
+        &self.location
+    }
+
+    pub fn kind(&self) -> StoryItemKind {
+        self.location.item_kind
+    }
+
+    pub fn text(&self) -> Result<Option<String>> {
+        let (source, item) = self.document.story_item_source(&self.location)?;
+        story_item_text(source.xml.as_ref(), &item)
+    }
+
+    /// Return modeled hyperlinks in source order with story-scoped targets.
+    pub fn links(&self) -> Result<Vec<LinkInfo>> {
+        let (source, item) = self.document.story_item_source(&self.location)?;
+        let links = scan_story_item_links(source.xml.as_ref(), &item)?;
+        links
+            .into_iter()
+            .map(|link| {
+                self.document
+                    .story_link_info(&self.location.story, source.xml.as_ref(), link)
+            })
+            .collect()
+    }
+
+    /// Returns the XML used by this traversal.
+    ///
+    /// Typed body and comment sources can return owned subtree bytes. Other
+    /// package-backed sources can return a borrowed exact slice, which can rely
+    /// on namespace declarations from ancestors outside that slice. Complex
+    /// fields return an owned, standalone paragraph with the in-scope namespace
+    /// declarations materialized.
+    pub fn xml(&self) -> Result<Cow<'a, [u8]>> {
+        let (source, item) = self.document.story_item_source(&self.location)?;
+        if item.complex_field {
+            return Ok(Cow::Owned(complex_story_field_xml(
+                source.xml.as_ref(),
+                &item,
+            )?));
+        }
+        match source.xml {
+            Cow::Borrowed(xml) => Ok(Cow::Borrowed(&xml[item.full])),
+            Cow::Owned(xml) => Ok(Cow::Owned(xml[item.full].to_vec())),
+        }
+    }
+}
+
+/// A location resolution failure from the container-neutral story API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoryError {
+    OwnerNotFound {
+        story: StoryId,
+    },
+    WrongOwner {
+        expected: StoryKind,
+        actual: StoryKind,
+    },
+    Stale {
+        story: StoryId,
+    },
+    InvalidPath {
+        path: Vec<usize>,
+    },
+    OutOfBounds {
+        index: usize,
+        len: usize,
+    },
+    KindMismatch {
+        expected: StoryItemKind,
+        actual: StoryItemKind,
+    },
+    NotTextBearing {
+        kind: StoryItemKind,
+    },
+}
+
+impl fmt::Display for StoryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OwnerNotFound { story } => write!(
+                formatter,
+                "story owner {:?} at {}[{}] was not found",
+                story.kind, story.part_name, story.owner_index
+            ),
+            Self::WrongOwner { expected, actual } => {
+                write!(
+                    formatter,
+                    "story owner kind is {actual:?}, expected {expected:?}"
+                )
+            }
+            Self::Stale { story } => write!(
+                formatter,
+                "story location for {:?} at {}[{}] is stale",
+                story.kind, story.part_name, story.owner_index
+            ),
+            Self::InvalidPath { path } => write!(formatter, "invalid story item path {path:?}"),
+            Self::OutOfBounds { index, len } => {
+                write!(
+                    formatter,
+                    "story item index {index} is out of bounds for {len} items"
+                )
+            }
+            Self::KindMismatch { expected, actual } => write!(
+                formatter,
+                "story item kind is {actual:?}, expected {expected:?}"
+            ),
+            Self::NotTextBearing { kind } => {
+                write!(formatter, "story item kind {kind:?} has no editable text")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StoryError {}
 
 const WORD_NAMESPACE: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
@@ -541,6 +1053,27 @@ fn namespace_declarations(element: &BytesStart<'_>) -> Result<Vec<(String, Strin
     Ok(declarations)
 }
 
+fn root_namespace_declarations(xml: &[u8]) -> Result<Vec<(String, String)>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid XML root: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                return namespace_declarations(&element);
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "XML part has no root namespace owner".to_owned(),
+                ));
+            }
+            _ => buffer.clear(),
+        }
+    }
+}
+
 fn apply_namespace_declarations(
     element: &BytesStart<'_>,
     scope: &mut Vec<(String, String)>,
@@ -567,6 +1100,7 @@ fn apply_namespace_declarations(
 fn unsafe_serializer_namespace_prefix(
     root_declarations: &[(String, String)],
     body_declarations: &[(String, String)],
+    document_xml: Option<&[u8]>,
 ) -> Option<String> {
     if let Some((name, _)) = body_declarations.first() {
         return Some(namespace_prefix(name));
@@ -576,11 +1110,71 @@ fn unsafe_serializer_namespace_prefix(
         let prefix = namespace_prefix(name);
         let expected = match canonical_serializer_namespace(&prefix) {
             Some(expected) => expected,
-            None if prefix.is_empty() => return Some("default".to_owned()),
+            None if prefix.is_empty() => {
+                return match document_xml.and_then(|xml| root_default_namespace_is_used(xml, value))
+                {
+                    Some(false) => None,
+                    Some(true) | None => Some("default".to_owned()),
+                };
+            }
             None => return None,
         };
         (value != expected).then_some(prefix)
     })
+}
+
+fn root_default_namespace_is_used(xml: &[u8], root_namespace: &str) -> Option<bool> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root_binding_scopes = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer).ok()?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let mut local_default = None;
+                for attribute in element.attributes() {
+                    let attribute = attribute.ok()?;
+                    if attribute.key.as_ref() == b"xmlns" {
+                        if local_default.is_some() {
+                            return None;
+                        }
+                        local_default = Some(
+                            attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    element.decoder(),
+                                )
+                                .ok()?
+                                .into_owned(),
+                        );
+                    }
+                }
+
+                let root_binding_is_active = if root_binding_scopes.is_empty() {
+                    if local_default.as_deref() != Some(root_namespace) {
+                        return None;
+                    }
+                    true
+                } else if local_default.is_some() {
+                    false
+                } else {
+                    *root_binding_scopes.last()?
+                };
+                if !element.name().as_ref().contains(&b':') && root_binding_is_active {
+                    return Some(true);
+                }
+                if matches!(event, Event::Start(_)) {
+                    root_binding_scopes.push(root_binding_is_active);
+                }
+            }
+            Event::End(_) => {
+                root_binding_scopes.pop()?;
+            }
+            Event::Eof => return root_binding_scopes.is_empty().then_some(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn canonical_serializer_namespace(prefix: &str) -> Option<&'static str> {
@@ -1550,6 +2144,343 @@ pub enum BodyContentRef<'a> {
     UnsupportedXml(UnsupportedXmlRef<'a>),
 }
 
+/// An immutable borrowed view of one section in document order.
+#[derive(Clone, Copy)]
+pub struct SectionRef<'a> {
+    ordinal: usize,
+    is_final: bool,
+    inner: &'a CT_SectPr,
+}
+
+impl<'a> SectionRef<'a> {
+    /// Return this section's zero-based document-order position.
+    pub fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+
+    /// Return whether this section owns the schema-final body properties.
+    pub fn is_final(&self) -> bool {
+        self.is_final
+    }
+
+    /// Return the explicitly configured page orientation.
+    pub fn orientation(&self) -> Option<ST_PageOrientation> {
+        self.inner.orientation
+    }
+
+    /// Return the explicitly configured page width and height.
+    pub fn page_size(&self) -> Option<(Length, Length)> {
+        Some((
+            Length::twips(self.inner.page_width?.0),
+            Length::twips(self.inner.page_height?.0),
+        ))
+    }
+
+    /// Return the explicitly configured top, right, bottom, and left margins.
+    pub fn margins(&self) -> Option<(Length, Length, Length, Length)> {
+        Some((
+            Length::twips(self.inner.margin_top?.0),
+            Length::twips(self.inner.margin_right?.0),
+            Length::twips(self.inner.margin_bottom?.0),
+            Length::twips(self.inner.margin_left?.0),
+        ))
+    }
+
+    /// Return the explicitly configured gutter.
+    pub fn gutter(&self) -> Option<Length> {
+        self.inner.gutter.map(|value| Length::twips(value.0))
+    }
+
+    /// Return the equal-width column count and spacing when modeled by M23.
+    pub fn columns(&self) -> Option<(u32, Length)> {
+        let columns = self.inner.columns.as_ref()?;
+        if columns.equal_width == Some(false) || !columns.columns.is_empty() {
+            return None;
+        }
+        Some((
+            columns.num.unwrap_or(1),
+            Length::twips(columns.space.map_or(720, |value| value.0)),
+        ))
+    }
+
+    /// Return the explicitly configured page-number restart.
+    pub fn page_number_start(&self) -> Option<u32> {
+        self.inner.page_number.as_ref()?.start
+    }
+
+    /// Return the explicitly configured header and footer distances.
+    pub fn header_footer_distance(&self) -> Option<(Length, Length)> {
+        Some((
+            Length::twips(self.inner.header_distance?.0),
+            Length::twips(self.inner.footer_distance?.0),
+        ))
+    }
+
+    /// Return the explicitly configured title-page state.
+    pub fn different_first_page(&self) -> Option<bool> {
+        self.inner.title_pg
+    }
+
+    /// Return the explicitly configured section break type.
+    pub fn break_type(&self) -> Option<ST_SectionType> {
+        self.inner.section_type
+    }
+
+    /// Borrow the complete section properties.
+    pub fn properties(&self) -> &'a CT_SectPr {
+        self.inner
+    }
+}
+
+/// A mutable borrowed view of one section in document order.
+pub struct Section<'a> {
+    ordinal: usize,
+    is_final: bool,
+    inner: &'a mut CT_SectPr,
+}
+
+impl Section<'_> {
+    /// Return this section's zero-based document-order position.
+    pub fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+
+    /// Return whether this section owns the schema-final body properties.
+    pub fn is_final(&self) -> bool {
+        self.is_final
+    }
+
+    /// Return the explicitly configured page orientation.
+    pub fn orientation(&self) -> Option<ST_PageOrientation> {
+        self.inner.orientation
+    }
+
+    /// Return the explicitly configured page width and height.
+    pub fn page_size(&self) -> Option<(Length, Length)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .page_size()
+    }
+
+    /// Set this section's positive page dimensions.
+    pub fn set_page_size(&mut self, width: Length, height: Length) -> Result<()> {
+        let width = checked_positive_section_twips(width, "page width")?;
+        let height = checked_positive_section_twips(height, "page height")?;
+        self.inner.page_width = Some(width);
+        self.inner.page_height = Some(height);
+        Ok(())
+    }
+
+    /// Set this section's orientation and normalize its page dimensions.
+    pub fn set_orientation(&mut self, orientation: ST_PageOrientation) {
+        self.inner.orientation = Some(orientation);
+        if let (Some(width), Some(height)) = (self.inner.page_width, self.inner.page_height) {
+            let dimensions_need_swap = match orientation {
+                ST_PageOrientation::Landscape => width.0 < height.0,
+                ST_PageOrientation::Portrait => width.0 > height.0,
+            };
+            if dimensions_need_swap {
+                self.inner.page_width = Some(height);
+                self.inner.page_height = Some(width);
+            }
+        }
+    }
+
+    /// Return the explicitly configured top, right, bottom, and left margins.
+    pub fn margins(&self) -> Option<(Length, Length, Length, Length)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .margins()
+    }
+
+    /// Set this section's top, right, bottom, and left margins.
+    pub fn set_margins(
+        &mut self,
+        top: Length,
+        right: Length,
+        bottom: Length,
+        left: Length,
+    ) -> Result<()> {
+        let top = checked_section_twips(top, "top margin")?;
+        let right = checked_section_twips(right, "right margin")?;
+        let bottom = checked_section_twips(bottom, "bottom margin")?;
+        let left = checked_section_twips(left, "left margin")?;
+        self.inner.margin_top = Some(top);
+        self.inner.margin_right = Some(right);
+        self.inner.margin_bottom = Some(bottom);
+        self.inner.margin_left = Some(left);
+        Ok(())
+    }
+
+    /// Return the explicitly configured gutter.
+    pub fn gutter(&self) -> Option<Length> {
+        self.inner.gutter.map(|value| Length::twips(value.0))
+    }
+
+    /// Set this section's nonnegative gutter.
+    pub fn set_gutter(&mut self, gutter: Length) -> Result<()> {
+        let gutter = checked_nonnegative_section_twips(gutter, "gutter")?;
+        self.inner.gutter = Some(gutter);
+        Ok(())
+    }
+
+    /// Return the equal-width column count and spacing when modeled by M23.
+    pub fn columns(&self) -> Option<(u32, Length)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .columns()
+    }
+
+    /// Set positive-count equal-width columns with nonnegative spacing.
+    pub fn set_columns(&mut self, count: u32, spacing: Length) -> Result<()> {
+        if count == 0 {
+            return Err(Error::Other(
+                "section column count must be positive".to_owned(),
+            ));
+        }
+        let spacing = checked_nonnegative_section_twips(spacing, "column spacing")?;
+        let separator = self.inner.columns.as_ref().and_then(|columns| columns.sep);
+        self.inner.columns = Some(CT_Columns {
+            num: Some(count),
+            space: Some(spacing),
+            equal_width: Some(true),
+            sep: separator,
+            columns: Vec::new(),
+        });
+        Ok(())
+    }
+
+    /// Return the explicitly configured page-number restart.
+    pub fn page_number_start(&self) -> Option<u32> {
+        self.inner.page_number.as_ref()?.start
+    }
+
+    /// Set the positive displayed page number at which this section starts.
+    pub fn set_page_number_start(&mut self, start: u32) -> Result<()> {
+        if start == 0 {
+            return Err(Error::Other(
+                "section page-number start must be positive".to_owned(),
+            ));
+        }
+        match &mut self.inner.page_number {
+            Some(page_number) => page_number.start = Some(start),
+            None => {
+                self.inner.page_number = Some(rdocx_oxml::document::CT_PageNumberType::new(start))
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the explicitly configured header and footer distances.
+    pub fn header_footer_distance(&self) -> Option<(Length, Length)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .header_footer_distance()
+    }
+
+    /// Set nonnegative header and footer distances from the page edges.
+    pub fn set_header_footer_distance(&mut self, header: Length, footer: Length) -> Result<()> {
+        let header = checked_nonnegative_section_twips(header, "header distance")?;
+        let footer = checked_nonnegative_section_twips(footer, "footer distance")?;
+        self.inner.header_distance = Some(header);
+        self.inner.footer_distance = Some(footer);
+        Ok(())
+    }
+
+    /// Return the explicitly configured title-page state.
+    pub fn different_first_page(&self) -> Option<bool> {
+        self.inner.title_pg
+    }
+
+    /// Configure whether this section uses first-page header and footer variants.
+    pub fn set_different_first_page(&mut self, enabled: bool) {
+        self.inner.title_pg = Some(enabled);
+    }
+
+    /// Return the explicitly configured section break type.
+    pub fn break_type(&self) -> Option<ST_SectionType> {
+        self.inner.section_type
+    }
+
+    /// Set this section's break type.
+    pub fn set_break_type(&mut self, break_type: ST_SectionType) {
+        self.inner.section_type = Some(break_type);
+    }
+
+    /// Borrow the complete section properties.
+    pub fn properties(&self) -> &CT_SectPr {
+        self.inner
+    }
+
+    /// Mutably borrow the complete section properties.
+    pub fn properties_mut(&mut self) -> &mut CT_SectPr {
+        self.inner
+    }
+}
+
+fn checked_positive_section_twips(value: Length, name: &str) -> Result<Twips> {
+    if value.to_emu() <= 0 {
+        return Err(Error::Other(format!("section {name} must be positive")));
+    }
+    let twips = checked_section_twips(value, name)?;
+    if twips.0 == 0 {
+        return Err(Error::Other(format!(
+            "section {name} must be at least one twip"
+        )));
+    }
+    Ok(twips)
+}
+
+fn checked_nonnegative_section_twips(value: Length, name: &str) -> Result<Twips> {
+    if value.to_emu() < 0 {
+        return Err(Error::Other(format!("section {name} must be nonnegative")));
+    }
+    checked_section_twips(value, name)
+}
+
+fn checked_section_twips(value: Length, name: &str) -> Result<Twips> {
+    let twips = value.to_emu() / 635;
+    let twips = i32::try_from(twips)
+        .map_err(|_| Error::Other(format!("section {name} exceeds the twip range")))?;
+    Ok(Twips(twips))
+}
+
+fn empty_section_properties() -> CT_SectPr {
+    CT_SectPr {
+        page_width: None,
+        page_height: None,
+        orientation: None,
+        margin_top: None,
+        margin_right: None,
+        margin_bottom: None,
+        margin_left: None,
+        gutter: None,
+        header_distance: None,
+        footer_distance: None,
+        section_type: None,
+        columns: None,
+        page_number: None,
+        title_pg: None,
+        header_refs: Vec::new(),
+        footer_refs: Vec::new(),
+        extra_xml: Vec::new(),
+        extra_xml_positions: Vec::new(),
+        change: None,
+    }
+}
+
 /// Package and WordprocessingML identity state owned by the document facade.
 ///
 /// Each set represents one OOXML scope. References are deliberately excluded
@@ -1580,6 +2511,8 @@ pub(crate) struct DocumentIdentifiers {
     authored_bookmark_names: HashSet<String>,
     authored_story_parts: HashSet<String>,
     authored_story_relationship_ids: HashMap<String, HashSet<String>>,
+    authored_nested_story_relationship_ids: HashMap<String, HashSet<String>>,
+    authored_nested_story_drawing_ids: HashMap<String, HashSet<u32>>,
     authored_bundle_relationship_ids: HashMap<String, HashSet<String>>,
     provisional_relationship_ids: HashMap<String, HashSet<String>>,
 }
@@ -1624,6 +2557,8 @@ impl DocumentIdentifiers {
             authored_bookmark_names: HashSet::new(),
             authored_story_parts: HashSet::new(),
             authored_story_relationship_ids: HashMap::new(),
+            authored_nested_story_relationship_ids: HashMap::new(),
+            authored_nested_story_drawing_ids: HashMap::new(),
             authored_bundle_relationship_ids: HashMap::new(),
             provisional_relationship_ids: HashMap::new(),
         };
@@ -1698,13 +2633,15 @@ impl DocumentIdentifiers {
             if let Some(categories) = identity_parts.get(&part_name_identity(part_name))
                 && identifier_xml_is_well_formed(bytes)
             {
+                let mut part_drawing_ids = HashSet::new();
                 identifiers
-                    .scan_xml_definitions(bytes, categories)
+                    .scan_xml_definitions(bytes, categories, &mut part_drawing_ids)
                     .map_err(|error| {
                         Error::Other(format!(
                             "cannot scan identifiers in XML part {part_name}: {error}"
                         ))
                     })?;
+                identifiers.drawing_ids.extend(part_drawing_ids);
             }
         }
         identifiers.preserved_relationship_ids = identifiers.relationship_ids.clone();
@@ -1750,6 +2687,7 @@ impl DocumentIdentifiers {
         &mut self,
         xml: &[u8],
         categories: &HashSet<IdentifierXmlCategory>,
+        part_drawing_ids: &mut HashSet<u32>,
     ) -> Result<()> {
         let mut reader = NsReader::from_reader(xml);
         let mut buffer = Vec::new();
@@ -1785,7 +2723,7 @@ impl DocumentIdentifiers {
                         None
                     };
                     if let Some(category) = category.filter(|value| categories.contains(value)) {
-                        self.scan_xml_id(&reader, element, category)?;
+                        self.scan_xml_id(&reader, element, category, part_drawing_ids)?;
                     }
                 }
                 Event::Eof => return Ok(()),
@@ -1800,6 +2738,7 @@ impl DocumentIdentifiers {
         reader: &NsReader<&[u8]>,
         element: &BytesStart<'_>,
         category: IdentifierXmlCategory,
+        part_drawing_ids: &mut HashSet<u32>,
     ) -> Result<()> {
         for attribute in element.attributes() {
             let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
@@ -1832,7 +2771,7 @@ impl DocumentIdentifiers {
                     let value = value
                         .parse::<u32>()
                         .map_err(|_| Error::Other(format!("invalid drawing id {value}")))?;
-                    Self::insert_unique(&mut self.drawing_ids, value, "drawing")?;
+                    Self::insert_unique(part_drawing_ids, value, "drawing")?;
                 }
                 IdentifierXmlCategory::Bookmark => {
                     let value = value
@@ -2135,6 +3074,20 @@ impl DocumentIdentifiers {
             .insert(part_name.to_ascii_lowercase());
     }
 
+    fn register_nested_story_relationship(&mut self, story: &StoryId, relationship_id: String) {
+        self.authored_nested_story_relationship_ids
+            .entry(relationship_owner_identity(&story.part_name))
+            .or_default()
+            .insert(relationship_id);
+    }
+
+    fn register_nested_story_drawing(&mut self, story: &StoryId, drawing_id: u32) {
+        self.authored_nested_story_drawing_ids
+            .entry(relationship_owner_identity(&story.part_name))
+            .or_default()
+            .insert(drawing_id);
+    }
+
     pub(crate) fn retire_authored_story_relationships(
         &mut self,
         owner: &str,
@@ -2162,6 +3115,13 @@ impl DocumentIdentifiers {
                 self.authored_story_relationship_ids.remove(&owner);
             }
         }
+        self.authored_nested_story_relationship_ids
+            .retain(|nested_owner, authored| {
+                if nested_owner == &owner {
+                    authored.retain(|id| !removed.contains(id));
+                }
+                !authored.is_empty()
+            });
         if let Some(authored) = self.authored_bundle_relationship_ids.get_mut(&owner) {
             authored.retain(|id| !removed.contains(id));
             if authored.is_empty() {
@@ -2305,6 +3265,26 @@ impl DocumentIdentifiers {
             &source.authored_story_relationship_ids,
             &self.relationship_ids,
         );
+        self.authored_nested_story_relationship_ids = source
+            .authored_nested_story_relationship_ids
+            .iter()
+            .filter_map(|(owner, ids)| {
+                let occupied = self.relationship_ids.get(owner)?;
+                let retained = ids.intersection(occupied).cloned().collect::<HashSet<_>>();
+                (!retained.is_empty()).then(|| (owner.clone(), retained))
+            })
+            .collect();
+        self.authored_nested_story_drawing_ids = source
+            .authored_nested_story_drawing_ids
+            .iter()
+            .filter_map(|(owner, ids)| {
+                let retained = ids
+                    .intersection(&self.drawing_ids)
+                    .copied()
+                    .collect::<HashSet<_>>();
+                (!retained.is_empty()).then(|| (owner.clone(), retained))
+            })
+            .collect();
         self.authored_bundle_relationship_ids = intersect_relationship_registry(
             &source.authored_bundle_relationship_ids,
             &self.relationship_ids,
@@ -2526,6 +3506,20 @@ fn xml_relationship_ids_in_order(xml: &[u8]) -> Result<Vec<String>> {
     xml_relationship_ids_in_order_with_bindings(xml, &[])
 }
 
+fn authored_relationship_ids_in_source_order(
+    xml: &[u8],
+    relationship_ids: &HashSet<String>,
+) -> Option<Vec<String>> {
+    let mut seen = HashSet::new();
+    let all = xml_relationship_ids_in_order(xml).ok()?;
+    let ordered = all
+        .iter()
+        .filter(|id| relationship_ids.contains(*id) && seen.insert((*id).clone()))
+        .cloned()
+        .collect::<Vec<_>>();
+    (ordered.len() == relationship_ids.len()).then_some(ordered)
+}
+
 fn xml_relationship_ids_in_order_with_bindings(
     xml: &[u8],
     inherited_bindings: &[(String, String)],
@@ -2636,7 +3630,206 @@ fn rewrite_authored_doc_pr_ids(xml: &[u8], occupied: &mut HashSet<u32>) -> Resul
     Ok(updated)
 }
 
+enum AuthoredMainDrawing {
+    Modeled,
+    Nested,
+}
+
+fn authored_drawing_slots_in_source_order(
+    xml: &[u8],
+    modeled_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+) -> Result<Vec<(AuthoredMainDrawing, Range<usize>, u32)>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut modeled_remaining = HashMap::new();
+    for id in modeled_ids {
+        *modeled_remaining.entry(*id).or_insert(0usize) += 1;
+    }
+    let mut depth = 0usize;
+    let mut current_depth = None;
+    let mut current_doc_pr = None;
+    let mut current_is_nested = false;
+    let mut ordered = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let namespace = reader.resolver().resolve_element(element.name()).0;
+                let local = element.local_name();
+                let word_drawing = matches!(namespace, ResolveResult::Bound(Namespace(value)) if value == drawing_ns::WP.as_bytes());
+                let drawing = matches!(namespace, ResolveResult::Bound(Namespace(value)) if value == drawing_ns::A.as_bytes());
+                if matches!(&event, Event::Start(_))
+                    && word_drawing
+                    && matches!(local.as_ref(), b"inline" | b"anchor")
+                    && current_depth.is_none()
+                {
+                    current_depth = Some(depth);
+                }
+                if current_depth.is_some() {
+                    if word_drawing && local.as_ref() == b"docPr" {
+                        for attribute in element.attributes() {
+                            let attribute = attribute.map_err(|error| {
+                                Error::Other(format!("invalid story XML: {error}"))
+                            })?;
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            if matches!(namespace, ResolveResult::Unbound)
+                                && local.as_ref() == b"id"
+                            {
+                                let id = attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .map_err(|error| {
+                                        Error::Other(format!("invalid story drawing id: {error}"))
+                                    })?
+                                    .parse::<u32>()
+                                    .map_err(|_| {
+                                        Error::Other("invalid story drawing id".to_owned())
+                                    })?;
+                                let (start, end) = story_attribute_value_span(
+                                    &xml[before..after],
+                                    attribute.key.as_ref(),
+                                )
+                                .ok_or_else(|| {
+                                    Error::Other("story drawing id source was not found".to_owned())
+                                })?;
+                                current_doc_pr = Some((id, before + start..before + end));
+                            }
+                        }
+                    }
+                    if drawing && local.as_ref() == b"blip" {
+                        for attribute in element.attributes() {
+                            let attribute = attribute.map_err(|error| {
+                                Error::Other(format!("invalid story XML: {error}"))
+                            })?;
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::R.as_bytes())
+                                && local.as_ref() == b"embed"
+                            {
+                                let id = attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .map_err(|error| {
+                                        Error::Other(format!(
+                                            "invalid story relationship id: {error}"
+                                        ))
+                                    })?;
+                                if nested_image_relationship_ids.contains(id.as_ref()) {
+                                    current_is_nested = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if matches!(&event, Event::Start(_)) {
+                    depth += 1;
+                }
+            }
+            Event::End(element) => {
+                depth = depth.saturating_sub(1);
+                let namespace = reader.resolver().resolve_element(element.name()).0;
+                let word_drawing = matches!(namespace, ResolveResult::Bound(Namespace(value)) if value == drawing_ns::WP.as_bytes());
+                if word_drawing
+                    && matches!(element.local_name().as_ref(), b"inline" | b"anchor")
+                    && current_depth == Some(depth)
+                {
+                    current_depth = None;
+                    let Some((id, span)) = current_doc_pr.take() else {
+                        if current_is_nested {
+                            return Err(Error::Other(
+                                "authored picture has no wp:docPr identity".to_owned(),
+                            ));
+                        }
+                        buffer.clear();
+                        continue;
+                    };
+                    if current_is_nested {
+                        ordered.push((AuthoredMainDrawing::Nested, span, id));
+                    } else if let Some(remaining) = modeled_remaining.get_mut(&id)
+                        && *remaining > 0
+                    {
+                        *remaining -= 1;
+                        ordered.push((AuthoredMainDrawing::Modeled, span, id));
+                    }
+                    current_is_nested = false;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if modeled_remaining.values().any(|remaining| *remaining != 0) {
+        return Err(Error::Other(
+            "authored drawing occurrences changed during source-order allocation".to_owned(),
+        ));
+    }
+    Ok(ordered)
+}
+
+fn drawing_ids_in_xml(xml: &[u8]) -> Result<HashSet<u32>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut ids = HashSet::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                let namespace = reader.resolver().resolve_element(element.name()).0;
+                if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::WP.as_bytes())
+                    && element.local_name().as_ref() == b"docPr"
+                {
+                    for attribute in element.attributes() {
+                        let attribute = attribute
+                            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                        let (attribute_namespace, local) =
+                            reader.resolver().resolve_attribute(attribute.key);
+                        if matches!(attribute_namespace, ResolveResult::Unbound)
+                            && local.as_ref() == b"id"
+                        {
+                            let value = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .map_err(|error| {
+                                    Error::Other(format!("invalid drawing id: {error}"))
+                                })?
+                                .parse::<u32>()
+                                .map_err(|_| Error::Other("invalid drawing id".to_owned()))?;
+                            ids.insert(value);
+                        }
+                    }
+                }
+            }
+            Event::Eof => return Ok(ids),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 fn remap_xml_relationship_ids(xml: &[u8], remap: &HashMap<String, String>) -> Result<Vec<u8>> {
+    remap_xml_relationship_ids_with_bindings(xml, remap, &[])
+}
+
+fn remap_xml_relationship_ids_with_bindings(
+    xml: &[u8],
+    remap: &HashMap<String, String>,
+    inherited_bindings: &[(String, String)],
+) -> Result<Vec<u8>> {
     if remap.is_empty() {
         return Ok(xml.to_vec());
     }
@@ -2660,7 +3853,23 @@ fn remap_xml_relationship_ids(xml: &[u8], remap: &HashMap<String, String>) -> Re
                         .map_err(|error| {
                             Error::Other(format!("invalid story relationship id: {error}"))
                         })?;
-                    if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::R.as_bytes())
+                    let inherited_relationship_prefix =
+                        matches!(namespace, ResolveResult::Unknown(_))
+                            && attribute.key.as_ref().contains(&b':')
+                            && attribute
+                                .key
+                                .as_ref()
+                                .split(|byte| *byte == b':')
+                                .next()
+                                .and_then(|prefix| std::str::from_utf8(prefix).ok())
+                                .is_some_and(|prefix| {
+                                    let declaration = format!("xmlns:{prefix}");
+                                    inherited_bindings.iter().any(|(name, value)| {
+                                        name == &declaration && value == drawing_ns::R
+                                    })
+                                });
+                    if (matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::R.as_bytes())
+                        || inherited_relationship_prefix)
                         && matches!(local.as_ref(), b"id" | b"embed" | b"link")
                         && let Some(updated) = remap.get(value.as_ref())
                     {
@@ -2742,13 +3951,6 @@ enum DrawingMut<'a> {
 }
 
 impl DrawingMut<'_> {
-    fn set_doc_pr_id(&mut self, id: u32) {
-        match self {
-            Self::Inline(drawing) => drawing.doc_pr_id = id,
-            Self::Anchor(drawing) => drawing.doc_pr_id = id,
-        }
-    }
-
     fn remap_relationship(&mut self, remap: &HashMap<String, String>) {
         let (embed_id, chart_rel_id) = match self {
             Self::Inline(drawing) => (&mut drawing.embed_id, &mut drawing.chart_rel_id),
@@ -2821,12 +4023,16 @@ pub struct Document {
     pub(crate) footnotes: rdocx_oxml::footnotes::CT_Footnotes,
     /// Existing footnotes relationship target. No conventional target is assumed on read.
     pub(crate) footnotes_part_name: Option<String>,
+    /// Producer root namespaces inherited by retained footnote raw XML.
+    footnotes_root_namespace_declarations: Vec<(String, String)>,
     /// Whether a facade mutation requires complete typed footnote serialization.
     pub(crate) footnotes_dirty: bool,
     /// Typed comments loaded through the main document relationship.
     pub(crate) comments: Option<rdocx_oxml::comments::CT_Comments>,
     /// Existing comments relationship target. No target is invented on read.
     pub(crate) comments_part_name: Option<String>,
+    /// Whether a typed comment mutation must be published into the package.
+    pub(crate) comments_dirty: bool,
     /// Typed reply linkage and resolved state for comments.
     pub(crate) comments_extended: Option<rdocx_oxml::comments_extended::CT_CommentsEx>,
     /// Existing comments-extended relationship target.
@@ -3026,6 +4232,3118 @@ fn default_application_properties() -> AppProperties {
     properties.application = Some("rdocx".to_owned());
     properties.application_version = Some(env!("CARGO_PKG_VERSION").to_owned());
     properties
+}
+
+fn equivalent_abstract_numbering(left: &CT_AbstractNum, right: &CT_AbstractNum) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.abstract_num_id = 0;
+    right.abstract_num_id = 0;
+    left == right
+}
+
+fn equivalent_numbering_instance(left: &CT_Num, right: &CT_Num, abstract_num_id: u32) -> bool {
+    if left.abstract_num_id != abstract_num_id {
+        return false;
+    }
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.num_id = 0;
+    right.num_id = 0;
+    left.abstract_num_id = abstract_num_id;
+    right.abstract_num_id = abstract_num_id;
+    left.abstract_num_id_raw = None;
+    right.abstract_num_id_raw = None;
+    left == right
+}
+
+struct StorySource<'a> {
+    root_kind: StoryKind,
+    part_name: String,
+    xml: Cow<'a, [u8]>,
+}
+
+#[derive(Clone)]
+struct StoryOwnerSpan {
+    kind: StoryKind,
+    owner_index: usize,
+    full: Range<usize>,
+    fingerprint: u64,
+}
+
+#[derive(Clone)]
+struct StoryItemSpan {
+    kind: StoryItemKind,
+    full: Range<usize>,
+    scan: Range<usize>,
+    direct_owner_child: bool,
+    complex_field: bool,
+    complex_ancestors: Vec<usize>,
+    sdt_context: Option<StorySdtContext>,
+}
+
+struct StoryLinkSpan {
+    full: Range<usize>,
+    rel_id: Option<String>,
+    anchor: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StoryNamespace {
+    Word,
+    Vml,
+    Drawing,
+    DrawingPicture,
+    WordDrawing,
+    WordShape,
+    WordGroup,
+    Other,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StorySdtContext {
+    Block,
+    Table,
+    Row,
+    Inline,
+}
+
+struct XmlElementFrame {
+    namespace: StoryNamespace,
+    local_name: Vec<u8>,
+    is_word: bool,
+    full_start: usize,
+    owner_kind: Option<StoryKind>,
+    item_kind: Option<StoryItemKind>,
+    direct_owner_child: bool,
+    sdt_context: Option<StorySdtContext>,
+    word_prefixes: Vec<String>,
+    opaque: bool,
+}
+
+fn word_element(namespace: &ResolveResult<'_>) -> bool {
+    matches!(
+        namespace,
+        ResolveResult::Bound(Namespace(uri)) if *uri == WORD_NAMESPACE.as_bytes()
+    )
+}
+
+fn story_namespace(namespace: &ResolveResult<'_>) -> StoryNamespace {
+    match namespace {
+        ResolveResult::Bound(Namespace(uri)) => match *uri {
+            uri if uri == WORD_NAMESPACE.as_bytes() => StoryNamespace::Word,
+            b"urn:schemas-microsoft-com:vml" => StoryNamespace::Vml,
+            b"http://schemas.openxmlformats.org/drawingml/2006/main" => StoryNamespace::Drawing,
+            b"http://schemas.openxmlformats.org/drawingml/2006/picture" => {
+                StoryNamespace::DrawingPicture
+            }
+            b"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" => {
+                StoryNamespace::WordDrawing
+            }
+            b"http://schemas.microsoft.com/office/word/2010/wordprocessingShape" => {
+                StoryNamespace::WordShape
+            }
+            b"http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" => {
+                StoryNamespace::WordGroup
+            }
+            _ => StoryNamespace::Other,
+        },
+        _ => StoryNamespace::Other,
+    }
+}
+
+fn modeled_word_child(parent: &[u8], child: &[u8]) -> bool {
+    match parent {
+        b"document" => child == b"body",
+        b"footnotes" => child == b"footnote",
+        b"endnotes" => child == b"endnote",
+        b"comments" => child == b"comment",
+        b"body" | b"hdr" | b"ftr" | b"footnote" | b"endnote" | b"comment" | b"txbxContent" => {
+            matches!(child, b"p" | b"tbl" | b"sdt" | b"sectPr")
+        }
+        b"tc" => matches!(child, b"tcPr" | b"p" | b"tbl" | b"sdt"),
+        b"tbl" => matches!(child, b"tblPr" | b"tblGrid" | b"tr" | b"sdt"),
+        b"tr" => matches!(child, b"trPr" | b"tc" | b"sdt"),
+        b"p" => matches!(
+            child,
+            b"pPr"
+                | b"r"
+                | b"sdt"
+                | b"hyperlink"
+                | b"fldSimple"
+                | b"ins"
+                | b"del"
+                | b"moveFrom"
+                | b"moveTo"
+                | b"bookmarkStart"
+                | b"bookmarkEnd"
+                | b"commentRangeStart"
+                | b"commentRangeEnd"
+                | b"proofErr"
+        ),
+        b"r" => matches!(
+            child,
+            b"rPr"
+                | b"t"
+                | b"delText"
+                | b"instrText"
+                | b"delInstrText"
+                | b"fldChar"
+                | b"drawing"
+                | b"pict"
+                | b"object"
+                | b"tab"
+                | b"br"
+                | b"cr"
+                | b"sym"
+                | b"noBreakHyphen"
+                | b"softHyphen"
+                | b"footnoteReference"
+                | b"endnoteReference"
+                | b"commentReference"
+                | b"lastRenderedPageBreak"
+        ),
+        b"sdt" => matches!(child, b"sdtPr" | b"sdtEndPr" | b"sdtContent"),
+        b"sdtContent" => false,
+        b"hyperlink" => {
+            matches!(child, b"r" | b"ins" | b"del" | b"moveFrom" | b"moveTo")
+        }
+        b"ins" | b"del" | b"moveFrom" | b"moveTo" => matches!(
+            child,
+            b"r" | b"hyperlink" | b"ins" | b"del" | b"moveFrom" | b"moveTo"
+        ),
+        b"fldSimple" => child == b"r",
+        _ => false,
+    }
+}
+
+fn story_sdt_context(stack: &[XmlElementFrame]) -> Option<StorySdtContext> {
+    let parent = stack.last()?;
+    if parent.namespace != StoryNamespace::Word {
+        return None;
+    }
+    match parent.local_name.as_slice() {
+        b"body" | b"hdr" | b"ftr" | b"footnote" | b"endnote" | b"comment" | b"txbxContent"
+        | b"tc" => Some(StorySdtContext::Block),
+        b"tbl" => Some(StorySdtContext::Table),
+        b"tr" => Some(StorySdtContext::Row),
+        b"p" | b"hyperlink" | b"fldSimple" | b"ins" | b"del" | b"moveFrom" | b"moveTo" => {
+            Some(StorySdtContext::Inline)
+        }
+        b"sdtContent" => parent.sdt_context,
+        _ => None,
+    }
+}
+
+fn story_element_sdt_context(
+    stack: &[XmlElementFrame],
+    namespace: StoryNamespace,
+    local_name: &[u8],
+) -> Option<StorySdtContext> {
+    if namespace != StoryNamespace::Word {
+        return None;
+    }
+    match local_name {
+        b"sdt" => story_sdt_context(stack),
+        b"sdtContent" => stack.last().and_then(|parent| {
+            (parent.namespace == StoryNamespace::Word && parent.local_name == b"sdt")
+                .then_some(parent.sdt_context)
+                .flatten()
+        }),
+        _ => None,
+    }
+}
+
+fn modeled_sdt_content_child(context: Option<StorySdtContext>, child: &[u8]) -> bool {
+    child == b"sdt"
+        || match context {
+            Some(StorySdtContext::Block) => matches!(child, b"p" | b"tbl"),
+            Some(StorySdtContext::Table) => child == b"tr",
+            Some(StorySdtContext::Row) => child == b"tc",
+            Some(StorySdtContext::Inline) => child == b"r",
+            None => false,
+        }
+}
+
+fn modeled_story_child(
+    stack: &[XmlElementFrame],
+    namespace: StoryNamespace,
+    local_name: &[u8],
+) -> bool {
+    let Some(parent) = stack.last() else {
+        return namespace == StoryNamespace::Word;
+    };
+    match (parent.namespace, namespace) {
+        (StoryNamespace::Word, StoryNamespace::Word) if parent.local_name == b"sdtContent" => {
+            modeled_sdt_content_child(parent.sdt_context, local_name)
+        }
+        (StoryNamespace::Word, StoryNamespace::Word) => {
+            modeled_word_child(&parent.local_name, local_name)
+        }
+        (StoryNamespace::Word, StoryNamespace::Vml) => {
+            matches!(parent.local_name.as_slice(), b"pict" | b"object")
+                && matches!(
+                    local_name,
+                    b"shape"
+                        | b"group"
+                        | b"rect"
+                        | b"roundrect"
+                        | b"oval"
+                        | b"line"
+                        | b"polyline"
+                        | b"curve"
+                        | b"arc"
+                )
+        }
+        (StoryNamespace::Vml, StoryNamespace::Vml) => match parent.local_name.as_slice() {
+            b"group" => matches!(
+                local_name,
+                b"shape"
+                    | b"group"
+                    | b"rect"
+                    | b"roundrect"
+                    | b"oval"
+                    | b"line"
+                    | b"polyline"
+                    | b"curve"
+                    | b"arc"
+            ),
+            b"shape" | b"rect" | b"roundrect" | b"oval" | b"line" | b"polyline" | b"curve"
+            | b"arc" => local_name == b"textbox",
+            _ => false,
+        },
+        (StoryNamespace::Vml, StoryNamespace::Word) => {
+            parent.local_name == b"textbox" && local_name == b"txbxContent"
+        }
+        (StoryNamespace::Word, StoryNamespace::WordDrawing) => {
+            parent.local_name == b"drawing" && matches!(local_name, b"inline" | b"anchor")
+        }
+        (StoryNamespace::WordDrawing, StoryNamespace::Drawing) => {
+            matches!(parent.local_name.as_slice(), b"inline" | b"anchor")
+                && local_name == b"graphic"
+        }
+        (StoryNamespace::Drawing, StoryNamespace::Drawing) => match parent.local_name.as_slice() {
+            b"graphic" => local_name == b"graphicData",
+            _ => false,
+        },
+        (StoryNamespace::Drawing, StoryNamespace::WordShape) => {
+            parent.local_name == b"graphicData" && local_name == b"wsp"
+        }
+        (StoryNamespace::Drawing, StoryNamespace::WordGroup) => {
+            parent.local_name == b"graphicData" && local_name == b"wgp"
+        }
+        (StoryNamespace::WordGroup, StoryNamespace::WordGroup) => {
+            matches!(parent.local_name.as_slice(), b"wgp" | b"grpSp") && local_name == b"grpSp"
+        }
+        (StoryNamespace::WordGroup, StoryNamespace::WordShape) => {
+            matches!(parent.local_name.as_slice(), b"wgp" | b"grpSp") && local_name == b"wsp"
+        }
+        (StoryNamespace::WordShape, StoryNamespace::WordShape) => {
+            parent.local_name == b"wsp" && local_name == b"txbx"
+        }
+        (StoryNamespace::WordShape, StoryNamespace::Word) => {
+            parent.local_name == b"txbx" && local_name == b"txbxContent"
+        }
+        (StoryNamespace::Drawing, StoryNamespace::DrawingPicture) => {
+            parent.local_name == b"graphicData" && local_name == b"pic"
+        }
+        _ => false,
+    }
+}
+
+fn field_instruction_has_name(instruction: &str) -> bool {
+    story_field_instruction_has_name(instruction)
+}
+
+fn story_word_prefixes_at(
+    element: &BytesStart<'_>,
+    inherited: &[String],
+    is_word_element: bool,
+) -> Result<Vec<String>> {
+    let mut prefixes = inherited.to_vec();
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("story namespace declaration scan failed: {error}"))
+        })?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            b"".as_slice()
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            prefix
+        } else {
+            continue;
+        };
+        let prefix = std::str::from_utf8(prefix)
+            .map_err(|error| Error::Other(format!("story namespace prefix is invalid: {error}")))?
+            .to_owned();
+        prefixes.retain(|candidate| candidate != &prefix);
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+            .map_err(|error| {
+                Error::Other(format!(
+                    "story namespace declaration decode failed: {error}"
+                ))
+            })?;
+        if value.as_ref() == WORD_NAMESPACE {
+            prefixes.push(prefix);
+        }
+    }
+    if is_word_element {
+        let name = element.name();
+        let prefix = name
+            .as_ref()
+            .split(|byte| *byte == b':')
+            .next()
+            .filter(|_| name.as_ref().contains(&b':'))
+            .unwrap_or(b"");
+        let prefix = std::str::from_utf8(prefix)
+            .map_err(|error| Error::Other(format!("story element prefix is invalid: {error}")))?
+            .to_owned();
+        if !prefixes.contains(&prefix) {
+            prefixes.push(prefix);
+        }
+    }
+    Ok(prefixes)
+}
+
+fn story_element_end(xml: &[u8], start: usize) -> Result<usize> {
+    let fragment = xml
+        .get(start..)
+        .ok_or_else(|| Error::Other("story element begins outside its source part".to_owned()))?;
+    let mut reader = quick_xml::Reader::from_reader(fragment);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story element scan failed: {error}")))?
+        {
+            Event::Start(_) => depth += 1,
+            Event::Empty(_) if depth == 0 => {
+                return Ok(start + reader.buffer_position() as usize);
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(start + reader.buffer_position() as usize);
+                }
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "story element has no matching closing element".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn story_namespace_scope_at(xml: &[u8], offset: usize) -> Result<BTreeMap<String, String>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut scopes = vec![BTreeMap::<String, String>::new()];
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story namespace scope scan failed: {error}")))?
+        {
+            Event::Start(element) => {
+                let mut scope = scopes.last().cloned().unwrap_or_default();
+                update_story_namespace_scope(&mut scope, &element)?;
+                if before == offset {
+                    return Ok(scope);
+                }
+                scopes.push(scope);
+            }
+            Event::Empty(element) => {
+                if before == offset {
+                    let mut scope = scopes.last().cloned().unwrap_or_default();
+                    update_story_namespace_scope(&mut scope, &element)?;
+                    return Ok(scope);
+                }
+            }
+            Event::End(_) => {
+                if scopes.len() > 1 {
+                    scopes.pop();
+                }
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "story item namespace scope was not found".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan) -> Result<bool> {
+    let mut scope = story_namespace_scope_at(xml, item.full.start)?;
+    let mut reader = quick_xml::Reader::from_reader(&xml[item.full.clone()]);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("content fragment scan failed: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                update_story_namespace_scope(&mut scope, &element)?;
+                let name = element.name();
+                let bytes = name.as_ref();
+                let (prefix, local) =
+                    if let Some(colon) = bytes.iter().position(|byte| *byte == b':') {
+                        (
+                            std::str::from_utf8(&bytes[..colon]).map_err(|error| {
+                                Error::Other(format!(
+                                    "content fragment namespace prefix is invalid: {error}"
+                                ))
+                            })?,
+                            &bytes[colon + 1..],
+                        )
+                    } else {
+                        ("", bytes)
+                    };
+                return Ok(local == b"sectPr"
+                    && scope
+                        .get(prefix)
+                        .is_some_and(|value| value == WORD_NAMESPACE));
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "content fragment has no root element".to_owned(),
+                ));
+            }
+            _ => buffer.clear(),
+        }
+    }
+}
+
+fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
+    let mut items = Vec::new();
+    for item in scan_story_items(xml, owner)? {
+        if !item.direct_owner_child {
+            continue;
+        }
+        if owner.kind == StoryKind::Body && content_fragment_root_is_section_properties(xml, &item)?
+        {
+            continue;
+        }
+        items.push(item);
+    }
+    Ok(items)
+}
+
+fn story_owner_content_end(xml: &[u8], owner: &StoryOwnerSpan) -> Result<usize> {
+    if owner.kind == StoryKind::Body {
+        for item in scan_story_items(xml, owner)? {
+            if item.direct_owner_child && content_fragment_root_is_section_properties(xml, &item)? {
+                return Ok(item.full.start);
+            }
+        }
+    }
+    let mut reader = quick_xml::Reader::from_reader(&xml[owner.full.clone()]);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story owner boundary scan failed: {error}")))?
+        {
+            Event::Start(_) => depth += 1,
+            Event::Empty(_) if depth == 0 => {
+                return (owner.full.end >= owner.full.start + 2)
+                    .then_some(owner.full.end - 2)
+                    .ok_or_else(|| Error::Other("empty story owner is incomplete".to_owned()));
+            }
+            Event::End(_) if depth == 1 => return Ok(owner.full.start + before),
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => {
+                return Err(Error::Other(
+                    "story owner has no closing boundary".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+pub(crate) fn package_authoritative_body_fragment(
+    xml: &[u8],
+    include_final_section_properties: bool,
+    destination_scope: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let owner = scan_story_owners(xml, StoryKind::Body)?
+        .into_iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("document fragment has no main body".to_owned()))?;
+    let mut output = Vec::new();
+    let items = direct_story_content_items(xml, &owner)?;
+    let mut cursor = items
+        .first()
+        .map(|item| item.full.start)
+        .ok_or_else(|| Error::Other("document fragment main body is empty".to_owned()))?;
+    for item in items {
+        output.extend_from_slice(&xml[cursor..item.full.start]);
+        let scope = story_namespace_scope_at(xml, item.full.start)?;
+        let required = scope
+            .into_iter()
+            .filter(|(prefix, namespace)| destination_scope.get(prefix) != Some(namespace))
+            .collect();
+        output.extend(close_content_fragment_namespaces(
+            &xml[item.full.clone()],
+            &required,
+        )?);
+        cursor = item.full.end;
+    }
+    output.extend_from_slice(&xml[cursor..story_owner_content_end(xml, &owner)?]);
+    if include_final_section_properties {
+        let mut section = None;
+        for item in scan_story_items(xml, &owner)? {
+            if item.direct_owner_child && content_fragment_root_is_section_properties(xml, &item)? {
+                section = Some(item);
+                break;
+            }
+        }
+        let section = section.ok_or_else(|| {
+            Error::Other("section-inclusive document fragment has no final section".to_owned())
+        })?;
+        let scope = story_namespace_scope_at(xml, section.full.start)?;
+        let required = scope
+            .into_iter()
+            .filter(|(prefix, namespace)| destination_scope.get(prefix) != Some(namespace))
+            .collect();
+        let section = close_content_fragment_namespaces(&xml[section.full], &required)?;
+        output.extend_from_slice(format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:pPr>"#).as_bytes());
+        output.extend(section);
+        output.extend_from_slice(b"</w:pPr></w:p>");
+    }
+    Ok(output)
+}
+
+fn close_content_fragment_namespaces(
+    xml: &[u8],
+    scope: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let (opening_end, empty, existing) = loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("content fragment scan failed: {error}")))?;
+        match event {
+            Event::Start(element) => {
+                let mut existing = HashSet::new();
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!("content fragment attribute scan failed: {error}"))
+                    })?;
+                    let name = attribute.key.as_ref();
+                    if name == b"xmlns" {
+                        existing.insert(String::new());
+                    } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+                        existing.insert(
+                            std::str::from_utf8(prefix)
+                                .map_err(|error| {
+                                    Error::Other(format!(
+                                        "content fragment namespace prefix is invalid: {error}"
+                                    ))
+                                })?
+                                .to_owned(),
+                        );
+                    }
+                }
+                break (reader.buffer_position() as usize, false, existing);
+            }
+            Event::Empty(element) => {
+                let mut existing = HashSet::new();
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!("content fragment attribute scan failed: {error}"))
+                    })?;
+                    let name = attribute.key.as_ref();
+                    if name == b"xmlns" {
+                        existing.insert(String::new());
+                    } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+                        existing.insert(
+                            std::str::from_utf8(prefix)
+                                .map_err(|error| {
+                                    Error::Other(format!(
+                                        "content fragment namespace prefix is invalid: {error}"
+                                    ))
+                                })?
+                                .to_owned(),
+                        );
+                    }
+                }
+                break (reader.buffer_position() as usize, true, existing);
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "content fragment has no root element".to_owned(),
+                ));
+            }
+            _ => buffer.clear(),
+        }
+    };
+    let mut declarations = Vec::new();
+    for (prefix, namespace) in scope {
+        if prefix == "xml" || existing.contains(prefix) {
+            continue;
+        }
+        declarations.extend_from_slice(b" xmlns");
+        if !prefix.is_empty() {
+            declarations.push(b':');
+            declarations.extend_from_slice(prefix.as_bytes());
+        }
+        declarations.extend_from_slice(b"=\"");
+        declarations.extend_from_slice(quick_xml::escape::escape(namespace).as_bytes());
+        declarations.push(b'"');
+    }
+    if declarations.is_empty() {
+        return Ok(xml.to_vec());
+    }
+    let insertion = opening_end
+        .checked_sub(if empty { 2 } else { 1 })
+        .ok_or_else(|| Error::Other("content fragment opening tag is incomplete".to_owned()))?;
+    let mut closed = Vec::with_capacity(xml.len() + declarations.len());
+    closed.extend_from_slice(&xml[..insertion]);
+    closed.extend_from_slice(&declarations);
+    closed.extend_from_slice(&xml[insertion..]);
+    Ok(closed)
+}
+
+fn reject_section_owning_content_fragment(fragment: &ContentFragment) -> Result<()> {
+    let xml = close_content_fragment_namespaces(&fragment.xml, &fragment.namespace_scope)?;
+    let mut wrapped = format!(r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>"#).into_bytes();
+    wrapped.extend_from_slice(&xml);
+    wrapped.extend_from_slice(b"</w:body></w:document>");
+    let document = CT_Document::from_xml(&wrapped)?;
+    let mut owns_section = false;
+    visit_body_paragraphs(&document.body.content, &mut |paragraph| {
+        owns_section |= paragraph
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.sect_pr.is_some());
+    });
+    if owns_section {
+        return Err(Error::Other(
+            "generic content operations cannot mutate a section-owning paragraph".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn serialize_content_fragment(content: BodyContent) -> Result<Vec<u8>> {
+    let mut document = CT_Document::new();
+    document.body.content = vec![content];
+    document.body.sect_pr = None;
+    let xml = document.to_xml()?;
+    let owner = scan_story_owners(&xml, StoryKind::Body)?
+        .into_iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("serialized content fragment has no body owner".to_owned()))?;
+    let items = direct_story_content_items(&xml, &owner)?;
+    let [item] = items.as_slice() else {
+        return Err(Error::Other(
+            "serialized content fragment must contain exactly one direct item".to_owned(),
+        ));
+    };
+    let scope = story_namespace_scope_at(&xml, item.full.start)?;
+    close_content_fragment_namespaces(&xml[item.full.clone()], &scope)
+}
+
+const BLOCK_SDT_PROPERTIES_SLOT: u8 = 1;
+const BLOCK_SDT_END_PROPERTIES_SLOT: u8 = 2;
+const BLOCK_SDT_CONTENT_SLOT: u8 = 4;
+
+fn validate_serialized_block_content_control(xml: &[u8]) -> Result<()> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut root_seen = false;
+    let mut controls: Vec<(usize, Option<usize>, u8, u8)> = Vec::new();
+
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(rdocx_oxml::OxmlError::from)?;
+        match event {
+            Event::Start(element) => {
+                validate_block_control_element(
+                    &namespace,
+                    &element,
+                    depth,
+                    false,
+                    &mut root_seen,
+                    &mut controls,
+                )?;
+                depth += 1;
+            }
+            Event::Empty(element) => validate_block_control_element(
+                &namespace,
+                &element,
+                depth,
+                true,
+                &mut root_seen,
+                &mut controls,
+            )?,
+            Event::End(element) => {
+                if depth == 0 {
+                    return Err(Error::Other(
+                        "block content control has an unmatched end element".to_owned(),
+                    ));
+                }
+                if controls.last().is_some_and(|control| {
+                    control.0 == depth
+                        && word_element(&namespace)
+                        && matches_local_name(element.name().as_ref(), b"sdt")
+                }) {
+                    controls.pop();
+                }
+                depth -= 1;
+            }
+            Event::Text(text) => {
+                let bytes: &[u8] = text.as_ref();
+                if block_control_text_is_direct(depth, &controls)
+                    && !block_control_bytes_are_xml_whitespace(bytes)?
+                {
+                    return Err(Error::Other(
+                        "block content control has direct non-whitespace text".to_owned(),
+                    ));
+                }
+            }
+            Event::CData(text) => {
+                let bytes: &[u8] = text.as_ref();
+                if block_control_text_is_direct(depth, &controls)
+                    && !block_control_bytes_are_xml_whitespace(bytes)?
+                {
+                    return Err(Error::Other(
+                        "block content control has direct non-whitespace CDATA".to_owned(),
+                    ));
+                }
+            }
+            Event::GeneralRef(reference) if block_control_text_is_direct(depth, &controls) => {
+                if !block_control_reference_is_whitespace(&reference)? {
+                    return Err(Error::Other(
+                        "block content control has a direct non-whitespace reference".to_owned(),
+                    ));
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    if !root_seen || depth != 0 || !controls.is_empty() {
+        return Err(Error::Other(
+            "block content control is structurally incomplete".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn block_control_reference_is_whitespace(
+    reference: &quick_xml::events::BytesRef<'_>,
+) -> Result<bool> {
+    if let Some(character) = reference.resolve_char_ref().map_err(|error| {
+        Error::Other(format!(
+            "block content control has an invalid character reference: {error}"
+        ))
+    })? {
+        if !xml_1_0_character_is_valid(character) {
+            return Err(Error::Other(
+                "block content control has an XML 1.0-forbidden character reference".to_owned(),
+            ));
+        }
+        return Ok(xml_1_0_whitespace(character));
+    }
+    let name = reference.decode().map_err(|error| {
+        Error::Other(format!(
+            "block content control has an invalid entity reference: {error}"
+        ))
+    })?;
+    let value = resolve_xml_entity(&name).ok_or_else(|| {
+        Error::Other(format!(
+            "block content control has an unresolved entity reference: &{name};"
+        ))
+    })?;
+    if !value.chars().all(xml_1_0_character_is_valid) {
+        return Err(Error::Other(format!(
+            "block content control entity reference contains an XML 1.0-forbidden character: &{name};"
+        )));
+    }
+    Ok(value.chars().all(xml_1_0_whitespace))
+}
+
+fn block_control_bytes_are_xml_whitespace(bytes: &[u8]) -> Result<bool> {
+    let text = std::str::from_utf8(bytes).map_err(|error| {
+        Error::Other(format!(
+            "block content control has invalid UTF-8 text: {error}"
+        ))
+    })?;
+    Ok(text.chars().all(xml_1_0_whitespace))
+}
+
+fn xml_1_0_whitespace(character: char) -> bool {
+    matches!(character, '\u{20}' | '\u{9}' | '\u{A}' | '\u{D}')
+}
+
+fn xml_1_0_character_is_valid(character: char) -> bool {
+    matches!(character, '\t' | '\n' | '\r')
+        || ('\u{20}'..='\u{D7FF}').contains(&character)
+        || ('\u{E000}'..='\u{FFFD}').contains(&character)
+        || ('\u{10000}'..='\u{10FFFF}').contains(&character)
+}
+
+fn validate_block_control_element(
+    namespace: &ResolveResult<'_>,
+    element: &BytesStart<'_>,
+    parent_depth: usize,
+    empty: bool,
+    root_seen: &mut bool,
+    controls: &mut Vec<(usize, Option<usize>, u8, u8)>,
+) -> Result<()> {
+    let is_word = word_element(namespace);
+    let name = element.name();
+    let local = name.as_ref();
+
+    if controls.is_empty() {
+        if *root_seen || !is_word || !matches_local_name(local, b"sdt") {
+            return Err(Error::Other(
+                "block content control must contain exactly one Word sdt root".to_owned(),
+            ));
+        }
+        *root_seen = true;
+        if !empty {
+            controls.push((parent_depth + 1, None, 0, 0));
+        }
+        return Ok(());
+    }
+
+    let (root_depth, content_depth) = {
+        let control = controls
+            .last()
+            .expect("active block content control was checked above");
+        (control.0, control.1)
+    };
+    if parent_depth == root_depth {
+        if !is_word {
+            return Ok(());
+        }
+        let (slot, order) = if matches_local_name(local, b"sdtPr") {
+            (BLOCK_SDT_PROPERTIES_SLOT, 0)
+        } else if matches_local_name(local, b"sdtEndPr") {
+            (BLOCK_SDT_END_PROPERTIES_SLOT, 1)
+        } else if matches_local_name(local, b"sdtContent") {
+            (BLOCK_SDT_CONTENT_SLOT, 2)
+        } else {
+            return Err(Error::Other(
+                "block content control has an invalid Word root child".to_owned(),
+            ));
+        };
+        let control = controls
+            .last_mut()
+            .expect("active block content control was checked above");
+        if control.3 & slot != 0 || control.2 > order {
+            return Err(Error::Other(
+                "block content control root children are duplicated or out of order".to_owned(),
+            ));
+        }
+        control.2 = order;
+        control.3 |= slot;
+        if slot == BLOCK_SDT_CONTENT_SLOT && !empty {
+            control.1 = Some(parent_depth + 1);
+        }
+        return Ok(());
+    }
+
+    if content_depth != Some(parent_depth) {
+        return Ok(());
+    }
+    if !is_word {
+        return Ok(());
+    }
+    if matches_local_name(local, b"p") || matches_local_name(local, b"tbl") {
+        return Ok(());
+    }
+    if matches_local_name(local, b"sdt") {
+        if !empty {
+            controls.push((parent_depth + 1, None, 0, 0));
+        }
+        return Ok(());
+    }
+    Err(Error::Other(
+        "block content control has a non-block Word content child".to_owned(),
+    ))
+}
+
+fn block_control_text_is_direct(depth: usize, controls: &[(usize, Option<usize>, u8, u8)]) -> bool {
+    controls
+        .last()
+        .is_some_and(|control| depth == control.0 || Some(depth) == control.1)
+}
+
+fn validated_direct_content_item(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    location: &ContentLocation,
+) -> Result<StoryItemSpan> {
+    if location.index_path.len() != 1 {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    let items = scan_story_items(xml, owner)?;
+    let index = location.index_path[0];
+    let item = items.get(index).cloned().ok_or(StoryError::OutOfBounds {
+        index,
+        len: items.len(),
+    })?;
+    if item.kind != location.item_kind {
+        return Err(StoryError::KindMismatch {
+            expected: location.item_kind,
+            actual: item.kind,
+        }
+        .into());
+    }
+    if !item.direct_owner_child
+        || owner.kind == StoryKind::Body && content_fragment_root_is_section_properties(xml, &item)?
+    {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    Ok(item)
+}
+
+fn validated_content_boundary(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    location: &ContentLocation,
+) -> Result<(usize, usize, usize)> {
+    let items = direct_story_content_items(xml, owner)?;
+    if location.is_end {
+        return Ok((
+            story_owner_content_end(xml, owner)?,
+            items.len(),
+            items.len(),
+        ));
+    }
+    if location.index_path.len() != 1 {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    let projected = scan_story_items(xml, owner)?;
+    let index = location.index_path[0];
+    let item = projected.get(index).ok_or(StoryError::OutOfBounds {
+        index,
+        len: projected.len(),
+    })?;
+    if item.kind != location.item_kind {
+        return Err(StoryError::KindMismatch {
+            expected: location.item_kind,
+            actual: item.kind,
+        }
+        .into());
+    }
+    if !item.direct_owner_child
+        || owner.kind == StoryKind::Body && content_fragment_root_is_section_properties(xml, item)?
+    {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    let direct_index = items
+        .iter()
+        .position(|candidate| candidate.full == item.full)
+        .ok_or_else(|| Error::Other("direct content destination was not found".to_owned()))?;
+    Ok((item.full.start, direct_index, items.len()))
+}
+
+fn insert_story_fragment(
+    source: &mut Vec<u8>,
+    owner: &StoryOwnerSpan,
+    boundary: usize,
+    fragment: Vec<u8>,
+) -> Result<()> {
+    let mut reader = quick_xml::Reader::from_reader(&source[owner.full.clone()]);
+    let mut buffer = Vec::new();
+    let empty_name = loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story owner insertion scan failed: {error}")))?
+        {
+            Event::Start(_) => break None,
+            Event::Empty(element) => break Some(element.name().as_ref().to_vec()),
+            Event::Eof => {
+                return Err(Error::Other(
+                    "story owner has no insertion boundary".to_owned(),
+                ));
+            }
+            _ => buffer.clear(),
+        }
+    };
+    if let Some(name) = empty_name {
+        if boundary + 2 != owner.full.end {
+            return Err(Error::Other(
+                "empty story owner insertion boundary is invalid".to_owned(),
+            ));
+        }
+        let mut replacement = Vec::with_capacity(fragment.len() + name.len() + 4);
+        replacement.push(b'>');
+        replacement.extend(fragment);
+        replacement.extend_from_slice(b"</");
+        replacement.extend(name);
+        replacement.push(b'>');
+        source.splice(boundary..owner.full.end, replacement);
+    } else {
+        source.splice(boundary..boundary, fragment);
+    }
+    Ok(())
+}
+
+fn story_scope_matches_fragment(destination: &StoryId, fragment: &ContentFragment) -> bool {
+    fragment.source_part_name.as_deref() == Some(destination.part_name.as_str())
+        && fragment.source_story_kind == Some(destination.kind)
+        && fragment.source_owner_index == Some(destination.owner_index)
+}
+
+fn validate_fragment_relationships(
+    document: &Document,
+    destination: &StoryId,
+    fragment: &ContentFragment,
+) -> Result<()> {
+    let inherited = fragment
+        .namespace_scope
+        .iter()
+        .map(|(prefix, namespace)| {
+            let name = if prefix.is_empty() {
+                "xmlns".to_owned()
+            } else {
+                format!("xmlns:{prefix}")
+            };
+            (name, namespace.clone())
+        })
+        .collect::<Vec<_>>();
+    let relationship_ids = xml_relationship_ids_in_order_with_bindings(&fragment.xml, &inherited)?;
+    if relationship_ids.is_empty() {
+        return Ok(());
+    }
+    if !story_scope_matches_fragment(destination, fragment) {
+        return Err(Error::Other(
+            "content fragment relationship references require the unchanged story owner".to_owned(),
+        ));
+    }
+    let relationships = document
+        .package
+        .get_part_rels(&destination.part_name)
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "content fragment owner {} has no relationship scope",
+                destination.part_name
+            ))
+        })?;
+    for id in relationship_ids {
+        if relationships.get_by_id(&id).is_none() {
+            return Err(Error::Other(format!(
+                "content fragment references missing relationship {id} in {}",
+                destination.part_name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn content_fragment_for_insertion(
+    document: &Document,
+    destination: &StoryId,
+    fragment: &ContentFragment,
+) -> Result<Vec<u8>> {
+    validate_fragment_relationships(document, destination, fragment)?;
+    if fragment.source_part_name.is_none() || story_scope_matches_fragment(destination, fragment) {
+        Ok(fragment.xml.clone())
+    } else {
+        close_content_fragment_namespaces(&fragment.xml, &fragment.namespace_scope)
+    }
+}
+
+fn freshen_content_fragment_identities(
+    document: &mut Document,
+    fragment: &ContentFragment,
+) -> Result<Vec<u8>> {
+    let mut wrapper_prefix = "rdocxw".to_owned();
+    let mut suffix = 1usize;
+    while fragment.namespace_scope.contains_key(&wrapper_prefix) {
+        wrapper_prefix = format!("rdocxw{suffix}");
+        suffix = suffix
+            .checked_add(1)
+            .ok_or_else(|| Error::Other("content wrapper prefix space exhausted".to_owned()))?;
+    }
+    let mut prefix =
+        format!(r#"<{wrapper_prefix}:document xmlns:{wrapper_prefix}="{WORD_NAMESPACE}""#)
+            .into_bytes();
+    for (namespace_prefix, namespace) in &fragment.namespace_scope {
+        if namespace_prefix == "xml" || namespace_prefix == &wrapper_prefix {
+            continue;
+        }
+        prefix.extend_from_slice(b" xmlns");
+        if !namespace_prefix.is_empty() {
+            prefix.push(b':');
+            prefix.extend_from_slice(namespace_prefix.as_bytes());
+        }
+        prefix.extend_from_slice(b"=\"");
+        prefix.extend_from_slice(quick_xml::escape::escape(namespace).as_bytes());
+        prefix.push(b'"');
+    }
+    prefix.extend_from_slice(format!("><{wrapper_prefix}:body>").as_bytes());
+    let suffix = format!("</{wrapper_prefix}:body></{wrapper_prefix}:document>");
+    let mut wrapped = prefix;
+    wrapped.extend_from_slice(&fragment.xml);
+    wrapped.extend_from_slice(suffix.as_bytes());
+    let updated = crate::field::freshen_content_fragment_identities(document, &wrapped)?;
+    let owner = scan_story_owners(&updated, StoryKind::Body)?
+        .into_iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("rewritten content wrapper has no body".to_owned()))?;
+    let items = direct_story_content_items(&updated, &owner)?;
+    let [item] = items.as_slice() else {
+        return Err(Error::Other(
+            "rewritten content wrapper must contain exactly one item".to_owned(),
+        ));
+    };
+    Ok(updated[item.full.clone()].to_vec())
+}
+
+fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) -> Result<()> {
+    if part_name == document.doc_part_name {
+        document.document = CT_Document::from_xml(&xml)?;
+        document.package.set_part(part_name, xml);
+    } else if document.comments_part_name.as_deref() == Some(part_name) {
+        document.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(&xml)?);
+        document.package.set_part(part_name, xml);
+        document.comments_dirty = false;
+    } else if document.footnotes_part_name.as_deref() == Some(part_name) {
+        document.footnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(&xml)?;
+        document.package.set_part(part_name, xml);
+        document.footnotes_dirty = false;
+    } else {
+        document.package.set_part(part_name, xml);
+    }
+    Ok(())
+}
+
+fn serialized_footnote_fragment(footnote: &rdocx_oxml::footnotes::CT_Footnote) -> Result<Vec<u8>> {
+    let serialized = rdocx_oxml::footnotes::CT_Footnotes {
+        footnotes: vec![footnote.clone()],
+    }
+    .to_xml_footnotes()?;
+    let owner = scan_story_owners(&serialized, StoryKind::Footnote)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Other("serialized footnote has no story owner".to_owned()))?;
+    let scope = story_namespace_scope_at(&serialized, owner.full.start)?;
+    close_content_fragment_namespaces(&serialized[owner.full], &scope)
+}
+
+fn append_story_fragments_to_root(
+    xml: &[u8],
+    root_local_name: &[u8],
+    item_local_name: &[u8],
+    fragments: &[Vec<u8>],
+) -> Result<Vec<u8>> {
+    if fragments.is_empty() {
+        return Ok(xml.to_vec());
+    }
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut saw_root = false;
+    let mut after_last_item = None;
+    let boundary = loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid footnotes XML: {error}")))?;
+        let is_word = word_element(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                if !saw_root {
+                    if is_word && element.local_name().as_ref() == root_local_name {
+                        saw_root = true;
+                        depth = 1;
+                    }
+                } else {
+                    if depth == 1 && is_word && element.local_name().as_ref() == item_local_name {
+                        after_last_item = Some(story_element_end(xml, before)?);
+                    }
+                    depth += 1;
+                }
+            }
+            Event::Empty(element) => {
+                if !saw_root && is_word && element.local_name().as_ref() == root_local_name {
+                    let name = element.name().as_ref().to_vec();
+                    let insertion = after.checked_sub(2).ok_or_else(|| {
+                        Error::Other("empty story root opening tag is incomplete".to_owned())
+                    })?;
+                    let mut updated = Vec::new();
+                    updated.extend_from_slice(&xml[..insertion]);
+                    updated.push(b'>');
+                    updated.extend(
+                        fragments
+                            .iter()
+                            .flat_map(|fragment| fragment.iter().copied()),
+                    );
+                    updated.extend_from_slice(b"</");
+                    updated.extend_from_slice(&name);
+                    updated.push(b'>');
+                    updated.extend_from_slice(&xml[after..]);
+                    return Ok(updated);
+                }
+                if saw_root
+                    && depth == 1
+                    && is_word
+                    && element.local_name().as_ref() == item_local_name
+                {
+                    after_last_item = Some(after);
+                }
+            }
+            Event::End(element) => {
+                if saw_root
+                    && depth == 1
+                    && is_word
+                    && element.local_name().as_ref() == root_local_name
+                {
+                    break after_last_item.unwrap_or(before);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => {
+                return Err(Error::Other(format!(
+                    "story XML has no closing {} root element",
+                    String::from_utf8_lossy(root_local_name)
+                )));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    };
+    let mut updated = xml.to_vec();
+    updated.splice(
+        boundary..boundary,
+        fragments
+            .iter()
+            .flat_map(|fragment| fragment.iter().copied()),
+    );
+    Ok(updated)
+}
+
+fn update_story_namespace_scope(
+    scope: &mut BTreeMap<String, String>,
+    element: &BytesStart<'_>,
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("story namespace scope attribute failed: {error}"))
+        })?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            ""
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            std::str::from_utf8(prefix).map_err(|error| {
+                Error::Other(format!("story namespace scope prefix is invalid: {error}"))
+            })?
+        } else {
+            continue;
+        };
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+            .map_err(|error| {
+                Error::Other(format!("story namespace scope value is invalid: {error}"))
+            })?
+            .into_owned();
+        if value.is_empty() {
+            scope.remove(prefix);
+        } else {
+            scope.insert(prefix.to_owned(), value);
+        }
+    }
+    Ok(())
+}
+
+fn story_word_prefix_for_scope(scope: &BTreeMap<String, String>) -> String {
+    scope
+        .iter()
+        .find_map(|(prefix, namespace)| (namespace == WORD_NAMESPACE).then_some(prefix.clone()))
+        .unwrap_or_else(|| {
+            let mut suffix = 0usize;
+            loop {
+                let candidate = if suffix == 0 {
+                    "rdocxw".to_owned()
+                } else {
+                    format!("rdocxw{suffix}")
+                };
+                if !scope.contains_key(&candidate) {
+                    break candidate;
+                }
+                suffix += 1;
+            }
+        })
+}
+
+fn complex_story_field_xml(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<u8>> {
+    let scope = story_namespace_scope_at(xml, item.scan.start)?;
+    let word_prefix = story_word_prefix_for_scope(&scope);
+    let mut bindings = scope;
+    bindings
+        .entry(word_prefix.clone())
+        .or_insert_with(|| WORD_NAMESPACE.to_owned());
+    let qualified_paragraph = if word_prefix.is_empty() {
+        "p".to_owned()
+    } else {
+        format!("{word_prefix}:p")
+    };
+    let mut projection = format!("<{qualified_paragraph}").into_bytes();
+    for (prefix, namespace) in bindings {
+        projection.extend_from_slice(b" xmlns");
+        if !prefix.is_empty() {
+            projection.push(b':');
+            projection.extend_from_slice(prefix.as_bytes());
+        }
+        projection.extend_from_slice(b"=\"");
+        projection.extend_from_slice(quick_xml::escape::escape(&namespace).as_bytes());
+        projection.push(b'"');
+    }
+    projection.push(b'>');
+    projection.extend_from_slice(&complex_story_field_runs(xml, item)?);
+    projection.extend_from_slice(format!("</{qualified_paragraph}>").as_bytes());
+    Ok(projection)
+}
+
+struct StoryRunShell {
+    open_end: usize,
+    close_start: usize,
+    close_end: usize,
+}
+
+fn story_run_shell(xml: &[u8], start: usize) -> Result<StoryRunShell> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut active = false;
+    let mut depth = 0usize;
+    let mut open_end = None;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (_, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story run shell scan failed: {error}")))?;
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            if !matches!(event, Event::Start(_)) {
+                return Err(Error::Other(
+                    "complex story field does not begin in a run".to_owned(),
+                ));
+            }
+            active = true;
+            depth = 1;
+            open_end = Some(after);
+        } else {
+            match event {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Ok(StoryRunShell {
+                            open_end: open_end.unwrap_or(after),
+                            close_start: before,
+                            close_end: after,
+                        });
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        buffer.clear();
+    }
+    Err(Error::Other(
+        "complex story field run has no matching close".to_owned(),
+    ))
+}
+
+fn complex_story_field_runs(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<u8>> {
+    let first = story_run_shell(xml, item.scan.start)?;
+    let mut last_start = item.scan.start;
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0usize;
+    let mut active = false;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("complex story run scan failed: {error}")))?;
+        let is_word_namespace = word_element(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != item.scan.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                if depth == 0 && is_word_namespace && element.local_name().as_ref() == b"r" {
+                    last_start = before;
+                }
+                depth += 1;
+            }
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => break,
+            _ => {}
+        }
+        if after == item.scan.end {
+            break;
+        }
+        buffer.clear();
+    }
+    let last = story_run_shell(xml, last_start)?;
+    let mut result = Vec::new();
+    if last_start == item.scan.start {
+        result.extend_from_slice(&xml[item.scan.start..first.open_end]);
+        result.extend_from_slice(&xml[item.full.clone()]);
+        result.extend_from_slice(&xml[first.close_start..first.close_end]);
+        return Ok(result);
+    }
+    result.extend_from_slice(&xml[item.scan.start..first.open_end]);
+    result.extend_from_slice(&xml[item.full.start..first.close_end]);
+    result.extend_from_slice(&xml[first.close_end..last_start]);
+    result.extend_from_slice(&xml[last_start..last.open_end]);
+    result.extend_from_slice(&xml[last.open_end..item.full.end]);
+    result.extend_from_slice(&xml[last.close_start..last.close_end]);
+    Ok(result)
+}
+
+fn modeled_story_event(
+    stack: &[XmlElementFrame],
+    namespace: StoryNamespace,
+    local_name: &[u8],
+    element: &BytesStart<'_>,
+    empty: bool,
+    xml: &[u8],
+    before: usize,
+    after: usize,
+) -> Result<bool> {
+    if !modeled_story_child(stack, namespace, local_name) {
+        return Ok(false);
+    }
+    if namespace != StoryNamespace::Word {
+        return Ok(true);
+    }
+    if matches!(
+        local_name,
+        b"sdt" | b"ins" | b"del" | b"moveFrom" | b"moveTo" | b"fldSimple"
+    ) {
+        let inherited = stack
+            .last()
+            .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+        let word_prefixes = story_word_prefixes_at(element, inherited, true)?;
+        let raw_end = if empty {
+            after
+        } else {
+            story_element_end(xml, before)?
+        };
+        let raw = xml
+            .get(before..raw_end)
+            .ok_or_else(|| Error::Other("story element lies outside its source part".to_owned()))?;
+        if local_name == b"sdt" {
+            let owner = match story_sdt_context(stack) {
+                Some(StorySdtContext::Block) => StorySdtOwner::Block,
+                Some(StorySdtContext::Table) => StorySdtOwner::Table,
+                Some(StorySdtContext::Row) => StorySdtOwner::Row,
+                Some(StorySdtContext::Inline) => StorySdtOwner::Inline,
+                None => return Ok(false),
+            };
+            return Ok(CT_Sdt::story_raw_is_typed(raw, &word_prefixes, owner));
+        }
+        if matches!(local_name, b"ins" | b"del" | b"moveFrom" | b"moveTo") {
+            return Ok(CT_Revision::story_raw_is_typed(raw, &word_prefixes));
+        }
+        return Ok(!empty && story_simple_field_is_typed(raw, &word_prefixes));
+    }
+    if empty && matches!(local_name, b"drawing" | b"pict" | b"sdt" | b"hyperlink") {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn opaque_story_event(
+    stack: &[XmlElementFrame],
+    namespace: StoryNamespace,
+    local_name: &[u8],
+    element: &BytesStart<'_>,
+    empty: bool,
+    xml: &[u8],
+    before: usize,
+    after: usize,
+) -> Result<bool> {
+    Ok(stack.last().is_some_and(|frame| frame.opaque)
+        || !modeled_story_event(
+            stack, namespace, local_name, element, empty, xml, before, after,
+        )?)
+}
+
+fn direct_story_item_kind(is_word: bool, local_name: &[u8]) -> StoryItemKind {
+    if !is_word {
+        return StoryItemKind::PreservedNode;
+    }
+    match local_name {
+        b"p" => StoryItemKind::Paragraph,
+        b"tbl" => StoryItemKind::Table,
+        b"sdt" => StoryItemKind::ContentControl,
+        _ => StoryItemKind::PreservedNode,
+    }
+}
+
+fn owner_kind(local_name: &[u8]) -> Option<StoryKind> {
+    match local_name {
+        b"body" => Some(StoryKind::Body),
+        b"tc" => Some(StoryKind::TableCell),
+        b"hdr" => Some(StoryKind::Header),
+        b"ftr" => Some(StoryKind::Footer),
+        b"footnote" => Some(StoryKind::Footnote),
+        b"endnote" => Some(StoryKind::Endnote),
+        b"comment" => Some(StoryKind::Comment),
+        b"txbxContent" => Some(StoryKind::TextBox),
+        _ => None,
+    }
+}
+
+fn editable_note_owner(reader: &NsReader<&[u8]>, element: &BytesStart<'_>) -> Result<bool> {
+    let mut id = None;
+    let mut separator = false;
+    for attribute in element.attributes() {
+        let attribute = attribute
+            .map_err(|error| Error::Other(format!("story owner attribute scan failed: {error}")))?;
+        let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
+        if !word_element(&namespace) {
+            continue;
+        }
+        match local_name.as_ref() {
+            b"type" => {
+                let value = attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                    .map_err(|error| {
+                        Error::Other(format!("story owner type decode failed: {error}"))
+                    })?;
+                separator = matches!(
+                    value.as_ref(),
+                    "separator" | "continuationSeparator" | "continuationNotice"
+                );
+            }
+            b"id" => {
+                id = attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                    .map_err(|error| {
+                        Error::Other(format!("story owner id decode failed: {error}"))
+                    })?
+                    .parse::<i32>()
+                    .ok();
+            }
+            _ => {}
+        }
+    }
+    Ok(!separator && id.unwrap_or(0) > 0)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ComplexFieldMarker {
+    Begin,
+    Separate,
+    End,
+}
+
+struct ComplexFieldScan {
+    marker_start: usize,
+    run_start: usize,
+    ancestors: Vec<usize>,
+    separators: usize,
+    instruction: String,
+    leading_nested: bool,
+    valid: bool,
+}
+
+impl ComplexFieldScan {
+    fn accepted(&self) -> bool {
+        self.valid
+            && self.separators <= 1
+            && !self.leading_nested
+            && field_instruction_has_name(&self.instruction)
+    }
+}
+
+fn complex_field_marker(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+) -> Result<Option<ComplexFieldMarker>> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("field marker attribute scan failed: {error}"))
+        })?;
+        let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
+        if !word_element(&namespace) || local_name.as_ref() != b"fldCharType" {
+            continue;
+        }
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+            .map_err(|error| Error::Other(format!("field marker type decode failed: {error}")))?;
+        return Ok(match value.as_ref() {
+            "begin" => Some(ComplexFieldMarker::Begin),
+            "separate" => Some(ComplexFieldMarker::Separate),
+            "end" => Some(ComplexFieldMarker::End),
+            _ => None,
+        });
+    }
+    Ok(None)
+}
+
+fn story_enclosing_run_range(
+    xml: &[u8],
+    stack: &[XmlElementFrame],
+) -> Result<Option<Range<usize>>> {
+    let Some(start) = stack.iter().rev().find_map(|frame| {
+        (!frame.opaque && frame.namespace == StoryNamespace::Word && frame.local_name == b"r")
+            .then_some(frame.full_start)
+    }) else {
+        return Ok(None);
+    };
+    Ok(Some(start..story_element_end(xml, start)?))
+}
+
+fn complex_field_scan_context(stack: &[XmlElementFrame]) -> bool {
+    stack.iter().any(|frame| {
+        !frame.opaque && frame.namespace == StoryNamespace::Word && frame.local_name == b"r"
+    }) && !stack
+        .iter()
+        .any(|frame| frame.namespace == StoryNamespace::Word && frame.local_name == b"fldSimple")
+}
+
+fn scan_complex_field_marker(
+    fields: &mut Vec<ComplexFieldScan>,
+    items: &mut Vec<StoryItemSpan>,
+    marker: Option<ComplexFieldMarker>,
+    before: usize,
+    after: usize,
+    run_start: usize,
+    run_end: usize,
+) {
+    match marker {
+        Some(ComplexFieldMarker::Begin) => {
+            let ancestors = fields.iter().map(|field| field.marker_start).collect();
+            fields.push(ComplexFieldScan {
+                marker_start: before,
+                run_start,
+                ancestors,
+                separators: 0,
+                instruction: String::new(),
+                leading_nested: false,
+                valid: true,
+            });
+        }
+        Some(ComplexFieldMarker::Separate) => {
+            if let Some(field) = fields.last_mut() {
+                field.separators += 1;
+                if field.separators > 1 {
+                    field.valid = false;
+                }
+            }
+        }
+        Some(ComplexFieldMarker::End) => {
+            let Some(field) = fields.pop() else {
+                return;
+            };
+            let accepted = field.accepted();
+            if let Some(parent) = fields.last_mut() {
+                if !accepted {
+                    parent.valid = false;
+                } else if parent.separators == 0 && !field_instruction_has_name(&parent.instruction)
+                {
+                    parent.leading_nested = true;
+                }
+            }
+            if accepted {
+                items.push(StoryItemSpan {
+                    kind: StoryItemKind::Field,
+                    full: field.marker_start..after,
+                    scan: field.run_start..run_end,
+                    direct_owner_child: false,
+                    complex_field: true,
+                    complex_ancestors: field.ancestors,
+                    sdt_context: None,
+                });
+            }
+        }
+        None => {}
+    }
+}
+
+fn push_complex_field_instruction(
+    fields: &mut [ComplexFieldScan],
+    stack: &[XmlElementFrame],
+    text: &str,
+) {
+    let modeled_instruction = stack.last().is_some_and(|frame| {
+        !frame.opaque && frame.namespace == StoryNamespace::Word && frame.local_name == b"instrText"
+    });
+    if modeled_instruction
+        && let Some(field) = fields.last_mut()
+        && field.separators == 0
+    {
+        field.instruction.push_str(text);
+    }
+}
+
+fn update_complex_field_results(results: &mut Vec<bool>, marker: Option<ComplexFieldMarker>) {
+    match marker {
+        Some(ComplexFieldMarker::Begin) => results.push(false),
+        Some(ComplexFieldMarker::Separate) => {
+            if let Some(result) = results.last_mut() {
+                *result = true;
+            }
+        }
+        Some(ComplexFieldMarker::End) => {
+            results.pop();
+        }
+        None => {}
+    }
+}
+
+fn complex_field_text_visible(item: &StoryItemSpan, results: &[bool]) -> bool {
+    !item.complex_field || (!results.is_empty() && results.iter().all(|result| *result))
+}
+
+fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerSpan>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack: Vec<XmlElementFrame> = Vec::new();
+    let mut owners = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story XML scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                let is_word = is_word_namespace;
+                let local_name = element.local_name().as_ref().to_vec();
+                let sdt_context = story_element_sdt_context(&stack, namespace_kind, &local_name);
+                let direct_owner_child =
+                    stack.last().is_some_and(|frame| frame.owner_kind.is_some());
+                let mut opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    &local_name,
+                    &element,
+                    false,
+                    xml,
+                    before,
+                    after,
+                )? || (direct_owner_child
+                    && direct_story_item_kind(is_word, &local_name)
+                        == StoryItemKind::PreservedNode);
+                let mut candidate = (!opaque && is_word)
+                    .then(|| owner_kind(&local_name))
+                    .flatten();
+                if matches!(candidate, Some(StoryKind::Footnote | StoryKind::Endnote))
+                    && !editable_note_owner(&reader, &element)?
+                {
+                    candidate = None;
+                    opaque = true;
+                }
+                let inherited = stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word)?;
+                stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word,
+                    full_start: before,
+                    owner_kind: candidate.filter(|kind| {
+                        *kind == root_kind
+                            || matches!(kind, StoryKind::TableCell | StoryKind::TextBox)
+                    }),
+                    item_kind: None,
+                    direct_owner_child: false,
+                    sdt_context,
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                let direct_owner_child =
+                    stack.last().is_some_and(|frame| frame.owner_kind.is_some());
+                let local_name = element.local_name();
+                let opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    xml,
+                    before,
+                    after,
+                )? || (direct_owner_child
+                    && direct_story_item_kind(is_word_namespace, local_name.as_ref())
+                        == StoryItemKind::PreservedNode);
+                if is_word_namespace
+                    && !opaque
+                    && let Some(kind) = owner_kind(local_name.as_ref()).filter(|kind| {
+                        *kind == root_kind
+                            || matches!(kind, StoryKind::TableCell | StoryKind::TextBox)
+                    })
+                    && (!matches!(kind, StoryKind::Footnote | StoryKind::Endnote)
+                        || editable_note_owner(&reader, &element)?)
+                {
+                    owners.push(StoryOwnerSpan {
+                        kind,
+                        owner_index: 0,
+                        full: before..after,
+                        fingerprint: structural_fingerprint(&xml[before..after])?,
+                    });
+                }
+            }
+            Event::End(_) => {
+                let Some(frame) = stack.pop() else {
+                    return Err(Error::Other(
+                        "story XML contains an unmatched closing element".to_owned(),
+                    ));
+                };
+                if let Some(kind) = frame.owner_kind {
+                    owners.push(StoryOwnerSpan {
+                        kind,
+                        owner_index: 0,
+                        full: frame.full_start..after,
+                        fingerprint: structural_fingerprint(&xml[frame.full_start..after])?,
+                    });
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    owners.sort_by_key(|owner| owner.full.start);
+    let mut counts = HashMap::new();
+    for owner in &mut owners {
+        let count = counts.entry(owner.kind).or_insert(0usize);
+        owner.owner_index = *count;
+        *count += 1;
+    }
+    Ok(owners)
+}
+
+fn structural_fingerprint(xml: &[u8]) -> Result<u64> {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    let mut hash = OFFSET;
+    for byte in xml {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    Ok(hash)
+}
+
+fn typed_complex_field_candidate_is_admitted(
+    xml: &[u8],
+    paragraph: &Range<usize>,
+    candidate: &StoryItemSpan,
+    inherited_word_prefixes: &[String],
+) -> Result<bool> {
+    let paragraph_xml = &xml[paragraph.clone()];
+    let mut reader = quick_xml::Reader::from_reader(paragraph_xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let paragraph_local_name = loop {
+        match reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("typed story field paragraph scan failed: {error}"))
+        })? {
+            Event::Start(element) => {
+                break element.local_name().as_ref().to_vec();
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "typed story field paragraph has no root element".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    };
+    let scanned = &xml[candidate.scan.clone()];
+    let marker_start = candidate
+        .full
+        .start
+        .checked_sub(candidate.scan.start)
+        .filter(|start| *start <= scanned.len())
+        .ok_or_else(|| {
+            Error::Other("complex story field starts outside its run span".to_owned())
+        })?;
+    let marker_end = candidate
+        .full
+        .end
+        .checked_sub(candidate.scan.start)
+        .filter(|end| marker_start <= *end && *end <= scanned.len())
+        .ok_or_else(|| Error::Other("complex story field ends outside its run span".to_owned()))?;
+    let mut run_reader = quick_xml::Reader::from_reader(scanned);
+    run_reader.config_mut().trim_text(false);
+    let mut run_buffer = Vec::new();
+    let mut run_opening_end = None;
+    let mut run_closing_start = None;
+    loop {
+        let before = run_reader.buffer_position() as usize;
+        let event = run_reader
+            .read_event_into(&mut run_buffer)
+            .map_err(|error| Error::Other(format!("typed story field run scan failed: {error}")))?;
+        let after = run_reader.buffer_position() as usize;
+        if run_opening_end.is_none() && matches!(event, Event::Start(_)) {
+            run_opening_end = Some(after);
+        }
+        if after == scanned.len() && matches!(event, Event::End(_)) {
+            run_closing_start = Some(before);
+            break;
+        }
+        if matches!(event, Event::Eof) {
+            break;
+        }
+        run_buffer.clear();
+    }
+    let Some(run_opening_end) = run_opening_end.filter(|end| *end <= marker_start) else {
+        return Ok(false);
+    };
+    let Some(run_closing_start) = run_closing_start.filter(|start| marker_end <= *start) else {
+        return Ok(false);
+    };
+    let mut isolated = Vec::new();
+    isolated.extend_from_slice(&scanned[..run_opening_end]);
+    isolated.extend_from_slice(&scanned[marker_start..marker_end]);
+    isolated.extend_from_slice(&scanned[run_closing_start..]);
+    let mut scope = story_namespace_scope_at(xml, candidate.scan.start)?;
+    let word_prefix = story_word_prefix_for_scope(&scope);
+    scope
+        .entry(word_prefix.clone())
+        .or_insert_with(|| WORD_NAMESPACE.to_owned());
+    let mut paragraph_name = Vec::new();
+    if !word_prefix.is_empty() {
+        paragraph_name.extend_from_slice(word_prefix.as_bytes());
+        paragraph_name.push(b':');
+    }
+    paragraph_name.extend_from_slice(&paragraph_local_name);
+    let mut fragment = Vec::new();
+    fragment.push(b'<');
+    fragment.extend_from_slice(&paragraph_name);
+    for (prefix, namespace) in scope {
+        fragment.extend_from_slice(b" xmlns");
+        if !prefix.is_empty() {
+            fragment.push(b':');
+            fragment.extend_from_slice(prefix.as_bytes());
+        }
+        fragment.extend_from_slice(b"=\"");
+        fragment.extend_from_slice(quick_xml::escape::escape(&namespace).as_bytes());
+        fragment.push(b'"');
+    }
+    fragment.push(b'>');
+    fragment.extend_from_slice(&isolated);
+    fragment.extend_from_slice(b"</");
+    fragment.extend_from_slice(&paragraph_name);
+    fragment.push(b'>');
+    let Ok(sources) = CT_P::story_complex_field_sources(&fragment, inherited_word_prefixes) else {
+        return Ok(false);
+    };
+    Ok(sources.iter().any(|source| source == &isolated))
+}
+
+fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack: Vec<XmlElementFrame> = Vec::new();
+    let mut items = Vec::new();
+    let mut complex_fields = Vec::<ComplexFieldScan>::new();
+    let mut paragraphs = Vec::<(Range<usize>, Vec<String>)>::new();
+    let mut active = false;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story item scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != owner.full.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                let is_word = is_word_namespace;
+                let local_name = element.local_name().as_ref().to_vec();
+                let sdt_context = story_element_sdt_context(&stack, namespace_kind, &local_name);
+                let depth = stack.len();
+                let in_nested_owner = stack.iter().skip(1).any(|frame| {
+                    frame.is_word && matches!(frame.local_name.as_slice(), b"tc" | b"txbxContent")
+                });
+                let child_opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    &local_name,
+                    &element,
+                    false,
+                    xml,
+                    before,
+                    after,
+                )?;
+                let item_kind = if depth == 1 && !in_nested_owner {
+                    Some(if child_opaque {
+                        StoryItemKind::PreservedNode
+                    } else {
+                        direct_story_item_kind(is_word, &local_name)
+                    })
+                } else if !in_nested_owner && !child_opaque && is_word {
+                    match local_name.as_slice() {
+                        b"sdt" => Some(StoryItemKind::ContentControl),
+                        b"fldSimple" => Some(StoryItemKind::Field),
+                        b"drawing" | b"pict" => Some(StoryItemKind::Drawing),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let opaque = child_opaque || item_kind == Some(StoryItemKind::PreservedNode);
+                if !opaque
+                    && !in_nested_owner
+                    && is_word
+                    && local_name.as_slice() == b"fldChar"
+                    && complex_field_scan_context(&stack)
+                    && let Some(run) = story_enclosing_run_range(xml, &stack)?
+                {
+                    scan_complex_field_marker(
+                        &mut complex_fields,
+                        &mut items,
+                        complex_field_marker(&reader, &element)?,
+                        before,
+                        after,
+                        run.start,
+                        run.end,
+                    );
+                }
+                let inherited = stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
+                stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word,
+                    full_start: before,
+                    owner_kind: None,
+                    item_kind,
+                    direct_owner_child: depth == 1 && !in_nested_owner,
+                    sdt_context,
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                let is_word = is_word_namespace;
+                let local_name = element.local_name();
+                let sdt_context =
+                    story_element_sdt_context(&stack, namespace_kind, local_name.as_ref());
+                let depth = stack.len();
+                let opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    xml,
+                    before,
+                    after,
+                )?;
+                let in_nested_owner = stack.iter().skip(1).any(|frame| {
+                    frame.is_word && matches!(frame.local_name.as_slice(), b"tc" | b"txbxContent")
+                });
+                let kind = if depth == 1 && !in_nested_owner {
+                    Some(if opaque {
+                        StoryItemKind::PreservedNode
+                    } else {
+                        direct_story_item_kind(is_word, local_name.as_ref())
+                    })
+                } else if !in_nested_owner && !opaque && is_word {
+                    match local_name.as_ref() {
+                        b"sdt" => Some(StoryItemKind::ContentControl),
+                        b"fldSimple" => Some(StoryItemKind::Field),
+                        b"drawing" | b"pict" => Some(StoryItemKind::Drawing),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if !opaque
+                    && !in_nested_owner
+                    && is_word
+                    && local_name.as_ref() == b"fldChar"
+                    && complex_field_scan_context(&stack)
+                    && let Some(run) = story_enclosing_run_range(xml, &stack)?
+                {
+                    scan_complex_field_marker(
+                        &mut complex_fields,
+                        &mut items,
+                        complex_field_marker(&reader, &element)?,
+                        before,
+                        after,
+                        run.start,
+                        run.end,
+                    );
+                }
+                if let Some(kind) = kind {
+                    items.push(StoryItemSpan {
+                        kind,
+                        full: before..after,
+                        scan: before..after,
+                        direct_owner_child: depth == 1 && !in_nested_owner,
+                        complex_field: false,
+                        complex_ancestors: Vec::new(),
+                        sdt_context,
+                    });
+                }
+            }
+            Event::End(_) => {
+                let Some(frame) = stack.pop() else {
+                    return Err(Error::Other(
+                        "story item XML contains an unmatched closing element".to_owned(),
+                    ));
+                };
+                if !frame.opaque
+                    && frame.namespace == StoryNamespace::Word
+                    && frame.local_name == b"p"
+                {
+                    paragraphs.push((frame.full_start..after, frame.word_prefixes.clone()));
+                    complex_fields.clear();
+                }
+                if let Some(kind) = frame.item_kind {
+                    items.push(StoryItemSpan {
+                        kind,
+                        full: frame.full_start..after,
+                        scan: frame.full_start..after,
+                        direct_owner_child: frame.direct_owner_child,
+                        complex_field: false,
+                        complex_ancestors: Vec::new(),
+                        sdt_context: frame.sdt_context,
+                    });
+                }
+                if after == owner.full.end {
+                    break;
+                }
+            }
+            Event::Text(value) => {
+                let decoded = value.decode().map_err(|error| {
+                    Error::Other(format!("field instruction decode failed: {error}"))
+                })?;
+                let value = quick_xml::escape::unescape(&decoded).map_err(|error| {
+                    Error::Other(format!("field instruction unescape failed: {error}"))
+                })?;
+                push_complex_field_instruction(&mut complex_fields, &stack, &value);
+            }
+            Event::CData(value) => {
+                let value = value.decode().map_err(|error| {
+                    Error::Other(format!("field instruction CDATA decode failed: {error}"))
+                })?;
+                push_complex_field_instruction(&mut complex_fields, &stack, &value);
+            }
+            Event::GeneralRef(value) => push_complex_field_instruction(
+                &mut complex_fields,
+                &stack,
+                &oxml_core::xml_text::resolve_entity(&value),
+            ),
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut typed_complex_admission = HashMap::<usize, bool>::new();
+    for (paragraph, word_prefixes) in &paragraphs {
+        for candidate in items.iter().filter(|item| {
+            item.complex_field
+                && paragraph.start <= item.scan.start
+                && item.scan.end <= paragraph.end
+        }) {
+            let admitted = typed_complex_field_candidate_is_admitted(
+                xml,
+                paragraph,
+                candidate,
+                word_prefixes,
+            )?;
+            typed_complex_admission.insert(candidate.full.start, admitted);
+        }
+    }
+    items.retain(|item| {
+        !item.complex_field
+            || (typed_complex_admission
+                .get(&item.full.start)
+                .copied()
+                .unwrap_or(false)
+                && item.complex_ancestors.iter().all(|ancestor| {
+                    typed_complex_admission
+                        .get(ancestor)
+                        .copied()
+                        .unwrap_or(false)
+                }))
+    });
+    items.sort_by_key(|item| (item.full.start, item.full.end));
+    items.dedup_by(|left, right| left.kind == right.kind && left.full == right.full);
+    Ok(items)
+}
+
+fn scan_story_item_links(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<StoryLinkSpan>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack: Vec<XmlElementFrame> = Vec::new();
+    let mut open_links = Vec::new();
+    let mut links = Vec::new();
+    let mut nested_owner_depth = 0usize;
+    let mut active = false;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story hyperlink scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != item.scan.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                let depth = stack.len();
+                let local_name = element.local_name().as_ref().to_vec();
+                let opaque = if stack.is_empty() && item.kind == StoryItemKind::ContentControl {
+                    false
+                } else {
+                    opaque_story_event(
+                        &stack,
+                        namespace_kind,
+                        &local_name,
+                        &element,
+                        false,
+                        xml,
+                        before,
+                        after,
+                    )?
+                };
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(local_name.as_slice(), b"tc" | b"txbxContent" | b"sdt")
+                {
+                    nested_owner_depth += 1;
+                }
+                if !opaque
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name == b"hyperlink"
+                {
+                    let (rel_id, anchor) = story_hyperlink_attributes(&reader, &element)?;
+                    open_links.push((before, rel_id, anchor));
+                }
+                let inherited = stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
+                stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word: is_word_namespace,
+                    full_start: before,
+                    owner_kind: None,
+                    item_kind: None,
+                    direct_owner_child: false,
+                    sdt_context: if depth == 0 && item.kind == StoryItemKind::ContentControl {
+                        item.sdt_context
+                    } else {
+                        story_element_sdt_context(
+                            &stack,
+                            namespace_kind,
+                            element.local_name().as_ref(),
+                        )
+                    },
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                let local_name = element.local_name();
+                let opaque = opaque_story_event(
+                    &stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    xml,
+                    before,
+                    after,
+                )?;
+                if !opaque
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name.as_ref() == b"hyperlink"
+                {
+                    let (rel_id, anchor) = story_hyperlink_attributes(&reader, &element)?;
+                    links.push(StoryLinkSpan {
+                        full: before..after,
+                        rel_id,
+                        anchor,
+                    });
+                }
+            }
+            Event::End(_) => {
+                let Some(frame) = stack.pop() else {
+                    return Err(Error::Other(
+                        "story hyperlink XML contains an unmatched closing element".to_owned(),
+                    ));
+                };
+                if !frame.opaque
+                    && nested_owner_depth == 0
+                    && frame.namespace == StoryNamespace::Word
+                    && frame.local_name == b"hyperlink"
+                {
+                    let (start, rel_id, anchor) = open_links.pop().ok_or_else(|| {
+                        Error::Other("story hyperlink has no matching start".to_owned())
+                    })?;
+                    links.push(StoryLinkSpan {
+                        full: start..after,
+                        rel_id,
+                        anchor,
+                    });
+                }
+                if !frame.opaque
+                    && !stack.is_empty()
+                    && frame.namespace == StoryNamespace::Word
+                    && matches!(frame.local_name.as_slice(), b"tc" | b"txbxContent" | b"sdt")
+                {
+                    nested_owner_depth = nested_owner_depth.saturating_sub(1);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if after == item.scan.end {
+            break;
+        }
+        buffer.clear();
+    }
+    if !open_links.is_empty() {
+        return Err(Error::Other(
+            "story hyperlink has no matching end".to_owned(),
+        ));
+    }
+    Ok(links)
+}
+
+fn story_hyperlink_attributes(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+) -> Result<(Option<String>, Option<String>)> {
+    let mut rel_id = None;
+    let mut anchor = None;
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("story hyperlink attribute scan failed: {error}"))
+        })?;
+        let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
+        let target = if matches!(
+            namespace,
+            ResolveResult::Bound(Namespace(uri)) if uri == drawing_ns::R.as_bytes()
+        ) && local_name.as_ref() == b"id"
+        {
+            &mut rel_id
+        } else if word_element(&namespace) && local_name.as_ref() == b"anchor" {
+            &mut anchor
+        } else {
+            continue;
+        };
+        *target = Some(
+            attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                .map_err(|error| {
+                    Error::Other(format!("story hyperlink attribute decode failed: {error}"))
+                })?
+                .into_owned(),
+        );
+    }
+    Ok((rel_id, anchor))
+}
+
+fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut in_text = 0usize;
+    let mut text = String::new();
+    let mut found = false;
+    let mut active = false;
+    let mut element_stack: Vec<XmlElementFrame> = Vec::new();
+    let mut nested_owner_depth = 0usize;
+    let mut complex_results = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story text scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != item.scan.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                let depth = element_stack.len();
+                let local_name = element.local_name().as_ref().to_vec();
+                let opaque =
+                    if element_stack.is_empty() && item.kind == StoryItemKind::ContentControl {
+                        false
+                    } else {
+                        opaque_story_event(
+                            &element_stack,
+                            namespace_kind,
+                            &local_name,
+                            &element,
+                            false,
+                            xml,
+                            before,
+                            after,
+                        )?
+                    };
+                if !opaque
+                    && item.complex_field
+                    && item.full.start <= before
+                    && before < item.full.end
+                    && is_word_namespace
+                    && local_name == b"fldChar"
+                {
+                    update_complex_field_results(
+                        &mut complex_results,
+                        complex_field_marker(&reader, &element)?,
+                    );
+                }
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(local_name.as_slice(), b"tc" | b"txbxContent")
+                {
+                    nested_owner_depth += 1;
+                }
+                if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name == b"t"
+                {
+                    in_text += 1;
+                    found = true;
+                }
+                let inherited = element_stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
+                element_stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word: is_word_namespace,
+                    full_start: before,
+                    owner_kind: None,
+                    item_kind: None,
+                    direct_owner_child: false,
+                    sdt_context: if depth == 0 && item.kind == StoryItemKind::ContentControl {
+                        item.sdt_context
+                    } else {
+                        story_element_sdt_context(
+                            &element_stack,
+                            namespace_kind,
+                            element.local_name().as_ref(),
+                        )
+                    },
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                let local_name = element.local_name();
+                let opaque = opaque_story_event(
+                    &element_stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    xml,
+                    before,
+                    after,
+                )?;
+                if !opaque
+                    && item.complex_field
+                    && item.full.start <= before
+                    && before < item.full.end
+                    && is_word_namespace
+                    && local_name.as_ref() == b"fldChar"
+                {
+                    update_complex_field_results(
+                        &mut complex_results,
+                        complex_field_marker(&reader, &element)?,
+                    );
+                } else if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name.as_ref() == b"t"
+                {
+                    found = true;
+                }
+            }
+            Event::End(element) => {
+                let opaque = element_stack.pop().is_some_and(|frame| frame.opaque);
+                let depth = element_stack.len();
+                if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && element.local_name().as_ref() == b"t"
+                {
+                    in_text = in_text.saturating_sub(1);
+                }
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(element.local_name().as_ref(), b"tc" | b"txbxContent")
+                {
+                    nested_owner_depth = nested_owner_depth.saturating_sub(1);
+                }
+            }
+            Event::Text(value)
+                if complex_field_text_visible(item, &complex_results) && in_text > 0 =>
+            {
+                text.push_str(
+                    &quick_xml::escape::unescape(&value.decode().map_err(|error| {
+                        Error::Other(format!("story text decode failed: {error}"))
+                    })?)
+                    .map_err(|error| {
+                        Error::Other(format!("story text unescape failed: {error}"))
+                    })?,
+                )
+            }
+            Event::CData(value)
+                if complex_field_text_visible(item, &complex_results) && in_text > 0 =>
+            {
+                text.push_str(
+                    &value.decode().map_err(|error| {
+                        Error::Other(format!("story CDATA decode failed: {error}"))
+                    })?,
+                )
+            }
+            Event::GeneralRef(value)
+                if complex_field_text_visible(item, &complex_results) && in_text > 0 =>
+            {
+                text.push_str(&oxml_core::xml_text::resolve_entity(&value));
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if (item.complex_field && after >= item.full.end)
+            || (!item.complex_field && after == item.scan.end)
+        {
+            break;
+        }
+        buffer.clear();
+    }
+    Ok((found || item.complex_field).then_some(text))
+}
+
+fn story_text_start(element: &BytesStart<'_>, preserve_space: bool) -> Result<Vec<u8>> {
+    let content: &[u8] = element;
+    let mut xml_space_key = None;
+    for attribute in element.attributes() {
+        let attribute = attribute
+            .map_err(|error| Error::Other(format!("story text attribute scan failed: {error}")))?;
+        if attribute.key.as_ref() == b"xml:space" {
+            let key_address = attribute.key.as_ref().as_ptr() as usize;
+            let content_address = content.as_ptr() as usize;
+            let key_start = key_address.checked_sub(content_address).ok_or_else(|| {
+                Error::Other("story text attribute lies outside its opening tag".to_owned())
+            })?;
+            if key_start + attribute.key.as_ref().len() > content.len() {
+                return Err(Error::Other(
+                    "story text attribute lies outside its opening tag".to_owned(),
+                ));
+            }
+            xml_space_key = Some((key_start, attribute.key.as_ref().len()));
+        }
+    }
+
+    let mut updated = Vec::with_capacity(content.len() + 23);
+    updated.push(b'<');
+    if let Some((key_start, key_len)) = xml_space_key {
+        let mut attribute_start = key_start;
+        while attribute_start > element.name().as_ref().len()
+            && content[attribute_start - 1].is_ascii_whitespace()
+        {
+            attribute_start -= 1;
+        }
+        let mut attribute_end = key_start + key_len;
+        while content
+            .get(attribute_end)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
+            attribute_end += 1;
+        }
+        if content.get(attribute_end) != Some(&b'=') {
+            return Err(Error::Other(
+                "story text xml:space attribute has no equals sign".to_owned(),
+            ));
+        }
+        attribute_end += 1;
+        while content
+            .get(attribute_end)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
+            attribute_end += 1;
+        }
+        let quote = *content.get(attribute_end).ok_or_else(|| {
+            Error::Other("story text xml:space attribute has no quoted value".to_owned())
+        })?;
+        if !matches!(quote, b'\'' | b'"') {
+            return Err(Error::Other(
+                "story text xml:space attribute has no quoted value".to_owned(),
+            ));
+        }
+        attribute_end += 1;
+        let value_end = content[attribute_end..]
+            .iter()
+            .position(|byte| *byte == quote)
+            .map(|offset| attribute_end + offset + 1)
+            .ok_or_else(|| {
+                Error::Other("story text xml:space attribute has no closing quote".to_owned())
+            })?;
+        updated.extend_from_slice(&content[..attribute_start]);
+        updated.extend_from_slice(&content[value_end..]);
+    } else {
+        updated.extend_from_slice(content);
+    }
+    if preserve_space {
+        updated.extend_from_slice(b" xml:space=\"preserve\"");
+    }
+    updated.push(b'>');
+    Ok(updated)
+}
+
+fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(source);
+    reader.config_mut().trim_text(false);
+    let mut text_depth = 0usize;
+    let mut text_ranges = Vec::new();
+    let mut root_prefix = None;
+    let mut root_end = None;
+    let mut root_is_empty = false;
+    let mut first_text_start = None;
+    let mut first_empty_text = None;
+    let mut found_text = false;
+    let mut element_stack: Vec<XmlElementFrame> = Vec::new();
+    let mut nested_owner_depth = 0usize;
+    let mut complex_results = Vec::new();
+    let mut outer_complex_separator_found = false;
+    let mut complex_end_marker_start = None;
+    let mut complex_insertion_word_prefixes = Vec::new();
+    let mut active = false;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story text mutation scan failed: {error}")))?;
+        let namespace_kind = story_namespace(&namespace);
+        let is_word_namespace = namespace_kind == StoryNamespace::Word;
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if !active {
+            if before != item.scan.start {
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+                continue;
+            }
+            active = true;
+        }
+        match event {
+            Event::Start(element) => {
+                let depth = element_stack.len();
+                if depth == 0 {
+                    let qualified_name = element.name();
+                    let name = std::str::from_utf8(qualified_name.as_ref()).map_err(|error| {
+                        Error::Other(format!("story item name is not UTF-8: {error}"))
+                    })?;
+                    root_prefix = Some(
+                        name.split_once(':')
+                            .map_or("", |(prefix, _)| prefix)
+                            .to_owned(),
+                    );
+                }
+                let local_name = element.local_name().as_ref().to_vec();
+                let opaque =
+                    if element_stack.is_empty() && item.kind == StoryItemKind::ContentControl {
+                        false
+                    } else {
+                        opaque_story_event(
+                            &element_stack,
+                            namespace_kind,
+                            &local_name,
+                            &element,
+                            false,
+                            source,
+                            before,
+                            after,
+                        )?
+                    };
+                if !opaque
+                    && item.complex_field
+                    && item.full.start <= before
+                    && before < item.full.end
+                    && is_word_namespace
+                    && local_name == b"fldChar"
+                {
+                    let marker = complex_field_marker(&reader, &element)?;
+                    if marker == Some(ComplexFieldMarker::Separate) && complex_results.len() == 1 {
+                        outer_complex_separator_found = true;
+                    } else if marker == Some(ComplexFieldMarker::End) && complex_results.len() == 1
+                    {
+                        complex_end_marker_start = Some(before);
+                        complex_insertion_word_prefixes = element_stack
+                            .last()
+                            .map_or_else(Vec::new, |frame| frame.word_prefixes.clone());
+                    }
+                    update_complex_field_results(&mut complex_results, marker);
+                }
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(local_name.as_slice(), b"tc" | b"txbxContent")
+                {
+                    nested_owner_depth += 1;
+                }
+                if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name == b"t"
+                {
+                    found_text = true;
+                    if first_text_start.is_none() && first_empty_text.is_none() {
+                        first_text_start = Some((
+                            before..after,
+                            story_text_start(
+                                &element,
+                                value.starts_with(' ') || value.ends_with(' '),
+                            )?,
+                        ));
+                    }
+                    text_ranges.push(after..after);
+                    text_depth += 1;
+                }
+                let inherited = element_stack
+                    .last()
+                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
+                element_stack.push(XmlElementFrame {
+                    namespace: namespace_kind,
+                    local_name,
+                    is_word: is_word_namespace,
+                    full_start: before,
+                    owner_kind: None,
+                    item_kind: None,
+                    direct_owner_child: false,
+                    sdt_context: if depth == 0 && item.kind == StoryItemKind::ContentControl {
+                        item.sdt_context
+                    } else {
+                        story_element_sdt_context(
+                            &element_stack,
+                            namespace_kind,
+                            element.local_name().as_ref(),
+                        )
+                    },
+                    word_prefixes,
+                    opaque,
+                });
+            }
+            Event::Empty(element) => {
+                if element_stack.is_empty() {
+                    root_is_empty = true;
+                    let qualified_name = element.name();
+                    let name = std::str::from_utf8(qualified_name.as_ref()).map_err(|error| {
+                        Error::Other(format!("story item name is not UTF-8: {error}"))
+                    })?;
+                    root_prefix = Some(
+                        name.split_once(':')
+                            .map_or("", |(prefix, _)| prefix)
+                            .to_owned(),
+                    );
+                }
+                let local_name = element.local_name();
+                let opaque = opaque_story_event(
+                    &element_stack,
+                    namespace_kind,
+                    local_name.as_ref(),
+                    &element,
+                    true,
+                    source,
+                    before,
+                    after,
+                )?;
+                if !opaque
+                    && item.complex_field
+                    && item.full.start <= before
+                    && before < item.full.end
+                    && is_word_namespace
+                    && local_name.as_ref() == b"fldChar"
+                {
+                    let marker = complex_field_marker(&reader, &element)?;
+                    if marker == Some(ComplexFieldMarker::Separate) && complex_results.len() == 1 {
+                        outer_complex_separator_found = true;
+                    } else if marker == Some(ComplexFieldMarker::End) && complex_results.len() == 1
+                    {
+                        complex_end_marker_start = Some(before);
+                        complex_insertion_word_prefixes = element_stack
+                            .last()
+                            .map_or_else(Vec::new, |frame| frame.word_prefixes.clone());
+                    }
+                    update_complex_field_results(&mut complex_results, marker);
+                } else if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name.as_ref() == b"t"
+                {
+                    found_text = true;
+                    if first_text_start.is_none() && first_empty_text.is_none() {
+                        let preserve_space = value.starts_with(' ') || value.ends_with(' ');
+                        let mut replacement = story_text_start(&element, preserve_space)?;
+                        replacement.extend_from_slice(quick_xml::escape::escape(value).as_bytes());
+                        replacement.extend_from_slice(b"</");
+                        replacement.extend_from_slice(element.name().as_ref());
+                        replacement.push(b'>');
+                        first_empty_text = Some((before..after, replacement));
+                    }
+                }
+            }
+            Event::End(element) => {
+                let opaque = element_stack.pop().is_some_and(|frame| frame.opaque);
+                let depth = element_stack.len();
+                if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && element.local_name().as_ref() == b"t"
+                {
+                    text_depth = text_depth.saturating_sub(1);
+                }
+                if !opaque
+                    && depth > 0
+                    && is_word_namespace
+                    && matches!(element.local_name().as_ref(), b"tc" | b"txbxContent")
+                {
+                    nested_owner_depth = nested_owner_depth.saturating_sub(1);
+                }
+                if depth == 0 {
+                    root_end = Some(before);
+                }
+            }
+            Event::Text(_) | Event::CData(_) | Event::GeneralRef(_)
+                if complex_field_text_visible(item, &complex_results) && text_depth > 0 =>
+            {
+                text_ranges.push(before..after);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if (item.complex_field && after >= item.full.end)
+            || (!item.complex_field && after == item.scan.end)
+        {
+            break;
+        }
+        buffer.clear();
+    }
+
+    let escaped = quick_xml::escape::escape(value).into_owned();
+    let mut updated = source.to_vec();
+    if !found_text {
+        if item.complex_field {
+            let insert_at = complex_end_marker_start.ok_or_else(|| {
+                Error::Other("complex story field has no closing marker".to_owned())
+            })?;
+            let nonempty_word_prefix = complex_insertion_word_prefixes
+                .iter()
+                .find(|prefix| !prefix.is_empty());
+            let default_word_namespace =
+                complex_insertion_word_prefixes.iter().any(String::is_empty);
+            let (prefix, declaration, attribute_prefix, attribute_declaration) =
+                if let Some(prefix) = nonempty_word_prefix {
+                    (format!("{prefix}:"), String::new(), prefix.as_str(), "")
+                } else if default_word_namespace {
+                    (
+                        String::new(),
+                        String::new(),
+                        "w",
+                        concat!(
+                            " xmlns:w=\"",
+                            "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+                            "\""
+                        ),
+                    )
+                } else {
+                    (
+                        "w:".to_owned(),
+                        format!(" xmlns:w=\"{WORD_NAMESPACE}\""),
+                        "w",
+                        "",
+                    )
+                };
+            let space = if value.starts_with(' ') || value.ends_with(' ') {
+                " xml:space=\"preserve\""
+            } else {
+                ""
+            };
+            let separator = if outer_complex_separator_found {
+                String::new()
+            } else {
+                format!(
+                    "<{prefix}fldChar{declaration}{attribute_declaration} \
+                     {attribute_prefix}:fldCharType=\"separate\"/>"
+                )
+            };
+            let replacement =
+                format!("{separator}<{prefix}t{declaration}{space}>{escaped}</{prefix}t>");
+            updated.splice(insert_at..insert_at, replacement.bytes());
+            return Ok(updated);
+        }
+        if item.kind != StoryItemKind::Paragraph {
+            return Err(StoryError::NotTextBearing { kind: item.kind }.into());
+        }
+        let prefix = root_prefix.unwrap_or_else(|| "w".to_owned());
+        let prefix = if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{prefix}:")
+        };
+        let space = if value.starts_with(' ') || value.ends_with(' ') {
+            " xml:space=\"preserve\""
+        } else {
+            ""
+        };
+        let run = format!("<{prefix}r><{prefix}t{space}>{escaped}</{prefix}t></{prefix}r>");
+        if let Some(end) = root_end {
+            updated.splice(end..end, run.bytes());
+        } else if root_is_empty {
+            let slash = item.full.end.checked_sub(2).ok_or_else(|| {
+                Error::Other("self-closing paragraph story item is truncated".to_owned())
+            })?;
+            if source.get(slash..item.full.end) != Some(b"/>".as_slice()) {
+                return Err(Error::Other(
+                    "self-closing paragraph story item has no closing slash".to_owned(),
+                ));
+            }
+            let replacement = format!(">{run}</{prefix}p>");
+            updated.splice(slash..item.full.end, replacement.bytes());
+        } else {
+            return Err(Error::Other(
+                "paragraph story item has no closing element".to_owned(),
+            ));
+        }
+    } else {
+        for (ordinal, range) in text_ranges.iter().enumerate().rev() {
+            let replacement = if ordinal == 0 && first_empty_text.is_none() {
+                escaped.as_bytes()
+            } else {
+                b""
+            };
+            updated.splice(range.clone(), replacement.iter().copied());
+        }
+        if let Some((range, replacement)) = first_text_start {
+            updated.splice(range, replacement);
+        }
+        if let Some((range, replacement)) = first_empty_text {
+            updated.splice(range, replacement);
+        }
+    }
+    Ok(updated)
 }
 
 fn validate_fresh_word_compatible_package(
@@ -4185,6 +8503,41 @@ fn visit_authored_drawings_mut(
     }
 }
 
+fn close_typed_story_drawing_namespaces(paragraph: &mut CT_P) -> Result<()> {
+    let scope = BTreeMap::from([
+        ("r".to_owned(), drawing_ns::R.to_owned()),
+        ("wp".to_owned(), drawing_ns::WP.to_owned()),
+    ]);
+    let mut error = None;
+    visit_paragraph_drawings_mut(paragraph, &mut |drawing| {
+        if error.is_some() {
+            return;
+        }
+        if let Some(inline) = &mut drawing.inline {
+            let mut writer = Writer::new(Vec::new());
+            if let Err(current) = inline.to_xml(&mut writer).map_err(Error::from) {
+                error = Some(current);
+                return;
+            }
+            match close_content_fragment_namespaces(&writer.into_inner(), &scope) {
+                Ok(xml) => inline.raw_xml = Some(xml),
+                Err(current) => error = Some(current),
+            }
+        } else if let Some(anchor) = &mut drawing.anchor {
+            let mut writer = Writer::new(Vec::new());
+            if let Err(current) = anchor.to_xml(&mut writer).map_err(Error::from) {
+                error = Some(current);
+                return;
+            }
+            match close_content_fragment_namespaces(&writer.into_inner(), &scope) {
+                Ok(xml) => anchor.raw_xml = Some(xml),
+                Err(current) => error = Some(current),
+            }
+        }
+    });
+    error.map_or(Ok(()), Err)
+}
+
 fn authored_drawing(drawing: &CT_Drawing) -> bool {
     drawing
         .inline
@@ -4436,9 +8789,11 @@ impl Document {
             identifiers,
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             footnotes_part_name: None,
+            footnotes_root_namespace_declarations: Vec::new(),
             footnotes_dirty: false,
             comments: None,
             comments_part_name: None,
+            comments_dirty: false,
             comments_extended: None,
             comments_extended_part_name: None,
             comments_owned: false,
@@ -4487,9 +8842,13 @@ impl Document {
             identifiers: self.identifiers.clone(),
             footnotes: self.footnotes.clone(),
             footnotes_part_name: self.footnotes_part_name.clone(),
+            footnotes_root_namespace_declarations: self
+                .footnotes_root_namespace_declarations
+                .clone(),
             footnotes_dirty: self.footnotes_dirty,
             comments: self.comments.clone(),
             comments_part_name: self.comments_part_name.clone(),
+            comments_dirty: self.comments_dirty,
             comments_extended: self.comments_extended.clone(),
             comments_extended_part_name: self.comments_extended_part_name.clone(),
             comments_owned: self.comments_owned,
@@ -4506,11 +8865,10 @@ impl Document {
         }
     }
 
-    fn canonicalize_authored_identifiers(&mut self) -> Result<()> {
+    fn canonicalize_typed_identifiers(&mut self) -> Result<()> {
         self.canonicalize_bookmark_ids()?;
         self.canonicalize_comment_ids()?;
         self.canonicalize_numbering_ids()?;
-        self.canonicalize_drawing_ids()?;
         Ok(())
     }
 
@@ -4684,6 +9042,7 @@ impl Document {
                         .sort_by(|left, right| left.para_id.cmp(&right.para_id));
                 }
             }
+            self.comments_dirty = true;
         }
         Ok(())
     }
@@ -4906,17 +9265,28 @@ impl Document {
             .get(&owner_identity)
             .cloned()
             .unwrap_or_default();
-        let mut story_relationships = Vec::new();
-        collect_relationship_ids(&self.document.body.content, &mut story_relationships);
+        let mut modeled_story_relationships = Vec::new();
+        collect_relationship_ids(
+            &self.document.body.content,
+            &mut modeled_story_relationships,
+        );
         if let Some(section) = &self.document.body.sect_pr {
             for reference in section.header_refs.iter().chain(&section.footer_refs) {
-                if !story_relationships.contains(&reference.rel_id) {
-                    story_relationships.push(reference.rel_id.clone());
+                if !modeled_story_relationships.contains(&reference.rel_id) {
+                    modeled_story_relationships.push(reference.rel_id.clone());
                 }
             }
         }
-        let opaque_relationships =
-            self.opaque_relationship_ids_from_serialized_story(&story_relationships)?;
+        let nested_relationships = self
+            .identifiers
+            .authored_nested_story_relationship_ids
+            .get(&owner_identity)
+            .cloned()
+            .unwrap_or_default();
+        let mut opaque_relationships =
+            self.opaque_relationship_ids_from_serialized_story(&modeled_story_relationships)?;
+        opaque_relationships.retain(|id| !nested_relationships.contains(id));
+        let mut story_relationships = self.main_story_relationship_ids();
         let relationships = self
             .package
             .get_part_rels(&owner)
@@ -5098,57 +9468,66 @@ impl Document {
                 }
             }
         }
-        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
-        let mut drawing_count = 0usize;
-        visit_authored_drawings(&self.document.body.content, &mut |_| drawing_count += 1);
-        let mut drawing_ids = Vec::with_capacity(drawing_count);
-        for _ in 0..drawing_count {
-            drawing_ids.push(reserve_u32(&mut occupied_drawings, 1, "drawing")?);
-        }
-        let mut drawing_ids = drawing_ids.into_iter();
-        let mut drawing_error = None;
-        visit_authored_drawings_mut(&mut self.document.body.content, &mut |drawing| {
-            let Some(mut drawing) = drawing
-                .inline
-                .as_mut()
-                .map(DrawingMut::Inline)
-                .or_else(|| drawing.anchor.as_mut().map(DrawingMut::Anchor))
-            else {
-                drawing_error = Some(Error::Other(
-                    "authored drawing has no inline or anchor payload".to_owned(),
-                ));
-                return;
-            };
-            let Some(id) = drawing_ids.next() else {
-                drawing_error = Some(Error::Other(
-                    "authored drawing identifier count changed during canonicalization".to_owned(),
-                ));
-                return;
-            };
-            drawing.set_doc_pr_id(id);
-            drawing.remap_relationship(&relationship_remap);
-        });
-        if let Some(error) = drawing_error {
-            return Err(error);
-        }
-        if drawing_ids.next().is_some() {
-            return Err(Error::Other(
-                "authored drawing identifier count changed during canonicalization".to_owned(),
-            ));
-        }
-        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
-            for hyperlink in &mut paragraph.hyperlinks {
-                if let Some(id) = &mut hyperlink.rel_id
-                    && let Some(updated) = relationship_remap.get(id)
-                {
-                    id.clone_from(updated);
-                }
-            }
-            if let Some(section) = paragraph
-                .properties
-                .as_mut()
-                .and_then(|properties| properties.sect_pr.as_mut())
+        let registered_nested_drawing_ids = self
+            .identifiers
+            .authored_nested_story_drawing_ids
+            .get(&owner_identity)
+            .cloned()
+            .unwrap_or_default();
+        let mut modeled_drawing_ids = Vec::new();
+        visit_authored_drawings(&self.document.body.content, &mut |drawing| {
+            if let Some(inline) = &drawing.inline
+                && !registered_nested_drawing_ids.contains(&inline.doc_pr_id)
             {
+                modeled_drawing_ids.push(inline.doc_pr_id);
+            }
+            if let Some(anchor) = &drawing.anchor
+                && !registered_nested_drawing_ids.contains(&anchor.doc_pr_id)
+            {
+                modeled_drawing_ids.push(anchor.doc_pr_id);
+            }
+        });
+        let has_live_nested_relationships = self.remap_authored_nested_story_relationships(
+            &owner_identity,
+            &nested_relationships,
+            &relationship_remap,
+        )?;
+        if !has_live_nested_relationships {
+            visit_authored_drawings_mut(&mut self.document.body.content, &mut |drawing| {
+                if let Some(mut drawing) = drawing
+                    .inline
+                    .as_mut()
+                    .map(DrawingMut::Inline)
+                    .or_else(|| drawing.anchor.as_mut().map(DrawingMut::Anchor))
+                {
+                    drawing.remap_relationship(&relationship_remap);
+                }
+            });
+            visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+                for hyperlink in &mut paragraph.hyperlinks {
+                    if let Some(id) = &mut hyperlink.rel_id
+                        && let Some(updated) = relationship_remap.get(id)
+                    {
+                        id.clone_from(updated);
+                    }
+                }
+                if let Some(section) = paragraph
+                    .properties
+                    .as_mut()
+                    .and_then(|properties| properties.sect_pr.as_mut())
+                {
+                    for reference in section
+                        .header_refs
+                        .iter_mut()
+                        .chain(&mut section.footer_refs)
+                    {
+                        if let Some(updated) = relationship_remap.get(&reference.rel_id) {
+                            reference.rel_id.clone_from(updated);
+                        }
+                    }
+                }
+            });
+            if let Some(section) = &mut self.document.body.sect_pr {
                 for reference in section
                     .header_refs
                     .iter_mut()
@@ -5159,19 +9538,74 @@ impl Document {
                     }
                 }
             }
-        });
-        if let Some(section) = &mut self.document.body.sect_pr {
-            for reference in section
-                .header_refs
-                .iter_mut()
-                .chain(&mut section.footer_refs)
+        }
+        let related_parts = self.related_story_parts();
+        let live_nested_relationships = self
+            .identifiers
+            .authored_nested_story_relationship_ids
+            .get(&owner_identity)
+            .cloned()
+            .unwrap_or_default();
+        let nested_image_relationship_ids = self
+            .package
+            .get_part_rels(&owner)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::IMAGE
+                    && live_nested_relationships.contains(&relationship.id)
+            })
+            .map(|relationship| relationship.id.clone())
+            .collect::<HashSet<_>>();
+        let current_document_xml = self.document.to_xml()?;
+        let authored_drawing_slots = authored_drawing_slots_in_source_order(
+            &current_document_xml,
+            &modeled_drawing_ids,
+            &nested_image_relationship_ids,
+        )?;
+        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
+        if let Ok(live_ids) = drawing_ids_in_xml(&current_document_xml) {
+            occupied_drawings.extend(live_ids);
+        }
+        for (_, _, id) in &authored_drawing_slots {
+            occupied_drawings.remove(id);
+        }
+        for part in &related_parts {
+            if !self.identifiers.authored_story_parts.contains(part)
+                && let Some(xml) = self.package.get_part(part)
+                && let Ok(live_ids) = drawing_ids_in_xml(xml)
             {
-                if let Some(updated) = relationship_remap.get(&reference.rel_id) {
-                    reference.rel_id.clone_from(updated);
-                }
+                occupied_drawings.extend(live_ids);
             }
         }
-        self.canonicalize_header_footer_relationships()?;
+        let mut drawing_edits = Vec::with_capacity(authored_drawing_slots.len());
+        let mut canonical_nested_drawing_ids = HashSet::new();
+        for (slot, span, _) in authored_drawing_slots {
+            let id = reserve_u32(&mut occupied_drawings, 1, "drawing")?;
+            if matches!(slot, AuthoredMainDrawing::Nested) {
+                canonical_nested_drawing_ids.insert(id);
+            }
+            drawing_edits.push((span.start, span.end, id.to_string().into_bytes()));
+        }
+        if !drawing_edits.is_empty() {
+            let mut updated = current_document_xml;
+            drawing_edits.sort_by_key(|(start, _, _)| *start);
+            for (start, end, replacement) in drawing_edits.into_iter().rev() {
+                updated.splice(start..end, replacement);
+            }
+            self.document = CT_Document::from_xml(&updated)?;
+        }
+        if canonical_nested_drawing_ids.is_empty() {
+            self.identifiers
+                .authored_nested_story_drawing_ids
+                .remove(&owner_identity);
+        } else {
+            self.identifiers
+                .authored_nested_story_drawing_ids
+                .insert(owner_identity.clone(), canonical_nested_drawing_ids);
+        }
+        self.canonicalize_related_story_relationships(&related_parts, &mut occupied_drawings)?;
+        self.identifiers.drawing_ids = occupied_drawings;
         self.canonicalize_image_parts()?;
         Ok(())
     }
@@ -5188,34 +9622,150 @@ impl Document {
         parts
     }
 
-    fn main_story_relationship_ids(&self) -> Vec<String> {
-        let mut ids = Vec::new();
-        collect_relationship_ids(&self.document.body.content, &mut ids);
-        if let Some(section) = &self.document.body.sect_pr {
-            for reference in section.header_refs.iter().chain(&section.footer_refs) {
-                if !ids.contains(&reference.rel_id) {
-                    ids.push(reference.rel_id.clone());
+    fn remap_authored_nested_story_relationships(
+        &mut self,
+        physical_owner: &str,
+        registered: &HashSet<String>,
+        relationship_remap: &HashMap<String, String>,
+    ) -> Result<bool> {
+        let xml = self.document.to_xml()?;
+        let occurrences =
+            xml_relationship_ids_in_order_with_bindings(&xml, &self.body_namespace_bindings)?;
+        let live = registered
+            .iter()
+            .filter(|id| occurrences.contains(id))
+            .cloned()
+            .collect::<HashSet<_>>();
+        if !relationship_remap.is_empty() && !live.is_empty() {
+            let updated = remap_xml_relationship_ids_with_bindings(
+                &xml,
+                relationship_remap,
+                &self.body_namespace_bindings,
+            )?;
+            self.document = CT_Document::from_xml(&updated)?;
+        }
+        if live.is_empty() {
+            self.identifiers
+                .authored_nested_story_relationship_ids
+                .remove(physical_owner);
+        } else {
+            let remapped = live
+                .iter()
+                .map(|id| relationship_remap.get(id).unwrap_or(id).clone())
+                .collect();
+            self.identifiers
+                .authored_nested_story_relationship_ids
+                .insert(physical_owner.to_owned(), remapped);
+        }
+        Ok(!live.is_empty())
+    }
+
+    fn related_story_parts(&self) -> Vec<String> {
+        let mut parts = self.active_header_footer_parts();
+        if let Some(relationships) = self.package.get_part_rels(&self.doc_part_name) {
+            for relationship in &relationships.items {
+                if matches!(
+                    relationship.rel_type.as_str(),
+                    rel_types::FOOTNOTES | rel_types::ENDNOTES | rel_types::COMMENTS
+                ) && relationship_is_internal(relationship)
+                {
+                    let part =
+                        OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+                    if self.package.contains_part(&part) && !parts.contains(&part) {
+                        parts.push(part);
+                    }
                 }
             }
         }
-        ids
+        parts
     }
 
-    fn canonicalize_header_footer_relationships(&mut self) -> Result<()> {
-        let parts = self.active_header_footer_parts();
-        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
-        visit_authored_drawings(&self.document.body.content, &mut |drawing| {
-            if let Some(inline) = &drawing.inline {
-                occupied_drawings.insert(inline.doc_pr_id);
+    fn main_story_relationship_ids(&self) -> Vec<String> {
+        let mut modeled = Vec::new();
+        collect_relationship_ids(&self.document.body.content, &mut modeled);
+        if let Some(section) = &self.document.body.sect_pr {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if !modeled.contains(&reference.rel_id) {
+                    modeled.push(reference.rel_id.clone());
+                }
             }
-            if let Some(anchor) = &drawing.anchor {
-                occupied_drawings.insert(anchor.doc_pr_id);
+        }
+        let owner = relationship_owner_identity(&self.doc_part_name);
+        let nested = self
+            .identifiers
+            .authored_nested_story_relationship_ids
+            .get(&owner)
+            .cloned()
+            .unwrap_or_default();
+        let semantic = modeled
+            .iter()
+            .cloned()
+            .chain(nested.iter().cloned())
+            .collect::<HashSet<_>>();
+        if let Ok(xml) = self.document.to_xml()
+            && let Some(ordered) = authored_relationship_ids_in_source_order(&xml, &semantic)
+        {
+            return ordered;
+        }
+        let mut nested = nested.into_iter().collect::<Vec<_>>();
+        nested.sort();
+        for id in nested {
+            if !modeled.contains(&id) {
+                modeled.push(id);
             }
-        });
+        }
+        modeled
+    }
+
+    fn canonicalize_related_story_relationships(
+        &mut self,
+        parts: &[String],
+        occupied_drawings: &mut HashSet<u32>,
+    ) -> Result<()> {
+        let mut partially_authored_drawing_slots = HashMap::new();
+        for owner in parts {
+            if self.identifiers.authored_story_parts.contains(owner) {
+                continue;
+            }
+            let owner_identity = relationship_owner_identity(owner);
+            let partially_authored = self
+                .identifiers
+                .authored_story_relationship_ids
+                .get(&owner_identity)
+                .cloned()
+                .unwrap_or_default();
+            if partially_authored.is_empty() {
+                continue;
+            }
+            let xml = self
+                .package
+                .get_part(owner)
+                .ok_or_else(|| Error::Other(format!("story part {owner} is missing")))?;
+            let authored_image_relationship_ids = self
+                .package
+                .get_part_rels(owner)
+                .into_iter()
+                .flat_map(|relationships| &relationships.items)
+                .filter(|relationship| {
+                    relationship.rel_type == rel_types::IMAGE
+                        && partially_authored.contains(&relationship.id)
+                })
+                .map(|relationship| relationship.id.clone())
+                .collect::<HashSet<_>>();
+            let drawing_slots =
+                authored_drawing_slots_in_source_order(xml, &[], &authored_image_relationship_ids)?
+                    .into_iter()
+                    .map(|(_, span, id)| (span, id))
+                    .collect::<Vec<_>>();
+            for (_, id) in &drawing_slots {
+                occupied_drawings.remove(id);
+            }
+            partially_authored_drawing_slots.insert(owner.clone(), drawing_slots);
+        }
 
         for owner in parts {
-            let owner_identity = relationship_owner_identity(&owner);
-            let fully_authored = self.identifiers.authored_story_parts.contains(&owner);
+            let owner_identity = relationship_owner_identity(owner);
+            let fully_authored = self.identifiers.authored_story_parts.contains(owner);
             let partially_authored = self
                 .identifiers
                 .authored_story_relationship_ids
@@ -5227,7 +9777,7 @@ impl Document {
             }
             let xml = self
                 .package
-                .get_part(&owner)
+                .get_part(owner)
                 .ok_or_else(|| Error::Other(format!("story part {owner} is missing")))?
                 .to_vec();
             let referenced = xml_relationship_ids_in_order(&xml)?;
@@ -5239,7 +9789,7 @@ impl Document {
                 .unwrap_or_default();
             let relationships = self
                 .package
-                .get_part_rels(&owner)
+                .get_part_rels(owner)
                 .map(|relationships| relationships.items.clone())
                 .unwrap_or_default();
             let semantic = referenced
@@ -5278,17 +9828,29 @@ impl Document {
                     reserve_relationship_from_cursor(&mut occupied, &mut cursor)?,
                 );
             }
-            if let Some(owner_relationships) = self.package.get_part_rels_mut(&owner) {
+            if let Some(owner_relationships) = self.package.get_part_rels_mut(owner) {
                 for relationship in &mut owner_relationships.items {
                     if let Some(updated) = remap.get(&relationship.id) {
                         relationship.id.clone_from(updated);
                     }
                 }
-                if fully_authored {
-                    let mut authored = owner_relationships
+                let canonicalized_relationship_ids = if fully_authored {
+                    owner_relationships
                         .items
                         .iter()
                         .filter(|relationship| !preserved.contains(&relationship.id))
+                        .map(|relationship| relationship.id.clone())
+                        .collect::<HashSet<_>>()
+                } else {
+                    remap.values().cloned().collect::<HashSet<_>>()
+                };
+                if !canonicalized_relationship_ids.is_empty() {
+                    let mut authored = owner_relationships
+                        .items
+                        .iter()
+                        .filter(|relationship| {
+                            canonicalized_relationship_ids.contains(&relationship.id)
+                        })
                         .cloned()
                         .collect::<Vec<_>>();
                     authored.sort_by_key(|relationship| {
@@ -5300,13 +9862,28 @@ impl Document {
                     });
                     let mut authored = authored.into_iter();
                     for relationship in &mut owner_relationships.items {
-                        if !preserved.contains(&relationship.id) {
+                        if canonicalized_relationship_ids.contains(&relationship.id) {
                             *relationship = authored
                                 .next()
                                 .expect("each authored relationship slot has a value");
                         }
                     }
                 }
+            }
+            let mut drawing_edits = Vec::new();
+            if !fully_authored {
+                for (span, _) in partially_authored_drawing_slots
+                    .remove(owner)
+                    .unwrap_or_default()
+                {
+                    let id = reserve_u32(occupied_drawings, 1, "drawing")?;
+                    drawing_edits.push((span.start, span.end, id.to_string().into_bytes()));
+                }
+            }
+            let mut xml = xml;
+            drawing_edits.sort_by_key(|(start, _, _)| *start);
+            for (start, end, replacement) in drawing_edits.into_iter().rev() {
+                xml.splice(start..end, replacement);
             }
             let xml = remap_xml_relationship_ids(&xml, &remap)?;
             if let Some(ids) = self
@@ -5320,22 +9897,23 @@ impl Document {
                     .collect();
             }
             let xml = if fully_authored {
-                rewrite_authored_doc_pr_ids(&xml, &mut occupied_drawings)?
+                rewrite_authored_doc_pr_ids(&xml, occupied_drawings)?
             } else {
                 xml
             };
-            self.package.set_part(&owner, xml);
+            self.package.set_part(owner, xml);
         }
         Ok(())
     }
 
     fn canonicalize_image_parts(&mut self) -> Result<()> {
         let mut ordered = Vec::new();
+        let main_xml = self.document.to_xml()?;
         let mut owners = vec![(
             self.doc_part_name.clone(),
-            self.main_story_relationship_ids(),
+            xml_relationship_ids_in_order(&main_xml)?,
         )];
-        for owner in self.active_header_footer_parts() {
+        for owner in self.related_story_parts() {
             let owner_identity = relationship_owner_identity(&owner);
             if self.identifiers.authored_story_parts.contains(&owner)
                 || self
@@ -5497,7 +10075,7 @@ impl Document {
     /// and all other package payloads remain present.
     pub fn to_bytes_as(&self, class: WordPackageClass) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         candidate
             .package
             .content_types
@@ -5555,7 +10133,7 @@ impl Document {
         certificate_der: &[u8],
     ) -> Result<oxml_opc::SignatureReport> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         let report = candidate
             .package
             .sign(private_key_pkcs8_der, certificate_der)?;
@@ -5672,6 +10250,12 @@ impl Document {
             .and_then(|xml| CustomProperties::from_xml(xml).ok());
 
         let footnotes_part_name = resolve_part(rel_types::FOOTNOTES);
+        let footnotes_root_namespace_declarations = footnotes_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+            .map(root_namespace_declarations)
+            .transpose()?
+            .unwrap_or_default();
         let footnotes = footnotes_part_name
             .as_deref()
             .and_then(|part| package.get_part(part))
@@ -5733,9 +10317,11 @@ impl Document {
             identifiers,
             footnotes,
             footnotes_part_name,
+            footnotes_root_namespace_declarations,
             footnotes_dirty: false,
             comments,
             comments_part_name,
+            comments_dirty: false,
             comments_extended,
             comments_extended_part_name,
             comments_owned: false,
@@ -5873,7 +10459,7 @@ impl Document {
     /// Save the document to a file path.
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
             &mut candidate.package,
             candidate.package_signatures_invalidated,
@@ -5885,7 +10471,7 @@ impl Document {
     /// Save the document to a byte vector.
     pub fn to_bytes(&mut self) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
             &mut candidate.package,
             candidate.package_signatures_invalidated,
@@ -5912,7 +10498,7 @@ impl Document {
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.prepare_staged_package()?;
+        candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
             &mut candidate.package,
             candidate.package_signatures_invalidated,
@@ -5926,10 +10512,19 @@ impl Document {
 
     pub(crate) fn prepare_staged_package(&mut self) -> Result<()> {
         self.preflight_flush_required_bundles()?;
-        self.canonicalize_authored_identifiers()?;
-        self.package_signatures_invalidated |=
+        self.canonicalize_typed_identifiers()?;
+        let retained_signature_invalidated =
             self.retained_package_signature_would_be_invalidated()?;
+        self.flush_dirty_related_story_models()?;
+        self.canonicalize_drawing_ids()?;
+        self.refresh_related_story_caches()?;
+        self.package_signatures_invalidated |= retained_signature_invalidated;
         self.flush_to_package()
+    }
+
+    pub(crate) fn prepare_staged_output(&mut self) -> Result<()> {
+        self.comments_dirty |= self.comments.is_some() && self.comments_part_name.is_some();
+        self.prepare_staged_package()
     }
 
     pub(crate) fn prepare_and_reopen_staged(mut self) -> Result<Self> {
@@ -5946,12 +10541,24 @@ impl Document {
         limits: PackageReadLimits,
     ) -> Result<Self> {
         let provenance = self.identifiers.clone();
+        let custom_properties_owned = self.custom_properties_owned;
+        let settings_owned = self.settings_owned;
+        let owned_settings = settings_owned.then(|| self.settings.clone());
+        let comments_owned = self.comments_owned;
+        let comments_extended_owned = self.comments_extended_owned;
         let embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
         let package_signatures_invalidated = self.package_signatures_invalidated;
         let mut output = std::io::Cursor::new(Vec::new());
         self.package.write_to(&mut output)?;
         let mut reopened = Self::from_bytes_with_limits(output.get_ref(), limits)?;
         reopened.identifiers.reconcile_provenance(&provenance);
+        reopened.custom_properties_owned = custom_properties_owned;
+        reopened.settings_owned = settings_owned;
+        if let Some(settings) = owned_settings {
+            reopened.settings = settings;
+        }
+        reopened.comments_owned = comments_owned;
+        reopened.comments_extended_owned = comments_extended_owned;
         reopened.embedded_invalidated_signatures = embedded_invalidated_signatures;
         reopened.package_signatures_invalidated = package_signatures_invalidated;
         Ok(reopened)
@@ -6005,38 +10612,7 @@ impl Document {
 
     /// Write the in-memory document/styles back into the OPC package parts.
     pub(crate) fn flush_to_package(&mut self) -> Result<()> {
-        // A read-only save with unsafe retained namespace shadows keeps the
-        // producer's complete scopes and every retained raw subtree byte for
-        // byte. A modified document fails closed when canonical serialization
-        // could change the meaning or bytes of retained content.
-        let existing_document_xml = self.package.get_part(&self.doc_part_name);
-        let typed_document_is_unchanged = existing_document_xml
-            .and_then(|xml| CT_Document::from_xml(xml).ok())
-            .as_ref()
-            == Some(&self.document);
-        let nested_namespace_owners = existing_document_xml
-            .map(nested_modeled_namespace_owners)
-            .transpose()?
-            .unwrap_or_default();
-        let unsafe_prefix = unsafe_serializer_namespace_prefix(
-            &self.root_namespace_declarations,
-            &self.body_namespace_declarations,
-        )
-        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
-        let doc_xml = if typed_document_is_unchanged && unsafe_prefix.is_some() {
-            existing_document_xml
-                .expect("compared existing document XML")
-                .to_vec()
-        } else {
-            if let Some(prefix) = unsafe_prefix {
-                return Err(Error::Other(format!(
-                    "cannot serialize a modified document with a shadowed `{prefix}` namespace"
-                )));
-            }
-            let serialized = self.document.to_xml()?;
-            replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
-        };
-        self.package.set_part(&self.doc_part_name, doc_xml);
+        self.flush_document_to_package()?;
 
         // Serialize the styles part. A document opened without one still gets
         // rdocx's defaults written out, so make sure it is reachable: an
@@ -6114,40 +10690,7 @@ impl Document {
             self.package.set_part(part_name, table.to_xml()?);
         }
 
-        // Preserve parsed footnote bytes until a facade mutation makes the typed view dirty.
-        if self.footnotes_dirty && !self.footnotes.footnotes.is_empty() {
-            let fx = self.footnotes.to_xml_footnotes()?;
-            let footnotes_part_name = self.footnotes_part_name.clone();
-            let footnotes_part = self
-                .reserve_document_part_bundle(
-                    footnotes_part_name.as_deref(),
-                    "/word/footnotes.xml",
-                    rel_types::FOOTNOTES,
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
-                )
-                .map_err(|error| {
-                    Error::Other(format!("footnotes relationship allocation failed: {error}"))
-                })?;
-            self.footnotes_part_name = Some(footnotes_part.clone());
-            self.package.set_part(&footnotes_part, fx);
-        }
-
-        // An existing comments part is modelled and flushed to its resolved
-        // relationship target. An absent part remains absent until the later
-        // comment API creates one deliberately.
-        if let (Some(comments), Some(part_name)) = (&self.comments, self.comments_part_name.clone())
-        {
-            let xml = comments.to_xml()?;
-            self.package.set_part(&part_name, xml);
-            self.ensure_part_relationship_checked(
-                &part_name,
-                rel_types::COMMENTS,
-                crate::comments::COMMENTS_CONTENT_TYPE,
-            )
-            .map_err(|error| {
-                Error::Other(format!("comments relationship allocation failed: {error}"))
-            })?;
-        }
+        self.flush_dirty_related_story_models()?;
 
         if let (Some(comments), Some(part_name)) = (
             &self.comments_extended,
@@ -6208,6 +10751,140 @@ impl Document {
             self.package.set_part(&custom_part, custom_xml);
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn flush_dirty_related_story_models(&mut self) -> Result<()> {
+        // Existing footnote XML remains the authority. Typed additions are
+        // inserted into that root once so producer namespace declarations and
+        // unmodelled root children never pass through the lossy typed model.
+        if self.footnotes_dirty && !self.footnotes.footnotes.is_empty() {
+            let footnotes_part_name = self.footnotes_part_name.clone();
+            let footnotes_part = self
+                .reserve_document_part_bundle(
+                    footnotes_part_name.as_deref(),
+                    "/word/footnotes.xml",
+                    rel_types::FOOTNOTES,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+                )
+                .map_err(|error| {
+                    Error::Other(format!("footnotes relationship allocation failed: {error}"))
+                })?;
+            self.footnotes_part_name = Some(footnotes_part.clone());
+            let xml = if let Some(existing_xml) = self.package.get_part(&footnotes_part) {
+                let existing = rdocx_oxml::footnotes::CT_Footnotes::from_xml(existing_xml)?;
+                let additions = self
+                    .footnotes
+                    .footnotes
+                    .iter()
+                    .filter(|footnote| {
+                        existing.footnotes.iter().all(|candidate| {
+                            candidate.id != footnote.id || candidate.note_type != footnote.note_type
+                        })
+                    })
+                    .map(serialized_footnote_fragment)
+                    .collect::<Result<Vec<_>>>()?;
+                if existing.footnotes.len() + additions.len() != self.footnotes.footnotes.len() {
+                    return Err(Error::Other(
+                        "typed footnote mutation is not an additive package update".to_owned(),
+                    ));
+                }
+                append_story_fragments_to_root(existing_xml, b"footnotes", b"footnote", &additions)?
+            } else {
+                let mut footnotes = self.footnotes.clone();
+                for footnote in &mut footnotes.footnotes {
+                    for paragraph in &mut footnote.paragraphs {
+                        close_typed_story_drawing_namespaces(paragraph)?;
+                    }
+                }
+                footnotes.to_xml_footnotes()?
+            };
+            self.package.set_part(&footnotes_part, xml);
+            self.footnotes_dirty = false;
+        }
+
+        // An existing comments part is modelled and flushed to its resolved
+        // relationship target. An absent part remains absent until the later
+        // comment API creates one deliberately.
+        if self.comments_dirty
+            && let (Some(comments), Some(part_name)) =
+                (&self.comments, self.comments_part_name.clone())
+        {
+            let mut comments = comments.clone();
+            for comment in &mut comments.comments {
+                for paragraph in &mut comment.paragraphs {
+                    close_typed_story_drawing_namespaces(paragraph)?;
+                }
+            }
+            let xml = comments.to_xml()?;
+            self.package.set_part(&part_name, xml);
+            self.comments_dirty = false;
+            self.ensure_part_relationship_checked(
+                &part_name,
+                rel_types::COMMENTS,
+                crate::comments::COMMENTS_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!("comments relationship allocation failed: {error}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn flush_document_to_package(&mut self) -> Result<()> {
+        // A read-only save with unsafe retained namespace shadows keeps the
+        // producer's complete scopes and every retained raw subtree byte for
+        // byte. A modified document fails closed when canonical serialization
+        // could change the meaning or bytes of retained content.
+        let existing_document_xml = self.package.get_part(&self.doc_part_name);
+        let typed_document_is_unchanged = existing_document_xml
+            .and_then(|xml| CT_Document::from_xml(xml).ok())
+            .as_ref()
+            == Some(&self.document);
+        let nested_namespace_owners = existing_document_xml
+            .map(nested_modeled_namespace_owners)
+            .transpose()?
+            .unwrap_or_default();
+        let unsafe_prefix = unsafe_serializer_namespace_prefix(
+            &self.root_namespace_declarations,
+            &self.body_namespace_declarations,
+            existing_document_xml,
+        )
+        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
+        let doc_xml = if typed_document_is_unchanged && unsafe_prefix.is_some() {
+            existing_document_xml
+                .expect("compared existing document XML")
+                .to_vec()
+        } else {
+            if let Some(prefix) = unsafe_prefix {
+                return Err(Error::Other(format!(
+                    "cannot serialize a modified document with a shadowed `{prefix}` namespace"
+                )));
+            }
+            let serialized = self.document.to_xml()?;
+            replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
+        };
+        let namespace_scopes = document_namespace_scopes(&doc_xml)?;
+        self.package.set_part(&self.doc_part_name, doc_xml);
+        self.root_namespace_declarations = namespace_scopes.root_declarations;
+        self.body_namespace_declarations = namespace_scopes.body_declarations;
+        self.body_namespace_bindings = namespace_scopes.body_bindings;
+        Ok(())
+    }
+
+    fn refresh_related_story_caches(&mut self) -> Result<()> {
+        if let Some(part_name) = self.footnotes_part_name.as_deref()
+            && let Some(xml) = self.package.get_part(part_name)
+        {
+            self.footnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml)?;
+            self.footnotes_dirty = false;
+        }
+        if let Some(part_name) = self.comments_part_name.as_deref()
+            && let Some(xml) = self.package.get_part(part_name)
+        {
+            self.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(xml)?);
+            self.comments_dirty = false;
+        }
         Ok(())
     }
 
@@ -6386,6 +11063,38 @@ impl Document {
         Ok(id)
     }
 
+    fn add_relative_internal_relationship_checked(
+        &mut self,
+        owner: &str,
+        rel_type: &str,
+        target_part: &str,
+    ) -> Result<String> {
+        let id = self.add_internal_relationship_checked(
+            owner,
+            rel_type,
+            &relative_target(owner, target_part),
+        )?;
+        if owner != self.doc_part_name {
+            self.identifiers
+                .authored_story_relationship_ids
+                .entry(relationship_owner_identity(owner))
+                .or_default()
+                .insert(id.clone());
+        }
+        Ok(id)
+    }
+
+    fn add_image_relationship_checked(
+        &mut self,
+        owner: &str,
+        image_data: &[u8],
+        filename: &str,
+    ) -> Result<String> {
+        let (part_name, format) = self.reserve_image_part(image_data, filename)?;
+        self.install_reserved_image_part(&part_name, image_data, format);
+        self.add_relative_internal_relationship_checked(owner, rel_types::IMAGE, &part_name)
+    }
+
     fn add_external_relationship_checked(
         &mut self,
         owner: &str,
@@ -6401,6 +11110,13 @@ impl Document {
                 target_mode: Some("External".to_owned()),
             },
         );
+        if owner != self.doc_part_name {
+            self.identifiers
+                .authored_story_relationship_ids
+                .entry(relationship_owner_identity(owner))
+                .or_default()
+                .insert(id.clone());
+        }
         Ok(id)
     }
 
@@ -6431,20 +11147,16 @@ impl Document {
             candidate
                 .identifiers
                 .reserve_part_name("/word/embeddings", "Workbook", "xlsx")?;
+        let document_part = candidate.doc_part_name.clone();
         let document_relationship_id = candidate
-            .identifiers
-            .reserve_relationship_id_checked(&candidate.doc_part_name)
+            .add_relative_internal_relationship_checked(
+                &document_part,
+                rel_types::CHART,
+                &chart_part,
+            )
             .map_err(|error| {
                 Error::Other(format!("chart relationship allocation failed: {error}"))
             })?;
-        candidate
-            .package
-            .get_or_create_part_rels(&candidate.doc_part_name)
-            .add_with_id(
-                &document_relationship_id,
-                rel_types::CHART,
-                &relative_target(&candidate.doc_part_name, &chart_part),
-            );
         let workbook_relationship_id = candidate
             .identifiers
             .reserve_relationship_id_checked(&chart_part)
@@ -6589,6 +11301,738 @@ impl Document {
         Ok(())
     }
 
+    fn story_sources(&self) -> Result<Vec<StorySource<'_>>> {
+        let mut sources = vec![StorySource {
+            root_kind: StoryKind::Body,
+            part_name: self.doc_part_name.clone(),
+            xml: Cow::Owned(self.document.to_xml()?),
+        }];
+        let mut seen = HashSet::new();
+        seen.insert((StoryKind::Body, self.doc_part_name.clone()));
+
+        for (relationship_id, is_header) in self.header_footer_rel_ids() {
+            let kind = if is_header {
+                StoryKind::Header
+            } else {
+                StoryKind::Footer
+            };
+            let part_name = self
+                .header_footer_part_name(&relationship_id, is_header)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "{kind:?} reference {relationship_id} has no valid internal relationship"
+                    ))
+                })?;
+            if seen.insert((kind, part_name.clone())) {
+                let xml = self.package.get_part(&part_name).ok_or_else(|| {
+                    Error::Other(format!("{kind:?} story targets missing part {part_name}"))
+                })?;
+                sources.push(StorySource {
+                    root_kind: kind,
+                    part_name,
+                    xml: Cow::Borrowed(xml),
+                });
+            }
+        }
+
+        if let Some(relationships) = self.package.get_part_rels(&self.doc_part_name) {
+            for relationship in &relationships.items {
+                let kind = match relationship.rel_type.as_str() {
+                    rel_types::FOOTNOTES => StoryKind::Footnote,
+                    rel_types::ENDNOTES => StoryKind::Endnote,
+                    rel_types::COMMENTS => StoryKind::Comment,
+                    _ => continue,
+                };
+                if !relationship_is_internal(relationship) {
+                    continue;
+                }
+                let part_name =
+                    OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+                if !seen.insert((kind, part_name.clone())) {
+                    return Err(Error::Other(format!(
+                        "{kind:?} story part {part_name} is referenced more than once"
+                    )));
+                }
+                let part_xml = self.package.get_part(&part_name).ok_or_else(|| {
+                    Error::Other(format!("{kind:?} story targets missing part {part_name}"))
+                })?;
+                let xml = if kind == StoryKind::Comment {
+                    Cow::Owned(part_xml.to_vec())
+                } else {
+                    Cow::Borrowed(part_xml)
+                };
+                sources.push(StorySource {
+                    root_kind: kind,
+                    part_name,
+                    xml,
+                });
+            }
+        }
+        Ok(sources)
+    }
+
+    /// Discover every supported Word story owner in stable document and
+    /// relationship order.
+    pub fn stories(&self) -> Result<Vec<StoryId>> {
+        let mut stories = Vec::new();
+        let mut seen = HashSet::new();
+        for source in self.story_sources()? {
+            for owner in scan_story_owners(&source.xml, source.root_kind)? {
+                let identity = (owner.kind, source.part_name.clone(), owner.owner_index);
+                if seen.insert(identity) {
+                    stories.push(StoryId {
+                        kind: owner.kind,
+                        part_name: source.part_name.clone(),
+                        owner_index: owner.owner_index,
+                        fingerprint: owner.fingerprint,
+                    });
+                }
+            }
+        }
+        Ok(stories)
+    }
+
+    fn story_source_and_owner<'a>(
+        &'a self,
+        story: &StoryId,
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan)> {
+        let mut sources = self.story_sources()?;
+        let source = sources.iter().position(|source| {
+            source.part_name == story.part_name
+                && (source.root_kind == story.kind
+                    || matches!(story.kind, StoryKind::TableCell | StoryKind::TextBox))
+        });
+        let source = match source {
+            Some(index) => sources.swap_remove(index),
+            None => {
+                if let Some(actual) = sources
+                    .iter()
+                    .find(|source| source.part_name == story.part_name)
+                    .map(|source| source.root_kind)
+                {
+                    return Err(StoryError::WrongOwner {
+                        expected: story.kind,
+                        actual,
+                    }
+                    .into());
+                }
+                return Err(StoryError::OwnerNotFound {
+                    story: story.clone(),
+                }
+                .into());
+            }
+        };
+        let owner = scan_story_owners(&source.xml, source.root_kind)?
+            .into_iter()
+            .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
+            .ok_or_else(|| StoryError::OwnerNotFound {
+                story: story.clone(),
+            })?;
+        if story.fingerprint != owner.fingerprint {
+            return Err(StoryError::Stale {
+                story: story.clone(),
+            }
+            .into());
+        }
+        Ok((source, owner))
+    }
+
+    fn story_item_source<'a>(
+        &'a self,
+        location: &ContentLocation,
+    ) -> Result<(StorySource<'a>, StoryItemSpan)> {
+        let (source, owner) = self.story_source_and_owner(&location.story)?;
+        if location.index_path.len() != 1 {
+            return Err(StoryError::InvalidPath {
+                path: location.index_path.clone(),
+            }
+            .into());
+        }
+        let items = scan_story_items(source.xml.as_ref(), &owner)?;
+        let index = location.index_path[0];
+        let item = items.get(index).cloned().ok_or(StoryError::OutOfBounds {
+            index,
+            len: items.len(),
+        })?;
+        if item.kind != location.item_kind {
+            return Err(StoryError::KindMismatch {
+                expected: location.item_kind,
+                actual: item.kind,
+            }
+            .into());
+        }
+        Ok((source, item))
+    }
+
+    /// Traverse one story's supported content without constructing a second
+    /// document tree.
+    pub fn story_items<'a>(&'a self, story: &StoryId) -> Result<Vec<StoryItemRef<'a>>> {
+        let (source, owner) = self.story_source_and_owner(story)?;
+        let spans = scan_story_items(&source.xml, &owner)?;
+        Ok(spans
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| StoryItemRef {
+                document: self,
+                location: ContentLocation {
+                    story: story.clone(),
+                    item_kind: item.kind,
+                    index_path: vec![index],
+                    is_end: false,
+                },
+            })
+            .collect())
+    }
+
+    fn story_link_info(
+        &self,
+        story: &StoryId,
+        xml: &[u8],
+        link: StoryLinkSpan,
+    ) -> Result<LinkInfo> {
+        let text_item = StoryItemSpan {
+            kind: StoryItemKind::Paragraph,
+            full: link.full.clone(),
+            scan: link.full,
+            direct_owner_child: false,
+            complex_field: false,
+            complex_ancestors: Vec::new(),
+            sdt_context: None,
+        };
+        let text = story_item_text(xml, &text_item)?.unwrap_or_default();
+        let url = link
+            .rel_id
+            .as_deref()
+            .map(|relationship_id| self.hyperlink_url_for_story(story, relationship_id))
+            .transpose()?;
+        Ok(LinkInfo {
+            text,
+            url,
+            anchor: link.anchor,
+            rel_id: link.rel_id,
+        })
+    }
+
+    /// Return one story's modeled hyperlinks in physical source order together
+    /// with the checked location of the item that owns each hyperlink.
+    pub fn story_links(&self, story: &StoryId) -> Result<Vec<(ContentLocation, LinkInfo)>> {
+        let (source, owner) = self.story_source_and_owner(story)?;
+        let items = scan_story_items(source.xml.as_ref(), &owner)?;
+        let mut links = Vec::new();
+        for (index, item) in items.into_iter().enumerate() {
+            for link in scan_story_item_links(source.xml.as_ref(), &item)? {
+                let source_position = link.full.start;
+                let source_end = link.full.end;
+                let owner_width = item.full.end - item.full.start;
+                let info = self.story_link_info(story, source.xml.as_ref(), link)?;
+                links.push((
+                    source_position,
+                    source_end,
+                    owner_width,
+                    ContentLocation {
+                        story: story.clone(),
+                        item_kind: item.kind,
+                        index_path: vec![index],
+                        is_end: false,
+                    },
+                    info,
+                ));
+            }
+        }
+        links.sort_by_key(|(source_position, _, owner_width, _, _)| {
+            (*source_position, *owner_width)
+        });
+        links.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+        Ok(links
+            .into_iter()
+            .map(|(_, _, _, location, info)| (location, info))
+            .collect())
+    }
+
+    fn append_fragment_to_story(
+        &mut self,
+        story: &StoryId,
+        mut fragment: ContentFragment,
+    ) -> Result<()> {
+        let (source, owner) = self.story_source_and_owner(story)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let destination = ContentLocation::end(story.clone());
+        let (boundary, _, _) = validated_content_boundary(&source_xml, &owner, &destination)?;
+        fragment.source_part_name = Some(part_name.clone());
+        fragment.source_story_kind = Some(story.kind);
+        fragment.source_owner_index = Some(story.owner_index);
+        let fragment_xml = content_fragment_for_insertion(self, story, &fragment)?;
+        let mut updated = source_xml;
+        insert_story_fragment(&mut updated, &owner, boundary, fragment_xml)?;
+        set_story_source_xml(self, &part_name, updated)
+    }
+
+    /// Append an inline picture paragraph to one checked story owner.
+    pub fn add_picture_to_story(
+        &mut self,
+        story: &StoryId,
+        image_data: &[u8],
+        image_filename: &str,
+        width: Length,
+        height: Length,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let relationship_id =
+            candidate.add_image_relationship_checked(&owner, image_data, image_filename)?;
+        let drawing_id = candidate.identifiers.reserve_drawing_id()?;
+
+        let mut inline = CT_Inline::new(&relationship_id, width.to_emu(), height.to_emu());
+        inline.doc_pr_id = drawing_id;
+        let run = CT_R {
+            alt_drawings: Vec::new(),
+            properties: None,
+            content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+        };
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(run);
+        let preserve_typed_body = story.kind == StoryKind::Body && owner == candidate.doc_part_name;
+        if preserve_typed_body {
+            candidate
+                .document
+                .body
+                .content
+                .push(BodyContent::Paragraph(paragraph));
+        } else {
+            let mut fragment_paragraph = paragraph;
+            close_typed_story_drawing_namespaces(&mut fragment_paragraph)?;
+            let fragment = ContentFragment::paragraph(fragment_paragraph)?;
+            candidate.append_fragment_to_story(story, fragment)?;
+        }
+        if owner == candidate.doc_part_name {
+            candidate
+                .identifiers
+                .register_nested_story_relationship(story, relationship_id);
+            candidate
+                .identifiers
+                .register_nested_story_drawing(story, drawing_id);
+        }
+        candidate.prepare_staged_package()?;
+        candidate.clone_for_staging().reopen_prepared_staged()?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Append one external hyperlink paragraph to a checked story owner.
+    pub fn add_hyperlink_to_story(&mut self, story: &StoryId, text: &str, url: &str) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let relationship_id =
+            candidate.add_external_relationship_checked(&owner, rel_types::HYPERLINK, url)?;
+        let mut paragraph = CT_P::new();
+        crate::Paragraph {
+            inner: &mut paragraph,
+        }
+        .add_hyperlink(text, &relationship_id);
+        paragraph
+            .hyperlinks
+            .last_mut()
+            .expect("the authored hyperlink was appended")
+            .extra_attributes
+            .push(("xmlns:r".to_owned(), drawing_ns::R.to_owned()));
+        let preserve_typed_body = story.kind == StoryKind::Body && owner == candidate.doc_part_name;
+        if preserve_typed_body {
+            candidate
+                .document
+                .body
+                .content
+                .push(BodyContent::Paragraph(paragraph));
+        } else {
+            let fragment = ContentFragment::paragraph(paragraph)?;
+            candidate.append_fragment_to_story(story, fragment)?;
+        }
+        if owner == candidate.doc_part_name {
+            candidate
+                .identifiers
+                .register_nested_story_relationship(story, relationship_id);
+        }
+        candidate.prepare_staged_package()?;
+        candidate.clone_for_staging().reopen_prepared_staged()?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Add an external hyperlink relationship to a checked story owner.
+    pub fn add_hyperlink_relationship_to_story(
+        &mut self,
+        story: &StoryId,
+        url: &str,
+    ) -> Result<String> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let matching_before = candidate
+            .package
+            .get_part_rels(&owner)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::HYPERLINK
+                    && relationship.target == url
+                    && relationship.target_mode.as_deref() == Some("External")
+            })
+            .count();
+        candidate.add_external_relationship_checked(&owner, rel_types::HYPERLINK, url)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let relationship_id = reopened
+            .package
+            .get_part_rels(&owner)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::HYPERLINK
+                    && relationship.target == url
+                    && relationship.target_mode.as_deref() == Some("External")
+            })
+            .nth(matching_before)
+            .map(|relationship| relationship.id.clone())
+            .ok_or_else(|| Error::Other("authored hyperlink relationship was lost".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(relationship_id)
+    }
+
+    /// Resolve and validate one internal relationship in a checked story scope.
+    pub fn validate_internal_relationship_for_story(
+        &self,
+        story: &StoryId,
+        relationship_id: &str,
+        expected_type: &str,
+    ) -> Result<String> {
+        self.story_source_and_owner(story)?;
+        let relationships = self
+            .package
+            .get_part_rels(&story.part_name)
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "story owner {} has no relationship scope",
+                    story.part_name
+                ))
+            })?;
+        let relationship = relationships.get_by_id(relationship_id).ok_or_else(|| {
+            Error::Other(format!(
+                "story owner {} has no relationship {relationship_id}",
+                story.part_name
+            ))
+        })?;
+        if relationship.rel_type != expected_type {
+            return Err(Error::Other(format!(
+                "story relationship {relationship_id} has type {}, expected {expected_type}",
+                relationship.rel_type
+            )));
+        }
+        if !relationship_is_internal(relationship) {
+            return Err(Error::Other(format!(
+                "story relationship {relationship_id} must be internal"
+            )));
+        }
+        let target = OpcPackage::resolve_rel_target(&story.part_name, &relationship.target);
+        if !self.package.contains_part(&target) {
+            return Err(Error::Other(format!(
+                "story relationship {relationship_id} targets missing part {target}"
+            )));
+        }
+        Ok(target)
+    }
+
+    /// Fetch image bytes through a checked story-local relationship.
+    pub fn image_data_for_story(&self, story: &StoryId, relationship_id: &str) -> Result<Vec<u8>> {
+        let target = self.validate_internal_relationship_for_story(
+            story,
+            relationship_id,
+            rel_types::IMAGE,
+        )?;
+        self.package
+            .get_part(&target)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| Error::Other(format!("image relationship target {target} is missing")))
+    }
+
+    /// Resolve an external hyperlink through a checked story-local relationship.
+    pub fn hyperlink_url_for_story(
+        &self,
+        story: &StoryId,
+        relationship_id: &str,
+    ) -> Result<String> {
+        self.story_source_and_owner(story)?;
+        let relationships = self
+            .package
+            .get_part_rels(&story.part_name)
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "story owner {} has no relationship scope",
+                    story.part_name
+                ))
+            })?;
+        let relationship = relationships.get_by_id(relationship_id).ok_or_else(|| {
+            Error::Other(format!(
+                "story owner {} has no relationship {relationship_id}",
+                story.part_name
+            ))
+        })?;
+        if relationship.rel_type != rel_types::HYPERLINK
+            || relationship.target_mode.as_deref() != Some("External")
+        {
+            return Err(Error::Other(format!(
+                "story relationship {relationship_id} is not an external hyperlink"
+            )));
+        }
+        Ok(relationship.target.clone())
+    }
+
+    /// Replace the visible text of one checked story item atomically.
+    pub fn set_story_text(&mut self, location: &ContentLocation, value: &str) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&location.story)?;
+        if location.index_path.len() != 1 {
+            return Err(StoryError::InvalidPath {
+                path: location.index_path.clone(),
+            }
+            .into());
+        }
+        let items = scan_story_items(&source.xml, &owner)?;
+        let index = location.index_path[0];
+        let item = items.get(index).ok_or(StoryError::OutOfBounds {
+            index,
+            len: items.len(),
+        })?;
+        if item.kind != location.item_kind {
+            return Err(StoryError::KindMismatch {
+                expected: location.item_kind,
+                actual: item.kind,
+            }
+            .into());
+        }
+        if item.kind == StoryItemKind::PreservedNode {
+            return Err(StoryError::NotTextBearing { kind: item.kind }.into());
+        }
+        let updated = replace_story_item_text(&source.xml, item, value)?;
+        if source.part_name == candidate.doc_part_name {
+            candidate.document = CT_Document::from_xml(&updated)?;
+            candidate.flush_to_package()?;
+        } else {
+            candidate.package.set_part(&source.part_name, updated);
+        }
+        let reopened = candidate.reopen_prepared_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Insert one owned fragment at a checked direct-child boundary.
+    pub fn insert_content(
+        &mut self,
+        destination: &ContentLocation,
+        fragment: ContentFragment,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&destination.story)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let (boundary, _, _) = validated_content_boundary(&source_xml, &owner, destination)?;
+        reject_section_owning_content_fragment(&fragment)?;
+        let fragment_xml =
+            content_fragment_for_insertion(&candidate, &destination.story, &fragment)?;
+        let mut updated = source_xml;
+        insert_story_fragment(&mut updated, &owner, boundary, fragment_xml)?;
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Import an owned cross-document main-body fragment at a checked boundary.
+    ///
+    /// The complete supported dependency closure is allocated on a staged
+    /// candidate. Unsupported or external relationships return an error before
+    /// the destination changes.
+    pub fn import_fragment(
+        &mut self,
+        destination: &ContentLocation,
+        fragment: &DocumentFragment,
+        policy: FragmentConflictPolicy,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        if destination.story.kind != StoryKind::Body
+            || destination.story.part_name != candidate.doc_part_name
+        {
+            return Err(Error::Other(
+                "document fragments can be imported only into the main body".to_owned(),
+            ));
+        }
+        let (source, owner) = candidate.story_source_and_owner(&destination.story)?;
+        let part_name = source.part_name.clone();
+        let mut source_xml = source.xml.into_owned();
+        let (boundary, _, _) = validated_content_boundary(&source_xml, &owner, destination)?;
+        let imported_document_xml = crate::field::import_document_fragment_content(
+            &mut candidate,
+            &fragment.package,
+            fragment.include_final_section_properties,
+            policy,
+        )?;
+        let destination_scope = story_namespace_scope_at(&source_xml, owner.full.start)?;
+        let imported_xml = package_authoritative_body_fragment(
+            &imported_document_xml,
+            fragment.include_final_section_properties,
+            &destination_scope,
+        )?;
+        insert_story_fragment(&mut source_xml, &owner, boundary, imported_xml)?;
+        candidate.prepare_staged_package()?;
+        set_story_source_xml(&mut candidate, &part_name, source_xml)?;
+        let reopened = candidate.reopen_prepared_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Remove one checked direct child and return it as an owned fragment.
+    pub fn remove_content_at(&mut self, location: &ContentLocation) -> Result<ContentFragment> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&location.story)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let item = validated_direct_content_item(&source_xml, &owner, location)?;
+        if owner.kind == StoryKind::TableCell
+            && item.kind == StoryItemKind::Paragraph
+            && direct_story_content_items(&source_xml, &owner)?
+                .iter()
+                .filter(|candidate| candidate.kind == StoryItemKind::Paragraph)
+                .count()
+                == 1
+        {
+            return Err(Error::Other(
+                "cannot remove the final required table-cell paragraph".to_owned(),
+            ));
+        }
+        let fragment = ContentFragment {
+            kind: item.kind,
+            xml: source_xml[item.full.clone()].to_vec(),
+            source_part_name: Some(part_name.clone()),
+            source_story_kind: Some(location.story.kind),
+            source_owner_index: Some(location.story.owner_index),
+            namespace_scope: story_namespace_scope_at(&source_xml, item.full.start)?,
+        };
+        reject_section_owning_content_fragment(&fragment)?;
+        validate_fragment_relationships(&candidate, &location.story, &fragment)?;
+        let mut updated = source_xml;
+        updated.drain(item.full);
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(fragment)
+    }
+
+    /// Clone one checked direct child into a checked insertion boundary.
+    pub fn clone_content(
+        &mut self,
+        source_location: &ContentLocation,
+        destination: &ContentLocation,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, source_owner) = candidate.story_source_and_owner(&source_location.story)?;
+        let source_xml = source.xml.into_owned();
+        let source_item =
+            validated_direct_content_item(&source_xml, &source_owner, source_location)?;
+        let mut fragment = ContentFragment {
+            kind: source_item.kind,
+            xml: source_xml[source_item.full.clone()].to_vec(),
+            source_part_name: Some(source_location.story.part_name.clone()),
+            source_story_kind: Some(source_location.story.kind),
+            source_owner_index: Some(source_location.story.owner_index),
+            namespace_scope: story_namespace_scope_at(&source_xml, source_item.full.start)?,
+        };
+        reject_section_owning_content_fragment(&fragment)?;
+
+        let (destination_source, destination_owner) =
+            candidate.story_source_and_owner(&destination.story)?;
+        let destination_part_name = destination_source.part_name.clone();
+        let destination_xml = destination_source.xml.into_owned();
+        let (boundary, _, _) =
+            validated_content_boundary(&destination_xml, &destination_owner, destination)?;
+        fragment.xml = freshen_content_fragment_identities(&mut candidate, &fragment)?;
+        let fragment_xml =
+            content_fragment_for_insertion(&candidate, &destination.story, &fragment)?;
+        let mut updated = destination_xml;
+        insert_story_fragment(&mut updated, &destination_owner, boundary, fragment_xml)?;
+        set_story_source_xml(&mut candidate, &destination_part_name, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Move one checked direct child within its current story owner.
+    pub fn move_content(
+        &mut self,
+        source_location: &ContentLocation,
+        destination: &ContentLocation,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&source_location.story)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let source_item = validated_direct_content_item(&source_xml, &owner, source_location)?;
+
+        let (destination_source, destination_owner) =
+            candidate.story_source_and_owner(&destination.story)?;
+        let destination_xml = destination_source.xml.into_owned();
+        let (boundary, destination_index, _) =
+            validated_content_boundary(&destination_xml, &destination_owner, destination)?;
+        if source_location.story != destination.story {
+            return Err(Error::Other(
+                "content can move only within one unchanged story owner".to_owned(),
+            ));
+        }
+        let direct_items = direct_story_content_items(&source_xml, &owner)?;
+        let source_index = direct_items
+            .iter()
+            .position(|item| item.full == source_item.full)
+            .ok_or_else(|| Error::Other("direct content source was not found".to_owned()))?;
+        let fragment = ContentFragment {
+            kind: source_item.kind,
+            xml: source_xml[source_item.full.clone()].to_vec(),
+            source_part_name: Some(part_name.clone()),
+            source_story_kind: Some(source_location.story.kind),
+            source_owner_index: Some(source_location.story.owner_index),
+            namespace_scope: story_namespace_scope_at(&source_xml, source_item.full.start)?,
+        };
+        reject_section_owning_content_fragment(&fragment)?;
+        validate_fragment_relationships(&candidate, &destination.story, &fragment)?;
+        if destination_index == source_index || destination_index == source_index + 1 {
+            return Ok(());
+        }
+        let removed_len = source_item.full.len();
+        let mut updated = source_xml;
+        updated.drain(source_item.full);
+        let adjusted_boundary = if source_index < destination_index {
+            boundary.checked_sub(removed_len).ok_or_else(|| {
+                Error::Other("content move destination underflowed after removal".to_owned())
+            })?
+        } else {
+            boundary
+        };
+        updated.splice(adjusted_boundary..adjusted_boundary, fragment.xml);
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
     // ---- Paragraph access ----
 
     /// Iterate over direct body items in source order.
@@ -6704,7 +12148,6 @@ impl Document {
             .reserve_footnotes_bundle()
             .expect("an in-memory document can allocate a footnotes part");
         candidate.invalidate_layout();
-        candidate.footnotes_dirty = true;
         use rdocx_oxml::footnotes::CT_Footnote;
         use rdocx_oxml::text::CT_P;
         let id = candidate
@@ -6722,6 +12165,13 @@ impl Document {
             note_type: rdocx_oxml::footnotes::NoteType::Normal,
             paragraphs: vec![p],
         });
+        candidate.footnotes_dirty = true;
+        candidate
+            .flush_dirty_related_story_models()
+            .expect("an in-memory document can publish a typed footnote");
+        candidate
+            .refresh_related_story_caches()
+            .expect("an in-memory document can refresh a typed footnote");
         self.commit_staged_mutation(candidate);
         id
     }
@@ -6988,17 +12438,10 @@ impl Document {
         height: Length,
     ) -> Result<()> {
         let mut candidate = self.clone_for_staging();
-        let (part_name, format) = candidate.reserve_image_part(image_data, image_filename)?;
         let owner = candidate.doc_part_name.clone();
-        let rel_id = candidate
-            .identifiers
-            .reserve_relationship_id_checked(&owner)?;
+        let rel_id =
+            candidate.add_image_relationship_checked(&owner, image_data, image_filename)?;
         let drawing_id = candidate.identifiers.reserve_drawing_id()?;
-        let rel_target = candidate.install_reserved_image_part(&part_name, image_data, format);
-        candidate
-            .package
-            .get_or_create_part_rels(&owner)
-            .add_with_id(&rel_id, rel_types::IMAGE, &rel_target);
 
         let mut inline = CT_Inline::new(&rel_id, width.to_emu(), height.to_emu());
         inline.doc_pr_id = drawing_id;
@@ -7233,19 +12676,10 @@ impl Document {
     /// `rel_id` to [`crate::Cell::add_picture`] for inline cell images.
     pub fn embed_image(&mut self, image_data: &[u8], filename: &str) -> String {
         let mut candidate = self.clone_for_staging();
-        let (part_name, format) = candidate
-            .reserve_image_part(image_data, filename)
-            .expect("an in-memory package cannot exhaust every media part suffix");
         let owner = candidate.doc_part_name.clone();
         let relationship_id = candidate
-            .identifiers
-            .reserve_relationship_id_checked(&owner)
+            .add_image_relationship_checked(&owner, image_data, filename)
             .expect("an in-memory package cannot exhaust every relationship identifier");
-        let rel_target = candidate.install_reserved_image_part(&part_name, image_data, format);
-        candidate
-            .package
-            .get_or_create_part_rels(&owner)
-            .add_with_id(&relationship_id, rel_types::IMAGE, &rel_target);
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
         relationship_id
@@ -7266,9 +12700,9 @@ impl Document {
 
     /// Resolve the public reader projection for one numbering level.
     ///
-    /// `has_unmodeled_properties` reports retained XML or attributes attached
-    /// to this numbering instance, definition, or level. Modeled producer
-    /// metadata that this projection does not expose is not reported here.
+    /// `has_unmodeled_properties` reports extra XML or attributes attached to
+    /// this numbering instance, definition, or level. Modeled producer metadata
+    /// and raw preservation overlays for level properties are not reported.
     pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
         if num_id == 0 {
             return None;
@@ -7315,76 +12749,10 @@ impl Document {
             tentative: level.tentative,
             has_unmodeled_properties: !instance.extra_xml.is_empty()
                 || !instance.extra_attributes.is_empty()
-                || instance
-                    .abstract_num_id_raw
-                    .as_ref()
-                    .is_some_and(|(_, raw, prefixes)| {
-                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                    })
-                || instance
-                    .level_overrides
-                    .iter()
-                    .any(numbering_override_has_unmodeled)
                 || !definition.extra_xml.is_empty()
                 || !definition.extra_attributes.is_empty()
-                || definition
-                    .nsid_raw
-                    .as_ref()
-                    .is_some_and(|(_, raw, prefixes)| {
-                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                    })
-                || definition
-                    .multi_level_type_raw
-                    .as_ref()
-                    .is_some_and(|(_, raw, prefixes)| {
-                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                    })
-                || definition
-                    .tmpl_raw
-                    .as_ref()
-                    .is_some_and(|(_, raw, prefixes)| {
-                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                    })
                 || !level.extra_xml.is_empty()
-                || !level.extra_attributes.is_empty()
-                || level.start_raw.as_ref().is_some_and(|(_, raw, prefixes)| {
-                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                })
-                || level
-                    .num_fmt_raw
-                    .as_ref()
-                    .is_some_and(|(_, raw, prefixes)| {
-                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                    })
-                || level
-                    .p_style_raw
-                    .as_ref()
-                    .is_some_and(|(_, raw, prefixes)| {
-                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                    })
-                || level
-                    .restart_raw
-                    .as_ref()
-                    .is_some_and(|(_, raw, prefixes)| {
-                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                    })
-                || level.legal_raw.as_ref().is_some_and(|(_, raw, prefixes)| {
-                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                })
-                || level.suffix_raw.as_ref().is_some_and(|(_, raw, prefixes)| {
-                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                })
-                || level
-                    .lvl_text_raw
-                    .as_ref()
-                    .is_some_and(|(_, raw, prefixes)| {
-                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                    })
-                || level.lvl_jc_raw.as_ref().is_some_and(|(_, raw, prefixes)| {
-                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
-                })
-                || level.ppr_raw.is_some()
-                || level.rpr_raw.is_some(),
+                || !level.extra_attributes.is_empty(),
             has_paragraph_presentation: level.ppr.as_ref().is_some_and(|properties| {
                 Self::has_list_paragraph_presentation(level.ilvl, properties)
             }),
@@ -8304,11 +13672,8 @@ impl Document {
         let part_name = self.reserve_hdr_ftr_part_name(is_header, hdr_type)?;
         self.clear_authored_story_relationships(&part_name);
 
-        // The image relationship belongs to the header/footer part, not the
-        // document, because that is where the drawing referencing it lives.
-        let img_rel_target = self.store_image_part(image_data, image_filename);
         let img_rel_id = self
-            .add_internal_relationship_checked(&part_name, rel_types::IMAGE, &img_rel_target)
+            .add_image_relationship_checked(&part_name, image_data, image_filename)
             .map_err(|error| {
                 Error::Other(format!(
                     "header or footer image relationship allocation failed: {error}"
@@ -8353,24 +13718,11 @@ impl Document {
         } else {
             &sect.footer_refs
         };
-        let rels = self.package.get_part_rels(&self.doc_part_name)?;
-        let expected_type = if is_header {
-            rel_types::HEADER
-        } else {
-            rel_types::FOOTER
-        };
-        let rel = refs
-            .iter()
-            .filter(|reference| reference.hdr_ftr_type == hdr_type)
-            .find_map(|reference| {
-                rels.get_by_id(&reference.rel_id).filter(|relationship| {
-                    relationship.rel_type == expected_type && relationship_is_internal(relationship)
-                })
-            })?;
-        let part_name = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
-        let xml = self.package.get_part(&part_name)?;
-        let hdr_ftr = CT_HdrFtr::from_xml(xml).ok()?;
-        Some(hdr_ftr.text())
+        let reference = self.first_usable_header_footer_reference(refs, hdr_type, is_header)?;
+        Some(
+            self.load_header_footer(&reference.rel_id, is_header)?
+                .text(),
+        )
     }
 
     // ---- Numbering/Lists ----
@@ -9902,8 +15254,25 @@ impl Document {
         paragraph: &ParagraphRef<'_>,
         run: &RunRef<'_>,
     ) -> CT_RPr {
+        self.effective_run_properties_from_direct(paragraph, run.inner.properties.as_ref())
+    }
+
+    /// Resolve inherited, paragraph-mark, and direct properties for one cached
+    /// complex-field display segment.
+    pub fn effective_field_segment_properties(
+        &self,
+        paragraph: &ParagraphRef<'_>,
+        segment: &FieldDisplaySegmentRef<'_>,
+    ) -> CT_RPr {
+        self.effective_run_properties_from_direct(paragraph, segment.properties())
+    }
+
+    fn effective_run_properties_from_direct(
+        &self,
+        paragraph: &ParagraphRef<'_>,
+        direct: Option<&CT_RPr>,
+    ) -> CT_RPr {
         let paragraph_properties = paragraph.inner.properties.as_ref();
-        let direct = run.inner.properties.as_ref();
         let mut effective = style::resolve_run_properties(
             paragraph_properties.and_then(|properties| properties.style_id.as_deref()),
             direct.and_then(|properties| properties.style_id.as_deref()),
@@ -9971,6 +15340,768 @@ impl Document {
 
     // ---- Section/Page setup ----
 
+    /// Return the number of section property owners in document order.
+    pub fn section_count(&self) -> usize {
+        self.section_properties_in_order().count()
+    }
+
+    /// Iterate over every section in document order.
+    pub fn sections(&self) -> impl Iterator<Item = SectionRef<'_>> {
+        let final_ordinal = self.section_count().checked_sub(1);
+        let has_final_body_owner = self.document.body.sect_pr.is_some();
+        self.section_properties_in_order()
+            .enumerate()
+            .map(move |(ordinal, inner)| SectionRef {
+                ordinal,
+                is_final: has_final_body_owner && Some(ordinal) == final_ordinal,
+                inner,
+            })
+    }
+
+    /// Get a section by its document-order index.
+    pub fn section(&self, index: usize) -> Option<SectionRef<'_>> {
+        let final_ordinal = self.section_count().checked_sub(1);
+        let has_final_body_owner = self.document.body.sect_pr.is_some();
+        self.section_properties_in_order()
+            .nth(index)
+            .map(|inner| SectionRef {
+                ordinal: index,
+                is_final: has_final_body_owner && Some(index) == final_ordinal,
+                inner,
+            })
+    }
+
+    /// Resolve the effective header or footer story for one section variant.
+    pub fn section_story(
+        &self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<Option<SectionStory>> {
+        if section_index >= self.section_count() {
+            return Err(Error::Other(format!(
+                "section index {section_index} is out of range"
+            )));
+        }
+        let mut effective = None;
+        for (source_section, section) in self
+            .section_properties_in_order()
+            .enumerate()
+            .take(section_index + 1)
+        {
+            let references = match kind {
+                HeaderFooterKind::Header => &section.header_refs,
+                HeaderFooterKind::Footer => &section.footer_refs,
+            };
+            if let Some(reference) = self
+                .first_usable_header_footer_reference(references, hdr_type, kind.is_header())
+                .cloned()
+            {
+                effective = Some((source_section, reference));
+            }
+        }
+        let Some((source_section, reference)) = effective else {
+            return Ok(None);
+        };
+        let part_name = self
+            .header_footer_part_name(&reference.rel_id, kind.is_header())
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "section story relationship {} is not a valid internal {:?}",
+                    reference.rel_id, kind
+                ))
+            })?;
+        Ok(Some(SectionStory {
+            story: self.story_id_for_header_footer_part(&part_name, kind)?,
+            source_section,
+            inherited: source_section != section_index,
+        }))
+    }
+
+    /// Ensure that one section has an explicit story, creating an empty story
+    /// when the variant is absent or inherited.
+    pub fn create_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<StoryId> {
+        if let Some(story) = self.section_story(section_index, kind, hdr_type)?
+            && !story.is_inherited()
+        {
+            let first_page_is_enabled = self
+                .section(section_index)
+                .is_some_and(|section| section.properties().title_pg.unwrap_or(false));
+            if hdr_type != HdrFtrType::First || first_page_is_enabled {
+                return Ok(story.story);
+            }
+            let mut candidate = self.clone_for_staging();
+            candidate
+                .section_mut(section_index)
+                .ok_or_else(|| {
+                    Error::Other(format!("section index {section_index} is out of range"))
+                })?
+                .inner
+                .title_pg = Some(true);
+            let reopened = candidate.prepare_and_reopen_staged()?;
+            let result = reopened
+                .section_story(section_index, kind, hdr_type)?
+                .map(|section_story| section_story.story)
+                .ok_or_else(|| {
+                    Error::Other("existing first-page story was not published".to_owned())
+                })?;
+            self.commit_staged_mutation(reopened);
+            return Ok(result);
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let story = candidate.install_empty_section_story(section_index, kind, hdr_type)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let result = reopened
+            .section_story(section_index, kind, hdr_type)?
+            .map(|section_story| section_story.story)
+            .ok_or_else(|| Error::Other("created section story was not published".to_owned()))?;
+        debug_assert_eq!(result.part_name(), story.part_name());
+        self.commit_staged_mutation(reopened);
+        Ok(result)
+    }
+
+    /// Point one section variant at an existing same-kind story in this document.
+    pub fn link_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+        story: &StoryId,
+    ) -> Result<StoryId> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.validate_section_story_target(story, kind)?;
+        let relationship_id = candidate.document_story_relationship(kind, story.part_name())?;
+        let removed = candidate.set_direct_section_story_reference(
+            section_index,
+            kind,
+            hdr_type,
+            Some(relationship_id),
+        )?;
+        candidate.prune_unreachable_authored_section_stories(&removed)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let result = reopened
+            .section_story(section_index, kind, hdr_type)?
+            .map(|section_story| section_story.story)
+            .ok_or_else(|| Error::Other("linked section story was not published".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(result)
+    }
+
+    /// Remove the direct reference so the same variant inherits from the
+    /// nearest preceding section, or remains absent when none exists.
+    pub fn inherit_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let removed =
+            candidate.set_direct_section_story_reference(section_index, kind, hdr_type, None)?;
+        candidate.prune_unreachable_authored_section_stories(&removed)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Clone the effective story into an independent story owned by this section.
+    pub fn unlink_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<StoryId> {
+        let effective = self
+            .section_story(section_index, kind, hdr_type)?
+            .ok_or_else(|| Error::Other("cannot unlink an absent section story".to_owned()))?;
+        self.replace_section_story(section_index, kind, hdr_type, effective.story())
+    }
+
+    /// Replace one variant with an independent copy of an existing same-kind story.
+    pub fn replace_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+        source: &StoryId,
+    ) -> Result<StoryId> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.validate_section_story_target(source, kind)?;
+        let part_name = candidate.clone_header_footer_story_part(source.part_name(), kind)?;
+        let relationship_id = candidate.document_story_relationship(kind, &part_name)?;
+        let removed = candidate.set_direct_section_story_reference(
+            section_index,
+            kind,
+            hdr_type,
+            Some(relationship_id),
+        )?;
+        candidate.prune_unreachable_authored_section_stories(&removed)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let result = reopened
+            .section_story(section_index, kind, hdr_type)?
+            .map(|section_story| section_story.story)
+            .ok_or_else(|| Error::Other("replaced section story was not published".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(result)
+    }
+
+    /// Replace one section variant with a distinct empty story.
+    pub fn remove_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<StoryId> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.install_empty_section_story(section_index, kind, hdr_type)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let result = reopened
+            .section_story(section_index, kind, hdr_type)?
+            .map(|section_story| section_story.story)
+            .ok_or_else(|| Error::Other("empty section story was not published".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(result)
+    }
+
+    fn story_id_for_header_footer_part(
+        &self,
+        part_name: &str,
+        kind: HeaderFooterKind,
+    ) -> Result<StoryId> {
+        let xml = self
+            .package
+            .get_part(part_name)
+            .ok_or_else(|| Error::Other(format!("section story part {part_name} is missing")))?;
+        let story_kind = kind.story_kind();
+        let owner = scan_story_owners(xml, story_kind)?
+            .into_iter()
+            .find(|owner| owner.kind == story_kind)
+            .ok_or_else(|| Error::Other(format!("section story part {part_name} has no root")))?;
+        Ok(StoryId {
+            kind: story_kind,
+            part_name: part_name.to_owned(),
+            owner_index: owner.owner_index,
+            fingerprint: owner.fingerprint,
+        })
+    }
+
+    fn validate_section_story_target(&self, story: &StoryId, kind: HeaderFooterKind) -> Result<()> {
+        if story.kind != kind.story_kind() {
+            return Err(StoryError::WrongOwner {
+                expected: kind.story_kind(),
+                actual: story.kind,
+            }
+            .into());
+        }
+        let (_, owner) = self.story_source_and_owner(story)?;
+        if owner.kind != kind.story_kind() || owner.owner_index != 0 {
+            return Err(Error::Other(
+                "section story target must be the physical header or footer root".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn document_story_relationship(
+        &mut self,
+        kind: HeaderFooterKind,
+        part_name: &str,
+    ) -> Result<String> {
+        if let Some(id) = self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .and_then(|relationships| {
+                relationships.items.iter().find(|relationship| {
+                    relationship.rel_type == kind.relationship_type()
+                        && relationship_is_internal(relationship)
+                        && part_name_identity(&OpcPackage::resolve_rel_target(
+                            &self.doc_part_name,
+                            &relationship.target,
+                        )) == part_name_identity(part_name)
+                })
+            })
+            .map(|relationship| relationship.id.clone())
+        {
+            return Ok(id);
+        }
+        let id = self
+            .identifiers
+            .reserve_relationship_id_checked(&self.doc_part_name)?;
+        let target = relative_target(&self.doc_part_name, part_name);
+        self.package
+            .get_or_create_part_rels(&self.doc_part_name)
+            .add_with_id(&id, kind.relationship_type(), &target);
+        Ok(id)
+    }
+
+    fn set_direct_section_story_reference(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+        relationship_id: Option<String>,
+    ) -> Result<Vec<HdrFtrRef>> {
+        let section = self.section_mut(section_index).ok_or_else(|| {
+            Error::Other(format!("section index {section_index} is out of range"))
+        })?;
+        let references = match kind {
+            HeaderFooterKind::Header => &mut section.inner.header_refs,
+            HeaderFooterKind::Footer => &mut section.inner.footer_refs,
+        };
+        let mut removed = Vec::new();
+        references.retain(|reference| {
+            if reference.hdr_ftr_type == hdr_type {
+                removed.push(reference.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if let Some(rel_id) = relationship_id {
+            references.push(HdrFtrRef {
+                hdr_ftr_type: hdr_type,
+                rel_id,
+            });
+            if hdr_type == HdrFtrType::First {
+                section.inner.title_pg = Some(true);
+            }
+        }
+        Ok(removed)
+    }
+
+    fn install_empty_section_story(
+        &mut self,
+        section_index: usize,
+        kind: HeaderFooterKind,
+        hdr_type: HdrFtrType,
+    ) -> Result<StoryId> {
+        let xml = Self::serialize_hdr_ftr(&CT_HdrFtr::new(), kind.is_header())?;
+        let part_name = self.install_header_footer_story_part(xml, None, kind)?;
+        let relationship_id = self.document_story_relationship(kind, &part_name)?;
+        let removed = self.set_direct_section_story_reference(
+            section_index,
+            kind,
+            hdr_type,
+            Some(relationship_id),
+        )?;
+        self.prune_unreachable_authored_section_stories(&removed)?;
+        self.story_id_for_header_footer_part(&part_name, kind)
+    }
+
+    fn clone_header_footer_story_part(
+        &mut self,
+        source_part: &str,
+        kind: HeaderFooterKind,
+    ) -> Result<String> {
+        let xml = self
+            .package
+            .get_part(source_part)
+            .ok_or_else(|| Error::Other(format!("section story part {source_part} is missing")))?;
+        if !header_footer_story_has_expected_root(xml, kind.is_header()) {
+            return Err(Error::Other(format!(
+                "section story part {source_part} has the wrong root"
+            )));
+        }
+        let mut xml = xml.to_vec();
+        xml = rewrite_authored_doc_pr_ids(&xml, &mut self.identifiers.drawing_ids)?;
+        let relationships = self.package.get_part_rels(source_part).cloned();
+        self.install_header_footer_story_part(
+            xml,
+            relationships.as_ref().map(|rels| (source_part, rels)),
+            kind,
+        )
+    }
+
+    fn install_header_footer_story_part(
+        &mut self,
+        xml: Vec<u8>,
+        copied_relationships: Option<(&str, &oxml_opc::relationship::Relationships)>,
+        kind: HeaderFooterKind,
+    ) -> Result<String> {
+        let part_name = self
+            .identifiers
+            .reserve_part_name("/word", kind.part_stem(), "xml")?;
+        self.package.set_part(&part_name, xml);
+        self.package
+            .content_types
+            .add_override(&part_name, kind.content_type());
+        self.identifiers.register_content_type_override(&part_name);
+        self.identifiers
+            .authored_story_parts
+            .insert(part_name.clone());
+
+        if let Some((source_part, relationships)) = copied_relationships {
+            let mut relationships = relationships.clone();
+            for relationship in &mut relationships.items {
+                if relationship_is_internal(relationship) {
+                    let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                    relationship.target = relative_target(&part_name, &target);
+                }
+            }
+            let owner = relationship_owner_identity(&part_name);
+            let ids = relationships
+                .items
+                .iter()
+                .map(|relationship| relationship.id.clone())
+                .collect::<HashSet<_>>();
+            self.identifiers
+                .relationship_ids
+                .insert(owner.clone(), ids.clone());
+            if !ids.is_empty() {
+                self.identifiers
+                    .authored_story_relationship_ids
+                    .insert(owner, ids);
+            }
+            self.package.set_part_rels(&part_name, relationships);
+        }
+        Ok(part_name)
+    }
+
+    /// Get a mutable section by its document-order index.
+    pub fn section_mut(&mut self, index: usize) -> Option<Section<'_>> {
+        let count = self.section_count();
+        let has_final_body_owner = self.document.body.sect_pr.is_some();
+        if index >= count {
+            return None;
+        }
+        self.invalidate_layout();
+        let mut remaining = index;
+        for content in &mut self.document.body.content {
+            if let BodyContent::Paragraph(paragraph) = content
+                && let Some(inner) = paragraph
+                    .properties
+                    .as_mut()
+                    .and_then(|properties| properties.sect_pr.as_mut())
+            {
+                if remaining == 0 {
+                    return Some(Section {
+                        ordinal: index,
+                        is_final: has_final_body_owner && index + 1 == count,
+                        inner,
+                    });
+                }
+                remaining -= 1;
+            }
+        }
+        self.document.body.sect_pr.as_mut().map(|inner| Section {
+            ordinal: index,
+            is_final: has_final_body_owner && index + 1 == count,
+            inner,
+        })
+    }
+
+    /// Insert an empty section at a document-order index.
+    ///
+    /// `index == section_count()` appends a new final section. Larger indices
+    /// are rejected without changing the document.
+    pub fn insert_section(&mut self, index: usize) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.insert_section_in_place(index)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Remove a section by document-order index and merge its content.
+    ///
+    /// A non-final section merges into the following section. Removing the
+    /// final section promotes the preceding section properties to the final
+    /// body owner. The sole section cannot be removed.
+    pub fn remove_section(&mut self, index: usize) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        let removed_references = candidate.remove_section_in_place(index)?;
+        candidate.prune_unreachable_authored_section_stories(&removed_references)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    fn insert_section_in_place(&mut self, index: usize) -> Result<()> {
+        let count = self.section_count();
+        if index > count {
+            return Err(Error::Other(format!(
+                "section index {index} is out of bounds for insertion into {count} sections"
+            )));
+        }
+        self.invalidate_layout();
+        if count == 0 {
+            self.document.body.sect_pr = Some(empty_section_properties());
+            return Ok(());
+        }
+        if index == count {
+            let previous_final = self.document.body.sect_pr.take().ok_or_else(|| {
+                Error::Other("document section ownership changed during insertion".to_owned())
+            })?;
+            let mut paragraph = CT_P::new();
+            paragraph.properties = Some(CT_PPr {
+                sect_pr: Some(previous_final),
+                ..CT_PPr::default()
+            });
+            self.document
+                .body
+                .content
+                .push(BodyContent::Paragraph(paragraph));
+            self.document.body.sect_pr = Some(empty_section_properties());
+            return Ok(());
+        }
+
+        let insert_at = if index == 0 {
+            0
+        } else {
+            self.paragraph_section_owner_index(index - 1)
+                .ok_or_else(|| {
+                    Error::Other("document section ownership changed during insertion".to_owned())
+                })?
+                + 1
+        };
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            sect_pr: Some(empty_section_properties()),
+            ..CT_PPr::default()
+        });
+        self.document
+            .body
+            .content
+            .insert(insert_at, BodyContent::Paragraph(paragraph));
+        Ok(())
+    }
+
+    fn remove_section_in_place(&mut self, index: usize) -> Result<Vec<HdrFtrRef>> {
+        let count = self.section_count();
+        if count <= 1 {
+            return Err(Error::Other(
+                "the sole document section cannot be removed".to_owned(),
+            ));
+        }
+        if index >= count {
+            return Err(Error::Other(format!(
+                "section index {index} is out of bounds for {count} sections"
+            )));
+        }
+        let removed_section = self
+            .section(index)
+            .expect("validated section index")
+            .properties();
+        let removed = removed_section
+            .header_refs
+            .iter()
+            .chain(&removed_section.footer_refs)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.invalidate_layout();
+
+        if index + 1 < count {
+            let mut effective_headers: [Option<HdrFtrRef>; 3] = [None, None, None];
+            let mut effective_footers: [Option<HdrFtrRef>; 3] = [None, None, None];
+            for section in self.section_properties_in_order().take(index + 1) {
+                for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+                    let slot = header_type_index(hdr_type);
+                    if let Some(reference) = self.first_usable_header_footer_reference(
+                        &section.header_refs,
+                        hdr_type,
+                        true,
+                    ) {
+                        effective_headers[slot] = Some(reference.clone());
+                    }
+                    if let Some(reference) = self.first_usable_header_footer_reference(
+                        &section.footer_refs,
+                        hdr_type,
+                        false,
+                    ) {
+                        effective_footers[slot] = Some(reference.clone());
+                    }
+                }
+            }
+            let following = self
+                .section(index + 1)
+                .expect("every non-final section has a following section");
+            let mut following_header_overrides = [false; 3];
+            let mut following_footer_overrides = [false; 3];
+            for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+                let slot = header_type_index(hdr_type);
+                following_header_overrides[slot] = self
+                    .first_usable_header_footer_reference(
+                        &following.properties().header_refs,
+                        hdr_type,
+                        true,
+                    )
+                    .is_some();
+                following_footer_overrides[slot] = self
+                    .first_usable_header_footer_reference(
+                        &following.properties().footer_refs,
+                        hdr_type,
+                        false,
+                    )
+                    .is_some();
+            }
+            let mut following = self
+                .section_mut(index + 1)
+                .expect("every non-final section has a following section");
+            for (slot, inherited) in effective_headers.into_iter().enumerate() {
+                if !following_header_overrides[slot]
+                    && let Some(inherited) = inherited
+                {
+                    following.properties_mut().header_refs.push(inherited);
+                }
+            }
+            for (slot, inherited) in effective_footers.into_iter().enumerate() {
+                if !following_footer_overrides[slot]
+                    && let Some(inherited) = inherited
+                {
+                    following.properties_mut().footer_refs.push(inherited);
+                }
+            }
+        }
+
+        if index + 1 < count || self.document.body.sect_pr.is_none() {
+            let owner_index = self
+                .paragraph_section_owner_index(index)
+                .expect("every non-final section has a paragraph owner");
+            let remove_empty_owner = {
+                let BodyContent::Paragraph(paragraph) =
+                    &mut self.document.body.content[owner_index]
+                else {
+                    unreachable!("recorded section owner is not a paragraph")
+                };
+                let properties = paragraph
+                    .properties
+                    .as_mut()
+                    .expect("a section owner has paragraph properties");
+                properties.sect_pr = None;
+                if *properties == CT_PPr::default() {
+                    paragraph.properties = None;
+                }
+                *paragraph == CT_P::new()
+            };
+            if remove_empty_owner {
+                self.document.body.content.remove(owner_index);
+            }
+        } else {
+            let previous_owner = self
+                .paragraph_section_owner_index(index - 1)
+                .expect("a removable final section has a preceding paragraph owner");
+            let (promoted, remove_empty_owner) = {
+                let BodyContent::Paragraph(paragraph) =
+                    &mut self.document.body.content[previous_owner]
+                else {
+                    unreachable!("recorded section owner is not a paragraph")
+                };
+                let properties = paragraph
+                    .properties
+                    .as_mut()
+                    .expect("a section owner has paragraph properties");
+                let promoted = properties
+                    .sect_pr
+                    .take()
+                    .expect("recorded section properties disappeared");
+                if *properties == CT_PPr::default() {
+                    paragraph.properties = None;
+                }
+                (promoted, *paragraph == CT_P::new())
+            };
+            if remove_empty_owner {
+                self.document.body.content.remove(previous_owner);
+            }
+            self.document.body.sect_pr = Some(promoted);
+        }
+        Ok(removed)
+    }
+
+    fn paragraph_section_owner_index(&self, ordinal: usize) -> Option<usize> {
+        self.document
+            .body
+            .content
+            .iter()
+            .enumerate()
+            .filter(|(_, content)| {
+                matches!(
+                    content,
+                    BodyContent::Paragraph(CT_P {
+                        properties: Some(properties),
+                        ..
+                    }) if properties.sect_pr.is_some()
+                )
+            })
+            .nth(ordinal)
+            .map(|(index, _)| index)
+    }
+
+    fn prune_unreachable_authored_section_stories(&mut self, removed: &[HdrFtrRef]) -> Result<()> {
+        let modeled_ids = self.main_story_relationship_ids();
+        let mut active_ids = modeled_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let opaque_ids = self.opaque_relationship_ids_from_serialized_story(&modeled_ids)?;
+        active_ids.extend(opaque_ids.iter().map(String::as_str));
+        let removable_ids = removed
+            .iter()
+            .map(|reference| reference.rel_id.as_str())
+            .filter(|id| !active_ids.contains(id))
+            .collect::<HashSet<_>>();
+        let candidates = self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .filter(|relationship| {
+                removable_ids.contains(relationship.id.as_str())
+                    && relationship_is_internal(relationship)
+                    && matches!(
+                        relationship.rel_type.as_str(),
+                        rel_types::HEADER | rel_types::FOOTER
+                    )
+            })
+            .map(|relationship| {
+                (
+                    relationship.id.clone(),
+                    OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target),
+                )
+            })
+            .filter(|(_, target)| self.identifiers.authored_story_parts.contains(target))
+            .collect::<Vec<_>>();
+
+        for (relationship_id, target) in candidates {
+            if let Some(relationships) = self.package.get_part_rels_mut(&self.doc_part_name) {
+                relationships
+                    .items
+                    .retain(|relationship| relationship.id != relationship_id);
+            }
+            self.identifiers
+                .retire_authored_story_relationships(&self.doc_part_name, [relationship_id]);
+            let target_identity = part_name_identity(&target);
+            let still_referenced = self.package.part_rels.iter().any(|(owner, relationships)| {
+                relationships.items.iter().any(|relationship| {
+                    relationship_is_internal(relationship)
+                        && part_name_identity(&OpcPackage::resolve_rel_target(
+                            owner,
+                            &relationship.target,
+                        )) == target_identity
+                })
+            });
+            if still_referenced {
+                continue;
+            }
+            self.clear_authored_story_relationships(&target);
+            self.package.remove_part(&target);
+            self.package.remove_part_rels(&target);
+            self.package.content_types.remove_override(&target);
+            self.identifiers.authored_story_parts.remove(&target);
+            self.identifiers.retire_authored_part(&target);
+        }
+        Ok(())
+    }
+
     /// Get the section properties (page size, margins).
     pub fn section_properties(&self) -> Option<&CT_SectPr> {
         self.document.body.sect_pr.as_ref()
@@ -9985,52 +16116,47 @@ impl Document {
             .get_or_insert_with(CT_SectPr::default_letter)
     }
 
-    /// Set page size.
+    /// Set page size without validation, preserving the legacy infallible behavior.
     pub fn set_page_size(&mut self, width: Length, height: Length) {
-        let sect = self.section_properties_mut();
-        sect.page_width = Some(width.as_twips());
-        sect.page_height = Some(height.as_twips());
+        let section = self.section_properties_mut();
+        section.page_width = Some(width.as_twips());
+        section.page_height = Some(height.as_twips());
     }
 
     /// Set page orientation to landscape (swaps width and height if needed).
     pub fn set_landscape(&mut self) {
-        let sect = self.section_properties_mut();
-        sect.orientation = Some(ST_PageOrientation::Landscape);
-        // Swap width/height if portrait dimensions
-        if let (Some(w), Some(h)) = (sect.page_width, sect.page_height)
-            && w.0 < h.0
-        {
-            sect.page_width = Some(h);
-            sect.page_height = Some(w);
+        let ordinal = self.section_count().saturating_sub(1);
+        Section {
+            ordinal,
+            is_final: true,
+            inner: self.section_properties_mut(),
         }
+        .set_orientation(ST_PageOrientation::Landscape);
     }
 
     /// Set page orientation to portrait (swaps width and height if needed).
     pub fn set_portrait(&mut self) {
-        let sect = self.section_properties_mut();
-        sect.orientation = Some(ST_PageOrientation::Portrait);
-        // Swap width/height if landscape dimensions
-        if let (Some(w), Some(h)) = (sect.page_width, sect.page_height)
-            && w.0 > h.0
-        {
-            sect.page_width = Some(h);
-            sect.page_height = Some(w);
+        let ordinal = self.section_count().saturating_sub(1);
+        Section {
+            ordinal,
+            is_final: true,
+            inner: self.section_properties_mut(),
         }
+        .set_orientation(ST_PageOrientation::Portrait);
     }
 
-    /// Set all page margins.
+    /// Set page margins without validation, preserving legacy behavior.
     pub fn set_margins(&mut self, top: Length, right: Length, bottom: Length, left: Length) {
-        let sect = self.section_properties_mut();
-        sect.margin_top = Some(top.as_twips());
-        sect.margin_right = Some(right.as_twips());
-        sect.margin_bottom = Some(bottom.as_twips());
-        sect.margin_left = Some(left.as_twips());
+        let section = self.section_properties_mut();
+        section.margin_top = Some(top.as_twips());
+        section.margin_right = Some(right.as_twips());
+        section.margin_bottom = Some(bottom.as_twips());
+        section.margin_left = Some(left.as_twips());
     }
 
-    /// Set equal-width column layout.
+    /// Set equal-width columns without validation, preserving legacy behavior.
     pub fn set_columns(&mut self, num: u32, spacing: Length) {
-        let sect = self.section_properties_mut();
-        sect.columns = Some(CT_Columns {
+        self.section_properties_mut().columns = Some(CT_Columns {
             num: Some(num),
             space: Some(spacing.as_twips()),
             equal_width: Some(true),
@@ -10039,21 +16165,27 @@ impl Document {
         });
     }
 
-    /// Set header and footer distances from page edges.
+    /// Set header and footer distances without validation for compatibility.
     pub fn set_header_footer_distance(&mut self, header: Length, footer: Length) {
-        let sect = self.section_properties_mut();
-        sect.header_distance = Some(header.as_twips());
-        sect.footer_distance = Some(footer.as_twips());
+        let section = self.section_properties_mut();
+        section.header_distance = Some(header.as_twips());
+        section.footer_distance = Some(footer.as_twips());
     }
 
-    /// Set the gutter margin.
+    /// Set the gutter margin without validation, preserving legacy behavior.
     pub fn set_gutter(&mut self, gutter: Length) {
         self.section_properties_mut().gutter = Some(gutter.as_twips());
     }
 
     /// Enable or disable different first page header/footer.
     pub fn set_different_first_page(&mut self, val: bool) {
-        self.section_properties_mut().title_pg = Some(val);
+        let ordinal = self.section_count().saturating_sub(1);
+        Section {
+            ordinal,
+            is_final: true,
+            inner: self.section_properties_mut(),
+        }
+        .set_different_first_page(val);
     }
 
     /// Enable or disable automatic document hyphenation.
@@ -10085,6 +16217,24 @@ impl Document {
             .map_err(|error| {
                 Error::Other(format!("settings relationship allocation failed: {error}"))
             })?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Return whether distinct even-page header and footer stories are enabled.
+    pub fn even_and_odd_headers(&self) -> bool {
+        self.settings
+            .as_ref()
+            .is_some_and(CT_Settings::even_and_odd_headers)
+    }
+
+    /// Enable or disable distinct even-page header and footer story selection.
+    pub fn set_even_and_odd_headers(&mut self, enabled: bool) -> Result<()> {
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_even_and_odd_headers(enabled)?;
         self.commit_staged_mutation(candidate);
         Ok(())
     }
@@ -11127,6 +17277,29 @@ impl Document {
         index: usize,
         other: &Document,
     ) -> Result<()> {
+        self.insert_document_content_staged_with_numbering_policy(index, other, false)
+            .map(|_| ())
+    }
+
+    pub(crate) fn insert_document_fragment_content_staged(
+        &mut self,
+        index: usize,
+        other: &Document,
+        reuse_equivalent_numbering: bool,
+    ) -> Result<HashMap<u32, u32>> {
+        self.insert_document_content_staged_with_numbering_policy(
+            index,
+            other,
+            reuse_equivalent_numbering,
+        )
+    }
+
+    fn insert_document_content_staged_with_numbering_policy(
+        &mut self,
+        index: usize,
+        other: &Document,
+        reuse_equivalent_numbering: bool,
+    ) -> Result<HashMap<u32, u32>> {
         self.reserve_merge_bundles(other)?;
         self.invalidate_layout();
         self.merge_styles(other)?;
@@ -11139,7 +17312,7 @@ impl Document {
                 .insert(insert_at + i, content.clone());
         }
 
-        self.remap_merged_numbering(other, insert_at)
+        self.remap_merged_numbering(other, insert_at, reuse_equivalent_numbering)
     }
 
     fn append_document_content(&mut self, other: &Document) -> Result<()> {
@@ -11151,7 +17324,8 @@ impl Document {
             .body
             .content
             .extend(other.document.body.content.iter().cloned());
-        self.remap_merged_numbering(other, start_idx)
+        self.remap_merged_numbering(other, start_idx, false)
+            .map(|_| ())
     }
 
     fn reserve_merge_bundles(&mut self, other: &Document) -> Result<()> {
@@ -11216,27 +17390,125 @@ impl Document {
         style::validate_style_graph(&self.styles)
     }
 
+    pub(crate) fn equivalent_numbering_dependency_id(
+        &self,
+        other: &Document,
+        num_id: u32,
+    ) -> Option<u32> {
+        let (left_numbering, right_numbering) =
+            self.numbering.as_ref().zip(other.numbering.as_ref())?;
+        let right = right_numbering
+            .nums
+            .iter()
+            .find(|instance| instance.num_id == num_id)?;
+        let right_abstract = right_numbering
+            .abstract_nums
+            .iter()
+            .find(|definition| definition.abstract_num_id == right.abstract_num_id)?;
+        left_numbering.nums.iter().find_map(|left| {
+            let left_abstract = left_numbering
+                .abstract_nums
+                .iter()
+                .find(|definition| definition.abstract_num_id == left.abstract_num_id)?;
+            (equivalent_abstract_numbering(left_abstract, right_abstract)
+                && equivalent_numbering_instance(left, right, left.abstract_num_id))
+            .then_some(left.num_id)
+        })
+    }
+
     /// Merge numbering from another document and remap IDs in the merged content.
     /// `start_idx` is the index where the other document's content starts in self.
-    fn remap_merged_numbering(&mut self, other: &Document, start_idx: usize) -> Result<()> {
+    fn remap_merged_numbering(
+        &mut self,
+        other: &Document,
+        start_idx: usize,
+        reuse_equivalent: bool,
+    ) -> Result<HashMap<u32, u32>> {
         let Some(other_numbering) = &other.numbering else {
-            return Ok(());
+            return Ok(HashMap::new());
         };
+        let existing_numbering = self.numbering.clone();
         let mut abstract_remap = HashMap::new();
+        let mut new_abstract_ids = HashSet::new();
         for abs_num in &other_numbering.abstract_nums {
-            let new_id = self.identifiers.reserve_abstract_numbering_id()?;
+            let new_id = existing_numbering
+                .as_ref()
+                .filter(|_| reuse_equivalent)
+                .and_then(|numbering| {
+                    numbering.abstract_nums.iter().find_map(|existing| {
+                        equivalent_abstract_numbering(existing, abs_num)
+                            .then_some(existing.abstract_num_id)
+                    })
+                })
+                .map(Ok)
+                .unwrap_or_else(|| self.identifiers.reserve_abstract_numbering_id())?;
+            if !existing_numbering.as_ref().is_some_and(|numbering| {
+                numbering
+                    .abstract_nums
+                    .iter()
+                    .any(|existing| existing.abstract_num_id == new_id)
+            }) {
+                new_abstract_ids.insert(abs_num.abstract_num_id);
+            }
             abstract_remap.insert(abs_num.abstract_num_id, new_id);
         }
         let mut num_remap = HashMap::new();
+        let mut new_num_ids = HashSet::new();
         for num in &other_numbering.nums {
-            num_remap.insert(
-                num.num_id,
-                self.identifiers.reserve_numbering_instance_id()?,
-            );
             if let std::collections::hash_map::Entry::Vacant(entry) =
                 abstract_remap.entry(num.abstract_num_id)
             {
-                entry.insert(self.identifiers.reserve_abstract_numbering_id()?);
+                let allocated = self.identifiers.reserve_abstract_numbering_id()?;
+                new_abstract_ids.insert(num.abstract_num_id);
+                entry.insert(allocated);
+            }
+            let mapped_abstract = abstract_remap[&num.abstract_num_id];
+            let new_id = existing_numbering
+                .as_ref()
+                .filter(|_| reuse_equivalent)
+                .and_then(|numbering| {
+                    numbering.nums.iter().find_map(|existing| {
+                        equivalent_numbering_instance(existing, num, mapped_abstract)
+                            .then_some(existing.num_id)
+                    })
+                })
+                .map(Ok)
+                .unwrap_or_else(|| self.identifiers.reserve_numbering_instance_id())?;
+            if !existing_numbering.as_ref().is_some_and(|numbering| {
+                numbering
+                    .nums
+                    .iter()
+                    .any(|existing| existing.num_id == new_id)
+            }) {
+                new_num_ids.insert(num.num_id);
+            }
+            num_remap.insert(num.num_id, new_id);
+        }
+
+        for source_style in &other.styles.styles {
+            let Some(source_num_id) = source_style
+                .ppr
+                .as_ref()
+                .and_then(|properties| properties.num_id)
+            else {
+                continue;
+            };
+            let Some(mapped_num_id) = num_remap.get(&source_num_id).copied() else {
+                continue;
+            };
+            let Some(destination_style) = self
+                .styles
+                .styles
+                .iter_mut()
+                .find(|style| style.style_id == source_style.style_id)
+            else {
+                continue;
+            };
+            if destination_style == source_style
+                && let Some(properties) = destination_style.ppr.as_mut()
+            {
+                properties.num_id = Some(mapped_num_id);
+                properties.num_id_raw = None;
             }
         }
 
@@ -11249,14 +17521,21 @@ impl Document {
                 extra_xml: Vec::new(),
             });
         for abs_num in &other_numbering.abstract_nums {
+            if !new_abstract_ids.contains(&abs_num.abstract_num_id) {
+                continue;
+            }
             let mut new_abs = abs_num.clone();
             new_abs.abstract_num_id = abstract_remap[&abs_num.abstract_num_id];
             numbering.abstract_nums.push(new_abs);
         }
         for num in &other_numbering.nums {
+            if !new_num_ids.contains(&num.num_id) {
+                continue;
+            }
             let mut new_num = num.clone();
             new_num.num_id = num_remap[&num.num_id];
             new_num.abstract_num_id = abstract_remap[&num.abstract_num_id];
+            new_num.abstract_num_id_raw = None;
             numbering.nums.push(new_num);
         }
         let incoming_count = other.document.body.content.len();
@@ -11273,7 +17552,7 @@ impl Document {
                 }
             },
         );
-        Ok(())
+        Ok(num_remap)
     }
 
     // ---- Table of Contents ----
@@ -11515,12 +17794,19 @@ impl Document {
     /// A `replacement` that contains `placeholder` is substituted once, not
     /// repeatedly.
     pub fn replace_text(&mut self, placeholder: &str, replacement: &str) -> usize {
+        self.try_replace_text(placeholder, replacement)
+            .expect("text replacement package preflight failed")
+    }
+
+    /// Fallible twin of [`Self::replace_text`].
+    ///
+    /// The complete replacement is staged, serialized, and reopened before it
+    /// replaces the live document. A preflight failure leaves `self` unchanged.
+    pub fn try_replace_text(&mut self, placeholder: &str, replacement: &str) -> Result<usize> {
         let mut candidate = self.clone_for_staging();
-        let count = candidate
-            .replace_batch(&[(placeholder, replacement)])
-            .expect("text replacement package preflight failed");
+        let count = candidate.replace_batch(&[(placeholder, replacement)])?;
         self.commit_staged_mutation(candidate);
-        count
+        Ok(count)
     }
 
     /// Replace multiple placeholders at once. Returns total replacements.
@@ -11730,13 +18016,7 @@ impl Document {
     }
 
     fn even_headers_enabled(&self) -> bool {
-        let Some(settings) = self.settings.as_ref() else {
-            return false;
-        };
-        settings
-            .to_xml()
-            .ok()
-            .is_some_and(|xml| settings_enable_even_headers(&xml))
+        self.even_and_odd_headers()
     }
 
     // ---- Regex replacement ----
@@ -11906,7 +18186,24 @@ impl Document {
     fn load_header_footer(&self, rel_id: &str, is_header: bool) -> Option<CT_HdrFtr> {
         let part_name = self.header_footer_part_name(rel_id, is_header)?;
         let xml = self.package.get_part(&part_name)?;
+        if !header_footer_story_has_expected_root(xml, is_header) {
+            return None;
+        }
         CT_HdrFtr::from_xml(xml).ok()
+    }
+
+    fn first_usable_header_footer_reference<'a>(
+        &self,
+        references: &'a [HdrFtrRef],
+        hdr_type: HdrFtrType,
+        is_header: bool,
+    ) -> Option<&'a HdrFtrRef> {
+        references.iter().find(|reference| {
+            reference.hdr_ftr_type == hdr_type
+                && self
+                    .load_header_footer(&reference.rel_id, is_header)
+                    .is_some()
+        })
     }
 
     /// Run raw XML replacement on all XML parts (for text boxes, shapes, charts, etc.).
@@ -13326,45 +19623,43 @@ fn chart_namespace_matches(namespace: &ResolveResult<'_>) -> bool {
     }
 }
 
-fn settings_enable_even_headers(xml: &[u8]) -> bool {
-    let mut reader = NsReader::from_reader(xml);
-    reader.config_mut().trim_text(true);
-    let mut buffer = Vec::new();
-    let mut depth = 0usize;
-    loop {
-        let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) else {
-            return false;
-        };
-        match event {
-            Event::Start(ref element) => {
-                if depth == 1
-                    && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
-                    && matches_local_name(element.name().as_ref(), b"evenAndOddHeaders")
-                {
-                    return word_on_off_value(&reader, element);
-                }
-                depth += 1;
-            }
-            Event::Empty(ref element)
-                if depth == 1
-                    && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
-                    && matches_local_name(element.name().as_ref(), b"evenAndOddHeaders") =>
-            {
-                return word_on_off_value(&reader, element);
-            }
-            Event::End(_) => depth = depth.saturating_sub(1),
-            Event::Eof => return false,
-            _ => {}
-        }
-        buffer.clear();
-    }
-}
-
 fn header_type_index(hdr_type: HdrFtrType) -> usize {
     match hdr_type {
         HdrFtrType::Default => 0,
         HdrFtrType::First => 1,
         HdrFtrType::Even => 2,
+    }
+}
+
+fn header_footer_story_has_expected_root(xml: &[u8], is_header: bool) -> bool {
+    let expected_local_name = if is_header {
+        b"hdr".as_slice()
+    } else {
+        b"ftr".as_slice()
+    };
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buffer = Vec::new();
+    loop {
+        let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) else {
+            return false;
+        };
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                return matches!(
+                    namespace,
+                    ResolveResult::Bound(Namespace(uri)) if uri == WORD_NAMESPACE.as_bytes()
+                ) && matches_local_name(element.name().as_ref(), expected_local_name);
+            }
+            Event::Decl(_) | Event::Comment(_) | Event::PI(_) => {}
+            Event::Eof
+            | Event::Text(_)
+            | Event::CData(_)
+            | Event::DocType(_)
+            | Event::GeneralRef(_)
+            | Event::End(_) => return false,
+        }
+        buffer.clear();
     }
 }
 
@@ -13435,29 +19730,6 @@ fn materialize_header_footer_inheritance(
             false,
         );
     }
-}
-
-fn word_on_off_value(
-    reader: &NsReader<&[u8]>,
-    element: &quick_xml::events::BytesStart<'_>,
-) -> bool {
-    element
-        .attributes()
-        .flatten()
-        .find_map(|attribute| {
-            let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
-            if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
-                && local.as_ref() == b"val"
-            {
-                attribute
-                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
-                    .ok()
-                    .map(|value| !matches!(value.as_ref(), "0" | "false" | "off"))
-            } else {
-                None
-            }
-        })
-        .unwrap_or(true)
 }
 
 /// Express `target_part` relative to the directory holding `source_part`.
@@ -15096,6 +21368,21 @@ mod tests {
     const FX087_CANDIDATE_SHA256: &str =
         "54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9";
 
+    #[test]
+    fn authored_relationship_source_order_resolves_namespaces_and_entities() {
+        let xml = format!(
+            r#"<w:root xmlns:w="{WORD_NAMESPACE}" xmlns:r="{}" xmlns:q="{}" xmlns:x="urn:foreign"><x:lookalike x:id="rId1">r:id="rId1"</x:lookalike><w:a q:embed="rId2"/><w:b r:id="rId&#49;"/></w:root>"#,
+            drawing_ns::R,
+            drawing_ns::R,
+        );
+        let relationship_ids = HashSet::from(["rId1".to_owned(), "rId2".to_owned()]);
+
+        assert_eq!(
+            authored_relationship_ids_in_source_order(xml.as_bytes(), &relationship_ids),
+            Some(vec!["rId2".to_owned(), "rId1".to_owned()])
+        );
+    }
+
     fn replace_numbering_xml(document: &mut Document, xml: Vec<u8>) -> Vec<u8> {
         let mut package =
             OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
@@ -15159,7 +21446,7 @@ mod tests {
     }
 
     #[test]
-    fn encoded_identifier_aliases_collide_during_package_scan() {
+    fn same_part_normalized_drawing_ids_remain_invalid() {
         let mut package =
             OpcPackage::with_main_part("word/document.xml", content_types::WORD_DOCUMENT);
         package.set_part(
@@ -15172,6 +21459,73 @@ mod tests {
         );
         let error = DocumentIdentifiers::scan(&package).unwrap_err();
         assert!(error.to_string().contains("duplicate drawing id 1"));
+    }
+
+    #[test]
+    fn foreign_doc_pr_does_not_enter_drawing_identity_scope() {
+        let mut package =
+            OpcPackage::with_main_part("word/document.xml", content_types::WORD_DOCUMENT);
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{WORD_NAMESPACE}" xmlns:wp="{}" xmlns:x="urn:foreign"><w:body><x:docPr id="1"/><wp:docPr id="1"/></w:body></w:document>"#,
+                drawing_ns::WP,
+            )
+            .into_bytes(),
+        );
+        let mut identifiers = DocumentIdentifiers::scan(&package).unwrap();
+        assert_eq!(identifiers.reserve_drawing_id().unwrap(), 2);
+    }
+
+    #[test]
+    fn default_namespace_use_respects_element_scope() {
+        let root = "urn:root-default";
+        let declarations = vec![("xmlns".to_owned(), root.to_owned())];
+        for xml in [
+            format!(
+                r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body foreign="value"/></q:document>"#
+            ),
+            format!(
+                r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body><local xmlns="urn:nested"><child/></local></q:body></q:document>"#
+            ),
+            format!(
+                r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body><local xmlns="{root}"><child/></local></q:body></q:document>"#
+            ),
+            format!(
+                r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body><local xmlns=""><child/></local></q:body></q:document>"#
+            ),
+            format!(
+                r#"<?xml version="1.0"?><w:document xmlns:w="{WORD_NAMESPACE}" xmlns="{root}"><w:body><w:p><w:r><w:drawing xmlns:wp="{}" xmlns:a="{}"><wp:inline><wp:docPr id="1"/><a:graphic/></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#,
+                drawing_ns::WP,
+                drawing_ns::A,
+            ),
+        ] {
+            assert_eq!(
+                unsafe_serializer_namespace_prefix(&declarations, &[], Some(xml.as_bytes())),
+                None,
+                "{xml}"
+            );
+        }
+
+        let used = format!(
+            r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body><local/></q:body></q:document>"#
+        );
+        assert_eq!(
+            unsafe_serializer_namespace_prefix(&declarations, &[], Some(used.as_bytes())),
+            Some("default".to_owned())
+        );
+        let malformed =
+            format!(r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}"><q:body>"#);
+        let ambiguous = format!(
+            r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns="{root}" xmlns="urn:other"><q:body/></q:document>"#
+        );
+        for xml in [malformed, ambiguous] {
+            assert_eq!(
+                unsafe_serializer_namespace_prefix(&declarations, &[], Some(xml.as_bytes())),
+                Some("default".to_owned()),
+                "{xml}"
+            );
+        }
     }
 
     #[test]
@@ -15569,7 +21923,8 @@ mod tests {
         );
 
         let mut staged = document.clone_for_staging();
-        staged.canonicalize_authored_identifiers().unwrap();
+        staged.canonicalize_typed_identifiers().unwrap();
+        staged.canonicalize_drawing_ids().unwrap();
         let numeric = staged
             .package
             .get_part_rels("/word/document.xml")
@@ -15596,7 +21951,8 @@ mod tests {
             .unwrap();
         assert!(authored.contains(&numeric));
         assert!(!authored.contains(&provisional));
-        staged.canonicalize_authored_identifiers().unwrap();
+        staged.canonicalize_typed_identifiers().unwrap();
+        staged.canonicalize_drawing_ids().unwrap();
         assert_eq!(
             staged
                 .package
@@ -19675,6 +26031,131 @@ mod tests {
             .to_owned()
     }
 
+    fn extracted_logical_lines(label: &str, pdf: &[u8]) -> Vec<String> {
+        let path =
+            std::env::temp_dir().join(format!("rdocx-fx092-{label}-{}.pdf", std::process::id()));
+        fs::write(&path, pdf).expect("write logical-order PDF");
+        let output = Command::new("pdftotext")
+            .arg(&path)
+            .arg("-")
+            .output()
+            .expect("run pinned pdftotext");
+        fs::remove_file(path).expect("remove logical-order PDF");
+        assert!(
+            output.status.success(),
+            "pdftotext failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("pdftotext output is UTF-8")
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("FX092-"))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn rendered_pdf_page_sha(label: &str, pdf: &[u8]) -> String {
+        let prefix =
+            std::env::temp_dir().join(format!("rdocx-fx092-{label}-render-{}", std::process::id()));
+        let pdf_path = prefix.with_extension("pdf");
+        let png_path = prefix.with_extension("png");
+        fs::write(&pdf_path, pdf).expect("write PDF raster candidate");
+        let output = Command::new("pdftoppm")
+            .args(["-png", "-r", "72", "-f", "1", "-l", "1", "-singlefile"])
+            .arg(&pdf_path)
+            .arg(&prefix)
+            .output()
+            .expect("run pinned pdftoppm");
+        assert!(
+            output.status.success(),
+            "pdftoppm failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let digest = sha256(&png_path);
+        fs::remove_file(pdf_path).expect("remove PDF raster candidate");
+        fs::remove_file(png_path).expect("remove PDF raster output");
+        digest
+    }
+
+    #[test]
+    fn large_word_and_presentation_pdfs_preserve_logical_reading_order() {
+        let version = Command::new("pdftotext")
+            .arg("-v")
+            .output()
+            .expect("run pinned pdftotext version check");
+        assert_eq!(
+            String::from_utf8_lossy(&version.stderr).lines().next(),
+            Some("pdftotext version 26.01.0")
+        );
+        let version = Command::new("pdftoppm")
+            .arg("-v")
+            .output()
+            .expect("run pinned pdftoppm version check");
+        assert_eq!(
+            String::from_utf8_lossy(&version.stderr).lines().next(),
+            Some("pdftoppm version 26.01.0")
+        );
+
+        let mut word = Document::new();
+        let mut expected_word = Vec::new();
+        for index in 0..120 {
+            let first = format!("FX092-WORD-{index:03} alpha ");
+            let expected = format!("{first}中文 beta gamma");
+            let mut paragraph = word.add_paragraph("");
+            paragraph.add_run(&first);
+            paragraph.add_run("中文 ").bold(index % 2 == 0);
+            paragraph.add_run("beta gamma").italic(index % 2 == 1);
+            expected_word.push(expected);
+        }
+
+        let mut presentation = rpptx::Presentation::new().expect("create presentation");
+        let mut expected_presentation = Vec::new();
+        for slide_index in 0..12 {
+            presentation.add_slide(6).expect("add blank slide");
+            let mut slide = presentation.slide_mut(slide_index).expect("new slide");
+            for row in 0..4 {
+                let line_index = slide_index * 4 + row;
+                let first = format!("FX092-PPT-{line_index:03} alpha ");
+                let expected = format!("{first}中文 beta gamma");
+                let mut shape = slide
+                    .add_textbox(
+                        Length::inches(0.75).as_emu(),
+                        Length::inches(0.5 + row as f64 * 1.25).as_emu(),
+                        Length::inches(8.5).as_emu(),
+                        Length::inches(0.75).as_emu(),
+                    )
+                    .expect("add logical-order textbox");
+                shape.set_text(&first).expect("set first text run");
+                let mut frame = shape.text_frame().expect("textbox text frame");
+                let mut paragraph = frame.paragraph_mut(0).expect("textbox paragraph");
+                paragraph.add_run("中文 ");
+                paragraph.add_run("beta gamma");
+                expected_presentation.push(expected);
+            }
+        }
+
+        let word_pdf = word.to_pdf_deterministic().expect("render Word PDF");
+        assert_eq!(extracted_logical_lines("word", &word_pdf), expected_word);
+        // Recorded from the pre-F-X092 writer with the pinned Poppler build.
+        assert_eq!(
+            rendered_pdf_page_sha("word", &word_pdf),
+            "7d800158f0b87c9596f524c4bfc91fbfa53e949b2113d573a8fc0ce3a28f332c"
+        );
+
+        let presentation_pdf = presentation
+            .to_pdf_deterministic()
+            .expect("render presentation PDF");
+        assert_eq!(
+            extracted_logical_lines("presentation", &presentation_pdf),
+            expected_presentation
+        );
+        assert_eq!(
+            rendered_pdf_page_sha("presentation", &presentation_pdf),
+            "4fa599779bbeda5ad5a0d3c647c4a323f76dd151f2fffd9b51bff32382eab1d4"
+        );
+    }
+
     fn plist_value(path: &str, key: &str) -> String {
         let output = Command::new("defaults")
             .args(["read", path.trim_end_matches(".plist"), key])
@@ -20999,6 +27480,185 @@ mod tests {
 
         let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
         assert!(reopened.has_header_footer_content());
+    }
+
+    fn authored_header_on_predecessor() -> (Document, HdrFtrRef) {
+        let mut document = Document::new();
+        document.set_header("valid inherited header");
+        document.insert_section(0).unwrap();
+        let valid = document
+            .section_mut(1)
+            .unwrap()
+            .properties_mut()
+            .header_refs
+            .pop()
+            .unwrap();
+        document
+            .section_mut(0)
+            .unwrap()
+            .properties_mut()
+            .header_refs
+            .push(valid.clone());
+        (document, valid)
+    }
+
+    #[test]
+    fn section_removal_ignores_each_unusable_following_header_override() {
+        for hazard in [
+            "missing relationship",
+            "external relationship",
+            "cross-type relationship",
+            "missing target",
+            "malformed target",
+        ] {
+            let (mut document, valid) = authored_header_on_predecessor();
+            let hazardous_id = format!("hazard-{}", hazard.replace(' ', "-"));
+            match hazard {
+                "missing relationship" => {}
+                "external relationship" => document
+                    .package
+                    .get_or_create_part_rels("/word/document.xml")
+                    .items
+                    .push(oxml_opc::relationship::Relationship {
+                        id: hazardous_id.clone(),
+                        rel_type: rel_types::HEADER.to_owned(),
+                        target: "https://example.test/header.xml".to_owned(),
+                        target_mode: Some("External".to_owned()),
+                    }),
+                "cross-type relationship" => document
+                    .package
+                    .get_or_create_part_rels("/word/document.xml")
+                    .add_with_id(&hazardous_id, rel_types::FOOTER, "header1.xml"),
+                "missing target" => document
+                    .package
+                    .get_or_create_part_rels("/word/document.xml")
+                    .add_with_id(&hazardous_id, rel_types::HEADER, "missing-header.xml"),
+                "malformed target" => {
+                    document
+                        .package
+                        .get_or_create_part_rels("/word/document.xml")
+                        .add_with_id(&hazardous_id, rel_types::HEADER, "malformed-header.xml");
+                    document
+                        .package
+                        .set_part("/word/malformed-header.xml", b"<not-a-header/>".to_vec());
+                }
+                _ => unreachable!(),
+            }
+            document
+                .section_mut(1)
+                .unwrap()
+                .properties_mut()
+                .header_refs
+                .push(HdrFtrRef {
+                    hdr_ftr_type: HdrFtrType::Default,
+                    rel_id: hazardous_id,
+                });
+
+            document.remove_section(0).unwrap();
+
+            assert_eq!(
+                document.header_text().as_deref(),
+                Some("valid inherited header"),
+                "{hazard} displaced the inherited story"
+            );
+            assert!(
+                document
+                    .section(0)
+                    .unwrap()
+                    .properties()
+                    .header_refs
+                    .iter()
+                    .any(|reference| reference.rel_id == valid.rel_id),
+                "{hazard} prevented inheritance materialization"
+            );
+            assert!(document.package.get_part("/word/header1.xml").is_some());
+        }
+    }
+
+    #[test]
+    fn section_removal_keeps_the_first_usable_duplicate_as_effective() {
+        let (mut document, valid) = authored_header_on_predecessor();
+        let mut later_header = CT_HdrFtr::new();
+        let mut paragraph = CT_P::new();
+        paragraph.add_run("later duplicate header");
+        later_header.paragraphs.push(paragraph);
+        document.package.set_part(
+            "/word/header-later.xml",
+            later_header.to_xml_header().unwrap(),
+        );
+        document
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("laterHeader", rel_types::HEADER, "header-later.xml");
+        document
+            .section_mut(0)
+            .unwrap()
+            .properties_mut()
+            .header_refs
+            .push(HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: "laterHeader".to_owned(),
+            });
+
+        document.remove_section(0).unwrap();
+
+        assert_eq!(
+            document.header_text().as_deref(),
+            Some("valid inherited header")
+        );
+        assert_eq!(
+            document.section(0).unwrap().properties().header_refs,
+            [valid]
+        );
+    }
+
+    #[test]
+    fn section_story_pruning_failure_is_atomic() {
+        let (mut document, _) = authored_header_on_predecessor();
+        document
+            .package
+            .set_part("/word/document.xml", b"<invalid".to_vec());
+        let before_document = document.document.to_xml().unwrap();
+        let before_main = document
+            .package
+            .get_part("/word/document.xml")
+            .unwrap()
+            .to_vec();
+        let before_relationships = document
+            .package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .clone();
+        let before_authored_parts = document.identifiers.authored_story_parts.clone();
+        let mut pruning_probe = document.clone_for_staging();
+        let removed = pruning_probe.remove_section_in_place(0).unwrap();
+        assert!(
+            pruning_probe
+                .prune_unreachable_authored_section_stories(&removed)
+                .is_err()
+        );
+
+        assert!(document.remove_section(0).is_err());
+
+        assert_eq!(document.document.to_xml().unwrap(), before_document);
+        assert_eq!(
+            document.package.get_part("/word/document.xml").unwrap(),
+            before_main
+        );
+        assert_eq!(
+            document
+                .package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .items,
+            before_relationships
+        );
+        assert_eq!(
+            document.identifiers.authored_story_parts,
+            before_authored_parts
+        );
+        assert!(document.package.get_part("/word/header1.xml").is_some());
     }
 
     #[test]
@@ -23257,10 +29917,10 @@ mod tests {
     }
 
     #[test]
-    fn numbering_level_distinguishes_modeled_metadata_from_retained_raw_facts() {
+    fn numbering_level_unmodeled_fact_contract_is_limited_to_extras() {
         let mut doc = Document::new();
-        let definition_metadata_id = doc.add_list_definition(&[ListLevel::decimal()]);
-        let raw_level_properties_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let modeled_and_raw_overlay_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let retained_extra_id = doc.add_list_definition(&[ListLevel::decimal()]);
         let raw_leaf_metadata_id = doc.add_list_definition(&[ListLevel::decimal()]);
 
         let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[0];
@@ -23268,7 +29928,7 @@ mod tests {
         definition.tmpl = Some("87654321".to_owned());
         definition.multi_level_type = Some("hybridMultilevel".to_owned());
 
-        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0];
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
         level.ppr_raw = Some((
             CT_PPr::default(),
             b"<w:pPr><producer:property/></w:pPr>".to_vec(),
@@ -23279,6 +29939,9 @@ mod tests {
             b"<w:rPr><producer:property/></w:rPr>".to_vec(),
             vec!["producer".to_owned()],
         ));
+        doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0]
+            .extra_xml
+            .push((0, b"<w:lvlRestart w:val=\"0\"/>".to_vec()));
 
         let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[2];
         definition.levels[0].start = Some(1);
@@ -23289,17 +29952,17 @@ mod tests {
         ));
 
         assert!(
-            !doc.numbering_level(definition_metadata_id, 0)
-                .expect("definition metadata level")
+            !doc.numbering_level(modeled_and_raw_overlay_id, 0)
+                .expect("modeled metadata and raw property overlays")
                 .has_unmodeled_properties
         );
         assert!(
-            doc.numbering_level(raw_level_properties_id, 0)
-                .expect("raw properties level")
+            doc.numbering_level(retained_extra_id, 0)
+                .expect("retained extra level")
                 .has_unmodeled_properties
         );
         assert!(
-            doc.numbering_level(raw_leaf_metadata_id, 0)
+            !doc.numbering_level(raw_leaf_metadata_id, 0)
                 .expect("raw leaf metadata level")
                 .has_unmodeled_properties
         );
@@ -23366,6 +30029,41 @@ mod tests {
             assert_eq!(effective.num_ilvl, Some(0));
             assert_eq!(effective.keep_next, Some(true));
         }
+    }
+
+    #[test]
+    fn reader_reports_list_paragraph_presentation_separately_from_unknown_xml() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.ppr = Some(CT_PPr {
+            ind_left: Some(Twips(360)),
+            ..CT_PPr::default()
+        });
+
+        let level = doc.numbering_level(num_id, 0).expect("numbering level");
+        assert!(level.has_paragraph_presentation);
+        assert!(!level.has_unmodeled_properties);
+    }
+
+    #[test]
+    fn reader_exposes_background_and_section_completeness_facts() {
+        let mut doc = Document::new();
+        assert!(!doc.has_document_background());
+        assert!(doc.has_section_layout_formatting());
+        assert!(!doc.has_unmodeled_section_properties());
+
+        doc.document.background_xml = Some(b"<w:background/>".to_vec());
+        doc.document
+            .body
+            .sect_pr
+            .as_mut()
+            .unwrap()
+            .extra_xml
+            .push(b"<w:printerSettings r:id=\"rId1\"/>".to_vec());
+
+        assert!(doc.has_document_background());
+        assert!(doc.has_unmodeled_section_properties());
     }
 
     #[test]
@@ -24661,10 +31359,8 @@ mod watermark_tests {
             HdrFtrType::Even,
         );
         enable_even_headers(&mut document);
-        document
-            .section_properties_mut()
-            .extra_xml
-            .push(br#"<w:pgNumType w:start="1"/>"#.to_vec());
+        document.section_properties_mut().page_number =
+            Some(rdocx_oxml::document::CT_PageNumberType::new(1));
         document.set_text_watermark("DRAFT").unwrap();
 
         let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
@@ -25030,6 +31726,27 @@ mod reader_fact_tests {
     }
 
     #[test]
+    fn reader_resolves_complex_field_display_segment_properties() {
+        let xml = br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:rPr><w:i/></w:rPr></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>7</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+        let mut document = Document::new();
+        document.document = CT_Document::from_xml(xml).expect("document parses");
+        let paragraph = document.paragraph(0).expect("paragraph");
+        let run = paragraph.runs().next().expect("field run");
+        let crate::RunItemRef::Field(field) = run.items().next().expect("field item") else {
+            panic!("expected field");
+        };
+        let segment = field
+            .cached_display_segments()
+            .into_iter()
+            .next()
+            .expect("cached segment");
+
+        let properties = document.effective_field_segment_properties(&paragraph, &segment);
+        assert_eq!(properties.bold, Some(true));
+        assert_eq!(properties.italic, Some(true));
+    }
+
+    #[test]
     fn unsupported_xml_reader_inspects_preserved_item_bytes() {
         let raw = br#"<w:proofErr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:type="spellStart"/>"#;
         let fact = UnsupportedXmlRef::from_bytes(raw);
@@ -25128,5 +31845,76 @@ mod odttf_tests {
                 "failed for {name}"
             );
         }
+    }
+
+    #[test]
+    fn malformed_fragment_relationship_xml_aborts_without_mutation() {
+        use std::io::{Cursor, Read, Write};
+        use zip::write::SimpleFileOptions;
+        use zip::{ZipArchive, ZipWriter};
+
+        let mut source = Document::new();
+        source.add_picture(
+            b"malformed-fragment-relationship",
+            "malformed.png",
+            Length::pt(12.0),
+            Length::pt(9.0),
+        );
+        let body = source
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == StoryKind::Body)
+            .unwrap();
+        let item = source.story_items(&body).unwrap()[0].location().clone();
+        let mut fragment =
+            DocumentFragment::from_range(&source, &item, &ContentLocation::end(body), false)
+                .unwrap();
+
+        let mut archive = ZipArchive::new(Cursor::new(fragment.package.as_slice())).unwrap();
+        let mut entries = Vec::new();
+        for index in 0..archive.len() {
+            let mut file = archive.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).unwrap();
+            if file.name() == "word/_rels/document.xml.rels" {
+                bytes = b"<Relationships".to_vec();
+            }
+            entries.push((file.name().to_owned(), file.compression(), bytes));
+        }
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, compression, bytes) in entries {
+            writer
+                .start_file(
+                    name,
+                    SimpleFileOptions::default().compression_method(compression),
+                )
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        fragment.package = writer.finish().unwrap().into_inner();
+
+        let mut destination = Document::new();
+        destination.add_paragraph("unchanged");
+        let before = destination.to_bytes().unwrap();
+        let body = destination
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == StoryKind::Body)
+            .unwrap();
+        let error = destination
+            .import_fragment(
+                &ContentLocation::end(body),
+                &fragment,
+                FragmentConflictPolicy::reuse_equivalent(),
+            )
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid document fragment")
+                && error.to_string().contains("XML error"),
+            "{error}"
+        );
+        assert_eq!(destination.to_bytes().unwrap(), before);
     }
 }

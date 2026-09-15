@@ -180,7 +180,7 @@ Adjacent regressions prove integer segment sampling, cumulative GIF delay,
 single preparation with at most one retained resolved frame, output-cap failure
 during codec writes, validation before rendering, JPEG quality sensitivity,
 and unchanged static PDF and raster output. The same exact locked golden runs
-in the Ubuntu workspace job and the macOS presentation-fidelity job. Both use
+in the Ubuntu workspace job and the Ubuntu presentation-fidelity job. Both use
 deterministic bundled fonts and require identical reviewed constants.
 
 The ordered-body integration gate opens an in-code package through the public
@@ -466,6 +466,11 @@ targets reserve case-insensitive part identities while retaining producer
 spelling. Mutation-history cases include building-block replacement. Header and
 footer cases reject cross-type or unrelated header-shaped relationship targets
 for text, raw XML, image, and background-image setter families.
+Cross-part drawing coverage opens a package whose body and header reuse one
+normalized producer `wp:docPr` identity, preserves both drawing payloads,
+allocates a later authored drawing outside the package-wide occupied union, and
+reopens repeatedly. A same-part character-reference alias remains a duplicate,
+and a foreign same-local-name element remains outside the drawing scope.
 Current-graph relationship cases add an unreferenced theme edge after chart
 authoring and require chart `rId1` followed by theme `rId2`. A producer theme
 captured on package open keeps its original id, while unknown internal and
@@ -479,6 +484,32 @@ parts and relationship owners, case-equivalent get, set, contains, and remove
 operations, Word and PowerPoint main-part reopen, signature discovery and
 coverage, duplicate relationship ids, direct part-map conflicts, and a sentinel
 destination that remains unchanged after pre-serialization validation fails.
+
+The story-scoped relationship gate authors equal picture and hyperlink content
+in body, header, footer, footnote, and text-box owners, saves, reopens, and
+resolves every reference only through its exact `StoryId` relationship scope.
+Atomic negatives cover stale and wrong owners, missing identifiers, wrong
+types, external images, internal hyperlinks, and missing targets. Main-part
+body, text-box, and table-cell lifecycle matrices remove and clone the authored
+paragraphs themselves. Removal leaves zero live XML references while retaining
+the relationship definition for the owned fragment. Clones serialize two
+references to one relationship, and picture clones receive distinct global
+`wp:docPr` identities. Namespace sensitivities cover aliases, character
+references, producer-shadowed `r` and `wp` bindings, and inherited raw
+relationship attributes in standalone footnotes and endnotes. Semantic reorder
+coverage extracts references from the exact body and text-box paragraphs and
+resolves them to their original media bytes and URLs.
+
+The cross-document fragment gate selects a main-body range containing custom
+styles, direct and style-carried numbering, a bookmark and REF field, a
+picture, an editable chart and workbook, an exact foreign subtree, and a
+resolved comment thread with a relationship-bearing payload. Two imports must
+reopen with all references resolved, exact selected raw XML retained twice,
+unused source dependencies absent, and collision-free package identities.
+Equivalent-reuse and rename policies must produce deterministic style,
+numbering, media, chart, and workbook results. Atomic negatives cover external
+relationships, split ownership, dangling targets, malformed relationship XML,
+and relationship-id exhaustion, with destination bytes unchanged.
 
 The RTF reader differential records Microsoft Word 16.104 build
 16.104.25121423 as the oracle. Its checked input is source-encoded RTF that
@@ -696,6 +727,14 @@ relationships remain byte-exact and appear once in tracked, accepted,
 rejected, saved, and reopened views. The legacy/default compatibility test
 keeps `Document::compare` byte-identical to default options. No sample invokes
 comparison, so the 49-entry hash harness remains unchanged.
+
+Drawing preservation coverage keeps inline and anchored drawings in changed
+main-story and header owners. It checks exact wrapper bytes, local prefix
+bindings, extended `docPr` payloads, relationship targets, media bytes, and
+schema child order through compare, save, reopen, accept, and reject. Run,
+word, and character granularity each retain a stable multi-unit sibling once.
+A malformed drawing without `docPr/@id` fails before the original document or
+package changes.
 
 The source-built external differential pins Microsoft Word 16.104 build
 16.104.25121423 and locale `en-US`. Its 24 normalized records cover every
@@ -1391,6 +1430,107 @@ and Strict alternative-format import targets. The composed predicate inspects
 the rebuilt TOC cache, section boundary, and body and header comparison output
 so each milestone operation is mutation-sensitive.
 
+The container-neutral story gate source-builds one package containing body,
+cell, text-box, header, footer, footnote, endnote, and comment owners. Its
+integration predicate applies the same location resolver and text mutation to
+every kind, then checks identical wrong-owner, kind, bounds, and stale errors.
+The round-trip predicate pins deterministic owner and item order for paragraphs,
+tables, controls, fields, drawings, and preserved nodes, including exact raw
+XML after save and reopen. The atomicity regression records package bytes
+before every invalid location and requires them to remain unchanged. Focused
+regressions also cover prefix aliases, typed admission, nested and same-run
+fields, namespace-complete owned projections, borrowed subtree semantics,
+opaque preservation boundaries, separator-note filtering, lifecycle state,
+and mutation of empty text nodes.
+
+The contributor reader-fact regression combines strict document and body
+boundaries, first section properties, missing revision authors, empty simple
+fields, bounded nested tables, marker child-content facts, effective complex
+field properties, cell margins, empty cells, historical grid preservation, and
+self-closing TOC coordinates. Namespace aliases and decoys, malformed owners,
+schema order, repeated save and reopen, and the exact seven-entry Word XML hash
+delta are mandatory. Every PDF and PNG fingerprint remains unchanged.
+
+The generic content-mutation regression interleaves insert, remove, clone, and
+same-owner move operations across body and table-cell content. It asserts final
+direct-child order, fresh clone identities, valid relationship scope, exact
+unmodelled XML, save and reopen, and byte-identical rollback for invalid or
+stale inputs. Focused source-built cases distinguish canonical actual-item
+anchors from nested flattened projections and use `ContentLocation::end` for
+empty, self-closing, and body section-property boundaries. The content-control
+matrix covers expanded-name aliases, schema order, retained private slots,
+direct nested block controls, opaque foreign subtrees, and exact XML 1.0
+whitespace and character-reference handling without panics.
+
+The ordered section round-trip gate is
+`ordered_section_mutations_preserve_independent_story_references`. It creates
+four ordered owners, removes one boundary, and reopens three portrait,
+landscape, and portrait sections without moving body content or unmodelled
+section XML. Every surviving explicit or materialized story reference is
+checked by variant, relationship id, exact relationship type, resolved target,
+and parsed story text. Focused tests cover total immutable and mutable lookup,
+bound ordinal and final-owner identity, dimension-normalizing orientation
+mutation, final-owner promotion, inherited default and first-page headers and
+footers, shared authored targets, producer-owned targets, last-owner pruning,
+and sole-section or out-of-range atomicity. The relationship hazard matrix
+rejects missing, external, cross-type, absent-part, and malformed-target
+overrides, keeps the first usable duplicate, and proves a pruning-scan failure
+leaves the live typed document and package graph unchanged.
+
+The complete section-geometry differential gate is
+`mixed_orientation_sections_match_word_geometry_and_page_numbers`. One
+source-built document produces portrait letter, landscape letter, and A4 pages
+with physical identities 1, 2, and 3 and displayed PAGE values 1, 12, and 27.
+The ignored regeneration route pins Microsoft Word 16.112.3 build
+16.112.26083020 and Poppler 26.09.0, checks the PDF's total page count, and
+requires one complete geometry and displayed-number record per page. Its exact
+unique artifact directory is removed on success and unwind.
+
+The per-section story differential gate is
+`section_header_footer_variants_match_word_width_and_inheritance`. One
+source-built document produces three pages at each of 612, 720, and 540 point
+page widths. Every group selects the expected default, first, and even header
+and footer through direct, inherited, and replaced references. The ignored live
+route pins Microsoft Word 16.112.4 build 16.112.26090911 on macOS 26.6.2 build
+25G83 and Poppler 26.09.0. It requires all nine exact page records and removes
+its unique artifact directory on success and unwind.
+
+The installed Python structure gate is
+`word_structure_snapshots_preserve_order_ownership_and_types`. A source-built
+three-section package includes inherited and independent header and footer
+owners, rich story content, a custom style, and equal hyperlink relationship
+identifiers in the body and two headers. It proves exact frozen records,
+source order, physical ownership, item paths, owner-scoped URL resolution,
+single ownership for a hyperlink in nested content controls, physical ordering
+when a nested link precedes an ancestor-owned link, snapshot stability after
+mutation, strict mypy, and stubtest after reopen.
+The native companion
+`story_item_links_resolve_only_through_the_checked_owner` resolves an equal
+identifier to distinct body and header targets and checks the same interleaved
+source order. All 49 hash entries remain unchanged.
+
+`rich_section_stories_survive_reopen_replace_and_unlink` covers paragraphs,
+tables, fields, block controls with nested tables, hyperlinks, images, drawings,
+fresh drawing identities, relationship rebasing, title-page enablement, save,
+and reopen. `removing_one_variant_retains_shared_and_inherited_stories` covers
+explicit empty removal, same-type inheritance, shared targets, facade-owned
+pruning, and byte-exact retention of unrelated stories. Stale, wrong-kind,
+out-of-range, and absent-story operations prove byte-identical rollback. The
+typed settings test covers namespace aliases, fixed write prefixes, schema
+order, and duplicate projection behavior. All 49 hash entries remain unchanged.
+
+The companion round-trip gate is
+`section_geometry_round_trips_with_unsupported_children_in_order`. It covers
+every M23 geometry property, typed page-number start, schema-slot replay,
+prefix aliases and shadows, duplicate page-number elements, retained M24
+attributes, repeated reference boundaries, and save and reopen. Distinguishable
+references retain predecessor or successor placement. Indistinguishable equal
+duplicates use deterministic source ordinals and produce byte-stable output
+after value-preserving String replacement, reorder, removal, clone, and reopen.
+`rejected_section_geometry_is_atomic` covers zero, negative, and signed-range
+failures without changing the document. No standard sample authors this state,
+so all 49 hash entries remain unchanged.
+
 Five real `.docx` files are stored outside the published crates and fetched by
 `scripts/fetch_docx_corpus.py` into the ignored `corpus/docx` directory. The
 tracked manifest pins one document for each of `business-letter`, `report`,
@@ -1889,6 +2029,14 @@ required, and no binary fixture enters the repository.
   operators, mixed solid paint, and page-local pattern resources.
 - A 90 degree group rotation turns a linear gradient's sampled colour change
   vertical when rasterised at 72 dpi with the recorded Poppler 26.01.0.
+- Rich PDF text tests require one initial matrix per multilingual run and exact
+  relative glyph positioning. Same-line tests require one logical
+  `ActualText`, unchanged paint traversal, and hard boundaries at owner,
+  baseline, source, duplicate-index, and index-gap changes.
+- The public Word and PowerPoint regression builds 120 numbered Word lines and
+  48 numbered slide lines split across Latin and CJK runs. Pinned Poppler
+  26.01.0 must extract every complete line once and in source order. Its 72 DPI
+  first-page PNGs must retain the exact pre-change digests for both formats.
 - **`Group` containing `Text` finds the font.** The regression test for the
   recursion hazard.
 - Tagged-PDF structure tests cover headings, nested lists, table headers and
@@ -1955,6 +2103,18 @@ readers, and directly compares the normalized rpptx-authored and
 python-pptx-authored records. It never compares package bytes and the oracle is
 not a runtime dependency.
 
+The rpptx extension gate
+`presentation_render_comments_and_notes_match_native_snapshots` compares the
+single-slide convenience with the ordered all-slide result, checks complete PDF
+and PNG signatures for slides and notes, and reads optional notes text. It adds
+an author, comments, and ordered replies through native GUID and RFC 3339
+validation, saves, reopens, and compares frozen snapshots exactly. A valid GUID
+that names an unknown author must fail without invalidating the held slide.
+Dedicated thread assertions prove both slide and notes raster calls release the
+GIL. The native companion gate compares every convenience PNG byte for byte
+with the resolved layout raster path and covers invalid DPI and missing slide
+indices.
+
 Both libraries are test-only CI dependencies. Neither oracle is a runtime or
 published-crate dependency, and neither differential compares package bytes or
 commits binary fixtures.
@@ -1966,6 +2126,17 @@ against both installed packages. Strict mypy also checks every inline-typed
 pure-Python source in each installed wheel. Representative enum-input,
 return-type, inline-source, constructor, and member mutations must make those
 gates fail, so hand-written stubs cannot drift.
+
+The rdocx binding gate
+`priority_word_operations_return_typed_snapshots_and_remain_atomic` exercises
+frozen range and result values, comment threads, redline comparison,
+deterministic layout fragments, page lookup, and TOC counts through save and
+reopen. Exact stale-handle revisions prove that each successful structural
+mutation advances the binding revision once. Invalid ranges and comparison
+metadata prove that failed staged operations preserve both package bytes and
+live handles. Dedicated thread tests cover comparison, layout, TOC rebuild,
+and serialization GIL release. The installed strict mypy and stubtest gates
+cover every added class, nullable field, tuple return, and method signature.
 
 The document WASM wrapper has a package-preservation Node gate and a PDF gate
 in its single defaults-off profile. The PDF gate calls generated `toPdf`
@@ -2002,13 +2173,25 @@ identity so the title appears exactly once.
 
 The `rdocx` CLI has one integration binary that invokes the compiled executable
 through `CARGO_BIN_EXE_rdocx`. Its tests cover `inspect`, `text`, `convert`,
-`diff`, `replace`, `validate`, and `render` with in-code DOCX and
-corrupt-package fixtures. The assertions bind schema 1, default paths, exact
-stdout, exit-status verdicts, output validity, replacement persistence,
-document-order text, bundled-font deterministic render bytes, legacy
-zero-based `render --page`, one-based `render --pages`, shared image format
-extensions, invalid range rejection and no partial output. Process ID and an
-atomic counter isolate temporary workspaces across concurrent runs.
+`diff`, `replace`, `validate`, `render`, nested comment and revision commands,
+comparison, and TOC rebuild with in-code DOCX and corrupt-package fixtures. The
+assertions bind schema 1, explicit story scope, default paths, exact stdout,
+exit-status verdicts, output validity, replacement persistence, comment thread
+round trips, id, author, and paired date revision filters, accept and reject
+comparison equivalence, document-order text, bundled-font deterministic render
+bytes, legacy zero-based `render --page`, one-based `render --pages`, shared
+image format extensions, invalid range rejection and no partial output. Process
+ID and an atomic counter isolate temporary workspaces across concurrent runs.
+
+The same binary binds the schema-1 structured automation surface. Its exact
+text record asserts direct style, numbering, nullable run formatting, and typed
+row, cell, and paragraph path segments. The layout record requires positive
+point-space extents and one-based physical and displayed page numbers for
+paragraphs and tables. Guarded replacement proves both an exact-count publish
+and a mismatch that creates no output. Focused deterministic layout tests
+separately require a page-spanning body item to produce ordered fragments on
+multiple pages, require empty-cell tables and image-bearing paragraphs to keep
+real extents, and compare warm restart fragments with a fresh pagination.
 
 All 27 workspace packages explicitly declare one distinct README. The root
 README is the high-level `rdocx` guide. It leads with the complete native
@@ -2055,17 +2238,23 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.13.1 carrier regression pins all eleven inherited version
-carriers, both Python project versions, both rdocx WASM dependency assertions,
+The stable 0.13.2 carrier regression pins all ten inherited version carriers,
+the `rdocx` Python project version, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
 are 0.11.0 while `rpptx-wasm` remains ineligible for publication.
-The paired incubating regression pins all sixteen explicit manifests, fifteen
-workspace dependency requirements, sixteen lockfile entries, publication
-flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.11.0. It separately proves the stable
-workspace remains at its prepared 0.13.1 boundary and `rpptx-wasm` remains
-ineligible for publication.
+The paired incubating regression pins all seventeen explicit manifests,
+sixteen workspace dependency requirements, seventeen lockfile entries,
+publication flags, README examples, Rust assertions, the CI WASM literal, and
+the exact 15-package publication preflight at 0.11.0. It separately proves the
+stable workspace remains at its prepared 0.13.2 boundary and both `rpptx-py`
+and `rpptx-wasm` remain ineligible for crates.io publication.
+The Python metadata regression requires both projects to name a crate-local
+Markdown README and provide their reviewed summary, author, keywords,
+classifiers, and project URLs. Artifact validation repeats that check against
+wheel `METADATA` and source-distribution `PKG-INFO`, including required
+installation, quick-start, typing, and project-link sections in the embedded
+long description.
 The immutable v0.13.0 shared-family gate packages and verifies
 `rdocx-layout@0.13.0`, requires its normalized archive dependency on
 `oxml-layout@0.10.0` to contain no local path, and compiles the packaged crate
@@ -2204,7 +2393,7 @@ parallel, or failure-swallowing invocation.
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
 | release-regressions | Install cargo-release 1.1.3 with its locked dependency graph, then run `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
-| presentation-fidelity | Fetch the pinned corpus, run the exact locked deterministic animation golden, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
+| presentation-fidelity | Prime locked Cargo dependencies, install exact LibreOffice 26.2.5.2 and Poppler 26.01.0 on Ubuntu 24.04, fetch the pinned corpus, run the exact locked deterministic animation golden, then run `python3 scripts/pptx_ssim_harness.py --check` |
 | word-fidelity | Restore the pinned Rust cache, run `cargo fetch --locked`, fetch the pinned Word corpus, then run `python3 scripts/docx_ssim_harness.py --check` on pinned Ubuntu 24.04 LibreOffice and Poppler with its locked offline helper |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |
@@ -2214,7 +2403,7 @@ parallel, or failure-swallowing invocation.
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
 | ci-gate | Always validate that every selected filtered job succeeded and every unselected filtered job was skipped |
-| python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
+| python-wheels | On manual dispatch, build six cp39-abi3 wheels and one source distribution for each Python package. On a `py-rdocx-v*` or `py-rpptx-v*` tag, build, validate, and publish only the selected package's seven artifacts. Install and test every compatible built artifact in a fresh environment. |
 
 MHTML uses the existing test, clippy, fmt, doc, wasm, hash-harness, and package
 routes. Its Microsoft Word differential remains an explicit ignored local
@@ -2309,6 +2498,20 @@ parse the exact two-package, six-target product and use negative mutations to
 prove that package, target, clean-install, parity, artifact dependency, and
 tag-only OIDC requirements are sensitive before the hosted matrix runs.
 
+The S72 publication proof is bound to reviewed SHA
+`2b009243ed39ab66470d7484d490985368e865a8`. Manual build-only run
+`34907492958` produced and validated both seven-file sets without publication.
+Tag runs `34934221487` and `34939929652` published `rdocx 0.13.2` and
+`rpptx 0.11.0` respectively through the `pypi` environment. Every live file
+passed exact artifact validation. Fresh canonical-PyPI installs passed the
+priority runtime suites under Python 3.9 and 3.12, and exact `mypy==2.3.0`
+strict checks plus `stubtest` passed under Python 3.12. The release-note body
+digests are
+`3bf361a6fcc5a858d1f315f07ea766b0e60e3c0b3c7930a777e643f1bf62b728`
+for rdocx and
+`60fad5ee4003448082f1c14d0d7b3a5e9d159b21fa1ca7c07b0c7ac64300197f`
+for rpptx.
+
 The pull-request binding job has one matrix row for `rdocx` and one for
 `rpptx`. It uses Python 3.12.9 with exact `maturin==1.13.3` and
 `pytest==9.1.1`, installs `python-docx==1.2.0` or `python-pptx==1.0.2` for the
@@ -2326,6 +2529,15 @@ changed pull-request files. No job grants `id-token: write`. Checkout v6.0.2,
 setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
 revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.
+
+The Word namespace regression matrix covers an unused unknown default on the
+document root, an inherited use by an unprefixed element, unprefixed
+attributes, nested different-URI and same-URI shadows, explicit undeclaration,
+malformed XML, and duplicate default declarations. Native replacement proves
+that a candidate is published only after successful serialization. The
+compiled CLI proves the unsafe case exits without a panic or partial output.
+The exact Issue 73 attachment is also replaced, saved, and reopened under the
+pinned external-tool environment.
 
 The pull-request WASM job uses exact Node 24.11.1 and wasm-pack 0.15.0. It
 installs the official Binaryen version 125 Linux archive only after verifying

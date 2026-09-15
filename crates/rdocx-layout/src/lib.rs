@@ -35,17 +35,44 @@ pub struct WordSourcePath {
     pub children: Vec<usize>,
 }
 
+/// Point-space extent occupied by one top-level Word body item on one page.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WordBodyLayoutFragment {
+    /// One-based physical page number in the produced layout.
+    pub physical_page: usize,
+    /// One-based displayed page number after section page-number restarts.
+    pub displayed_page: usize,
+    /// Left edge in points from the physical page origin.
+    pub x: f64,
+    /// Top edge in points from the physical page origin.
+    pub y: f64,
+    /// Width in points.
+    pub width: f64,
+    /// Height in points.
+    pub height: f64,
+}
+
 /// Complete layout output plus its result-local Word source map.
 #[derive(Debug)]
 pub struct WordLayoutResult {
     pub layout: LayoutResult,
     pub revision_view: RevisionView,
     source_nodes: Vec<WordSourcePath>,
+    body_fragments: Vec<Vec<WordBodyLayoutFragment>>,
     numbering_by_source: Vec<Option<style_resolver::ResolvedNumbering>>,
     page_reference_names: Vec<String>,
 }
 
 impl WordLayoutResult {
+    /// Return placed fragments for one direct body item by its source index.
+    ///
+    /// Modeled items return one fragment per occupied page. Preserved content
+    /// that does not enter layout returns an empty slice. An out-of-range body
+    /// index returns `None`.
+    pub fn body_layout_fragments(&self, body_index: usize) -> Option<&[WordBodyLayoutFragment]> {
+        self.body_fragments.get(body_index).map(Vec::as_slice)
+    }
+
     /// Resolve a result-local source identity.
     pub fn source_node(&self, id: SourceNodeId) -> Option<&WordSourcePath> {
         self.source_nodes.get(id.get() as usize - 1)
@@ -114,11 +141,13 @@ pub fn layout_document(input: &LayoutInput) -> Result<LayoutResult> {
 pub fn layout_document_with_provenance(input: &LayoutInput) -> Result<WordLayoutResult> {
     let mut engine = engine::Engine::new();
     let (layout, source_nodes) = engine.layout_with_provenance(input)?;
+    let body_fragments = engine.take_body_fragments();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
+        body_fragments,
         numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
@@ -134,11 +163,13 @@ pub fn layout_document_with_reusable_engine(
     input: &LayoutInput,
 ) -> Result<WordLayoutResult> {
     let (layout, source_nodes) = engine.layout_with_provenance(input)?;
+    let body_fragments = engine.take_body_fragments();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
+        body_fragments,
         numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
@@ -151,11 +182,13 @@ pub fn layout_document_with_caller_fonts_and_provenance(
 ) -> Result<WordLayoutResult> {
     let mut engine = engine::Engine::new_with_caller_fonts();
     let (layout, source_nodes) = engine.layout_with_provenance(input)?;
+    let body_fragments = engine.take_body_fragments();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
+        body_fragments,
         numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
@@ -172,11 +205,13 @@ pub fn layout_document_deterministic_with_provenance(
 ) -> Result<WordLayoutResult> {
     let mut engine = engine::Engine::new_deterministic()?;
     let (layout, source_nodes) = engine.layout_with_provenance(input)?;
+    let body_fragments = engine.take_body_fragments();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
+        body_fragments,
         numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })

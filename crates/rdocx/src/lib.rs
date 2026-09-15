@@ -51,12 +51,14 @@ pub use comparison::{
 };
 pub use content_control::ContentControlRef;
 pub use document::{
-    AccessibilityIssue, BodyContentRef, BodyItemRef, Document, EmbeddedFont, EmbeddedFontKind,
-    FontDefinition, FontEmbeddingLicense, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
+    AccessibilityIssue, BodyContentRef, BodyItemRef, ContentFragment, ContentLocation, Document,
+    DocumentFragment, EmbeddedFont, EmbeddedFontKind, FontDefinition, FontEmbeddingLicense,
+    FragmentConflictPolicy, HeaderFooterKind, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
     ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
-    NumberingLevelOverride, OutlineNode, RenderOptions, UnsupportedXmlRef, WordCreationProfile,
-    WordPackageClass,
+    NumberingLevelOverride, OutlineNode, RenderOptions, Section, SectionRef, SectionStory,
+    StoryError, StoryId, StoryItemKind, StoryItemRef, StoryKind, UnsupportedXmlRef,
+    WordCreationProfile, WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
@@ -95,6 +97,7 @@ pub use paragraph::{
     ParagraphItemRef, ParagraphRef, SectionBreak, TabAlignment, TabLeader,
 };
 pub use rdocx_layout::RevisionView;
+pub use rdocx_oxml::header_footer::HdrFtrType;
 pub use rdocx_oxml::math::{
     CT_OMath, CT_OMathPara, FractionType, LimitLocation, MathAccent, MathArgument, MathDelimiter,
     MathExpression, MathFraction, MathJustification, MathLimit, MathMatrix, MathMatrixProperties,

@@ -514,6 +514,14 @@ round-trip XML retain logical order.
 x and y advances, x and y offsets, logical clusters, direction, and extraction
 text. PDF paints those exact positions inside logical `ActualText`, raster
 applies the same per-glyph coordinates, and SVG emits searchable logical text.
+The PDF writer emits each rich run with one initial text matrix and relative
+glyph placement. Adjacent runs may share one extracted logical line only when
+their semantic owner, transformed baseline, and contiguous source or logical
+indices agree. The first run owns the complete `ActualText`, later runs use an
+empty replacement, and their paint operators stay in their original order.
+Ambiguous ownership, duplicate or gapped logical indices, and baseline changes
+end the line plan. Nested group transforms are cancelled only while expressing
+the same final glyph positions in page coordinates.
 Legacy Latin remains on `GlyphRun` so existing output bytes do not move.
 Non-negative leading is divided equally above and below the glyph box. A
 below-natural exact line keeps its stated height and places no negative leading
@@ -676,6 +684,23 @@ result shares immutable pages and font bytes without caching the completed
 bundle. Every PDF and raster path borrows its `LayoutResult` field from the same
 bundle that owns the exact font data and Word source map. Cloning a completed
 result shares each immutable page frame and font byte buffer.
+
+The Python `Document.layout()` method always reads the bundled-font-only
+snapshot. It returns immutable main-body fragments with their zero-based body
+index, one-based physical and displayed page numbers, and point-space bounds.
+`Document.layout_page()` uses the same deterministic cache and returns immutable
+page number and size metadata for one zero-based page index. Neither method
+exposes positioned renderer elements or permits mutation through a layout
+result.
+
+PowerPoint slide raster export also stays on the facade-owned deterministic
+path. `Presentation::slide_png_deterministic` renders one zero-based slide and
+returns `None` outside the presentation. `slide_pngs_deterministic` renders all
+slides in producer order. Both resolve the same staged package and layout as
+`to_pdf_deterministic`, enforce the existing finite 600 DPI ceiling and 256 MiB
+decoded-output ceiling, and call the shared PNG backend without introducing a
+binding-private render path. Python PDF, slide PNG, notes PDF, and notes PNG
+methods release the GIL around these native operations.
 
 Normal `FontManager` construction clones one process-lifetime snapshot of the
 bundled and system face table. Installing, removing, or replacing a system font
@@ -920,6 +945,23 @@ table before layout and return it with the positioned output as
 than allocating per page. Source metadata does not change shaping, pagination,
 font selection, or rendered bytes.
 
+`WordLayoutResult::body_layout_fragments` also resolves one zero-based direct
+body item to its placed point-space extents. Each `WordBodyLayoutFragment`
+records one-based physical and displayed page numbers plus top-left `x`, `y`,
+`width`, and `height` values in points. Paragraph fragments use the placed flow
+box, including empty and image-bearing lines. Table fragments use the union of
+the rows placed on that page, including repeated header rows. A page-spanning
+item therefore owns one fragment on every occupied page. Body-level content
+controls aggregate the blocks projected from that direct body owner. Preserved
+unlaid content remains addressable through an empty fragment slice.
+
+The body owner is a private result-local overlay on shared layout blocks.
+`PositionedElement` and the renderer input remain unchanged. Recorded restart
+state retains the sidecar with its exact pages, accounts for its capacity under
+the existing aggregate cache ceiling, and combines cached prefix and suffix
+fragments with newly paginated fragments. Warm and cold provenance results are
+therefore equal without moving rendered output.
+
 ### Word revision views
 
 `LayoutInput::revision_view` selects the accepted or tracked projection before
@@ -954,6 +996,22 @@ odd pages and on the left for even pages. The marker does not affect text
 placement. Existing render methods select accepted layout and retain the normal
 and deterministic caches. Option-taking tracked renders are uncached.
 
+### Word section geometry and page numbering
+
+Each body section carries its own resolved page width, page height, orientation,
+margins, gutter, columns, header and footer distance, title-page state, and
+break type into pagination. A positive `w:pgNumType/@w:start` resets the
+section's displayed sequence without changing the one-based physical output
+page identity. `PageFrame::page_number` is physical and
+`PageFrame::displayed_page_number` drives PAGE substitution plus first, even,
+and default header or footer selection.
+
+A section without a restart continues after the preceding section's displayed
+last page. Appended endnote pages continue after the final body page for fresh
+and restarted pagination, including a restarted final section. PAGE fields on
+those pages consume the continued displayed value. Number format, chapter
+style, and chapter separator remain preserved but do not affect M23 layout.
+
 ### Word watermarks
 
 Header `w:pict` content has a conservative renderer-only projection. A direct
@@ -984,6 +1042,15 @@ select the even variant even when it is blank. `w:pgNumType/@w:start` resets
 that displayed parity for a section. Missing later variants inherit only the
 same type from the preceding section. No selected first or even variant borrows
 default header, footer, or watermark content.
+
+The native authoring facade preserves that selection contract. Creating a
+first-page story enables the section title-page state. Creating an even-page
+story does not change the document-wide even-page setting, which has its own
+explicit getter and setter. Removing a variant authors an explicit empty story,
+while inheriting it removes the direct reference. Cloned and replaced stories
+retain their part-local images, links, drawings, fields, tables, and supported
+nested content, so layout receives the same relationship-resolved content at
+the geometry of the section that selects it.
 
 Every public document mutation and mutable-accessor entry point clears both
 completed result caches before changing or exposing content. It preserves the

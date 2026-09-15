@@ -1087,9 +1087,9 @@ Build `rdocx` and `rpptx` with maturin as abi3-py39 wheels for
 manylinux_2_28 x86_64 and aarch64, musllinux_1_2 x86_64, macOS x86_64 and
 arm64, and Windows x86_64. Build one source distribution per package. Every
 compatible wheel is installed and tested in a fresh environment. A separate
-job collects the exact twelve wheels and two source distributions and receives
-PyPI OIDC authority only for the `py-v*` tag namespace. Manual dispatch never
-publishes.
+job selects the exact six wheels and one source distribution for either
+`py-rdocx-v*` or `py-rpptx-v*` and receives PyPI OIDC authority only for those
+tag namespaces. Manual dispatch builds both projects and never publishes.
 **Depends on**: F-134, F-136.
 **Test gate**: the local exact-product contract and its negative mutations
 pass, both native wheels and source distributions build, and both native wheels
@@ -2348,60 +2348,102 @@ stable identifiers, repeated saves are byte-identical, and collision or
 overflow failures are atomic.
 
 ### F-250, Ordered mutable section facade (L)
-Expose every section in document order with stable lookup, insertion, removal,
-and mutation across paragraph-level and final section properties. Section
-operations preserve body order and cannot orphan related stories.
+The native facade exposes every paragraph-level and schema-final section owner
+in document order through concrete immutable and mutable handles. Handles carry
+their ordinal and final-owner identity, inspect orientation, and retain complete
+property access. Mutable handles normalize page dimensions for orientation
+changes and configure first-page behavior. Total lookup, insertion, and removal
+stage the complete document and package without a second section tree. Removal
+preserves effective same-variant header and footer inheritance, body order, and
+unmodelled XML, and prunes only unreachable facade-owned related stories.
 **Depends on**: F-249.
-**Test gate**: round-trip. A portrait, landscape, portrait document retains all
-three ordered sections and their independent references after every mutation.
+**Test gate**: round-trip. A portrait, landscape, portrait document retains
+three ordered sections and proves each independent or inherited story variant,
+relationship type, target, and content after mutation, save, and reopen.
 
 ### F-251, Complete section and page geometry (L)
-Author the M23 section properties for size, orientation, margins, gutter,
-columns, page numbering, header and footer distance, title page, and break type.
-Unsupported section children remain visible until M24 completes them.
+The ordered section handles read and author M23 page size, orientation, margins,
+gutter, equal-width columns, page-number start, header and footer distance,
+title-page state, and break type through checked atomic setters. Legacy
+final-section document setters remain unchecked and infallible. The OXML model
+authors only `w:pgNumType/@w:start`, preserves number format, chapter style,
+chapter separator, and unsupported children for M24, and replays raw children
+at schema and repeated-reference boundaries. Distinguishable references follow
+their value. Indistinguishable equal duplicates use a deterministic source
+ordinal without changing the public `Vec<HdrFtrRef>` fields. Pagination keeps
+physical and displayed page identities separate, substitutes PAGE from the
+displayed value, and continues final-section numbering onto endnote pages.
 **Depends on**: F-250.
-**Test gate**: differential. Mixed-orientation source-built sections match the
-pinned Word page geometry and page-number sequence.
+**Test gate**: differential.
+`mixed_orientation_sections_match_word_geometry_and_page_numbers` matches
+Microsoft Word 16.112.3 build 16.112.26083020 for three exact page geometries,
+physical identities, and displayed PAGE values.
 
 ### F-252, Rich per-section headers and footers (L)
-Create, link, unlink, inherit, replace, and remove default, first, and even
-header and footer stories per section. Each story accepts paragraphs, tables,
-fields, links, images, drawings, and nested supported content through the same
-public container operations.
+The native facade creates, links, unlinks, inherits, replaces, and removes
+default, first, and even header and footer stories per section. Effective
+lookup follows same-type inheritance and reports the source section. Removal
+authors an explicit empty story, while inheritance removes the direct
+reference. Unlink and replacement clone the complete part-local relationship
+set, rebase internal targets, and freshen drawing identities. Each story accepts
+paragraphs, tables, fields, links, images, drawings, and nested supported
+content through the common public container operations. First-page creation
+enables `titlePg`, and even-page selection has an explicit document setting.
 **Depends on**: F-250, F-253.
-**Test gate**: differential. Every section variant renders at the correct width
-and survives save, reopen, replacement, and inheritance changes.
+**Test gate**: differential.
+`section_header_footer_variants_match_word_width_and_inheritance` matches
+Microsoft Word 16.112.4 build 16.112.26090911 across nine pages at three exact
+widths and proves default, first, and even selection through direct, inherited,
+and replaced stories.
 
 ### F-253, Container-neutral story editing (L)
-Define one public content-location and mutation model for the body, table cells,
-headers, footers, notes, comments, and text boxes. The model supports ordered
-paragraph, table, control, field, drawing, and preserved-node traversal without
-introducing a second document tree.
+The native Word facade provides one public content-location and mutation model
+for the body, table cells, headers, footers, ordinary notes, comments, and text
+boxes. Deterministic owner and item traversal exposes paragraphs, tables,
+controls, fields, drawings, and preserved nodes over existing typed and package
+sources without introducing a second document tree. Checked text mutation
+resolves an operation-scoped location on a staged package and leaves the
+document unchanged on every location or serialization failure.
 **Depends on**: F-240.
 **Test gate**: integration. One generic mutation visits and edits the same
 supported content shape in every story with identical error behavior.
 
 ### F-254, Generic insert, move, clone, and remove operations (L)
-Add transactional arbitrary-position insertion, movement, cloning, and removal
-for supported content through the container-neutral model. Invalid ranges,
-cross-owner moves, and stale locations fail without partial mutation.
+The native Word facade performs transactional insertion, removal, cloning, and
+same-owner movement of direct story content through owned `ContentFragment`
+values. Existing destinations use canonical actual-item locations that resolve
+to direct owner children. `ContentLocation::end` represents the boundary after
+final direct content, including empty and self-closing owners, and stays before
+body section properties. Clones allocate fresh document identities.
+Relationship-bearing fragments require the unchanged owner scope. Invalid,
+stale, cross-owner, ambiguous, or structurally incomplete operations leave the
+document unchanged.
 **Depends on**: F-253, F-249.
 **Test gate**: regression. Interleaved operations across body and cell content
 preserve exact order, references, and untouched raw XML.
 
 ### F-255, Part-scoped assets, links, and relationships (M)
-Make images, hyperlinks, charts, and other related content allocate against the
-owning OPC part rather than assuming the main document. Public APIs resolve and
-validate relationship scope for every supported story.
+The native Word facade resolves image, hyperlink, chart, and ordinary related
+content through an explicit OPC owner rather than a conventional main-document
+path. Public story-scoped picture and hyperlink insertion, relationship lookup,
+and internal relationship validation use checked `StoryId` owners. Cells and
+text boxes inherit the containing part. Header, footer, note, and comment
+stories use their resolved related parts. Staged serialization reconciles live
+relationship occurrences, preserves same-owner shared references, assigns each
+authored picture occurrence a global drawing identity, and publishes only a
+validated reopened candidate.
 **Depends on**: F-253, F-249.
 **Test gate**: round-trip. Equal content in body, header, footer, note, and text
 box stories resolves only through its correct owner relationships.
 
 ### F-256, Transactional cross-document fragment import (L)
-Import a selected subtree while remapping styles, numbering, bookmarks,
-comments, media, drawings, charts, embedded parts, fields, and relationships.
-Caller-selected conflict policies are deterministic, and any unsupported
-dependency aborts without changing the destination.
+The native facade imports a nonempty half-open main-body selection while
+remapping selected styles, numbering, bookmarks, comments, media, drawings,
+charts, embedded workbooks, fields, and recursive internal relationships.
+Caller-selected equivalent reuse or renaming is deterministic for styles,
+numbering, and related parts. Exact retained body and comment XML remains
+package-authoritative, and unsupported, external, dangling, malformed,
+split-range, or exhausted dependencies abort without changing the destination.
 **Depends on**: F-246 through F-255.
 **Test gate**: regression. A dependency-rich fragment imports twice without
 collisions and reopens with every reference resolved.
@@ -4662,6 +4704,266 @@ official comparison sources in focused network mode, rejects extra rows,
 duplicate evidence, or a broadened uniqueness conclusion, binds security claims
 to default-off Cargo features, and proves every one of the 22 publishable
 archives contains its byte-identical declared README.
+
+### F-X090, Accept part-local producer drawing identities (S)
+
+Producer documents open when the same normalized `wp:docPr/@id` appears in
+different physical XML parts. Imported drawing identities are validated within
+each part, then their complete union remains occupied input to the
+package-global authored allocator. Producer XML remains unchanged, and
+normalized duplicates inside one part remain invalid.
+
+**Depends on**: F-255.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/72>.
+**Test gate**: regression. `cross_part_producer_drawing_ids_do_not_block_document_open`
+opens a source-built package whose body and header reuse one valid drawing id,
+preserves both parts through mutation and reopen, allocates a new authored id
+outside the occupied union, and still rejects same-part normalized duplicates.
+
+### F-X091, Serialize unused root default namespaces safely (M)
+
+Classify a producer root default namespace by namespace-aware use rather than
+rejecting every unknown default binding. An unused declaration does not block a
+typed mutation or save. A used, ambiguous, or malformed binding still fails
+closed and leaves the package unchanged. Add fallible
+`Document::try_replace_text` for the CLI while retaining the legacy infallible
+signature. Nested declarations shadow the root by lexical scope, unprefixed
+attributes do not consume the default, and successful serialization refreshes
+the cached namespace facts from the published main-story bytes.
+
+**Depends on**: F-255.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/73>.
+**Test gate**: regression. `unused_root_default_namespace_allows_atomic_save`
+mutates and reopens the reported package shape while retaining its prefixed raw
+producer element. Scope regressions cover same-URI and different-URI shadows,
+undeclaration, unprefixed attributes, malformed input, and duplicate defaults.
+A used inherited default namespace still fails atomically through native and
+CLI paths without a panic or partial output.
+
+### F-X092, Preserve logical reading order in generated PDFs (L)
+
+Make the shared PDF backend expose complete logical lines instead of
+run-fragmented extraction for large Word documents and PowerPoint
+presentations. Emit rich runs with run-wide extraction geometry and preserve
+logical source order across adjacent styled and bidirectional runs without
+changing glyph paint order, pagination, or raster geometry.
+The PDF-local line planner coalesces only adjacent runs with matching semantic
+ownership and baseline plus contiguous source spans or logical indices. One
+initial text matrix and relative glyph placement preserve exact paint, while
+the first run carries the complete logical line and later runs suppress
+duplicate extraction. Nested group transforms retain the same final page
+coordinates.
+
+**Depends on**: F-255.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/74>.
+**Test gate**: regression. `large_word_and_presentation_pdfs_preserve_logical_reading_order`
+builds large DOCX and PPTX inputs with uniquely numbered multiword lines split
+across runs. Pinned Poppler 26.01.0 extracts each substantial line once and in
+logical order while deterministic raster output remains unchanged.
+
+### F-X093, Preserve drawings through document comparison staging (M)
+
+Keep package-authoritative main-story XML and namespace ownership through
+comparison, tracked-body construction, staged reopen, and accept or reject
+postconditions. Valid body and related-story drawings remain complete while
+text revisions are emitted. Invalid drawings still fail atomically.
+
+**Depends on**: F-255.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/75>.
+**Test gate**: regression. `document_compare_preserves_inline_drawings_through_staging`
+compares source-built packages containing body and header drawings whose text
+sibling changes. It preserves exact inline and anchored wrappers, namespace
+bindings, extended `docPr` children, relationships, and media through compare,
+save, reopen, accept, and reject at run, word, and character granularity. A
+stable multi-unit run appears once, while a genuinely missing `wp:docPr/@id`
+still rejects atomically.
+
+### F-X094a, Expose Word collaboration and redline commands in rdocx-cli (M)
+
+Expose shipped comment, revision-resolution, and comparison facades through
+nested `rdocx comment`, `rdocx revision`, `rdocx compare`, and
+`rdocx toc rebuild` commands. Comment additions use zero-based half-open body
+paragraph and run coordinates. Revision filters select at most one id, exact
+author, or paired inclusive RFC 3339 date range. Every mutation requires an
+explicit output, publishes atomically, and returns exact schema-1 JSON when
+requested. Revision inspection remains explicitly scoped to the main story,
+while resolution and comparison declare their all-supported-story scope.
+
+**Depends on**: F-148, F-150, F-234, F-235.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: integration. `cli_collaboration_commands_are_schema_stable_and_atomic`
+lists and mutates comment threads, lists and resolves revisions, creates a
+reopenable redline, verifies exact JSON, and proves invalid inputs publish no
+destination.
+
+### F-X094b, Structured CLI text and layout plus guarded replacement (L)
+
+Add schema-1 JSON for rich accepted-view body text and deterministic body-item
+layout. Text records carry a top-level body index and typed nested path. Layout
+uses real point-space fragments for page-spanning items, empty tables, and
+image-bearing paragraphs. `replace --expect N` guards the existing run-aware
+replacement before publication.
+
+The native sidecar keeps every direct body item addressable. Its public fragment
+record exposes one-based physical and displayed pages plus point-space bounds,
+while preserved unlaid items have an empty fragment list. Cached pagination
+retains the same fragment result as fresh pagination without changing shared
+positioned output.
+
+**Depends on**: F-X032, F-X037, F-X047.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: integration. `cli_structured_text_layout_and_guarded_replace_preserve_exact_contracts`
+checks nested text paths, run formatting, multi-page body fragments, empty and
+image extents, and an exact-count mismatch that creates no output.
+
+### F-X094c, Priority rdocx Python collaboration, comparison, layout, and TOC (L)
+
+The Python `Document` exposes current comparison, main-body comments,
+deterministic layout and page lookup, and TOC rebuild through precisely typed
+immutable snapshots. Structural mutations advance binding revision once only
+after success. Comparison, layout, TOC rebuild, and serialization release the
+GIL. The surface does not complete the future all-story work in F-291, F-293,
+F-295, or F-310.
+
+**Depends on**: F-X094b, F-148, F-232, F-234, F-235.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: binding. `priority_word_operations_return_typed_snapshots_and_remain_atomic`
+reopens a redline and comment thread, checks real layout fragments and TOC
+counts, passes installed typing and stub checks, and proves native failures do
+not mutate the Python document.
+
+### F-X094d, rdocx Python sections, styles, rich stories, and hyperlinks (L)
+
+After F-252, expose ordered section, style, rich header and footer, and
+relationship-resolved hyperlink snapshots. Records retain source order, story
+ownership, inheritance, and nested paths without adding a second document tree
+or an untyped dictionary layer. Frozen Python records expose sections in EMU,
+styles, physical stories, story items, all effective header and footer
+variants, and hyperlinks. Native `StoryItemRef::links` returns existing
+`LinkInfo` records and resolves each relationship through the checked story
+owner. Native `Document::story_links` pairs the existing location and link
+types in physical source order across nested and ancestor-owned items.
+
+**Depends on**: F-252, F-255, F-X094c.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: binding. `word_structure_snapshots_preserve_order_ownership_and_types`
+opens a three-section document with inherited and independent rich variants,
+styles, and links, then verifies exact frozen records and installed typing
+through save and reopen.
+
+### F-X094e, rpptx Python rendering, comments, and notes (L)
+
+Expose deterministic slide and speaker-note PDF and PNG rendering, notes text,
+and the current modern comment-author, thread, reply, and ordered mutation
+facade through precisely typed Python values. Rendering releases the GIL and
+collaboration mutation retains native identity and atomicity. The native
+facade adds one-slide and all-slide deterministic PNG conveniences over the
+same resolved layout path. Python returns frozen `CommentAuthor`, `Comment`,
+and `CommentReply` values, accepts native GUID and RFC 3339 strings, and
+advances its global revision only after a successful collaboration operation.
+
+**Depends on**: F-136, F-217, F-226.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: binding. `presentation_render_comments_and_notes_match_native_snapshots`
+renders slide and notes outputs, reads notes text, mutates and reopens one
+comment thread, passes installed typing, and proves invalid identities publish
+no mutation.
+
+### F-X094f, Prepare the version-aligned Python release paths (M)
+
+Extend the reviewed release ceremony with independent Python distributions.
+`py-rdocx-v0.13.2` selects `rdocx` at the matching stable source version, while
+`py-rpptx-v0.11.0` selects `rpptx` at the matching incubating crate version.
+Each release contains exactly six cp39-abi3 wheels and one source distribution,
+uses trusted PyPI publication, publishes byte-identical GitHub release notes,
+verifies registry ownership, and retains contribution evidence. Each project
+uses its crate-local README as the Markdown long description and supplies a
+specific summary, author, keywords, classifiers, and project URLs. The
+artifact gate verifies that metadata and required installation, quick-start,
+typing, and project-link guidance in both archive formats. The immutable PyPI
+`rdocx 0.13.1` release remains available, so the corrected metadata ships as
+0.13.2. A manual
+`wheels.yml` run at the reviewed SHA is build-only and supplies the exact
+artifacts for clean Python 3.9 and 3.12 install and runtime checks. Strict
+typing and stub checks run under Python 3.12. After separate exact-tag
+approvals, S72 published and verified `rdocx 0.13.2` and `rpptx 0.11.0` from
+reviewed SHA `2b009243ed39ab66470d7484d490985368e865a8`. Both GitHub release
+bodies match their reviewed notes byte for byte. The completed release gate
+notified and closed Issues 72 through 76, contributor PRs 77 through 80, and
+the unmerged verification PR 82.
+
+**Depends on**: F-137, F-138, F-X094a, F-X094c, F-X094d, F-X094e, F-X096.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: release preparation.
+`python_release_contract_rejects_partial_or_unapproved_publication` accepts
+only the exact selected tag, distribution, six wheels, one source archive,
+matching native crate version, trusted publisher, reviewed-note, verification,
+and approval contract. Negative mutations reject every mixed, mismatched,
+partial, or manual-publication path.
+`python_release_contract_requires_complete_project_metadata` requires the
+reviewed long description and project metadata in each source project and
+built archive.
+
+### F-X095, Integrate PRs 77 through 80 and restore deterministic CI (L)
+
+Integrate the contributor outcomes from PRs 77 through 80 at pinned heads
+`aed8f14d826e43fee52b6da75c47fe2c5d37645a`,
+`4b8fd0d15b3920abf3e40f46f7752ade23589bf5`,
+`8ede12b4102fb8bdc9421c22e059b7df010e2113`, and
+`9a9d3e8eeab2a5b8f2088930beae50ebce918f23`. Preserve contributor credit while
+reconciling the changes against the completed S72 section, story, binding, and
+release work. Numbering reports only retained extra XML and attributes as
+unmodelled. Document, self-closing body, revision, marker, field, table-cell,
+and TOC reader facts remain namespace-aware, bounded, schema-ordered, and
+stable through save, reopen, and repeated save. Pedro Assumpcao is credited for
+the four pinned contributor heads in the sprint delivery record and release
+notes.
+
+Restore hosted Presentation fidelity by installing the exact reviewed
+LibreOffice 26.2.5.2 and Poppler 26.01.0 builds on Ubuntu 24.04. Package-manager
+LibreOffice is not an accepted substitute. Retain the existing S72 Python
+binding repair for documents that carry an authored font table and prove both
+reported hosted failures are absent on the integrated branch.
+
+**Depends on**: F-X071, F-253.
+**GitHub pull requests**: <https://github.com/tensorbee/rdocx/pull/77>,
+<https://github.com/tensorbee/rdocx/pull/78>,
+<https://github.com/tensorbee/rdocx/pull/79>, and
+<https://github.com/tensorbee/rdocx/pull/80>.
+**Test gate**: regression. The focused contributor reader tests cover narrowed
+numbering evidence, strict body boundaries, missing revision authors, marker
+child content, complex-field properties, cell margins, empty cells, nested
+tables, and self-closing TOC coordinates. The CI contract test rejects a moving
+LibreOffice installation or a non-Ubuntu Presentation fidelity runner. The
+complete `rdocx-oxml`, `rdocx`, Python binding, workflow regression, and hash
+harness gates must pass. Exactly seven `word/document.xml` hashes may change
+for self-closing empty paragraphs, while every PNG and PDF fingerprint remains
+unchanged.
+
+### F-X096, Align Python distribution versions and release tags (M)
+
+Publish each Python distribution at the version of its corresponding native
+crate. The corrective stable source, native `rdocx`, `rdocx-py`, and the next
+PyPI `rdocx` release use 0.13.2. The immutable PyPI `rdocx 0.13.1` release and
+the complete crates.io 0.13.1 family remain available.
+`rpptx-py` and PyPI `rpptx` use 0.11.0 with native `rpptx`, rather than
+inheriting the unrelated stable workspace version 0.13.2. Package metadata,
+wheel and source archive names, installed module versions, PyPI records, and
+GitHub releases must all agree.
+
+Use `py-rdocx-vX.Y.Z` and `py-rpptx-vX.Y.Z` as the Python tag namespaces. The
+existing `v*` stable Rust and `rpptx-v*` incubating Rust tag families remain
+unchanged, so neither Python tag can start crates.io publication. A tag build
+may build the complete matrix, but its trusted publish job selects exactly the
+one matching distribution. Manual dispatch remains build-only.
+
+**Depends on**: F-X094e.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/76>.
+**Test gate**: release preparation.
+`python_release_contract_keeps_distribution_versions_independent` proves exact
+crate and project version agreement, disjoint tag routing, six wheels and one
+source archive per selected distribution, manual build-only behavior, and
+fail-closed rejection of a version or family mismatch.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

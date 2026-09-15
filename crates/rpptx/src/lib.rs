@@ -1173,6 +1173,20 @@ impl Presentation {
         Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
+    /// Renders one deterministic slide PNG at `dpi` by zero-based index.
+    #[cfg(feature = "render")]
+    pub fn slide_png_deterministic(&self, slide_index: usize, dpi: f64) -> Result<Option<Vec<u8>>> {
+        let (_, layout) = self.render_deterministic()?;
+        render_export_png(&layout, slide_index, dpi)
+    }
+
+    /// Renders one deterministic PNG per slide at `dpi`.
+    #[cfg(feature = "render")]
+    pub fn slide_pngs_deterministic(&self, dpi: f64) -> Result<Vec<Vec<u8>>> {
+        let (_, layout) = self.render_deterministic()?;
+        render_export_pngs(&layout, dpi)
+    }
+
     /// Render the presentation to the selected archival PDF profile.
     #[cfg(feature = "render")]
     pub fn to_pdfa_deterministic(&self, profile: oxml_pdf::PdfConformance) -> Result<Vec<u8>> {
@@ -6419,13 +6433,37 @@ const MAX_PRESENTATION_EXPORT_RASTER_BYTES: u64 = 256 * 1024 * 1024;
 
 #[cfg(feature = "render")]
 fn render_export_pngs(layout: &LayoutResult, dpi: f64) -> Result<Vec<Vec<u8>>> {
+    validate_export_png_pages(&layout.pages, dpi)?;
+    (0..layout.pages.len())
+        .map(|index| {
+            oxml_pdf::render_page_to_png(layout, index, dpi).ok_or_else(|| {
+                render_failure(format!("could not rasterize export page {}", index + 1))
+            })
+        })
+        .collect()
+}
+
+#[cfg(feature = "render")]
+fn render_export_png(layout: &LayoutResult, index: usize, dpi: f64) -> Result<Option<Vec<u8>>> {
+    let Some(page) = layout.pages.get(index) else {
+        validate_export_png_pages(&[], dpi)?;
+        return Ok(None);
+    };
+    validate_export_png_pages(std::slice::from_ref(page), dpi)?;
+    oxml_pdf::render_page_to_png(layout, index, dpi)
+        .map(Some)
+        .ok_or_else(|| render_failure(format!("could not rasterize export page {}", index + 1)))
+}
+
+#[cfg(feature = "render")]
+fn validate_export_png_pages(pages: &[std::sync::Arc<PageFrame>], dpi: f64) -> Result<()> {
     if !dpi.is_finite() || dpi <= 0.0 || dpi > MAX_PRESENTATION_EXPORT_DPI {
         return Err(render_failure(format!(
             "raster DPI must be finite and in 0..={MAX_PRESENTATION_EXPORT_DPI}, found {dpi}"
         )));
     }
     let scale = dpi / 72.0;
-    let estimated = layout.pages.iter().try_fold(0u64, |total, page| {
+    let estimated = pages.iter().try_fold(0u64, |total, page| {
         let width = (page.width * scale).ceil();
         let height = (page.height * scale).ceil();
         if !width.is_finite() || !height.is_finite() || width < 1.0 || height < 1.0 {
@@ -6440,13 +6478,7 @@ fn render_export_pngs(layout: &LayoutResult, dpi: f64) -> Result<Vec<Vec<u8>>> {
             MAX_PRESENTATION_EXPORT_RASTER_BYTES
         )));
     }
-    (0..layout.pages.len())
-        .map(|index| {
-            oxml_pdf::render_page_to_png(layout, index, dpi).ok_or_else(|| {
-                render_failure(format!("could not rasterize export page {}", index + 1))
-            })
-        })
-        .collect()
+    Ok(())
 }
 
 #[cfg(feature = "render")]

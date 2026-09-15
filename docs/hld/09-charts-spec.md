@@ -493,6 +493,20 @@ overwriting retained source bytes. Serialization or validation failure leaves
 the document unchanged. Chart and workbook names allocate independently after
 the greatest occupied positive suffix.
 
+The public Word chart operation remains a body-flow API. Its private package
+assembly uses the same explicit relationship-owner allocator as story-scoped
+images and hyperlinks, so chart, workbook, theme, and media edges cannot fall
+back to an implicit conventional main-part path. Any later story-scoped chart
+surface must supply the owning part through this same concrete helper.
+
+A selected main-body fragment that contains a chart imports the retained Word
+drawing and its internal chart closure together. The document-to-chart edge,
+ChartML part, chart-to-workbook edge, and embedded workbook receive
+collision-safe destination identities before the retained relationship
+attributes are rewritten. Repeated import may reuse an exactly equivalent leaf
+part only when the caller enables related-part reuse. Missing, external, or
+malformed chart closure edges reject the complete fragment transaction.
+
 The source-built portable candidate has SHA-256
 `54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`.
 Its automated gate saves and reopens line, bar, pie, and doughnut charts with

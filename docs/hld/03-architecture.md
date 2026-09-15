@@ -107,15 +107,29 @@ while package maps retain producer spelling. Facade operations reserve
 complete identifier bundles on staged state, while serialization derives
 authored identifiers from final recursive document order before publishing the
 candidate. Relationship identifiers remain scoped to their owning part, and
-only identities captured at package open have preserved provenance. Current
-graph edges added later join authored semantic canonicalization even when no
-modeled `r:id` refers to them. Internal and external edges retain their targets
-and modes while receiving deterministic type-and-target order. Relationship
-attributes in retained body XML and raw drawing payloads are fixed occupants.
+producer drawing-definition uniqueness is also validated within each physical
+XML part. The union of every valid producer drawing value remains occupied for
+package-global authored allocation. Only identities captured at package open
+have preserved provenance. Current graph edges added later join authored
+semantic canonicalization even when no modeled `r:id` refers to them. Internal
+and external edges retain their targets and modes while receiving deterministic
+type-and-target order. Relationship attributes in retained body XML and raw
+drawing payloads are fixed occupants.
 Their values are found by expanded office relationship namespace, including
 bindings inherited by the document body, and are never remapped without a safe
 raw rewrite.
-bookmark, comment, drawing, abstract-numbering, and numbering-instance values
+
+Story-scoped image and hyperlink operations resolve the normalized OPC owner
+from `StoryId`. Cells and text boxes inherit the containing part, while
+headers, footers, notes, and comments use their related parts. Main-part
+occurrence provenance reconciles against live expanded-name references during
+serialization. Repeated same-owner references share one relationship, removed
+references retire only occurrence provenance, and each live authored picture
+receives a distinct globally canonical drawing identity. Producer drawings may
+reuse one preserved identity in different physical parts without being
+renumbered.
+
+Bookmark, comment, drawing, abstract-numbering, and numbering-instance values
 remain separate namespaces. Rich-merge content-control `w:id` and non-visual
 drawing `cNvPr` values remain separate merge-local scopes rather than package
 identifier-owner categories.
@@ -237,6 +251,13 @@ and coverage segmentation, ICU break opportunities, conditional hyphenation,
 HarfRust shaping, and line-local UAX 9 visual ordering therefore remain shared
 by document formats. Logical order is the extraction contract. Visual order is
 applied only to completed lines for painting.
+
+The shared PDF backend owns the final extraction projection. It groups only
+adjacent rich runs with one semantic owner, one transformed baseline, and
+contiguous source spans or logical indices. The first painted run carries the
+complete logical line through `ActualText`, and later painted runs carry empty
+replacement text so extraction sees the line once. The backend retains paint
+traversal and exact glyph positions, including through nested group transforms.
 
 Word and Presentation both project complex text into those shared rich values.
 `rdocx-layout` selects the effective direct, bidirectional, or East Asian
@@ -894,8 +915,14 @@ unpublished at 0.11.0. The earlier 0.10.0 family remains available. The family
 includes `oxml-chart` as the format-neutral owner while
 retaining `rpptx-chart` as a source-compatible deprecated shim. The released
 `rdocx-*` crates use the separate workspace version. The stable workspace, its
-nine internal pins, eleven inherited lockfile packages, two Python project
-versions, and unpublished `rdocx-wasm` package are at 0.13.1. The exact
+eight stable-version internal pins, ten inherited lockfile packages, the
+`rdocx` Python project, and unpublished `rdocx-wasm` package are at 0.13.2. The
+metadata-complete `rdocx` Python distribution is published at 0.13.2 from
+immutable annotated tag `py-rdocx-v0.13.2` at reviewed SHA
+`2b009243ed39ab66470d7484d490985368e865a8`. This source version does not
+authorize a crates.io publication. The `rpptx` Python project follows the
+native incubating version 0.11.0 and is published from immutable annotated tag
+`py-rpptx-v0.11.0` at the same reviewed SHA. The exact
 seven-package stable crates.io family is published from immutable annotated
 `v0.13.1` tag at reviewed SHA
 `c391d12422c288be5db314bad8338dd08bb47d9a`. Every registry entry and its sole
@@ -913,8 +940,11 @@ The separately approved cleanup yanked exactly the incomplete
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` entries. Complete coherent stable
 releases remain live and unyanked. The v0.11.0 tag remains immutable, and no
 v0.11.0 GitHub release exists. Earlier immutable registry releases, including
-the complete 0.12.0 family, remain available. Version
-preparation and manifest eligibility do not authorize any later publication.
+the complete 0.12.0 family, remain available. The immutable `rdocx 0.13.1`
+PyPI release remains available. PyPI `rdocx 0.13.2` and `rpptx 0.11.0` each
+contain six `cp39-abi3` wheels and one source distribution with their
+crate-local README as the Markdown long description. Version preparation and
+manifest eligibility do not authorize any later publication.
 `oxml-cli-support` is the
 format-neutral owner of range parsing,
 JSON envelope, and output-path contracts. It has no dependency on either
@@ -1011,6 +1041,85 @@ the part, package relationship, content type, and typed model publish together.
 An empty custom-properties part is pruned only when the current facade created
 it. Settings mutations use the same staged boundary and keep the existing
 relationship-resolved target.
+
+Container-neutral Word story editing also belongs to the `rdocx` facade.
+Concrete `StoryKind`, `StoryId`, `ContentLocation`, `StoryItemKind`, and
+`StoryItemRef` values address the body, cells, headers, footers, ordinary
+footnotes and endnotes, comments, and nested text boxes without constructing a
+second document tree. The facade resolves package owners and stable source
+order. The existing `rdocx-oxml` grammar remains the authority for admitting
+content controls, revisions, and fields as typed content. Content rejected by
+that grammar remains one opaque preserved boundary and cannot expose nested
+owners or editable text.
+
+`StoryItemRef::links` returns modeled hyperlinks in item source order. Display
+text comes from the existing story text projection, while relationship targets
+resolve only through the item's checked physical `StoryId`. Nested cells and
+text boxes remain separate owners and are not folded into the enclosing item.
+`Document::story_links` merges item-owned links by their physical XML position
+and returns each existing `LinkInfo` with its checked `ContentLocation`. This
+keeps nested content-control ownership without reordering interleaved links.
+
+`ContentFragment` owns one paragraph, table, block content control, or removed
+preserved node. Insert, remove, clone, and move resolve canonical
+`StoryItemRef::location` values only when they name actual direct owner
+children of the matching kind. `ContentLocation::end` is the distinct boundary
+after final direct content. It works for empty and self-closing owners and
+remains before body section properties. Moves stay within one unchanged story
+owner. Clones allocate fresh document identities, while relationship-bearing
+fragments require the unchanged owner scope. Every operation serializes and
+reopens a staged candidate before publishing it.
+
+`DocumentFragment` owns a package-authoritative half-open main-body selection
+and its supported dependency source. Import closes only dependencies reachable
+from the selected body XML and selected comment threads. It computes style and
+numbering references to a fixpoint, preallocates relationship and part names,
+and rewrites bookmark, comment, drawing, field, style, numbering, and
+relationship identities only after every map exists. Exact retained body and
+comment XML remain authoritative. Reuse of equivalent style, numbering, and
+related-part graphs is caller-selected through `FragmentConflictPolicy`.
+Import applies all changes to one staged document and publishes only after the
+package serializes and reopens. External, dangling, malformed, incomplete, or
+exhausted dependency graphs leave the destination unchanged.
+
+Ordered Word section ownership also belongs to the `rdocx` facade. Concrete
+`SectionRef` and `Section` handles borrow the existing paragraph-level or
+schema-final `CT_SectPr` owner and carry its document-order ordinal and final
+owner identity. They expose page size, orientation, four margins, gutter,
+equal-width columns, page-number start, header and footer distance, title-page
+state, break type, and the complete properties. Checked setters validate the
+full `Length` value before publishing any narrowed twip. Orientation mutation
+normalizes page dimensions. The legacy final-section `Document` convenience
+setters remain unchecked and infallible. `Document` counts, iterates, and looks
+up those owners without constructing a second section tree. Insertion and
+removal stage the complete document and package, retain body order and
+unmodelled section XML, serialize and reopen the candidate, then publish once.
+
+Per-section header and footer ownership is a native `rdocx` facade concern.
+`HeaderFooterKind` and `HdrFtrType` select the story family and default, first,
+or even variant. `SectionStory` reports the resolved `StoryId`, its source
+section, and whether it is inherited. Lookup follows only the same variant
+through preceding sections. Create, link, inherit, unlink, replace, and remove
+stage the complete document and package, serialize and reopen the candidate,
+then publish once. First-page creation enables `titlePg`. Even-page selection
+is controlled separately by the typed document setting. Rich edits continue
+through the container-neutral story operations rather than a second header or
+footer content model.
+
+The Python facade projects sections, styles, stories, story items, effective
+header and footer variants, and hyperlinks into detached frozen records.
+Document accessors return tuples in native source order. Records retain the
+physical story owner, item index path, inheritance source, and relationship
+identifier without exposing raw XML or adding a second binding-side tree.
+
+`rdocx-oxml` authors only `w:pgNumType/@w:start` for M23. Number format,
+chapter style, chapter separator, and every other unsupported attribute or
+child remain in the retained source for M24. Section serialization replays raw
+children at schema slots and at predecessor or successor boundaries between
+repeated header and footer references. Distinguishable references follow their
+value through removal and reorder. Equal public values are indistinguishable
+through the preserved `Vec<HdrFtrRef>` surface and resolve by deterministic
+source ordinal, with a resolvable following reference taking precedence.
 
 `Document` also owns one relationship-resolved `CT_Styles` graph. Public style
 creation, update, default selection, and removal build a complete candidate,

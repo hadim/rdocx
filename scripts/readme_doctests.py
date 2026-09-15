@@ -178,26 +178,26 @@ README_CASES = (
 
 README_REQUIRED_TEXT = {
     REPO_ROOT / "README.md": (
-        'rdocx = "0.13.1"',
-        'rdocx = { version = "0.13.1", default-features = false }',
+        'rdocx = "0.13.2"',
+        'rdocx = { version = "0.13.2", default-features = false }',
         "rdocx convert report.docx --to pdf -o report.pdf",
         "rdocx convert report.docx --to html -o report.html",
         "rdocx convert report.docx --to md -o report.md",
         'rdocx replace report.docx --placeholder "Draft" --value "Final" -o final.docx',
     ),
     REPO_ROOT / "crates/rdocx-cli/README.md": (
-        "cargo install rdocx-cli --version '^0.13.1'",
+        "cargo install rdocx-cli --version '^0.13.2'",
         "rdocx convert report.docx --to pdf -o report.pdf",
     ),
-    REPO_ROOT / "crates/rdocx-html/README.md": ('rdocx-html = "0.13.1"',),
-    REPO_ROOT / "crates/rdocx-layout/README.md": ('rdocx-layout = "0.13.1"',),
+    REPO_ROOT / "crates/rdocx-html/README.md": ('rdocx-html = "0.13.2"',),
+    REPO_ROOT / "crates/rdocx-layout/README.md": ('rdocx-layout = "0.13.2"',),
     REPO_ROOT / "crates/rdocx-opc/README.md": (
-        'rdocx-opc = "0.13.1"',
+        'rdocx-opc = "0.13.2"',
         "use rdocx_opc::OpcPackage;",
     ),
-    REPO_ROOT / "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.13.1"',),
+    REPO_ROOT / "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.13.2"',),
     REPO_ROOT / "crates/rdocx-pdf/README.md": (
-        'rdocx-pdf = "0.13.1"',
+        'rdocx-pdf = "0.13.2"',
         "use rdocx_pdf::render_to_pdf;",
     ),
     REPO_ROOT / "crates/oxml-cli-support/README.md": (
@@ -234,7 +234,9 @@ README_REQUIRED_TEXT = {
     REPO_ROOT / "crates/rpptx-py/README.md": (
         'Presentation("deck.pptx")',
         "len(presentation.slides)",
-        "The binding does not expose PDF or raster rendering.",
+        "presentation.to_pdf()",
+        "presentation.render_slide_to_png(0)",
+        "Read speaker-note text and inspect or mutate modern comment threads.",
     ),
     REPO_ROOT / "crates/rpptx-layout/README.md": ("ScopedMediaIds::default()",),
     REPO_ROOT / "crates/rpptx-oxml/README.md": (

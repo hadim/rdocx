@@ -171,8 +171,14 @@ def _document_with_invalid_embedded_font():
     with zipfile.ZipFile(source_archive) as source_zip:
         with zipfile.ZipFile(result, "w") as result_zip:
             for info in source_zip.infolist():
+                if info.filename == "word/fontTable.xml":
+                    continue
                 data = source_zip.read(info.filename)
                 if info.filename == "[Content_Types].xml":
+                    data = data.replace(
+                        b'  <Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>\n',
+                        b"",
+                    )
                     data = data.replace(
                         b"</Types>",
                         (
@@ -180,10 +186,13 @@ def _document_with_invalid_embedded_font():
                             b'ContentType="application/x-font-ttf"/></Types>'
                         ),
                     )
+                elif info.filename == "word/_rels/document.xml.rels":
+                    data = data.replace(
+                        b'  <Relationship Id="rdocxFontTable" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>\n',
+                        b"",
+                    )
                 result_zip.writestr(info, data)
-            result_zip.writestr(
-                "word/fonts/Carlito-Regular.ttf", _font_with_zero_units_per_em()
-            )
+            result_zip.writestr("word/fonts/FaultyX.ttf", _font_with_zero_units_per_em())
     return Document.from_bytes(result.getvalue())
 
 
@@ -262,9 +271,44 @@ def test_poppler_version_pin_rejects_unreviewed_suffix():
 def test_to_bytes_releases_gil_for_python_worker():
     document = _nontrivial_document(10)
 
-    package = _assert_releases_gil(document.to_bytes)
+    def serialize_repeatedly():
+        package = b""
+        for _ in range(16):
+            package = document.to_bytes()
+        return package
+
+    package = _assert_releases_gil(serialize_repeatedly)
 
     assert package.startswith(b"PK")
+
+
+def test_compare_releases_gil_for_python_worker():
+    original = _nontrivial_document(20)
+    edited = _nontrivial_document(21)
+
+    diagnostics = _assert_releases_gil(
+        lambda: original.compare(
+            edited, author="Ada", timestamp="2026-09-14T09:00:00Z"
+        )
+    )
+
+    assert isinstance(diagnostics, tuple)
+
+
+def test_layout_releases_gil_for_python_worker():
+    document = _nontrivial_document(22)
+
+    fragments = _assert_releases_gil(document.layout)
+
+    assert fragments
+
+
+def test_rebuild_toc_releases_gil_for_python_worker():
+    document = _nontrivial_document(23)
+
+    report = _assert_releases_gil(document.rebuild_toc)
+
+    assert report.entry_count == 0
 
 
 def test_render_page_to_png_releases_gil_for_python_worker():
