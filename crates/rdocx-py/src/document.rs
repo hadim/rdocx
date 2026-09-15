@@ -1,6 +1,7 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use oxml_py_support::{PathSeg, RevisionCounter};
+use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError};
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
@@ -237,6 +238,42 @@ pub struct PyTocRebuildReport {
     diagnostics: Vec<String>,
 }
 
+#[pyclass(name = "Revision", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyRevision {
+    pub id: i32,
+    pub author: String,
+    pub timestamp: Option<String>,
+    pub kind: String,
+}
+
+#[pymethods]
+impl PyRevision {
+    #[new]
+    #[pyo3(signature = (*, id, author, timestamp, kind))]
+    fn new(id: i32, author: String, timestamp: Option<String>, kind: String) -> Self {
+        Self {
+            id,
+            author,
+            timestamp,
+            kind,
+        }
+    }
+}
+
+fn revision_kind_name(kind: rdocx::RevisionKind) -> &'static str {
+    match kind {
+        rdocx::RevisionKind::Insertion => "insertion",
+        rdocx::RevisionKind::Deletion => "deletion",
+        rdocx::RevisionKind::MoveFrom => "move_from",
+        rdocx::RevisionKind::MoveTo => "move_to",
+        rdocx::RevisionKind::RunPropertyChange => "run_property_change",
+        rdocx::RevisionKind::ParagraphPropertyChange => "paragraph_property_change",
+        rdocx::RevisionKind::TablePropertyChange => "table_property_change",
+        rdocx::RevisionKind::SectionPropertyChange => "section_property_change",
+    }
+}
+
 #[pyclass(name = "Story", frozen, get_all, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyStory {
@@ -266,18 +303,22 @@ pub struct PyStoryItem {
     index_path: Vec<usize>,
     direct_body_index: Option<usize>,
     text: Option<String>,
+    xml: Vec<u8>,
+    revision: u64,
 }
 
 #[pymethods]
 impl PyStoryItem {
     #[new]
-    #[pyo3(signature = (*, story, kind, index_path, text, direct_body_index=None))]
+    #[pyo3(signature = (*, story, kind, index_path, text, xml=None, direct_body_index=None, revision=0))]
     fn new(
         story: PyRef<'_, PyStory>,
         kind: String,
         index_path: Vec<usize>,
         text: Option<String>,
+        xml: Option<&[u8]>,
         direct_body_index: Option<usize>,
+        revision: u64,
     ) -> Self {
         Self {
             story: story.clone(),
@@ -285,6 +326,8 @@ impl PyStoryItem {
             index_path,
             direct_body_index,
             text,
+            xml: xml.unwrap_or_default().to_vec(),
+            revision,
         }
     }
 
@@ -311,6 +354,16 @@ impl PyStoryItem {
     #[getter]
     fn text(&self) -> Option<&str> {
         self.text.as_deref()
+    }
+
+    #[getter]
+    fn xml<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.xml)
+    }
+
+    #[getter]
+    fn revision(&self) -> u64 {
+        self.revision
     }
 }
 
@@ -629,6 +682,27 @@ impl PyDocument {
         }
     }
 
+    /// The live native owner that a `Story` snapshot names.
+    ///
+    /// A snapshot carries no fingerprint, so it resolves by kind, part name
+    /// and owner index against the document as it is now.
+    fn native_story(&self, py: Python<'_>, story: &PyStory) -> PyResult<rdocx::StoryId> {
+        self.inner
+            .stories()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .find(|candidate| story_snapshot(candidate) == *story)
+            .ok_or_else(|| {
+                rdocx_to_pyerr(
+                    py,
+                    rdocx::Error::Other(format!(
+                        "document has no {} story {} at owner index {}",
+                        story.kind, story.part_name, story.owner_index
+                    )),
+                )
+            })
+    }
+
     fn body_story(&self, py: Python<'_>) -> PyResult<rdocx::StoryId> {
         self.inner
             .stories()
@@ -641,6 +715,30 @@ impl PyDocument {
                     rdocx::Error::Other("document body story is missing".to_owned()),
                 )
             })
+    }
+
+    fn native_location(
+        &self,
+        py: Python<'_>,
+        item: &PyStoryItem,
+    ) -> PyResult<rdocx::ContentLocation> {
+        let story = self.native_story(py, &item.story)?;
+        if item.revision != self.revisions.current() {
+            return Err(crate::stale_to_pyerr(
+                py,
+                StaleElementError {
+                    element_kind: "story item".to_owned(),
+                    captured_revision: item.revision,
+                    current_revision: self.revisions.current(),
+                    recovery_hint: "Re-fetch it with document.story_items.".to_owned(),
+                },
+            ));
+        }
+        Ok(rdocx::ContentLocation::new(
+            story,
+            story_item_kind_from_name(&item.kind)?,
+            item.index_path.clone(),
+        ))
     }
 
     fn body_location(&self, py: Python<'_>, index: usize) -> PyResult<rdocx::ContentLocation> {
@@ -763,6 +861,20 @@ fn story_item_kind_name(kind: rdocx::StoryItemKind) -> &'static str {
         rdocx::StoryItemKind::Drawing => "drawing",
         rdocx::StoryItemKind::PreservedNode => "preserved_node",
         _ => "unknown",
+    }
+}
+
+fn story_item_kind_from_name(name: &str) -> PyResult<rdocx::StoryItemKind> {
+    match name {
+        "paragraph" => Ok(rdocx::StoryItemKind::Paragraph),
+        "table" => Ok(rdocx::StoryItemKind::Table),
+        "content_control" => Ok(rdocx::StoryItemKind::ContentControl),
+        "field" => Ok(rdocx::StoryItemKind::Field),
+        "drawing" => Ok(rdocx::StoryItemKind::Drawing),
+        "preserved_node" => Ok(rdocx::StoryItemKind::PreservedNode),
+        _ => Err(PyValueError::new_err(format!(
+            "unsupported story item kind {name:?}"
+        ))),
     }
 }
 
@@ -1028,6 +1140,11 @@ impl PyDocument {
                         .direct_body_index()
                         .map_err(|error| rdocx_to_pyerr(py, error))?,
                     text: item.text().map_err(|error| rdocx_to_pyerr(py, error))?,
+                    xml: item
+                        .xml()
+                        .map_err(|error| rdocx_to_pyerr(py, error))?
+                        .into_owned(),
+                    revision: self.revisions.current(),
                 });
             }
         }
@@ -1090,6 +1207,43 @@ impl PyDocument {
             }
         }
         PyTuple::new(py, snapshots)
+    }
+
+    fn set_header(&mut self, text: &str) {
+        self.inner.set_header(text);
+        self.revisions.bump();
+    }
+
+    fn set_footer(&mut self, text: &str) {
+        self.inner.set_footer(text);
+        self.revisions.bump();
+    }
+
+    fn set_story_text(
+        &mut self,
+        py: Python<'_>,
+        item: PyRef<'_, PyStoryItem>,
+        text: &str,
+    ) -> PyResult<()> {
+        let location = self.native_location(py, &item)?;
+        py.detach(|| self.inner.set_story_text(&location, text))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    fn add_hyperlink_to_story(
+        &mut self,
+        py: Python<'_>,
+        story: PyRef<'_, PyStory>,
+        text: &str,
+        url: &str,
+    ) -> PyResult<()> {
+        let story = self.native_story(py, &story)?;
+        py.detach(|| self.inner.add_hyperlink_to_story(&story, text, url))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
     }
 
     #[pyo3(signature = (range, *, author, text, initials = None))]
@@ -1211,6 +1365,70 @@ impl PyDocument {
         })
     }
 
+    #[getter(revisions)]
+    fn revision_snapshots<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .revisions()
+                .into_iter()
+                .map(|revision| PyRevision {
+                    id: revision.id(),
+                    author: revision.author().to_owned(),
+                    timestamp: revision.timestamp().map(str::to_owned),
+                    kind: revision_kind_name(revision.kind()).to_owned(),
+                }),
+        )
+    }
+
+    fn accept_all(&mut self, py: Python<'_>) -> PyResult<usize> {
+        self.counted_mutation(py, rdocx::Document::accept_all)
+    }
+
+    fn reject_all(&mut self, py: Python<'_>) -> PyResult<usize> {
+        self.counted_mutation(py, rdocx::Document::reject_all)
+    }
+
+    fn accept_revisions_by_author(&mut self, py: Python<'_>, author: &str) -> PyResult<usize> {
+        self.counted_mutation(py, |document| document.accept_revisions_by_author(author))
+    }
+
+    fn reject_revisions_by_author(&mut self, py: Python<'_>, author: &str) -> PyResult<usize> {
+        self.counted_mutation(py, |document| document.reject_revisions_by_author(author))
+    }
+
+    #[pyo3(signature = (*, start, end))]
+    fn accept_revisions_in_date_range(
+        &mut self,
+        py: Python<'_>,
+        start: &str,
+        end: &str,
+    ) -> PyResult<usize> {
+        self.counted_mutation(py, |document| {
+            document.accept_revisions_in_date_range(start, end)
+        })
+    }
+
+    #[pyo3(signature = (*, start, end))]
+    fn reject_revisions_in_date_range(
+        &mut self,
+        py: Python<'_>,
+        start: &str,
+        end: &str,
+    ) -> PyResult<usize> {
+        self.counted_mutation(py, |document| {
+            document.reject_revisions_in_date_range(start, end)
+        })
+    }
+
+    fn accept_revision_id(&mut self, py: Python<'_>, id: i32) -> PyResult<usize> {
+        self.counted_mutation(py, |document| document.accept_revision_id(id))
+    }
+
+    fn reject_revision_id(&mut self, py: Python<'_>, id: i32) -> PyResult<usize> {
+        self.counted_mutation(py, |document| document.reject_revision_id(id))
+    }
+
     fn try_replace_text(
         &mut self,
         py: Python<'_>,
@@ -1228,6 +1446,54 @@ impl PyDocument {
         patterns: Vec<(String, String)>,
     ) -> PyResult<usize> {
         self.counted_mutation(py, |document| document.replace_all_regex(&patterns))
+    }
+
+    #[pyo3(signature = (
+        *,
+        now = None,
+        file_name = None,
+        file_path = None,
+        merge_fields = None,
+        included_text = None,
+        merge_record_number = None,
+        merge_sequence_number = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn update_fields(
+        &mut self,
+        py: Python<'_>,
+        now: Option<&Bound<'_, PyAny>>,
+        file_name: Option<String>,
+        file_path: Option<String>,
+        merge_fields: Option<BTreeMap<String, String>>,
+        included_text: Option<BTreeMap<String, String>>,
+        merge_record_number: Option<u32>,
+        merge_sequence_number: Option<u32>,
+    ) -> PyResult<usize> {
+        // Read field by field: the abi3 build has no datetime accessors, and
+        // the wall-clock values are used as given.
+        let now = now
+            .map(|now| {
+                Ok::<_, PyErr>(rdocx::FieldDateTime {
+                    year: now.getattr("year")?.extract()?,
+                    month: now.getattr("month")?.extract()?,
+                    day: now.getattr("day")?.extract()?,
+                    hour: now.getattr("hour")?.extract()?,
+                    minute: now.getattr("minute")?.extract()?,
+                    second: now.getattr("second")?.extract()?,
+                })
+            })
+            .transpose()?;
+        let context = rdocx::FieldEvaluationContext {
+            now,
+            file_name,
+            file_path,
+            merge_fields: merge_fields.unwrap_or_default(),
+            included_text: included_text.unwrap_or_default(),
+            merge_record_number,
+            merge_sequence_number,
+        };
+        self.counted_mutation(py, |document| document.update_fields(&context))
     }
 
     #[getter]
@@ -1282,7 +1548,22 @@ impl PyDocument {
         py: Python<'_>,
         content: &Bound<'_, PyAny>,
     ) -> PyResult<usize> {
+        if let Ok(text) = content.extract::<String>() {
+            return slf
+                .borrow(py)
+                .inner
+                .find_content_index(&text)
+                .ok_or_else(|| PyValueError::new_err("text was not found in body content"));
+        }
         Self::direct_content_index(&slf, py, content)
+    }
+
+    fn find_content_indices<'py>(
+        &self,
+        py: Python<'py>,
+        text: &str,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.inner.find_content_indices(text))
     }
 
     fn insert_paragraph(

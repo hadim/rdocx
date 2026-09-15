@@ -1581,6 +1581,19 @@ paragraph ordinals that include nested block-control paragraphs. The complete
 checks, the workspace gate, and the unchanged 49-entry hash set complete the
 binding proof.
 
+The Python story mutation gate is
+`python_story_revision_field_and_xml_operations_are_typed_and_atomic`. It
+accepts a compared revision set, authors default header and footer stories,
+adds a relationship-scoped hyperlink, reads exact immutable item XML, and
+reopens the edited package. The same gate proves stale StoryItems fail,
+replacement removes only newly empty hyperlinks, cloned comment anchors do not
+multiply, and direct paragraph lookup precedes an enclosing content control.
+Companion tests cover every revision filter, field context evaluation, revision
+invalidation, and GIL release. The complete 57-test source-tree suite runs
+against pinned Poppler 26.01.0. A fresh cp39-abi3 wheel installs and runs on
+Python 3.9, while strict mypy and stubtest validate that same wheel on Python
+3.12.
+
 Table-property round-trip coverage opens `0`, `false`, and `off` for
 `w:tblHeader`, `w:cantSplit`, and `w:noWrap`, then saves and reopens the table.
 Existing bare-element and absent-property cases retain true and inherited

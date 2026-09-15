@@ -1,6 +1,6 @@
 # F-X106c, Expose story mutation, hyperlinks, revisions, fields, and XML in Python
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-X103, F-X106b
@@ -75,12 +75,12 @@ story, revision, or field mutations.
 
 ## Implementation checklist
 
-- [ ] Add frozen revision and field-result snapshots where existing values are insufficient.
-- [ ] Bind story text, header, footer, and story hyperlink mutations.
-- [ ] Bind revision inspection and resolution filters.
-- [ ] Bind field updates and read-only StoryItem XML.
-- [ ] Sanitize cloned anchors, empty links, stale StoryItems, and ambiguous lookup.
-- [ ] Verify GIL release, revision bumps, runtime, typing, WASM, full verification, and microscope.
+- [x] Add frozen revision and field-result snapshots where existing values are insufficient.
+- [x] Bind story text, header, footer, and story hyperlink mutations.
+- [x] Bind revision inspection and resolution filters.
+- [x] Bind field updates and read-only StoryItem XML.
+- [x] Sanitize cloned anchors, empty links, stale StoryItems, and ambiguous lookup.
+- [x] Verify GIL release, revision bumps, runtime, typing, WASM, full verification, and microscope.
 
 ## Open questions
 

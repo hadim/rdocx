@@ -20,6 +20,7 @@ from rdocx import (
     Paragraph,
     ParagraphCollection,
     ParagraphFormat,
+    Revision,
     Row,
     RowCollection,
     Run,
@@ -107,6 +108,33 @@ def exercise_rdocx_types(path: Path) -> None:
     document.move_content(table, content_index)
     replacement_count: int = document.try_replace_text("old", "new")
     regex_count: int = document.replace_all_regex([("old", "new")])
+    revisions: tuple[Revision, ...] = document.revisions
+    accepted: int = document.accept_all()
+    dated: int = document.reject_revisions_in_date_range(
+        start="2026-01-01T00:00:00Z", end="2026-12-31T00:00:00Z"
+    )
+    replaced: int = document.try_replace_text("{{name}}", "Ada")
+    matched: int = document.replace_all_regex([(r"\d", "#")])
+    updated: int = document.update_fields(
+        file_name="report.docx", merge_fields={"Name": "Ada"}
+    )
+    assert_type(revisions[0].timestamp, str | None)
+    document.set_header("Header")
+    document.set_footer("Footer")
+    document.set_story_text(story_items[0], "edited")
+    document.add_hyperlink_to_story(stories[0], "home", "https://example.com/")
+    link_run: Run = first.add_hyperlink("docs", "https://example.com/docs")
+    assert_type(story_items[0].xml, bytes)
+    compatible_story_item = StoryItem(
+        story=stories[0],
+        kind="paragraph",
+        index_path=(0,),
+        text=None,
+        xml=None,
+    )
+    assert_type(compatible_story_item.xml, bytes)
+    text_content_index: int = document.find_content_index("typed")
+    text_content_indices: tuple[int, ...] = document.find_content_indices("typed")
     if fragments:
         bounds: BoundingBox = fragments[0].bounds
         assert_type(bounds.width, float)
@@ -115,6 +143,7 @@ def exercise_rdocx_types(path: Path) -> None:
     assert_type(styles[0].style_type, str)
     assert_type(stories[0].owner_index, int)
     assert_type(story_items[0].index_path, tuple[int, ...])
+    assert_type(story_items[0].revision, int)
     assert_type(variants[0].story, Story | None)
     assert_type(hyperlinks[0].url, str | None)
     assert_type(report.entry_count, int)
@@ -132,6 +161,7 @@ def exercise_rdocx_types(path: Path) -> None:
         regex_count,
         fragment_kind,
     )
+    accepted, dated, replaced, matched, updated
 
 
 if TYPE_CHECKING:

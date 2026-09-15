@@ -5447,6 +5447,7 @@ fn freshen_content_fragment_identities(
     wrapped.extend_from_slice(&fragment.xml);
     wrapped.extend_from_slice(suffix.as_bytes());
     let updated = crate::field::freshen_content_fragment_identities(document, &wrapped)?;
+    let updated = remove_comment_anchors_from_fragment(&updated)?;
     let owner = scan_story_owners(&updated, StoryKind::Body)?
         .into_iter()
         .find(|owner| owner.kind == StoryKind::Body)
@@ -5458,6 +5459,53 @@ fn freshen_content_fragment_identities(
         ));
     };
     Ok(updated[item.full.clone()].to_vec())
+}
+
+fn remove_comment_anchors_from_fragment(xml: &[u8]) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut ranges = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comment anchor scan failed: {error}")))?;
+        let is_word = word_element(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Empty(element)
+                if is_word
+                    && matches!(
+                        element.local_name().as_ref(),
+                        b"commentRangeStart" | b"commentRangeEnd" | b"commentReference"
+                    ) =>
+            {
+                ranges.push(before..after);
+            }
+            Event::Start(element)
+                if is_word
+                    && matches!(
+                        element.local_name().as_ref(),
+                        b"commentRangeStart" | b"commentRangeEnd" | b"commentReference"
+                    ) =>
+            {
+                ranges.push(before..story_element_end(xml, before)?);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut result = Vec::with_capacity(xml.len());
+    let mut cursor = 0usize;
+    for range in ranges {
+        result.extend_from_slice(&xml[cursor..range.start]);
+        cursor = range.end;
+    }
+    result.extend_from_slice(&xml[cursor..]);
+    Ok(result)
 }
 
 fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) -> Result<()> {
@@ -7373,6 +7421,132 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
             updated.splice(range, replacement);
         }
     }
+    Ok(updated)
+}
+
+fn hyperlink_has_visible_content(source: &[u8], range: Range<usize>) -> Result<bool> {
+    let mut reader = NsReader::from_reader(source);
+    reader.config_mut().trim_text(false);
+    let mut word_text_depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("hyperlink content scan failed: {error}")))?;
+        let is_word = word_element(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if after <= range.start {
+            buffer.clear();
+            continue;
+        }
+        if before >= range.end {
+            return Ok(false);
+        }
+        match event {
+            Event::Start(element) if is_word && element.local_name().as_ref() == b"t" => {
+                word_text_depth += 1;
+            }
+            Event::End(element) if is_word && element.local_name().as_ref() == b"t" => {
+                word_text_depth = word_text_depth.saturating_sub(1);
+            }
+            Event::Text(text) if word_text_depth > 0 => {
+                let bytes: &[u8] = text.as_ref();
+                if !bytes.is_empty() {
+                    return Ok(true);
+                }
+            }
+            Event::Start(element) | Event::Empty(element)
+                if is_word
+                    && matches!(
+                        element.local_name().as_ref(),
+                        b"tab"
+                            | b"br"
+                            | b"cr"
+                            | b"sym"
+                            | b"drawing"
+                            | b"pict"
+                            | b"object"
+                            | b"footnoteReference"
+                            | b"endnoteReference"
+                    ) =>
+            {
+                return Ok(true);
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn story_hyperlinks(source: &[u8], item_range: Range<usize>) -> Result<Vec<(Range<usize>, bool)>> {
+    source
+        .get(item_range.clone())
+        .ok_or_else(|| Error::Other("story item range is outside updated XML".to_owned()))?;
+    let mut reader = NsReader::from_reader(source);
+    reader.config_mut().trim_text(false);
+    let mut ranges = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("empty hyperlink scan failed: {error}")))?;
+        let is_word = word_element(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        if after <= item_range.start {
+            buffer.clear();
+            continue;
+        }
+        if before >= item_range.end {
+            break;
+        }
+        if let Event::Start(element) = event {
+            if is_word && element.local_name().as_ref() == b"hyperlink" {
+                let end = story_element_end(source, before)?;
+                let visible = hyperlink_has_visible_content(source, before..end)?;
+                ranges.push((before..end, visible));
+            }
+        } else if matches!(event, Event::Eof) {
+            break;
+        }
+        buffer.clear();
+    }
+    Ok(ranges)
+}
+
+fn remove_newly_empty_hyperlinks(
+    before: &[u8],
+    before_item: Range<usize>,
+    after: &[u8],
+    after_item: Range<usize>,
+) -> Result<Vec<u8>> {
+    let old_links = story_hyperlinks(before, before_item)?;
+    let new_links = story_hyperlinks(after, after_item)?;
+    let ranges = new_links
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, (range, visible))| {
+            (!visible
+                && old_links
+                    .get(index)
+                    .is_some_and(|(_, old_visible)| *old_visible))
+            .then_some(range)
+        })
+        .collect::<Vec<_>>();
+    if ranges.is_empty() {
+        return Ok(after.to_vec());
+    }
+    let mut updated = Vec::with_capacity(after.len());
+    let mut cursor = 0usize;
+    for range in ranges {
+        updated.extend_from_slice(&after[cursor..range.start]);
+        cursor = range.end;
+    }
+    updated.extend_from_slice(&after[cursor..]);
     Ok(updated)
 }
 
@@ -11864,7 +12038,25 @@ impl Document {
         if item.kind == StoryItemKind::PreservedNode {
             return Err(StoryError::NotTextBearing { kind: item.kind }.into());
         }
+        let original_len = source.xml.len();
+        let item_start = item.full.start;
+        let item_end = item.full.end;
         let updated = replace_story_item_text(&source.xml, item, value)?;
+        let new_item_end = if updated.len() >= original_len {
+            item_end + (updated.len() - original_len)
+        } else {
+            item_end
+                .checked_sub(original_len - updated.len())
+                .ok_or_else(|| {
+                    Error::Other("story text replacement underflowed its item range".to_owned())
+                })?
+        };
+        let updated = remove_newly_empty_hyperlinks(
+            &source.xml,
+            item_start..item_end,
+            &updated,
+            item_start..new_item_end,
+        )?;
         if source.part_name == candidate.doc_part_name {
             candidate.document = CT_Document::from_xml(&updated)?;
             candidate.flush_to_package()?;
@@ -12440,7 +12632,15 @@ impl Document {
 
     /// Find the body content index of the first paragraph containing the given text.
     pub fn find_content_index(&self, text: &str) -> Option<usize> {
-        self.document.body.find_paragraph_index(text)
+        self.find_content_indices(text).into_iter().next()
+    }
+
+    /// Find every direct body location whose paragraph content contains `text`.
+    ///
+    /// Direct paragraphs precede enclosing content controls so a heading wins
+    /// over a table-of-contents control that happens to repeat its text.
+    pub fn find_content_indices(&self, text: &str) -> Vec<usize> {
+        self.document.body.find_paragraph_indices(text)
     }
 
     /// Return the paragraph index of the direct body child at `content_index`.

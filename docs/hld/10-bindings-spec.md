@@ -218,10 +218,17 @@ handles use `Body`, `Row`, `Cell`, `Para` and `Run` path segments and reach the
 document only through the public `rdocx` facade.
 
 The Python `Document` also exposes the current native comparison, main-body
-comment, deterministic layout, and TOC rebuild operations. `RunPosition` and
+comment, deterministic layout, TOC rebuild, revision, counted replacement, and
+field cache update operations. `RunPosition` and
 `RunRange` are constructible frozen values for zero-based half-open run ranges.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
-`LayoutPage`, and `TocRebuildReport` are frozen typed snapshots. Comments are
+`LayoutPage`, `TocRebuildReport`, and `Revision` are frozen typed snapshots.
+`Document.revisions` lists main-document revisions with a snake_case `kind`,
+while the accept and reject methods resolve revisions in every story and return
+how many they resolved. `try_replace_text` and `replace_all_regex` return their
+replacement counts. `update_fields` takes the native evaluation context as
+keyword arguments, reads the wall-clock fields of `now` as given, and returns
+the number of updated fields. Comments are
 returned as a tuple in package order, comparison diagnostics are returned as a
 tuple, and layout fragments are returned in body and page order. No operation
 returns a borrowed native handle or an untyped dictionary.
@@ -231,7 +238,9 @@ serialization release the GIL. A successful comment addition or reply advances
 the document revision once. Comment resolution and removal advance it once
 only when they update the document. Comparison and TOC rebuild compare their
 serialized package state around the successful staged operation and advance
-the revision once only when that state changes. A native error publishes no
+the revision once only when that state changes. Revision resolution,
+replacement, and field updates release the GIL and advance the revision once
+only when they report a nonzero count. A native error publishes no
 candidate and does not advance the binding revision.
 
 `rpptx` mirrors python-pptx through an unpublished mixed-layout `rpptx-py`
@@ -380,7 +389,16 @@ story and final section properties expose no coordinate.
 `Document::set_story_text` resolves a checked operation-scoped
 location against a staged package and publishes only a serialized and reopened
 candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
-WASM and CLI gain no story traversal or mutation entry point.
+Python exposes story and story item snapshots, including each item's `xml` as
+bytes. `Document.set_story_text` takes a `StoryItem` snapshot and resolves its
+story kind, part name, owner index, item kind, and index path against the same
+document revision. The compatibility constructor accepts omitted or `None`
+XML and materializes it as empty immutable bytes. Cloned fragments omit Word
+comment anchors, and story replacement removes only links whose visible
+content the replacement emptied. Body text lookup prefers direct paragraphs
+over enclosing controls, while `find_content_indices` returns every matching
+body coordinate in that priority order. WASM and CLI gain no story traversal
+or mutation entry point.
 
 Native Rust also exposes the owned `ContentFragment` value and
 `ContentLocation::end`. Paragraph, table, and block content-control
@@ -426,7 +444,9 @@ do not add a trait, generic parameter, or WASM or CLI surface.
 existing `LinkInfo` values after checked owner-scoped resolution.
 `Document::story_links` pairs those records with their existing
 `ContentLocation` owners and merges nested and ancestor-owned links by physical
-source position.
+source position. Python exposes `Document.add_hyperlink_to_story` for a `Story`
+snapshot, resolved the same way as a story item, and `Paragraph.add_hyperlink`,
+which adds a main-document link relationship and returns the new hyperlink run.
 
 Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
 Each handle reports its zero-based document ordinal, schema-final ownership,
@@ -449,8 +469,9 @@ section and inherited state. `create_section_story`, `link_section_story`,
 addressed by the returned `StoryId` through the common story API. The facade
 also exposes `even_and_odd_headers` and `set_even_and_odd_headers`, while first
 story creation enables section `titlePg`. These are additive pre-1.0 native
-Rust APIs. Python exposes immutable inspection snapshots but no corresponding
-mutation entry point. WASM and CLI gain no corresponding binding surface.
+Rust APIs. Python exposes immutable inspection snapshots, and only the default
+header and footer text setters `Document.set_header` and `Document.set_footer`
+as mutation entry points. WASM and CLI gain no corresponding binding surface.
 
 `CT_SectPr` adds typed page-number start and raw child-position state, while
 `PageFrame` adds `displayed_page_number` beside its physical `page_number`.

@@ -60,7 +60,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X103 | Accept standard TOC switches and report rebuild diagnostics | M | done | codex |
 | F-X106a | Expose indexed content mutation and counted replacement in Python | L | done | codex |
 | F-X106b | Expose paragraph and run formatting mutations in Python | M | done | codex |
-| F-X106c | Expose story mutation, hyperlinks, revisions, fields, and XML in Python | L | pending | - |
+| F-X106c | Expose story mutation, hyperlinks, revisions, fields, and XML in Python | L | done | codex |
 | F-259 | Container measurement and equal-height layout | M | pending | - |
 | F-261 | Rich HTML fragments in arbitrary containers | L | pending | - |
 | F-262 | Corpus drawings, text boxes, and watermarks | L | pending | - |

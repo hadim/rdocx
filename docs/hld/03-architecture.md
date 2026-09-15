@@ -1074,6 +1074,17 @@ text boxes remain separate owners and are not folded into the enclosing item.
 and returns each existing `LinkInfo` with its checked `ContentLocation`. This
 keeps nested content-control ownership without reordering interleaved links.
 
+The Python projection materializes each story item as a frozen value with its
+exact XML bytes and the binding revision that produced it. Story mutation
+resolves the story kind, part name, owner index, item kind, and item path
+against the live native document, then rejects a stale revision before calling
+the staged native operation. Default header and footer setters and story or
+paragraph hyperlink creation use the same native ownership and relationship
+paths. Cloning omits comment anchors from the copy, while story text replacement
+removes only hyperlinks that had visible content before the replacement and
+became empty because of it. Body text lookup returns direct paragraph matches
+before enclosing content controls and exposes every matching body coordinate.
+
 `ContentFragment` owns one paragraph, table, block content control, or removed
 preserved node. Insert, remove, clone, and move resolve canonical
 `StoryItemRef::location` values only when they name actual direct owner

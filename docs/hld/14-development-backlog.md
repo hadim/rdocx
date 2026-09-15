@@ -5185,9 +5185,11 @@ filters, field-cache updates, and read-only story-item XML through typed Python
 methods and frozen values. Reuse native staged operations and StoryId ownership.
 Do not expose a mutable raw-XML injection path or create a second document
 model. Cloning removes duplicate comment anchors, story replacement removes
-empty hyperlinks, StoryItem snapshots reject stale revisions, and content
-lookup prefers direct paragraph matches over enclosing controls while exposing
-ambiguity rather than silently selecting destructive scope.
+only hyperlinks made empty by that replacement, StoryItem snapshots carry and
+reject stale binding revisions, and content lookup returns direct paragraph
+matches before enclosing controls while exposing every ambiguous coordinate.
+The compatibility StoryItem constructor maps omitted or `None` XML to empty
+immutable bytes.
 
 **Depends on**: F-X103, F-X106b.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/94>.

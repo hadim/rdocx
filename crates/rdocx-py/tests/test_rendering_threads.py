@@ -295,6 +295,18 @@ def test_compare_releases_gil_for_python_worker():
     assert isinstance(diagnostics, tuple)
 
 
+def test_revision_resolution_releases_gil_for_python_worker():
+    original = _nontrivial_document(30)
+    edited = _nontrivial_document(31)
+    original.compare(edited, author="Ada", timestamp="2026-09-15T10:30:00Z")
+    assert original.revisions
+
+    count = _assert_releases_gil(original.accept_all)
+
+    assert count > 0
+    assert original.revisions == ()
+
+
 def test_layout_releases_gil_for_python_worker():
     document = _nontrivial_document(22)
 

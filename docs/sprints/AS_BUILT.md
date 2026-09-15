@@ -14242,3 +14242,43 @@ installed on Python 3.14 and passed the exact runtime, typing, and stub gates.
 fills as separate properties. Formatting mutation must preserve unmodelled run
 children in place and must not stale handles whose structural coordinates do
 not change.
+
+### F-X106c, Expose story mutation, hyperlinks, revisions, fields, and XML in Python
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Python now exposes frozen revision records, accept and
+reject filters, field cache updates, default header and footer text, story and
+paragraph hyperlinks, checked story text replacement, exact StoryItem XML, and
+ordered body text lookup. Contributor PRs 109 and 110 supplied the initial
+story, revision, field, and hyperlink surfaces.
+
+**Non-obvious choices.** StoryItem snapshots carry the binding revision and
+fail loudly after structural mutation. Clones omit Word comment anchors, while
+story replacement removes a hyperlink only when the replacement changed it
+from visible to empty. Direct paragraph text matches precede enclosing content
+controls, and callers can request every matching coordinate.
+
+**Deviations from the design plan.** None. Microscope pass 2 reviewed the final
+runtime and stub contract and reports zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, checked Python story
+ownership, `docs/hld/10-bindings-spec.md`, the typed binding surface,
+`docs/hld/12-testing-strategy.md`, runtime, GIL, typing, and clean-wheel gates,
+and the F-X106c entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_story_revision_field_and_xml_operations_are_typed_and_atomic`
+first failed at the story baseline because `Document.revisions` and the new
+mutation surface did not exist. It passes with the implementation. The complete
+57-test Python suite, strict mypy, stubtest, GIL regression, native crate and
+workspace suites, both WASM checks, docs, README doctests, package dry run,
+archive ceiling, and supply-chain gates pass. A fresh cp39-abi3 wheel installed
+and ran on Python 3.9, then passed strict typing and stub checks on Python 3.12.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep StoryItem XML immutable and keep every
+mutation behind the native staged facade. Do not broaden empty-hyperlink
+cleanup to links that were already empty before a replacement.

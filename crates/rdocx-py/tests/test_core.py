@@ -37,6 +37,183 @@ def _replace_settings_xml(document, settings):
     return type(document).from_bytes(result.getvalue())
 
 
+def _tracked_document():
+    import rdocx
+
+    original = rdocx.Document()
+    original.add_paragraph("alpha")
+    edited = rdocx.Document()
+    edited.add_paragraph("alpha beta")
+    document = rdocx.Document.from_bytes(original.to_bytes())
+    document.compare(edited, "Ada", "2026-01-02T03:04:05Z")
+    return document
+
+
+def test_revisions_are_snapshots_and_resolution_reports_counts():
+    import rdocx
+
+    document = _tracked_document()
+    revisions = document.revisions
+    assert revisions
+    assert {revision.author for revision in revisions} == {"Ada"}
+    kinds = {revision.kind for revision in revisions}
+    assert "insertion" in kinds
+    assert kinds <= {
+        "insertion",
+        "deletion",
+        "move_from",
+        "move_to",
+        "run_property_change",
+        "paragraph_property_change",
+        "table_property_change",
+        "section_property_change",
+    }
+    assert {revision.timestamp for revision in revisions} == {"2026-01-02T03:04:05Z"}
+
+    held = document.paragraphs[0]
+    assert document.reject_revisions_by_author("Grace") == 0
+    held.text
+    with pytest.raises(rdocx.RdocxError):
+        document.accept_revisions_in_date_range(start="yesterday", end="2026-01-03T00:00:00Z")
+    held.text
+
+    assert (
+        document.accept_revisions_in_date_range(
+            start="2026-01-01T00:00:00Z", end="2026-01-03T00:00:00Z"
+        )
+        > 0
+    )
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert document.revisions == ()
+    assert [paragraph.text for paragraph in document.paragraphs] == ["alpha beta"]
+
+
+def test_reject_revision_id_then_reject_all_restores_the_original():
+    document = _tracked_document()
+    first = document.revisions[0]
+    assert document.reject_revision_id(first.id) > 0
+    assert all(revision.id != first.id for revision in document.revisions)
+    document.reject_all()
+    assert document.revisions == ()
+    assert [paragraph.text for paragraph in document.paragraphs] == ["alpha"]
+
+
+def test_counted_replacement_spans_runs_and_a_bad_regex_changes_nothing():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Dear {{na").add_run("me}}, hello")
+    held = document.paragraphs[0]
+    assert document.try_replace_text("{{missing}}", "x") == 0
+    held.text
+    assert document.try_replace_text("{{name}}", "Ada") == 1
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert document.paragraphs[0].text == "Dear Ada, hello"
+
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="invalid regex"):
+        document.replace_all_regex([("hello", "bye"), ("(", "x")])
+    assert document.to_bytes() == before
+    assert document.replace_all_regex([("h(el)lo", "bye")]) == 1
+    assert document.paragraphs[0].text == "Dear Ada, bye"
+
+
+def test_update_fields_takes_a_keyword_context_and_counts_updates():
+    import datetime
+
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:fldSimple w:instr=" FILENAME "><w:r><w:t>old.docx</w:t></w:r></w:fldSimple></w:p>'
+        '<w:p><w:fldSimple w:instr=" MERGEFIELD Name "><w:r><w:t>Name</w:t></w:r></w:fldSimple></w:p>'
+        '<w:p><w:fldSimple w:instr=" DATE \\@ &quot;yyyy-MM-dd&quot; "><w:r><w:t>2000-01-01</w:t></w:r></w:fldSimple></w:p>',
+    )
+    held = document.paragraphs[0]
+    count = document.update_fields(
+        now=datetime.datetime(2026, 9, 15, 10, 30),
+        file_name="report.docx",
+        merge_fields={"Name": "Ada"},
+    )
+    assert count == 3
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    xml = _document_xml(document)
+    for cached in (b"report.docx", b"Ada", b"2026-09-15"):
+        assert cached in xml
+    assert b"old.docx" not in xml and b"2000-01-01" not in xml
+
+
+def test_python_story_revision_field_and_xml_operations_are_typed_and_atomic():
+    import rdocx
+
+    document = _tracked_document()
+    revisions = document.revisions
+    assert revisions
+    assert {revision.author for revision in revisions} == {"Ada"}
+    assert document.accept_all() == len(revisions)
+
+    document.set_header("Draft")
+    document.set_footer("Page footer")
+    header = next(story for story in document.stories if story.kind == "header")
+    document.add_hyperlink_to_story(header, "home", "https://example.com/")
+    header_item = next(
+        item
+        for item in document.story_items
+        if item.story == header and item.kind == "paragraph"
+    )
+    assert isinstance(header_item.xml, bytes)
+    document.set_story_text(header_item, "Final")
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert "Final" in [item.text for item in reopened.story_items]
+    assert [(link.text, link.url) for link in reopened.hyperlinks] == [
+        ("home", "https://example.com/")
+    ]
+
+    with pytest.raises(rdocx.StaleElementError, match="story item handle"):
+        document.set_story_text(header_item, "stale")
+
+    linked = rdocx.Document()
+    paragraph = linked.add_paragraph("See ")
+    paragraph.add_hyperlink("old link", "https://example.com/old")
+    linked_item = next(
+        item
+        for item in linked.story_items
+        if item.story.kind == "body" and item.kind == "paragraph"
+    )
+    linked.set_story_text(linked_item, "New text without a link")
+    assert linked.hyperlinks == ()
+    assert b"<w:hyperlink" not in _document_xml(linked)
+
+    commented = rdocx.Document()
+    commented.add_paragraph("commented")
+    commented.add_paragraph("destination")
+    commented.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=0, run_index=1),
+        ),
+        author="Ada",
+        text="review",
+    )
+    commented.clone_content(commented.paragraphs[0], 0)
+    cloned_xml = _document_xml(commented)
+    assert cloned_xml.count(b"commentRangeStart") == 1
+    assert cloned_xml.count(b"commentRangeEnd") == 1
+    assert cloned_xml.count(b"commentReference") == 1
+
+    lookup = _replace_document_body(
+        rdocx.Document(),
+        '<w:sdt><w:sdtContent><w:p><w:r><w:t>Background</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+        '<w:p><w:r><w:t>Background</w:t></w:r></w:p>',
+    )
+    assert lookup.find_content_index("Background") == 1
+    assert lookup.find_content_indices("Background") == (1, 0)
+
+
 def test_update_fields_on_open_sets_clears_and_removes_the_setting():
     import rdocx
 
@@ -674,3 +851,89 @@ def test_word_structure_snapshots_preserve_order_ownership_and_types():
     assert captured_items[-1].text != "later body content"
     assert len(reopened.story_items) == len(captured_items) + 1
     assert reopened.hyperlinks == captured_links
+
+
+def _story_paragraph_texts(document, kind):
+    return [
+        item.text
+        for item in document.story_items
+        if item.story.kind == kind and item.kind == "paragraph"
+    ]
+
+
+def test_header_footer_and_story_text_edit_the_section_stories():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body")
+    held = document.paragraphs[0]
+    document.set_header("Draft")
+    document.set_footer("Page footer")
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert _story_paragraph_texts(document, "header") == ["Draft"]
+    assert _story_paragraph_texts(document, "footer") == ["Page footer"]
+
+    header_item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "header" and item.kind == "paragraph"
+    )
+    document.set_story_text(header_item, "Final")
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert _story_paragraph_texts(reopened, "header") == ["Final"]
+    assert _story_paragraph_texts(reopened, "body") == ["body"]
+
+
+def test_set_story_text_rejects_a_story_that_is_not_in_the_document():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body")
+    missing = rdocx.StoryItem(
+        story=rdocx.Story(kind="header", part_name="/word/missing.xml", owner_index=0),
+        kind="paragraph",
+        index_path=(0,),
+        text="stale",
+        xml=b"",
+    )
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="no header story"):
+        document.set_story_text(missing, "edited")
+    assert document.to_bytes() == before
+    assert held.text == "body"
+
+
+def test_hyperlinks_are_added_to_paragraphs_and_stories():
+    import rdocx
+
+    document = rdocx.Document()
+    run = document.add_paragraph("See ").add_hyperlink("docs", "https://example.com/docs")
+    run.font.bold = True
+    document.set_header("Header")
+    header = next(story for story in document.stories if story.kind == "header")
+    document.add_hyperlink_to_story(header, "home", "https://example.com/")
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [(link.story.kind, link.text, link.url) for link in reopened.hyperlinks] == [
+        ("body", "docs", "https://example.com/docs"),
+        ("header", "home", "https://example.com/"),
+    ]
+    assert reopened.paragraphs[0].runs[1].font.bold is True
+
+
+def test_story_item_xml_is_a_detached_snapshot():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("hello")
+    item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body" and item.kind == "paragraph"
+    )
+    assert isinstance(item.xml, bytes)
+    assert b"hello" in item.xml
+    document.add_paragraph("later")
+    assert b"later" not in item.xml
