@@ -13785,3 +13785,38 @@ and both WASM target checks pass.
 **Notes for future sessions.** A story scan ordinal is not a direct body index.
 Always resolve the containing checked span, especially for fields, drawings,
 and controls nested inside a paragraph.
+
+### F-X100, Preserve explicit false table toggles
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Word table row-header, row-split, and cell no-wrap
+properties now parse the complete shared on-off vocabulary. Explicit `0`,
+`false`, and `off` values remain false and write canonically. Bare elements
+remain true and absent properties remain inherited.
+
+**Non-obvious choices.** The three properties reuse one namespace-aware parser
+and the existing canonical toggle writer. Their schema slots and surrounding
+raw property children do not move.
+
+**Deviations from the design plan.** None. The table-toggle commit from
+contributor PR 101 was adopted and verified. The PR's separate TOC `\z`
+contribution remains assigned to F-X103, so the PR stays open until both
+outcomes are integrated.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, the Word table
+serialization rules, `docs/hld/10-bindings-spec.md`, the tri-state property
+contract, `docs/hld/12-testing-strategy.md`, Word table round-trip coverage,
+and the F-X100 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `explicit_false_table_toggles_remain_false` is the story gate.
+Existing bare, absent, ordered raw property, low-level table, and full workspace
+tests also pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not model an OOXML on-off element by presence
+alone. Explicit false and inherited absence are distinct states required by
+later authoring setters.

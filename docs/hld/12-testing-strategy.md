@@ -1520,6 +1520,11 @@ The native companion
 identifier to distinct body and header targets and checks the same interleaved
 source order. All 49 hash entries remain unchanged.
 
+Table-property round-trip coverage opens `0`, `false`, and `off` for
+`w:tblHeader`, `w:cantSplit`, and `w:noWrap`, then saves and reopens the table.
+Existing bare-element and absent-property cases retain true and inherited
+semantics, and ordered raw siblings remain in their schema slots.
+
 `rich_section_stories_survive_reopen_replace_and_unlink` covers paragraphs,
 tables, fields, block controls with nested tables, hyperlinks, images, drawings,
 fresh drawing identities, relationship rebasing, title-page enablement, save,

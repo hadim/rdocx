@@ -438,6 +438,7 @@ defended.
 | F-X097 | S73 | M | 2 | 1 | 2026-09-15 | Preserved ancestor-scoped drawing namespaces and exact complex-field ownership through comparison, accept, and reject |
 | F-X098 | S73 | M | 2 | 1 | 2026-09-15 | Preserved attributes and ordered child payloads on modeled content-control type elements until explicit type replacement |
 | F-X099 | S73 | M | 2 | 1 | 2026-09-15 | Added checked direct-body ownership to native and frozen Python story-item snapshots without changing recursive paths |
+| F-X100 | S73 | S | 1 | 1 | 2026-09-15 | Preserved explicit false row-header, row-split, and cell no-wrap values from contributor PR 101 |
 
 ## Velocity
 

@@ -1,6 +1,6 @@
 # F-X100, Preserve explicit false table toggles
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: S
 **Depends on**: F-253
@@ -66,7 +66,7 @@ three table toggles.
 - [x] Add the failing table-toggle round-trip regression.
 - [x] Parse all three toggles through the shared on-off vocabulary.
 - [x] Serialize both true and false values canonically in schema order.
-- [ ] Run focused table tests, hash harness, full verification, and microscope.
+- [x] Run focused table tests, hash harness, full verification, and microscope.
 
 ## Open questions
 

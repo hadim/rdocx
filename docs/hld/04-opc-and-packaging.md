@@ -443,6 +443,9 @@ malformed row revision markers in their original slots. Drawing relationship
 projection requires the direct WordprocessingML and DrawingML picture path and
 the Office relationships namespace. Foreign attributes, descendant
 lookalikes, ambiguous pictures, and ambiguous blips remain opaque.
+The typed `tblHeader`, `cantSplit`, and `noWrap` values use the shared on-off
+vocabulary. Absence remains distinct from explicit true and false, and present
+values write canonically in their existing row or cell property slots.
 
 Raw Word run children receive semantic classification only at the OXML parse
 boundary. A WordprocessingML `pict` is classified as a legacy horizontal rule

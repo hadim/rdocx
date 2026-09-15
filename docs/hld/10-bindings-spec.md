@@ -178,7 +178,8 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
   mutation.
 - **Tri-state properties return `None` for inherit**, `True` or `False` when
   explicit. rdocx's `Option<bool>` already matches. Never collapse `None` to
-  `False`.
+  `False`. This applies to row header and split policy plus cell no-wrap state,
+  whose low-level values preserve explicit false forms on round trip.
 - `Length` is a pure-Python subclass of `int` and returns EMU, matching
   `docx.shared.Length`, with `.inches`, `.cm`, `.mm`, `.pt`, `.emu` and
   `.twips`. `Inches`, `Cm`, `Mm`, `Pt` and `Emu` are immutable subclasses, and
