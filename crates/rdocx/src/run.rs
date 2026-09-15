@@ -1,12 +1,12 @@
 //! Run — a contiguous stretch of text with uniform formatting.
 
-use rdocx_oxml::drawing::CT_Drawing;
+use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
 use rdocx_oxml::properties::{CT_RPr, CT_Shd};
 use rdocx_oxml::shared::ST_Underline;
 use rdocx_oxml::text::{BreakType, CT_R, CT_Text, Field, RunContent};
 use rdocx_oxml::units::{HalfPoint, Twips};
 
-use crate::Length;
+use crate::{Error, Length, Result};
 
 /// A break embedded in a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,6 +384,48 @@ impl<'a> Run<'a> {
     pub fn add_text(&mut self, text: &str) {
         self.inner
             .append_content(RunContent::Text(CT_Text::new(text)));
+    }
+
+    /// Append a tab at the current end of this run.
+    pub fn add_tab(&mut self) {
+        self.inner.append_content(RunContent::Tab);
+    }
+
+    /// Append a line, page, or column break at the current end of this run.
+    pub fn add_break(&mut self, kind: BreakKind) {
+        let kind = match kind {
+            BreakKind::Line => BreakType::Line,
+            BreakKind::Page => BreakType::Page,
+            BreakKind::Column => BreakType::Column,
+        };
+        self.inner.append_content(RunContent::Break(kind));
+    }
+
+    /// Append an inline picture using a relationship already embedded in the document.
+    ///
+    /// Obtain `relationship_id` from [`crate::Document::embed_image`].
+    pub fn add_picture(&mut self, relationship_id: &str, width: Length, height: Length) {
+        let inline = CT_Inline::new(relationship_id, width.to_emu(), height.to_emu());
+        self.inner
+            .append_content(RunContent::Drawing(CT_Drawing::inline(inline)));
+    }
+
+    /// Append a Word field with its cached display result.
+    pub fn add_field(&mut self, instruction: &str, cached_result: &str) -> Result<()> {
+        let field = Field::new(instruction, cached_result);
+        if field.instruction.name.is_empty() {
+            return Err(Error::Other(
+                "field instruction must contain a field name".to_owned(),
+            ));
+        }
+        self.inner.append_content(RunContent::Field(field));
+        Ok(())
+    }
+
+    /// Append one Unicode symbol as ordinary text in this run.
+    pub fn add_symbol(&mut self, symbol: char) {
+        let mut encoded = [0_u8; 4];
+        self.add_text(symbol.encode_utf8(&mut encoded));
     }
 
     /// Set bold formatting.

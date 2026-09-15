@@ -454,6 +454,13 @@ enabled Office `hr` attribute and whitespace otherwise. The classification is
 stored in the existing raw-child position sidecar, while the subtree bytes and
 ancestor namespace ownership remain unchanged. Foreign, malformed, numeric,
 false, visible, or structurally ambiguous content stays unmodelled raw XML.
+Authored mixed runs keep typed children and raw boundaries in one logical
+sequence. Because `w:fldSimple` and complex field sequences are paragraph
+children, the writer emits physical `w:r` segments around each field. Direct
+run properties are copied to authored segments and the cached field result.
+Positioned raw children stay on the same side of each field boundary. Legacy
+unordered raw children remain at the final run boundary. Readers remain prefix
+tolerant and writers use the fixed Word prefixes.
 
 The Word facade resolves an existing comments part through the main document's
 `COMMENTS` relationship and retains the normalized target. Saving serializes

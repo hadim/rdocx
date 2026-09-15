@@ -27,6 +27,10 @@ Standalone footnote and endnote roots declare the standard relationship
 namespace. The `rdocx` facade may replay a producer root binding, but it keeps
 each authored picture namespace-complete and rewrites only the exact expanded
 name attributes it owns.
+The native run facade can append an inline picture from a relationship created
+by `Document::embed_image`. The drawing stays in the caller-selected mixed run
+position and carries the supplied point or EMU dimensions through the existing
+WordprocessingDrawing wrapper. Relationship creation remains package-owned.
 
 Cross-document body-fragment import treats each selected picture or chart
 drawing as the root of a part-local relationship closure. It assigns fresh

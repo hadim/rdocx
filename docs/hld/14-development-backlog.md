@@ -2477,7 +2477,9 @@ the same final row height and match whole-document layout.
 ### F-260, Ordered run content authoring (L)
 Author tabs, line, page, and column breaks, drawings, fields, symbols, and text
 inside one run while preserving mixed-content order. Existing formatting
-setters operate on the run without replacing non-text children.
+setters operate on the run without replacing non-text children. Fields are
+normalized to schema-valid paragraph children on write, with the direct run
+properties copied to the cached result and each surrounding physical run.
 **Depends on**: F-253.
 **Test gate**: round-trip. A run containing every supported child reopens in
 the same order and renders each break and tab at the expected position.

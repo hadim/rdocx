@@ -4208,9 +4208,46 @@ impl CT_P {
                     written_field_owner = None;
                     field
                 };
-                write_field(
+                write_field_with_result_properties(
                     writer,
                     field,
+                    current_hyperlink
+                        .and_then(|index| shadowed_word_namespace(&self.hyperlinks[index])),
+                    run.properties.as_ref(),
+                )?;
+                continue;
+            }
+
+            if run
+                .content
+                .iter()
+                .any(|content| matches!(content, RunContent::Field(_)))
+            {
+                for field in run.content.iter().filter_map(|content| match content {
+                    RunContent::Field(field) => Some(field),
+                    _ => None,
+                }) {
+                    let Some(owner_id) = field.source_owner_id() else {
+                        continue;
+                    };
+                    let owner_fields = self
+                        .runs
+                        .iter()
+                        .flat_map(|candidate| &candidate.content)
+                        .filter(|content| {
+                            matches!(content, RunContent::Field(candidate) if candidate.source_owner_id() == Some(owner_id))
+                        })
+                        .count();
+                    if owner_fields > 1 {
+                        return Err(OxmlError::InvalidValue(
+                            "a field sharing one physical run was changed".to_owned(),
+                        ));
+                    }
+                }
+                written_field_owner = None;
+                write_mixed_field_run(
+                    writer,
+                    run,
                     current_hyperlink
                         .and_then(|index| shadowed_word_namespace(&self.hyperlinks[index])),
                 )?;
@@ -4284,6 +4321,90 @@ impl CT_P {
     }
 }
 
+fn write_mixed_field_run<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    run: &CT_R,
+    foreign_word_namespace: Option<&str>,
+) -> Result<()> {
+    let mut segment_start = 0usize;
+    for (field_index, content) in run.content.iter().enumerate() {
+        let RunContent::Field(field) = content else {
+            continue;
+        };
+        write_run_content_segment(
+            writer,
+            run,
+            segment_start,
+            field_index,
+            segment_start == 0,
+            false,
+            foreign_word_namespace,
+        )?;
+        write_field_with_result_properties(
+            writer,
+            field,
+            foreign_word_namespace,
+            run.properties.as_ref(),
+        )?;
+        segment_start = field_index + 1;
+    }
+    write_run_content_segment(
+        writer,
+        run,
+        segment_start,
+        run.content.len(),
+        segment_start == 0,
+        true,
+        foreign_word_namespace,
+    )
+}
+
+fn write_run_content_segment<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    run: &CT_R,
+    start: usize,
+    end: usize,
+    first: bool,
+    last: bool,
+    foreign_word_namespace: Option<&str>,
+) -> Result<()> {
+    let property_boundary = usize::from(run.properties.is_some());
+    let lower = if first { 0 } else { property_boundary + start };
+    let upper = property_boundary + end;
+    let mut extra_xml = Vec::new();
+    let mut extra_xml_positions = Vec::new();
+    if run.extra_xml_positions.len() == run.extra_xml.len() {
+        for (position, raw) in run.extra_xml_positions.iter().zip(&run.extra_xml) {
+            let boundary = CT_R::raw_child_position(*position);
+            if boundary < lower || boundary > upper {
+                continue;
+            }
+            let mut mapped = *position;
+            let mapped_boundary = if boundary < property_boundary {
+                boundary
+            } else {
+                boundary.saturating_sub(start)
+            };
+            CT_R::set_raw_child_position(&mut mapped, mapped_boundary);
+            extra_xml.push(raw.clone());
+            extra_xml_positions.push(mapped);
+        }
+    } else if last {
+        extra_xml = run.extra_xml.clone();
+    }
+    if start == end && extra_xml.is_empty() {
+        return Ok(());
+    }
+    CT_R {
+        properties: run.properties.clone(),
+        content: run.content[start..end].to_vec(),
+        extra_xml,
+        extra_xml_positions,
+        alt_drawings: Vec::new(),
+    }
+    .to_xml_with_word_override(writer, foreign_word_namespace)
+}
+
 fn collect_story_complex_field_sources(paragraph: &CT_P, sources: &mut Vec<Vec<u8>>) {
     for run in paragraph.runs() {
         for content in &run.content {
@@ -4342,6 +4463,15 @@ fn write_field<W: std::io::Write>(
     field: &Field,
     foreign_word_namespace: Option<&str>,
 ) -> Result<()> {
+    write_field_with_result_properties(writer, field, foreign_word_namespace, None)
+}
+
+fn write_field_with_result_properties<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    field: &Field,
+    foreign_word_namespace: Option<&str>,
+    result_properties: Option<&CT_RPr>,
+) -> Result<()> {
     if field.is_unchanged()
         && let FieldSource::Parsed { raw_xml, .. } = &field.source
     {
@@ -4399,8 +4529,12 @@ fn write_field<W: std::io::Write>(
         form
     };
     match form {
-        FieldForm::Simple => write_simple_field(writer, &field, foreign_word_namespace),
-        FieldForm::Complex => write_complex_field(writer, &field, foreign_word_namespace),
+        FieldForm::Simple => {
+            write_simple_field(writer, &field, foreign_word_namespace, result_properties)
+        }
+        FieldForm::Complex => {
+            write_complex_field(writer, &field, foreign_word_namespace, result_properties)
+        }
     }
 }
 
@@ -5227,7 +5361,7 @@ fn update_simple_field_source(
                     continue;
                 };
                 if cached_changed && context.canonical_end == Some("w:fldSimple") && !wrote_result {
-                    write_field_result_run(&mut writer, field, None)?;
+                    write_field_result_run(&mut writer, field, None, None)?;
                     wrote_result = true;
                 }
                 if let Some(name) = context.canonical_end {
@@ -5985,6 +6119,7 @@ fn write_simple_field<W: std::io::Write>(
     writer: &mut Writer<W>,
     field: &Field,
     foreign_word_namespace: Option<&str>,
+    result_properties: Option<&CT_RPr>,
 ) -> Result<()> {
     let mut element = BytesStart::new("w:fldSimple");
     if foreign_word_namespace.is_some() {
@@ -5993,7 +6128,7 @@ fn write_simple_field<W: std::io::Write>(
     element.push_attribute(("w:instr", field.instruction.raw.as_str()));
     push_dirty_attribute(&mut element, field.dirty);
     writer.write_event(Event::Start(element))?;
-    write_field_result_run(writer, field, foreign_word_namespace)?;
+    write_field_result_run(writer, field, foreign_word_namespace, result_properties)?;
     writer.write_event(Event::End(BytesEnd::new("w:fldSimple")))?;
     Ok(())
 }
@@ -6002,6 +6137,7 @@ fn write_complex_field<W: std::io::Write>(
     writer: &mut Writer<W>,
     field: &Field,
     foreign_word_namespace: Option<&str>,
+    result_properties: Option<&CT_RPr>,
 ) -> Result<()> {
     write_field_char_run(writer, "begin", field.dirty, foreign_word_namespace)?;
     let mut text = format!(" {}", field.instruction.name);
@@ -6037,7 +6173,7 @@ fn write_complex_field<W: std::io::Write>(
         write_instruction_run(writer, &text, foreign_word_namespace)?;
     }
     write_field_char_run(writer, "separate", None, foreign_word_namespace)?;
-    write_field_result_run(writer, field, foreign_word_namespace)?;
+    write_field_result_run(writer, field, foreign_word_namespace, result_properties)?;
     write_field_char_run(writer, "end", None, foreign_word_namespace)?;
     Ok(())
 }
@@ -6049,7 +6185,7 @@ fn write_nested_instruction_field<W: std::io::Write>(
 ) -> Result<()> {
     let mut field = field.clone();
     field.instruction = instruction_for_write(&field);
-    write_complex_field(writer, &field, foreign_word_namespace)
+    write_complex_field(writer, &field, foreign_word_namespace, None)
 }
 
 fn push_canonical_field_token(output: &mut String, value: &str) {
@@ -6106,8 +6242,12 @@ fn write_field_result_run<W: std::io::Write>(
     writer: &mut Writer<W>,
     field: &Field,
     foreign_word_namespace: Option<&str>,
+    properties: Option<&CT_RPr>,
 ) -> Result<()> {
     write_word_run_start(writer, foreign_word_namespace)?;
+    if let Some(properties) = properties {
+        properties.to_xml_with_word_override(writer, foreign_word_namespace)?;
+    }
     let display = if field.cached_result.is_empty()
         && matches!(field.instruction.name.as_str(), "PAGE" | "NUMPAGES")
     {

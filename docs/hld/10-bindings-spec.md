@@ -888,6 +888,16 @@ returns the ordinary mutable run handle. It is additive on the pre-1.0 Rust
 facade. Python, WASM, and CLI surfaces gain no method and retain their existing
 package-preserving behavior.
 
+The same mutable `Run` handle exposes additive `add_tab`, `add_break`,
+`add_picture`, `add_field`, and `add_symbol` methods. `add_break` accepts the
+existing typed line, page, and column inventory. `add_picture` consumes a
+relationship already created by `Document::embed_image`. `add_field` rejects
+an instruction without a field name before mutation. `add_symbol` stores one
+Unicode scalar as text. `set_text` remains the explicit replacement operation,
+while formatting setters retain the complete ordered content sequence. These
+methods are additive on the pre-1.0 native Rust facade. Python, WASM, and CLI
+gain no implicit surface.
+
 The low-level `rdocx-layout::TableCell` payload is source-ordered
 `Vec<CellBlock>`, with the present paragraph and recursive table variants. The
 additional merge-span and cell-margin fields expose renderer input rather than

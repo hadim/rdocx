@@ -524,6 +524,12 @@ Complex fields expose ordered cached-display segments with each segment's
 direct run properties. Tracked insertion projection retains inline paragraph
 structure and nested revision boundaries, with a fixed depth ceiling checked
 before recursive projection.
+The mutable native run facade owns one logical ordered sequence of text, tabs,
+typed breaks, inline pictures, fields, and Unicode symbols. A field remains a
+paragraph child in physical WordprocessingML. Serialization therefore divides
+the surrounding logical run into schema-valid physical runs, copies the direct
+run properties to each authored segment and field result, and preserves the
+logical child order on reopen.
 Unchanged fields therefore write their original bytes. Cache and dirty updates
 rewrite only the typed values while preserving run formatting and unmodelled
 neighbours. Markers are recognized only as direct run children through their

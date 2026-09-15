@@ -446,6 +446,7 @@ defended.
 | F-X110 | S73 | S | 1 | 1 | 2026-09-15 | Added lossless native and Python control of the Word update-fields-on-open setting from contributor PR 104 |
 | F-X111 | S73 | L | 4 | 1 | 2026-09-15 | Added selected-family six-target CLI release archives, exact checksums, cargo-binstall metadata, and pre-publication asset validation |
 | F-X106a | S73 | L | 4 | 1 | 2026-09-15 | Added owner-checked indexed Python content mutation and counted replacement from contributor PRs 109 and 111 |
+| F-260 | S73 | L | 4 | 1 | 2026-09-15 | Added ordered mixed run content authoring with schema-valid field segmentation and exact raw boundary preservation |
 
 ## Velocity
 

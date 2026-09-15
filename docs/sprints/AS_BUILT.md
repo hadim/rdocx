@@ -14110,3 +14110,50 @@ environment.
 recursive story paths. Resolve and validate every handle before borrowing the
 document mutably, and bump the shared revision only after the native operation
 publishes successfully.
+
+### F-260, Ordered run content authoring
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Native Word runs can now append tabs, typed line, page, and
+column breaks, pre-embedded pictures, fields, Unicode symbols, and text in one
+stable logical order. Save and reopen retain that order, while authored fields
+are emitted through schema-valid physical run segments that keep the logical
+run formatting.
+
+**Non-obvious choices.** Fields remain paragraph-level OOXML even when callers
+author them through one logical run. Serialization therefore closes and reopens
+physical runs around each field without exposing those storage boundaries in
+the public model. Parsed fields that share one producer run reject ambiguous
+mixed-content mutation instead of risking partial or reordered XML.
+
+**Deviations from the design plan.** None. The deterministic render gate proves
+the complete ordered sequence reaches layout. Run-level page pagination remains
+the separate dependent F-X101 story.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, ordered logical and
+physical run ownership, `docs/hld/04-opc-and-packaging.md`, field segmentation
+and raw preservation, `docs/hld/05-drawingml-model.md`, pre-embedded picture
+ownership, `docs/hld/08-rendering-spec.md`, mixed run lowering,
+`docs/hld/10-bindings-spec.md`, additive native methods,
+`docs/hld/12-testing-strategy.md`, ordered round-trip and render coverage, and
+the F-260 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `mixed_run_content_reopens_and_renders_in_source_order` first failed
+because the append methods did not exist and passes with the implementation.
+The raw-boundary and invalid-field regression, complete `rdocx-oxml` and
+`rdocx` suites, full workspace, no-default-font, WASM, docs, README, package,
+archive-size, and supply-chain gates pass. Microscope pass 1 found field display
+formatting was not copied to the authored result segment. That was corrected,
+and pass 2 reports zero defects and zero smells. The package dry run used
+`--allow-dirty` because `/complete-feature` verifies before creating the story
+commit. All 22 archives verified and remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the logical ordered run model independent
+from the physical OOXML run boundaries required by fields. Reject ambiguous
+producer ownership before mutation, and keep F-X101 responsible for page-break
+pagination behavior.

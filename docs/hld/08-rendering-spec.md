@@ -985,6 +985,12 @@ Provenance ranges are local to this selected projection. The field model's
 advances a run's projection offset, which prevents repeated cached and literal
 text from producing a plausible but false range. Field display glyphs remain
 unattributed even when a parsed complex cache contributes to later offsets.
+Logical mixed runs reach this projection in authored child order. Text and
+Unicode symbols contribute ordinary text spans. Tabs and typed line, page, and
+column breaks retain their exact positions, pictures contribute the established
+drawing element, and fields contribute one cached display. Schema-required
+physical run splitting does not change that logical order. Deterministic font
+mode is the acceptance path for the resulting PDF.
 
 A tracked paragraph with visible revised content or a property-only revision
 carries a changed marker into pagination. Visible-revision detection follows

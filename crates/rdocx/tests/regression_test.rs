@@ -21,7 +21,8 @@ use rdocx::{
     MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions,
     RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange, RunRef, StoryId,
     StoryItemKind, StoryKind, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection,
-    TocField, TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    TocField, TocRebuildReport, UnderlineStyle, UnsupportedXmlRef, WordCreationProfile,
+    WordPackageClass,
 };
 use rdocx_oxml::content_control::SdtContent;
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
@@ -12359,6 +12360,112 @@ fn paragraph_markers_report_whether_their_source_elements_contain_children() {
         .collect::<Vec<_>>();
 
     assert_eq!(markers, [true, false, true, false]);
+}
+
+#[test]
+fn mixed_run_content_reopens_and_renders_in_source_order() {
+    const PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60,
+        0xf8, 0xcf, 0xf0, 0x00, 0x00, 0x04, 0x01, 0x01, 0x08, 0x9d, 0x1d, 0xe1, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    let mut document = Document::new();
+    let relationship_id = document.embed_image(PNG, "pixel.png");
+    {
+        let mut paragraph = document.add_paragraph("");
+        let mut run = paragraph.add_run("first");
+        run.add_tab();
+        run.add_break(BreakKind::Line);
+        run.add_break(BreakKind::Page);
+        run.add_break(BreakKind::Column);
+        run.add_picture(&relationship_id, Length::pt(1.0), Length::pt(1.0));
+        run.add_field("PAGE", "2").unwrap();
+        run.add_symbol('§');
+        run.add_text("last");
+        run.set_bold(true);
+        run.set_italic(true);
+        run.set_underline_style(UnderlineStyle::Double);
+        run.set_size(11.0);
+        run.set_font("Carlito");
+        run.set_language("en-GB");
+        run.set_color("123456");
+        run.set_highlight("yellow");
+        run.set_strike(true);
+        run.set_double_strike(false);
+        run.set_all_caps(false);
+        run.set_small_caps(false);
+        run.set_superscript();
+        run.set_subscript();
+        run.set_character_spacing(Length::pt(0.5));
+        run.set_width_scale(100);
+        run.set_position(0);
+        run.set_hidden(false);
+        run.set_style("Emphasis");
+    }
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let mut raw_subtrees = Vec::new();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let snapshot = (0..paragraph.run_count())
+        .map(|index| run_snapshot(paragraph.run(index).unwrap(), &mut raw_subtrees))
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(
+        snapshot,
+        "text:first,tab,break:line,break:page,break:column,drawing:true:false:Some(\"rId1\"):Some(\"Picture\"):None:Some(12700):Some(12700),field:PAGE:PAGE:2:None,text:§,text:last"
+    );
+    assert!(paragraph.run(0).unwrap().is_bold());
+    assert!(paragraph.run(0).unwrap().is_italic());
+    let field_run = paragraph.run(1).unwrap();
+    let RunItemRef::Field(field) = field_run.items().next().unwrap() else {
+        panic!("middle run must contain the authored field");
+    };
+    let field_segments = field.cached_display_segments();
+    let field_properties = field_segments[0].properties().unwrap();
+    assert_eq!(field_properties.bold, Some(true));
+    assert_eq!(field_properties.italic, Some(true));
+    assert!(paragraph.run(2).unwrap().is_bold());
+    assert!(paragraph.run(2).unwrap().is_italic());
+    assert!(
+        reopened
+            .to_pdf_deterministic()
+            .unwrap()
+            .starts_with(b"%PDF-")
+    );
+}
+
+#[test]
+fn mixed_run_field_append_preserves_raw_boundaries_and_rejects_invalid_fields() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>before</w:t><x:custom xmlns:x="urn:custom"/></w:r></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    {
+        let mut paragraph = document.paragraph_mut(0).unwrap();
+        let mut run = paragraph.run_mut(0).unwrap();
+        assert!(run.add_field("", "ignored").is_err());
+        assert_eq!(run.text(), "before");
+        run.add_field("DATE", "today").unwrap();
+        run.add_text("after");
+        run.set_bold(true);
+    }
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let mut raw_subtrees = Vec::new();
+    let snapshot = (0..paragraph.run_count())
+        .map(|index| run_snapshot(paragraph.run(index).unwrap(), &mut raw_subtrees))
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(
+        snapshot,
+        "text:before,raw:<x:custom xmlns:x=\"urn:custom\"/>,field:DATE:DATE:today:None,text:after"
+    );
+    assert!(paragraph.run(0).unwrap().is_bold());
+    assert!(paragraph.run(2).unwrap().is_bold());
 }
 
 #[test]

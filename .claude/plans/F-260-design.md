@@ -1,6 +1,6 @@
 # F-260, Ordered run content authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-253
@@ -79,11 +79,11 @@ authoring operations. Every changed entry must name the responsible child.
 
 ## Implementation checklist
 
-- [ ] Add the failing all-child round-trip and formatting-preservation matrix.
-- [ ] Add typed append operations on the existing Run handle.
-- [ ] Add staged facade operations only where package ownership requires them.
-- [ ] Verify parser order, rendering positions, fields, drawings, and raw slots.
-- [ ] Run parser, layout, public API, hash harness, full verification, and microscope gates.
+- [x] Add the failing all-child round-trip and formatting-preservation matrix.
+- [x] Add typed append operations on the existing Run handle.
+- [x] Add staged facade operations only where package ownership requires them.
+- [x] Verify parser order, rendering positions, fields, drawings, and raw slots.
+- [x] Run parser, layout, public API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

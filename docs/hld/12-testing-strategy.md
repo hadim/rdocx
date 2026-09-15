@@ -1464,6 +1464,16 @@ fields, namespace-complete owned projections, borrowed subtree semantics,
 opaque preservation boundaries, separator-note filtering, lifecycle state,
 and mutation of empty text nodes.
 
+The ordered mixed-run gate authors text, a tab, all three typed breaks, an
+inline picture, a field, a Unicode symbol, and trailing text through one native
+run handle. It applies the public formatting setters, saves and reopens the
+package, and compares the flattened logical child order across the physical
+field boundary. The cached field result and both surrounding run segments keep
+the authored properties. A companion regression inserts a field beside a
+positioned foreign run child, proves the raw bytes stay on their original side
+of the field boundary, and proves an invalid field instruction is atomic. The
+reopened document must render through deterministic bundled fonts.
+
 The contributor reader-fact regression combines strict document and body
 boundaries, first section properties, missing revision authors, empty simple
 fields, bounded nested tables, marker child-content facts, effective complex
