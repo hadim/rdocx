@@ -297,6 +297,15 @@ rather than inventing an attribute. A canonical `a:blip` with `r:embed` or
 `r:link` declares the fixed relationship namespace locally, so a modelled fill
 remains namespace-valid when its parent did not declare `r`.
 
+`Blip` models the first DrawingML `a:alphaModFix` child as a bounded
+`Percent1000` amount from zero through 100000. Reads resolve a conventional
+`a` prefix or an alternate prefix declared on the effect, blip, or enclosing
+picture fill. The writer emits one canonical `a:alphaModFix` in the raw-child
+slot where the modelled effect occurred. Duplicate effects, foreign-namespace
+lookalikes, unsupported siblings, and unmodelled attributes remain opaque and
+ordered. A missing `amt` uses the schema default of 100000. Malformed or
+out-of-range unqualified values reject the fill.
+
 `office_default()` constructs the standard Office theme. It is the correctness
 floor for a template whose master lacks a theme relationship. It is *not* how
 `Presentation::new()` works, which uses a bundled binary template for the

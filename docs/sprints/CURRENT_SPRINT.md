@@ -51,7 +51,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X099 | Expose direct body ownership for story items | M | done | codex |
 | F-X100 | Preserve explicit false table toggles | S | done | codex |
 | F-X102 | Resolve header and footer pictures in their story scope | M | done | codex |
-| F-X104 | Render DrawingML picture transparency | M | pending | - |
+| F-X104 | Render DrawingML picture transparency | M | done | codex |
 | F-X105 | Separate slide-owned placeholders from master header flags | M | pending | - |
 | F-X110 | Control field updates on document open | S | pending | - |
 | F-X111 | Attach portable CLI binaries to Rust releases | L | pending | - |

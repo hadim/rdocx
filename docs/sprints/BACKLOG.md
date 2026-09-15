@@ -648,7 +648,7 @@ regenerated, never hand-edited.
 | F-X101 | Honor run-level page breaks during pagination | S73 | M | pending |
 | F-X102 | Resolve header and footer pictures in their story scope | S73 | M | done |
 | F-X103 | Accept standard TOC switches and report rebuild diagnostics | S73 | M | done |
-| F-X104 | Render DrawingML picture transparency | S73 | M | pending |
+| F-X104 | Render DrawingML picture transparency | S73 | M | done |
 | F-X105 | Separate slide-owned placeholders from master header flags | S73 | M | pending |
 | F-X106a | Expose indexed content mutation and counted replacement in Python | S73 | L | pending |
 | F-X106b | Expose paragraph and run formatting mutations in Python | S73 | M | pending |

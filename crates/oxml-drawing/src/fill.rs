@@ -9,7 +9,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::color::{ColorChoice, ColorError};
-use crate::namespace::reject_conflicting_a_prefix;
+use crate::namespace::{A_NS, reject_conflicting_a_prefix};
 use crate::order::OrderedRawChildren;
 
 /// Errors produced while parsing or writing DrawingML fills.
@@ -609,6 +609,9 @@ impl PatternFill {
 pub struct Blip {
     pub embed: Option<String>,
     pub link: Option<String>,
+    /// Fixed alpha modulation in thousandths of a percent.
+    pub alpha_modulation_fix: Option<Percent1000>,
+    alpha_modulation_fix_raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
 }
 
@@ -617,17 +620,71 @@ impl Blip {
         Self {
             embed: get_attr(start, b"embed"),
             link: get_attr(start, b"link"),
+            alpha_modulation_fix: None,
+            alpha_modulation_fix_raw_attributes: Vec::new(),
             raw_children: OrderedRawChildren::default(),
         }
     }
 
-    fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+    fn from_element(
+        reader: &mut Reader<&[u8]>,
+        start: &BytesStart<'_>,
+        ancestor: &BytesStart<'_>,
+    ) -> Result<Self> {
         let mut blip = Self::from_start(start);
-        blip.raw_children = capture_all_children(reader, b"blip")?;
+        let mut buffer = Vec::new();
+        let mut boundary = 0;
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Start(element)
+                    if blip.alpha_modulation_fix.is_none()
+                        && is_drawingml_alpha_mod_fix(&element, start, ancestor)? =>
+                {
+                    let (amount, raw_attributes) = parse_alpha_modulation_fix(&element)?;
+                    read_empty_effect_body(reader, &element)?;
+                    blip.alpha_modulation_fix = Some(amount);
+                    blip.alpha_modulation_fix_raw_attributes = raw_attributes;
+                    boundary = 1;
+                }
+                Event::Empty(element)
+                    if blip.alpha_modulation_fix.is_none()
+                        && is_drawingml_alpha_mod_fix(&element, start, ancestor)? =>
+                {
+                    let (amount, raw_attributes) = parse_alpha_modulation_fix(&element)?;
+                    blip.alpha_modulation_fix = Some(amount);
+                    blip.alpha_modulation_fix_raw_attributes = raw_attributes;
+                    boundary = 1;
+                }
+                Event::Start(element) => blip
+                    .raw_children
+                    .push(boundary, capture_element(reader, &element)?),
+                Event::Empty(element) => blip
+                    .raw_children
+                    .push(boundary, capture_empty_element(&element)?),
+                Event::End(element) if matches_local_name(element.name().as_ref(), b"blip") => {
+                    break;
+                }
+                Event::Eof => return Err(missing_end("blip")),
+                _ => {}
+            }
+            buffer.clear();
+        }
         Ok(blip)
     }
 
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        if let Some(amount) = self.alpha_modulation_fix
+            && !(0..=100_000).contains(&amount.0)
+        {
+            return Err(FillError::InvalidAttribute {
+                element: "alphaModFix".to_owned(),
+                attribute: "amt".to_owned(),
+                value: amount.0.to_string(),
+            });
+        }
         let mut start = BytesStart::new("a:blip");
         if self.embed.is_some() || self.link.is_some() {
             start.push_attribute(("xmlns:r", R_NS));
@@ -638,12 +695,121 @@ impl Blip {
         if let Some(link) = self.link.as_deref() {
             start.push_attribute(("r:link", link));
         }
-        if self.raw_children.is_empty() {
+        if self.alpha_modulation_fix.is_none() && self.raw_children.is_empty() {
             return write_empty(writer, start);
         }
         write_start(writer, start)?;
         emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(amount) = self.alpha_modulation_fix {
+            let amount = amount.0.to_string();
+            let mut effect = BytesStart::new("a:alphaModFix");
+            effect.push_attribute(("amt", amount.as_str()));
+            push_raw_attributes(&mut effect, &self.alpha_modulation_fix_raw_attributes);
+            write_empty(writer, effect)?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
         write_end(writer, "a:blip")
+    }
+}
+
+fn is_drawingml_alpha_mod_fix(
+    element: &BytesStart<'_>,
+    parent: &BytesStart<'_>,
+    ancestor: &BytesStart<'_>,
+) -> Result<bool> {
+    if !matches_local_name(element.name().as_ref(), b"alphaModFix") {
+        return Ok(false);
+    }
+    let qualified = element.name();
+    let qualified = qualified.as_ref();
+    let prefix = qualified
+        .split(|byte| *byte == b':')
+        .next()
+        .filter(|prefix| prefix.len() != qualified.len());
+    let binding = namespace_binding(element, prefix)?
+        .or(namespace_binding(parent, prefix)?)
+        .or(namespace_binding(ancestor, prefix)?);
+    if prefix == Some(b"a") && binding.as_deref().is_some_and(|uri| uri != A_NS) {
+        return Err(OxmlError::InvalidValue(
+            "xmlns:a conflicts with the fixed DrawingML writer namespace".to_owned(),
+        )
+        .into());
+    }
+    Ok(binding.as_deref() == Some(A_NS) || (prefix == Some(b"a") && binding.is_none()))
+}
+
+fn namespace_binding(start: &BytesStart<'_>, prefix: Option<&[u8]>) -> Result<Option<String>> {
+    let name = prefix.map_or_else(
+        || b"xmlns".to_vec(),
+        |prefix| {
+            let mut name = b"xmlns:".to_vec();
+            name.extend_from_slice(prefix);
+            name
+        },
+    );
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        if attribute.key.as_ref() == name {
+            return Ok(Some(
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                    .map_err(OxmlError::from)?
+                    .into_owned(),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+fn parse_alpha_modulation_fix(
+    element: &BytesStart<'_>,
+) -> Result<(Percent1000, Vec<(String, String)>)> {
+    let mut amount = None;
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        if attribute.key.as_ref() == b"amt" {
+            amount = Some(
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                    .map_err(OxmlError::from)?
+                    .into_owned(),
+            );
+        }
+    }
+    let amount = amount.unwrap_or_else(|| "100000".to_owned());
+    let parsed = amount
+        .parse::<i32>()
+        .map_err(|_| invalid(element, b"amt", amount.clone()))?;
+    if !(0..=100_000).contains(&parsed) {
+        return Err(invalid(element, b"amt", amount));
+    }
+    Ok((
+        Percent1000(parsed),
+        capture_unmodelled_attributes(element, &[b"amt"])?,
+    ))
+}
+
+fn read_empty_effect_body(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<()> {
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::End(element) if element.name().as_ref() == start.name().as_ref() => {
+                return Ok(());
+            }
+            Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
+            Event::Start(element) | Event::Empty(element) => return Err(unexpected(&element)),
+            Event::Eof => return Err(missing_end("alphaModFix")),
+            _ => {
+                return Err(OxmlError::InvalidValue(
+                    "a:alphaModFix must not contain content".to_owned(),
+                )
+                .into());
+            }
+        }
+        buffer.clear();
     }
 }
 
@@ -732,7 +898,7 @@ impl BlipFill {
             {
                 Event::Start(element) if matches_local_name(element.name().as_ref(), b"blip") => {
                     reject_conflicting_a_prefix(&element)?;
-                    fill.blip = Some(Blip::from_element(reader, &element)?);
+                    fill.blip = Some(Blip::from_element(reader, &element, start)?);
                     boundary = 1;
                 }
                 Event::Empty(element) if matches_local_name(element.name().as_ref(), b"blip") => {
@@ -1419,6 +1585,84 @@ mod tests {
 
         let blip_leaf_extensions = br#"<z:blipFill><z:srcRect><x:sourceExt/></z:srcRect><z:stretch><z:fillRect><x:fillExt/></z:fillRect></z:stretch></z:blipFill>"#;
         assert_eq!(Fill::from_xml(blip_leaf_extensions).unwrap().to_xml().unwrap(), br#"<a:blipFill><a:srcRect><x:sourceExt/></a:srcRect><a:stretch><a:fillRect><x:fillExt/></a:fillRect></a:stretch></a:blipFill>"#);
+    }
+
+    #[test]
+    fn blip_alpha_mod_fix_is_typed_bounded_and_schema_ordered() {
+        let parse = |children: &str| {
+            let xml = format!(
+                r#"<a:blipFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:blip r:embed="rId1">{children}</a:blip></a:blipFill>"#
+            );
+            super::BlipFill::from_xml(xml.as_bytes())
+        };
+
+        let fill = parse(
+            r#"<x:before xmlns:x="urn:producer"/><q:alphaModFix xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" amt="30000"/><x:after xmlns:x="urn:producer"/>"#,
+        )
+        .unwrap();
+        let blip = fill.blip.unwrap();
+        assert_eq!(blip.alpha_modulation_fix, Some(super::Percent1000(30_000)));
+        let xml = super::Fill::Blip(super::BlipFill {
+            blip: Some(blip),
+            ..Default::default()
+        })
+        .to_xml()
+        .unwrap();
+        let xml = String::from_utf8(xml).unwrap();
+        let before = xml.find("x:before").unwrap();
+        let alpha = xml.find("a:alphaModFix").unwrap();
+        let after = xml.find("x:after").unwrap();
+        assert!(before < alpha && alpha < after, "{xml}");
+        assert!(xml.contains("amt=\"30000\""), "{xml}");
+
+        let inherited_alias = super::BlipFill::from_xml(
+            br#"<q:blipFill xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main"><q:blip><q:alphaModFix amt="25000"/></q:blip></q:blipFill>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            inherited_alias.blip.unwrap().alpha_modulation_fix,
+            Some(super::Percent1000(25_000))
+        );
+
+        let qualified_amount =
+            parse(r#"<a:alphaModFix xmlns:producer="urn:producer" producer:amt="20000"/>"#)
+                .unwrap();
+        assert_eq!(
+            qualified_amount.blip.unwrap().alpha_modulation_fix,
+            Some(super::Percent1000(100_000))
+        );
+
+        let duplicate = parse(
+            r#"<a:alphaModFix amt="40000"/><a:alphaModFix producer:keep="yes" xmlns:producer="urn:producer" amt="20000"/>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            duplicate.blip.as_ref().unwrap().alpha_modulation_fix,
+            Some(super::Percent1000(40_000))
+        );
+        let duplicate_xml = super::Fill::Blip(duplicate).to_xml().unwrap();
+        let duplicate_xml = String::from_utf8(duplicate_xml).unwrap();
+        assert_eq!(duplicate_xml.matches("alphaModFix").count(), 2);
+        assert!(duplicate_xml.contains("producer:keep=\"yes\""));
+
+        for invalid in ["-1", "100001", "not-a-number"] {
+            assert!(parse(&format!(r#"<a:alphaModFix amt="{invalid}"/>"#)).is_err());
+        }
+        assert!(parse(r#"<a:alphaModFix amt="30000">content</a:alphaModFix>"#).is_err());
+        let mut invalid_write = parse(r#"<a:alphaModFix amt="30000"/>"#).unwrap();
+        invalid_write.blip.as_mut().unwrap().alpha_modulation_fix = Some(super::Percent1000(-1));
+        assert!(super::Fill::Blip(invalid_write).to_xml().is_err());
+        let foreign = parse(
+            r#"<x:alphaModFix xmlns:x="urn:producer" amt="30000" producer:keep="yes" xmlns:producer="urn:producer"/>"#,
+        )
+        .unwrap();
+        assert_eq!(foreign.blip.as_ref().unwrap().alpha_modulation_fix, None);
+        let foreign_xml = super::Fill::Blip(foreign).to_xml().unwrap();
+        assert!(
+            String::from_utf8(foreign_xml)
+                .unwrap()
+                .contains("producer:keep=\"yes\"")
+        );
     }
 
     #[test]

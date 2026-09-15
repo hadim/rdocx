@@ -1872,6 +1872,18 @@ CI retains `gate-evidence.json`, `render-manifest.tsv`, and
 trees stay job-local because the TSV identifies every deck, slide, score, and
 paired path without uploading hundreds of redundant raster files.
 
+The picture-transparency differential is
+`picture_alpha_mod_fix_matches_presentation_renderers`. Its source-built deck
+places a 30 percent picture on the slide and another on its layout beside an
+opaque control. The exact LibreOffice 26.2.5.2 build exports the deck to PDF,
+and Poppler rasterises it at 72 DPI for bounded channel comparisons. The
+regular companion gate checks the same resolved opacities, exact repeated PNG
+bytes, PDF `/ExtGState` alpha, and modelled slide and layout round trips.
+Unit gates cover inherited DrawingML prefix aliases, invalid amounts, raw
+sibling and duplicate preservation, picture backgrounds, cached previews, and
+multiplication with animation opacity. The existing shared SVG group-opacity
+gate covers the same backend-neutral group contract.
+
 Stand this harness up in M10 alongside the first text rendering, not afterwards.
 
 The M10 native spot-check uses Microsoft PowerPoint 16.104, Info.plist build

@@ -13903,3 +13903,43 @@ no-default layout, both WASM checks, and workflow tests pass.
 **Notes for future sessions.** Keep report diagnostics as the sole source for
 their count. If another TOC form gains a retained-display outcome, attach its
 physical source offset before merging it into the public ordered collection.
+
+### F-X104, Render DrawingML picture transparency
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** DrawingML blips now model one namespace-aware
+`a:alphaModFix` amount with strict bounds and ordered raw sibling preservation.
+Presentation layout carries the effective value as image opacity, and rendering
+applies it to the complete picture layer across slide, layout, master,
+background, preview, PDF, SVG, and raster paths.
+
+**Non-obvious choices.** Picture opacity lowers through the existing shared
+group primitive. This keeps backend behavior identical and multiplies cleanly
+with enclosing group and animation opacity. Unsupported effects and duplicate
+`alphaModFix` children remain byte-preserved rather than acquiring ambiguous
+typed ownership.
+
+**Deviations from the design plan.** None. Contributor PR 105 supplied the
+resolved-image and backend-group direction. The integrated implementation
+hardened its parser with namespace resolution, amount validation, duplicate
+ownership, canonical child ordering, background and preview coverage, and an
+exact pinned LibreOffice and Poppler differential gate.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md`, DrawingML blip
+effect ownership, `docs/hld/08-rendering-spec.md`, backend-neutral picture
+opacity, `docs/hld/12-testing-strategy.md`, pinned presentation transparency
+coverage, and the F-X104 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `picture_alpha_mod_fix_matches_presentation_renderers` is the story
+gate and passed with LibreOffice 26.2.5.2 and Poppler 26.01.0. Parser, layout,
+animation composition, background, preview, PDF, raster, full workspace,
+WASM, docs, package, and supply-chain gates also pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep picture transparency on the complete image
+layer after crop and tile lowering. Applying opacity to pixels or only one
+placement would break transparent backgrounds and nested opacity composition.

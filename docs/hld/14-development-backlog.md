@@ -5100,7 +5100,9 @@ derives its count from that tuple-backed snapshot.
 
 Model the bounded `a:alphaModFix` child of an embedded picture blip as a
 validated zero-to-100000 amount while preserving unsupported sibling effects
-in order. Propagate its effective opacity through slide, layout, master,
+and duplicate or foreign lookalikes in order. Namespace resolution accepts the
+conventional prefix and aliases declared through the enclosing picture fill.
+Propagate its effective opacity through slide, layout, master,
 background, cached preview, SVG, PDF, and raster rendering without changing
 opaque pictures or animation opacity.
 

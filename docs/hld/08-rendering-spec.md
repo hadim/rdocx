@@ -1337,8 +1337,10 @@ same `FontManager` that produced the group and then shapes ordinary slide text.
 backend-neutral `Paint` or a shared `ResolvedImage`. `ResolvedContent::Image`
 and `ResolvedShape::image_fill` use the same `ResolvedImage` structure, which
 carries media ID, source crop, stretch or tile placement, declared DPI, and
-rotation policy. A background image lowers through the existing picture path
-before every slide shape. A shape image fill lowers through that path and its
+rotation policy. It also carries the effective zero-to-one opacity derived
+from the modelled blip `a:alphaModFix`. A background image lowers through the
+existing picture path before every slide shape. A shape image fill lowers
+through that path and its
 concrete geometry clip before the shape stroke and text. It stays separate from
 `ResolvedContent`, so picture-filled text retains both layers. Paint backgrounds
 remain in `PageFrame::background`.
@@ -1459,6 +1461,12 @@ rectangle, and clips it to the destination and picture geometry. When picture
 content does not rotate with the shape, stretch and tile coverage expands to
 the rotated geometry's axis-aligned bounds before inverse rotation, then clips
 to the rotated picture path. Picture content is emitted before its outline.
+An image whose effective opacity is below one is wrapped in a
+backend-neutral identity group. This applies once to the complete stretch or
+tile layer and therefore reaches SVG, PDF, and raster output without backend
+picture exceptions. Slide, layout, master, background, and cached-preview
+pictures use the same lowering path. Enclosing shape and animation opacity
+multiply the picture group opacity.
 
 Tile size starts from probed pixel dimensions. A positive declared blip DPI
 overrides both embedded axes, embedded DPI overrides the 96 DPI fallback, and

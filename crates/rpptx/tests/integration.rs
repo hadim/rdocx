@@ -13881,6 +13881,159 @@ fn duplicate_picture_bytes_share_one_media_part_across_slides() {
     }
 }
 
+fn picture_alpha_mod_fix_fixture() -> Vec<u8> {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let png = valid_one_pixel_png();
+    for x in [1.0, 4.0] {
+        presentation
+            .add_picture(
+                0,
+                &png,
+                "red.png",
+                Emu::from_cm(x),
+                Emu::from_cm(1.0),
+                Some(Emu::from_cm(2.0)),
+                Some(Emu::from_cm(2.0)),
+            )
+            .unwrap();
+    }
+
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-X104 picture opacity source",
+    );
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::SLIDE).then_some(part.clone())
+        })
+        .unwrap();
+    let layout_part = {
+        let relationship = package
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_LAYOUT)
+            .unwrap();
+        OpcPackage::resolve_rel_target(&slide_part, &relationship.target)
+    };
+    let image_relationship = package
+        .get_part_rels(&slide_part)
+        .unwrap()
+        .get_by_type(rel_types::IMAGE)
+        .unwrap()
+        .clone();
+
+    let slide_xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let blip_end = format!(r#"r:embed="{}"/>"#, image_relationship.id);
+    let faded_blip_end = format!(
+        r#"r:embed="{}"><a:alphaModFix amt="30000"/></a:blip>"#,
+        image_relationship.id
+    );
+    let slide_xml = slide_xml.replacen(&blip_end, &faded_blip_end, 1);
+    assert!(slide_xml.contains(&faded_blip_end), "{slide_xml}");
+    let first_picture_start = slide_xml.find("<p:pic>").unwrap();
+    let first_picture_end = first_picture_start
+        + slide_xml[first_picture_start..].find("</p:pic>").unwrap()
+        + "</p:pic>".len();
+    let mut layout_picture = slide_xml[first_picture_start..first_picture_end].to_owned();
+    layout_picture = layout_picture.replacen(
+        r#"<a:off x="360000" y="360000"/>"#,
+        r#"<a:off x="2520000" y="360000"/>"#,
+        1,
+    );
+    assert!(layout_picture.contains(r#"<a:off x="2520000" y="360000"/>"#));
+    layout_picture = layout_picture.replacen(r#"<p:cNvPr id="2""#, r#"<p:cNvPr id="424242""#, 1);
+    package.set_part(&slide_part, slide_xml.into_bytes());
+
+    let layout_image_id = package
+        .get_or_create_part_rels(&layout_part)
+        .add(rel_types::IMAGE, &image_relationship.target);
+    layout_picture = layout_picture.replace(
+        &format!(r#"r:embed="{}""#, image_relationship.id),
+        &format!(r#"r:embed="{layout_image_id}""#),
+    );
+    let layout_xml = String::from_utf8(package.get_part(&layout_part).unwrap().to_vec()).unwrap();
+    let layout_xml = layout_xml.replacen("</p:spTree>", &format!("{layout_picture}</p:spTree>"), 1);
+    package.set_part(&layout_part, layout_xml.into_bytes());
+    package_bytes(package)
+}
+
+fn picture_alpha_pixel(pixmap: &tiny_skia::Pixmap, x: u32) -> (u8, u8, u8) {
+    let pixel = pixmap.pixel(x, 57).unwrap();
+    (pixel.red(), pixel.green(), pixel.blue())
+}
+
+#[test]
+fn picture_alpha_mod_fix_reaches_layout_pdf_and_raster_backends() {
+    let source = picture_alpha_mod_fix_fixture();
+    let presentation = Presentation::from_bytes(&source).unwrap();
+    let (input, layout) = presentation.render_deterministic().unwrap();
+    let opacities = input.slides[0]
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.content {
+            ResolvedContent::Image(image) => Some(image.opacity),
+            _ => shape.image_fill.as_ref().map(|image| image.opacity),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(opacities, vec![0.3, 0.3, 1.0]);
+
+    let first = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+    let second = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+    assert_eq!(first, second, "deterministic picture opacity raster");
+    let pixmap = tiny_skia::Pixmap::decode_png(&first).unwrap();
+    for x in [57, 227] {
+        let (red, green, blue) = picture_alpha_pixel(&pixmap, x);
+        assert_eq!(red, 255);
+        assert!((i16::from(green) - 178).abs() <= 1 && green == blue);
+    }
+    assert_eq!(picture_alpha_pixel(&pixmap, 142), (255, 0, 0));
+
+    let pdf = String::from_utf8_lossy(&presentation.to_pdf_deterministic().unwrap()).into_owned();
+    assert!(pdf.contains("/ExtGState"), "{pdf}");
+    assert!(pdf.contains("/ca 0.3"), "{pdf}");
+
+    let round_trip = presentation.to_bytes().unwrap();
+    let package = open_opc(&round_trip, "F-X104 picture opacity round trip");
+    let alpha_count = package
+        .parts
+        .values()
+        .filter_map(|bytes| std::str::from_utf8(bytes).ok())
+        .map(|xml| xml.matches(r#"<a:alphaModFix amt="30000"/>"#).count())
+        .sum::<usize>();
+    assert_eq!(alpha_count, 2);
+}
+
+#[test]
+#[ignore = "requires pinned LibreOffice 26.2.5.2 and Poppler"]
+fn picture_alpha_mod_fix_matches_presentation_renderers() {
+    picture_alpha_mod_fix_reaches_layout_pdf_and_raster_backends();
+    let root = f222_temp_directory("f-x104-alpha");
+    fs::create_dir_all(&root).unwrap();
+    let source_path = root.join("picture-alpha-mod-fix.pptx");
+    fs::write(&source_path, picture_alpha_mod_fix_fixture()).unwrap();
+    f222_libreoffice_convert(&source_path, "pdf", &root);
+    let oracle_path = root.join("picture-alpha-mod-fix.pdf");
+    let oracle_pages = m21_pdf_page_pngs(&oracle_path, &root.join("oracle"), 72);
+    assert_eq!(oracle_pages.len(), 1);
+    let oracle = tiny_skia::Pixmap::decode_png(&oracle_pages[0]).unwrap();
+
+    for x in [57, 227] {
+        let (red, green, blue) = picture_alpha_pixel(&oracle, x);
+        assert!(red >= 250, "oracle faded red at {x}: {red}");
+        assert!(
+            (170..=190).contains(&green) && (i16::from(green) - i16::from(blue)).abs() <= 2,
+            "oracle faded pixel at {x}: ({red}, {green}, {blue})"
+        );
+    }
+    let (red, green, blue) = picture_alpha_pixel(&oracle, 142);
+    assert!(red >= 250 && green <= 5 && blue <= 5);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn picture_sniffs_bytes_when_extension_is_misleading() {
     let png = png_header(5, 4);

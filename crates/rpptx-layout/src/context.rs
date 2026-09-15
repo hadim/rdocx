@@ -1382,6 +1382,9 @@ fn resolve_image_fill(
         },
         dpi: fill.dpi.filter(|dpi| *dpi > 0).map(f64::from),
         rotate_with_shape: fill.rotate_with_shape.unwrap_or(true),
+        opacity: blip
+            .alpha_modulation_fix
+            .map_or(1.0, |amount| f64::from(amount.0) / 100_000.0),
     })
 }
 
@@ -4622,7 +4625,7 @@ mod tests {
 
     #[test]
     fn background_picture_relationship_uses_its_producer_scope() {
-        let background = r#"<p:bg><p:bgPr><a:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId9"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:bgPr></p:bg>"#;
+        let background = r#"<p:bg><p:bgPr><a:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId9"><a:alphaModFix amt="30000"/></a:blip><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:bgPr></p:bg>"#;
         let fixtures = [
             Fixture::from_xml(
                 &slide_xml_with("", background, ""),
@@ -4656,6 +4659,7 @@ mod tests {
                 panic!("expected source-scoped background image");
             };
             assert_eq!(image.media, expected);
+            assert_eq!(image.opacity, 0.3);
             assert!(resolved.diagnostics.is_empty());
         }
     }
@@ -5141,6 +5145,31 @@ mod tests {
             ResolvedTextRun::Text { text, .. } if text == "caption"
         ));
         assert!(resolved.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn picture_fill_opacity_comes_from_alpha_modulation_fix() {
+        let opaque = shape_picture_fill("rId7", 0, None);
+        let faded = opaque.replace(
+            r#"r:embed="rId7"/>"#,
+            r#"r:embed="rId7"><a:alphaModFix amt="30000"/></a:blip>"#,
+        );
+        assert_ne!(faded, opaque);
+        let media = ScopedMediaIds {
+            slide: HashMap::from([("rId7".to_owned(), MediaId(7))]),
+            ..ScopedMediaIds::default()
+        };
+
+        for (shape, opacity) in [(opaque, 1.0), (faded, 0.3)] {
+            let fixture = Fixture::new(&shape, "", "");
+            let resolved = fixture
+                .context()
+                .resolve_slide_with_media((720.0, 540.0), &media)
+                .unwrap();
+            let image = resolved.shapes[0].image_fill.as_ref().unwrap();
+            assert_eq!(image.opacity, opacity);
+            assert!(resolved.diagnostics.is_empty());
+        }
     }
 
     #[test]
@@ -6872,7 +6901,10 @@ mod tests {
 
     #[test]
     fn three_dimensional_chart_uses_cached_image_and_diagnostic() {
-        let alternate = chart_alternate("rIdChart", Some("rIdPreview"));
+        let alternate = chart_alternate("rIdChart", Some("rIdPreview")).replace(
+            r#"r:embed="rIdPreview"/>"#,
+            r#"r:embed="rIdPreview"><a:alphaModFix amt="30000"/></a:blip>"#,
+        );
         let fixture = Fixture::new(&alternate, "", "");
         let preview = MediaId(47);
         let media = ScopedMediaIds {
@@ -6902,7 +6934,7 @@ mod tests {
 
         assert!(matches!(
             resolved.shapes[0].content,
-            ResolvedContent::Image(ref image) if image.media == preview
+            ResolvedContent::Image(ref image) if image.media == preview && image.opacity == 0.3
         ));
         assert!(resolved.shapes[0].unsupported.is_some());
         assert!(resolved.diagnostics.iter().any(|diagnostic| {

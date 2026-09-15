@@ -1,6 +1,6 @@
 # F-X104, Render DrawingML picture transparency
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-217
@@ -70,10 +70,10 @@ reviewed alone.
 
 ## Implementation checklist
 
-- [ ] Add failing slide, layout, and opaque-control renders.
-- [ ] Model and serialize `alphaModFix` with ordered raw siblings.
-- [ ] Propagate and compose resolved image opacity across every backend.
-- [ ] Run oracle, parser, layout, public API, hash harness, full verification, and microscope gates.
+- [x] Add failing slide, layout, and opaque-control renders.
+- [x] Model and serialize `alphaModFix` with ordered raw siblings.
+- [x] Propagate and compose resolved image opacity across every backend.
+- [x] Run oracle, parser, layout, public API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 
