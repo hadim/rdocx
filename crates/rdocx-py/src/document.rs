@@ -228,12 +228,12 @@ impl PyLayoutPage {
     }
 }
 
-#[pyclass(name = "TocRebuildReport", frozen, get_all, eq, skip_from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[pyclass(name = "TocRebuildReport", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PyTocRebuildReport {
-    pub entry_count: usize,
-    pub bookmark_count: usize,
-    pub diagnostic_count: usize,
+    entry_count: usize,
+    bookmark_count: usize,
+    diagnostics: Vec<String>,
 }
 
 #[pyclass(name = "Story", frozen, get_all, eq, skip_from_py_object)]
@@ -571,13 +571,33 @@ impl PyStyle {
 #[pymethods]
 impl PyTocRebuildReport {
     #[new]
-    #[pyo3(signature = (*, entry_count, bookmark_count, diagnostic_count))]
-    fn new(entry_count: usize, bookmark_count: usize, diagnostic_count: usize) -> Self {
+    #[pyo3(signature = (*, entry_count, bookmark_count, diagnostics))]
+    fn new(entry_count: usize, bookmark_count: usize, diagnostics: Vec<String>) -> Self {
         Self {
             entry_count,
             bookmark_count,
-            diagnostic_count,
+            diagnostics,
         }
+    }
+
+    #[getter]
+    fn entry_count(&self) -> usize {
+        self.entry_count
+    }
+
+    #[getter]
+    fn bookmark_count(&self) -> usize {
+        self.bookmark_count
+    }
+
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.diagnostics)
+    }
+
+    #[getter]
+    fn diagnostic_count(&self) -> usize {
+        self.diagnostics.len()
     }
 }
 
@@ -1056,7 +1076,7 @@ impl PyDocument {
         Ok(PyTocRebuildReport {
             entry_count: report.entry_count,
             bookmark_count: report.bookmark_count,
-            diagnostic_count: report.diagnostic_count,
+            diagnostics: report.diagnostics,
         })
     }
 

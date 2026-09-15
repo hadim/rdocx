@@ -341,7 +341,7 @@ def test_priority_word_operations_return_typed_snapshots_and_remain_atomic():
     held_before_toc = toc.paragraphs[-1]
     report = toc.rebuild_toc()
     assert report == rdocx.TocRebuildReport(
-        entry_count=1, bookmark_count=1, diagnostic_count=0
+        entry_count=1, bookmark_count=1, diagnostics=()
     )
     with pytest.raises(
         rdocx.StaleElementError, match=r"revision 0, but the document is now at revision 1"
@@ -354,9 +354,34 @@ def test_priority_word_operations_return_typed_snapshots_and_remain_atomic():
     no_toc.add_paragraph("no table of contents")
     live_after_noop = no_toc.paragraphs[0]
     assert no_toc.rebuild_toc() == rdocx.TocRebuildReport(
-        entry_count=0, bookmark_count=0, diagnostic_count=0
+        entry_count=0, bookmark_count=0, diagnostics=()
     )
     assert live_after_noop.text == "no table of contents"
+
+
+def test_word_default_toc_switch_rebuilds_and_reports_ordered_diagnostics():
+    import rdocx
+
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    document = _replace_document_body(
+        source,
+        """
+        <w:p><w:fldSimple w:instr="TOC"><w:r><w:t>simple cache</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \\x</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>complex cache</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        """,
+    )
+
+    report = document.rebuild_toc()
+    assert report.diagnostics == (
+        "simple table of contents fields are not rebuilt, stored display retained",
+        "field TOC uses unsupported switch \\x, stored display retained",
+    )
+    assert report.diagnostic_count == len(report.diagnostics) == 2
+    with pytest.raises(AttributeError):
+        report.diagnostics = ()
 
 
 def test_word_structure_snapshots_preserve_order_ownership_and_types():

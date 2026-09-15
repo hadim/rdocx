@@ -7443,7 +7443,7 @@ fn dynamic_toc_rebuild_matches_the_pinned_word_update() {
         TocRebuildReport {
             entry_count: 4,
             bookmark_count: 4,
-            diagnostic_count: 0,
+            diagnostics: Vec::new(),
         }
     );
 
@@ -7512,7 +7512,7 @@ fn dynamic_toc_rebuild_matches_the_pinned_word_update() {
         TocRebuildReport {
             entry_count: 2,
             bookmark_count: 1,
-            diagnostic_count: 0,
+            diagnostics: Vec::new(),
         }
     );
     let xml = document_xml(&mut document);
@@ -7716,7 +7716,7 @@ fn toc_rebuild_rejects_ambiguous_or_malformed_sources_atomically() {
     }
 
     let unsupported = r#"
-        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \z</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \x</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
         <w:p><w:r><w:t>stored unsupported cache</w:t></w:r></w:p>
         <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
     "#;
@@ -7727,7 +7727,9 @@ fn toc_rebuild_rejects_ambiguous_or_malformed_sources_atomically() {
         TocRebuildReport {
             entry_count: 0,
             bookmark_count: 0,
-            diagnostic_count: 1,
+            diagnostics: vec![
+                "field TOC uses unsupported switch \\x, stored display retained".to_owned()
+            ],
         }
     );
     assert_eq!(document_xml(&mut document), before);
@@ -7735,12 +7737,67 @@ fn toc_rebuild_rejects_ambiguous_or_malformed_sources_atomically() {
     let simple = r#"<w:p><w:fldSimple w:instr="TOC"><w:r><w:t>stored simple cache</w:t></w:r></w:fldSimple></w:p>"#;
     let mut document = document_with_field_parts(&wrap_word_body(simple), None, None);
     let before = document_xml(&mut document);
-    assert_eq!(document.rebuild_toc().unwrap().diagnostic_count, 1);
+    assert_eq!(document.rebuild_toc().unwrap().diagnostic_count(), 1);
     assert_eq!(document_xml(&mut document), before);
 
     let mut no_toc = Document::new();
     no_toc.add_paragraph("Heading").style("Heading1");
     assert_eq!(no_toc.rebuild_toc().unwrap(), TocRebuildReport::default());
+}
+
+#[test]
+fn word_default_toc_switch_rebuilds_and_reports_ordered_diagnostics() {
+    let body = r#"
+        <w:sdt>
+          <w:sdtPr><w:id w:val="17"/><w:dropDownList producer:flag="keep"><w:listItem w:displayText="A" w:value="a"/></w:dropDownList></w:sdtPr>
+          <w:sdtContent>
+            <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+            <w:p><w:r><w:t>stale cache</w:t></w:r></w:p>
+            <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+          </w:sdtContent>
+        </w:sdt>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Alpha</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+
+    let report = document.rebuild_toc().unwrap();
+    assert_eq!(report.entry_count, 1);
+    assert_eq!(report.diagnostic_count(), 0);
+    assert!(report.diagnostics.is_empty());
+    let bytes = document.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    let repeat_report = reopened.rebuild_toc().unwrap();
+    assert_eq!(repeat_report.entry_count, 1);
+    assert!(repeat_report.diagnostics.is_empty());
+    let xml = document_xml(&mut reopened);
+    assert!(!xml.contains("stale cache"), "{xml}");
+    for preserved in [
+        r#" TOC \o "1-3" \h \z \u "#,
+        "producer:flag=\"keep\"",
+        "w:listItem",
+        "w:displayText=\"A\"",
+    ] {
+        assert!(xml.contains(preserved), "missing {preserved}: {xml}");
+    }
+
+    let diagnostics = r#"
+        <w:p><w:fldSimple w:instr="TOC"><w:r><w:t>simple cache</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \x</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>complex cache</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(diagnostics), None, None);
+    let before = document.to_bytes().unwrap();
+    let report = document.rebuild_toc().unwrap();
+    assert_eq!(
+        report.diagnostics,
+        [
+            "simple table of contents fields are not rebuilt, stored display retained",
+            "field TOC uses unsupported switch \\x, stored display retained",
+        ]
+    );
+    assert_eq!(report.diagnostic_count(), 2);
+    assert_eq!(document.to_bytes().unwrap(), before);
 }
 
 #[test]
@@ -8077,7 +8134,10 @@ fn toc_rebuild_diagnoses_simple_tocs_in_accepted_revisions() {
             TocRebuildReport {
                 entry_count: 0,
                 bookmark_count: 0,
-                diagnostic_count: 1,
+                diagnostics: vec![
+                    "simple table of contents fields are not rebuilt, stored display retained"
+                        .to_owned(),
+                ],
             },
             "{wrapper}",
         );
@@ -8169,7 +8229,7 @@ fn toc_rebuild_projects_accepted_revisions_inside_content_controls() {
             r#"<w:p><w:sdt><w:sdtContent><w:{wrapper} w:id="74" w:author="Ada"><w:fldSimple w:instr="TOC"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:{wrapper}></w:sdtContent></w:sdt></w:p>"#
         );
         let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
-        assert_eq!(document.rebuild_toc().unwrap().diagnostic_count, 1);
+        assert_eq!(document.rebuild_toc().unwrap().diagnostic_count(), 1);
     }
 }
 
@@ -9310,7 +9370,7 @@ fn malformed_control_fields_and_bookmarks_do_not_shift_later_toc_coordinates() {
         .expect("opaque prefixes do not shift coordinates");
     assert_eq!(report.entry_count, 1);
     assert_eq!(report.bookmark_count, 1);
-    assert_eq!(report.diagnostic_count, 0);
+    assert_eq!(report.diagnostic_count(), 0);
     let target = document
         .bookmarks()
         .into_iter()

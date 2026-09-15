@@ -372,6 +372,11 @@ preservation case keeps alternate-prefix field scaffolding and neighbouring raw
 XML while proving an untouched custom part is byte-identical after save and
 reopen. Failure cases compare the live document before and after the rejected
 rebuild.
+The Word-default instruction case retains argument-free `TOC \\z`, rebuilds
+through an existing content-control payload, and saves and reopens the result.
+A mixed simple and unsupported complex TOC case asserts exact diagnostic text
+in physical source order, the derived native count, the immutable Python tuple,
+strict typing, and runtime stub agreement.
 Block-owner coverage keeps a direct body `sdtContent` opaque. It also places
 invalid control paragraphs before a valid TOC to prove the byte scanner and
 typed projection retain identical paragraph coordinates, and keeps invalidly

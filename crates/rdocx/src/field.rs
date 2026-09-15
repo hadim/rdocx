@@ -668,12 +668,20 @@ pub struct TocField {
     pub entry_page_separator: Option<String>,
 }
 
-/// Counts produced by one atomic table-of-contents rebuild.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Outcome produced by one atomic table-of-contents rebuild.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TocRebuildReport {
     pub entry_count: usize,
     pub bookmark_count: usize,
-    pub diagnostic_count: usize,
+    pub diagnostics: Vec<String>,
+}
+
+impl TocRebuildReport {
+    /// Number of retained fields that produced diagnostics.
+    #[must_use]
+    pub fn diagnostic_count(&self) -> usize {
+        self.diagnostics.len()
+    }
 }
 
 /// Which TC entries contribute to a table of contents.
@@ -830,20 +838,28 @@ impl Document {
             .ok_or(Error::NoDocumentPart)?
             .to_vec();
         let toc_spans = scan_dynamic_toc_spans(&document_xml)?;
-        let simple_diagnostic_count = count_simple_toc_fields(&document_xml)?;
+        let mut diagnostics = collect_simple_toc_diagnostics(&document_xml)?;
         if toc_spans.is_empty() {
             return Ok(TocRebuildReport {
-                diagnostic_count: simple_diagnostic_count,
+                diagnostics: diagnostics
+                    .into_iter()
+                    .map(|(_, diagnostic)| diagnostic)
+                    .collect(),
                 ..Default::default()
             });
         }
 
-        let (toc_fields, mut diagnostic_count) =
+        let (toc_fields, mut dynamic_diagnostics) =
             parse_dynamic_toc_fields(&candidate, &document_xml, &toc_spans)?;
-        diagnostic_count += simple_diagnostic_count;
+        diagnostics.append(&mut dynamic_diagnostics);
+        diagnostics.sort_by_key(|(offset, _)| *offset);
+        let diagnostics = diagnostics
+            .into_iter()
+            .map(|(_, diagnostic)| diagnostic)
+            .collect::<Vec<_>>();
         if toc_fields.iter().all(Option::is_none) {
             return Ok(TocRebuildReport {
-                diagnostic_count,
+                diagnostics,
                 ..Default::default()
             });
         }
@@ -1062,7 +1078,7 @@ impl Document {
         Ok(TocRebuildReport {
             entry_count,
             bookmark_count,
-            diagnostic_count,
+            diagnostics,
         })
     }
 
@@ -3744,7 +3760,7 @@ fn scan_dynamic_toc_spans(xml: &[u8]) -> Result<Vec<DynamicTocSpan>> {
     Ok(spans)
 }
 
-fn count_simple_toc_fields(xml: &[u8]) -> Result<usize> {
+fn collect_simple_toc_diagnostics(xml: &[u8]) -> Result<Vec<(usize, String)>> {
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -3889,7 +3905,16 @@ fn count_simple_toc_fields(xml: &[u8]) -> Result<usize> {
         }
         buffer.clear();
     }
-    Ok(simple_toc_starts.len())
+    Ok(simple_toc_starts
+        .into_iter()
+        .map(|offset| {
+            (
+                offset,
+                "simple table of contents fields are not rebuilt, stored display retained"
+                    .to_owned(),
+            )
+        })
+        .collect())
 }
 
 fn classify_typed_block_owner(
@@ -4572,24 +4597,26 @@ fn update_dynamic_field_stack(
     Ok(())
 }
 
+type ParsedDynamicTocFields = (Vec<Option<TocField>>, Vec<(usize, String)>);
+
 fn parse_dynamic_toc_fields(
     document: &Document,
     xml: &[u8],
     spans: &[DynamicTocSpan],
-) -> Result<(Vec<Option<TocField>>, usize)> {
+) -> Result<ParsedDynamicTocFields> {
     let mut paragraphs = Vec::new();
     collect_body_paragraphs(&document.document.body, &mut paragraphs);
     let context = FieldEvaluationContext::default();
     let mut output = Vec::with_capacity(spans.len());
-    let mut diagnostic_count = 0usize;
+    let mut diagnostics = Vec::new();
     for span in spans {
         let field = parse_dynamic_toc_field(xml, span)?;
         let mut evaluator = Evaluator::new(document, &context);
         evaluator.ensure_numbering_layout_for_field(&field)?;
         match evaluator.evaluate_field(&field, "main", &paragraphs, span.begin_paragraph) {
             FieldOutcome::TableOfContents(toc) => output.push(Some(toc)),
-            FieldOutcome::KeepStored { .. } => {
-                diagnostic_count += 1;
+            FieldOutcome::KeepStored { diagnostic } => {
+                diagnostics.push((span.field_start, diagnostic));
                 output.push(None);
             }
             _ => {
@@ -4599,7 +4626,7 @@ fn parse_dynamic_toc_fields(
             }
         }
     }
-    Ok((output, diagnostic_count))
+    Ok((output, diagnostics))
 }
 
 fn parse_dynamic_toc_field(xml: &[u8], span: &DynamicTocSpan) -> Result<Field> {
@@ -8511,6 +8538,7 @@ impl<'a> Evaluator<'a> {
             };
             match field_switch.name.as_str() {
                 "h" if argument.is_none() => toc.hyperlink = true,
+                "z" if argument.is_none() => {}
                 "u" if argument.is_none() => {
                     toc.use_outline_levels = true;
                     has_explicit_source = true;

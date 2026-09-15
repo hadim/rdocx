@@ -13864,3 +13864,42 @@ The page-one PNG and all other fingerprints are unchanged, 49 of 49 match.
 story relationship identifier and its local image relationship identifier.
 Never insert a duplicate unscoped key for convenience because local identifiers
 may collide across physical parts.
+
+### F-X103, Accept standard TOC switches and report rebuild diagnostics
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** TOC evaluation accepts Word's argument-free `\\z` web
+layout switch as a retained no-op for paginated output. Native rebuild reports
+own exact diagnostic messages in physical source order and derive the
+compatibility count from that collection. Python exposes the same messages as
+an immutable tuple with a derived count property.
+
+**Non-obvious choices.** Simple and complex TOC diagnostics retain their source
+byte offsets until both scans finish, then sort once before the public report is
+created. This preserves document order without combining the two established
+ownership scanners or changing which fields are eligible for rebuilding.
+
+**Deviations from the design plan.** None. Contributor PR 101 supplied the
+focused `\\z` parser direction and regression. The approved story extended it
+with exact ordered native diagnostics, the Python and typing surface, content
+control payload coverage, and save and reopen proof. Clippy required one
+private return-shape alias to keep the parser signature readable.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the TOC atomic update
+and diagnostic boundary, `docs/hld/10-bindings-spec.md`, native and Python
+report contracts, `docs/hld/12-testing-strategy.md`, TOC binding coverage, and
+the F-X103 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `word_default_toc_switch_rebuilds_and_reports_ordered_diagnostics`
+is the native and Python story gate. All 43 Python binding tests, strict mypy,
+stubtest, the full workspace suite, clippy, docs, package inventories,
+no-default layout, both WASM checks, and workflow tests pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep report diagnostics as the sole source for
+their count. If another TOC form gains a retained-display outcome, attach its
+physical source offset before merging it into the public ordered collection.

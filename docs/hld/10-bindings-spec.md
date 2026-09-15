@@ -454,11 +454,14 @@ mutation cannot alter an earlier result.
 
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic
-bundled-font page targets and returns `TocRebuildReport` with entry, newly
-allocated bookmark, and retained-field diagnostic counts. A document without
-a TOC is unchanged and returns zero counts. `rdocx-cli toc rebuild` publishes
-the validated result to an explicit output and reports these counts through a
-schema-1 main-story record. Python and WASM do not expose this operation.
+bundled-font page targets and returns `TocRebuildReport` with entry and newly
+allocated bookmark counts plus exact retained-field diagnostics in physical
+source order. `diagnostic_count()` is derived from the owned diagnostic
+collection. A document without a TOC is unchanged and returns empty counts and
+diagnostics. `rdocx-cli toc rebuild` publishes the validated result to an
+explicit output and reports the counts through a schema-1 main-story record.
+Python exposes the same operation and returns diagnostics as an immutable tuple
+with a derived `diagnostic_count` property. WASM does not expose this operation.
 
 The native facade re-exports the concrete OfficeMath tree from `rdocx-oxml`.
 `Paragraph::equations`, `Paragraph::equation`, and their read-only equivalents

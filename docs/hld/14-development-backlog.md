@@ -5092,6 +5092,9 @@ same collection rather than maintained separately.
 reported Word-default instruction, preserves its content-control payload,
 exposes no diagnostic, and returns exact ordered messages for malformed and
 unsupported controls through Rust, Python, typing, and save-reopen checks.
+The native report owns `Vec<String>` diagnostics and derives its compatibility
+count through an accessor. Python exposes the same messages as a tuple and
+derives its count from that tuple-backed snapshot.
 
 ### F-X104, Render DrawingML picture transparency (M)
 

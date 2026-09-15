@@ -1,6 +1,6 @@
 # F-X103, Accept standard TOC switches and report rebuild diagnostics
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-X098
@@ -70,11 +70,11 @@ Expected to be unchanged because the harness does not rebuild a TOC containing
 
 ## Implementation checklist
 
-- [ ] Add a failing Word-default TOC reproduction.
-- [ ] Accept and retain argument-free `\\z`.
-- [ ] Collect exact ordered rebuild diagnostics in Rust.
-- [ ] Expose diagnostics and compatibility count through Python and stubs.
-- [ ] Run binding, public API, hash harness, full verification, and microscope gates.
+- [x] Add a failing Word-default TOC reproduction.
+- [x] Accept and retain argument-free `\\z`.
+- [x] Collect exact ordered rebuild diagnostics in Rust.
+- [x] Expose diagnostics and compatibility count through Python and stubs.
+- [x] Run binding, public API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

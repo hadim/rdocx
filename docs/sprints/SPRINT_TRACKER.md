@@ -440,6 +440,7 @@ defended.
 | F-X099 | S73 | M | 2 | 1 | 2026-09-15 | Added checked direct-body ownership to native and frozen Python story-item snapshots without changing recursive paths |
 | F-X100 | S73 | S | 1 | 1 | 2026-09-15 | Preserved explicit false row-header, row-split, and cell no-wrap values from contributor PR 101 |
 | F-X102 | S73 | M | 2 | 1 | 2026-09-15 | Resolved body, header, and footer pictures against their owning relationship scope from contributor PR 102 |
+| F-X103 | S73 | M | 2 | 1 | 2026-09-15 | Accepted Word-default TOC web layout switches and exposed ordered native and Python rebuild diagnostics from contributor PR 101 |
 
 ## Velocity
 

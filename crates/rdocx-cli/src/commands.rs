@@ -802,13 +802,13 @@ pub fn toc_rebuild(file: &Path, output: &Path, json_output: bool) -> Result<()> 
             "scope": "main",
             "entry_count": report.entry_count,
             "bookmark_count": report.bookmark_count,
-            "diagnostic_count": report.diagnostic_count,
+            "diagnostic_count": report.diagnostic_count(),
             "output": output.display().to_string(),
         }))?;
     } else {
         println!("Entries: {}", report.entry_count);
         println!("Bookmarks: {}", report.bookmark_count);
-        println!("Diagnostics: {}", report.diagnostic_count);
+        println!("Diagnostics: {}", report.diagnostic_count());
         println!("Written to {}", output.display());
     }
     Ok(())

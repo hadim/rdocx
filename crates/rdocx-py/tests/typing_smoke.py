@@ -97,6 +97,8 @@ def exercise_rdocx_types(path: Path) -> None:
     assert_type(variants[0].story, Story | None)
     assert_type(hyperlinks[0].url, str | None)
     assert_type(report.entry_count, int)
+    assert_type(report.diagnostics, tuple[str, ...])
+    assert_type(report.diagnostic_count, int)
     package_bytes, pdf_bytes, pages, maybe_page, sliced, channels
 
 
