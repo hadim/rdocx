@@ -5117,20 +5117,20 @@ and repeated deterministic PNG output.
 ### F-X105, Separate slide-owned placeholders from master header flags (M)
 
 Treat an occupied date, footer, or slide-number placeholder physically present
-on a slide as slide content. Master and layout `p:hf` flags govern only
-inherited latent placeholders. An inherited layout or master placeholder still
-requires an enabling container and is suppressed by an occupied slide
-placeholder of the same latent type. Update the placeholder precedence HLD
-from the recorded ECMA wording and pinned PowerPoint or documented secondary
-oracle result before changing the flattener.
+on a slide as slide content. Master and layout `p:hf` flags govern only latent
+placeholders inherited from that same source part. An inherited layout or
+master placeholder still requires its own enabling container and is suppressed
+by an occupied slide placeholder of the same latent type. The pinned secondary
+oracle records the decision while native PowerPoint confirmation remains
+optional.
 
 **Depends on**: F-226.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/92>.
 **Test gate**: differential.
 `slide_owned_latent_placeholders_ignore_master_header_flags` covers absent,
-all-false, and slide-number-only `p:hf` containers. Slide-owned numbers remain,
-unoccupied inherited dates remain hidden, and the resulting text and raster
-match the recorded oracle decision.
+all-false, and slide-number-only master `p:hf` containers. Slide-owned numbers
+remain, unoccupied inherited dates remain hidden, and deterministic Rust text
+and raster visibility match LibreOffice 26.2.5.2 through Poppler 26.01.0.
 
 ### F-X106a, Expose indexed content mutation and counted replacement in Python (L)
 

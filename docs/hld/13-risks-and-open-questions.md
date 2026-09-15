@@ -87,6 +87,12 @@ style inheritance, concrete replacement formatting, base-level start and
 restart controls, and counter projection once, then shares that result with
 visible markers, TOC rebuild, and REF fields.
 
+Presentation latent placeholders use physical ownership as a policy boundary.
+Slide-owned date, footer, and number placeholders are direct content. An
+inherited layout or master placeholder requires its own source part's `p:hf`
+container and flag. The source-built pinned LibreOffice differential covers
+the absent, all-disabled, and slide-number-only master cases.
+
 ### R5, schema child ordering
 
 Diffuse, because it touches every writer, and violations are silent until

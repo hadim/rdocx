@@ -1,6 +1,6 @@
 # F-X105, Separate slide-owned placeholders from master header flags
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-226
@@ -71,10 +71,10 @@ the oracle decision is recorded.
 
 ## Implementation checklist
 
-- [ ] Record the standards and application-oracle decision.
-- [ ] Add the failing direct and inherited placeholder matrix.
-- [ ] Split direct-slide and inherited-latent policy in the flattener.
-- [ ] Update the HLD rule and run deterministic rendering, hash harness, full verification, and microscope.
+- [x] Record the standards and application-oracle decision.
+- [x] Add the failing direct and inherited placeholder matrix.
+- [x] Split direct-slide and inherited-latent policy in the flattener.
+- [x] Update the HLD rule and run deterministic rendering, hash harness, full verification, and microscope.
 
 ## Open questions
 

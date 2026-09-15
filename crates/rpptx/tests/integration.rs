@@ -13961,6 +13961,158 @@ fn picture_alpha_mod_fix_fixture() -> Vec<u8> {
     package_bytes(package)
 }
 
+fn slide_owned_latent_placeholder_fixture(master_header_footer: Option<&str>) -> Vec<u8> {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-X105 slide placeholder source",
+    );
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::SLIDE).then_some(part.clone())
+        })
+        .unwrap();
+    let layout_part = {
+        let relationship = package
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_LAYOUT)
+            .unwrap();
+        OpcPackage::resolve_rel_target(&slide_part, &relationship.target)
+    };
+    let master_part = {
+        let relationship = package
+            .get_part_rels(&layout_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_MASTER)
+            .unwrap();
+        OpcPackage::resolve_rel_target(&layout_part, &relationship.target)
+    };
+
+    let layout_xml = String::from_utf8(package.get_part(&layout_part).unwrap().to_vec()).unwrap();
+    let slide_number_marker = layout_xml.find("type=\"sldNum\"").unwrap();
+    let slide_number_start = layout_xml[..slide_number_marker].rfind("<p:sp>").unwrap();
+    let slide_number_end = slide_number_marker
+        + layout_xml[slide_number_marker..].find("</p:sp>").unwrap()
+        + "</p:sp>".len();
+    let slide_number = &layout_xml[slide_number_start..slide_number_end];
+    let slide_xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let slide_xml = slide_xml.replacen("</p:spTree>", &format!("{slide_number}</p:spTree>"), 1);
+    package.set_part(&slide_part, slide_xml.into_bytes());
+
+    let master_xml = String::from_utf8(package.get_part(&master_part).unwrap().to_vec()).unwrap();
+    assert!(!master_xml.contains("<p:hf"));
+    let master_xml = master_header_footer.map_or(master_xml.clone(), |attributes| {
+        master_xml.replacen(
+            "<p:txStyles>",
+            &format!("<p:hf {attributes}/><p:txStyles>"),
+            1,
+        )
+    });
+    package.set_part(&master_part, master_xml.into_bytes());
+    package_bytes(package)
+}
+
+fn slide_owned_latent_placeholder_text(bytes: &[u8]) -> Vec<String> {
+    let presentation = Presentation::from_bytes(bytes).unwrap();
+    let (input, _) = presentation.render_deterministic().unwrap();
+    input.slides[0]
+        .shapes
+        .iter()
+        .map(|shape| resolved_content_text(&shape.content))
+        .filter(|text| !text.trim().is_empty())
+        .collect()
+}
+
+#[test]
+fn slide_owned_latent_placeholder_source_matrix_is_stable() {
+    for master_header_footer in [
+        None,
+        Some(r#"dt="0" ftr="0" hdr="0" sldNum="0""#),
+        Some(r#"sldNum="1""#),
+    ] {
+        let source = slide_owned_latent_placeholder_fixture(master_header_footer);
+        assert_eq!(
+            slide_owned_latent_placeholder_text(&source),
+            ["‹#›"],
+            "master header-footer: {master_header_footer:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pinned LibreOffice 26.2.5.2 and Poppler 26.01.0"]
+fn slide_owned_latent_placeholders_ignore_master_header_flags() {
+    slide_owned_latent_placeholder_source_matrix_is_stable();
+    for tool in ["pdftotext", "pdftoppm"] {
+        let version = Command::new(tool).arg("-v").output().unwrap();
+        let version_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&version.stdout),
+            String::from_utf8_lossy(&version.stderr)
+        );
+        assert!(
+            version_text.contains(&format!("{tool} version 26.01.0")),
+            "{version_text}"
+        );
+    }
+    let root = f222_temp_directory("f-x105-slide-placeholders");
+    fs::create_dir_all(&root).unwrap();
+
+    for (label, master_header_footer) in [
+        ("absent", None),
+        ("all-off", Some(r#"dt="0" ftr="0" hdr="0" sldNum="0""#)),
+        ("slide-number-only", Some(r#"sldNum="1""#)),
+    ] {
+        let source = slide_owned_latent_placeholder_fixture(master_header_footer);
+        let presentation = Presentation::from_bytes(&source).unwrap();
+        let (_, rust_layout) = presentation.render_deterministic().unwrap();
+        let rust_png = oxml_pdf::render_page_to_png(&rust_layout, 0, 72.0).unwrap();
+        let rust_tokens = m21_pdf_token_pages(
+            &presentation.to_pdf_deterministic().unwrap(),
+            &format!("f-x105-rust-{label}"),
+        );
+        let source_path = root.join(format!("{label}.pptx"));
+        fs::write(&source_path, source).unwrap();
+        f222_libreoffice_convert(&source_path, "pdf", &root);
+        let oracle_path = root.join(format!("{label}.pdf"));
+        let oracle_tokens = m21_pdf_token_pages(
+            &fs::read(&oracle_path).unwrap(),
+            &format!("f-x105-oracle-{label}"),
+        );
+        let oracle_pngs = m21_pdf_page_pngs(
+            &oracle_path,
+            &root.join(format!("f-x105-oracle-{label}")),
+            72,
+        );
+
+        assert_eq!(rust_tokens, vec![vec!["1"]], "Rust case: {label}");
+        assert_eq!(oracle_tokens, rust_tokens, "LibreOffice case: {label}");
+        assert_eq!(oracle_pngs.len(), 1);
+        let rust_size = f226_png_dimensions(&rust_png);
+        let oracle_size = f226_png_dimensions(&oracle_pngs[0]);
+        assert!(rust_size.0.abs_diff(oracle_size.0) <= 1);
+        assert!(rust_size.1.abs_diff(oracle_size.1) <= 1);
+        for (renderer, png) in [("Rust", &rust_png), ("LibreOffice", &oracle_pngs[0])] {
+            let size = f226_png_dimensions(png);
+            assert_eq!(
+                m21_ink_mass(png, (30, size.1 - 45, 190, 40)),
+                0,
+                "{renderer} exposed the inherited date in {label}"
+            );
+            assert!(
+                m21_ink_mass(png, (500, size.1 - 45, 190, 40)) > 0,
+                "{renderer} omitted the slide-owned number in {label}"
+            );
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn picture_alpha_pixel(pixmap: &tiny_skia::Pixmap, x: u32) -> (u8, u8, u8) {
     let pixel = pixmap.pixel(x, 57).unwrap();
     (pixel.red(), pixel.green(), pixel.blue())

@@ -13943,3 +13943,42 @@ WASM, docs, package, and supply-chain gates also pass.
 **Notes for future sessions.** Keep picture transparency on the complete image
 layer after crop and tile lowering. Applying opacity to pixels or only one
 placement would break transparent backgrounds and nested opacity composition.
+
+### F-X105, Separate slide-owned placeholders from master header flags
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Presentation flattening now treats occupied slide-owned
+date, footer, and slide-number placeholders as direct slide content. Inherited
+layout and master latent placeholders each obey the `p:hf` policy owned by
+their own source.
+
+**Non-obvious choices.** An occupied deeper layout placeholder still claims
+its latent type before visibility is decided. This prevents a hidden layout
+date from exposing stale master content. Direct slide content retains source
+order and suppresses matching inherited placeholders once.
+
+**Deviations from the design plan.** PowerPoint was unavailable, so the
+approved secondary oracle was LibreOffice 26.2.5.2 with Poppler 26.01.0. Its
+exact extracted text and bounded raster regions confirmed the three Issue 92
+master-header cases. No baseline was recorded from system fonts.
+
+**Spec sections touched.** `docs/hld/07-inheritance-and-resolution.md`, the
+source-owned latent placeholder rule, `docs/hld/12-testing-strategy.md`, the
+placeholder oracle matrix, `docs/hld/13-risks-and-open-questions.md`, the
+approved application decision, and the F-X105 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `slide_owned_latent_placeholders_ignore_master_header_flags` is the
+exact differential gate. The occupied and empty source matrix, ordering and
+deduplication regressions, all 131 rpptx-layout tests, all 219 rpptx integration
+tests, the full workspace, WASM, docs, package, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Decide latent visibility in the source that owns
+the placeholder. Keep direct slide placeholders outside template `p:hf`
+policy, and do not let an ineligible deeper source reveal stale shallower
+content.

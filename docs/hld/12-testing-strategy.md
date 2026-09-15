@@ -1384,6 +1384,15 @@ for the inherited placeholder run. The one-time PowerPoint record in the
 integration test names build 16.104.25121423, the exact original paths and the
 clean no-repair verdict.
 
+The source-built latent-placeholder differential is
+`slide_owned_latent_placeholders_ignore_master_header_flags`. It copies the
+bundled blank layout's slide-number field onto a slide and tests an absent
+master `p:hf`, every master flag disabled, and only `sldNum` enabled. The exact
+LibreOffice 26.2.5.2 and Poppler 26.01.0 path must agree with deterministic Rust
+PDF text, retain bottom-right slide-number ink, and leave the inherited date
+region empty. A one-pixel PDF page-width difference is accepted because the
+two PDF writers round the 10-inch page boundary differently at 72 DPI.
+
 These automated visual tests use the same external-corpus policy as the other
 corpus gates. A missing configured corpus skips them when
 `RDOCX_PPTX_CORPUS_REQUIRED` is unset and fails them when it is set. The
