@@ -273,9 +273,13 @@ inheritance outside the limited ABI.
 The presentation binding exposes `to_pdf`, `render_slide_to_png`,
 `render_all_slides`, `to_notes_pdf`, and `render_all_notes` through the native
 deterministic facade. Every render call releases the GIL. A `Slide` exposes
-optional speaker-note text and an ordered tuple of frozen `Comment` snapshots.
-Each comment contains an ordered tuple of frozen `CommentReply` snapshots, and
-the presentation exposes an ordered tuple of frozen `CommentAuthor` snapshots.
+optional speaker-note text as a readable and writable property. A successful
+notes assignment publishes the native staged mutation, advances the global
+revision once, and makes pre-write handles stale. A rejected assignment leaves
+package bytes and revisions unchanged. A `Slide` also exposes an ordered tuple
+of frozen `Comment` snapshots. Each comment contains an ordered tuple of frozen
+`CommentReply` snapshots, and the presentation exposes an ordered tuple of
+frozen `CommentAuthor` snapshots.
 Author, comment, and reply additions accept native GUID and RFC 3339 strings.
 Comment and reply moves retain native final-position semantics. A successful
 collaboration operation advances the global revision once. Constructor or
@@ -707,6 +711,14 @@ replacement and publishes it only after namespace-safe serialization succeeds.
 The command-line `replace` operation uses this boundary, reports the stable
 serialization error, and creates no partial output. Python and WASM bindings
 gain no corresponding method.
+
+The native presentation facade provides the same staged boundary through
+`Presentation::try_replace_text`, with exact counts across slides and speaker
+notes. `rpptx replace` refuses an existing destination, including its input,
+accepts `--expect` for an exact count, rejects an unexpected zero count, and
+publishes only after the count and serialization succeed. `--expect 0` is the
+explicit zero-match opt-in. Its stable stdout reports the count, literal source
+and replacement values, and final output path.
 
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF

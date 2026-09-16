@@ -1345,6 +1345,13 @@ Eight gates run against it:
    five rules, and rejection of a 1.01-point displacement. The 49-entry render
    hash manifest remains unchanged.
 
+The notes-owner regression removes both reverse slide relationships from the
+same source-built control and requires byte-identical deterministic notes PDF.
+Companion mutations require conflicting, multiple, and external reverse owners
+to fail closed. Notes mutation saves and reopens while retaining the body
+placeholder identity, first-run formatting, and unmodelled run XML. Missing
+notes and missing body placeholders fail without changing package bytes.
+
 The portable M21 core test source-builds one macro-enabled signed deck that
 combines modern comments, sections, the self-contained minimal SmartArt
 preservation fixture, exact embedded audio and poster bytes, a typed fade
@@ -2372,6 +2379,11 @@ Dedicated thread assertions prove both slide and notes raster calls release the
 GIL. The native companion gate compares every convenience PNG byte for byte
 with the resolved layout raster path and covers invalid DPI and missing slide
 indices.
+The binding notes-mutation gate assigns through `Slide.notes_text`, proves the
+held slide becomes stale after success, and checks text, placeholder identity,
+first-run formatting, and unmodelled run XML after save and reopen. A slide
+without notes rejects assignment while retaining both bytes and handle
+validity. Strict typing and stub checks require the writable property.
 
 Both libraries are test-only CI dependencies. Neither oracle is a runtime or
 published-crate dependency, and neither differential compares package bytes or
@@ -2428,6 +2440,12 @@ slide-one PNG and recursive paragraph output with stable level indentation.
 Regressions cover nonstandard aspect ratios, shared output defaulting, grouped
 text order, embedded paragraph-break normalization, and field-only title
 identity so the title appears exactly once.
+
+The guarded replacement gate refuses existing and input destinations, rejects
+unexpected zero and mismatched expected counts without output, accepts an
+explicit expected zero, and counts slide plus speaker-note matches exactly.
+Successful output retains notes formatting and unmodelled XML, reports exact
+stdout, reopens with replaced slide and notes text, and leaves no staged file.
 
 The `rdocx` CLI has one integration binary that invokes the compiled executable
 through `CARGO_BIN_EXE_rdocx`. Its tests cover `inspect`, `text`, `convert`,

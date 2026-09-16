@@ -1465,8 +1465,15 @@ impl CT_TextParagraph {
     }
 
     /// Replaces ordered text choices with one regular run.
+    ///
+    /// The first existing regular run supplies direct formatting and
+    /// unmodelled run content for the replacement.
     pub fn set_text(&mut self, text: &str) {
         let old_run_count = self.runs.len();
+        let retained_run = self.runs.iter().find_map(|run| match run {
+            TextRun::Run(run) => Some(run.clone()),
+            TextRun::Break(_) | TextRun::Field(_) => None,
+        });
         let mut raw_children = OrderedRawChildren::default();
         for boundary in 0..=2 + old_run_count {
             let new_boundary = if boundary <= 1 {
@@ -1481,7 +1488,9 @@ impl CT_TextParagraph {
             }
         }
         self.raw_children = raw_children;
-        self.runs = vec![TextRun::Run(CT_RegularTextRun::new(text))];
+        let mut run = retained_run.unwrap_or_else(|| CT_RegularTextRun::new(text));
+        run.set_text(text);
+        self.runs = vec![TextRun::Run(run)];
     }
 
     /// Appends one regular run after the existing ordered text choices.

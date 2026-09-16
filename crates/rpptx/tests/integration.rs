@@ -8954,6 +8954,153 @@ fn notes_pages_follow_master_geometry_text_metadata_and_slide_order() {
 }
 
 #[test]
+fn notes_render_without_a_reverse_slide_relationship() {
+    let control = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    let control_pdf = control.to_notes_pdf_deterministic().unwrap();
+
+    let mut package = open_opc(&f226_fixture_bytes(), "notes without reverse slide links");
+    for notes_part in ["/custom/notes/notes1.xml", "/custom/notes/notes2.xml"] {
+        package
+            .get_or_create_part_rels(notes_part)
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::SLIDE);
+    }
+    let google_style = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    assert_eq!(
+        google_style.to_notes_pdf_deterministic().unwrap(),
+        control_pdf
+    );
+
+    let mut conflicting = open_opc(&f226_fixture_bytes(), "conflicting notes owner");
+    conflicting
+        .get_or_create_part_rels("/custom/notes/notes1.xml")
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .unwrap()
+        .target = "../../ppt/slides/slide2.xml".to_owned();
+    let conflicting = Presentation::from_bytes(&package_bytes(conflicting)).unwrap();
+    assert!(
+        conflicting
+            .to_notes_pdf_deterministic()
+            .unwrap_err()
+            .to_string()
+            .contains("differs from owner")
+    );
+
+    let mut multiple = open_opc(&f226_fixture_bytes(), "multiple notes owners");
+    multiple
+        .get_or_create_part_rels("/custom/notes/notes1.xml")
+        .add_with_id(
+            "second-slide",
+            rel_types::SLIDE,
+            "../../ppt/slides/slide2.xml",
+        );
+    let multiple = Presentation::from_bytes(&package_bytes(multiple)).unwrap();
+    assert!(
+        multiple
+            .to_notes_pdf_deterministic()
+            .unwrap_err()
+            .to_string()
+            .contains("expected at most one")
+    );
+
+    let mut external = open_opc(&f226_fixture_bytes(), "external notes owner");
+    let relationship = external
+        .get_or_create_part_rels("/custom/notes/notes1.xml")
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .unwrap();
+    relationship.target = "https://example.com/slide.xml".to_owned();
+    relationship.target_mode = Some("External".to_owned());
+    let external = Presentation::from_bytes(&package_bytes(external)).unwrap();
+    assert!(
+        external
+            .to_notes_pdf_deterministic()
+            .unwrap_err()
+            .to_string()
+            .contains("external target")
+    );
+}
+
+#[test]
+fn notes_text_mutation_is_staged_and_preserves_the_body_run() {
+    let mut package = open_opc(&f226_fixture_bytes(), "formatted notes mutation");
+    let notes_part = "/custom/notes/notes1.xml";
+    let xml = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
+    let rich_run = r#"<a:rPr lang="en-US" b="1"><a:extLst><a:ext uri="{6D487B31-4C56-4F45-AED3-4C741AC43E77}"><x:payload xmlns:x="urn:rdocx:test"/></a:ext></a:extLst></a:rPr>"#;
+    let xml = xml.replacen(r#"<a:rPr lang="en-US"/>"#, rich_run, 1);
+    assert!(xml.contains("x:payload"));
+    package.set_part(notes_part, xml.into_bytes());
+
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .set_notes_text("Final speaker note")
+        .unwrap();
+    assert_eq!(
+        presentation.slide(0).unwrap().notes_text().as_deref(),
+        Some("Final speaker note")
+    );
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened.slide(0).unwrap().notes_text().as_deref(),
+        Some("Final speaker note")
+    );
+    let saved = open_opc(&bytes, "saved formatted notes mutation");
+    let xml = String::from_utf8(saved.get_part(notes_part).unwrap().to_vec()).unwrap();
+    assert_eq!(xml.matches(r#"<p:ph type="body" idx="3""#).count(), 1);
+    assert!(xml.contains(r#"b="1""#));
+    assert!(xml.contains(r#"lang="en-US""#));
+    assert!(xml.contains("x:payload"));
+    assert!(xml.contains("Final speaker note"));
+
+    let mut counted = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    assert_eq!(counted.try_replace_text("F-226", "Final").unwrap(), 4);
+    let counted = Presentation::from_bytes(&counted.to_bytes().unwrap()).unwrap();
+    assert!(counted.slide(0).unwrap().text().contains("Final slide one"));
+    assert_eq!(
+        counted.slide(0).unwrap().notes_text().as_deref(),
+        Some("Final speaker note 1")
+    );
+
+    let mut without_notes = Presentation::new().unwrap();
+    without_notes.add_slide(6).unwrap();
+    let before = without_notes.to_bytes().unwrap();
+    assert!(
+        without_notes
+            .slide_mut(0)
+            .unwrap()
+            .set_notes_text("must fail")
+            .unwrap_err()
+            .to_string()
+            .contains("no notes part")
+    );
+    assert_eq!(without_notes.to_bytes().unwrap(), before);
+
+    let mut package = open_opc(&f226_fixture_bytes(), "notes without body");
+    let xml = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
+    let xml = xml.replacen(r#"type="body""#, r#"type="title""#, 1);
+    package.set_part(notes_part, xml.into_bytes());
+    let mut without_body = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let before = without_body.to_bytes().unwrap();
+    assert!(
+        without_body
+            .slide_mut(0)
+            .unwrap()
+            .set_notes_text("must fail")
+            .unwrap_err()
+            .to_string()
+            .contains("no body placeholder")
+    );
+    assert_eq!(without_body.to_bytes().unwrap(), before);
+}
+
+#[test]
 fn handouts_follow_master_metadata_and_all_six_audience_layouts() {
     let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
     for (layout, pages) in [

@@ -282,11 +282,30 @@ fn longest_common_subsequence(a: &[String], b: &[String]) -> Result<Vec<String>>
     Ok(result)
 }
 
-pub fn replace(file: &Path, placeholder: &str, value: &str, output: &Path) -> Result<()> {
+pub fn replace(
+    file: &Path,
+    placeholder: &str,
+    value: &str,
+    expect: Option<usize>,
+    output: &Path,
+) -> Result<()> {
+    ensure_output_paths_available(&[output.to_path_buf()])?;
     let mut presentation = Presentation::open(file)?;
-    let count = presentation.replace_text(placeholder, value);
-    presentation.save(output)?;
-    println!("Replaced {count} occurrence(s)");
+    let count = presentation.try_replace_text(placeholder, value)?;
+    if let Some(expected) = expect
+        && count != expected
+    {
+        return Err(format!(
+            "expected {expected} replacement(s) of \"{placeholder}\", found {count}"
+        )
+        .into());
+    }
+    if count == 0 && expect != Some(0) {
+        return Err(format!("no replacements found for \"{placeholder}\"").into());
+    }
+    let bytes = presentation.to_bytes()?;
+    stage_and_publish(&[(output.to_path_buf(), bytes)])?;
+    println!("Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\"");
     println!("Written to {}", output.display());
     Ok(())
 }

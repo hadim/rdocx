@@ -1,6 +1,6 @@
 # F-X118, Make notes rendering and replacement safe
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-X105, F-X111
@@ -73,12 +73,12 @@ notes or the rpptx CLI.
 
 ## Implementation checklist
 
-- [ ] Add Google-style notes graph and guarded CLI failures.
-- [ ] Render missing reverse relationships from the known owning slide.
-- [ ] Add formatting-preserving native and Python notes mutation.
-- [ ] Count slide and notes replacement through one staged native operation.
-- [ ] Add output guard and `--expect` to the CLI.
-- [ ] Run notes, CLI, binding, hash harness, full verification, and microscope gates.
+- [x] Add Google-style notes graph and guarded CLI failures.
+- [x] Render missing reverse relationships from the known owning slide.
+- [x] Add formatting-preserving native and Python notes mutation.
+- [x] Count slide and notes replacement through one staged native operation.
+- [x] Add output guard and `--expect` to the CLI.
+- [x] Run notes, CLI, binding, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

@@ -75,6 +75,7 @@ def exercise_rpptx_types(path: Path) -> None:
     notes_pdf: bytes = presentation.to_notes_pdf()
     notes_pngs: list[bytes] = presentation.render_all_notes()
     notes_text: str | None = presentation.slides[0].notes_text
+    presentation.slides[0].notes_text = "Updated speaker note"
     presentation.add_comment_author(
         id="{11111111-1111-1111-1111-111111111111}",
         name="Ada",

@@ -1681,13 +1681,39 @@ impl Presentation {
         self.slides
             .iter_mut()
             .map(|record| {
-                replace_text_in_children(
+                let slide_count = replace_text_in_children(
                     &mut record.slide.common_slide_data.shape_tree.children,
                     placeholder,
                     value,
-                )
+                );
+                let notes_count = record.notes.as_mut().map_or(0, |notes| {
+                    replace_text_in_children(
+                        &mut notes.notes.common_slide_data.shape_tree.children,
+                        placeholder,
+                        value,
+                    )
+                });
+                slide_count + notes_count
             })
             .sum()
+    }
+
+    /// Replaces literal slide and speaker-note text on a staged candidate.
+    ///
+    /// The candidate is serialized before it replaces the live presentation,
+    /// so a malformed retained subtree cannot publish a partial mutation.
+    pub fn try_replace_text(&mut self, placeholder: &str, value: &str) -> Result<usize> {
+        if placeholder.is_empty() {
+            return Err(Error::InvalidSlideMutation {
+                operation: "replace text",
+                message: "placeholder must not be empty".to_owned(),
+            });
+        }
+        let mut candidate = self.clone();
+        let count = candidate.replace_text(placeholder, value);
+        candidate.staged_package(false)?;
+        *self = candidate;
+        Ok(count)
     }
 
     /// Returns the optional slide dimensions in EMUs.
@@ -4803,6 +4829,33 @@ impl<'a> SlideMut<'a> {
         self.record.slide.clear_background();
     }
 
+    /// Replaces speaker-note text while preserving its body placeholder.
+    pub fn set_notes_text(&mut self, text: &str) -> Result<()> {
+        let notes = self
+            .record
+            .notes
+            .as_mut()
+            .ok_or_else(|| Error::InvalidSlideMutation {
+                operation: "set notes text",
+                message: "slide has no notes part".to_owned(),
+            })?;
+        let mut candidate = notes.notes.clone();
+        let body = first_notes_body_mut(&mut candidate.common_slide_data.shape_tree.children)
+            .ok_or_else(|| Error::InvalidSlideMutation {
+                operation: "set notes text",
+                message: "notes slide has no body placeholder".to_owned(),
+            })?;
+        body.set_text(text);
+        candidate
+            .to_xml()
+            .map_err(|error| Error::InvalidSlideMutation {
+                operation: "set notes text",
+                message: error.to_string(),
+            })?;
+        notes.notes = candidate;
+        Ok(())
+    }
+
     /// Appends a rectangular table at the top of the slide's z-order.
     pub fn add_table(
         &mut self,
@@ -6288,6 +6341,32 @@ fn collect_text(children: &[ShapeTreeChild], output: &mut Vec<String>) {
     }
 }
 
+fn first_notes_body_mut(children: &mut [ShapeTreeChild]) -> Option<&mut CT_TextBody> {
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape)
+                if shape
+                    .placeholder
+                    .as_ref()
+                    .is_some_and(|placeholder| placeholder.effective_type() == PhType::Body) =>
+            {
+                return Some(shape.text_body.get_or_insert_with(CT_TextBody::new));
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(body) = first_notes_body_mut(&mut group.children) {
+                    return Some(body);
+                }
+            }
+            ShapeTreeChild::Shape(_)
+            | ShapeTreeChild::Picture(_)
+            | ShapeTreeChild::GraphicFrame(_)
+            | ShapeTreeChild::Connector(_)
+            | ShapeTreeChild::AlternateContent(_) => {}
+        }
+    }
+    None
+}
+
 fn replace_text_in_children(
     children: &mut [ShapeTreeChild],
     placeholder: &str,
@@ -6363,6 +6442,9 @@ fn replace_text_in_paragraph(
 }
 
 fn replace_text_in_run_segment(runs: &mut [TextRun], placeholder: &str, value: &str) -> usize {
+    if placeholder.is_empty() {
+        return 0;
+    }
     let mut text = String::new();
     let mut ranges = Vec::with_capacity(runs.len());
     for run in runs.iter() {
@@ -6839,12 +6921,35 @@ fn validate_notes_export_graph(
             "{notes_part}: notes master {master} differs from presentation master {notes_master_part}"
         )));
     }
-    let slide =
-        render_exact_related_part(package, notes_part, rel_types::SLIDE, content_types::SLIDE)?;
-    if slide != slide_part {
+    let slide_relationships = package
+        .get_part_rels(notes_part)
+        .map(|relationships| relationships.get_all_by_type(rel_types::SLIDE))
+        .unwrap_or_default();
+    if slide_relationships.len() > 1 {
         return Err(render_failure(format!(
-            "{notes_part}: source slide {slide} differs from owner {slide_part}"
+            "{notes_part}: found {} relationships of type {}, expected at most one",
+            slide_relationships.len(),
+            rel_types::SLIDE
         )));
+    }
+    if let Some(relationship) = slide_relationships.first() {
+        reject_external(notes_part, relationship)?;
+        let slide = OpcPackage::resolve_rel_target(notes_part, &relationship.target);
+        required_part(package, &slide)?;
+        let actual = package.content_types.content_type_for(&slide);
+        if actual != Some(content_types::SLIDE) {
+            return Err(render_failure(format!(
+                "{notes_part}: relationship {} targets {slide} with content type {:?}, expected {}",
+                relationship.id,
+                actual,
+                content_types::SLIDE
+            )));
+        }
+        if slide != slide_part {
+            return Err(render_failure(format!(
+                "{notes_part}: source slide {slide} differs from owner {slide_part}"
+            )));
+        }
     }
     Ok(())
 }

@@ -52,6 +52,9 @@ enum Command {
         placeholder: String,
         #[arg(long, short = 'v')]
         value: String,
+        /// Require exactly this many slide and speaker-note replacements
+        #[arg(long)]
+        expect: Option<usize>,
         #[arg(long, short = 'o')]
         output: PathBuf,
     },
@@ -124,8 +127,9 @@ fn main() {
             file,
             placeholder,
             value,
+            expect,
             output,
-        } => commands::replace(&file, &placeholder, &value, &output),
+        } => commands::replace(&file, &placeholder, &value, expect, &output),
         Command::Validate { .. } => unreachable!("validate is dispatched above"),
         Command::Render {
             file,

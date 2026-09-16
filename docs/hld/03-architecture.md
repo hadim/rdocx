@@ -1017,9 +1017,11 @@ or registry version was moved or overwritten.
 
 The `rpptx` facade owns formatting-preserving presentation text replacement.
 `Presentation::replace_text` applies literal, non-recursive replacement across
-contiguous regular runs in ordinary shapes, nested groups, and table cells.
-Fields, breaks, and selected alternate-content fallbacks remain traversal
-boundaries so the facade preserves their unmodelled or separately typed XML.
+contiguous regular runs in ordinary shapes, nested groups, table cells, and
+speaker notes. `Presentation::try_replace_text` stages that complete mutation,
+serializes the candidate, and publishes it only after validation. Fields,
+breaks, and selected alternate-content fallbacks remain traversal boundaries
+so the facade preserves their unmodelled or separately typed XML.
 
 The facade also owns modern PresentationML package identity. The exact main
 part content type distinguishes PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Normal
@@ -1413,7 +1415,12 @@ their themes from the OPC relationship graph, remaps notes-master and
 notes-slide relationship scopes into one collision-free transient package
 scope, and composes ordinary `PageFrame` values. The existing layout and render
 crates consume those frames without a notes-specific parser, renderer, public
-type, or dependency.
+type, or dependency. The resolved slide-to-notes edge is authoritative when a
+producer omits the optional reverse notes-to-slide edge. A present reverse edge
+must still be internal, singular, correctly typed, and equal to the known
+owner. Notes text mutation stages one body placeholder, retains its identity
+and first regular-run formatting and raw XML, and publishes only serializable
+notes state.
 
 The facade also owns package-to-render-input assembly. Its deterministic render
 entry points resolve the current package once and return either the shared

@@ -5443,15 +5443,17 @@ rejects zero unexpected matches, and publishes only after validation.
 **Test gate**: CLI.
 `rpptx_replace_is_guarded_counted_and_includes_notes` covers existing outputs,
 input equality, zero and expected counts, speaker notes, formatting, rollback,
-and Google-style notes relationship graphs.
+and staged-file cleanup. The companion
+`notes_render_without_a_reverse_slide_relationship` regression covers
+Google-style notes relationship graphs and rejects conflicting owners.
 
 ### F-X119, Complete round-three Python authoring and inspection (L)
 
 Bind in-memory Word picture insertion and checked StoryItem placement, plus a
 source-compatible path-aware comment position for table-cell paragraphs. Bind
-notes mutation, presentation shape bounds and identity, run font name, size and
-color, text autofit mode, and a Run text setter that preserves formatting. Keep
-the existing direct-body RunPosition source compatible.
+presentation shape bounds and identity, run font name, size and color, text
+autofit mode, and a Run text setter that preserves formatting. Keep the
+existing direct-body RunPosition source compatible.
 
 **Depends on**: F-X106c, F-X108, F-X109, F-X115, F-X118.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/121>.
