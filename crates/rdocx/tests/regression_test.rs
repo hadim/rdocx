@@ -15953,6 +15953,102 @@ fn rejecting_a_comparison_reproduces_the_original_body_exactly() {
 }
 
 #[test]
+fn comparison_appends_multiple_terminal_paragraphs_without_residue() {
+    let reconstruct = |mut original: Document, edited: Document| {
+        let original_bytes = original.to_bytes().unwrap();
+        let mut compared = Document::from_bytes(&original_bytes).unwrap();
+        let diagnostics = compared
+            .compare(&edited, "Ada", "2026-09-16T09:30:00Z")
+            .unwrap();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let tracked = compared.to_bytes().unwrap();
+
+        let mut accepted = Document::from_bytes(&tracked).unwrap();
+        accepted.accept_all().unwrap();
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-09-16T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        let accepted = accepted.to_bytes().unwrap();
+
+        let mut rejected = Document::from_bytes(&tracked).unwrap();
+        rejected.reject_all().unwrap();
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-09-16T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        let rejected = rejected.to_bytes().unwrap();
+        (tracked, accepted, rejected)
+    };
+
+    let mut original = Document::new();
+    original.add_paragraph("anchor");
+    let mut edited = Document::new();
+    edited.add_paragraph("inserted at start");
+    edited.add_paragraph("anchor");
+    reconstruct(original, edited);
+
+    let mut original = Document::new();
+    original.add_paragraph("first");
+    original.add_paragraph("last");
+    let mut edited = Document::new();
+    edited.add_paragraph("first");
+    edited.add_paragraph("inserted in middle");
+    edited.add_paragraph("last");
+    reconstruct(original, edited);
+
+    for appended in 1..=3 {
+        let mut original = Document::new();
+        original.add_paragraph("anchor");
+        let original_bytes = original.to_bytes().unwrap();
+        let mut edited = Document::from_bytes(&original_bytes).unwrap();
+        for index in 0..appended {
+            edited.add_paragraph(&format!("appended {index}"));
+        }
+        reconstruct(original, edited);
+    }
+
+    let mut original = Document::new();
+    let relationship_id = original.embed_image(b"stable image", "stable.png");
+    {
+        let mut paragraph = original.add_paragraph("");
+        let mut run = paragraph.add_run("anchor");
+        run.add_field("AUTHOR", "Ada").unwrap();
+        run.add_picture(&relationship_id, Length::pt(1.0), Length::pt(1.0));
+    }
+    original.add_paragraph("");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(original.to_bytes().unwrap()))
+            .unwrap();
+    package.set_part("/custom/keep.bin", b"unrelated bytes".to_vec());
+    package
+        .content_types
+        .add_override("/custom/keep.bin", "application/octet-stream");
+    let mut original_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut original_bytes).unwrap();
+    let original_bytes = original_bytes.into_inner();
+    let original = Document::from_bytes(&original_bytes).unwrap();
+    let mut edited = Document::from_bytes(&original_bytes).unwrap();
+    edited.add_paragraph("first appended");
+    edited.add_paragraph("second appended");
+    let (tracked, accepted, rejected) = reconstruct(original, edited);
+    for bytes in [&tracked, &accepted, &rejected] {
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(
+            package.get_part("/custom/keep.bin").unwrap(),
+            b"unrelated bytes"
+        );
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains("AUTHOR"), "{xml}");
+        assert!(xml.contains("<w:drawing"), "{xml}");
+    }
+}
+
+#[test]
 fn modeled_formatting_changes_are_tracked_without_diagnostics() {
     let original_xml =
         wrap_word_body(r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>same</w:t></w:r></w:p>"#);

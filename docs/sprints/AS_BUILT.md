@@ -14564,3 +14564,41 @@ supply-chain gates pass.
 rows, matching the existing `Table` facade. Keep package-wide identity work at
 the staged `Document` boundary, and preserve table boundary metadata whenever
 direct row indexes shift.
+
+### F-X113, Preserve appended paragraphs in document comparison
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Main-story comparison now preserves every paragraph when
+one, two, or three paragraphs are appended after the original final paragraph.
+Acceptance reproduces the edited story, while rejection reconstructs the
+original without a synthetic empty terminal paragraph.
+
+**Non-obvious choices.** The original final paragraph boundary is marked once,
+each intermediate appended paragraph owns its inserted paragraph mark, and the
+last appended paragraph remains the story terminator. A shared marker helper
+expands a self-closing original paragraph around its paragraph properties
+instead of emitting those properties as raw body content.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, terminal comparison
+ownership, `docs/hld/12-testing-strategy.md`, accept, reject, and preservation
+coverage, and the F-X113 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `comparison_appends_multiple_terminal_paragraphs_without_residue`
+first failed at the story baseline with an extra empty paragraph after
+rejection. It covers start and middle insertion, one through three appended
+paragraphs, a self-closing original terminator, fields, drawings, media
+relationships, and an unrelated opaque package part. Full changed-crate,
+workspace, no-default-font, WASM, rustdoc, README, workflow, and hash gates
+pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep paragraph-mark ownership explicit when a
+body alignment ends in inserted paragraphs. Do not remove an empty terminal
+paragraph after resolution because it may have existed in the original.

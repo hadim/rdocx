@@ -1970,6 +1970,18 @@ fn compare_body(
         &edited_signatures,
         &mut metadata.ids,
     )?;
+    let trailing_paragraph_insert_start = aligned
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, (left, right))| {
+            left.is_none()
+                && right
+                    .and_then(|index| edited.body.content.get(index))
+                    .is_some_and(|content| matches!(content, BodyContent::Paragraph(_)))
+        })
+        .map(|(position, _)| position)
+        .last();
     let mut output: Vec<(bool, String)> = Vec::new();
     for (position, (original_index, edited_index)) in aligned.iter().copied().enumerate() {
         let next_is_paragraph = aligned.get(position + 1).is_some_and(|(left, right)| {
@@ -2052,6 +2064,18 @@ fn compare_body(
                             moved_body_content(content, "moveTo", id, metadata)?,
                         ));
                     }
+                } else if matches!(content, BodyContent::Paragraph(_))
+                    && trailing_paragraph_insert_start.is_some_and(|start| position >= start)
+                {
+                    if trailing_paragraph_insert_start == Some(position) {
+                        mark_previous_paragraph(&mut output, "ins", metadata)?;
+                    }
+                    let inserted = if next_is_paragraph {
+                        inserted_body_content(content, metadata)?
+                    } else {
+                        inserted_paragraph_content(content, metadata)?
+                    };
+                    output.push((true, inserted));
                 } else if matches!(content, BodyContent::Paragraph(_)) && !next_is_paragraph {
                     mark_previous_paragraph(&mut output, "ins", metadata)?;
                     output.push((true, inserted_paragraph_content(content, metadata)?));
@@ -2292,32 +2316,48 @@ fn mark_previous_paragraph(
     let marker = metadata
         .ids
         .marker(kind, metadata.author, metadata.timestamp)?;
+    *paragraph = marked_paragraph_xml(paragraph, &marker)?;
+    Ok(())
+}
+
+fn marked_paragraph_xml(paragraph: &str, marker: &str) -> Result<String> {
     let paragraph_properties = direct_word_element_spans(paragraph, "pPr")?;
     if let Some(properties_span) = paragraph_properties.first() {
         let properties = &paragraph[properties_span.clone()];
         let run_properties = direct_word_element_spans(properties, "rPr")?;
         let updated = if let Some(run_span) = run_properties.first() {
             let run_properties = &properties[run_span.clone()];
-            let updated_run = append_word_child(run_properties, "rPr", &marker)?;
+            let updated_run = append_word_child(run_properties, "rPr", marker)?;
             let mut updated = properties.to_owned();
             updated.replace_range(run_span.clone(), &updated_run);
             updated
         } else {
             append_word_child(properties, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))?
         };
-        paragraph.replace_range(properties_span.clone(), &updated);
-    } else {
-        let open = paragraph
-            .find('>')
-            .ok_or_else(|| Error::Other("paragraph XML has no start".to_owned()))?
-            + 1;
-        *paragraph = format!(
-            "{}<w:pPr><w:rPr>{marker}</w:rPr></w:pPr>{}",
-            &paragraph[..open],
-            &paragraph[open..]
-        );
+        let mut marked = paragraph.to_owned();
+        marked.replace_range(properties_span.clone(), &updated);
+        return Ok(marked);
     }
-    Ok(())
+    let open = paragraph
+        .find('>')
+        .ok_or_else(|| Error::Other("paragraph XML has no start".to_owned()))?
+        + 1;
+    let properties = format!("<w:pPr><w:rPr>{marker}</w:rPr></w:pPr>");
+    if paragraph.as_bytes().get(open.saturating_sub(2)..open) == Some(b"/>") {
+        let name_end = paragraph[1..]
+            .find(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '/' | '>')
+            })
+            .map(|offset| offset + 1)
+            .ok_or_else(|| Error::Other("paragraph XML has no qualified name".to_owned()))?;
+        let name = &paragraph[1..name_end];
+        return Ok(format!("{}>{properties}</{name}>", &paragraph[..open - 2]));
+    }
+    Ok(format!(
+        "{}{properties}{}",
+        &paragraph[..open],
+        &paragraph[open..]
+    ))
 }
 
 fn mark_previous_paragraph_with_id(
@@ -2332,30 +2372,7 @@ fn mark_previous_paragraph_with_id(
         ));
     };
     let marker = IdAllocator::marker_with_id(kind, metadata.author, metadata.timestamp, id);
-    let paragraph_properties = direct_word_element_spans(paragraph, "pPr")?;
-    if let Some(properties_span) = paragraph_properties.first() {
-        let properties = &paragraph[properties_span.clone()];
-        let run_properties = direct_word_element_spans(properties, "rPr")?;
-        let updated = if let Some(run_span) = run_properties.first() {
-            let updated_run = append_word_child(&properties[run_span.clone()], "rPr", &marker)?;
-            let mut updated = properties.to_owned();
-            updated.replace_range(run_span.clone(), &updated_run);
-            updated
-        } else {
-            append_word_child(properties, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))?
-        };
-        paragraph.replace_range(properties_span.clone(), &updated);
-    } else {
-        let open = paragraph
-            .find('>')
-            .ok_or_else(|| Error::Other("paragraph XML has no start".to_owned()))?
-            + 1;
-        *paragraph = format!(
-            "{}<w:pPr><w:rPr>{marker}</w:rPr></w:pPr>{}",
-            &paragraph[..open],
-            &paragraph[open..]
-        );
-    }
+    *paragraph = marked_paragraph_xml(paragraph, &marker)?;
     Ok(())
 }
 

@@ -764,6 +764,12 @@ Inherited-binding coverage adds story-root and outer-drawing declarations plus
 an unrelated typed edit before comparison. It checks dirty staging, complex
 fields, sibling fields sharing one physical run, and both revision outcomes.
 
+Terminal paragraph comparison coverage inserts at the start, middle, and end
+of the main story, including one, two, and three appended paragraphs. It proves
+exact accept and reject reconstruction when the original ends in a
+self-closing empty paragraph and when retained content includes a field,
+drawing, media relationship, and unrelated opaque package part.
+
 The source-built external differential pins Microsoft Word 16.104 build
 16.104.25121423 and locale `en-US`. Its 24 normalized records cover every
 supported story, move, field owner, and property revision, and calibrated

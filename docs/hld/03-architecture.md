@@ -808,6 +808,13 @@ with existing modeled revisions or differing story and control shells are
 rejected unless their story category is ignored. Attributed text alignment
 retains owner, formatting, content position, and raw-child boundaries, then
 coalesces adjacent equal-owner edits into minimal revision wrappers.
+When a main story gains a trailing run of paragraphs, comparison marks the
+original final paragraph boundary once, marks each intermediate inserted
+paragraph boundary once, and leaves the final inserted paragraph mark as the
+story terminator. A self-closing original final paragraph expands around its
+marker without creating a raw sibling. This ownership lets acceptance retain
+every appended paragraph and rejection reconstruct the original without an
+empty terminal residue.
 Comparison patches only owned source spans, preserves every unowned byte,
 stages the complete package, proves that acceptance matches the edited policy
 projection and rejection matches the original, then commits once.

@@ -5338,7 +5338,8 @@ paragraphs after the original final paragraph. Rejecting the staged revisions
 must reproduce the original without an extra empty paragraph, and accepting
 must reproduce the edited story. Start and middle insertions, intentional empty
 paragraphs, fields, drawings, and unrelated package parts retain their current
-behavior.
+behavior. A self-closing original final paragraph expands around the tracked
+boundary instead of emitting paragraph properties as raw body content.
 
 **Depends on**: F-X097.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/115>.

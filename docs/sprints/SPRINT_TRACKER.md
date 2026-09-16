@@ -456,6 +456,7 @@ defended.
 | F-258 | S73 | L | 4 | 1 | 2026-09-16 | Completed checked row and cell authoring with grid and merge validation, nested tables, typed reopen, and Word parity |
 | F-X120 | S73 | S | 1 | 1 | 2026-09-16 | Integrated and hardened contributor PR 122 with exact fractional Word line-spacing normalization and deterministic layout parity |
 | F-X107 | S73 | M | 2 | 1 | 2026-09-16 | Integrated and hardened contributor PR 113 with atomic native and Python formatted-row cloning and removal |
+| F-X113 | S73 | M | 2 | 1 | 2026-09-16 | Preserved one, two, and three appended comparison paragraphs through exact accept and reject reconstruction |
 
 ## Velocity
 

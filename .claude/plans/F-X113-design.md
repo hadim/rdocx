@@ -1,6 +1,6 @@
 # F-X113, Preserve appended paragraphs in document comparison
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-X097
@@ -63,10 +63,10 @@ Expected to be unchanged because samples do not run document comparison.
 
 ## Implementation checklist
 
-- [ ] Add the failing two-paragraph terminal append regression.
-- [ ] Correct terminal paragraph-mark ownership in comparison lowering.
-- [ ] Cover start, middle, empty, field, and drawing boundaries.
-- [ ] Run comparison, preservation, hash harness, full verification, and microscope gates.
+- [x] Add the failing two-paragraph terminal append regression.
+- [x] Correct terminal paragraph-mark ownership in comparison lowering.
+- [x] Cover start, middle, empty, field, and drawing boundaries.
+- [x] Run comparison, preservation, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

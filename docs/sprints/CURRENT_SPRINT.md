@@ -68,7 +68,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X108 | Replace an existing picture atomically | M | done | codex |
 | F-X109 | Split text runs at Unicode character offsets | M | done | codex |
 | F-263 | Layout-backed fields and M23 corpus gate | L | pending | - |
-| F-X113 | Preserve appended paragraphs in document comparison | M | pending | - |
+| F-X113 | Preserve appended paragraphs in document comparison | M | done | codex |
 | F-X114 | Rebuild TOC entries with document styles and geometry | M | pending | - |
 | F-X115 | Preserve modern comment metadata and identity | M | pending | - |
 | F-X116 | Make Python story reads linear and complete | L | pending | - |
