@@ -59,9 +59,9 @@ pub use document::{
     ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
     NumberingLevelOverride, OutlineNode, PictureAnchor, PictureCrop, PictureOptions, RenderOptions,
-    Section, SectionRef, SectionStory, StoryError, StoryId, StoryItemKind, StoryItemRef, StoryKind,
-    TextBoxDirection, TextBoxOptions, TextWatermarkOptions, UnsupportedXmlRef, WordCreationProfile,
-    WordPackageClass,
+    Section, SectionRef, SectionStory, StoryError, StoryId, StoryItemKind, StoryItemRef,
+    StoryItemSnapshot, StoryKind, TextBoxDirection, TextBoxOptions, TextWatermarkOptions,
+    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
@@ -114,6 +114,7 @@ pub use rdocx_oxml::settings::{
     CryptProviderType, DocumentProtection, ProtectionMode, ThemeFontLanguage,
 };
 pub use rdocx_oxml::styles::StyleType;
+pub use rdocx_oxml::text::{AcceptedRunPath, AcceptedRunPathSegment};
 pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};

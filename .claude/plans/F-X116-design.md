@@ -1,6 +1,6 @@
 # F-X116, Make Python story reads linear and complete
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-X106c, F-X109
@@ -72,11 +72,11 @@ story snapshots.
 
 ## Implementation checklist
 
-- [ ] Add counted linear-scaling and nested-visible-run failures.
-- [ ] Materialize one native story inventory per snapshot call.
-- [ ] Use one accepted-view walker for item, paragraph, and run projections.
-- [ ] Carry recursive run paths through live Python handles and lifecycle checks.
-- [ ] Run performance, binding, WASM, API, hash harness, full verification, and microscope gates.
+- [x] Add counted linear-scaling and nested-visible-run failures.
+- [x] Materialize one native story inventory per snapshot call.
+- [x] Use one accepted-view walker for item, paragraph, and run projections.
+- [x] Carry recursive run paths through live Python handles and lifecycle checks.
+- [x] Run performance, binding, WASM, API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

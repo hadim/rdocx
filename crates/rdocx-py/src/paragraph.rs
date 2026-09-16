@@ -92,7 +92,7 @@ impl PyParagraph {
     /// return its handle.
     fn append_run(&self, py: Python<'_>, text: &str, url: Option<&str>) -> PyResult<Py<PyRun>> {
         let location = self.validate(py)?;
-        let path = {
+        let (path, run_path) = {
             let mut document = self.document.borrow_mut(py);
             let relationship_id = match url {
                 Some(url) => {
@@ -128,9 +128,12 @@ impl PyParagraph {
                         paragraph.add_run(text);
                     }
                 }
-                run_index
+                let run_path = paragraph
+                    .run_path(run_index)
+                    .expect("the appended run has an accepted source path");
+                (run_index, run_path)
             };
-            let run_index = match location {
+            let (run_index, run_path) = match location {
                 ParagraphLocation::Body(index) => append(
                     &mut document
                         .inner
@@ -160,9 +163,9 @@ impl PyParagraph {
             document.revisions.bump();
             let mut segments = self.path.segs.clone();
             segments.push(PathSeg::Run(run_index));
-            document.revisions.capture(segments)
+            (document.revisions.capture(segments), run_path)
         };
-        Py::new(py, PyRun::new(self.document.clone_ref(py), path))
+        Py::new(py, PyRun::new(self.document.clone_ref(py), path, run_path))
     }
 }
 

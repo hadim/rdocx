@@ -1118,6 +1118,10 @@ text boxes remain separate owners and are not folded into the enclosing item.
 `Document::story_links` merges item-owned links by their physical XML position
 and returns each existing `LinkInfo` with its checked `ContentLocation`. This
 keeps nested content-control ownership without reordering interleaved links.
+Owned story-item and story-link snapshots build the package source and owner
+inventory once per accessor. Namespace scopes for all selected owners are
+collected in one source pass, then item text and links are projected from that
+bounded inventory without restarting discovery for each returned value.
 
 The Python projection materializes each story item as a frozen value with its
 exact XML bytes and the binding revision that produced it. Story mutation
@@ -1129,6 +1133,9 @@ paths. Cloning omits comment anchors from the copy, while story text replacement
 removes only hyperlinks that had visible content before the replacement and
 became empty because of it. Body text lookup returns direct paragraph matches
 before enclosing content controls and exposes every matching body coordinate.
+Paragraph text and run handles use one accepted-view walk. Direct runs, inline
+content-control runs, insertion runs, and move-destination runs retain recursive
+source paths in exact order. Deletion and move-source text stays excluded.
 
 `ContentFragment` owns one paragraph, table, block content control, or removed
 preserved node. Insert, remove, clone, and move resolve canonical
@@ -1352,11 +1359,13 @@ The additive `add_comment_with_date` and `reply_to_with_date` operations own
 validated optional timestamps. The original operations delegate with no date.
 
 `Document::split_run` creates an exact accepted-view run boundary without
-changing `RunPosition`. It clones the selected paragraph, counts Unicode scalar
-values only in direct literal text, partitions ordered zero-width children at
-their source boundary, repairs hyperlink and marker coordinates, and publishes
-the clone only on success. Zero and end offsets select existing boundaries and
-leave typed state, layout, and binding revisions unchanged.
+changing `RunPosition`. It clones the selected paragraph, resolves the selected
+recursive source path, counts Unicode scalar values only in literal text,
+partitions ordered zero-width children at their source boundary, repairs
+hyperlink and marker coordinates, and publishes the clone only on success.
+Zero and end offsets select existing boundaries and leave typed state, layout,
+and binding revisions unchanged. A structural edit makes an earlier path-backed
+Python run handle stale.
 
 Word bookmark mutation input reuses the same top-level `RunPosition` and
 half-open `RunRange` boundary as comments. `Document::bookmarks` returns

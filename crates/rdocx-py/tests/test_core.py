@@ -2,6 +2,7 @@ import io
 import posixpath
 import re
 import struct
+import time
 import zipfile
 import zlib
 
@@ -216,6 +217,100 @@ def test_python_story_revision_field_and_xml_operations_are_typed_and_atomic():
     )
     assert lookup.find_content_index("Background") == 1
     assert lookup.find_content_indices("Background") == (1, 0)
+
+
+def test_paragraph_views_include_accepted_nested_runs_in_source_order():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><w:t xml:space="preserve">Start </w:t></w:r>'
+        '<w:ins w:id="1" w:author="Ada"><w:r><w:t xml:space="preserve">inserted </w:t></w:r></w:ins>'
+        '<w:sdt><w:sdtPr><w:id w:val="7"/></w:sdtPr><w:sdtContent>'
+        '<w:r><w:t xml:space="preserve">controlled </w:t></w:r>'
+        '<w:ins w:id="3" w:author="Ada"><w:r><w:t xml:space="preserve">nested </w:t></w:r></w:ins>'
+        '</w:sdtContent></w:sdt>'
+        '<w:del w:id="2" w:author="Ada"><w:r><w:delText>deleted </w:delText></w:r></w:del>'
+        '<w:moveFrom w:id="4" w:author="Ada"><w:r><w:t>moved away </w:t></w:r></w:moveFrom>'
+        '<w:r><w:t>end</w:t></w:r></w:p>',
+    )
+    item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body" and item.kind == "paragraph"
+    )
+    paragraph = document.paragraphs[0]
+
+    assert item.text == "Start inserted controlled nested end"
+    assert paragraph.text == item.text
+    assert [run.text for run in paragraph.runs] == [
+        "Start ",
+        "inserted ",
+        "controlled ",
+        "nested ",
+        "end",
+    ]
+
+    inserted = paragraph.runs[1]
+    controlled = paragraph.runs[2]
+    nested = paragraph.runs[3]
+    inserted.text = "changed "
+    controlled.font.bold = True
+    nested.text = "composed "
+    assert inserted.text == "changed "
+    assert controlled.font.bold is True
+    assert nested.text == "composed "
+
+    boundary = document.split_run(body_index=0, run_index=1, character_offset=4)
+    assert boundary == 2
+    with pytest.raises(rdocx.StaleElementError):
+        _ = inserted.text
+    assert [run.text for run in document.paragraphs[0].runs] == [
+        "Start ",
+        "chan",
+        "ged ",
+        "controlled ",
+        "composed ",
+        "end",
+    ]
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.paragraphs[0].text == "Start changed controlled composed end"
+    assert reopened.paragraphs[0].runs[3].font.bold is True
+    assert reopened.paragraphs[0].runs[4].text == "composed "
+
+
+def test_python_story_inventory_scales_linearly():
+    import rdocx
+
+    def timed_snapshot(paragraph_count):
+        body = []
+        for index in range(paragraph_count):
+            body.append(
+                f'<w:p><w:r><w:t>paragraph {index}</w:t></w:r>'
+                f'<w:hyperlink w:anchor="target{index}"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p>'
+            )
+            if index % 10 == 0:
+                cells = "".join(
+                    f'<w:tc><w:p><w:r><w:t>cell {index} {cell}</w:t></w:r></w:p></w:tc>'
+                    for cell in range(4)
+                )
+                body.append(f"<w:tbl><w:tr>{cells}</w:tr></w:tbl>")
+        document = _replace_document_body(rdocx.Document(), "".join(body))
+        started = time.perf_counter()
+        items = document.story_items
+        links = document.hyperlinks
+        elapsed = time.perf_counter() - started
+        return elapsed, len(items), len(links)
+
+    small_elapsed, small_items, small_links = timed_snapshot(50)
+    large_elapsed, large_items, large_links = timed_snapshot(100)
+
+    assert large_items == small_items * 2
+    assert large_links == small_links * 2
+    assert large_elapsed <= small_elapsed * 3.0 + 0.02, (
+        f"doubling the story inventory took {large_elapsed / small_elapsed:.2f} times longer"
+    )
 
 
 def test_update_fields_on_open_sets_clears_and_removes_the_setting():

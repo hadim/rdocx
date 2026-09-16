@@ -5409,7 +5409,9 @@ support checked mutation, and become stale after structural edits.
 **Test gate**: performance.
 `python_story_inventory_scales_linearly` counts complete-story traversals while
 doubling paragraphs, table cells, and hyperlinks, and the companion binding
-gate proves nested visible runs agree across every text view.
+gate proves nested visible runs agree across every text view. Story-item and
+hyperlink snapshots each build their source inventory once, and path-backed
+nested run mutation is checked through save, reopen, and stale-handle failure.
 
 ### F-X117, Render transparent and large raster pictures safely (M)
 

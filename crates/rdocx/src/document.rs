@@ -1073,6 +1073,37 @@ pub struct StoryItemRef<'a> {
     location: ContentLocation,
 }
 
+/// One owned story-item projection materialized from a single story inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryItemSnapshot {
+    location: ContentLocation,
+    direct_body_index: Option<usize>,
+    text: Option<String>,
+    xml: Vec<u8>,
+}
+
+impl StoryItemSnapshot {
+    /// Return the checked story location captured by this snapshot.
+    pub fn location(&self) -> &ContentLocation {
+        &self.location
+    }
+
+    /// Return the containing direct main-body child when this item has one.
+    pub fn direct_body_index(&self) -> Option<usize> {
+        self.direct_body_index
+    }
+
+    /// Return accepted-view text when the item is text bearing.
+    pub fn text(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    /// Return the exact or namespace-complete XML captured for this item.
+    pub fn xml(&self) -> &[u8] {
+        &self.xml
+    }
+}
+
 impl<'a> StoryItemRef<'a> {
     pub fn location(&self) -> &ContentLocation {
         &self.location
@@ -4600,6 +4631,7 @@ fn bundle_relationship_precedes_story(rel_type: &str) -> bool {
 thread_local! {
     static LAYOUT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     static FAIL_NEXT_HEADER_FOOTER_SERIALIZATION: Cell<bool> = const { Cell::new(false) };
+    static STORY_SOURCE_BUILDS: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -4934,7 +4966,9 @@ fn modeled_sdt_content_child(context: Option<StorySdtContext>, child: &[u8]) -> 
             Some(StorySdtContext::Block) => matches!(child, b"p" | b"tbl"),
             Some(StorySdtContext::Table) => child == b"tr",
             Some(StorySdtContext::Row) => child == b"tc",
-            Some(StorySdtContext::Inline) => child == b"r",
+            Some(StorySdtContext::Inline) => {
+                matches!(child, b"r" | b"ins" | b"del" | b"moveFrom" | b"moveTo")
+            }
             None => false,
         }
 }
@@ -5157,6 +5191,174 @@ pub(crate) fn story_namespace_scope_at(
         }
         buffer.clear();
     }
+}
+
+fn story_namespace_scopes_at(
+    xml: &[u8],
+    offsets: impl IntoIterator<Item = usize>,
+) -> Result<HashMap<usize, BTreeMap<String, String>>> {
+    let requested = offsets.into_iter().collect::<HashSet<_>>();
+    let mut found = HashMap::with_capacity(requested.len());
+    if requested.is_empty() {
+        return Ok(found);
+    }
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut scopes = vec![BTreeMap::<String, String>::new()];
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story namespace scope scan failed: {error}")))?
+        {
+            Event::Start(element) => {
+                let mut scope = scopes.last().cloned().unwrap_or_default();
+                update_story_namespace_scope(&mut scope, &element)?;
+                if requested.contains(&before) {
+                    found.insert(before, scope.clone());
+                    if found.len() == requested.len() {
+                        return Ok(found);
+                    }
+                }
+                scopes.push(scope);
+            }
+            Event::Empty(element) => {
+                if requested.contains(&before) {
+                    let mut scope = scopes.last().cloned().unwrap_or_default();
+                    update_story_namespace_scope(&mut scope, &element)?;
+                    found.insert(before, scope);
+                    if found.len() == requested.len() {
+                        return Ok(found);
+                    }
+                }
+            }
+            Event::End(_) => {
+                if scopes.len() > 1 {
+                    scopes.pop();
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let missing = requested
+        .into_iter()
+        .filter(|offset| !found.contains_key(offset))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        Ok(found)
+    } else {
+        Err(Error::Other(format!(
+            "story namespace scopes were not found at offsets {missing:?}"
+        )))
+    }
+}
+
+fn scoped_story_fragment(
+    xml: &[u8],
+    range: Range<usize>,
+    scope: &BTreeMap<String, String>,
+) -> Result<(Vec<u8>, usize)> {
+    let original = xml
+        .get(range)
+        .ok_or_else(|| Error::Other("story fragment lies outside its source part".to_owned()))?;
+    let closed = close_content_fragment_namespaces(original, scope)?;
+    let added = closed
+        .len()
+        .checked_sub(original.len())
+        .ok_or_else(|| Error::Other("namespace closure shortened a story fragment".to_owned()))?;
+    Ok((closed, added))
+}
+
+fn scan_story_items_with_scope(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    scope: &BTreeMap<String, String>,
+) -> Result<Vec<StoryItemSpan>> {
+    let (closed, added) = scoped_story_fragment(xml, owner.full.clone(), scope)?;
+    let mut local_owner = owner.clone();
+    local_owner.full = 0..closed.len();
+    let mut items = scan_story_items(&closed, &local_owner)?;
+    let map = |position: usize| {
+        if position == 0 {
+            owner.full.start
+        } else {
+            owner.full.start + position - added
+        }
+    };
+    for item in &mut items {
+        item.full = map(item.full.start)..map(item.full.end);
+        item.scan = map(item.scan.start)..map(item.scan.end);
+        for ancestor in &mut item.complex_ancestors {
+            *ancestor = map(*ancestor);
+        }
+    }
+    Ok(items)
+}
+
+fn local_story_item(
+    item: &StoryItemSpan,
+    source_start: usize,
+    closed_len: usize,
+    added: usize,
+) -> StoryItemSpan {
+    let local = |position: usize| {
+        if position == source_start {
+            0
+        } else {
+            position - source_start + added
+        }
+    };
+    StoryItemSpan {
+        kind: item.kind,
+        full: local(item.full.start)..local(item.full.end),
+        scan: 0..closed_len,
+        direct_owner_child: item.direct_owner_child,
+        complex_field: item.complex_field,
+        complex_ancestors: item
+            .complex_ancestors
+            .iter()
+            .map(|ancestor| local(*ancestor))
+            .collect(),
+        sdt_context: item.sdt_context,
+    }
+}
+
+fn story_item_text_with_scope(
+    xml: &[u8],
+    item: &StoryItemSpan,
+    scope: &BTreeMap<String, String>,
+) -> Result<Option<String>> {
+    let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
+    let local = local_story_item(item, item.scan.start, closed.len(), added);
+    story_item_text(&closed, &local)
+}
+
+fn scan_story_item_links_with_scope(
+    xml: &[u8],
+    item: &StoryItemSpan,
+    scope: &BTreeMap<String, String>,
+) -> Result<Vec<StoryLinkSpan>> {
+    let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
+    let local = local_story_item(item, item.scan.start, closed.len(), added);
+    let links = scan_story_item_links(&closed, &local)?;
+    let map = |position: usize| {
+        if position == 0 {
+            item.scan.start
+        } else {
+            item.scan.start + position - added
+        }
+    };
+    Ok(links
+        .into_iter()
+        .map(|link| StoryLinkSpan {
+            full: map(link.full.start)..map(link.full.end),
+            rel_id: link.rel_id,
+            anchor: link.anchor,
+        })
+        .collect())
 }
 
 fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan) -> Result<bool> {
@@ -6614,6 +6816,14 @@ fn complex_field_text_visible(item: &StoryItemSpan, results: &[bool]) -> bool {
     !item.complex_field || (!results.is_empty() && results.iter().all(|result| *result))
 }
 
+fn accepted_story_text_visible(stack: &[XmlElementFrame]) -> bool {
+    !stack.iter().any(|frame| {
+        !frame.opaque
+            && frame.namespace == StoryNamespace::Word
+            && matches!(frame.local_name.as_slice(), b"del" | b"moveFrom")
+    })
+}
+
 fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerSpan>> {
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
@@ -7368,6 +7578,7 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                 }
                 if !opaque
                     && complex_field_text_visible(item, &complex_results)
+                    && accepted_story_text_visible(&element_stack)
                     && nested_owner_depth == 0
                     && is_word_namespace
                     && local_name == b"t"
@@ -7425,6 +7636,7 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                     );
                 } else if !opaque
                     && complex_field_text_visible(item, &complex_results)
+                    && accepted_story_text_visible(&element_stack)
                     && nested_owner_depth == 0
                     && is_word_namespace
                     && local_name.as_ref() == b"t"
@@ -7437,6 +7649,7 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                 let depth = element_stack.len();
                 if !opaque
                     && complex_field_text_visible(item, &complex_results)
+                    && accepted_story_text_visible(&element_stack)
                     && nested_owner_depth == 0
                     && is_word_namespace
                     && element.local_name().as_ref() == b"t"
@@ -12213,6 +12426,8 @@ impl Document {
     }
 
     fn story_sources(&self) -> Result<Vec<StorySource<'_>>> {
+        #[cfg(test)]
+        STORY_SOURCE_BUILDS.set(STORY_SOURCE_BUILDS.get() + 1);
         let mut sources = vec![StorySource {
             root_kind: StoryKind::Body,
             part_name: self.doc_part_name.clone(),
@@ -12395,6 +12610,99 @@ impl Document {
             .collect())
     }
 
+    /// Materialize every story item after building each package source once.
+    ///
+    /// Unlike repeated calls through [`StoryItemRef`], this owned projection
+    /// serializes the main document once and scans each story owner once for
+    /// the complete snapshot.
+    pub fn story_item_snapshots(&self) -> Result<Vec<StoryItemSnapshot>> {
+        let mut snapshots = Vec::new();
+        let mut seen = HashSet::new();
+        for source in self.story_sources()? {
+            let owners = scan_story_owners(source.xml.as_ref(), source.root_kind)?;
+            let owner_scopes = story_namespace_scopes_at(
+                source.xml.as_ref(),
+                owners.iter().map(|owner| owner.full.start),
+            )?;
+            let mut inventories = Vec::new();
+            for owner in owners {
+                let identity = (owner.kind, source.part_name.clone(), owner.owner_index);
+                if !seen.insert(identity) {
+                    continue;
+                }
+                let story = StoryId {
+                    kind: owner.kind,
+                    part_name: source.part_name.clone(),
+                    owner_index: owner.owner_index,
+                    fingerprint: owner.fingerprint,
+                };
+                let scope = owner_scopes.get(&owner.full.start).ok_or_else(|| {
+                    Error::Other("story owner namespace scope was not inventoried".to_owned())
+                })?;
+                let items = scan_story_items_with_scope(source.xml.as_ref(), &owner, scope)?;
+                let direct_items = if owner.kind == StoryKind::Body {
+                    let mut direct = Vec::new();
+                    for item in items.iter().filter(|item| item.direct_owner_child) {
+                        if item.kind != StoryItemKind::PreservedNode
+                            || !content_fragment_root_is_section_properties(
+                                source.xml.as_ref(),
+                                item,
+                            )?
+                        {
+                            direct.push(item.clone());
+                        }
+                    }
+                    direct
+                } else {
+                    Vec::new()
+                };
+                inventories.push((story, items, direct_items));
+            }
+            let item_scopes = story_namespace_scopes_at(
+                source.xml.as_ref(),
+                inventories
+                    .iter()
+                    .flat_map(|(_, items, _)| items.iter().map(|item| item.scan.start)),
+            )?;
+            for (story, items, direct_items) in inventories {
+                let mut direct_cursor = 0usize;
+                for (index, item) in items.into_iter().enumerate() {
+                    while direct_items
+                        .get(direct_cursor)
+                        .is_some_and(|direct| direct.full.end <= item.full.start)
+                    {
+                        direct_cursor += 1;
+                    }
+                    let direct_body_index = direct_items.get(direct_cursor).and_then(|direct| {
+                        (direct.full.start <= item.full.start && item.full.end <= direct.full.end)
+                            .then_some(direct_cursor)
+                    });
+                    let scope = item_scopes.get(&item.scan.start).ok_or_else(|| {
+                        Error::Other("story item namespace scope was not inventoried".to_owned())
+                    })?;
+                    let text = story_item_text_with_scope(source.xml.as_ref(), &item, scope)?;
+                    let xml = if item.complex_field {
+                        complex_story_field_xml(source.xml.as_ref(), &item)?
+                    } else {
+                        source.xml[item.full.clone()].to_vec()
+                    };
+                    snapshots.push(StoryItemSnapshot {
+                        location: ContentLocation {
+                            story: story.clone(),
+                            item_kind: item.kind,
+                            index_path: vec![index],
+                            is_end: false,
+                        },
+                        direct_body_index,
+                        text,
+                        xml,
+                    });
+                }
+            }
+        }
+        Ok(snapshots)
+    }
+
     fn story_link_info(
         &self,
         story: &StoryId,
@@ -12414,7 +12722,7 @@ impl Document {
         let url = link
             .rel_id
             .as_deref()
-            .map(|relationship_id| self.hyperlink_url_for_story(story, relationship_id))
+            .map(|relationship_id| self.hyperlink_url_for_validated_story(story, relationship_id))
             .transpose()?;
         Ok(LinkInfo {
             text,
@@ -12458,6 +12766,80 @@ impl Document {
             .into_iter()
             .map(|(_, _, _, location, info)| (location, info))
             .collect())
+    }
+
+    /// Materialize every modeled story hyperlink from one package inventory.
+    pub fn story_link_snapshots(&self) -> Result<Vec<(ContentLocation, LinkInfo)>> {
+        let mut snapshots = Vec::new();
+        let mut seen = HashSet::new();
+        for source in self.story_sources()? {
+            let owners = scan_story_owners(source.xml.as_ref(), source.root_kind)?;
+            let owner_scopes = story_namespace_scopes_at(
+                source.xml.as_ref(),
+                owners.iter().map(|owner| owner.full.start),
+            )?;
+            let mut inventories = Vec::new();
+            for owner in owners {
+                let identity = (owner.kind, source.part_name.clone(), owner.owner_index);
+                if !seen.insert(identity) {
+                    continue;
+                }
+                let story = StoryId {
+                    kind: owner.kind,
+                    part_name: source.part_name.clone(),
+                    owner_index: owner.owner_index,
+                    fingerprint: owner.fingerprint,
+                };
+                let scope = owner_scopes.get(&owner.full.start).ok_or_else(|| {
+                    Error::Other("story owner namespace scope was not inventoried".to_owned())
+                })?;
+                let items = scan_story_items_with_scope(source.xml.as_ref(), &owner, scope)?;
+                inventories.push((story, items));
+            }
+            let item_scopes = story_namespace_scopes_at(
+                source.xml.as_ref(),
+                inventories
+                    .iter()
+                    .flat_map(|(_, items)| items.iter().map(|item| item.scan.start)),
+            )?;
+            for (story, items) in inventories {
+                let mut links = Vec::new();
+                for (index, item) in items.into_iter().enumerate() {
+                    let scope = item_scopes.get(&item.scan.start).ok_or_else(|| {
+                        Error::Other("story item namespace scope was not inventoried".to_owned())
+                    })?;
+                    for link in scan_story_item_links_with_scope(source.xml.as_ref(), &item, scope)?
+                    {
+                        let source_position = link.full.start;
+                        let source_end = link.full.end;
+                        let owner_width = item.full.end - item.full.start;
+                        let info = self.story_link_info(&story, source.xml.as_ref(), link)?;
+                        links.push((
+                            source_position,
+                            source_end,
+                            owner_width,
+                            ContentLocation {
+                                story: story.clone(),
+                                item_kind: item.kind,
+                                index_path: vec![index],
+                                is_end: false,
+                            },
+                            info,
+                        ));
+                    }
+                }
+                links.sort_by_key(|(source_position, _, owner_width, _, _)| {
+                    (*source_position, *owner_width)
+                });
+                links.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+                snapshots.extend(
+                    links
+                        .into_iter()
+                        .map(|(_, _, _, location, info)| (location, info)),
+                );
+            }
+        }
+        Ok(snapshots)
     }
 
     fn append_fragment_to_story(
@@ -12950,6 +13332,14 @@ impl Document {
         relationship_id: &str,
     ) -> Result<String> {
         self.story_source_and_owner(story)?;
+        self.hyperlink_url_for_validated_story(story, relationship_id)
+    }
+
+    fn hyperlink_url_for_validated_story(
+        &self,
+        story: &StoryId,
+        relationship_id: &str,
+    ) -> Result<String> {
         let relationships = self
             .package
             .get_part_rels(&story.part_name)
@@ -13563,9 +13953,10 @@ impl Document {
             Error::Other(format!("body paragraph index {body_index} is out of range"))
         })?;
         let mut candidate = original.inner.clone();
-        let boundary = candidate
-            .split_run(run_index, character_offset)
-            .map_err(|error| Error::Other(error.to_string()))?;
+        let boundary = Paragraph {
+            inner: &mut candidate,
+        }
+        .split_run(run_index, character_offset)?;
         if candidate == *original.inner {
             return Ok(boundary);
         }
@@ -23034,6 +23425,31 @@ mod tests {
     const FX087_PAGES_BUILD: &str = "7044.0.273";
     const FX087_CANDIDATE_SHA256: &str =
         "54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9";
+
+    #[test]
+    fn python_story_inventory_scales_linearly() {
+        for paragraph_count in [64, 128] {
+            let mut document = Document::new();
+            for index in 0..paragraph_count {
+                document.add_paragraph(&format!("paragraph {index}"));
+            }
+
+            STORY_SOURCE_BUILDS.set(0);
+            let items = document.story_item_snapshots().unwrap();
+            assert_eq!(
+                items
+                    .iter()
+                    .filter(|item| item.location().item_kind() == StoryItemKind::Paragraph)
+                    .count(),
+                paragraph_count,
+            );
+            assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+
+            STORY_SOURCE_BUILDS.set(0);
+            assert!(document.story_link_snapshots().unwrap().is_empty());
+            assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+        }
+    }
 
     #[test]
     fn authored_relationship_source_order_resolves_namespaces_and_entities() {

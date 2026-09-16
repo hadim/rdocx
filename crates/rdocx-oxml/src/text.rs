@@ -3008,6 +3008,106 @@ enum AcceptedOwnerOrder {
     AfterRaw,
 }
 
+/// One recursive step to a visible accepted-view run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AcceptedRunPathSegment {
+    /// A direct run index in the current paragraph or content control.
+    Run(usize),
+    /// A content-control index in the current paragraph or content control.
+    ContentControl(usize),
+    /// A revision index in the current paragraph or content control.
+    Revision(usize),
+}
+
+/// A checked recursive address for one visible accepted-view run.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AcceptedRunPath {
+    pub(crate) segments: Vec<AcceptedRunPathSegment>,
+}
+
+impl AcceptedRunPath {
+    /// Return the recursive source steps for this run.
+    pub fn segments(&self) -> &[AcceptedRunPathSegment] {
+        &self.segments
+    }
+}
+
+fn accepted_paragraph_run_paths(paragraph: &CT_P) -> Vec<AcceptedRunPath> {
+    let mut output = Vec::new();
+    let mut prefix = Vec::new();
+    append_accepted_paragraph_run_paths(paragraph, &mut prefix, &mut output);
+    output
+}
+
+pub(crate) fn append_accepted_paragraph_run_paths(
+    paragraph: &CT_P,
+    prefix: &mut Vec<AcceptedRunPathSegment>,
+    output: &mut Vec<AcceptedRunPath>,
+) {
+    for boundary in 0..=paragraph.runs.len() {
+        let mut owners = paragraph
+            .content_controls
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _, _, _))| *at == boundary)
+            .map(|(index, (_, raw_before, _, _))| {
+                (AcceptedOwnerOrder::Raw(*raw_before), 0u8, index)
+            })
+            .chain(
+                paragraph
+                    .revisions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (at, _, _))| *at == boundary)
+                    .map(|(index, (_, slot, _))| {
+                        let order = if let Some(hyperlink_index) = hyperlink_revision_index(*slot) {
+                            if let Some(raw_before) = paragraph
+                                .hyperlinks
+                                .get(hyperlink_index)
+                                .and_then(|hyperlink| hyperlink.preserved_raw_before)
+                            {
+                                AcceptedOwnerOrder::Raw(raw_before)
+                            } else if paragraph
+                                .hyperlinks
+                                .get(hyperlink_index)
+                                .is_some_and(|hyperlink| boundary == hyperlink.run_end)
+                            {
+                                AcceptedOwnerOrder::BeforeRaw
+                            } else {
+                                AcceptedOwnerOrder::AfterRaw
+                            }
+                        } else {
+                            AcceptedOwnerOrder::Raw(*slot)
+                        };
+                        (order, 1u8, index)
+                    }),
+            )
+            .collect::<Vec<_>>();
+        owners.sort_by_key(|(order, kind, _)| (*order, *kind));
+        for (_, kind, index) in owners {
+            if kind == 0 {
+                prefix.push(AcceptedRunPathSegment::ContentControl(index));
+                paragraph.content_controls[index]
+                    .3
+                    .append_accepted_run_paths(prefix, output);
+            } else {
+                prefix.push(AcceptedRunPathSegment::Revision(index));
+                paragraph.revisions[index]
+                    .2
+                    .append_accepted_run_paths(prefix, output);
+            }
+            prefix.pop();
+        }
+        if paragraph.runs.get(boundary).is_some() {
+            prefix.push(AcceptedRunPathSegment::Run(boundary));
+            output.push(AcceptedRunPath {
+                segments: prefix.clone(),
+            });
+            prefix.pop();
+        }
+    }
+}
+
 fn accepted_paragraph_runs(paragraph: &CT_P) -> Vec<&CT_R> {
     let mut output = Vec::new();
     for boundary in 0..=paragraph.runs.len() {
@@ -3347,6 +3447,137 @@ impl CT_P {
     #[doc(hidden)]
     pub fn accepted_bookmark_runs(&self) -> Vec<&CT_R> {
         accepted_paragraph_runs(self)
+    }
+
+    /// Return recursive addresses for every accepted-view run.
+    #[doc(hidden)]
+    pub fn accepted_run_paths(&self) -> Vec<AcceptedRunPath> {
+        accepted_paragraph_run_paths(self)
+    }
+
+    /// Resolve one recursive accepted-view run address.
+    #[doc(hidden)]
+    pub fn accepted_run(&self, path: &AcceptedRunPath) -> Option<&CT_R> {
+        self.accepted_run_segments(path.segments())
+    }
+
+    pub(crate) fn accepted_run_segments(&self, path: &[AcceptedRunPathSegment]) -> Option<&CT_R> {
+        let (first, rest) = path.split_first()?;
+        match *first {
+            AcceptedRunPathSegment::Run(index) if rest.is_empty() => self.runs.get(index),
+            AcceptedRunPathSegment::ContentControl(index) => self
+                .content_controls
+                .get(index)?
+                .3
+                .accepted_run_segments(rest),
+            AcceptedRunPathSegment::Revision(index) => {
+                self.revisions.get(index)?.2.accepted_run_segments(rest)
+            }
+            AcceptedRunPathSegment::Run(_) => None,
+        }
+    }
+
+    /// Replace one accepted-view run while retaining its recursive owner.
+    #[doc(hidden)]
+    pub fn replace_accepted_run(
+        &mut self,
+        path: &AcceptedRunPath,
+        replacement: CT_R,
+    ) -> Result<bool> {
+        self.replace_accepted_run_segments(path.segments(), replacement)
+    }
+
+    pub(crate) fn replace_accepted_run_segments(
+        &mut self,
+        path: &[AcceptedRunPathSegment],
+        replacement: CT_R,
+    ) -> Result<bool> {
+        let Some((first, rest)) = path.split_first() else {
+            return Ok(false);
+        };
+        match *first {
+            AcceptedRunPathSegment::Run(index) if rest.is_empty() => {
+                let Some(run) = self.runs.get_mut(index) else {
+                    return Ok(false);
+                };
+                *run = replacement;
+                Ok(true)
+            }
+            AcceptedRunPathSegment::ContentControl(index) => {
+                let Some((_, _, _, control)) = self.content_controls.get_mut(index) else {
+                    return Ok(false);
+                };
+                control.replace_accepted_run_segments(rest, replacement)
+            }
+            AcceptedRunPathSegment::Revision(index) => {
+                let Some((_, _, revision)) = self.revisions.get_mut(index) else {
+                    return Ok(false);
+                };
+                revision.replace_accepted_run_segments(rest, replacement)
+            }
+            AcceptedRunPathSegment::Run(_) => Ok(false),
+        }
+    }
+
+    /// Split one accepted-view run and return the accepted boundary.
+    #[doc(hidden)]
+    pub fn split_accepted_run(
+        &mut self,
+        path: &AcceptedRunPath,
+        accepted_index: usize,
+        offset: usize,
+    ) -> Result<usize> {
+        let run = self
+            .accepted_run(path)
+            .ok_or_else(|| OxmlError::InvalidValue("accepted run path is stale".to_owned()))?;
+        let literal_len = run.literal_len();
+        if offset > literal_len {
+            return Err(OxmlError::InvalidValue(format!(
+                "split offset {offset} exceeds a run's literal text length of {literal_len} characters"
+            )));
+        }
+        if offset == 0 {
+            return Ok(accepted_index);
+        }
+        if offset == literal_len {
+            return Ok(accepted_index + 1);
+        }
+        if self.split_accepted_run_segments(path.segments(), offset)? {
+            Ok(accepted_index + 1)
+        } else {
+            Err(OxmlError::InvalidValue(
+                "accepted run path is stale".to_owned(),
+            ))
+        }
+    }
+
+    pub(crate) fn split_accepted_run_segments(
+        &mut self,
+        path: &[AcceptedRunPathSegment],
+        offset: usize,
+    ) -> Result<bool> {
+        let Some((first, rest)) = path.split_first() else {
+            return Ok(false);
+        };
+        match *first {
+            AcceptedRunPathSegment::Run(index) if rest.is_empty() => self
+                .split_run(index, offset)
+                .map(|_| true)
+                .map_err(|error| OxmlError::InvalidValue(error.to_string())),
+            AcceptedRunPathSegment::ContentControl(index) => {
+                let Some((_, _, _, control)) = self.content_controls.get_mut(index) else {
+                    return Ok(false);
+                };
+                control.split_accepted_run_segments(rest, offset)
+            }
+            AcceptedRunPathSegment::Revision(index) => {
+                let Some((_, _, revision)) = self.revisions.get_mut(index) else {
+                    return Ok(false);
+                };
+                revision.split_accepted_run_segments(rest, offset)
+            }
+            AcceptedRunPathSegment::Run(_) => Ok(false),
+        }
     }
 
     /// Add a run with the given text.
@@ -7080,6 +7311,14 @@ fn write_paragraph_boundary<W: std::io::Write>(
                 .find(|(at, slot, _)| *at == run_index && *slot == raw_index)
             {
                 equation.write_xml(writer)?;
+            } else if let Some((_, _, revision)) =
+                boundary.revisions.iter().find(|(at, slot, _)| {
+                    *at == run_index
+                        && hyperlink_revision_index(*slot).is_none()
+                        && *slot == raw_index
+                })
+            {
+                revision.write_xml(writer)?;
             } else if let Some((hyperlink_index, hyperlink)) = boundary
                 .hyperlinks
                 .iter()

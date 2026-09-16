@@ -1,15 +1,16 @@
 //! Tracked revision metadata and read-only content projections.
 
 use quick_xml::events::Event;
-use quick_xml::{Reader, XmlVersion};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::content_control::{CT_Sdt, SdtContent};
 use crate::document::{BodyContent, CT_Document, CT_SectPr};
+use crate::namespace::W_NS;
 use crate::numbering::{parse_scoped_ppr, parse_scoped_rpr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_element};
 use crate::raw_xml::capture_empty_element;
 use crate::table::{CT_Row, CT_Tbl, CT_TblPr, CT_Tc, CellContent};
-use crate::text::{CT_P, CT_R, hyperlink_revision_index};
+use crate::text::{AcceptedRunPath, AcceptedRunPathSegment, CT_P, CT_R, hyperlink_revision_index};
 
 const MAX_REVISION_NESTING_DEPTH: usize = 32;
 
@@ -49,6 +50,8 @@ pub struct CT_Revision {
     content: RevisionContent,
     content_paragraph: Option<Box<CT_P>>,
     nested_revisions: Vec<(usize, CT_Revision)>,
+    parse_word_prefixes: Vec<String>,
+    require_author: bool,
 }
 
 impl CT_Revision {
@@ -124,6 +127,8 @@ impl CT_Revision {
                         content: RevisionContent::Marker,
                         content_paragraph: None,
                         nested_revisions: Vec::new(),
+                        parse_word_prefixes: word_prefixes.to_vec(),
+                        require_author,
                     });
                 }
                 Event::Eof => {
@@ -154,6 +159,8 @@ impl CT_Revision {
             content,
             content_paragraph,
             nested_revisions,
+            parse_word_prefixes: word_prefixes.to_vec(),
+            require_author,
         })
     }
 
@@ -187,6 +194,99 @@ impl CT_Revision {
     #[doc(hidden)]
     pub fn nested_revisions(&self) -> &[(usize, CT_Revision)] {
         &self.nested_revisions
+    }
+
+    pub(crate) fn append_accepted_run_paths(
+        &self,
+        prefix: &mut Vec<AcceptedRunPathSegment>,
+        output: &mut Vec<AcceptedRunPath>,
+    ) {
+        if !matches!(self.kind, RevisionKind::Insertion | RevisionKind::MoveTo) {
+            return;
+        }
+        if let Some(paragraph) = self.content_paragraph.as_deref() {
+            super::text::append_accepted_paragraph_run_paths(paragraph, prefix, output);
+        }
+    }
+
+    pub(crate) fn accepted_run_segments(&self, path: &[AcceptedRunPathSegment]) -> Option<&CT_R> {
+        if !matches!(self.kind, RevisionKind::Insertion | RevisionKind::MoveTo) {
+            return None;
+        }
+        self.content_paragraph
+            .as_deref()?
+            .accepted_run_segments(path)
+    }
+
+    pub(crate) fn replace_accepted_run_segments(
+        &mut self,
+        path: &[AcceptedRunPathSegment],
+        replacement: CT_R,
+    ) -> crate::Result<bool> {
+        if !matches!(self.kind, RevisionKind::Insertion | RevisionKind::MoveTo) {
+            return Ok(false);
+        }
+        ensure_revision_word_prefix_is_mutable(&self.raw_xml)?;
+        let mut candidate = self.clone();
+        let Some(paragraph) = candidate.content_paragraph.as_deref_mut() else {
+            return Ok(false);
+        };
+        if !paragraph.replace_accepted_run_segments(path, replacement)? {
+            return Ok(false);
+        }
+        candidate.refresh_accepted_content()?;
+        *self = candidate;
+        Ok(true)
+    }
+
+    pub(crate) fn split_accepted_run_segments(
+        &mut self,
+        path: &[AcceptedRunPathSegment],
+        offset: usize,
+    ) -> crate::Result<bool> {
+        if !matches!(self.kind, RevisionKind::Insertion | RevisionKind::MoveTo) {
+            return Ok(false);
+        }
+        ensure_revision_word_prefix_is_mutable(&self.raw_xml)?;
+        let mut candidate = self.clone();
+        let Some(paragraph) = candidate.content_paragraph.as_deref_mut() else {
+            return Ok(false);
+        };
+        if !paragraph.split_accepted_run_segments(path, offset)? {
+            return Ok(false);
+        }
+        candidate.refresh_accepted_content()?;
+        *self = candidate;
+        Ok(true)
+    }
+
+    fn refresh_accepted_content(&mut self) -> crate::Result<()> {
+        let paragraph = self.content_paragraph.as_deref().ok_or_else(|| {
+            crate::OxmlError::MissingElement("accepted revision paragraph".to_owned())
+        })?;
+        let mut writer = Writer::new(Vec::new());
+        paragraph.to_xml(&mut writer)?;
+        let paragraph_xml = writer.into_inner();
+        let paragraph_start = paragraph_xml
+            .iter()
+            .position(|byte| *byte == b'>')
+            .map(|index| index + 1)
+            .ok_or_else(|| crate::OxmlError::MissingElement("paragraph start".to_owned()))?;
+        let paragraph_end = paragraph_xml
+            .windows(b"</w:p>".len())
+            .rposition(|window| window == b"</w:p>")
+            .ok_or_else(|| crate::OxmlError::MissingElement("paragraph end".to_owned()))?;
+        let (content_start, content_end) = revision_content_bounds(&self.raw_xml)?;
+        let mut updated = Vec::with_capacity(
+            self.raw_xml.len() + paragraph_xml.len() - (content_end - content_start),
+        );
+        updated.extend_from_slice(&self.raw_xml[..content_start]);
+        updated.extend_from_slice(&paragraph_xml[paragraph_start..paragraph_end]);
+        updated.extend_from_slice(&self.raw_xml[content_end..]);
+        let prefixes = self.parse_word_prefixes.clone();
+        let require_author = self.require_author;
+        *self = Self::try_from_raw(updated, &prefixes, require_author)?;
+        Ok(())
     }
 
     pub(crate) fn write_xml<W: std::io::Write>(
@@ -491,6 +591,21 @@ fn parse_accepted_revision_content(
     raw_xml: &[u8],
     word_prefixes: &[String],
 ) -> crate::Result<CT_P> {
+    let (content_start, content_end) = revision_content_bounds(raw_xml)?;
+    let mut paragraph_xml = Vec::from(b"<w:p>".as_slice());
+    paragraph_xml.extend_from_slice(&raw_xml[content_start..content_end]);
+    paragraph_xml.extend_from_slice(b"</w:p>");
+    let mut paragraph_reader = Reader::from_reader(paragraph_xml.as_slice());
+    let mut paragraph_buffer = Vec::new();
+    match paragraph_reader.read_event_into(&mut paragraph_buffer)? {
+        Event::Start(_) => CT_P::from_xml_with_prefixes(&mut paragraph_reader, word_prefixes),
+        _ => Err(crate::OxmlError::MissingElement(
+            "insertion content".to_owned(),
+        )),
+    }
+}
+
+fn revision_content_bounds(raw_xml: &[u8]) -> crate::Result<(usize, usize)> {
     let mut reader = Reader::from_reader(raw_xml);
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -512,17 +627,34 @@ fn parse_accepted_revision_content(
         .rev()
         .find_map(|(index, byte)| (*byte == b'<').then_some(index))
         .ok_or_else(|| crate::OxmlError::MissingElement("insertion close tag".to_owned()))?;
-    let mut paragraph_xml = Vec::from(b"<w:p>".as_slice());
-    paragraph_xml.extend_from_slice(&raw_xml[content_start..content_end]);
-    paragraph_xml.extend_from_slice(b"</w:p>");
-    let mut paragraph_reader = Reader::from_reader(paragraph_xml.as_slice());
-    let mut paragraph_buffer = Vec::new();
-    match paragraph_reader.read_event_into(&mut paragraph_buffer)? {
-        Event::Start(_) => CT_P::from_xml_with_prefixes(&mut paragraph_reader, word_prefixes),
-        _ => Err(crate::OxmlError::MissingElement(
-            "insertion content".to_owned(),
-        )),
+    Ok((content_start, content_end))
+}
+
+fn ensure_revision_word_prefix_is_mutable(raw_xml: &[u8]) -> crate::Result<()> {
+    let mut reader = Reader::from_reader(raw_xml);
+    let mut buffer = Vec::new();
+    let root = match reader.read_event_into(&mut buffer)? {
+        Event::Start(root) => root,
+        _ => {
+            return Err(crate::OxmlError::MissingElement(
+                "revision start".to_owned(),
+            ));
+        }
+    };
+    for attribute in root.attributes() {
+        let attribute = attribute?;
+        if attribute.key.as_ref() != b"xmlns:w" {
+            continue;
+        }
+        let namespace =
+            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, root.decoder())?;
+        if namespace.as_ref() != W_NS {
+            return Err(crate::OxmlError::InvalidValue(
+                "revision binds the reserved w prefix to a foreign namespace".to_owned(),
+            ));
+        }
     }
+    Ok(())
 }
 
 fn revision_kind(name: &[u8], prefixes: &[String]) -> Option<RevisionKind> {
@@ -916,6 +1048,85 @@ mod tests {
             };
             assert_eq!(run.text(), "control");
         }
+    }
+
+    #[test]
+    fn accepted_revision_mutation_rejects_a_shadowed_reserved_word_prefix() {
+        let raw = format!(
+            r#"<wx:ins xmlns:wx="{W_NS}" xmlns:w="urn:foreign" wx:id="7" wx:author="Ada"><wx:r><wx:t>before</wx:t></wx:r></wx:ins>"#
+        )
+        .into_bytes();
+        let mut revision =
+            CT_Revision::from_raw(raw, &["wx".to_owned()]).expect("insertion parses");
+        let error = revision
+            .replace_accepted_run_segments(&[AcceptedRunPathSegment::Run(0)], CT_R::new("after"))
+            .expect_err("shadowed reserved prefix must fail closed");
+
+        assert_eq!(
+            error.to_string(),
+            "invalid value: revision binds the reserved w prefix to a foreign namespace"
+        );
+        assert_eq!(
+            revision
+                .content_paragraph()
+                .expect("accepted content remains available")
+                .text(),
+            "before"
+        );
+    }
+
+    #[test]
+    fn failed_accepted_revision_refresh_keeps_the_original_projection() {
+        let raw = format!(
+            concat!(
+                r#"<w:ins xmlns:w="{}" w:id="7" w:author="Ada"><w:r>"#,
+                r#"<w:fldChar w:fldCharType="begin"/><w:instrText>DATE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>first</w:t><w:fldChar w:fldCharType="end"/>"#,
+                r#"<w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>second</w:t><w:fldChar w:fldCharType="end"/>"#,
+                r#"</w:r></w:ins>"#,
+            ),
+            W_NS
+        )
+        .into_bytes();
+        let mut revision = CT_Revision::from_raw(raw, &["w".to_owned()]).expect("insertion parses");
+        let paragraph = revision
+            .content_paragraph()
+            .expect("accepted content is projected");
+        let page_index = paragraph
+            .runs
+            .iter()
+            .position(|run| {
+                run.content.iter().any(|content| {
+                    matches!(content, crate::text::RunContent::Field(field) if field.instruction.name == "PAGE")
+                })
+            })
+            .expect("PAGE field is projected");
+        let mut replacement = paragraph.runs[page_index].clone();
+        let field = replacement
+            .content
+            .iter_mut()
+            .find_map(|content| match content {
+                crate::text::RunContent::Field(field) => Some(field),
+                _ => None,
+            })
+            .expect("replacement contains a field");
+        field.cached_result = "changed".to_owned();
+
+        let error = revision
+            .replace_accepted_run_segments(&[AcceptedRunPathSegment::Run(page_index)], replacement)
+            .expect_err("shared physical field mutation must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("field sharing one physical run was changed")
+        );
+        assert_eq!(
+            revision
+                .content_paragraph()
+                .expect("original accepted content remains")
+                .text(),
+            "firstsecond"
+        );
     }
 
     #[test]

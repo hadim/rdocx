@@ -90,6 +90,13 @@ cannot back a Python property setter. The facade exposes 61 non-consuming
 borrowed nested handle can mutate without a rebind:
 `doc.paragraph_mut(3).unwrap().add_run("text").set_bold(true)`.
 
+Python paragraph text, run iteration, run indexing, formatting mutation, and
+run splitting share the native accepted-view run order. Visible runs inside
+inline content controls, insertions, and move destinations carry recursive
+source paths. Deleted and move-source runs are absent. A successful structural
+edit invalidates earlier path-backed run handles through the same document
+revision check as direct handles.
+
 The Rust facade also exposes the minimum automatic-hyphenation authoring
 surface. `Document::set_auto_hyphenation` writes the Word document setting,
 while `Run::language` and `Run::set_language` assign the direct `w:lang` value.
@@ -508,7 +515,9 @@ kind, and default, first, or even selection. Hyperlink URLs are resolved by the
 native checked story API. Their order comes from the story-wide native
 projection, including when a nested control precedes a link owned by its
 ancestor item. Returned records are detached snapshots, so later document
-mutation cannot alter an earlier result.
+mutation cannot alter an earlier result. Each `story_items` or `hyperlinks`
+accessor materializes one native source and owner inventory for the complete
+tuple instead of rebuilding it per returned record.
 
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic

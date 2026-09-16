@@ -1180,34 +1180,22 @@ impl PyDocument {
 
     #[getter]
     fn story_items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let stories = self
+        let items = self
             .inner
-            .stories()
+            .story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        let mut snapshots = Vec::new();
-        for story in stories {
-            let story_snapshot = story_snapshot(&story);
-            for item in self
-                .inner
-                .story_items(&story)
-                .map_err(|error| rdocx_to_pyerr(py, error))?
-            {
-                snapshots.push(PyStoryItem {
-                    story: story_snapshot.clone(),
-                    kind: story_item_kind_name(item.kind()).to_owned(),
-                    index_path: item.location().index_path().to_vec(),
-                    direct_body_index: item
-                        .direct_body_index()
-                        .map_err(|error| rdocx_to_pyerr(py, error))?,
-                    text: item.text().map_err(|error| rdocx_to_pyerr(py, error))?,
-                    xml: item
-                        .xml()
-                        .map_err(|error| rdocx_to_pyerr(py, error))?
-                        .into_owned(),
-                    revision: self.revisions.current(),
-                });
-            }
-        }
+        let snapshots = items
+            .into_iter()
+            .map(|item| PyStoryItem {
+                story: story_snapshot(item.location().story()),
+                kind: story_item_kind_name(item.location().item_kind()).to_owned(),
+                index_path: item.location().index_path().to_vec(),
+                direct_body_index: item.direct_body_index(),
+                text: item.text().map(str::to_owned),
+                xml: item.xml().to_vec(),
+                revision: self.revisions.current(),
+            })
+            .collect::<Vec<_>>();
         PyTuple::new(py, snapshots)
     }
 
@@ -1244,28 +1232,21 @@ impl PyDocument {
 
     #[getter]
     fn hyperlinks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let stories = self
+        let links = self
             .inner
-            .stories()
+            .story_link_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        let mut snapshots = Vec::new();
-        for story in stories {
-            let story_snapshot = story_snapshot(&story);
-            for (location, link) in self
-                .inner
-                .story_links(&story)
-                .map_err(|error| rdocx_to_pyerr(py, error))?
-            {
-                snapshots.push(PyHyperlink {
-                    story: story_snapshot.clone(),
-                    index_path: location.index_path().to_vec(),
-                    text: link.text,
-                    url: link.url,
-                    anchor: link.anchor,
-                    relationship_id: link.rel_id,
-                });
-            }
-        }
+        let snapshots = links
+            .into_iter()
+            .map(|(location, link)| PyHyperlink {
+                story: story_snapshot(location.story()),
+                index_path: location.index_path().to_vec(),
+                text: link.text,
+                url: link.url,
+                anchor: link.anchor,
+                relationship_id: link.rel_id,
+            })
+            .collect::<Vec<_>>();
         PyTuple::new(py, snapshots)
     }
 

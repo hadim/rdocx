@@ -126,11 +126,20 @@ impl FontUpdate<'_> {
 pub struct PyFont {
     document: Py<PyDocument>,
     path: ContentPath,
+    run_path: rdocx::AcceptedRunPath,
 }
 
 impl PyFont {
-    pub(crate) fn new(document: Py<PyDocument>, path: ContentPath) -> Self {
-        Self { document, path }
+    pub(crate) fn new(
+        document: Py<PyDocument>,
+        path: ContentPath,
+        run_path: rdocx::AcceptedRunPath,
+    ) -> Self {
+        Self {
+            document,
+            path,
+            run_path,
+        }
     }
 
     fn validate(&self, py: Python<'_>) -> PyResult<(ParagraphLocation, usize)> {
@@ -160,8 +169,8 @@ impl PyFont {
     }
 
     fn apply(&self, py: Python<'_>, update: FontUpdate<'_>) -> PyResult<()> {
-        let (location, run_index) = self.validate(py)?;
-        apply_run_update(py, &self.document, location, run_index, update)
+        let (location, _) = self.validate(py)?;
+        apply_run_update(py, &self.document, location, &self.run_path, update)
     }
 }
 
@@ -197,7 +206,7 @@ pub(crate) fn apply_run_update(
     py: Python<'_>,
     document: &Py<PyDocument>,
     location: ParagraphLocation,
-    run_index: usize,
+    run_path: &rdocx::AcceptedRunPath,
     update: FontUpdate<'_>,
 ) -> PyResult<()> {
     let mut document = document.borrow_mut(py);
@@ -207,10 +216,9 @@ pub(crate) fn apply_run_update(
                 .inner
                 .paragraph_mut(index)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            let mut run = paragraph
-                .run_mut(run_index)
-                .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
-            update.apply(&mut run);
+            paragraph
+                .edit_run(run_path, |run| update.apply(run))
+                .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         }
         ParagraphLocation::Cell {
             table,
@@ -228,10 +236,9 @@ pub(crate) fn apply_run_update(
             let mut paragraph = cell
                 .paragraph_mut(paragraph)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            let mut run = paragraph
-                .run_mut(run_index)
-                .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
-            update.apply(&mut run);
+            paragraph
+                .edit_run(run_path, |run| update.apply(run))
+                .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         }
     }
     Ok(())

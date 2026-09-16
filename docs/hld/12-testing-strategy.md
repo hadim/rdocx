@@ -1636,6 +1636,16 @@ The native companion
 identifier to distinct body and header targets and checks the same interleaved
 source order. All 49 hash entries remain unchanged.
 
+The Python story-scale gate is `python_story_inventory_scales_linearly`. It
+doubles a corpus containing paragraphs, table cells, and hyperlinks, requires
+exact doubled inventory counts, and bounds the elapsed ratio without relying
+on an absolute machine speed. A native counted companion requires one complete
+story-source build for each item or hyperlink snapshot. The binding companion
+interleaves direct, inserted, inline-control, and deleted runs, then proves
+StoryItem text, Paragraph text, and live run handles use the same accepted
+order. Nested formatting and splitting survive save and reopen, while an old
+run handle fails after the structural split.
+
 The indexed Python content gate is
 `python_indexed_content_mutation_is_counted_and_atomic`. It maps live direct
 Paragraph and Table handles across interleaved content, inserts a paragraph,

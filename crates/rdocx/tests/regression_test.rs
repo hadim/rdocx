@@ -11217,7 +11217,7 @@ fn ordered_reader_items_keep_every_direct_child_and_preserved_boundary() {
     assert_eq!(
         body,
         [
-            "paragraph:firstcontrollink beforelink afterlast",
+            "paragraph:firstcontrollink beforelinked revisionlink afterinsertedlast",
             "raw:<x:body-raw xmlns:x=\"urn:foreign\"><x:child/></x:body-raw>",
             "table",
             "control:body control",
@@ -11354,7 +11354,7 @@ fn ordered_reader_items_resolve_aliases_without_flattening_containers() {
             "run:direct",
         ]
     );
-    assert_eq!(document.paragraph(0).unwrap().run_count(), 1);
+    assert_eq!(document.paragraph(0).unwrap().run_count(), 2);
 }
 
 #[test]

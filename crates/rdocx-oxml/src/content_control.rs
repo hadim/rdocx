@@ -12,7 +12,9 @@ use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
 use crate::table::{CT_Row, CT_Tbl, CT_Tc};
-use crate::text::{CT_P, CT_R, Field, LegacyFormFieldValue, RunContent};
+use crate::text::{
+    AcceptedRunPath, AcceptedRunPathSegment, CT_P, CT_R, Field, LegacyFormFieldValue, RunContent,
+};
 
 /// The bounded content-control type markers that rdocx reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -659,6 +661,147 @@ impl CT_Sdt {
         &self.revisions
     }
 
+    pub(crate) fn append_accepted_run_paths(
+        &self,
+        prefix: &mut Vec<AcceptedRunPathSegment>,
+        output: &mut Vec<AcceptedRunPath>,
+    ) {
+        for boundary in 0..=self.content.len() {
+            for (revision_index, (_, revision)) in self
+                .revisions
+                .iter()
+                .enumerate()
+                .filter(|(_, (at, _))| *at == boundary)
+            {
+                prefix.push(AcceptedRunPathSegment::Revision(revision_index));
+                revision.append_accepted_run_paths(prefix, output);
+                prefix.pop();
+            }
+            match self.content.get(boundary) {
+                Some(SdtContent::Run(_)) => {
+                    prefix.push(AcceptedRunPathSegment::Run(boundary));
+                    output.push(AcceptedRunPath {
+                        segments: prefix.clone(),
+                    });
+                    prefix.pop();
+                }
+                Some(SdtContent::ContentControl(control)) => {
+                    prefix.push(AcceptedRunPathSegment::ContentControl(boundary));
+                    control.append_accepted_run_paths(prefix, output);
+                    prefix.pop();
+                }
+                Some(
+                    SdtContent::Paragraph(_)
+                    | SdtContent::Table(_)
+                    | SdtContent::Row(_)
+                    | SdtContent::Cell(_)
+                    | SdtContent::RawXml(_),
+                )
+                | None => {}
+            }
+        }
+    }
+
+    pub(crate) fn accepted_run_segments(&self, path: &[AcceptedRunPathSegment]) -> Option<&CT_R> {
+        let (first, rest) = path.split_first()?;
+        match *first {
+            AcceptedRunPathSegment::Run(index) if rest.is_empty() => {
+                match self.content.get(index)? {
+                    SdtContent::Run(run) => Some(run),
+                    _ => None,
+                }
+            }
+            AcceptedRunPathSegment::ContentControl(index) => match self.content.get(index)? {
+                SdtContent::ContentControl(control) => control.accepted_run_segments(rest),
+                _ => None,
+            },
+            AcceptedRunPathSegment::Revision(index) => {
+                self.revisions.get(index)?.1.accepted_run_segments(rest)
+            }
+            AcceptedRunPathSegment::Run(_) => None,
+        }
+    }
+
+    pub(crate) fn replace_accepted_run_segments(
+        &mut self,
+        path: &[AcceptedRunPathSegment],
+        replacement: CT_R,
+    ) -> Result<bool> {
+        let Some((first, rest)) = path.split_first() else {
+            return Ok(false);
+        };
+        match *first {
+            AcceptedRunPathSegment::Run(index) if rest.is_empty() => {
+                let Some(SdtContent::Run(run)) = self.content.get_mut(index) else {
+                    return Ok(false);
+                };
+                *run = replacement;
+                Ok(true)
+            }
+            AcceptedRunPathSegment::ContentControl(index) => {
+                let Some(SdtContent::ContentControl(control)) = self.content.get_mut(index) else {
+                    return Ok(false);
+                };
+                control.replace_accepted_run_segments(rest, replacement)
+            }
+            AcceptedRunPathSegment::Revision(index) => {
+                let Some((_, revision)) = self.revisions.get_mut(index) else {
+                    return Ok(false);
+                };
+                revision.replace_accepted_run_segments(rest, replacement)
+            }
+            AcceptedRunPathSegment::Run(_) => Ok(false),
+        }
+    }
+
+    pub(crate) fn split_accepted_run_segments(
+        &mut self,
+        path: &[AcceptedRunPathSegment],
+        offset: usize,
+    ) -> Result<bool> {
+        let Some((first, rest)) = path.split_first() else {
+            return Ok(false);
+        };
+        match *first {
+            AcceptedRunPathSegment::Run(index) if rest.is_empty() => {
+                let Some(SdtContent::Run(run)) = self.content.get(index) else {
+                    return Ok(false);
+                };
+                let mut paragraph = CT_P::new();
+                paragraph.runs.push(run.clone());
+                paragraph
+                    .split_run(0, offset)
+                    .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+                let replacement = paragraph.runs.drain(..).map(SdtContent::Run);
+                self.content.splice(index..=index, replacement);
+                for (boundary, _) in &mut self.revisions {
+                    if *boundary > index {
+                        *boundary += 1;
+                    }
+                }
+                for source in &mut self.inline_run_sources {
+                    if source.content_index > index {
+                        source.content_index += 1;
+                    }
+                }
+                Ok(true)
+            }
+            AcceptedRunPathSegment::ContentControl(index) => {
+                let Some(SdtContent::ContentControl(control)) = self.content.get_mut(index) else {
+                    return Ok(false);
+                };
+                control.split_accepted_run_segments(rest, offset)
+            }
+            AcceptedRunPathSegment::Revision(index) => {
+                let Some((_, revision)) = self.revisions.get_mut(index) else {
+                    return Ok(false);
+                };
+                revision.split_accepted_run_segments(rest, offset)
+            }
+            AcceptedRunPathSegment::Run(_) => Ok(false),
+        }
+    }
+
     pub(crate) fn word_prefixes(&self) -> &[String] {
         &self.word_prefixes
     }
@@ -851,7 +994,17 @@ impl CT_Sdt {
                     }
                 }
                 SdtContent::ContentControl(sdt) => sdt.to_xml(writer)?,
-                SdtContent::RawXml(raw) => writer.get_mut().write_all(raw)?,
+                SdtContent::RawXml(raw) => {
+                    if let Some((_, revision)) = self
+                        .revisions
+                        .iter()
+                        .find(|(boundary, _)| *boundary == content_index)
+                    {
+                        revision.write_xml(writer)?;
+                    } else {
+                        writer.get_mut().write_all(raw)?;
+                    }
+                }
             }
         }
         writer.write_event(Event::End(BytesEnd::new("w:sdtContent")))?;
