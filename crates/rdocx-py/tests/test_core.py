@@ -1189,3 +1189,62 @@ def test_split_run_rejects_bad_coordinates_without_changing_the_document():
         with pytest.raises(rdocx.RdocxError):
             document.split_run(*args)
         assert document.to_bytes() == before
+
+
+def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("before")
+    anchor = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body" and item.kind == "paragraph"
+    )
+    picture = document.add_picture(
+        _one_pixel_png(), "pixel.png", rdocx.Inches(1), rdocx.Inches(1), after=anchor
+    )
+    assert picture.kind == "paragraph"
+    assert b"<w:drawing>" in picture.xml
+    before_bad_picture = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        document.add_picture(
+            _one_pixel_png(), "pixel.png", width=rdocx.Inches(1), after=picture
+        )
+    assert document.to_bytes() == before_bad_picture
+
+    table = document.add_table(1, 1)
+    table.cell(0, 0).text = "cell text"
+    cell_item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "table_cell"
+        and item.kind == "paragraph"
+        and item.text == "cell text"
+    )
+    before_bad_comment = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        document.add_comment(
+            rdocx.StoryRunRange(
+                start=rdocx.StoryRunPosition(item=cell_item, run_index=0),
+                end=rdocx.StoryRunPosition(item=cell_item, run_index=9),
+            ),
+            author="Ada",
+            text="invalid",
+        )
+    assert document.to_bytes() == before_bad_comment
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=cell_item, run_index=0),
+            end=rdocx.StoryRunPosition(item=cell_item, run_index=1),
+        ),
+        author="Ada",
+        text="Check this cell",
+    )
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.comments[0].id == comment_id
+    xml = _document_xml(reopened)
+    assert b"pixel.png" not in xml
+    assert f'w:id="{comment_id}"'.encode() in xml
+    assert b"cell text" in xml

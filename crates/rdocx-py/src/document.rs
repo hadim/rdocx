@@ -367,6 +367,64 @@ impl PyStoryItem {
     }
 }
 
+#[pyclass(name = "StoryRunPosition", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyStoryRunPosition {
+    item: PyStoryItem,
+    run_index: usize,
+}
+
+#[pymethods]
+impl PyStoryRunPosition {
+    #[new]
+    #[pyo3(signature = (*, item, run_index))]
+    fn new(item: PyRef<'_, PyStoryItem>, run_index: usize) -> Self {
+        Self {
+            item: item.clone(),
+            run_index,
+        }
+    }
+
+    #[getter]
+    fn item(&self) -> PyStoryItem {
+        self.item.clone()
+    }
+
+    #[getter]
+    fn run_index(&self) -> usize {
+        self.run_index
+    }
+}
+
+#[pyclass(name = "StoryRunRange", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyStoryRunRange {
+    start: PyStoryRunPosition,
+    end: PyStoryRunPosition,
+}
+
+#[pymethods]
+impl PyStoryRunRange {
+    #[new]
+    #[pyo3(signature = (*, start, end))]
+    fn new(start: PyRef<'_, PyStoryRunPosition>, end: PyRef<'_, PyStoryRunPosition>) -> Self {
+        Self {
+            start: start.clone(),
+            end: end.clone(),
+        }
+    }
+
+    #[getter]
+    fn start(&self) -> PyStoryRunPosition {
+        self.start.clone()
+    }
+
+    #[getter]
+    fn end(&self) -> PyStoryRunPosition {
+        self.end.clone()
+    }
+}
+
 #[pyclass(name = "ContentFragment", frozen, skip_from_py_object)]
 pub struct PyContentFragment {
     inner: rdocx::ContentFragment,
@@ -768,6 +826,29 @@ impl PyDocument {
                 "direct body content at index {index} has no checked location"
             )),
         ))
+    }
+
+    fn story_item_snapshot(
+        &self,
+        py: Python<'_>,
+        location: &rdocx::ContentLocation,
+    ) -> PyResult<PyStoryItem> {
+        let item = self
+            .inner
+            .story_item_snapshots()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .find(|item| item.location() == location)
+            .ok_or_else(|| PyIndexError::new_err("inserted story item was not found"))?;
+        Ok(PyStoryItem {
+            story: story_snapshot(item.location().story()),
+            kind: story_item_kind_name(item.location().item_kind()).to_owned(),
+            index_path: item.location().index_path().to_vec(),
+            direct_body_index: item.direct_body_index(),
+            text: item.text().map(str::to_owned),
+            xml: item.xml().to_vec(),
+            revision: self.revisions.current(),
+        })
     }
 
     fn direct_content_index(
@@ -1287,20 +1368,76 @@ impl PyDocument {
         Ok(())
     }
 
+    #[pyo3(signature = (data, filename, width=None, height=None, *, after=None))]
+    fn add_picture(
+        &mut self,
+        py: Python<'_>,
+        data: &[u8],
+        filename: &str,
+        width: Option<i64>,
+        height: Option<i64>,
+        after: Option<PyRef<'_, PyStoryItem>>,
+    ) -> PyResult<PyStoryItem> {
+        let after = after
+            .as_deref()
+            .map(|item| self.native_location(py, item))
+            .transpose()?;
+        let story = match after.as_ref() {
+            Some(location) => location.story().clone(),
+            None => self.body_story(py)?,
+        };
+        let location = py
+            .detach(|| {
+                self.inner.insert_picture_to_story(
+                    &story,
+                    after.as_ref(),
+                    data,
+                    filename,
+                    width.map(rdocx::Length::emu),
+                    height.map(rdocx::Length::emu),
+                )
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        self.story_item_snapshot(py, &location)
+    }
+
     #[pyo3(signature = (range, *, author, text, initials = None, date = None))]
     fn add_comment(
         &mut self,
-        range: PyRef<'_, PyRunRange>,
+        range: &Bound<'_, PyAny>,
         author: &str,
         text: &str,
         initials: Option<&str>,
         date: Option<&str>,
         py: Python<'_>,
     ) -> PyResult<i32> {
-        let id = self
-            .inner
-            .add_comment_with_date((*range).into(), author, initials, text, date)
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let id = if let Ok(range) = range.cast::<PyRunRange>() {
+            self.inner
+                .add_comment_with_date((*range.borrow()).into(), author, initials, text, date)
+        } else if let Ok(range) = range.cast::<PyStoryRunRange>() {
+            let range = range.borrow();
+            let start = rdocx::StoryRunPosition {
+                location: self.native_location(py, &range.start.item)?,
+                run_index: range.start.run_index,
+            };
+            let end = rdocx::StoryRunPosition {
+                location: self.native_location(py, &range.end.item)?,
+                run_index: range.end.run_index,
+            };
+            self.inner.add_story_comment_with_date(
+                rdocx::StoryRunRange { start, end },
+                author,
+                initials,
+                text,
+                date,
+            )
+        } else {
+            return Err(PyTypeError::new_err(
+                "range must be a RunRange or StoryRunRange",
+            ));
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.revisions.bump();
         Ok(id)
     }

@@ -33,6 +33,20 @@ fn run_index(path: &ContentPath) -> Option<usize> {
     })
 }
 
+fn font_properties(
+    presentation: &rpptx::Presentation,
+    path: &ContentPath,
+) -> Option<rpptx::CT_TextCharacterProperties> {
+    let paragraph = paragraph_index(path)?;
+    let paragraph = shape_ref_at(presentation, path)
+        .and_then(|shape| shape.text_frame())
+        .and_then(|frame| frame.paragraph(paragraph))?;
+    match run_index(path) {
+        Some(run) => paragraph.run(run)?.properties().cloned(),
+        None => paragraph.default_run_properties().cloned(),
+    }
+}
+
 #[pyclass(name = "TextFrame")]
 pub struct PyTextFrame {
     pub(crate) presentation: Py<PyPresentation>,
@@ -107,6 +121,21 @@ impl PyTextFrame {
             presentation.revisions.capture(segments)
         };
         Py::new(py, PyParagraph::new(self.presentation.clone_ref(py), path))
+    }
+
+    #[getter]
+    fn autofit(&self, py: Python<'_>) -> PyResult<Option<&'static str>> {
+        self.validate(py)?;
+        Ok(
+            shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
+                .and_then(|shape| shape.text_frame())
+                .and_then(|frame| frame.autofit_mode())
+                .map(|mode| match mode {
+                    rpptx::AutofitMode::None => "none",
+                    rpptx::AutofitMode::Normal => "normal",
+                    rpptx::AutofitMode::Shape => "shape",
+                }),
+        )
     }
 }
 
@@ -320,6 +349,40 @@ impl PyRun {
             .map(|run| run.text().to_owned())
             .ok_or_else(|| PyIndexError::new_err("run index out of range"))
     }
+
+    #[setter]
+    fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        validate_path(py, &self.presentation.borrow(py), &self.path, "run", "")?;
+        let paragraph = paragraph_index(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
+        let run =
+            run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let frame = shape_mut_at(&mut presentation.inner, &self.path)
+            .and_then(rpptx::ShapeMut::into_text_frame)
+            .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?;
+        let mut paragraph = frame
+            .into_paragraph_mut(paragraph)
+            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+        let mut run = paragraph
+            .run_mut(run)
+            .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
+        run.set_text(value);
+        presentation.revisions.bump();
+        Ok(())
+    }
+
+    #[getter]
+    fn font(&self, py: Python<'_>) -> PyResult<Py<PyFont>> {
+        validate_path(py, &self.presentation.borrow(py), &self.path, "run", "")?;
+        Py::new(
+            py,
+            PyFont {
+                presentation: self.presentation.clone_ref(py),
+                path: self.path.clone(),
+            },
+        )
+    }
 }
 
 #[pyclass(name = "RunCollection")]
@@ -422,13 +485,8 @@ impl PyFont {
             "font",
             ".font",
         )?;
-        let paragraph = paragraph_index(&self.path)
-            .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         Ok(
-            shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-                .and_then(|shape| shape.text_frame())
-                .and_then(|frame| frame.paragraph(paragraph))
-                .and_then(|paragraph| paragraph.default_run_properties())
+            font_properties(&self.presentation.borrow(py).inner, &self.path)
                 .and_then(|properties| properties.bold),
         )
     }
@@ -449,8 +507,56 @@ impl PyFont {
             .and_then(rpptx::ShapeMut::into_text_frame)
             .and_then(|frame| frame.into_paragraph_mut(paragraph))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-        paragraph.default_run_properties_mut().bold = value;
+        if let Some(run) = run_index(&self.path) {
+            let mut run = paragraph
+                .run_mut(run)
+                .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
+            let mut properties = run.properties().cloned().unwrap_or_default();
+            properties.bold = value;
+            run.set_properties(properties);
+        } else {
+            paragraph.default_run_properties_mut().bold = value;
+        }
         Ok(())
+    }
+
+    #[getter]
+    fn name(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        validate_path(
+            py,
+            &self.presentation.borrow(py),
+            &self.path,
+            "font",
+            ".font",
+        )?;
+        Ok(
+            font_properties(&self.presentation.borrow(py).inner, &self.path)
+                .and_then(|properties| properties.latin)
+                .map(|font| font.typeface),
+        )
+    }
+
+    #[getter]
+    fn color(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        validate_path(
+            py,
+            &self.presentation.borrow(py),
+            &self.path,
+            "font",
+            ".font",
+        )?;
+        let paragraph = paragraph_index(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
+        let Some(run) = run_index(&self.path) else {
+            return Ok(None);
+        };
+        Ok(
+            shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
+                .and_then(|shape| shape.text_frame())
+                .and_then(|frame| frame.paragraph(paragraph))
+                .and_then(|paragraph| paragraph.run(run))
+                .and_then(|run| run.font_color()),
+        )
     }
 
     #[getter]
@@ -462,12 +568,7 @@ impl PyFont {
             "font",
             ".font",
         )?;
-        let paragraph = paragraph_index(&self.path)
-            .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
-        let size = shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
-            .and_then(|frame| frame.paragraph(paragraph))
-            .and_then(|paragraph| paragraph.default_run_properties())
+        let size = font_properties(&self.presentation.borrow(py).inner, &self.path)
             .and_then(|properties| properties.font_size);
         size.map(|centipoints| {
             py.import("rpptx")?
@@ -498,7 +599,16 @@ impl PyFont {
             .and_then(rpptx::ShapeMut::into_text_frame)
             .and_then(|frame| frame.into_paragraph_mut(paragraph_index))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-        paragraph.default_run_properties_mut().font_size = centipoints;
+        if let Some(run) = run_index(&self.path) {
+            let mut run = paragraph
+                .run_mut(run)
+                .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
+            let mut properties = run.properties().cloned().unwrap_or_default();
+            properties.font_size = centipoints;
+            run.set_properties(properties);
+        } else {
+            paragraph.default_run_properties_mut().font_size = centipoints;
+        }
         Ok(())
     }
 }

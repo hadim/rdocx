@@ -77,10 +77,87 @@ impl PyShape {
         let presentation = self.presentation.borrow(py);
         validate_path(py, &presentation, &self.path, "shape", "")
     }
+
+    fn length<'py>(
+        &self,
+        py: Python<'py>,
+        value: Option<rpptx::Emu>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        value
+            .map(|value| {
+                py.import("rpptx")?
+                    .getattr("Length")?
+                    .call1((value.0,))
+                    .map(Bound::unbind)
+            })
+            .transpose()
+    }
 }
 
 #[pymethods]
 impl PyShape {
+    #[getter]
+    fn left(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.validate(py)?;
+        let presentation = self.presentation.borrow(py);
+        let value = shape_ref_at(&presentation.inner, &self.path)
+            .and_then(|shape| shape.position())
+            .map(|(left, _)| left);
+        drop(presentation);
+        self.length(py, value)
+    }
+
+    #[getter]
+    fn top(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.validate(py)?;
+        let presentation = self.presentation.borrow(py);
+        let value = shape_ref_at(&presentation.inner, &self.path)
+            .and_then(|shape| shape.position())
+            .map(|(_, top)| top);
+        drop(presentation);
+        self.length(py, value)
+    }
+
+    #[getter]
+    fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.validate(py)?;
+        let presentation = self.presentation.borrow(py);
+        let value = shape_ref_at(&presentation.inner, &self.path)
+            .and_then(|shape| shape.size())
+            .map(|(width, _)| width);
+        drop(presentation);
+        self.length(py, value)
+    }
+
+    #[getter]
+    fn height(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.validate(py)?;
+        let presentation = self.presentation.borrow(py);
+        let value = shape_ref_at(&presentation.inner, &self.path)
+            .and_then(|shape| shape.size())
+            .map(|(_, height)| height);
+        drop(presentation);
+        self.length(py, value)
+    }
+
+    #[getter]
+    fn shape_id(&self, py: Python<'_>) -> PyResult<Option<u32>> {
+        self.validate(py)?;
+        Ok(
+            shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
+                .and_then(|shape| shape.non_visual_id()),
+        )
+    }
+
+    #[getter]
+    fn name(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.validate(py)?;
+        Ok(
+            shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
+                .and_then(|shape| shape.non_visual_name()),
+        )
+    }
+
     #[getter]
     fn shapes(&self, py: Python<'_>) -> PyResult<Py<PyShapeCollection>> {
         self.validate(py)?;

@@ -1,6 +1,6 @@
 # F-X119, Complete round-three Python authoring and inspection
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-X106c, F-X108, F-X109, F-X115, F-X118
@@ -77,12 +77,12 @@ Python binding operations.
 
 ## Implementation checklist
 
-- [ ] Add installed runtime and typing failures for every Issue 121 item.
-- [ ] Bind Word picture insertion and checked StoryItem placement.
-- [ ] Add source-compatible path-aware table-cell comment positions.
-- [ ] Bind notes mutation and presentation geometry, identity, font, and autofit reads.
-- [ ] Add property-preserving presentation Run text mutation.
-- [ ] Run binding, preservation, WASM, API, hash harness, full verification, and microscope gates.
+- [x] Add installed runtime and typing failures for every Issue 121 item.
+- [x] Bind Word picture insertion and checked StoryItem placement.
+- [x] Add source-compatible path-aware table-cell comment positions.
+- [x] Bind notes mutation and presentation geometry, identity, font, and autofit reads.
+- [x] Add property-preserving presentation Run text mutation.
+- [x] Run binding, preservation, WASM, API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

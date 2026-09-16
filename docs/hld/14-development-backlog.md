@@ -5449,11 +5449,12 @@ Google-style notes relationship graphs and rejects conflicting owners.
 
 ### F-X119, Complete round-three Python authoring and inspection (L)
 
-Bind in-memory Word picture insertion and checked StoryItem placement, plus a
-source-compatible path-aware comment position for table-cell paragraphs. Bind
-presentation shape bounds and identity, run font name, size and color, text
-autofit mode, and a Run text setter that preserves formatting. Keep the
-existing direct-body RunPosition source compatible.
+The Python bindings accept in-memory Word picture insertion with checked
+StoryItem placement and source-compatible path-aware comment positions for
+table-cell paragraphs. Presentation handles expose shape bounds and identity,
+run font name, size and color, text autofit mode, and a Run text setter that
+preserves formatting. The existing direct-body RunPosition remains source
+compatible.
 
 **Depends on**: F-X106c, F-X108, F-X109, F-X115, F-X118.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/121>.

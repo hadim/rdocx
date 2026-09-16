@@ -1685,6 +1685,16 @@ against pinned Poppler 26.01.0. A fresh cp39-abi3 wheel installs and runs on
 Python 3.9, while strict mypy and stubtest validate that same wheel on Python
 3.12.
 
+The round-three installed binding gate is
+`python_round_three_authoring_and_inspection_is_typed_and_lossless`. Its Word
+half inserts an in-memory picture after a checked story item and anchors a
+comment in a table-cell paragraph. Its presentation half checks shape bounds
+and identity, direct run font facts, autofit, notes mutation, and run text
+replacement after reopen. The package assertions retain run properties,
+foreign children, media relationships, comment anchors, and unrelated XML.
+Strict mypy and stubtest cover the same optional values, frozen ranges, and
+setters.
+
 Table-property round-trip coverage opens `0`, `false`, and `off` for
 `w:tblHeader`, `w:cantSplit`, and `w:noWrap`, then saves and reopens the table.
 Existing bare-element and absent-property cases retain true and inherited

@@ -23,6 +23,7 @@ pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu};
+use oxml_drawing::color::ColorChoice;
 #[cfg(feature = "render")]
 use oxml_drawing::color::ColorMap;
 pub use oxml_drawing::fill::Fill;
@@ -33,7 +34,7 @@ use oxml_drawing::table::CT_TableStyleList;
 use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
 #[cfg(feature = "render")]
 use oxml_drawing::text::CT_TextListStyle;
-use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph, TextRun};
+use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph, TextAutofit, TextRun};
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
     TextBulletChoice, TextFont,
@@ -5150,6 +5151,14 @@ pub enum ShapeKind {
     AlternateContent,
 }
 
+/// The direct autofit choice stored on a DrawingML text body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutofitMode {
+    None,
+    Normal,
+    Shape,
+}
+
 /// A borrowed shape-tree child.
 #[derive(Clone, Copy)]
 pub struct ShapeRef<'a> {
@@ -6066,6 +6075,19 @@ impl<'a> TextFrameRef<'a> {
             .get(index)
             .map(|paragraph| TextParagraphRef { paragraph })
     }
+
+    /// Returns the direct autofit choice on the text body.
+    pub fn autofit_mode(&self) -> Option<AutofitMode> {
+        self.body
+            .body_properties
+            .autofit
+            .as_ref()
+            .map(|autofit| match autofit {
+                TextAutofit::NoAutofit => AutofitMode::None,
+                TextAutofit::Normal(_) => AutofitMode::Normal,
+                TextAutofit::ShapeAutofit => AutofitMode::Shape,
+            })
+    }
 }
 
 impl<'a> TextParagraphRef<'a> {
@@ -6130,6 +6152,30 @@ impl TextRunRef<'_> {
     /// Returns direct character properties when present.
     pub fn properties(&self) -> Option<&CT_TextCharacterProperties> {
         self.run.properties.as_ref()
+    }
+
+    /// Returns the direct Latin typeface on this run.
+    pub fn font_name(&self) -> Option<&str> {
+        self.properties()?
+            .latin
+            .as_ref()
+            .map(|font| font.typeface.as_str())
+    }
+
+    /// Returns the direct run size in hundredths of a point.
+    pub fn font_size(&self) -> Option<i32> {
+        self.properties()?.font_size
+    }
+
+    /// Returns the direct sRGB run colour as `RRGGBB`.
+    pub fn font_color(&self) -> Option<String> {
+        let Fill::Solid(fill) = self.properties()?.fill.as_ref()? else {
+            return None;
+        };
+        let ColorChoice::Srgb { value, .. } = fill.color.as_ref()? else {
+            return None;
+        };
+        Some(value.to_string())
     }
 }
 
@@ -6201,6 +6247,11 @@ pub struct TextRunMut<'a> {
 }
 
 impl TextRunMut<'_> {
+    /// Returns direct character properties when present.
+    pub fn properties(&self) -> Option<&CT_TextCharacterProperties> {
+        self.run.properties.as_ref()
+    }
+
     /// Replaces text while retaining the run's typed and unmodelled state.
     pub fn set_text(&mut self, text: &str) {
         self.run.set_text(text);
@@ -6234,10 +6285,43 @@ fn shape_kind(child: &ShapeTreeChild) -> ShapeKind {
     }
 }
 
+fn shape_transform(child: &ShapeTreeChild) -> Option<&CT_Transform2D> {
+    match child {
+        ShapeTreeChild::Shape(shape) => shape.shape_properties.transform.as_ref(),
+        ShapeTreeChild::Picture(picture) => picture.shape_properties.transform.as_ref(),
+        ShapeTreeChild::GraphicFrame(frame) => Some(&frame.transform),
+        ShapeTreeChild::GroupShape(group) => group.group_transform(),
+        ShapeTreeChild::Connector(connector) => connector.shape_properties.transform.as_ref(),
+        ShapeTreeChild::AlternateContent(alternate) => Some(&alternate.chart_choice()?.transform),
+    }
+}
+
 impl<'a> ShapeRef<'a> {
     /// Returns the child's normalized structural kind.
     pub fn kind(&self) -> ShapeKind {
         shape_kind(self.child)
+    }
+
+    /// Returns the direct shape offset in EMU.
+    pub fn position(&self) -> Option<(Emu, Emu)> {
+        let offset = shape_transform(self.child)?.offset?;
+        Some((offset.x, offset.y))
+    }
+
+    /// Returns the direct shape extent in EMU.
+    pub fn size(&self) -> Option<(Emu, Emu)> {
+        let extent = shape_transform(self.child)?.extent?;
+        Some((extent.cx, extent.cy))
+    }
+
+    /// Returns the producer-facing non-visual shape id.
+    pub fn non_visual_id(&self) -> Option<u32> {
+        self.child.non_visual_id()
+    }
+
+    /// Returns the producer-facing non-visual shape name.
+    pub fn non_visual_name(&self) -> Option<String> {
+        self.child.non_visual_name()
     }
 
     /// Returns ordinary shape text or row-major table text when modelled.

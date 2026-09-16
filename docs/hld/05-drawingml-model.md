@@ -234,6 +234,13 @@ are absent, inserting them moves preserved boundary-0 content to the slot after
 keeps a preserved `mc:AlternateContent` run substitution after the newly
 inserted properties without changing its bytes.
 
+The presentation facade projects direct shape offset and extent, non-visual id
+and name, and the text body's explicit autofit choice through borrowed handles.
+Regular-run handles project the direct Latin typeface, centipoint size, and
+sRGB fill without reparsing XML. Run text replacement changes only `a:t`, so
+typed character properties and retained foreign children remain attached to
+the same run.
+
 `a:pPr/@rtl` is a typed optional boolean direction input. Parsing accepts the
 DrawingML attribute only in its unqualified schema form, while a foreign
 same-local-name attribute remains opaque. Writing places the canonical typed

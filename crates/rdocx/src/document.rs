@@ -12563,6 +12563,82 @@ impl Document {
         Ok((source, owner))
     }
 
+    pub(crate) fn story_paragraph_mut(&mut self, location: &ContentLocation) -> Result<&mut CT_P> {
+        let (part_name, mut paragraph_index, cell_route) = {
+            let (source, owner) = self.story_source_and_owner(&location.story)?;
+            let part_name = source.part_name.clone();
+            let source_xml = source.xml.into_owned();
+            if location.index_path.len() != 1 {
+                return Err(StoryError::InvalidPath {
+                    path: location.index_path.clone(),
+                }
+                .into());
+            }
+            let items = scan_story_items(&source_xml, &owner)?;
+            let item_index = location.index_path[0];
+            let item = items.get(item_index).ok_or(StoryError::OutOfBounds {
+                index: item_index,
+                len: items.len(),
+            })?;
+            if location.item_kind != StoryItemKind::Paragraph {
+                return Err(Error::Other(
+                    "comment positions must identify paragraphs".to_owned(),
+                ));
+            }
+            if item.kind != location.item_kind {
+                return Err(StoryError::KindMismatch {
+                    expected: location.item_kind,
+                    actual: item.kind,
+                }
+                .into());
+            }
+            let paragraph_index = items[..item_index]
+                .iter()
+                .filter(|item| item.kind == StoryItemKind::Paragraph)
+                .count();
+            let cell_route = (location.story.kind == StoryKind::TableCell
+                && part_name == self.doc_part_name)
+                .then(|| modeled_main_cell_route(&source_xml, &owner))
+                .transpose()?;
+            (part_name, paragraph_index, cell_route)
+        };
+        if part_name != self.doc_part_name {
+            return Err(Error::Other(
+                "path-aware comments currently support the main document story".to_owned(),
+            ));
+        }
+        match location.story.kind {
+            StoryKind::Body => {
+                nth_paragraph_in_body(&mut self.document.body.content, &mut paragraph_index)
+                    .ok_or_else(|| Error::Other("comment body paragraph is missing".to_owned()))
+            }
+            StoryKind::TableCell => {
+                let (content_index, mut cell_index) = cell_route.ok_or_else(|| {
+                    Error::Other("comment position has no modeled table-cell route".to_owned())
+                })?;
+                let content = self
+                    .document
+                    .body
+                    .content
+                    .get_mut(content_index)
+                    .ok_or_else(|| Error::Other("comment table container is missing".to_owned()))?;
+                let cell = match content {
+                    BodyContent::Table(table) => nth_cell_in_table(table, &mut cell_index),
+                    BodyContent::ContentControl(control) => {
+                        nth_cell_in_control(control, &mut cell_index)
+                    }
+                    BodyContent::Paragraph(_) | BodyContent::RawXml(_) => None,
+                }
+                .ok_or_else(|| Error::Other("comment table cell is missing".to_owned()))?;
+                nth_paragraph_in_cell(cell, &mut paragraph_index)
+                    .ok_or_else(|| Error::Other("comment cell paragraph is missing".to_owned()))
+            }
+            _ => Err(Error::Other(
+                "path-aware comments support body and table-cell paragraphs".to_owned(),
+            )),
+        }
+    }
+
     fn story_item_source<'a>(
         &'a self,
         location: &ContentLocation,
@@ -12870,12 +12946,77 @@ impl Document {
         width: Length,
         height: Length,
     ) -> Result<()> {
+        self.insert_picture_to_story(
+            story,
+            None,
+            image_data,
+            image_filename,
+            Some(width),
+            Some(height),
+        )?;
+        Ok(())
+    }
+
+    /// Insert an inline picture paragraph after checked story content.
+    ///
+    /// Omitting `after` appends to the story. Width and height must either both
+    /// be present or both be omitted. Omitted dimensions use the image's native
+    /// size at 72 DPI.
+    pub fn insert_picture_to_story(
+        &mut self,
+        story: &StoryId,
+        after: Option<&ContentLocation>,
+        image_data: &[u8],
+        image_filename: &str,
+        width: Option<Length>,
+        height: Option<Length>,
+    ) -> Result<ContentLocation> {
+        let (width, height) = match (width, height) {
+            (Some(width), Some(height)) => (width, height),
+            (None, None) => {
+                let native_size = oxml_media::probe(image_data)
+                    .and_then(|info| info.native_size(72.0))
+                    .ok_or_else(|| Error::UnavailableImageDimensions {
+                        filename: image_filename.to_owned(),
+                    })?;
+                (
+                    Length::emu(native_size.width_emu),
+                    Length::emu(native_size.height_emu),
+                )
+            }
+            _ => {
+                return Err(Error::Other(
+                    "picture width and height must both be provided or both be omitted".to_owned(),
+                ));
+            }
+        };
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
-        candidate.story_source_and_owner(story)?;
-        let owner = story.part_name.clone();
+        let (source, story_owner) = candidate.story_source_and_owner(story)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let direct_items = direct_story_content_items(&source_xml, &story_owner)?;
+        let (boundary, inserted_direct_index) = match after {
+            Some(after) => {
+                if after.story != *story {
+                    return Err(Error::Other(
+                        "picture placement must belong to the target story".to_owned(),
+                    ));
+                }
+                let item = validated_direct_content_item(&source_xml, &story_owner, after)?;
+                let index = direct_items
+                    .iter()
+                    .position(|candidate| candidate.full == item.full)
+                    .ok_or_else(|| Error::Other("picture placement was not found".to_owned()))?;
+                (item.full.end, index + 1)
+            }
+            None => (
+                story_owner_content_end(&source_xml, &story_owner)?,
+                direct_items.len(),
+            ),
+        };
         let relationship_id =
-            candidate.add_image_relationship_checked(&owner, image_data, image_filename)?;
+            candidate.add_image_relationship_checked(&part_name, image_data, image_filename)?;
         let drawing_id = candidate.identifiers.reserve_drawing_id()?;
 
         let mut inline = CT_Inline::new(&relationship_id, width.to_emu(), height.to_emu());
@@ -12889,20 +13030,16 @@ impl Document {
         };
         let mut paragraph = CT_P::new();
         paragraph.runs.push(run);
-        let preserve_typed_body = story.kind == StoryKind::Body && owner == candidate.doc_part_name;
-        if preserve_typed_body {
-            candidate
-                .document
-                .body
-                .content
-                .push(BodyContent::Paragraph(paragraph));
-        } else {
-            let mut fragment_paragraph = paragraph;
-            close_typed_story_drawing_namespaces(&mut fragment_paragraph)?;
-            let fragment = ContentFragment::paragraph(fragment_paragraph)?;
-            candidate.append_fragment_to_story(story, fragment)?;
-        }
-        if owner == candidate.doc_part_name {
+        close_typed_story_drawing_namespaces(&mut paragraph)?;
+        let mut fragment = ContentFragment::paragraph(paragraph)?;
+        fragment.source_part_name = Some(part_name.clone());
+        fragment.source_story_kind = Some(story.kind);
+        fragment.source_owner_index = Some(story.owner_index);
+        let fragment_xml = content_fragment_for_insertion(&candidate, story, &fragment)?;
+        let mut updated = source_xml;
+        insert_story_fragment(&mut updated, &story_owner, boundary, fragment_xml)?;
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        if part_name == candidate.doc_part_name {
             candidate
                 .identifiers
                 .register_nested_story_relationship(story, relationship_id);
@@ -12910,10 +13047,33 @@ impl Document {
                 .identifiers
                 .register_nested_story_drawing(story, drawing_id);
         }
-        candidate.prepare_staged_package()?;
-        candidate.clone_for_staging().reopen_prepared_staged()?;
-        self.commit_staged_mutation(candidate);
-        Ok(())
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let location = {
+            let refreshed_story = reopened
+                .stories()?
+                .into_iter()
+                .find(|candidate| {
+                    candidate.kind == story.kind
+                        && candidate.part_name == story.part_name
+                        && candidate.owner_index == story.owner_index
+                })
+                .ok_or_else(|| Error::Other("inserted picture story was not found".to_owned()))?;
+            let (source, owner) = reopened.story_source_and_owner(&refreshed_story)?;
+            let direct = direct_story_content_items(source.xml.as_ref(), &owner)?;
+            let inserted = direct.get(inserted_direct_index).ok_or_else(|| {
+                Error::Other("inserted picture paragraph was not found".to_owned())
+            })?;
+            let projected = scan_story_items(source.xml.as_ref(), &owner)?;
+            let index = projected
+                .iter()
+                .position(|item| item.full == inserted.full)
+                .ok_or_else(|| {
+                    Error::Other("inserted picture paragraph was not projected".to_owned())
+                })?;
+            ContentLocation::new(refreshed_story, StoryItemKind::Paragraph, vec![index])
+        };
+        self.commit_staged_mutation(reopened);
+        Ok(location)
     }
 
     /// Append one configured picture paragraph to a checked story owner.

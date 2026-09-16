@@ -237,6 +237,10 @@ The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
 field cache update operations. `RunPosition` and
 `RunRange` are constructible frozen values for zero-based half-open run ranges.
+`StoryRunPosition` and `StoryRunRange` are parallel frozen values whose
+`StoryItem` snapshots can identify direct body or table-cell paragraphs.
+`Document.add_comment` accepts either range form. The original direct-body
+constructors and call shape remain unchanged.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
 `LayoutPage`, `TocRebuildReport`, and `Revision` are frozen typed snapshots.
 `Document.revisions` lists main-document revisions with a snake_case `kind`,
@@ -259,6 +263,13 @@ replacement, and field updates release the GIL and advance the revision once
 only when they report a nonzero count. A native error publishes no
 candidate and does not advance the binding revision.
 
+`Document.add_picture` accepts in-memory bytes, a safe filename, optional
+paired EMU dimensions, and an optional checked `StoryItem` placement. Omitted
+dimensions use native 72 DPI sizing. Omitted placement appends to the body.
+The returned immutable `StoryItem` names the inserted paragraph at the new
+document revision. A rejected image, filename, dimension pair, or stale path
+leaves package bytes and binding revisions unchanged.
+
 `rpptx` mirrors python-pptx through an unpublished mixed-layout `rpptx-py`
 crate. `Presentation` owns the Rust facade and one revision counter. Lazy
 layouts, slides, shapes, placeholders, text frames, paragraphs, runs, columns
@@ -269,6 +280,13 @@ path after each structural write, because strict global revision invalidation
 intentionally stales every pre-write handle and collection. Pure-Python
 `Length`, `Inches`, `Pt` and the required `MSO_SHAPE` members keep native
 inheritance outside the limited ABI.
+
+Presentation `Shape` handles expose optional `Length` values for left, top,
+width, and height plus optional non-visual id and name. `TextFrame.autofit`
+reports `none`, `normal`, or `shape` when the body carries an explicit choice.
+`Run.font` reads the run's direct Latin name, size, and sRGB colour, while the
+`Run.text` setter replaces only that run's text and preserves its typed and
+unmodelled properties.
 
 The presentation binding exposes `to_pdf`, `render_slide_to_png`,
 `render_all_slides`, `to_notes_pdf`, and `render_all_notes` through the native

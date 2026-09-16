@@ -1354,11 +1354,22 @@ boundaries. `Document` validates both endpoints before mutation, allocates
 collision-free comment and paragraph ids, updates the comment parts and all
 three anchors together, then invalidates layout once. `CommentRef` is a
 read-only view over the typed comment and its comments-extended thread entry.
+`StoryRunPosition` and `StoryRunRange` add checked `ContentLocation` ownership
+for body and table-cell paragraphs without changing `RunPosition`. The staged
+path validates both endpoints and edits cloned paragraphs before it creates
+comment relationships, so any path, run, or package failure publishes nothing.
 Replies follow paragraph-id parent linkage, resolution applies to the thread
 root, and removal deletes the selected comment plus descendant replies without
 deleting unrelated runs or producer XML.
 The additive `add_comment_with_date` and `reply_to_with_date` operations own
 validated optional timestamps. The original operations delegate with no date.
+
+Checked picture insertion uses the same story owner and package relationship
+scope. `insert_picture_to_story` accepts bytes, a safe filename, paired
+explicit dimensions or native 72 DPI sizing, and an optional direct item after
+which to insert. It serializes, reopens, and returns the refreshed paragraph
+location only after the image part, relationship, drawing identity, and story
+content all validate together.
 
 `Document::split_run` creates an exact accepted-view run boundary without
 changing `RunPosition`. It clones the selected paragraph, resolves the selected

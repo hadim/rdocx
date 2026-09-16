@@ -30,6 +30,8 @@ from rdocx import (
     Section,
     Story,
     StoryItem,
+    StoryRunPosition,
+    StoryRunRange,
     Style,
     Table,
     TableCollection,
@@ -100,6 +102,14 @@ def exercise_rdocx_types(path: Path) -> None:
     document.replace_image("rId1", b"image")
     document.replace_image_for_story(stories[0], "rId1", b"image")
     story_items: tuple[StoryItem, ...] = document.story_items
+    inserted_picture: StoryItem = document.add_picture(
+        b"png", "image.png", Inches(1), Inches(1), after=story_items[0]
+    )
+    story_position = StoryRunPosition(item=story_items[0], run_index=0)
+    story_range = StoryRunRange(start=story_position, end=story_position)
+    story_comment_id: int = document.add_comment(
+        story_range, author="Ada", text="story review"
+    )
     direct_body_index: int | None = story_items[0].direct_body_index if story_items else None
     variants: tuple[HeaderFooterVariant, ...] = document.header_footer_variants
     hyperlinks: tuple[Hyperlink, ...] = document.hyperlinks
@@ -177,6 +187,8 @@ def exercise_rdocx_types(path: Path) -> None:
         regex_count,
         image_data,
         fragment_kind,
+        inserted_picture,
+        story_comment_id,
     )
     accepted, dated, replaced, matched, updated
 

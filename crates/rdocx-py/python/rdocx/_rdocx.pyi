@@ -13,7 +13,7 @@ __all__ = [
     "Comment", "ComparisonDiagnostic", "ContentFragment", "Document", "Font", "HeaderFooterVariant",
     "Hyperlink", "LayoutFragment", "LayoutPage", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
-    "RunRange", "Section", "Story", "StoryItem", "Style", "Table", "TableCollection",
+    "RunRange", "Section", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style", "Table", "TableCollection",
     "TocRebuildReport",
 ]
 
@@ -197,6 +197,26 @@ class StoryItem:
     def xml(self) -> bytes: ...
     @property
     def revision(self) -> int: ...
+
+
+@_final
+class StoryRunPosition:
+    def __new__(cls, *, item: StoryItem, run_index: int) -> StoryRunPosition: ...
+    @property
+    def item(self) -> StoryItem: ...
+    @property
+    def run_index(self) -> int: ...
+
+
+@_final
+class StoryRunRange:
+    def __new__(
+        cls, *, start: StoryRunPosition, end: StoryRunPosition
+    ) -> StoryRunRange: ...
+    @property
+    def start(self) -> StoryRunPosition: ...
+    @property
+    def end(self) -> StoryRunPosition: ...
 
 
 @_final
@@ -421,7 +441,7 @@ class Document:
     def update_fields_on_open(self, value: bool | None) -> None: ...
     def add_comment(
         self,
-        range: RunRange,
+        range: RunRange | StoryRunRange,
         *,
         author: str,
         text: str,
@@ -463,6 +483,15 @@ class Document:
     def set_footer(self, text: str) -> None: ...
     def set_story_text(self, item: StoryItem, text: str) -> None: ...
     def add_hyperlink_to_story(self, story: Story, text: str, url: str) -> None: ...
+    def add_picture(
+        self,
+        data: bytes,
+        filename: str,
+        width: int | None = None,
+        height: int | None = None,
+        *,
+        after: StoryItem | None = None,
+    ) -> StoryItem: ...
     @property
     def paragraphs(self) -> ParagraphCollection: ...
     @property

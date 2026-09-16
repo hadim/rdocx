@@ -20,9 +20,9 @@ use rdocx::{
     ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText, MailMergeImage,
     MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions,
     RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange, RunRef, StoryId,
-    StoryItemKind, StoryKind, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection,
-    TocField, TocRebuildReport, UnderlineStyle, UnsupportedXmlRef, WordCreationProfile,
-    WordPackageClass,
+    StoryItemKind, StoryKind, StoryRunPosition, StoryRunRange, StyleBuilder, StyleType, TableRef,
+    TcField, TocEntrySelection, TocField, TocRebuildReport, UnderlineStyle, UnsupportedXmlRef,
+    WordCreationProfile, WordPackageClass,
 };
 use rdocx_oxml::content_control::SdtContent;
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
@@ -1230,6 +1230,69 @@ fn split_run_enables_exact_comment_ranges_without_losing_content() {
             .all(|run| run.bold_value() == Some(true))
     );
     assert_eq!(reopened.comments().len(), 1);
+}
+
+#[test]
+fn checked_table_cell_comment_range_is_atomic_and_reopens() {
+    let mut document = Document::new();
+    document
+        .add_table(1, 1)
+        .row(0)
+        .unwrap()
+        .cell(0)
+        .unwrap()
+        .set_text("cell text");
+    let cell = f254_story(&document, StoryKind::TableCell);
+    let location = document
+        .story_items(&cell)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let before_invalid = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_story_comment(
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 2,
+                    },
+                },
+                "Ada",
+                None,
+                "invalid",
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_invalid);
+
+    let id = document
+        .add_story_comment(
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "review",
+        )
+        .unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.comments()[0].id(), id);
+    assert_eq!(reopened.comments()[0].text(), "review");
 }
 
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
