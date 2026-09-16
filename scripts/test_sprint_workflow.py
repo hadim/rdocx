@@ -9067,6 +9067,7 @@ Pedro Assumpcao and the rdocx maintainers.
                 255,
                 256,
                 257,
+                258,
                 260,
             }
         }

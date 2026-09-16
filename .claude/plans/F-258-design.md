@@ -1,6 +1,6 @@
 # F-258, Complete M23 row and cell authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-257, F-X100
@@ -81,11 +81,11 @@ cell properties. Every delta must be reviewed against this plan.
 
 ## Implementation checklist
 
-- [ ] Add failing sanitized row, cell, merge, and nested-table differentials.
-- [ ] Complete checked row height, grid, alignment, and toggle authoring.
-- [ ] Complete checked cell border, margin, width, fill, alignment, direction, merge, and wrap authoring.
-- [ ] Validate the whole table and preserve unrelated raw slots before commit.
-- [ ] Run parser, layout, public API, oracle, hash harness, full verification, and microscope gates.
+- [x] Add failing sanitized row, cell, merge, and nested-table differentials.
+- [x] Complete checked row height, grid, alignment, and toggle authoring.
+- [x] Complete checked cell border, margin, width, fill, alignment, direction, merge, and wrap authoring.
+- [x] Validate the whole table and preserve unrelated raw slots before commit.
+- [x] Run parser, layout, public API, oracle, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

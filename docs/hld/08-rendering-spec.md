@@ -635,6 +635,14 @@ including cells that span multiple columns and rows with leading or trailing
 grid omissions. Invalid coverage and overflow do not reach layout because the
 mutation is rejected before publication. Explicit `none` borders remain
 modeled inputs, so layout can distinguish suppression from an omitted edge.
+Rows can directly author minimum or exact height, repeat and split policy,
+alignment, grid omissions, and conditional regions. Cells can directly author
+horizontal and vertical merge topology, width, borders, margins, fill,
+vertical alignment, six Word text directions, wrapping, conditional regions,
+and nested tables. Layout receives only candidates whose rows cover the active
+grid exactly and whose vertical continuations match the immediately preceding
+row at the same grid range. An explicit false toggle remains a direct layout
+input rather than becoming absence.
 Paragraphs without an explicit style use the authored default paragraph style.
 When a run names a paragraph style with a reciprocal character-style link, the
 linked character inheritance chain supplies its run properties. All three

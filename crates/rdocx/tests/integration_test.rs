@@ -7,7 +7,8 @@ use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
 use rdocx::paragraph::Alignment;
 use rdocx::table::{
-    TableBorderEdge, TableCellMargins, TableLayout, TableLook, TableWidth, VerticalAlignment,
+    CellBorderEdge, CellTextDirection, RowHeight, TableBorderEdge, TableCellMargins,
+    TableConditionalFormatting, TableLayout, TableLook, TableWidth, VerticalAlignment,
 };
 use rdocx::{
     BodyItemRef, BorderStyle, Length, ListLevel, MhtmlDiagnostic, ParagraphRef, RunPosition,
@@ -24,6 +25,25 @@ use rdocx_oxml::table::{CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TcPr};
 const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
 const MHTML_ORACLE_VERSION: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_SECTION_ORACLE: &str = "Microsoft Word 16.112.3 build 16.112.26083020";
+const WORD_ROW_CELL_ORACLE: &str = "Microsoft Word 16.112.4 build 16.112.26090911";
+const WORD_ROW_CELL_RECORDS: &[&str] = &[
+    "table | rows=6 | grid=1200,1800,2400",
+    "row 0 | cells=3 | before=None | after=None",
+    "row 0 format | height=atLeast:480 | header=Some(true) | alignment=Some(Center)",
+    "direction | row=0 | cell=1 | value=TopToBottomRightToLeft",
+    "row 1 | cells=2 | before=Some(1) | after=None",
+    "direction | row=1 | cell=1 | value=BottomToTopLeftToRight",
+    "row 2 | cells=2 | before=None | after=None",
+    "direction | row=2 | cell=0 | value=LeftToRightTopToBottomVertical",
+    "row 3 | cells=3 | before=None | after=None",
+    "direction | row=3 | cell=0 | value=TopToBottomRightToLeftVertical",
+    "row 4 | cells=3 | before=None | after=None",
+    "direction | row=4 | cell=0 | value=TopToBottomLeftToRightVertical",
+    "row 5 | cells=3 | before=None | after=None",
+    "cell 0:1 | width=1800 | border=single:336699 | margins=60,90,60,90 | shading=D9EAF7 | valign=Some(Center) | nested=1",
+    "cell 2:0 | span=Some(2) | width=3000",
+    "merge | restart=Some(Restart) | continuation=Some(Continue)",
+];
 const WORD_SECTION_ENVIRONMENT: &str = "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f251-section-pdf-v1; pdftotext=26.09.0; pdfinfo=26.09.0";
 const WORD_SECTION_RECORDS: [&str; 3] = [
     "page | physical=1 | size_pt=612x792 | PAGE=1",
@@ -6983,6 +7003,741 @@ fn checked_table_mutation_preserves_raw_property_slots_and_border_extensions() {
         width < borders && borders < after && after < shading && shading < look,
         "{second_xml}"
     );
+}
+
+fn m23_row_cell_oracle_source() -> Document {
+    let mut document = Document::new();
+    {
+        let mut table = document.add_table(6, 3);
+        table
+            .set_grid_widths(&[
+                Length::twips(1_200),
+                Length::twips(1_800),
+                Length::twips(2_400),
+            ])
+            .unwrap();
+        table.set_row_grid_omissions(1, Some(1), None).unwrap();
+        table.set_cell_grid_span_checked(2, 0, Some(2)).unwrap();
+        table
+            .set_cell_vertical_merge(0, 1, Some(rdocx::table::VMerge::Restart))
+            .unwrap();
+        table
+            .set_cell_vertical_merge(1, 0, Some(rdocx::table::VMerge::Continue))
+            .unwrap();
+
+        {
+            let mut row = table.row(0).unwrap();
+            row.set_height_checked(RowHeight::AtLeast(Length::twips(480)))
+                .unwrap();
+            row.set_header_value(Some(true));
+            row.set_cant_split_value(Some(false));
+            row.set_alignment(Alignment::Center);
+            row.set_conditional_formatting(TableConditionalFormatting {
+                first_row: true,
+                ..Default::default()
+            });
+        }
+        {
+            let mut cell = table.cell(0, 1).unwrap();
+            cell.set_width_checked(Length::twips(1_800)).unwrap();
+            cell.set_border_checked(CellBorderEdge::Bottom, BorderStyle::Single, 8, "336699")
+                .unwrap();
+            cell.set_margins_checked(
+                Length::twips(60),
+                Length::twips(90),
+                Length::twips(60),
+                Length::twips(90),
+            )
+            .unwrap();
+            cell.set_shading_checked("D9EAF7").unwrap();
+            cell.set_vertical_alignment(VerticalAlignment::Center);
+            cell.set_text_direction(Some(CellTextDirection::TopToBottomRightToLeft));
+            cell.set_conditional_formatting(TableConditionalFormatting {
+                first_row: true,
+                first_column: true,
+                ..Default::default()
+            });
+            cell.set_no_wrap_value(Some(false));
+            let mut nested = cell.add_table_checked(1, 2).unwrap();
+            nested
+                .set_grid_widths(&[Length::twips(700), Length::twips(900)])
+                .unwrap();
+        }
+        for (row, cell, direction) in [
+            (0, 0, CellTextDirection::LeftToRightTopToBottom),
+            (0, 1, CellTextDirection::TopToBottomRightToLeft),
+            (1, 1, CellTextDirection::BottomToTopLeftToRight),
+            (2, 0, CellTextDirection::LeftToRightTopToBottomVertical),
+            (3, 0, CellTextDirection::TopToBottomRightToLeftVertical),
+            (4, 0, CellTextDirection::TopToBottomLeftToRightVertical),
+        ] {
+            table
+                .cell(row, cell)
+                .unwrap()
+                .set_text_direction(Some(direction));
+        }
+    }
+    document
+}
+
+/// Normalize the stable facts retained by Word's writer. Exact local checks
+/// separately cover explicit false values, default direction, contextual
+/// conditional markers, and absent heights that Word canonicalizes.
+fn m23_row_cell_oracle_records(document: &Document) -> Vec<String> {
+    let table = document.table(0).unwrap();
+    let mut records = vec![format!(
+        "table | rows={} | grid={}",
+        table.row_count(),
+        table
+            .grid_widths()
+            .iter()
+            .map(|width| width.to_twips().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    )];
+    for row_index in 0..table.row_count() {
+        let row = table.row(row_index).unwrap();
+        records.push(format!(
+            "row {row_index} | cells={} | before={:?} | after={:?}",
+            row.cell_count(),
+            row.grid_before(),
+            row.grid_after(),
+        ));
+        if row_index == 0 {
+            let height = match row.height() {
+                Some(RowHeight::AtLeast(value)) => format!("atLeast:{}", value.to_twips()),
+                Some(RowHeight::Exact(value)) => format!("exact:{}", value.to_twips()),
+                None => "none".to_owned(),
+            };
+            records.push(format!(
+                "row 0 format | height={height} | header={:?} | alignment={:?}",
+                row.header_value(),
+                row.alignment(),
+            ));
+        }
+        for cell_index in 0..row.cell_count() {
+            let cell = row.cell(cell_index).unwrap();
+            if let Some(direction) = cell
+                .text_direction()
+                .filter(|value| *value != CellTextDirection::LeftToRightTopToBottom)
+            {
+                records.push(format!(
+                    "direction | row={row_index} | cell={cell_index} | value={direction:?}"
+                ));
+            }
+        }
+    }
+    let cell = table.cell(0, 1).unwrap();
+    let margins = cell.margins().unwrap();
+    records.push(format!(
+        "cell 0:1 | width={} | border={}:{} | margins={},{},{},{} | shading={} | valign={:?} | nested={}",
+        cell.width().unwrap().to_twips(),
+        cell.border(CellBorderEdge::Bottom).unwrap().style(),
+        cell.border(CellBorderEdge::Bottom).unwrap().color().unwrap(),
+        margins.top.unwrap().to_twips(),
+        margins.right.unwrap().to_twips(),
+        margins.bottom.unwrap().to_twips(),
+        margins.left.unwrap().to_twips(),
+        cell.shading_fill().unwrap(),
+        cell.vertical_alignment(),
+        cell.items()
+            .filter(|item| matches!(item, rdocx::CellItemRef::Table(_)))
+            .count(),
+    ));
+    let span = table.cell(2, 0).unwrap();
+    records.push(format!(
+        "cell 2:0 | span={:?} | width={}",
+        span.grid_span(),
+        span.width().unwrap().to_twips(),
+    ));
+    records.push(format!(
+        "merge | restart={:?} | continuation={:?}",
+        table.cell(0, 1).unwrap().v_merge(),
+        table.cell(1, 0).unwrap().v_merge(),
+    ));
+    records
+}
+
+#[test]
+fn m23_nested_rows_and_cells_match_word() {
+    assert_eq!(
+        WORD_ROW_CELL_ORACLE,
+        "Microsoft Word 16.112.4 build 16.112.26090911"
+    );
+    let mut document = m23_row_cell_oracle_source();
+
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        m23_row_cell_oracle_records(&reopened),
+        WORD_ROW_CELL_RECORDS
+    );
+    {
+        let table = reopened.table(0).unwrap();
+        let row = table.row(0).unwrap();
+        assert_eq!(row.height(), Some(RowHeight::AtLeast(Length::twips(480))));
+        assert_eq!(row.header_value(), Some(true));
+        assert_eq!(row.cant_split_value(), Some(false));
+        assert_eq!(row.alignment(), Some(Alignment::Center));
+        assert_eq!(
+            row.conditional_formatting(),
+            Some(TableConditionalFormatting {
+                first_row: true,
+                ..Default::default()
+            })
+        );
+        assert_eq!(table.row(1).unwrap().grid_before(), Some(1));
+        assert_eq!(table.row(1).unwrap().cell_count(), 2);
+        assert_eq!(table.row(2).unwrap().cell_count(), 2);
+        assert_eq!(table.cell(2, 0).unwrap().grid_span(), Some(2));
+        assert_eq!(
+            table.cell(2, 0).unwrap().width(),
+            Some(Length::twips(3_000))
+        );
+        assert_eq!(
+            table.cell(0, 1).unwrap().v_merge(),
+            Some(&rdocx::table::VMerge::Restart)
+        );
+        assert_eq!(
+            table.cell(1, 0).unwrap().v_merge(),
+            Some(&rdocx::table::VMerge::Continue)
+        );
+        let cell = table.cell(0, 1).unwrap();
+        assert_eq!(cell.width(), Some(Length::twips(1_800)));
+        assert_eq!(
+            cell.border(CellBorderEdge::Bottom).unwrap().color(),
+            Some("336699")
+        );
+        assert_eq!(
+            cell.margins(),
+            Some(TableCellMargins {
+                top: Some(Length::twips(60)),
+                right: Some(Length::twips(90)),
+                bottom: Some(Length::twips(60)),
+                left: Some(Length::twips(90)),
+            })
+        );
+        assert_eq!(cell.shading_fill(), Some("D9EAF7"));
+        assert_eq!(cell.vertical_alignment(), Some(VerticalAlignment::Center));
+        assert_eq!(
+            cell.text_direction(),
+            Some(CellTextDirection::TopToBottomRightToLeft)
+        );
+        assert_eq!(cell.no_wrap_value(), Some(false));
+        assert_eq!(
+            cell.conditional_formatting(),
+            Some(TableConditionalFormatting {
+                first_row: true,
+                first_column: true,
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            cell.items()
+                .filter(|item| matches!(item, rdocx::CellItemRef::Table(_)))
+                .count(),
+            1
+        );
+        for (row, cell, direction) in [
+            (0, 0, CellTextDirection::LeftToRightTopToBottom),
+            (0, 1, CellTextDirection::TopToBottomRightToLeft),
+            (1, 1, CellTextDirection::BottomToTopLeftToRight),
+            (2, 0, CellTextDirection::LeftToRightTopToBottomVertical),
+            (3, 0, CellTextDirection::TopToBottomRightToLeftVertical),
+            (4, 0, CellTextDirection::TopToBottomLeftToRightVertical),
+        ] {
+            assert_eq!(
+                table.cell(row, cell).unwrap().text_direction(),
+                Some(direction)
+            );
+        }
+    }
+
+    let xml = String::from_utf8(document_xml(&mut reopened)).unwrap();
+    assert!(
+        xml.contains(r#"<w:cantSplit w:val="false"/>"#),
+        "{WORD_ROW_CELL_ORACLE}\n{xml}"
+    );
+    assert!(xml.contains(r#"<w:noWrap w:val="false"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:gridBefore w:val="1"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:gridSpan w:val="2"/>"#), "{xml}");
+    let row_properties = &xml[xml.find("<w:trPr>").unwrap()..xml.find("</w:trPr>").unwrap()];
+    let row_positions = [
+        "<w:cnfStyle",
+        "<w:cantSplit",
+        "<w:trHeight",
+        "<w:tblHeader",
+        "<w:jc",
+    ]
+    .map(|element| row_properties.find(element).unwrap());
+    assert!(row_positions.windows(2).all(|pair| pair[0] < pair[1]));
+    let cell_marker = xml.find("D9EAF7").unwrap();
+    let cell_start = xml[..cell_marker].rfind("<w:tcPr>").unwrap();
+    let cell_end = xml[cell_marker..].find("</w:tcPr>").unwrap() + cell_marker;
+    let cell_properties = &xml[cell_start..cell_end];
+    let cell_positions = [
+        "<w:cnfStyle",
+        "<w:tcW",
+        "<w:vMerge",
+        "<w:tcBorders",
+        "<w:shd",
+        "<w:noWrap",
+        "<w:tcMar",
+        "<w:textDirection",
+        "<w:vAlign",
+    ]
+    .map(|element| cell_properties.find(element).unwrap());
+    assert!(cell_positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let first = reopened
+        .render_page_to_png_deterministic(0, 72.0)
+        .unwrap()
+        .unwrap();
+    let second = reopened
+        .render_page_to_png_deterministic(0, 72.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first, second);
+}
+
+#[test]
+#[ignore = "requires pinned Microsoft Word 16.112.4 GUI automation"]
+fn regenerate_f258_word_row_cell_oracle() {
+    let plist = "/Applications/Microsoft Word.app/Contents/Info.plist";
+    let version = std::process::Command::new("plutil")
+        .args(["-extract", "CFBundleShortVersionString", "raw", plist])
+        .output()
+        .unwrap();
+    let build = std::process::Command::new("plutil")
+        .args(["-extract", "CFBundleVersion", "raw", plist])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&version.stdout).trim(), "16.112.4");
+    assert_eq!(
+        String::from_utf8_lossy(&build.stdout).trim(),
+        "16.112.26090911"
+    );
+    assert_eq!(
+        WORD_ROW_CELL_ORACLE,
+        "Microsoft Word 16.112.4 build 16.112.26090911"
+    );
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::path::Path::new(
+        "/Users/atulsharma/Library/Containers/com.microsoft.Word/Data/Documents/rdocx-f258-word-oracle",
+    )
+    .join(format!("{}-{nonce}", std::process::id()));
+    let artifacts = F251OracleArtifacts::create(directory);
+    let source = artifacts.path().join("f258-source.docx");
+    let output = artifacts.path().join("f258-word.docx");
+    m23_row_cell_oracle_source().save(&source).unwrap();
+
+    let script = format!(
+        r#"with timeout of 60 seconds
+tell application "Microsoft Word"
+activate
+open POSIX file "{}"
+delay 3
+set oracleDocument to active document
+save as oracleDocument file name "{}" file format format document default add to recent files false
+close oracleDocument saving no
+end tell
+end timeout"#,
+        source.display(),
+        output.display(),
+    );
+    let word = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .unwrap();
+    assert!(
+        word.status.success(),
+        "Word DOCX save failed: {}",
+        String::from_utf8_lossy(&word.stderr)
+    );
+
+    let oracle = Document::open(&output).unwrap();
+    let records = m23_row_cell_oracle_records(&oracle);
+    for record in &records {
+        println!("{record:?},");
+    }
+    assert_eq!(records, WORD_ROW_CELL_RECORDS);
+}
+
+#[test]
+fn complete_row_and_cell_properties_round_trip() {
+    let mut document = Document::new();
+    let mut table = document.add_table(6, 2);
+    table
+        .row(0)
+        .unwrap()
+        .set_height_checked(RowHeight::Exact(Length::twips(720)))
+        .unwrap();
+    table.row(0).unwrap().set_header_value(Some(false));
+    table.row(0).unwrap().set_cant_split_value(None);
+    let directions = [
+        CellTextDirection::LeftToRightTopToBottom,
+        CellTextDirection::TopToBottomRightToLeft,
+        CellTextDirection::BottomToTopLeftToRight,
+        CellTextDirection::LeftToRightTopToBottomVertical,
+        CellTextDirection::TopToBottomRightToLeftVertical,
+        CellTextDirection::TopToBottomLeftToRightVertical,
+    ];
+    let edges = [
+        CellBorderEdge::Top,
+        CellBorderEdge::Bottom,
+        CellBorderEdge::Left,
+        CellBorderEdge::Right,
+        CellBorderEdge::InsideHorizontal,
+        CellBorderEdge::InsideVertical,
+    ];
+    for (index, (direction, edge)) in directions.into_iter().zip(edges).enumerate() {
+        let mut cell = table.cell(index, 0).unwrap();
+        cell.set_text_direction(Some(direction));
+        cell.set_border_checked(edge, BorderStyle::Single, 8, "123456")
+            .unwrap();
+    }
+    table.cell(0, 0).unwrap().set_no_wrap_value(None);
+    table.cell(0, 1).unwrap().set_no_wrap_value(Some(true));
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened_table = reopened.table(0).unwrap();
+    let row = reopened_table.row(0).unwrap();
+    assert_eq!(row.height(), Some(RowHeight::Exact(Length::twips(720))));
+    assert_eq!(row.header_value(), Some(false));
+    assert_eq!(row.cant_split_value(), None);
+    for (index, (direction, edge)) in directions.into_iter().zip(edges).enumerate() {
+        let cell = reopened_table.cell(index, 0).unwrap();
+        assert_eq!(cell.text_direction(), Some(direction));
+        assert_eq!(cell.border(edge).unwrap().style(), "single");
+    }
+    assert_eq!(reopened_table.cell(0, 0).unwrap().no_wrap_value(), None);
+    assert_eq!(
+        reopened_table.cell(0, 1).unwrap().no_wrap_value(),
+        Some(true)
+    );
+}
+
+#[test]
+fn checked_row_cell_topology_is_atomic() {
+    let mut document = Document::new();
+    document.add_table(2, 2);
+    let before = document.to_bytes().unwrap();
+
+    assert!(
+        document
+            .table_mut(0)
+            .unwrap()
+            .set_row_grid_omissions(0, Some(2), Some(1))
+            .is_err()
+    );
+    assert!(
+        document
+            .table_mut(0)
+            .unwrap()
+            .set_cell_grid_span_checked(0, 0, Some(0))
+            .is_err()
+    );
+    assert!(
+        document
+            .table_mut(0)
+            .unwrap()
+            .set_cell_vertical_merge(1, 0, Some(rdocx::table::VMerge::Continue))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    {
+        let mut table = document.table_mut(0).unwrap();
+        assert!(
+            table
+                .row(0)
+                .unwrap()
+                .set_height_checked(RowHeight::Exact(Length::twips(-1)))
+                .is_err()
+        );
+        assert!(
+            table
+                .cell(0, 0)
+                .unwrap()
+                .set_width_checked(Length::emu(i64::MAX))
+                .is_err()
+        );
+        assert!(
+            table
+                .cell(0, 0)
+                .unwrap()
+                .set_border_checked(CellBorderEdge::Top, BorderStyle::Single, 0, "000000")
+                .is_err()
+        );
+        assert!(
+            table
+                .cell(0, 0)
+                .unwrap()
+                .set_shading_checked("invalid")
+                .is_err()
+        );
+        assert!(table.cell(0, 0).unwrap().add_table_checked(0, 1).is_err());
+    }
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document
+        .table_mut(0)
+        .unwrap()
+        .cell(0, 1)
+        .unwrap()
+        .set_text("keep");
+    let nonempty = document.to_bytes().unwrap();
+    assert!(
+        document
+            .table_mut(0)
+            .unwrap()
+            .set_cell_grid_span_checked(0, 0, Some(2))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), nonempty);
+
+    let mut span_document = Document::new();
+    span_document.add_table(1, 3);
+    let original_widths = span_document.table(0).unwrap().grid_widths();
+    let merged_width = original_widths
+        .iter()
+        .map(|width| width.to_twips())
+        .sum::<i32>();
+    span_document
+        .table_mut(0)
+        .unwrap()
+        .set_cell_grid_span_checked(0, 0, Some(3))
+        .unwrap();
+    assert_eq!(
+        span_document.table(0).unwrap().cell(0, 0).unwrap().width(),
+        Some(Length::twips(merged_width))
+    );
+    span_document
+        .table_mut(0)
+        .unwrap()
+        .set_cell_grid_span_checked(0, 0, None)
+        .unwrap();
+    let table = span_document.table(0).unwrap();
+    assert_eq!(table.row(0).unwrap().cell_count(), 3);
+    for (cell, width) in original_widths.into_iter().enumerate() {
+        assert_eq!(table.cell(0, cell).unwrap().width(), Some(width));
+    }
+}
+
+#[test]
+fn checked_row_cell_mutation_preserves_raw_slots_and_aliases() {
+    let mut seed = Document::new();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:m23-row-cell">
+  <q:body>
+    <q:tbl>
+      <q:tblPr><q:tblW q:w="2400" q:type="dxa"/></q:tblPr>
+      <q:tblGrid><q:gridCol q:w="1200"/><q:gridCol q:w="1200"/></q:tblGrid>
+      <q:tr>
+        <q:trPr><ext:rowPre ext:value="exact"/><ext:cnfStyle ext:val="000000000000"/><q:cnfStyle q:val="100000000000"/><ext:rowMid ext:value="exact"/><ext:trHeight ext:val="999"/><q:tblHeader q:val="false"/><ext:jc ext:val="left"/><ext:rowAfter ext:value="exact"/></q:trPr>
+        <q:tc><q:tcPr><ext:cellPre ext:value="exact"/><q:tcW q:w="1200" q:type="dxa"/><q:tcBorders><q:top q:val="single" q:sz="8" q:color="112233"/><ext:diagonal ext:value="exact"/></q:tcBorders><ext:cellMid ext:value="exact"/><ext:noWrap ext:val="true"/><q:noWrap q:val="0"/><ext:textDirection ext:val="lrTb"/><q:textDirection q:val="btLr"/><ext:cellAfter ext:value="exact"/></q:tcPr><q:p/></q:tc>
+        <q:tc><q:tcPr><q:tcW q:w="1200" q:type="dxa"/></q:tcPr><q:p/></q:tc>
+      </q:tr>
+    </q:tbl>
+    <q:sectPr/>
+  </q:body>
+</q:document>"#
+            .to_vec(),
+    );
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    assert_eq!(
+        document.table(0).unwrap().row(0).unwrap().header_value(),
+        Some(false)
+    );
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .text_direction(),
+        Some(CellTextDirection::BottomToTopLeftToRight)
+    );
+    let first_xml = String::from_utf8(document_xml(&mut document)).unwrap();
+    {
+        let mut table = document.table_mut(0).unwrap();
+        let mut row = table.row(0).unwrap();
+        row.set_height_checked(RowHeight::Exact(Length::twips(540)))
+            .unwrap();
+        row.set_alignment(Alignment::Right);
+        row.set_conditional_formatting(TableConditionalFormatting {
+            last_row: true,
+            ..Default::default()
+        });
+    }
+    {
+        let mut table = document.table_mut(0).unwrap();
+        let mut cell = table.cell(0, 0).unwrap();
+        cell.set_border_checked(CellBorderEdge::Bottom, BorderStyle::None, 0, "auto")
+            .unwrap();
+        cell.set_margins_checked(
+            Length::twips(40),
+            Length::twips(50),
+            Length::twips(60),
+            Length::twips(70),
+        )
+        .unwrap();
+        cell.set_shading_checked("ABCDEF").unwrap();
+        cell.set_vertical_alignment(VerticalAlignment::Bottom);
+        cell.set_text_direction(Some(CellTextDirection::TopToBottomRightToLeft));
+        cell.set_conditional_formatting(TableConditionalFormatting {
+            last_column: true,
+            ..Default::default()
+        });
+        cell.set_no_wrap_value(Some(false));
+    }
+    let second_xml = String::from_utf8(document_xml(&mut document)).unwrap();
+
+    let raw_element = |xml: &str, marker: &str| {
+        let start = xml.find(&format!("<{marker}")).unwrap();
+        let end = xml[start..].find("/>").unwrap() + start + 2;
+        xml[start..end].to_owned()
+    };
+    for marker in [
+        "ext:rowPre",
+        "ext:cnfStyle",
+        "ext:rowMid",
+        "ext:trHeight",
+        "ext:jc",
+        "ext:rowAfter",
+        "ext:cellPre",
+        "ext:diagonal",
+        "ext:cellMid",
+        "ext:noWrap",
+        "ext:textDirection",
+        "ext:cellAfter",
+    ] {
+        assert_eq!(
+            raw_element(&first_xml, marker),
+            raw_element(&second_xml, marker)
+        );
+    }
+    assert!(second_xml.contains(r#"<w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>"#));
+    assert!(second_xml.contains(r#"<w:noWrap w:val="false"/>"#));
+    assert!(second_xml.contains(r#"<w:textDirection w:val="tbRl"/>"#));
+    assert!(second_xml.contains(r#"<w:vAlign w:val="bottom"/>"#));
+}
+
+#[test]
+fn row_cell_pagination_matrix_is_deterministic() {
+    let mut document = Document::new();
+    {
+        let mut table = document.add_table(70, 1);
+        table.row(0).unwrap().set_header_value(Some(true));
+        for index in 0..70 {
+            let mut row = table.row(index).unwrap();
+            row.set_height_checked(if index % 2 == 0 {
+                RowHeight::Exact(Length::twips(720))
+            } else {
+                RowHeight::AtLeast(Length::twips(480))
+            })
+            .unwrap();
+            row.set_cant_split_value(Some(index % 3 == 0));
+            let mut cell = row.cell(0).unwrap();
+            let text = if index == 0 {
+                "REPEATED HEADER".to_owned()
+            } else {
+                format!("reviewed row {index:02}")
+            };
+            cell.set_text(&text);
+            cell.set_no_wrap_value(Some(index % 2 == 0));
+            cell.set_text_direction(Some(if index % 2 == 0 {
+                CellTextDirection::TopToBottomRightToLeft
+            } else {
+                CellTextDirection::LeftToRightTopToBottom
+            }));
+        }
+    }
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.table(0).unwrap().row(0).unwrap().height(),
+        Some(RowHeight::Exact(Length::twips(720)))
+    );
+    assert_eq!(
+        reopened.table(0).unwrap().row(1).unwrap().height(),
+        Some(RowHeight::AtLeast(Length::twips(480)))
+    );
+    assert_eq!(
+        reopened
+            .table(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .no_wrap_value(),
+        Some(true)
+    );
+    assert_eq!(
+        reopened
+            .table(0)
+            .unwrap()
+            .cell(1, 0)
+            .unwrap()
+            .text_direction(),
+        Some(CellTextDirection::LeftToRightTopToBottom)
+    );
+
+    let first = reopened.layout_deterministic().unwrap();
+    let second = reopened.layout_deterministic().unwrap();
+    let page_texts = |layout: &rdocx_layout::WordLayoutResult| {
+        layout
+            .layout
+            .pages
+            .iter()
+            .map(|page| {
+                let mut text = String::new();
+                oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                    oxml_layout::PositionedElement::Text(run) => text.push_str(&run.text),
+                    oxml_layout::PositionedElement::MultilingualText(run) => {
+                        text.push_str(&run.logical_text)
+                    }
+                    _ => {}
+                });
+                text
+            })
+            .collect::<Vec<_>>()
+    };
+    let first_text = page_texts(&first);
+    let second_text = page_texts(&second);
+    assert_eq!(first_text, second_text);
+    assert_eq!(first_text.len(), 4);
+    assert!(
+        first_text
+            .iter()
+            .all(|page| page.matches("REPEATED HEADER").count() == 1)
+    );
+    let joined = first_text.join("|");
+    for index in 1..70 {
+        assert_eq!(
+            joined.matches(&format!("reviewed row {index:02}")).count(),
+            1
+        );
+    }
+    for page_index in 0..first_text.len() {
+        let first_png = reopened
+            .render_page_to_png_deterministic(page_index, 72.0)
+            .unwrap()
+            .unwrap();
+        let second_png = reopened
+            .render_page_to_png_deterministic(page_index, 72.0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_png, second_png);
+    }
 }
 
 #[test]

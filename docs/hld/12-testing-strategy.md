@@ -1780,6 +1780,24 @@ coverage, and atomic rejection of malformed values and overflow. The final
 five-document comparison and its pinned LibreOffice 26.2.5.2 and Poppler
 26.01.0 evidence remain owned by the required-private F-263 gate.
 
+The M23 row-and-cell gate is `m23_nested_rows_and_cells_match_word`. It uses
+only the public native facade to author checked heights, explicit toggles,
+alignment, omissions, horizontal and vertical merges, cell appearance, all six
+text directions, conditional regions, and a nested table. Save and reopen must
+retain every typed value and canonical row and cell property sequence. The
+sanitized record is pinned to Microsoft Word 16.112.4 build 16.112.26090911.
+The comparison normalizes Word's removal of explicit false, default direction,
+and contextual conditional markers plus its inferred vertical-text row height.
+Exact source-form assertions cover those intentional writer differences.
+Deterministic bundled-font layout and two same-process PNG renders must agree.
+
+Companion regressions cover exact and minimum height pagination, repeated
+headers, split policy, every cell border edge and text direction, merge and
+omission rollback, nonempty-cell protection, malformed existing topology,
+namespace aliases, foreign same-local children, and exact row, cell, and border
+extension retention. The final private corpus comparison remains F-263 and is
+pinned to LibreOffice 26.2.5.2 and Poppler 26.01.0.
+
 The fresh-profile round-trip gate adds an unrelated unmodelled XML part and
 package relationship before reopen and repeat-save. The part bytes and
 relationship identity must survive exactly. The optional repair gate is pinned

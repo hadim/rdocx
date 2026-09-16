@@ -950,6 +950,22 @@ cell width together. Table property setters retain unrelated raw property
 slots, border extensions, namespace aliases on read, and canonical fixed `w`
 prefixes on changed modeled children.
 
+Checked row authoring covers minimum and exact heights, repeating-header and
+split toggles including explicit false and removal, alignment, conditional
+regions, and leading or trailing grid omissions. Checked cell authoring covers
+width, borders, margins, shading, vertical alignment, text direction,
+conditional regions, wrapping, horizontal spans, vertical merges, and nested
+tables. Topology-changing operations clone the complete table, reconcile only
+untouched empty cells, validate positive grid widths, exact row coverage, and
+immediately adjacent vertical merge ranges, then replace the live table.
+
+Row and cell property readers select modeled elements and attributes by their
+bound WordprocessingML namespace. Foreign same-local children remain raw in
+their exact schema slots. Changed modeled children use canonical `w` prefixes
+and row or cell `xsd:sequence`, while unrelated row, cell, and border extension
+bytes remain exact. Checked nested tables are nonempty and retain the required
+trailing cell paragraph.
+
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
 with every inherited namespace binding they use. Typed table, cell, border,

@@ -11,8 +11,7 @@ use crate::numbering::{
     local_namespace_overrides, merged_owner_bindings, namespace_bindings, word_prefixes_at,
 };
 use crate::properties::{
-    CT_Shd, get_val_attr, get_word_val_attr, is_word_attribute, is_word_element, parse_word_toggle,
-    write_toggle,
+    CT_Shd, get_word_val_attr, is_word_attribute, is_word_element, parse_word_toggle, write_toggle,
 };
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::{CT_Revision, RevisionKind};
@@ -973,21 +972,21 @@ impl CT_TrPr {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     let (at, next) = tr_pr_raw_boundary(name.as_ref(), boundary, &prefixes);
-                    if matches_local_name(name.as_ref(), b"trHeight") {
+                    if is_word_element(name.as_ref(), b"trHeight", &prefixes) {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"val") {
+                            if is_word_attribute(key, b"val", &prefixes) {
                                 pr.height = Some(Twips(val.parse()?));
-                            } else if matches_local_name(key, b"hRule") {
+                            } else if is_word_attribute(key, b"hRule", &prefixes) {
                                 pr.height_rule = Some(val.to_string());
                             }
                         }
                     } else if is_word_element(name.as_ref(), b"tblHeader", &prefixes) {
                         pr.header = Some(parse_word_toggle(e, &prefixes)?);
-                    } else if matches_local_name(name.as_ref(), b"jc") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"jc", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             pr.jc = ST_Jc::from_str(&val).ok();
                         }
                     } else if is_word_element(name.as_ref(), b"gridBefore", &prefixes) {
@@ -998,8 +997,8 @@ impl CT_TrPr {
                         pr.grid_after = get_word_val_attr(e, &prefixes)?
                             .map(|value| value.parse())
                             .transpose()?;
-                    } else if matches_local_name(name.as_ref(), b"cnfStyle") {
-                        pr.cnf_style = get_val_attr(e)?;
+                    } else if is_word_element(name.as_ref(), b"cnfStyle", &prefixes) {
+                        pr.cnf_style = get_word_val_attr(e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"cantSplit", &prefixes) {
                         pr.cant_split = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes)

@@ -764,6 +764,22 @@ WASM, and CLI do not gain new table-property methods, but their owned
 `rdocx::Document` remains package-preserving when native code uses the new
 operations.
 
+Native rows and cells also expose the additive `RowHeight`, `CellBorderEdge`,
+`CellTextDirection`, and `TableConditionalFormatting` values. Row handles have
+checked height plus direct header, split, alignment, and conditional-region
+setters. Cell handles have checked width, border, margin, and shading setters,
+typed alignment and direction, explicit or absent wrapping, conditional
+regions, and checked nested-table construction. Matching borrowed readers
+expose every stored typed value after reopen.
+
+Operations whose validity depends on neighbouring cells live on `Table` and
+take checked row and cell indexes. Grid omissions reconcile only untouched
+empty edge cells. Horizontal spans consume or restore only untouched empty
+cells. Vertical continuations require an equal grid range in the immediately
+preceding row. Each operation validates a cloned complete table before
+publication. These are additive pre-1.0 native APIs. Python, WASM, and CLI gain
+no row or cell methods in this story.
+
 Native Word table inspection includes additive
 `TableRef::has_grid_change()`. It reports whether the low-level grid preserves
 one historical `w:tblGridChange` and does not expose that historical snapshot

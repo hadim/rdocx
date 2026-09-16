@@ -2463,13 +2463,19 @@ pagination record, and deterministic rendering. Companion regressions prove
 complete typed reopen and failure atomicity.
 
 ### F-258, Complete M23 row and cell authoring (L)
-Author exact and minimum row heights, repeating headers, split policy, row
-alignment, grid omissions, merges, per-cell borders and margins, width,
-shading, vertical alignment, text direction, conditional formatting, and
-wrapping.
+The native facade authors checked exact and minimum row heights, explicit
+repeating-header and split toggles, row alignment and conditional regions,
+grid omissions, horizontal and vertical merges, per-cell borders and margins,
+width, shading, vertical alignment, six text directions, conditional regions,
+wrapping, and checked nested tables. Topology changes reconcile only untouched
+empty cells and publish only a complete validated table. Aliased modeled
+properties remain readable, foreign same-local children remain raw, and
+unrelated property and border-extension slots remain exact.
 **Depends on**: F-257, F-X100.
-**Test gate**: differential. The corpus-required nested tables reproduce every
-reviewed row and cell property without unmodeled fallback.
+**Test gate**: differential. `m23_nested_rows_and_cells_match_word` proves the
+sanitized nested-table property matrix, canonical schema order, typed reopen,
+merge topology, and deterministic rendering. Companion regressions prove
+failure atomicity and exact producer XML preservation.
 
 ### F-259, Container measurement and equal-height layout (M)
 Measure supported paragraphs and tables at a caller-supplied width using the

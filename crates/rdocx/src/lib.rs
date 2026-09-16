@@ -120,8 +120,9 @@ pub use run::{
 pub use style::{Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};
 pub use table::{
-    Cell, CellItemRef, CellRef, Row, RowRef, Table, TableBorderEdge, TableBorderRef,
-    TableCellMargins, TableLayout, TableLook, TableRef, TableWidth, VMerge, VerticalAlignment,
+    Cell, CellBorderEdge, CellItemRef, CellRef, CellTextDirection, Row, RowHeight, RowRef, Table,
+    TableBorderEdge, TableBorderRef, TableCellMargins, TableConditionalFormatting, TableLayout,
+    TableLook, TableRef, TableWidth, VMerge, VerticalAlignment,
 };
 
 #[cfg(test)]

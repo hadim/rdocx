@@ -14420,3 +14420,53 @@ external tools.
 mutation. Treat an absent border differently from an explicit invisible edge,
 and preserve raw table-property and border-extension slots when changing one
 modeled value.
+
+### F-258, Complete M23 row and cell authoring
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native row and cell facade now provides checked exact
+and minimum heights, repeating headers, split policy, alignment, grid
+omissions, horizontal and vertical merges, cell widths, individual borders and
+margins, shading, vertical alignment, all six text directions, conditional
+formatting, wrapping, and nested tables. Candidate mutations validate complete
+grid coverage and merge topology before publication.
+
+**Non-obvious choices.** Horizontal span changes recompute the selected cell
+width from the covered grid columns, while shrinking restores width-synchronized
+empty cells. Existing convenience methods still set toggles true, and companion
+setters write false or remove the direct value without breaking callers. The
+Word oracle is normalized only where Word 16.112.4 drops explicit defaults or
+infers a vertical row height, while local assertions retain those distinctions.
+
+**Deviations from the design plan.** None. Microscope pass 1 found missing
+external oracle evidence, incomplete text-direction coverage, and a weak
+pagination assertion. All three were corrected. The remediation also exposed
+and fixed stale cell widths when a span grows or shrinks. Pass 2 reports zero
+defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, modern row and
+cell authoring, `docs/hld/04-opc-and-packaging.md`, checked table topology and
+schema order, `docs/hld/08-rendering-spec.md`, pagination and nested tables,
+`docs/hld/10-bindings-spec.md`, additive native APIs,
+`docs/hld/12-testing-strategy.md`, authenticated Word and deterministic layout
+gates, and the F-258 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `m23_nested_rows_and_cells_match_word` first failed at the story
+baseline because the checked row and cell API did not exist. It now proves
+public-only construction, all six text directions, typed reopen, exact schema
+order, intentional Word normalizations, and an authenticated Word 16.112.4
+structural oracle. Focused tests cover explicit false and absent toggles,
+malformed pre-existing topology, atomic invalid-input rejection, span width
+recalculation, nested tables, four-page pagination, repeated headers, and
+deterministic raster bytes. Full workspace, no-default-font, WASM, rustdoc,
+README, workflow, package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Validate the complete candidate topology before
+publishing any row or cell edit. Keep stored cell widths synchronized with the
+active grid when changing spans, and preserve foreign same-local-name property
+elements as raw XML.

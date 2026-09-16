@@ -2812,17 +2812,6 @@ pub(crate) fn parse_word_toggle(e: &BytesStart, word_prefixes: &[String]) -> Res
     Ok(ST_OnOff::from_str_or_default(val.as_deref()).is_on())
 }
 
-/// Extract the `w:val` attribute from an element.
-pub(crate) fn get_val_attr(e: &BytesStart) -> Result<Option<String>> {
-    for attr in e.attributes() {
-        let attr = attr?;
-        if matches_local_name(attr.key.as_ref(), b"val") {
-            return Ok(Some(std::str::from_utf8(&attr.value)?.to_string()));
-        }
-    }
-    Ok(None)
-}
-
 /// Write a toggle element.
 pub(crate) fn write_toggle<W: std::io::Write>(
     writer: &mut Writer<W>,
