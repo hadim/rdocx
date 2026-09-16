@@ -74,7 +74,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X116 | Make Python story reads linear and complete | L | done | - |
 | F-X117 | Render transparent and large raster pictures safely | M | done | - |
 | F-X118 | Make notes rendering and replacement safe | L | done | - |
-| F-X119 | Complete round-three Python authoring and inspection | L | pending | - |
+| F-X119 | Complete round-three Python authoring and inspection | L | in-progress | codex |
 | F-X120 | Accept fractional DOCX line spacing values | S | done | - |
 | F-X121 | Adopt PR 123 authored line-chart portability | S | done | - |
 | F-X112 | Publish the complete S73 package families | L | pending | - |
