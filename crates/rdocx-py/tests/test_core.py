@@ -1028,3 +1028,53 @@ def test_story_item_xml_is_a_detached_snapshot():
     assert b"hello" in item.xml
     document.add_paragraph("later")
     assert b"later" not in item.xml
+
+
+def test_split_run_enables_exact_comment_ranges_without_losing_content():
+    import re
+
+    import rdocx
+
+    document = rdocx.Document()
+    run = document.add_paragraph("").add_run("Hello 🐝brave world")
+    run.font.bold = True
+    before_no_ops = document.to_bytes()
+    paragraph = document.paragraphs[0]
+    assert document.split_run(0, 0, 0) == 0
+    assert document.split_run(0, 0, 18) == 1
+    assert document.to_bytes() == before_no_ops
+    assert paragraph.text == "Hello 🐝brave world"
+
+    brave_start = document.split_run(0, 0, 6)
+    with pytest.raises(rdocx.StaleElementError):
+        run.text
+    brave_end = document.split_run(0, brave_start, 6)
+    assert (brave_start, brave_end) == (1, 2)
+    runs = document.paragraphs[0].runs
+    assert [item.text for item in runs] == ["Hello ", "🐝brave", " world"]
+    assert [item.font.bold for item in runs] == [True, True, True]
+
+    brave = rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=0, run_index=brave_start),
+        end=rdocx.RunPosition(body_index=0, run_index=brave_end),
+    )
+    comment_id = document.add_comment(brave, author="Ada", text="Which one?")
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    xml = _document_xml(reopened).decode()
+    start = xml.index(f'commentRangeStart w:id="{comment_id}"')
+    end = xml.index(f'commentRangeEnd w:id="{comment_id}"')
+    assert re.findall(r"<w:t[^>]*>([^<]*)</w:t>", xml[start:end]) == [
+        "🐝brave"
+    ]
+
+
+def test_split_run_rejects_bad_coordinates_without_changing_the_document():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("abc")
+    before = document.to_bytes()
+    for args in ((1, 0, 1), (0, 1, 1), (0, 0, 4)):
+        with pytest.raises(rdocx.RdocxError):
+            document.split_run(*args)
+        assert document.to_bytes() == before

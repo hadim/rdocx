@@ -12627,6 +12627,39 @@ impl Document {
             .map(|inner| Paragraph { inner })
     }
 
+    /// Split a direct body paragraph run at a Unicode scalar offset of its
+    /// literal text and return the resulting run boundary.
+    ///
+    /// Zero returns the boundary before the selected run and the literal text
+    /// length returns the boundary after it without changing the document.
+    /// Interior offsets create a continuation with cloned run properties while
+    /// preserving ordered non-text content, hyperlinks, and range markers.
+    /// Every failure leaves the document unchanged.
+    pub fn split_run(
+        &mut self,
+        body_index: usize,
+        run_index: usize,
+        character_offset: usize,
+    ) -> Result<usize> {
+        let original = self.paragraph(body_index).ok_or_else(|| {
+            Error::Other(format!("body paragraph index {body_index} is out of range"))
+        })?;
+        let mut candidate = original.inner.clone();
+        let boundary = candidate
+            .split_run(run_index, character_offset)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        if candidate == *original.inner {
+            return Ok(boundary);
+        }
+
+        self.invalidate_layout();
+        let mut remaining = body_index;
+        let paragraph = nth_paragraph_in_body(&mut self.document.body.content, &mut remaining)
+            .ok_or_else(|| Error::Other("body paragraph disappeared during split".to_owned()))?;
+        *paragraph = candidate;
+        Ok(boundary)
+    }
+
     // ---- Table access ----
 
     /// Get immutable references to all tables.

@@ -518,6 +518,13 @@ unsupported-byte requests compare the complete saved document before and after
 the rejected operation. Save and reopen must retain every replacement and the
 same relationship identifier in its original owner scope.
 
+The run-splitting binding gate proves the native and Python direct-body entry
+points with ASCII and multibyte text, endpoint no-ops, copied formatting, an
+exact comment range, invalid-coordinate rollback, and save-reopen behavior.
+OXML regressions split hyperlink-owned and mixed runs containing tabs, breaks,
+field markup, alternate-content drawings, symbols, and unknown raw children,
+then compare their exact serialized order and layout-projection ownership.
+
 The cross-document fragment gate selects a main-body range containing custom
 styles, direct and style-carried numbering, a bookmark and REF field, a
 picture, an editable chart and workbook, an exact foreign subtree, and a

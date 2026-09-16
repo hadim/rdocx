@@ -14325,3 +14325,48 @@ stubtest passing on Python 3.12.
 **Notes for future sessions.** Keep replacement scoped to the relationship
 owner. Do not mutate a shared media target in place, and do not remove producer
 content-type defaults merely because the facade no longer needs them.
+
+### F-X109, Split text runs at Unicode character offsets
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native Rust and Python callers can now split a direct body
+run at a checked Unicode scalar offset and receive the existing or newly
+created run boundary. The operation preserves formatting, hyperlink spans,
+comment coordinates, fields, drawings, and unmodelled ordered content.
+
+**Non-obvious choices.** Contributor PR 112 supplied the initial ordered split
+and coordinate repair. Zero and end offsets are stable no-op boundaries.
+Tabs, breaks, fields, drawings, references, symbols, and raw XML have zero
+width for the offset calculation. Alternate-content drawings keep their raw
+serialization and layout projection together on the owning side of a split.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that
+alternate-content drawings were rejected and that mixed-content coverage was
+incomplete. Both were corrected, and pass 2 reports zero defects and zero
+smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, staged split
+mutation, `docs/hld/04-opc-and-packaging.md`, raw and projected child order,
+`docs/hld/10-bindings-spec.md`, native and Python split contracts,
+`docs/hld/12-testing-strategy.md`, split and clean-wheel gates, and the F-X109
+entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `split_run_enables_exact_comment_ranges_without_losing_content`
+first failed at the story baseline because `Document::split_run` did not
+exist. It now covers ASCII and multibyte text, hyperlinks, exact comment
+ranges, endpoint no-ops, invalid offsets, and atomic rollback. The ordered
+mixed-content regression covers text, tabs, breaks, fields,
+alternate-content drawings, symbols, raw XML, and trailing text. The full
+workspace, no-default-font, WASM, docs, README, package, archive-size,
+supply-chain, and 60-test Python gates pass. A fresh cp39-abi3 wheel passed on
+Python 3.9, with strict mypy and stubtest passing on Python 3.12.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep offsets scoped to direct literal text and
+keep raw alternate-content XML coupled to its parseable drawing projection.
+Do not count zero-width ordered children as characters or serialize the raw
+and projected forms independently.

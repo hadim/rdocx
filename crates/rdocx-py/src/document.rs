@@ -1028,6 +1028,31 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    fn split_run(
+        &mut self,
+        py: Python<'_>,
+        body_index: usize,
+        run_index: usize,
+        character_offset: usize,
+    ) -> PyResult<usize> {
+        let before = self
+            .inner
+            .paragraph(body_index)
+            .map(|paragraph| paragraph.run_count());
+        let boundary = self
+            .inner
+            .split_run(body_index, run_index, character_offset)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let after = self
+            .inner
+            .paragraph(body_index)
+            .map(|paragraph| paragraph.run_count());
+        if before != after {
+            self.revisions.bump();
+        }
+        Ok(boundary)
+    }
+
     fn to_pdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         py.detach(|| self.inner.to_pdf())
             .map(|bytes| PyBytes::new(py, &bytes))

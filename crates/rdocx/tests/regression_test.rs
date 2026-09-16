@@ -1176,6 +1176,62 @@ fn replace_image_preserves_drawings_and_story_relationship_ownership() {
     );
 }
 
+#[test]
+fn split_run_enables_exact_comment_ranges_without_losing_content() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("Hello 🐝brave world")
+        .run_mut(0)
+        .unwrap()
+        .set_bold(true);
+
+    let before_no_ops = document.to_bytes().unwrap();
+    assert_eq!(document.split_run(0, 0, 0).unwrap(), 0);
+    assert_eq!(document.split_run(0, 0, 18).unwrap(), 1);
+    assert_eq!(document.to_bytes().unwrap(), before_no_ops);
+
+    let brave_start = document.split_run(0, 0, 6).unwrap();
+    let brave_end = document.split_run(0, brave_start, 6).unwrap();
+    assert_eq!((brave_start, brave_end), (1, 2));
+
+    document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: brave_start,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: brave_end,
+                },
+            },
+            "Ada",
+            None,
+            "Which one?",
+        )
+        .unwrap();
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let texts = reopened
+        .paragraph(0)
+        .unwrap()
+        .runs()
+        .map(|run| run.text())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["Hello ", "🐝brave", " world"]);
+    assert!(
+        reopened
+            .paragraph(0)
+            .unwrap()
+            .runs()
+            .filter(|run| !run.text().is_empty())
+            .all(|run| run.bold_value() == Some(true))
+    );
+    assert_eq!(reopened.comments().len(), 1);
+}
+
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
     let mut document = f255_story_document();
     document.add_picture(b"body image", "body.png", Length::pt(1.0), Length::pt(1.0));

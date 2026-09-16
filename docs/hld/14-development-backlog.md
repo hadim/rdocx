@@ -5245,10 +5245,11 @@ failure atomicity through save and reopen.
 Add a checked native and Python `split_run` primitive for direct-body
 paragraphs. The offset is a Unicode scalar-value index in the run's visible
 literal text, and zero or end offsets are defined no-op boundaries. A split
-copies run properties, keeps non-text children in original order, updates
-hyperlink and marker spans, and returns the new run boundary so existing
-half-open `RunRange` comment APIs can anchor exact words without changing the
-stable `RunPosition` struct.
+copies run properties, treats tabs, breaks, fields, drawings, references,
+symbols, and raw children as zero-width, keeps them in original order, updates
+hyperlink and marker spans, and returns the selected or new run boundary so
+existing half-open `RunRange` comment APIs can anchor exact words without
+changing the stable `RunPosition` struct.
 
 **Depends on**: F-260, F-X106a.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/97>.

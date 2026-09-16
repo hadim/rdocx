@@ -1,6 +1,6 @@
 # F-X109, Split text runs at Unicode character offsets
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-260, F-X106a
@@ -24,12 +24,13 @@ losing run properties or surrounding ordered content.
 
 Add `Document::split_run(body_index, run_index, character_offset) ->
 Result<usize>` and the same Python method. Count Unicode scalar values across
-the run's direct literal text children and require an interior offset. Walk the
-ordered content once, split the selected text child when the boundary falls
-inside it, and partition zero-width non-text children by their existing source
-position. Clone run properties to the continuation and retain every raw child
-at its corresponding boundary. Update hyperlink spans and direct marker
-coordinates. Return the new run index so callers can create exact existing
+the run's direct literal text children. Zero and end offsets are no-op
+boundaries, while an interior offset creates a continuation. Walk the ordered
+content once, split the selected text child when the boundary falls inside it,
+and partition zero-width non-text children by their existing source position.
+Clone run properties to the continuation and retain every raw child at its
+corresponding boundary. Update hyperlink spans and direct marker coordinates.
+Return the selected or new run index so callers can create exact existing
 `RunRange` values without changing that public struct.
 
 ## Rejected alternatives
@@ -47,7 +48,7 @@ coordinates. Return the new run index so callers can create exact existing
 |---|---|---|
 | binding | `split_run_enables_exact_comment_ranges_without_losing_content` | Two splits create a word-level comment range in Rust and Python and reopen exactly. |
 | regression | ordered mixed content | Text, tabs, breaks, fields, drawings, symbols, and hyperlinks stay in order with copied formatting. |
-| failure | offset and ownership | Non-text runs, endpoint, invalid body or run indices, and out-of-range offsets leave bytes unchanged. |
+| failure | offset and ownership | Non-text runs, no-op endpoints, invalid body or run indices, and out-of-range offsets leave bytes unchanged. |
 
 The **test gate** is the binding test named in the backlog.
 
@@ -74,11 +75,11 @@ Expected to be unchanged because no sample invokes the split operation.
 
 ## Implementation checklist
 
-- [ ] Add failing ASCII, multibyte, hyperlink, field-adjacent, and mixed-content tests.
-- [ ] Implement checked staged splitting and coordinate repair.
-- [ ] Expose the returned boundary in Python.
-- [ ] Anchor and reopen an exact word-level comment.
-- [ ] Run serialization, binding, API, hash harness, full verification, and microscope gates.
+- [x] Add failing ASCII, multibyte, hyperlink, field-adjacent, and mixed-content tests.
+- [x] Implement checked staged splitting and coordinate repair.
+- [x] Expose the returned boundary in Python.
+- [x] Anchor and reopen an exact word-level comment.
+- [x] Run serialization, binding, API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

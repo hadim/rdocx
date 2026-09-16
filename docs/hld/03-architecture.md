@@ -1312,6 +1312,13 @@ Replies follow paragraph-id parent linkage, resolution applies to the thread
 root, and removal deletes the selected comment plus descendant replies without
 deleting unrelated runs or producer XML.
 
+`Document::split_run` creates an exact accepted-view run boundary without
+changing `RunPosition`. It clones the selected paragraph, counts Unicode scalar
+values only in direct literal text, partitions ordered zero-width children at
+their source boundary, repairs hyperlink and marker coordinates, and publishes
+the clone only on success. Zero and end offsets select existing boundaries and
+leave typed state, layout, and binding revisions unchanged.
+
 Word bookmark mutation input reuses the same top-level `RunPosition` and
 half-open `RunRange` boundary as comments. `Document::bookmarks` returns
 immutable correlated summaries in typed main-story paragraph order through

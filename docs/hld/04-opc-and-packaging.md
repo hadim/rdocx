@@ -471,6 +471,13 @@ Positioned raw children stay on the same side of each field boundary. Legacy
 unordered raw children remain at the final run boundary. Readers remain prefix
 tolerant and writers use the fixed Word prefixes.
 
+Run splitting uses the same encoded raw-child position sidecar. A second
+private classification bit associates each parsed `mc:AlternateContent`
+drawing projection with its verbatim compatibility block, so both move to the
+same split run while serialization still writes the raw block exactly once.
+Tabs, breaks, field markup, drawings, references, symbols, and unknown children
+remain zero-width and keep their relative schema positions around literal text.
+
 The Word facade resolves an existing comments part through the main document's
 `COMMENTS` relationship and retains the normalized target. Saving serializes
 the typed comments model back to that target with its content-type override.

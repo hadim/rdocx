@@ -451,6 +451,7 @@ defended.
 | F-X106b | S73 | M | 2 | 1 | 2026-09-15 | Added paragraph and run formatting mutation with named Word highlights and separate shading from contributor PR 108 |
 | F-X106c | S73 | L | 4 | 1 | 2026-09-15 | Added typed Python story mutation, scoped hyperlinks, revision resolution, field updates, exact XML snapshots, and Issue 94 hardening from contributor PRs 109 and 110 |
 | F-X108 | S73 | M | 2 | 1 | 2026-09-15 | Added atomic story-scoped image replacement with shared-target copy-on-write and format-aware package cleanup from contributor PR 107 |
+| F-X109 | S73 | M | 2 | 1 | 2026-09-15 | Added atomic native and Python run splitting at Unicode scalar offsets from contributor PR 112 |
 
 ## Velocity
 

@@ -33,6 +33,27 @@ impl CT_Text {
             preserve_space: text.starts_with(' ') || text.ends_with(' '),
         }
     }
+
+    /// Keep the first `at` characters and return the rest.
+    ///
+    /// Either part preserves space when the original did or when the split
+    /// leaves a space at one of its ends.
+    fn split_off_at(&mut self, at: usize) -> CT_Text {
+        let byte = self
+            .text
+            .char_indices()
+            .nth(at)
+            .map_or(self.text.len(), |(byte, _)| byte);
+        let rest = self.text.split_off(byte);
+        let inherited = self.preserve_space;
+        let preserve = |text: &str| inherited || text.starts_with(' ') || text.ends_with(' ');
+        let rest = CT_Text {
+            preserve_space: preserve(&rest),
+            text: rest,
+        };
+        self.preserve_space = preserve(&self.text);
+        rest
+    }
 }
 
 /// A parsed Word field with its stored result and update marker.
@@ -679,7 +700,9 @@ pub struct CT_R {
 }
 
 const RAW_LEGACY_HORIZONTAL_RULE_FLAG: usize = 1usize << (usize::BITS - 1);
-const RAW_CHILD_POSITION_MASK: usize = !RAW_LEGACY_HORIZONTAL_RULE_FLAG;
+const RAW_ALTERNATE_CONTENT_DRAWING_FLAG: usize = 1usize << (usize::BITS - 2);
+const RAW_CHILD_FLAGS: usize = RAW_LEGACY_HORIZONTAL_RULE_FLAG | RAW_ALTERNATE_CONTENT_DRAWING_FLAG;
+const RAW_CHILD_POSITION_MASK: usize = !RAW_CHILD_FLAGS;
 const VML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:vml";
 const OFFICE_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:office";
 
@@ -864,19 +887,31 @@ impl CT_R {
         encoded & RAW_LEGACY_HORIZONTAL_RULE_FLAG != 0
     }
 
+    fn raw_child_has_alternate_content_drawing(encoded: usize) -> bool {
+        encoded & RAW_ALTERNATE_CONTENT_DRAWING_FLAG != 0
+    }
+
     /// Replace a raw-child boundary without changing its parsed classification.
     #[doc(hidden)]
     pub fn set_raw_child_position(encoded: &mut usize, position: usize) {
-        debug_assert_eq!(position & RAW_LEGACY_HORIZONTAL_RULE_FLAG, 0);
-        *encoded =
-            (position & RAW_CHILD_POSITION_MASK) | (*encoded & RAW_LEGACY_HORIZONTAL_RULE_FLAG);
+        debug_assert_eq!(position & RAW_CHILD_FLAGS, 0);
+        *encoded = (position & RAW_CHILD_POSITION_MASK) | (*encoded & RAW_CHILD_FLAGS);
     }
 
-    fn encode_raw_child_position(position: usize, legacy_horizontal_rule: bool) -> usize {
-        debug_assert_eq!(position & RAW_LEGACY_HORIZONTAL_RULE_FLAG, 0);
+    fn encode_raw_child_position(
+        position: usize,
+        legacy_horizontal_rule: bool,
+        alternate_content_drawing: bool,
+    ) -> usize {
+        debug_assert_eq!(position & RAW_CHILD_FLAGS, 0);
         position
             | if legacy_horizontal_rule {
                 RAW_LEGACY_HORIZONTAL_RULE_FLAG
+            } else {
+                0
+            }
+            | if alternate_content_drawing {
+                RAW_ALTERNATE_CONTENT_DRAWING_FLAG
             } else {
                 0
             }
@@ -884,24 +919,123 @@ impl CT_R {
 
     /// Get the combined text of all text content in this run.
     pub fn text(&self) -> String {
-        let mut result = String::new();
-        for item in &self.content {
-            match item {
-                RunContent::Text(t) | RunContent::DeletedText(t) => result.push_str(&t.text),
-                RunContent::Tab => result.push('\t'),
-                RunContent::Break(_) => result.push('\n'),
-                RunContent::Drawing(_) => {} // Drawings have no text content
-                RunContent::Field(field) => {
-                    if let Some(text) = field.projected_text() {
-                        result.push_str(text);
-                    }
+        self.content.iter().map(Self::content_text).collect()
+    }
+
+    /// The text one content item contributes to [`Self::text`].
+    fn content_text(content: &RunContent) -> &str {
+        match content {
+            RunContent::Text(t) | RunContent::DeletedText(t) => &t.text,
+            RunContent::Tab => "\t",
+            RunContent::Break(_) => "\n",
+            RunContent::Drawing(_) => "", // Drawings have no text content
+            RunContent::Field(field) => field.projected_text().unwrap_or(""),
+            RunContent::FootnoteRef { .. }
+            | RunContent::EndnoteRef { .. }
+            | RunContent::CommentReference { .. } => "",
+        }
+    }
+
+    /// The literal text that contributes to a public split offset.
+    fn literal_text(content: &RunContent) -> &str {
+        match content {
+            RunContent::Text(text) | RunContent::DeletedText(text) => &text.text,
+            RunContent::Tab
+            | RunContent::Break(_)
+            | RunContent::Drawing(_)
+            | RunContent::Field(_)
+            | RunContent::FootnoteRef { .. }
+            | RunContent::EndnoteRef { .. }
+            | RunContent::CommentReference { .. } => "",
+        }
+    }
+
+    fn literal_len(&self) -> usize {
+        self.content
+            .iter()
+            .map(Self::literal_text)
+            .map(str::chars)
+            .map(Iterator::count)
+            .sum()
+    }
+
+    /// Split this run at a Unicode scalar offset of its literal text.
+    ///
+    /// This run keeps the content before `offset`, and the returned run, with
+    /// cloned properties, receives the rest. Text-free content and raw children
+    /// at the split point stay in this run. Nothing changes on error.
+    fn split_off_at(&mut self, offset: usize) -> std::result::Result<CT_R, RunSplitError> {
+        let len = self.literal_len();
+        if offset == 0 || offset >= len {
+            return Err(RunSplitError::OffsetOutOfRange { offset, len });
+        }
+        // The first item whose text reaches past the offset, and how many of
+        // its characters come before the offset.
+        let mut end = 0;
+        let (index, within, width) = self
+            .content
+            .iter()
+            .enumerate()
+            .find_map(|(index, content)| {
+                let start = end;
+                let width = Self::literal_text(content).chars().count();
+                end += width;
+                (width > 0 && end >= offset).then_some((index, offset - start, width))
+            })
+            .expect("an offset inside the run text falls inside one content item");
+        let tail_content = if within == width {
+            self.content.split_off(index + 1)
+        } else {
+            let rest = match &mut self.content[index] {
+                RunContent::Text(text) => RunContent::Text(text.split_off_at(within)),
+                RunContent::DeletedText(text) => RunContent::DeletedText(text.split_off_at(within)),
+                _ => unreachable!("an interior literal offset falls inside literal text"),
+            };
+            let mut tail = self.content.split_off(index + 1);
+            tail.insert(0, rest);
+            tail
+        };
+        let removed_prefix_content = index + usize::from(within == width);
+
+        let mut tail = CT_R {
+            properties: self.properties.clone(),
+            content: tail_content,
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        };
+        // A raw child position counts the modeled children before it, so a
+        // child after the first `index` content items moves to the tail.
+        let head_boundary = usize::from(self.properties.is_some()) + index;
+        if self.extra_xml_positions.len() == self.extra_xml.len() {
+            let raw_children = std::mem::take(&mut self.extra_xml);
+            let positions = std::mem::take(&mut self.extra_xml_positions);
+            let mut alternate_drawings = std::mem::take(&mut self.alt_drawings).into_iter();
+            for (raw, mut encoded) in raw_children.into_iter().zip(positions) {
+                let position = Self::raw_child_position(encoded);
+                let alternate_drawing = Self::raw_child_has_alternate_content_drawing(encoded)
+                    .then(|| alternate_drawings.next())
+                    .flatten();
+                if position <= head_boundary {
+                    self.extra_xml.push(raw);
+                    self.extra_xml_positions.push(encoded);
+                    self.alt_drawings.extend(alternate_drawing);
+                } else {
+                    Self::set_raw_child_position(&mut encoded, position - removed_prefix_content);
+                    tail.extra_xml.push(raw);
+                    tail.extra_xml_positions.push(encoded);
+                    tail.alt_drawings.extend(alternate_drawing);
                 }
-                RunContent::FootnoteRef { .. }
-                | RunContent::EndnoteRef { .. }
-                | RunContent::CommentReference { .. } => {}
+            }
+            self.alt_drawings.extend(alternate_drawings);
+        }
+        let head_raw_children = self.extra_xml.len();
+        for content in &mut tail.content {
+            if let RunContent::CommentReference { raw_before, .. } = content {
+                *raw_before = raw_before.saturating_sub(head_raw_children);
             }
         }
-        result
+        Ok(tail)
     }
 
     /// Replace typed run content while retaining every raw child boundary.
@@ -1065,13 +1199,17 @@ impl CT_R {
                         // so layout can see the shape. alt_drawings is never
                         // serialised, the raw copy below is what gets written.
                         let raw = capture_element(reader, e)?;
-                        if let Some(drawing) =
-                            crate::drawing::parse_alternate_content(&raw, &prefixes)
-                        {
+                        let drawing = crate::drawing::parse_alternate_content(&raw, &prefixes);
+                        let has_drawing = drawing.is_some();
+                        if let Some(drawing) = drawing {
                             alt_drawings.push(drawing);
                         }
                         extra_xml.push(raw);
-                        extra_xml_positions.push(modeled_children);
+                        extra_xml_positions.push(Self::encode_raw_child_position(
+                            modeled_children,
+                            false,
+                            has_drawing,
+                        ));
                     } else {
                         // Capture unknown child elements as raw XML
                         let is_word_pict = is_word_element(name.as_ref(), b"pict", &prefixes);
@@ -1082,6 +1220,7 @@ impl CT_R {
                         extra_xml_positions.push(Self::encode_raw_child_position(
                             modeled_children,
                             legacy_horizontal_rule,
+                            false,
                         ));
                     }
                 }
@@ -2828,6 +2967,17 @@ fn remap_complex_field_boundaries(
     }
 }
 
+/// Why [`CT_P::split_run`] could not split a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RunSplitError {
+    #[error("run index {run_index} is out of range for a paragraph with {run_count} runs")]
+    RunOutOfRange { run_index: usize, run_count: usize },
+    #[error("split offset {offset} exceeds a run's literal text length of {len} characters")]
+    OffsetOutOfRange { offset: usize, len: usize },
+    #[error("bookmark markers could not be projected after the split")]
+    BookmarkProjection,
+}
+
 /// `CT_P` — A paragraph element containing runs and properties.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
@@ -3211,32 +3361,7 @@ impl CT_P {
         if run_index > self.runs.len() {
             return false;
         }
-        for marker in &mut self.comment_ranges {
-            match marker {
-                CommentRangeMarker::Start { run_index: at, .. }
-                | CommentRangeMarker::End { run_index: at, .. }
-                    if *at >= run_index =>
-                {
-                    *at += 1;
-                }
-                CommentRangeMarker::Start { .. } | CommentRangeMarker::End { .. } => {}
-            }
-        }
-        for marker in &mut self.bookmark_markers {
-            if marker.run_index >= run_index {
-                marker.run_index += 1;
-            }
-        }
-        for (at, _, _, _) in &mut self.content_controls {
-            if *at >= run_index {
-                *at += 1;
-            }
-        }
-        for (at, _, _) in &mut self.revisions {
-            if *at >= run_index {
-                *at += 1;
-            }
-        }
+        self.shift_run_boundaries_from(run_index);
 
         let mut hyperlinks = Vec::with_capacity(self.hyperlinks.len() + 1);
         let mut hyperlink_map = Vec::with_capacity(self.hyperlinks.len());
@@ -3292,6 +3417,105 @@ impl CT_P {
             let new_index = suffix.filter(|_| *at > run_index).unwrap_or(*prefix);
             *slot = hyperlink_revision_slot(new_index);
         }
+        self.runs.insert(run_index, run);
+        self.refresh_bookmark_projection()
+    }
+
+    /// Split the direct run at `run_index` at a Unicode scalar offset of its
+    /// literal text.
+    ///
+    /// The run keeps the text before `offset`. A new direct run at
+    /// `run_index + 1` receives the rest with cloned properties, inside the
+    /// same hyperlink. Zero selects the boundary before the run and the literal
+    /// text length selects the boundary after it without changing the paragraph.
+    /// Tabs, breaks, fields, drawings, references, and raw children are
+    /// zero-width for this operation.
+    /// Text-free content and raw children at the split point stay in the first
+    /// run, and boundary markers after the original run stay after the second.
+    /// Only [`RunSplitError::BookmarkProjection`] leaves the paragraph changed.
+    pub fn split_run(
+        &mut self,
+        run_index: usize,
+        offset: usize,
+    ) -> std::result::Result<usize, RunSplitError> {
+        let run_count = self.runs.len();
+        let literal_len = self
+            .runs
+            .get(run_index)
+            .ok_or(RunSplitError::RunOutOfRange {
+                run_index,
+                run_count,
+            })?
+            .literal_len();
+        if offset > literal_len {
+            return Err(RunSplitError::OffsetOutOfRange {
+                offset,
+                len: literal_len,
+            });
+        }
+        if offset == 0 {
+            return Ok(run_index);
+        }
+        if offset == literal_len {
+            return Ok(run_index + 1);
+        }
+        let tail = self.runs[run_index].split_off_at(offset)?;
+        let inserted = run_index + 1;
+        self.shift_run_boundaries_from(inserted);
+        for hyperlink in &mut self.hyperlinks {
+            if hyperlink.run_start >= inserted {
+                hyperlink.run_start += 1;
+                hyperlink.run_end += 1;
+            } else if hyperlink.run_end >= inserted {
+                // The hyperlink contains the split run, so it grows by one run.
+                let boundary_after_run = inserted - hyperlink.run_start;
+                for (boundary, _, _) in &mut hyperlink.extra_xml {
+                    if *boundary >= boundary_after_run {
+                        *boundary += 1;
+                    }
+                }
+                hyperlink.run_end += 1;
+            }
+        }
+        self.runs.insert(inserted, tail);
+        if self.refresh_bookmark_projection() {
+            Ok(inserted)
+        } else {
+            Err(RunSplitError::BookmarkProjection)
+        }
+    }
+
+    /// Move every run-boundary projection at or after `run_index` one run later.
+    ///
+    /// Hyperlink spans are left to the caller, which decides whether the new
+    /// run joins or splits them.
+    fn shift_run_boundaries_from(&mut self, run_index: usize) {
+        for marker in &mut self.comment_ranges {
+            match marker {
+                CommentRangeMarker::Start { run_index: at, .. }
+                | CommentRangeMarker::End { run_index: at, .. }
+                    if *at >= run_index =>
+                {
+                    *at += 1;
+                }
+                CommentRangeMarker::Start { .. } | CommentRangeMarker::End { .. } => {}
+            }
+        }
+        for marker in &mut self.bookmark_markers {
+            if marker.run_index >= run_index {
+                marker.run_index += 1;
+            }
+        }
+        for (at, _, _, _) in &mut self.content_controls {
+            if *at >= run_index {
+                *at += 1;
+            }
+        }
+        for (at, _, _) in &mut self.revisions {
+            if *at >= run_index {
+                *at += 1;
+            }
+        }
         for (position, _) in &mut self.extra_xml {
             if *position >= run_index {
                 *position += 1;
@@ -3302,8 +3526,6 @@ impl CT_P {
                 *position += 1;
             }
         }
-        self.runs.insert(run_index, run);
-        self.refresh_bookmark_projection()
     }
 
     /// Remove selected comment anchors and remap every collapsed run boundary.
@@ -10853,5 +11075,141 @@ mod tests {
             ),
             "{output}"
         );
+    }
+
+    #[test]
+    fn split_run_keeps_properties_space_and_later_markers_in_order() {
+        let mut paragraph = parse_paragraph(concat!(
+            r#"<w:bookmarkStart w:id="1" w:name="mark"/>"#,
+            r#"<w:r><w:rPr><w:b/></w:rPr><w:t>Hello world</w:t></w:r>"#,
+            r#"<w:bookmarkEnd w:id="1"/><w:r><w:t>!</w:t></w:r>"#,
+        ));
+        paragraph.split_run(0, 6).unwrap();
+
+        let texts = paragraph.runs.iter().map(CT_R::text).collect::<Vec<_>>();
+        assert_eq!(texts, ["Hello ", "world", "!"]);
+        assert_eq!(paragraph.runs[0].properties, paragraph.runs[1].properties);
+        let output = serialized_paragraph(&paragraph);
+        assert!(
+            output.contains(r#"<w:t xml:space="preserve">Hello </w:t>"#),
+            "{output}"
+        );
+        let world = output.find(">world<").unwrap();
+        let bookmark_end = output.find("bookmarkEnd").unwrap();
+        let exclamation = output.find(">!<").unwrap();
+        assert!(
+            world < bookmark_end && bookmark_end < exclamation,
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn split_run_keeps_both_parts_in_the_hyperlink_with_raw_children_in_order() {
+        let mut paragraph = parse_paragraph(concat!(
+            r#"<w:hyperlink w:anchor="target"><w:r><w:t>ab</w:t><x:mark/><w:t>cd</w:t><x:end/></w:r></w:hyperlink>"#,
+            r#"<w:r><w:t>after</w:t></w:r>"#,
+        ));
+        paragraph.split_run(0, 3).unwrap();
+
+        let texts = paragraph.runs.iter().map(CT_R::text).collect::<Vec<_>>();
+        assert_eq!(texts, ["abc", "d", "after"]);
+        let hyperlink = &paragraph.hyperlinks[0];
+        assert_eq!((hyperlink.run_start, hyperlink.run_end), (0, 2));
+        let output = serialized_paragraph(&paragraph);
+        assert_eq!(output.matches("<w:hyperlink").count(), 1, "{output}");
+        assert!(
+            output.contains(concat!(
+                r#"<w:r><w:t>ab</w:t><x:mark/><w:t>c</w:t></w:r>"#,
+                r#"<w:r><w:t>d</w:t><x:end/></w:r></w:hyperlink>"#,
+            )),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn split_run_rejects_missing_runs_edge_offsets_and_field_results_unchanged() {
+        let mut paragraph = parse_paragraph(concat!(
+            r#"<w:r><w:t>Page </w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>12</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+        let before = serialized_paragraph(&paragraph);
+        let field_run = paragraph
+            .runs
+            .iter()
+            .position(|run| {
+                run.content
+                    .iter()
+                    .any(|content| matches!(content, RunContent::Field(_)))
+            })
+            .unwrap();
+        assert_eq!(paragraph.runs[field_run].text(), "12");
+        assert_eq!(paragraph.split_run(field_run, 0), Ok(field_run));
+        assert_eq!(
+            paragraph.split_run(field_run, 1),
+            Err(RunSplitError::OffsetOutOfRange { offset: 1, len: 0 })
+        );
+        assert_eq!(paragraph.split_run(0, 0), Ok(0));
+        assert_eq!(paragraph.split_run(0, 5), Ok(1));
+        assert_eq!(
+            paragraph.split_run(0, 6),
+            Err(RunSplitError::OffsetOutOfRange { offset: 6, len: 5 })
+        );
+        let run_count = paragraph.runs.len();
+        assert_eq!(
+            paragraph.split_run(run_count, 1),
+            Err(RunSplitError::RunOutOfRange {
+                run_index: run_count,
+                run_count
+            })
+        );
+        assert_eq!(serialized_paragraph(&paragraph), before);
+    }
+
+    #[test]
+    fn split_run_partitions_zero_width_mixed_content_without_reordering() {
+        let mut paragraph = parse_paragraph(concat!(
+            r#"<w:r xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><w:t>ab</w:t><w:tab/><w:br/><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText>"#,
+            r#"<mc:AlternateContent><mc:Choice Requires="wps">"#,
+            r#"<w:drawing><wp:anchor behindDoc="0">"#,
+            r#"<wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>"#,
+            r#"<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>"#,
+            r#"<wp:extent cx="914400" cy="457200"/><wp:docPr id="1" name="Shape"/>"#,
+            r#"<a:graphic><a:graphicData><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp></a:graphicData></a:graphic>"#,
+            r#"</wp:anchor></w:drawing></mc:Choice>"#,
+            r#"<mc:Fallback><w:pict><v:rect/></w:pict></mc:Fallback></mc:AlternateContent>"#,
+            r#"<w:sym w:font="Wingdings" w:char="F0FC"/><x:raw/><w:t>cd</w:t></w:r>"#,
+        ));
+        assert_eq!(paragraph.runs.len(), 1);
+        assert_eq!(paragraph.runs[0].alt_drawings.len(), 1);
+
+        assert_eq!(paragraph.split_run(0, 2), Ok(1));
+        assert_eq!(paragraph.runs.len(), 2);
+        assert_eq!(paragraph.runs[0].text(), "ab");
+        assert_eq!(paragraph.runs[1].text(), "\t\ncd");
+        assert!(paragraph.runs[0].alt_drawings.is_empty());
+        assert_eq!(paragraph.runs[1].alt_drawings.len(), 1);
+
+        let output = serialized_paragraph(&paragraph);
+        assert_eq!(
+            output.matches("<mc:AlternateContent").count(),
+            1,
+            "{output}"
+        );
+        let ordered = [
+            "<w:t>ab</w:t>",
+            "<w:tab/>",
+            "<w:br/>",
+            "fldCharType=\"begin\"",
+            "<w:instrText> PAGE </w:instrText>",
+            "<mc:AlternateContent",
+            "<w:sym",
+            "<x:raw/>",
+            "<w:t>cd</w:t>",
+        ]
+        .map(|needle| output.find(needle).unwrap());
+        assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]), "{output}");
     }
 }

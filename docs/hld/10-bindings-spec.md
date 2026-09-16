@@ -766,7 +766,14 @@ Rust source impact does not add Python, WASM, or CLI methods.
 Native Word callers can inspect comments through `Document::comments` and
 author threads through `add_comment`, `reply_to`, `resolve_comment`, and
 `remove_comment`. `RunPosition` and `RunRange` define top-level paragraph run
-boundaries with an inclusive start and exclusive end. `CommentRef` exposes
+boundaries with an inclusive start and exclusive end. `Document::split_run`
+splits one direct-body run at a Unicode scalar offset of its literal text, so
+such a boundary can fall inside what was one run. The second part keeps the run
+properties and the enclosing hyperlink. Tabs, breaks, fields, drawings,
+references, and preserved raw children have zero width. Zero and the literal
+text length return the existing boundary without mutation. Interior success
+returns the new continuation index. Python exposes the same method and advances
+the binding revision only when a continuation is created. `CommentRef` exposes
 comment metadata, text, parent identity, and resolved state without permitting
 part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
 removes comments. Add ranges use explicit zero-based, half-open body paragraph

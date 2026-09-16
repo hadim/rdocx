@@ -443,6 +443,25 @@ impl<'a> Paragraph<'a> {
         self.inner.runs.get_mut(index).map(|inner| Run { inner })
     }
 
+    /// Split the run at `run_index` at a Unicode scalar offset of its literal
+    /// text.
+    ///
+    /// The run keeps the text before `offset`, and a new run at
+    /// `run_index + 1` receives the rest with the same properties, inside the
+    /// same hyperlink. Zero returns the boundary before the run and the literal
+    /// text length returns the boundary after it without changing the paragraph.
+    /// Non-text children have zero width. A comment or bookmark range can then
+    /// start or end at the returned boundary. On error the paragraph is
+    /// unchanged.
+    pub fn split_run(&mut self, run_index: usize, offset: usize) -> crate::Result<usize> {
+        let mut paragraph = self.inner.clone();
+        let boundary = paragraph
+            .split_run(run_index, offset)
+            .map_err(|error| crate::Error::Other(error.to_string()))?;
+        *self.inner = paragraph;
+        Ok(boundary)
+    }
+
     /// Get an iterator over immutable run references.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
         self.inner.runs.iter().map(|r| RunRef { inner: r })

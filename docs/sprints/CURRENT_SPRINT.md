@@ -66,7 +66,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-262 | Corpus drawings, text boxes, and watermarks | L | pending | - |
 | F-X107 | Clone and remove existing table rows | M | pending | - |
 | F-X108 | Replace an existing picture atomically | M | done | codex |
-| F-X109 | Split text runs at Unicode character offsets | M | pending | - |
+| F-X109 | Split text runs at Unicode character offsets | M | done | codex |
 | F-263 | Layout-backed fields and M23 corpus gate | L | pending | - |
 | F-X113 | Preserve appended paragraphs in document comparison | M | pending | - |
 | F-X114 | Rebuild TOC entries with document styles and geometry | M | pending | - |
