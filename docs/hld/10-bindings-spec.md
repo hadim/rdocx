@@ -1158,6 +1158,18 @@ methods are additive on the native pre-1.0 facade. Python, WASM, and CLI gain no
 watermark methods and continue to preserve watermarks already authored through
 their owned `Document`.
 
+The same native facade exposes `add_picture_with_options`,
+`add_text_box_to_story`, and `set_text_watermark_for`. `PictureOptions` selects
+crop, size, inline or floating placement, relative axes, wrap, distances,
+z-order, and behind-text behavior. `TextBoxOptions` selects bounds, rotation,
+direction, and fill or outline colors while the method appends one checked
+story paragraph. `TextWatermarkOptions` selects geometry, typography, opacity,
+and one default, first, or even header variant. Invalid dimensions, crops,
+rotation scaling, story kinds, or missing header variants fail atomically.
+Selecting an even variant does not enable even and odd headers. These are
+additive pre-1.0 native Rust APIs. Python, WASM, and CLI gain no corresponding
+surface.
+
 The public low-level `VmlWatermark` projection and the added paginator section
 and header-selection fields are part of the intentional pre-1.0 Rust source
 break for the next stable family. They expose renderer input, not a second

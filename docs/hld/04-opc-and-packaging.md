@@ -602,6 +602,15 @@ stage all header, relationship, media, and content-type changes on a cloned
 package. A missing part, invalid dimension, parse error, or serialization error
 leaves the live document and package unchanged.
 
+Story-scoped picture options are validated before media publication. The
+owning story receives the image relationship, while crop rectangles remain in
+the picture blip fill and floating geometry remains in the WordprocessingDrawing
+anchor. Authored text boxes carry local namespace declarations and a complete
+VML shape-type definition so either compatibility branch is independently
+resolvable. Section-aware text watermark replacement touches only the selected
+API-owned shape. It neither synthesizes unrelated header variants nor enables
+the document-wide even-and-odd setting.
+
 Threaded comments add a document relationship using the Microsoft
 `commentsExtended` relationship type. The facade retains its resolved target
 and writes the comments-extended content type at that exact part. New comment

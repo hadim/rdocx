@@ -2515,12 +2515,18 @@ identifiers publish atomically after reopen. No external resource is fetched.
 Word content and rendering in body, cell, header, and footer containers.
 
 ### F-262, Corpus drawings, text boxes, and watermarks (L)
-Author inline and floating images, crop and size, anchors, wrapping, rotated
-text boxes, text direction, section-aware watermarks, and the required modeled
-AlternateContent and VML fallback. Raw header XML is not used by the generator.
+`PictureOptions` authors inline and floating images with crop, size, relative
+position, wrapping, distances, z-order, and behind-text control. Checked story
+text boxes carry rotation and all three supported text directions in a WPS
+primary branch with a self-contained VML fallback. Section-aware text
+watermarks target one header variant without changing caller-owned parity
+settings. Every mutation publishes only after save and reopen. Raw header XML
+is not used by the generator.
 **Depends on**: F-252, F-255, F-260.
 **Test gate**: differential. Every private-corpus drawing and watermark matches
-the reviewed Word geometry and compatibility structure.
+the reviewed Word geometry and compatibility structure. Companion exact XML,
+relationship, option-matrix, header-selection, and rollback tests cover the
+portable gate when Word GUI automation is unavailable.
 
 ### F-263, Layout-backed fields and M23 corpus gate (L)
 Materialize PAGE, NUMPAGES, PAGEREF, and supported TOC caches from deterministic

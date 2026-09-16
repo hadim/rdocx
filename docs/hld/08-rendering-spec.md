@@ -871,6 +871,14 @@ VML watermarks remain reusable because the part, complete section geometry,
 resolved media bytes, and reusable context are all authoritative identity
 inputs.
 
+Facade-authored text boxes expose their selected DrawingML WPS branch to the
+normal Word story projection after save and reopen. Rotation and horizontal,
+vertical, or vertical-270 text direction therefore reach the same deterministic
+layout boundary as retained producer text boxes. Section-aware watermarks keep
+the existing selected-header projection. Authoring a watermark for an even
+header does not change page selection policy, so layout observes it only when
+the caller has enabled even and odd headers.
+
 Retained block and restart state share a 5,216-entry and 64 MiB ceiling.
 Paragraph blocks receive 4,096 entries and 50 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and

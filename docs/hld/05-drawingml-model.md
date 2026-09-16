@@ -32,6 +32,16 @@ by `Document::embed_image`. The drawing stays in the caller-selected mixed run
 position and carries the supplied point or EMU dimensions through the existing
 WordprocessingDrawing wrapper. Relationship creation remains package-owned.
 
+The document facade also authors pictures through `PictureOptions`.
+`CT_Inline` and `CT_Anchor` own a typed `SourceRect`, and anchored pictures emit
+schema-ordered relative positioning plus none, square, tight, through, top and
+bottom wrapping. Tight and through output includes the required wrap polygon.
+Text boxes use a WPS DrawingML primary branch with exact rotation and vertical
+direction, plus a self-contained VML fallback whose shape type, text spacing,
+and vertical flow agree with the selected option. Unsupported producer
+`AlternateContent` remains opaque unless the facade authors that complete
+fragment itself.
+
 Cross-document body-fragment import treats each selected picture or chart
 drawing as the root of a part-local relationship closure. It assigns fresh
 package-global drawing identities, rewrites only schema-owned relationship

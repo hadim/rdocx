@@ -5115,6 +5115,363 @@ fn html_fragment_rejects_unreviewed_story_kinds_atomically() {
 }
 
 #[test]
+fn m23_drawings_text_boxes_and_watermarks_match_word() {
+    let mut document = Document::new();
+    document.add_paragraph("drawing matrix");
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let png = mhtml_pixel_png();
+
+    document
+        .add_picture_with_options(
+            &body,
+            &png,
+            "cropped.png",
+            rdocx::PictureOptions {
+                width: Length::pt(72.0),
+                height: Length::pt(36.0),
+                crop: Some(rdocx::PictureCrop {
+                    left: 10_000,
+                    top: 5_000,
+                    right: 20_000,
+                    bottom: 0,
+                }),
+                anchor: None,
+                name: Some("Cropped inline".to_owned()),
+                description: Some("inline corpus picture".to_owned()),
+            },
+        )
+        .unwrap();
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    document
+        .add_picture_with_options(
+            &body,
+            &png,
+            "floating.png",
+            rdocx::PictureOptions {
+                width: Length::pt(90.0),
+                height: Length::pt(45.0),
+                crop: None,
+                anchor: Some(rdocx::PictureAnchor {
+                    horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Margin,
+                    horizontal_offset: Length::pt(18.0),
+                    horizontal_alignment: None,
+                    vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                    vertical_offset: Length::pt(6.0),
+                    vertical_alignment: None,
+                    wrap: rdocx::DrawingWrap::Square,
+                    distance_top: Length::pt(2.0),
+                    distance_bottom: Length::pt(3.0),
+                    distance_left: Length::pt(4.0),
+                    distance_right: Length::pt(5.0),
+                    relative_height: 7,
+                    behind_text: false,
+                }),
+                name: Some("Floating picture".to_owned()),
+                description: None,
+            },
+        )
+        .unwrap();
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    document
+        .add_text_box_to_story(
+            &body,
+            " rotated corpus text ",
+            rdocx::TextBoxOptions {
+                width: Length::pt(144.0),
+                height: Length::pt(54.0),
+                anchor: rdocx::PictureAnchor {
+                    horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                    horizontal_offset: Length::pt(24.0),
+                    horizontal_alignment: None,
+                    vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                    vertical_offset: Length::pt(12.0),
+                    vertical_alignment: None,
+                    wrap: rdocx::DrawingWrap::TopAndBottom,
+                    distance_top: Length::pt(2.0),
+                    distance_bottom: Length::pt(2.0),
+                    distance_left: Length::pt(0.0),
+                    distance_right: Length::pt(0.0),
+                    relative_height: 8,
+                    behind_text: false,
+                },
+                rotation_degrees: 15.0,
+                text_direction: rdocx::TextBoxDirection::Vertical,
+                fill_color: Some("D9EAF7".to_owned()),
+            },
+        )
+        .unwrap();
+    document
+        .set_text_watermark_for(
+            0,
+            HdrFtrType::Default,
+            "CONFIDENTIAL",
+            rdocx::TextWatermarkOptions {
+                width: Length::pt(360.0),
+                height: Length::pt(90.0),
+                rotation_degrees: 315.0,
+                color: "D9D9D9".to_owned(),
+                font_family: Some("Calibri".to_owned()),
+                opacity: 0.5,
+            },
+        )
+        .unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    let round_trip = reopened.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(round_trip)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    assert!(xml.contains("<a:srcRect l=\"10000\" t=\"5000\" r=\"20000\" b=\"0\"/>"));
+    assert!(xml.contains("<wp:extent cx=\"914400\" cy=\"457200\"/>"));
+    assert!(xml.contains("relativeFrom=\"margin\""));
+    assert!(xml.contains("<wp:wrapSquare"));
+    for distance in [
+        "distT=\"25400\"",
+        "distB=\"38100\"",
+        "distL=\"50800\"",
+        "distR=\"63500\"",
+    ] {
+        assert!(xml.contains(distance), "{distance}");
+    }
+    assert!(xml.contains("<mc:AlternateContent"));
+    assert!(xml.contains("<wps:wsp"));
+    assert!(xml.contains("<w:txbxContent"));
+    assert_eq!(
+        xml.matches("<w:t xml:space=\"preserve\"> rotated corpus text </w:t>")
+            .count(),
+        2
+    );
+    assert!(xml.contains("<a:xfrm rot=\"900000\""));
+    assert!(xml.contains("<wps:bodyPr vert=\"vert\"/>"));
+    assert!(xml.contains("<mc:Fallback"));
+    assert!(xml.contains("<v:shapetype id=\"rdocx-textbox-type-"));
+    assert!(xml.contains("type=\"#rdocx-textbox-type-"));
+    assert!(xml.contains("<v:textbox"));
+    assert!(
+        xml.contains(
+            "<v:textbox style=\"layout-flow:vertical;mso-layout-flow-alt:top-to-bottom\">"
+        )
+    );
+    let shape_xml = &xml[xml.find("<wps:wsp").unwrap()..xml.find("</wps:wsp>").unwrap()];
+    assert!(shape_xml.find("<a:prstGeom").unwrap() < shape_xml.find("<a:solidFill").unwrap());
+    assert!(shape_xml.find("<wps:txbx").unwrap() < shape_xml.find("<wps:bodyPr").unwrap());
+    assert_eq!(reopened.paragraphs()[0].text(), "drawing matrix");
+    let native_pdf = reopened.to_pdf_deterministic().unwrap();
+    assert!(native_pdf.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn drawing_option_matrix_round_trips_with_story_relationships() {
+    let mut document = container_neutral_story_fixture();
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let before_items = document.story_items(&header).unwrap().len();
+    let before_paragraphs = document
+        .story_items(&header)
+        .unwrap()
+        .iter()
+        .filter(|item| item.kind() == StoryItemKind::Paragraph)
+        .count();
+    document
+        .add_picture_with_options(
+            &header,
+            &mhtml_pixel_png(),
+            "header-crop.png",
+            rdocx::PictureOptions {
+                width: Length::pt(24.0),
+                height: Length::pt(12.0),
+                crop: Some(rdocx::PictureCrop {
+                    left: 1,
+                    top: 2,
+                    right: 3,
+                    bottom: 4,
+                }),
+                anchor: None,
+                name: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let reopened_header = reopened
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let reopened_items = reopened.story_items(&reopened_header).unwrap();
+    assert_eq!(reopened_items.len(), before_items + 2);
+    assert_eq!(
+        reopened_items
+            .iter()
+            .filter(|item| item.kind() == StoryItemKind::Paragraph)
+            .count(),
+        before_paragraphs + 1
+    );
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    assert_eq!(
+        package
+            .get_part_rels(reopened_header.part_name())
+            .unwrap()
+            .items
+            .iter()
+            .filter(|relationship| relationship.rel_type == rel_types::IMAGE)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn section_aware_watermark_pages_select_the_requested_variant() {
+    let mut document = Document::new();
+    document
+        .set_text_watermark_for(
+            0,
+            HdrFtrType::Even,
+            "EVEN MARK",
+            rdocx::TextWatermarkOptions::default(),
+        )
+        .unwrap();
+    assert!(!document.even_and_odd_headers());
+    document
+        .section_mut(0)
+        .unwrap()
+        .set_different_first_page(true);
+    document.set_even_and_odd_headers(true).unwrap();
+    for (kind, text) in [
+        (HdrFtrType::Default, "DEFAULT MARK"),
+        (HdrFtrType::First, "FIRST MARK"),
+    ] {
+        document
+            .set_text_watermark_for(0, kind, text, rdocx::TextWatermarkOptions::default())
+            .unwrap();
+    }
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let header_text = package
+        .parts
+        .iter()
+        .filter(|(part, _)| part.starts_with("/word/header"))
+        .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+        .collect::<String>();
+    for text in ["DEFAULT MARK", "FIRST MARK", "EVEN MARK"] {
+        assert_eq!(header_text.matches(text).count(), 1, "{text}");
+    }
+    for (kind, text) in [
+        (HdrFtrType::Default, "DEFAULT MARK"),
+        (HdrFtrType::First, "FIRST MARK"),
+        (HdrFtrType::Even, "EVEN MARK"),
+    ] {
+        let story = reopened
+            .section_story(0, rdocx::HeaderFooterKind::Header, kind)
+            .unwrap()
+            .unwrap();
+        let xml = String::from_utf8_lossy(package.get_part(story.story().part_name()).unwrap());
+        assert!(xml.contains(text), "{kind:?} selected {xml}");
+    }
+}
+
+#[test]
+fn staged_drawing_invariants_reject_invalid_inputs_atomically() {
+    let mut document = Document::new();
+    let body = document.stories().unwrap()[0].clone();
+    let stable = document.to_bytes().unwrap();
+    let invalid = rdocx::PictureOptions {
+        width: Length::pt(0.0),
+        height: Length::pt(10.0),
+        crop: Some(rdocx::PictureCrop {
+            left: 80_000,
+            top: 0,
+            right: 30_000,
+            bottom: 0,
+        }),
+        anchor: None,
+        name: None,
+        description: None,
+    };
+    assert!(
+        document
+            .add_picture_with_options(&body, &mhtml_pixel_png(), "invalid.png", invalid)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), stable);
+
+    let invalid_text_box = rdocx::TextBoxOptions {
+        width: Length::pt(10.0),
+        height: Length::pt(10.0),
+        anchor: rdocx::PictureAnchor {
+            horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Page,
+            horizontal_offset: Length::pt(0.0),
+            horizontal_alignment: None,
+            vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Page,
+            vertical_offset: Length::pt(0.0),
+            vertical_alignment: None,
+            wrap: rdocx::DrawingWrap::None,
+            distance_top: Length::pt(0.0),
+            distance_bottom: Length::pt(0.0),
+            distance_left: Length::pt(0.0),
+            distance_right: Length::pt(0.0),
+            relative_height: 0,
+            behind_text: false,
+        },
+        rotation_degrees: f64::from(i32::MAX) / 60_000.0 + 1.0,
+        text_direction: rdocx::TextBoxDirection::Horizontal,
+        fill_color: None,
+    };
+    assert!(
+        document
+            .add_text_box_to_story(&body, "invalid", invalid_text_box)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), stable);
+
+    let valid = rdocx::PictureOptions {
+        width: Length::pt(10.0),
+        height: Length::pt(10.0),
+        crop: None,
+        anchor: None,
+        name: None,
+        description: None,
+    };
+    assert!(
+        document
+            .add_picture_with_options(&body, b"not an image", "invalid.png", valid.clone())
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), stable);
+
+    document.add_paragraph("invalidate the retained story identity");
+    let stable_after_edit = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_picture_with_options(&body, &mhtml_pixel_png(), "stale.png", valid)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), stable_after_edit);
+}
+
+#[test]
 #[ignore = "requires pinned Word, LibreOffice, and Poppler render artifacts"]
 fn regenerate_f261_html_fragment_render_oracle() {
     use base64::Engine as _;

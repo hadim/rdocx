@@ -852,6 +852,20 @@ entity-decoded settings, unsupported colour and media diagnostics, atomic
 rejection, and margin-relative centering. No sample authors a watermark, so the
 49-entry hash harness remains unchanged.
 
+The M23 drawing gate is `m23_drawings_text_boxes_and_watermarks_match_word`.
+It authors cropped inline and floating pictures, every wrap family, rotated and
+vertical text boxes, compatibility fallbacks, and section-selected watermarks
+through the public facade. Save, reopen, and repeat-save retain exact owner
+relationships, schema order, source rectangles, wrap polygons, WPS geometry,
+and self-contained VML references. Companion tests cover the complete drawing
+option matrix, selected default, first, and even header variants, preserved
+leading and trailing text-box spaces, and atomic rejection of invalid or
+overflowing geometry. Deterministic bundled-font PDF and PNG output is checked
+with Poppler 26.01.0, while LibreOffice 26.2.5.2 provides the portable reopen
+and visual inspection. The Word 16.112.4 structure record is reviewed
+statically when GUI automation is unavailable. No sample opts into the new
+options, so all 49 hash entries remain unchanged.
+
 The Word glyph-provenance regression resolves every attributed run through its
 result-local `WordSourcePath` and requires the selected paragraph's exact
 Unicode-scalar slice to equal the displayed run. Its in-code fixture covers

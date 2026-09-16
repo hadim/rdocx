@@ -902,6 +902,16 @@ through the shared `MediaRegistry`, and lowers each selected watermark to a
 backend-neutral group before pagination. Unsupported VML stays opaque and no
 backend parses WordprocessingML.
 
+Configured picture and text-box authoring follows the same story ownership.
+The facade stages the selected story, allocates package-global drawing ids, and
+creates media relationships only on that story's OPC owner. Pictures carry
+typed crop, size, inline or floating position, wrap, distance, and z-order
+choices. Text boxes emit one DrawingML WPS primary branch plus a self-contained
+VML fallback inside `mc:AlternateContent`. Section-aware text watermarks target
+one effective header variant without changing the caller-owned even-and-odd
+header setting. Every operation serializes and reopens the staged package
+before publishing it.
+
 Footnotes and endnotes are laid out into a `NoteRegistry` before pagination, and
 the paginator reserves, splits and draws them. Note placement is part of
 pagination rather than a pass that runs after it, because a page's body height

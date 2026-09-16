@@ -1,6 +1,6 @@
 # F-262, Corpus drawings, text boxes, and watermarks
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-252, F-255, F-260
@@ -85,11 +85,11 @@ Each delta must be reviewed as an intentional drawing behavior change.
 
 ## Implementation checklist
 
-- [ ] Add failing inline, anchor, crop, wrap, text-box, and watermark differentials.
-- [ ] Complete story-aware typed drawing and text-box authoring.
-- [ ] Complete section-aware watermark selection and modeled compatibility branches.
-- [ ] Validate and reopen the complete package before publishing any mutation.
-- [ ] Run parser, layout, public API, oracle, hash harness, full verification, and microscope gates.
+- [x] Add failing inline, anchor, crop, wrap, text-box, and watermark differentials.
+- [x] Complete story-aware typed drawing and text-box authoring.
+- [x] Complete section-aware watermark selection and modeled compatibility branches.
+- [x] Validate and reopen the complete package before publishing any mutation.
+- [x] Run parser, layout, public API, oracle, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

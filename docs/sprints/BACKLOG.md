@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 21 | 1 | 2 |
+| M23, From-scratch business documents           | 24 | 22 | 1 | 1 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
 | X, Cross-cutting (opportunistic)            | 130 | 116 | 1 | 9  |
-| **Total** | **448** | **363** | **2** | **79** |
+| **Total** | **448** | **364** | **2** | **78** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -474,7 +474,7 @@ regenerated, never hand-edited.
 | F-259 | Container measurement and equal-height layout | S73 | M | done |
 | F-260 | Ordered run content authoring | S73 | L | done |
 | F-261 | Rich HTML fragments in arbitrary containers | S73 | L | done |
-| F-262 | Corpus drawings, text boxes, and watermarks | S73 | L | pending |
+| F-262 | Corpus drawings, text boxes, and watermarks | S73 | L | done |
 | F-263 | Layout-backed fields and M23 corpus gate | S73 | L | pending |
 <!-- AUTOGEN:backlog-M23 END -->
 

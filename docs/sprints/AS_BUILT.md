@@ -14696,3 +14696,50 @@ archive-size, and supply-chain gates pass.
 **Notes for future sessions.** Keep fragment resources explicit and preserve
 story-local relationship ownership. Extend the shared HTML projection when the
 supported subset grows instead of adding a parallel fragment parser.
+
+### F-262, Corpus drawings, text boxes, and watermarks
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native `Document` facade now authors cropped inline
+and floating pictures with full position and wrapping options, rotated or
+vertical story text boxes, and text watermarks for a selected section header
+variant. Authored text boxes contain a WPS DrawingML primary branch and a
+self-contained VML fallback.
+
+**Non-obvious choices.** Every operation stages relationship, media, drawing
+identity, and story XML changes, then serializes and reopens the complete
+package before publication. Tight and through wraps include their required
+polygon. Selecting an even watermark header does not silently enable the
+document-wide even-and-odd setting, which remains caller-owned.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, story and identity
+ownership, `docs/hld/04-opc-and-packaging.md`, package staging and compatibility
+branches, `docs/hld/05-drawingml-model.md`, crop, anchors, wraps, and text-box
+serialization, `docs/hld/08-rendering-spec.md`, selected text-box and watermark
+layout, `docs/hld/10-bindings-spec.md`, the additive native API,
+`docs/hld/12-testing-strategy.md`, drawing conformance and oracle gates, and the
+F-262 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `m23_drawings_text_boxes_and_watermarks_match_word` first failed at
+the story baseline because the typed option and text-box APIs did not exist. It
+now proves reviewed geometry and compatibility structure. Companion tests cover
+the exact option matrix, owner-scoped relationships, section header selection,
+whitespace, save and reopen, schema-complete wraps, and atomic invalid-input
+rollback. The full workspace, Clippy, no-default-font, WASM, rustdoc, README,
+workflow, package, archive-size, and deterministic render gates pass. Portable
+visual inspection used LibreOffice 26.2.5.2 and Poppler 26.01.0. Word 16.112.4
+GUI automation was unavailable, so the Word gate used its reviewed static
+structure record and did not claim a successful GUI render.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep text-box compatibility branches complete
+and self-contained. Preserve caller ownership of even-header policy and add new
+wrap variants only with their required schema children and exact round-trip
+coverage.

@@ -52,13 +52,16 @@ pub use comparison::{
 pub use content_control::ContentControlRef;
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemRef, ContentFragment, ContentLocation,
-    ContentMeasurement, Document, DocumentFragment, EmbeddedFont, EmbeddedFontKind, FontDefinition,
-    FontEmbeddingLicense, FragmentConflictPolicy, HeaderFooterKind, ImageInfo, IssueSeverity,
-    LinkInfo, ListLevel, ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
+    ContentMeasurement, Document, DocumentFragment, DrawingHorizontalAlignment,
+    DrawingHorizontalRelativeFrom, DrawingVerticalAlignment, DrawingVerticalRelativeFrom,
+    DrawingWrap, EmbeddedFont, EmbeddedFontKind, FontDefinition, FontEmbeddingLicense,
+    FragmentConflictPolicy, HeaderFooterKind, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
+    ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
-    NumberingLevelOverride, OutlineNode, RenderOptions, Section, SectionRef, SectionStory,
-    StoryError, StoryId, StoryItemKind, StoryItemRef, StoryKind, UnsupportedXmlRef,
-    WordCreationProfile, WordPackageClass,
+    NumberingLevelOverride, OutlineNode, PictureAnchor, PictureCrop, PictureOptions, RenderOptions,
+    Section, SectionRef, SectionStory, StoryError, StoryId, StoryItemKind, StoryItemRef, StoryKind,
+    TextBoxDirection, TextBoxOptions, TextWatermarkOptions, UnsupportedXmlRef, WordCreationProfile,
+    WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,

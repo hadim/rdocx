@@ -25,7 +25,10 @@ use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
-use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline, drawing_ns};
+use rdocx_oxml::drawing::{
+    AnchorAlignH, AnchorAlignV, CT_Anchor, CT_Drawing, CT_Inline, ST_RelativeFromH,
+    ST_RelativeFromV, SourceRect, WrapType, drawing_ns,
+};
 use rdocx_oxml::font_table::{EmbeddedFontReference, FontFaceKind, FontTable};
 use rdocx_oxml::header_footer::{
     CT_HdrFtr, HdrFtrRef, HdrFtrType, VmlWatermark, replace_authored_watermark,
@@ -258,6 +261,441 @@ pub enum StoryKind {
 pub enum HeaderFooterKind {
     Header,
     Footer,
+}
+
+/// Horizontal frame used to position a floating Word drawing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingHorizontalRelativeFrom {
+    Page,
+    Margin,
+    Column,
+    Character,
+    LeftMargin,
+    RightMargin,
+    InsideMargin,
+    OutsideMargin,
+}
+
+/// Vertical frame used to position a floating Word drawing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingVerticalRelativeFrom {
+    Page,
+    Margin,
+    Paragraph,
+    Line,
+    TopMargin,
+    BottomMargin,
+    InsideMargin,
+    OutsideMargin,
+}
+
+/// Horizontal alignment used instead of a floating drawing offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingHorizontalAlignment {
+    Left,
+    Center,
+    Right,
+    Inside,
+    Outside,
+}
+
+/// Vertical alignment used instead of a floating drawing offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingVerticalAlignment {
+    Top,
+    Center,
+    Bottom,
+    Inside,
+    Outside,
+}
+
+/// Text wrapping policy for a floating Word drawing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DrawingWrap {
+    #[default]
+    None,
+    Square,
+    TopAndBottom,
+    Tight,
+    Through,
+}
+
+/// Picture crop in DrawingML thousandths of one percent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PictureCrop {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+/// Floating placement for a picture or text box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PictureAnchor {
+    pub horizontal_relative_from: DrawingHorizontalRelativeFrom,
+    pub horizontal_offset: Length,
+    pub horizontal_alignment: Option<DrawingHorizontalAlignment>,
+    pub vertical_relative_from: DrawingVerticalRelativeFrom,
+    pub vertical_offset: Length,
+    pub vertical_alignment: Option<DrawingVerticalAlignment>,
+    pub wrap: DrawingWrap,
+    pub distance_top: Length,
+    pub distance_bottom: Length,
+    pub distance_left: Length,
+    pub distance_right: Length,
+    pub relative_height: u32,
+    pub behind_text: bool,
+}
+
+/// Options for one story-scoped picture.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PictureOptions {
+    pub width: Length,
+    pub height: Length,
+    pub crop: Option<PictureCrop>,
+    pub anchor: Option<PictureAnchor>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Text flow direction inside an authored Word text box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextBoxDirection {
+    #[default]
+    Horizontal,
+    Vertical,
+    Vertical270,
+}
+
+/// Options for one floating Word text box.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextBoxOptions {
+    pub width: Length,
+    pub height: Length,
+    pub anchor: PictureAnchor,
+    pub rotation_degrees: f64,
+    pub text_direction: TextBoxDirection,
+    pub fill_color: Option<String>,
+}
+
+/// Appearance of one section-variant text watermark.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextWatermarkOptions {
+    pub width: Length,
+    pub height: Length,
+    pub rotation_degrees: f64,
+    pub color: String,
+    pub font_family: Option<String>,
+    pub opacity: f64,
+}
+
+impl Default for TextWatermarkOptions {
+    fn default() -> Self {
+        Self {
+            width: Length::pt(468.0),
+            height: Length::pt(117.0),
+            rotation_degrees: 315.0,
+            color: "D9D9D9".to_owned(),
+            font_family: Some("Calibri".to_owned()),
+            opacity: 0.5,
+        }
+    }
+}
+
+impl From<DrawingHorizontalRelativeFrom> for ST_RelativeFromH {
+    fn from(value: DrawingHorizontalRelativeFrom) -> Self {
+        match value {
+            DrawingHorizontalRelativeFrom::Page => Self::Page,
+            DrawingHorizontalRelativeFrom::Margin => Self::Margin,
+            DrawingHorizontalRelativeFrom::Column => Self::Column,
+            DrawingHorizontalRelativeFrom::Character => Self::Character,
+            DrawingHorizontalRelativeFrom::LeftMargin => Self::LeftMargin,
+            DrawingHorizontalRelativeFrom::RightMargin => Self::RightMargin,
+            DrawingHorizontalRelativeFrom::InsideMargin => Self::InsideMargin,
+            DrawingHorizontalRelativeFrom::OutsideMargin => Self::OutsideMargin,
+        }
+    }
+}
+
+impl From<DrawingVerticalRelativeFrom> for ST_RelativeFromV {
+    fn from(value: DrawingVerticalRelativeFrom) -> Self {
+        match value {
+            DrawingVerticalRelativeFrom::Page => Self::Page,
+            DrawingVerticalRelativeFrom::Margin => Self::Margin,
+            DrawingVerticalRelativeFrom::Paragraph => Self::Paragraph,
+            DrawingVerticalRelativeFrom::Line => Self::Line,
+            DrawingVerticalRelativeFrom::TopMargin => Self::TopMargin,
+            DrawingVerticalRelativeFrom::BottomMargin => Self::BottomMargin,
+            DrawingVerticalRelativeFrom::InsideMargin => Self::InsideMargin,
+            DrawingVerticalRelativeFrom::OutsideMargin => Self::OutsideMargin,
+        }
+    }
+}
+
+impl From<DrawingHorizontalAlignment> for AnchorAlignH {
+    fn from(value: DrawingHorizontalAlignment) -> Self {
+        match value {
+            DrawingHorizontalAlignment::Left => Self::Left,
+            DrawingHorizontalAlignment::Center => Self::Center,
+            DrawingHorizontalAlignment::Right => Self::Right,
+            DrawingHorizontalAlignment::Inside => Self::Inside,
+            DrawingHorizontalAlignment::Outside => Self::Outside,
+        }
+    }
+}
+
+impl From<DrawingVerticalAlignment> for AnchorAlignV {
+    fn from(value: DrawingVerticalAlignment) -> Self {
+        match value {
+            DrawingVerticalAlignment::Top => Self::Top,
+            DrawingVerticalAlignment::Center => Self::Center,
+            DrawingVerticalAlignment::Bottom => Self::Bottom,
+            DrawingVerticalAlignment::Inside => Self::Inside,
+            DrawingVerticalAlignment::Outside => Self::Outside,
+        }
+    }
+}
+
+impl From<DrawingWrap> for WrapType {
+    fn from(value: DrawingWrap) -> Self {
+        match value {
+            DrawingWrap::None => Self::None,
+            DrawingWrap::Square => Self::Square,
+            DrawingWrap::TopAndBottom => Self::TopAndBottom,
+            DrawingWrap::Tight => Self::Tight,
+            DrawingWrap::Through => Self::Through,
+        }
+    }
+}
+
+fn validate_picture_options(options: &PictureOptions) -> Result<()> {
+    if options.width.to_emu() <= 0 || options.height.to_emu() <= 0 {
+        return Err(Error::Other(
+            "picture width and height must be positive".to_owned(),
+        ));
+    }
+    if let Some(crop) = options.crop {
+        for (name, value) in [
+            ("left", crop.left),
+            ("top", crop.top),
+            ("right", crop.right),
+            ("bottom", crop.bottom),
+        ] {
+            if !(0..100_000).contains(&value) {
+                return Err(Error::Other(format!(
+                    "picture crop {name} must be between 0 and 99999"
+                )));
+            }
+        }
+        if crop.left + crop.right >= 100_000 || crop.top + crop.bottom >= 100_000 {
+            return Err(Error::Other(
+                "opposite picture crop values must leave a visible source rectangle".to_owned(),
+            ));
+        }
+    }
+    if let Some(anchor) = options.anchor {
+        validate_picture_anchor(anchor)?;
+    }
+    Ok(())
+}
+
+fn validate_picture_anchor(anchor: PictureAnchor) -> Result<()> {
+    for (name, value) in [
+        ("top", anchor.distance_top),
+        ("bottom", anchor.distance_bottom),
+        ("left", anchor.distance_left),
+        ("right", anchor.distance_right),
+    ] {
+        if value.to_emu() < 0 {
+            return Err(Error::Other(format!(
+                "drawing {name} wrap distance must be nonnegative"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_text_box_options(options: &TextBoxOptions) -> Result<()> {
+    if options.width.to_emu() <= 0 || options.height.to_emu() <= 0 {
+        return Err(Error::Other(
+            "text box width and height must be positive".to_owned(),
+        ));
+    }
+    drawingml_rotation(options.rotation_degrees)?;
+    if let Some(color) = options.fill_color.as_deref()
+        && !is_rgb_hex(color)
+    {
+        return Err(Error::Other(
+            "text box fill color must be six hexadecimal digits".to_owned(),
+        ));
+    }
+    validate_picture_anchor(options.anchor)
+}
+
+fn drawingml_rotation(rotation_degrees: f64) -> Result<i32> {
+    if !rotation_degrees.is_finite() {
+        return Err(Error::Other("text box rotation must be finite".to_owned()));
+    }
+    let rotation = rotation_degrees * 60_000.0;
+    if rotation < f64::from(i32::MIN) || rotation > f64::from(i32::MAX) {
+        return Err(Error::Other(
+            "text box rotation exceeds the DrawingML angle range".to_owned(),
+        ));
+    }
+    Ok(rotation.round() as i32)
+}
+
+fn validate_text_watermark_options(options: &TextWatermarkOptions) -> Result<()> {
+    if options.width.to_emu() <= 0 || options.height.to_emu() <= 0 {
+        return Err(Error::Other(
+            "watermark width and height must be positive".to_owned(),
+        ));
+    }
+    if !options.rotation_degrees.is_finite() {
+        return Err(Error::Other("watermark rotation must be finite".to_owned()));
+    }
+    if !options.opacity.is_finite() || !(0.0..=1.0).contains(&options.opacity) {
+        return Err(Error::Other(
+            "watermark opacity must be between zero and one".to_owned(),
+        ));
+    }
+    if !is_rgb_hex(&options.color) {
+        return Err(Error::Other(
+            "watermark color must be six hexadecimal digits".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_rgb_hex(value: &str) -> bool {
+    value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn apply_picture_anchor(anchor: &mut CT_Anchor, options: PictureAnchor) {
+    anchor.behind_doc = options.behind_text;
+    anchor.pos_h_relative_from = options.horizontal_relative_from.into();
+    anchor.pos_h_offset = rdocx_oxml::units::Emu(options.horizontal_offset.to_emu());
+    anchor.pos_h_align = options.horizontal_alignment.map(Into::into);
+    anchor.pos_v_relative_from = options.vertical_relative_from.into();
+    anchor.pos_v_offset = rdocx_oxml::units::Emu(options.vertical_offset.to_emu());
+    anchor.pos_v_align = options.vertical_alignment.map(Into::into);
+    anchor.wrap = options.wrap.into();
+    anchor.dist_t = rdocx_oxml::units::Emu(options.distance_top.to_emu());
+    anchor.dist_b = rdocx_oxml::units::Emu(options.distance_bottom.to_emu());
+    anchor.dist_l = rdocx_oxml::units::Emu(options.distance_left.to_emu());
+    anchor.dist_r = rdocx_oxml::units::Emu(options.distance_right.to_emu());
+    anchor.relative_height = options.relative_height;
+}
+
+fn authored_text_box_alternate_content(
+    drawing_id: u32,
+    text: &str,
+    options: &TextBoxOptions,
+) -> Result<Vec<u8>> {
+    let horizontal = match options.anchor.horizontal_alignment {
+        Some(alignment) => format!(
+            "<wp:align>{}</wp:align>",
+            AnchorAlignH::from(alignment).to_str()
+        ),
+        None => format!(
+            "<wp:posOffset>{}</wp:posOffset>",
+            options.anchor.horizontal_offset.to_emu()
+        ),
+    };
+    let vertical = match options.anchor.vertical_alignment {
+        Some(alignment) => format!(
+            "<wp:align>{}</wp:align>",
+            AnchorAlignV::from(alignment).to_str()
+        ),
+        None => format!(
+            "<wp:posOffset>{}</wp:posOffset>",
+            options.anchor.vertical_offset.to_emu()
+        ),
+    };
+    let wrap = match options.anchor.wrap {
+        DrawingWrap::None => "<wp:wrapNone/>".to_owned(),
+        DrawingWrap::Square => "<wp:wrapSquare wrapText=\"bothSides\"/>".to_owned(),
+        DrawingWrap::TopAndBottom => "<wp:wrapTopAndBottom/>".to_owned(),
+        DrawingWrap::Tight => {
+            "<wp:wrapTight wrapText=\"bothSides\"><wp:wrapPolygon edited=\"0\"><wp:start x=\"0\" y=\"0\"/><wp:lineTo x=\"0\" y=\"21600\"/><wp:lineTo x=\"21600\" y=\"21600\"/><wp:lineTo x=\"21600\" y=\"0\"/><wp:lineTo x=\"0\" y=\"0\"/></wp:wrapPolygon></wp:wrapTight>".to_owned()
+        }
+        DrawingWrap::Through => {
+            "<wp:wrapThrough wrapText=\"bothSides\"><wp:wrapPolygon edited=\"0\"><wp:start x=\"0\" y=\"0\"/><wp:lineTo x=\"0\" y=\"21600\"/><wp:lineTo x=\"21600\" y=\"21600\"/><wp:lineTo x=\"21600\" y=\"0\"/><wp:lineTo x=\"0\" y=\"0\"/></wp:wrapPolygon></wp:wrapThrough>".to_owned()
+        }
+    };
+    let direction = match options.text_direction {
+        TextBoxDirection::Horizontal => "horz",
+        TextBoxDirection::Vertical => "vert",
+        TextBoxDirection::Vertical270 => "vert270",
+    };
+    let vml_direction = match options.text_direction {
+        TextBoxDirection::Horizontal => "layout-flow:horizontal",
+        TextBoxDirection::Vertical => "layout-flow:vertical;mso-layout-flow-alt:top-to-bottom",
+        TextBoxDirection::Vertical270 => "layout-flow:vertical;mso-layout-flow-alt:bottom-to-top",
+    };
+    let fill = options.fill_color.as_deref().map_or_else(
+        || "<a:noFill/>".to_owned(),
+        |color| format!("<a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill>"),
+    );
+    let rotation = drawingml_rotation(options.rotation_degrees)?;
+    let escaped = quick_xml::escape::escape(text);
+    let width = options.width.to_emu();
+    let height = options.height.to_emu();
+    let anchor = options.anchor;
+    let xml = format!(
+        concat!(
+            "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" ",
+            "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" ",
+            "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" ",
+            "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" ",
+            "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" ",
+            "xmlns:v=\"urn:schemas-microsoft-com:vml\" ",
+            "xmlns:o=\"urn:schemas-microsoft-com:office:office\"><mc:Choice Requires=\"wps\"><w:drawing>",
+            "<wp:anchor behindDoc=\"{behind}\" simplePos=\"0\" relativeHeight=\"{relative_height}\" ",
+            "distT=\"{dist_t}\" distB=\"{dist_b}\" distL=\"{dist_l}\" distR=\"{dist_r}\" ",
+            "locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\"><wp:simplePos x=\"0\" y=\"0\"/>",
+            "<wp:positionH relativeFrom=\"{relative_h}\">{horizontal}</wp:positionH>",
+            "<wp:positionV relativeFrom=\"{relative_v}\">{vertical}</wp:positionV>",
+            "<wp:extent cx=\"{width}\" cy=\"{height}\"/>{wrap}<wp:docPr id=\"{drawing_id}\" name=\"Text Box {drawing_id}\"/>",
+            "<a:graphic><a:graphicData uri=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">",
+            "<wps:wsp><wps:cNvSpPr txBox=\"1\"/><wps:spPr><a:xfrm rot=\"{rotation}\"><a:off x=\"0\" y=\"0\"/>",
+            "<a:ext cx=\"{width}\" cy=\"{height}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>{fill}</wps:spPr>",
+            "<wps:txbx><w:txbxContent><w:p><w:r><w:t xml:space=\"preserve\">{escaped}</w:t></w:r></w:p></w:txbxContent></wps:txbx>",
+            "<wps:bodyPr vert=\"{direction}\"/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>",
+            "<mc:Fallback><w:pict><v:shapetype id=\"rdocx-textbox-type-{drawing_id}\" coordsize=\"21600,21600\" ",
+            "o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/>",
+            "<v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>",
+            "<v:shape id=\"rdocx-textbox-{drawing_id}\" type=\"#rdocx-textbox-type-{drawing_id}\" ",
+            "style=\"position:absolute;width:{width_pt}pt;height:{height_pt}pt;rotation:{rotation_degrees}\" ",
+            "fillcolor=\"#{vml_fill}\"><v:textbox style=\"{vml_direction}\"><w:txbxContent><w:p><w:r>",
+            "<w:t xml:space=\"preserve\">{escaped}</w:t></w:r></w:p>",
+            "</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent>"
+        ),
+        behind = u8::from(anchor.behind_text),
+        horizontal = horizontal,
+        vertical = vertical,
+        width = width,
+        height = height,
+        wrap = wrap,
+        drawing_id = drawing_id,
+        rotation = rotation,
+        fill = fill,
+        direction = direction,
+        vml_direction = vml_direction,
+        escaped = escaped,
+        relative_height = anchor.relative_height,
+        dist_t = anchor.distance_top.to_emu(),
+        dist_b = anchor.distance_bottom.to_emu(),
+        dist_l = anchor.distance_left.to_emu(),
+        dist_r = anchor.distance_right.to_emu(),
+        relative_h = ST_RelativeFromH::from(anchor.horizontal_relative_from).to_str(),
+        relative_v = ST_RelativeFromV::from(anchor.vertical_relative_from).to_str(),
+        width_pt = options.width.to_pt(),
+        height_pt = options.height.to_pt(),
+        rotation_degrees = options.rotation_degrees,
+        vml_fill = options.fill_color.as_deref().unwrap_or("FFFFFF"),
+    );
+    Ok(xml.into_bytes())
 }
 
 impl HeaderFooterKind {
@@ -12190,6 +12628,137 @@ impl Document {
         Ok(())
     }
 
+    /// Append one configured picture paragraph to a checked story owner.
+    pub fn add_picture_with_options(
+        &mut self,
+        story: &StoryId,
+        image_data: &[u8],
+        image_filename: &str,
+        options: PictureOptions,
+    ) -> Result<()> {
+        validate_picture_options(&options)?;
+        if oxml_media::probe(image_data).is_none() {
+            return Err(Error::Other(format!(
+                "picture `{image_filename}` is unsupported or malformed"
+            )));
+        }
+
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let relationship_id =
+            candidate.add_image_relationship_checked(&owner, image_data, image_filename)?;
+        let drawing_id = candidate.identifiers.reserve_drawing_id()?;
+        let source_rect = options.crop.map(|crop| SourceRect {
+            left: crop.left,
+            top: crop.top,
+            right: crop.right,
+            bottom: crop.bottom,
+        });
+        let drawing = match options.anchor {
+            Some(anchor_options) => {
+                let mut anchor = CT_Anchor::background(
+                    &relationship_id,
+                    options.width.to_emu(),
+                    options.height.to_emu(),
+                );
+                apply_picture_anchor(&mut anchor, anchor_options);
+                anchor.doc_pr_id = drawing_id;
+                anchor.name = options.name;
+                anchor.description = options.description;
+                anchor.source_rect = source_rect;
+                CT_Drawing::anchor(anchor)
+            }
+            None => {
+                let mut inline = CT_Inline::new(
+                    &relationship_id,
+                    options.width.to_emu(),
+                    options.height.to_emu(),
+                );
+                inline.doc_pr_id = drawing_id;
+                inline.name = options.name;
+                inline.description = options.description;
+                inline.source_rect = source_rect;
+                CT_Drawing::inline(inline)
+            }
+        };
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R {
+            alt_drawings: Vec::new(),
+            properties: None,
+            content: vec![RunContent::Drawing(drawing)],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+        });
+        candidate.append_authored_paragraph_to_story(story, paragraph)?;
+        if owner == candidate.doc_part_name && story.kind != StoryKind::Body {
+            candidate
+                .identifiers
+                .register_nested_story_relationship(story, relationship_id);
+            candidate
+                .identifiers
+                .register_nested_story_drawing(story, drawing_id);
+        }
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Append one modeled DrawingML text box with a VML compatibility fallback.
+    pub fn add_text_box_to_story(
+        &mut self,
+        story: &StoryId,
+        text: &str,
+        options: TextBoxOptions,
+    ) -> Result<()> {
+        validate_text_box_options(&options)?;
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_source_and_owner(story)?;
+        let drawing_id = candidate.identifiers.reserve_drawing_id()?;
+        let alternate = authored_text_box_alternate_content(drawing_id, text, &options)?;
+        let drawing =
+            rdocx_oxml::drawing::parse_alternate_content(&alternate, &[]).ok_or_else(|| {
+                Error::Other("authored text box did not reopen as DrawingML".to_owned())
+            })?;
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R {
+            properties: None,
+            content: Vec::new(),
+            extra_xml: vec![alternate],
+            extra_xml_positions: vec![0],
+            alt_drawings: vec![drawing],
+        });
+        candidate.append_authored_paragraph_to_story(story, paragraph)?;
+        if story.part_name == candidate.doc_part_name && story.kind != StoryKind::Body {
+            candidate
+                .identifiers
+                .register_nested_story_drawing(story, drawing_id);
+        }
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    fn append_authored_paragraph_to_story(
+        &mut self,
+        story: &StoryId,
+        mut paragraph: CT_P,
+    ) -> Result<()> {
+        self.story_source_and_owner(story)?;
+        if story.kind == StoryKind::Body && story.part_name == self.doc_part_name {
+            self.document
+                .body
+                .content
+                .push(BodyContent::Paragraph(paragraph));
+        } else {
+            close_typed_story_drawing_namespaces(&mut paragraph)?;
+            self.append_fragment_to_story(story, ContentFragment::paragraph(paragraph)?)?;
+        }
+        Ok(())
+    }
+
     /// Append one external hyperlink paragraph to a checked story owner.
     pub fn add_hyperlink_to_story(&mut self, story: &StoryId, text: &str, url: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
@@ -14022,6 +14591,43 @@ impl Document {
             ))
         })?;
         self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Set the API-owned text watermark for one explicit section header variant.
+    pub fn set_text_watermark_for(
+        &mut self,
+        section_index: usize,
+        hdr_type: HdrFtrType,
+        text: &str,
+        options: TextWatermarkOptions,
+    ) -> Result<()> {
+        validate_text_watermark_options(&options)?;
+        let mut candidate = self.clone_for_staging();
+        let story =
+            candidate.create_section_story(section_index, HeaderFooterKind::Header, hdr_type)?;
+        let part_name = story.part_name.clone();
+        let xml = candidate
+            .package
+            .get_part(&part_name)
+            .ok_or_else(|| Error::Other(format!("header part {part_name} is missing")))?
+            .to_vec();
+        let updated = replace_authored_watermark(
+            &xml,
+            &VmlWatermark::Text {
+                text: text.to_owned(),
+                width_pt: options.width.to_pt(),
+                height_pt: options.height.to_pt(),
+                rotation_degrees: options.rotation_degrees,
+                color: options.color,
+                font_family: options.font_family,
+                opacity: options.opacity,
+            },
+        )?;
+        candidate.package.set_part(&part_name, updated);
+        candidate.invalidate_layout();
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
         Ok(())
     }
 
@@ -23920,6 +24526,31 @@ mod tests {
                 false,
             );
         });
+
+        let mut document = Document::new();
+        let body = document.stories().unwrap()[0].clone();
+        document.identifiers.drawing_ids.insert(u32::MAX);
+        let before = document.clone_for_staging();
+        let result = document.add_picture_with_options(
+            &body,
+            super::watermark_tests::PNG,
+            "image.png",
+            PictureOptions {
+                width: Length::pt(1.0),
+                height: Length::pt(1.0),
+                crop: None,
+                anchor: None,
+                name: None,
+                description: None,
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(document.document, before.document);
+        assert_eq!(document.package.parts, before.package.parts);
+        assert_eq!(
+            document.package.part_rels.len(),
+            before.package.part_rels.len()
+        );
     }
 
     #[test]
