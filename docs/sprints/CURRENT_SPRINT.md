@@ -64,7 +64,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-259 | Container measurement and equal-height layout | M | pending | - |
 | F-261 | Rich HTML fragments in arbitrary containers | L | pending | - |
 | F-262 | Corpus drawings, text boxes, and watermarks | L | pending | - |
-| F-X107 | Clone and remove existing table rows | M | pending | - |
+| F-X107 | Clone and remove existing table rows | M | done | codex |
 | F-X108 | Replace an existing picture atomically | M | done | codex |
 | F-X109 | Split text runs at Unicode character offsets | M | done | codex |
 | F-263 | Layout-backed fields and M23 corpus gate | L | pending | - |

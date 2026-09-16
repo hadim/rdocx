@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 20 | 0 | 4 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 130 | 114 | 1 | 11 |
-| **Total** | **448** | **360** | **1** | **83** |
+| X, Cross-cutting (opportunistic)            | 130 | 115 | 1 | 10 |
+| **Total** | **448** | **361** | **1** | **82** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -653,7 +653,7 @@ regenerated, never hand-edited.
 | F-X106a | Expose indexed content mutation and counted replacement in Python | S73 | L | done |
 | F-X106b | Expose paragraph and run formatting mutations in Python | S73 | M | done |
 | F-X106c | Expose story mutation, hyperlinks, revisions, fields, and XML in Python | S73 | L | done |
-| F-X107 | Clone and remove existing table rows | S73 | M | pending |
+| F-X107 | Clone and remove existing table rows | S73 | M | done |
 | F-X108 | Replace an existing picture atomically | S73 | M | done |
 | F-X109 | Split text runs at Unicode character offsets | S73 | M | done |
 | F-X110 | Control field updates on document open | S73 | S | done |

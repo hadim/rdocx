@@ -646,6 +646,11 @@ and nested tables. Layout receives only candidates whose rows cover the active
 grid exactly and whose vertical continuations match the immediately preceding
 row at the same grid range. An explicit false toggle remains a direct layout
 input rather than becoming absence.
+Cloned rows enter layout as ordinary reopened rows. Their minimum or exact
+height, repeat and split policy, grid omissions, nested tables, and merge ranges
+use the same validated inputs as an authored row. Removing a merge restart
+promotes the matching continuation below before layout, so pagination never
+receives an orphan continuation from a successful row removal.
 Paragraphs without an explicit style use the authored default paragraph style.
 When a run names a paragraph style with a reciprocal character-style link, the
 linked character inheritance chain supplies its run properties. All three

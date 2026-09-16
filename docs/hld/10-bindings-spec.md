@@ -217,6 +217,15 @@ alignment and width, plus cell text, width and vertical alignment. These
 handles use `Body`, `Row`, `Cell`, `Para` and `Run` path segments and reach the
 document only through the public `rdocx` facade.
 
+`Table.clone_row(index, at=None)` accepts a negative source index, inserts
+after that row by default, and returns the new live `Row` handle. The optional
+`at` value is a zero-based insertion boundary. `Table.remove_row(index)` also
+accepts a negative row index. Each successful operation advances the document
+revision once, stales every earlier structural handle, and publishes only the
+native staged result. Python index errors are rejected before mutation, while
+native topology and serialization failures use the existing `RdocxError`
+mapping. Removing the only direct row is rejected.
+
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
 field cache update operations. `RunPosition` and
@@ -779,6 +788,15 @@ cells. Vertical continuations require an equal grid range in the immediately
 preceding row. Each operation validates a cloned complete table before
 publication. These are additive pre-1.0 native APIs. Python, WASM, and CLI gain
 no row or cell methods in this story.
+
+Row cloning and removal depend on package-wide identities, so the additive
+native operations live on `Document` as `clone_table_row(table, source,
+insert_at) -> Result<usize>` and `remove_table_row(table, row) -> Result<bool>`.
+They count nested tables in the same document order as `table` and
+`table_mut`, retain relationship scope, and validate the complete changed
+table before publishing a serialized and reopened candidate. The Python Table
+methods resolve their live table path through these operations. WASM and CLI
+gain no row mutation entry point.
 
 Native Word table inspection includes additive
 `TableRef::has_grid_change()`. It reports whether the low-level grid preserves

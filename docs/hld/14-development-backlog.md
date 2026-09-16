@@ -5217,11 +5217,15 @@ Add native and Python table operations that clone an existing row before or
 after a requested position and remove a row by index. Cloning retains row
 properties, cell properties, nested content, and preserved XML while assigning
 fresh identities where the package-wide identifier contract requires them.
-Row header and split setters accept true and false using F-X100's lossless
-toggle representation. Root namespace attribute names are converted to the
-prefix vocabulary expected by content fragments, so an unused default
-namespace never becomes an illegal `xmlns:xmlns` declaration. Every invalid
-index fails without mutation.
+The native document methods return the inserted boundary and removal result.
+Python Table methods accept negative source indexes, insert after the source by
+default, and stale structural handles once after success. Row header and split
+setters accept true, false, and removal using F-X100's lossless toggle
+representation. Root namespace attribute names are converted to the prefix
+vocabulary expected by content fragments, so an unused default namespace never
+becomes an illegal `xmlns:xmlns` declaration. Removing a vertical-merge restart
+promotes the matching continuation below. Every invalid index, topology, XML,
+or reopen result fails without mutation.
 
 **Depends on**: F-258, F-X106a.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/95>.

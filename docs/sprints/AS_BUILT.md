@@ -14516,3 +14516,51 @@ pass.
 paragraph `w:line`. Do not route it through floating point or widen decimal
 acceptance to unrelated OOXML measures without a separate producer case and
 story.
+
+### F-X107, Clone and remove existing table rows
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native `Document` and Python `Table` operations now clone
+complete formatted direct rows at a requested boundary and remove direct rows
+by index. Successful mutations publish a serialized and reopened candidate,
+while invalid indexes, malformed topology, serialization failures, and the
+one-row guard leave the live document unchanged.
+
+**Non-obvious choices.** PR 113 supplied the initial operation shape and the
+reported root-default-namespace failure. The integrated path freshens drawing,
+bookmark, and content-control identities, omits copied comment anchors, keeps
+relationships in their existing story scope, and converts namespace
+declaration names to fragment prefixes before reparsing. Table-level raw XML
+and content controls move with their logical row boundaries. Removing a merge
+restart promotes an exactly matching continuation in the next direct row.
+
+**Deviations from the design plan.** None. The zero-finding microscope pass
+confirmed the direct-row contract, package identity handling, OOXML order,
+atomicity, binding lifecycle, and test strength.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, staged row
+mutation and identity preservation, `docs/hld/08-rendering-spec.md`, validated
+row geometry, `docs/hld/10-bindings-spec.md`, native and Python row operations,
+`docs/hld/12-testing-strategy.md`, the row mutation gates, and the F-X107 entry
+in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `table_rows_clone_remove_and_clear_through_native_and_python` first
+failed at the story baseline because neither native row operation existed. It
+now proves formatted nested-row cloning, toggle clearing, removal, reopen, and
+deterministic rendering. Companion native tests cover identity freshening,
+shared relationships, removed comment anchors, default namespaces, merge
+promotion, raw and content-control boundaries, invalid topology, and byte
+atomicity. Python tests cover negative indexes, formatting, stale handles, the
+one-row guard, strict mypy, and stubtest. Full workspace, Python binding,
+no-default-font, WASM, rustdoc, README, workflow, package, archive-size, and
+supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Row coordinates deliberately address direct
+rows, matching the existing `Table` facade. Keep package-wide identity work at
+the staged `Document` boundary, and preserve table boundary metadata whenever
+direct row indexes shift.

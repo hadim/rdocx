@@ -1798,6 +1798,19 @@ namespace aliases, foreign same-local children, and exact row, cell, and border
 extension retention. The final private corpus comparison remains F-263 and is
 pinned to LibreOffice 26.2.5.2 and Poppler 26.01.0.
 
+The row mutation gate is
+`table_rows_clone_remove_and_clear_through_native_and_python`. It clones a row
+with exact height, direct toggles, and a nested table, clears the copied
+toggles, removes the source, reopens, and renders twice with deterministic
+fonts. Identity coverage adds a picture, bookmark, comment anchors,
+content-control ID, producer XML, and a Word-style unused root default
+namespace. The copy has fresh document identities, one shared valid image
+relationship, no copied comment anchors, and no `xmlns:xmlns` declaration.
+Companion regressions cover vertical-merge promotion, table-level raw and
+content-control boundary order, the one-row guard, invalid coordinates,
+malformed existing topology, byte-atomic failure, stale Python handles,
+negative indexes, strict mypy, and stubtest.
+
 The fresh-profile round-trip gate adds an unrelated unmodelled XML part and
 package relationship before reopen and repeat-save. The part bytes and
 relationship identity must survive exactly. The optional repair gate is pinned

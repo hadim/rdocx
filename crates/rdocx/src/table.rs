@@ -304,7 +304,7 @@ fn checked_table_border(
     })
 }
 
-fn row_cell_ranges(row: &CT_Row, grid_columns: usize) -> Result<Vec<(usize, usize)>> {
+pub(crate) fn row_cell_ranges(row: &CT_Row, grid_columns: usize) -> Result<Vec<(usize, usize)>> {
     let before = row
         .properties
         .as_ref()
@@ -355,7 +355,7 @@ fn row_cell_ranges(row: &CT_Row, grid_columns: usize) -> Result<Vec<(usize, usiz
     Ok(ranges)
 }
 
-fn validate_table_topology(table: &CT_Tbl) -> Result<()> {
+pub(crate) fn validate_table_topology(table: &CT_Tbl) -> Result<()> {
     let grid = table
         .grid
         .as_ref()

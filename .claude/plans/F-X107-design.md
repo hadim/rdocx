@@ -1,6 +1,6 @@
 # F-X107, Clone and remove existing table rows
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-258, F-X106a
@@ -80,12 +80,12 @@ Expected to be unchanged because current samples do not clone or remove rows.
 
 ## Implementation checklist
 
-- [ ] Add failing native and Python formatted-row tests.
-- [ ] Implement staged clone with identity and relationship reconciliation.
-- [ ] Normalize default and prefixed root namespace bindings for row fragments.
-- [ ] Implement checked removal and bool row toggles.
-- [ ] Bind operations and lifecycle semantics in Python.
-- [ ] Run serialization, layout, binding, API, hash harness, full verification, and microscope gates.
+- [x] Add failing native and Python formatted-row tests.
+- [x] Implement staged clone with identity and relationship reconciliation.
+- [x] Normalize default and prefixed root namespace bindings for row fragments.
+- [x] Implement checked removal and bool row toggles.
+- [x] Bind operations and lifecycle semantics in Python.
+- [x] Run serialization, layout, binding, API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

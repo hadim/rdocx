@@ -9379,6 +9379,230 @@ fn table_header_row_round_trip() {
 }
 
 #[test]
+fn table_rows_clone_remove_and_clear_through_native_and_python() {
+    let mut doc = Document::new();
+    let mut table = doc.add_table(2, 2);
+    table.cell(0, 0).unwrap().set_text("header");
+    table.cell(1, 0).unwrap().set_text("entry");
+    {
+        let mut row = table.row(1).unwrap();
+        row.set_height_checked(RowHeight::Exact(Length::twips(480)))
+            .unwrap();
+        row.set_header_value(Some(true));
+        row.set_cant_split_value(Some(true));
+    }
+    {
+        let mut cell = table.cell(1, 1).unwrap();
+        let mut nested = cell.add_table_checked(1, 1).unwrap();
+        nested.cell(0, 0).unwrap().set_text("nested");
+    }
+
+    assert_eq!(doc.clone_table_row(0, 1, 2).unwrap(), 2);
+    {
+        let mut table = doc.table_mut(0).unwrap();
+        let mut copied = table.row(2).unwrap();
+        copied.set_header_value(None);
+        copied.set_cant_split_value(None);
+        copied.cell(0).unwrap().set_text("copied entry");
+    }
+    assert!(doc.remove_table_row(0, 1).unwrap());
+
+    let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+    let table = reopened.table(0).unwrap();
+    assert_eq!(table.row_count(), 2);
+    assert_eq!(table.cell(1, 0).unwrap().text(), "copied entry");
+    assert_eq!(
+        table.row(1).unwrap().height(),
+        Some(RowHeight::Exact(Length::twips(480)))
+    );
+    assert_eq!(table.row(1).unwrap().header_value(), None);
+    assert_eq!(table.row(1).unwrap().cant_split_value(), None);
+    assert!(table.cell(1, 1).unwrap().items().any(|item| matches!(
+        item,
+        rdocx::table::CellItemRef::Table(nested)
+            if nested.cell(0, 0).unwrap().text() == "nested"
+    )));
+    assert_eq!(
+        reopened.render_page_to_png_deterministic(0, 72.0).unwrap(),
+        reopened.render_page_to_png_deterministic(0, 72.0).unwrap()
+    );
+}
+
+#[test]
+fn cloned_table_row_freshens_identities_and_normalizes_root_namespaces() {
+    let mut seed = Document::new();
+    seed.add_paragraph("entry");
+    let entry = RunRange {
+        start: RunPosition {
+            body_index: 0,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index: 0,
+            run_index: 1,
+        },
+    };
+    seed.add_bookmark("entry", entry).unwrap();
+    seed.add_comment(entry, "Ada", None, "Check this entry")
+        .unwrap();
+    seed.add_picture(
+        PNG_2_BY_3,
+        "entry.png",
+        Length::twips(240),
+        Length::twips(360),
+    );
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+        .expect("open seed package");
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap())
+        .unwrap()
+        .to_owned();
+    let body_start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+    let section_start = body_start + xml[body_start..].find("<w:sectPr").unwrap();
+    let table = format!(
+        r#"<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:sdt><w:sdtPr><w:id w:val="42"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt><x:keep/>{}</w:tc></w:tr></w:tbl>"#,
+        &xml[body_start..section_start]
+    );
+    let xml = format!(
+        "{}{table}{}",
+        &xml[..body_start],
+        &xml[section_start..]
+    )
+    .replacen(
+        "<w:document ",
+        r#"<w:document xmlns="http://schemas.microsoft.com/office/tasks/2019/documenttasks" xmlns:x="urn:producer" "#,
+        1,
+    );
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+
+    assert_eq!(document.clone_table_row(0, 0, 1).unwrap(), 1);
+
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.table(0).unwrap().row_count(), 2);
+    assert_eq!(reopened.comments().len(), 1);
+    let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(!xml.contains("xmlns:xmlns"), "{xml}");
+    assert_eq!(xml.matches("commentRangeStart").count(), 1, "{xml}");
+    assert_eq!(xml.matches("commentReference").count(), 1, "{xml}");
+    assert_eq!(xml.matches("<x:keep").count(), 2, "{xml}");
+
+    let bookmark_starts = xml
+        .match_indices("<w:bookmarkStart ")
+        .map(|(start, _)| &xml[start..start + xml[start..].find('>').unwrap()])
+        .collect::<Vec<_>>();
+    assert_eq!(bookmark_starts.len(), 2, "{xml}");
+    assert_ne!(bookmark_starts[0], bookmark_starts[1], "{xml}");
+    let control_ids = xml
+        .match_indices("<w:id w:val=\"")
+        .map(|(start, _)| &xml[start..start + xml[start..].find('>').unwrap()])
+        .collect::<Vec<_>>();
+    assert_eq!(control_ids.len(), 2, "{xml}");
+    assert_ne!(control_ids[0], control_ids[1], "{xml}");
+    let drawing_ids = xml
+        .match_indices("<wp:docPr ")
+        .map(|(start, _)| &xml[start..start + xml[start..].find('>').unwrap()])
+        .collect::<Vec<_>>();
+    assert_eq!(drawing_ids.len(), 2, "{xml}");
+    assert_ne!(drawing_ids[0], drawing_ids[1], "{xml}");
+    let image_relationships = xml
+        .match_indices("r:embed=\"")
+        .map(|(start, _)| {
+            let value = &xml[start + "r:embed=\"".len()..];
+            &value[..value.find('"').unwrap()]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(image_relationships.len(), 2, "{xml}");
+    assert_eq!(image_relationships[0], image_relationships[1], "{xml}");
+}
+
+#[test]
+fn removing_table_rows_restarts_vertical_merges_and_keeps_one_row() {
+    let mut document = Document::new();
+    let mut table = document.add_table(3, 1);
+    for (row, text) in ["first", "second", "third"].into_iter().enumerate() {
+        table.cell(row, 0).unwrap().set_text(text);
+    }
+    table.cell(0, 0).unwrap().set_v_merge_restart();
+    table.cell(1, 0).unwrap().set_v_merge_continue();
+    table.cell(2, 0).unwrap().set_v_merge_continue();
+
+    assert!(document.remove_table_row(0, 0).unwrap());
+    let saved = document.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&saved).unwrap();
+    let table = reopened.table(0).unwrap();
+    assert_eq!(table.row_count(), 2);
+    assert_eq!(table.cell(0, 0).unwrap().text(), "second");
+    assert_eq!(
+        table.cell(0, 0).unwrap().v_merge(),
+        Some(&rdocx_oxml::table::VMerge::Restart)
+    );
+    assert_eq!(
+        table.cell(1, 0).unwrap().v_merge(),
+        Some(&rdocx_oxml::table::VMerge::Continue)
+    );
+
+    assert!(reopened.remove_table_row(0, 1).unwrap());
+    let before = reopened.to_bytes().unwrap();
+    let error = reopened.remove_table_row(0, 0).unwrap_err();
+    assert!(error.to_string().contains("at least one row"), "{error}");
+    assert_eq!(reopened.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn table_row_mutations_preserve_raw_boundaries_and_fail_atomically() {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let seed = Document::new().to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed)).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{W}" xmlns:x="urn:producer"><w:body><w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><x:a/><w:tr><w:tc><w:p><w:r><w:t>first</w:t></w:r></w:p></w:tc></w:tr><x:b/><w:sdt><w:sdtPr><w:id w:val="11"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>controlled</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt><x:c/><w:tr><w:tc><w:p><w:r><w:t>second</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr/></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+
+    assert_eq!(document.clone_table_row(0, 0, 1).unwrap(), 1);
+    assert!(document.remove_table_row(0, 1).unwrap());
+    let saved = document.to_bytes().unwrap();
+    let xml = String::from_utf8(
+        OpcPackage::from_reader(std::io::Cursor::new(&saved))
+            .unwrap()
+            .get_part("/word/document.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let positions =
+        ["<x:a", "<x:b", "<w:sdt>", "<x:c", ">second<"].map(|needle| xml.find(needle).unwrap());
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{xml}");
+    let before = document.to_bytes().unwrap();
+    assert!(document.clone_table_row(0, 5, 0).is_err());
+    assert!(document.clone_table_row(0, 0, 5).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let mut invalid_package = OpcPackage::from_reader(std::io::Cursor::new(before)).unwrap();
+    let invalid = xml.replacen(
+        "<w:tc>",
+        r#"<w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr>"#,
+        1,
+    );
+    invalid_package.set_part("/word/document.xml", invalid.into_bytes());
+    let mut invalid_bytes = std::io::Cursor::new(Vec::new());
+    invalid_package.write_to(&mut invalid_bytes).unwrap();
+    let mut invalid = Document::from_bytes(&invalid_bytes.into_inner()).unwrap();
+    let before = invalid.to_bytes().unwrap();
+    assert!(invalid.clone_table_row(0, 0, 1).is_err());
+    assert_eq!(invalid.to_bytes().unwrap(), before);
+}
+
+#[test]
 fn table_cell_grid_span_round_trip() {
     let mut doc = Document::new();
     let mut table = doc.add_table(2, 3);

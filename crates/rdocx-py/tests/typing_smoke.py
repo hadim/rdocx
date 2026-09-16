@@ -67,6 +67,8 @@ def exercise_rdocx_types(path: Path) -> None:
         item.text
     table: Table = document.add_table(1, 1)
     row: Row = table.rows[0]
+    cloned_row: Row = table.clone_row(0)
+    table.remove_row(0)
     cell: Cell = row.cells[0]
     cell.text = first.text
     package_bytes: bytes = loaded.to_bytes()
@@ -160,6 +162,7 @@ def exercise_rdocx_types(path: Path) -> None:
         maybe_page,
         sliced,
         channels,
+        cloned_row,
         update_fields_on_open,
         replacement_count,
         regex_count,

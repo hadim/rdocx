@@ -967,6 +967,16 @@ tables. Topology-changing operations clone the complete table, reconcile only
 untouched empty cells, validate positive grid widths, exact row coverage, and
 immediately adjacent vertical merge ranges, then replace the live table.
 
+Existing direct table rows clone and remove through a staged `Document`
+mutation. A clone retains the complete row, cell, nested-content, relationship,
+and raw XML model, then freshens bookmark, content-control, and drawing
+identities and omits copied comment anchors. Body namespace declaration names
+are converted to fragment prefixes before freshening, including the empty
+prefix for a root default namespace. Table-level raw XML and content controls
+move with their logical row boundary. Removing a vertical-merge restart
+promotes a matching continuation below, and a table always retains one direct
+row. Invalid indexes, topology, XML, or reopen results discard the candidate.
+
 Row and cell property readers select modeled elements and attributes by their
 bound WordprocessingML namespace. Foreign same-local children remain raw in
 their exact schema slots. Changed modeled children use canonical `w` prefixes
