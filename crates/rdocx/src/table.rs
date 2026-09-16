@@ -5,14 +5,14 @@ use rdocx_oxml::properties::CT_Shd;
 use rdocx_oxml::shared::ST_Jc;
 pub use rdocx_oxml::table::VMerge;
 use rdocx_oxml::table::{
-    CT_Row, CT_Tbl, CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TblWidth, CT_Tc, CT_TcPr, CT_TrPr,
-    CellContent, ST_VerticalJc,
+    CT_Row, CT_Tbl, CT_TblBorders, CT_TblCellMar, CT_TblLook, CT_TblPr, CT_TblWidth, CT_Tc,
+    CT_TcPr, CT_TrPr, CellContent, ST_VerticalJc,
 };
 use rdocx_oxml::text::CT_P;
 
-use crate::Length;
 use crate::content_control::ContentControlRef;
 use crate::paragraph::{Paragraph, ParagraphRef};
+use crate::{Error, Length, Result};
 
 /// Vertical alignment within a table cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +38,129 @@ impl VerticalAlignment {
             ST_VerticalJc::Bottom => Self::Bottom,
         }
     }
+}
+
+/// A complete table width mode.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TableWidth {
+    /// Let Word choose the table width from its content and container.
+    Auto,
+    /// Use an exact physical width.
+    Fixed(Length),
+    /// Use a percentage of the containing width, from 0 through 100.
+    Percentage(f64),
+}
+
+/// The table layout algorithm written to `w:tblLayout`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableLayout {
+    /// Let Word resize columns from their content.
+    AutoFit,
+    /// Keep the authored grid widths fixed.
+    Fixed,
+}
+
+/// One edge in the table border model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableBorderEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+    InsideHorizontal,
+    InsideVertical,
+}
+
+/// Conditional table-style regions selected by `w:tblLook`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TableLook {
+    /// Apply first-row conditional formatting.
+    pub first_row: bool,
+    /// Apply last-row conditional formatting.
+    pub last_row: bool,
+    /// Apply first-column conditional formatting.
+    pub first_column: bool,
+    /// Apply last-column conditional formatting.
+    pub last_column: bool,
+    /// Apply horizontal row banding.
+    pub horizontal_banding: bool,
+    /// Apply vertical column banding.
+    pub vertical_banding: bool,
+}
+
+/// Default margins applied to every table cell.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableCellMargins {
+    /// Top cell margin.
+    pub top: Option<Length>,
+    /// Right cell margin.
+    pub right: Option<Length>,
+    /// Bottom cell margin.
+    pub bottom: Option<Length>,
+    /// Left cell margin.
+    pub left: Option<Length>,
+}
+
+/// An immutable table border edge.
+#[derive(Debug, Clone, Copy)]
+pub struct TableBorderRef<'a> {
+    inner: &'a CT_BorderEdge,
+}
+
+impl TableBorderRef<'_> {
+    /// The OOXML border style name, including explicit `none` edges.
+    pub fn style(self) -> &'static str {
+        self.inner.val.to_str()
+    }
+
+    /// Border width in eighths of a point.
+    pub fn size_eighths_pt(self) -> Option<u32> {
+        self.inner.sz
+    }
+
+    /// Border color, normally six hexadecimal digits or `auto`.
+    pub fn color(&self) -> Option<&str> {
+        self.inner.color.as_deref()
+    }
+}
+
+fn checked_table_twips(name: &str, value: Length) -> Result<i32> {
+    if value.to_emu() < 0 {
+        return Err(Error::Other(format!("table {name} cannot be negative")));
+    }
+    i32::try_from(value.to_emu() / 635)
+        .map_err(|_| Error::Other(format!("table {name} exceeds the signed twip range")))
+}
+
+fn checked_table_color(name: &str, value: &str) -> Result<String> {
+    if value.eq_ignore_ascii_case("auto")
+        || (value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        Ok(value.to_owned())
+    } else {
+        Err(Error::Other(format!(
+            "table {name} must be 'auto' or six hexadecimal digits"
+        )))
+    }
+}
+
+fn checked_table_border(
+    style: crate::BorderStyle,
+    size_eighths_pt: u32,
+    color: &str,
+) -> Result<CT_BorderEdge> {
+    if size_eighths_pt > 96 || (style != crate::BorderStyle::None && size_eighths_pt == 0) {
+        return Err(Error::Other(
+            "table border width must be 1 through 96 for a visible edge, or 0 through 96 for an invisible edge"
+                .to_owned(),
+        ));
+    }
+    Ok(CT_BorderEdge {
+        val: style.to_st(),
+        sz: Some(size_eighths_pt),
+        space: Some(0),
+        color: Some(checked_table_color("border color", color)?),
+    })
 }
 
 // ---- Mutable Table ----
@@ -70,9 +193,36 @@ impl<'a> Table<'a> {
         self.ensure_tbl_pr().width = Some(CT_TblWidth::dxa(length.as_twips().0));
     }
 
+    /// Set a checked auto, fixed, or percentage table width.
+    ///
+    /// Validation finishes before the table is changed.
+    pub fn set_width_mode(&mut self, width: TableWidth) -> Result<()> {
+        let width = match width {
+            TableWidth::Auto => CT_TblWidth::auto(),
+            TableWidth::Fixed(value) => CT_TblWidth::dxa(checked_table_twips("width", value)?),
+            TableWidth::Percentage(percent) => {
+                if !percent.is_finite() || !(0.0..=100.0).contains(&percent) {
+                    return Err(Error::Other(
+                        "table width percentage must be finite and between 0 and 100".to_owned(),
+                    ));
+                }
+                CT_TblWidth::pct((percent * 50.0) as i32)
+            }
+        };
+        self.ensure_tbl_pr().width = Some(width);
+        Ok(())
+    }
+
     /// Set the table indentation from the left margin in place.
     pub fn set_indent(&mut self, length: Length) {
         self.ensure_tbl_pr().indent = Some(CT_TblWidth::dxa(length.as_twips().0));
+    }
+
+    /// Set a checked nonnegative table indentation.
+    pub fn set_indent_checked(&mut self, length: Length) -> Result<()> {
+        let twips = checked_table_twips("indentation", length)?;
+        self.ensure_tbl_pr().indent = Some(CT_TblWidth::dxa(twips));
+        Ok(())
     }
 
     /// Set the table width as a percentage (0–100).
@@ -119,15 +269,62 @@ impl<'a> Table<'a> {
             space: Some(0),
             color: Some(color.to_string()),
         };
-        self.ensure_tbl_pr().borders = Some(CT_TblBorders {
-            top: Some(edge.clone()),
-            bottom: Some(edge.clone()),
-            left: Some(edge.clone()),
-            right: Some(edge.clone()),
-            inside_h: Some(edge.clone()),
-            inside_v: Some(edge),
-            extra_xml: Vec::new(),
-        });
+        let borders = self
+            .ensure_tbl_pr()
+            .borders
+            .get_or_insert_with(CT_TblBorders::default);
+        borders.top = Some(edge.clone());
+        borders.bottom = Some(edge.clone());
+        borders.left = Some(edge.clone());
+        borders.right = Some(edge.clone());
+        borders.inside_h = Some(edge.clone());
+        borders.inside_v = Some(edge);
+    }
+
+    /// Set every table edge after validating its width and color.
+    pub fn set_all_borders_checked(
+        &mut self,
+        style: crate::BorderStyle,
+        size_eighths_pt: u32,
+        color: &str,
+    ) -> Result<()> {
+        let edge = checked_table_border(style, size_eighths_pt, color)?;
+        let borders = self
+            .ensure_tbl_pr()
+            .borders
+            .get_or_insert_with(CT_TblBorders::default);
+        borders.top = Some(edge.clone());
+        borders.bottom = Some(edge.clone());
+        borders.left = Some(edge.clone());
+        borders.right = Some(edge.clone());
+        borders.inside_h = Some(edge.clone());
+        borders.inside_v = Some(edge);
+        Ok(())
+    }
+
+    /// Set one explicit table edge without replacing the other edges or raw
+    /// producer extensions.
+    pub fn set_border_checked(
+        &mut self,
+        position: TableBorderEdge,
+        style: crate::BorderStyle,
+        size_eighths_pt: u32,
+        color: &str,
+    ) -> Result<()> {
+        let edge = checked_table_border(style, size_eighths_pt, color)?;
+        let borders = self
+            .ensure_tbl_pr()
+            .borders
+            .get_or_insert_with(CT_TblBorders::default);
+        match position {
+            TableBorderEdge::Top => borders.top = Some(edge),
+            TableBorderEdge::Bottom => borders.bottom = Some(edge),
+            TableBorderEdge::Left => borders.left = Some(edge),
+            TableBorderEdge::Right => borders.right = Some(edge),
+            TableBorderEdge::InsideHorizontal => borders.inside_h = Some(edge),
+            TableBorderEdge::InsideVertical => borders.inside_v = Some(edge),
+        }
+        Ok(())
     }
 
     /// Set default cell margins.
@@ -152,6 +349,36 @@ impl<'a> Table<'a> {
         });
     }
 
+    /// Set checked nonnegative default cell margins.
+    pub fn set_cell_margins_checked(
+        &mut self,
+        top: Length,
+        right: Length,
+        bottom: Length,
+        left: Length,
+    ) -> Result<()> {
+        let margins = CT_TblCellMar {
+            top: Some(rdocx_oxml::Twips(checked_table_twips(
+                "top cell margin",
+                top,
+            )?)),
+            right: Some(rdocx_oxml::Twips(checked_table_twips(
+                "right cell margin",
+                right,
+            )?)),
+            bottom: Some(rdocx_oxml::Twips(checked_table_twips(
+                "bottom cell margin",
+                bottom,
+            )?)),
+            left: Some(rdocx_oxml::Twips(checked_table_twips(
+                "left cell margin",
+                left,
+            )?)),
+        };
+        self.ensure_tbl_pr().cell_margin = Some(margins);
+        Ok(())
+    }
+
     /// Set the table layout to fixed or auto.
     pub fn layout_fixed(mut self) -> Self {
         self.set_layout_fixed();
@@ -161,6 +388,164 @@ impl<'a> Table<'a> {
     /// Set the table layout to fixed in place.
     pub fn set_layout_fixed(&mut self) {
         self.ensure_tbl_pr().layout = Some("fixed".to_string());
+    }
+
+    /// Set the complete table layout mode.
+    pub fn set_layout(&mut self, layout: TableLayout) {
+        self.ensure_tbl_pr().layout = Some(
+            match layout {
+                TableLayout::AutoFit => "autofit",
+                TableLayout::Fixed => "fixed",
+            }
+            .to_owned(),
+        );
+    }
+
+    /// Set checked table shading.
+    pub fn set_shading_checked(&mut self, fill_color: &str) -> Result<()> {
+        let fill = checked_table_color("shading color", fill_color)?;
+        self.ensure_tbl_pr().shading = Some(CT_Shd {
+            val: "clear".to_owned(),
+            color: Some("auto".to_owned()),
+            fill: Some(fill),
+        });
+        Ok(())
+    }
+
+    /// Select the conditional regions supplied by the table style.
+    pub fn set_look(&mut self, look: TableLook) {
+        self.ensure_tbl_pr().look = Some(CT_TblLook {
+            val: None,
+            first_row: Some(look.first_row),
+            last_row: Some(look.last_row),
+            first_column: Some(look.first_column),
+            last_column: Some(look.last_column),
+            no_h_band: Some(!look.horizontal_banding),
+            no_v_band: Some(!look.vertical_banding),
+        });
+    }
+
+    /// Replace the complete active grid and synchronize the fixed table width
+    /// and every covering cell width.
+    ///
+    /// The input must cover the existing grid exactly. Invalid lengths, row
+    /// spans, omissions, and sums are rejected before mutation.
+    pub fn set_grid_widths(&mut self, widths: &[Length]) -> Result<()> {
+        let Some(grid) = self.inner.grid.as_ref() else {
+            return Err(Error::Other("table has no active grid".to_owned()));
+        };
+        if widths.len() != grid.columns.len() || widths.is_empty() {
+            return Err(Error::Other(format!(
+                "table grid requires exactly {} positive column widths",
+                grid.columns.len()
+            )));
+        }
+
+        let widths = widths
+            .iter()
+            .enumerate()
+            .map(|(index, width)| {
+                let value = checked_table_twips(&format!("grid column {index}"), *width)?;
+                if value == 0 {
+                    return Err(Error::Other(format!(
+                        "table grid column {index} must be positive"
+                    )));
+                }
+                Ok(value)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let table_width = widths.iter().try_fold(0_i32, |total, width| {
+            total.checked_add(*width).ok_or_else(|| {
+                Error::Other("table grid width exceeds the signed twip range".to_owned())
+            })
+        })?;
+
+        let mut cell_widths = Vec::with_capacity(self.inner.rows.len());
+        for (row_index, row) in self.inner.rows.iter().enumerate() {
+            let before = row
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.grid_before)
+                .unwrap_or(0) as usize;
+            let after = row
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.grid_after)
+                .unwrap_or(0) as usize;
+            let limit = widths.len().checked_sub(after).ok_or_else(|| {
+                Error::Other(format!(
+                    "table row {row_index} grid omissions exceed the grid"
+                ))
+            })?;
+            if before > limit {
+                return Err(Error::Other(format!(
+                    "table row {row_index} grid omissions exceed the grid"
+                )));
+            }
+            let mut grid_index = before;
+            let mut row_widths = Vec::with_capacity(row.cells.len());
+            for (cell_index, cell) in row.cells.iter().enumerate() {
+                let span = cell
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.grid_span)
+                    .unwrap_or(1);
+                if span == 0 {
+                    return Err(Error::Other(format!(
+                        "table row {row_index} cell {cell_index} has a zero grid span"
+                    )));
+                }
+                let span = span as usize;
+                let end = grid_index.checked_add(span).ok_or_else(|| {
+                    Error::Other(format!(
+                        "table row {row_index} cell {cell_index} span overflows"
+                    ))
+                })?;
+                if end > limit {
+                    return Err(Error::Other(format!(
+                        "table row {row_index} cells exceed the active grid"
+                    )));
+                }
+                let cell_width =
+                    widths[grid_index..end]
+                        .iter()
+                        .try_fold(0_i32, |total, width| {
+                            total.checked_add(*width).ok_or_else(|| {
+                                Error::Other(format!(
+                                    "table row {row_index} cell {cell_index} width overflows"
+                                ))
+                            })
+                        })?;
+                row_widths.push(cell_width);
+                grid_index = end;
+            }
+            if grid_index != limit {
+                return Err(Error::Other(format!(
+                    "table row {row_index} cells do not cover the active grid"
+                )));
+            }
+            cell_widths.push(row_widths);
+        }
+
+        for (column, width) in self
+            .inner
+            .grid
+            .as_mut()
+            .expect("active grid was validated")
+            .columns
+            .iter_mut()
+            .zip(&widths)
+        {
+            column.width = rdocx_oxml::Twips(*width);
+        }
+        self.ensure_tbl_pr().width = Some(CT_TblWidth::dxa(table_width));
+        for (row, row_widths) in self.inner.rows.iter_mut().zip(cell_widths) {
+            for (cell, width) in row.cells.iter_mut().zip(row_widths) {
+                cell.properties.get_or_insert_with(CT_TcPr::default).width =
+                    Some(CT_TblWidth::dxa(width));
+            }
+        }
+        Ok(())
     }
 
     /// Set one grid column's width and keep the table, grid, and covering cell
@@ -679,6 +1064,102 @@ impl<'a> TableRef<'a> {
     pub fn width(&self) -> Option<Length> {
         let width = self.inner.properties.as_ref()?.width.as_ref()?;
         (width.width_type == "dxa").then(|| Length::twips(width.w))
+    }
+
+    /// Get the complete authored table width mode.
+    pub fn width_mode(&self) -> Option<TableWidth> {
+        let width = self.inner.properties.as_ref()?.width.as_ref()?;
+        match width.width_type.as_str() {
+            "auto" => Some(TableWidth::Auto),
+            "dxa" => Some(TableWidth::Fixed(Length::twips(width.w))),
+            "pct" => Some(TableWidth::Percentage(width.w as f64 / 50.0)),
+            _ => None,
+        }
+    }
+
+    /// Get the authored table indentation when stored as twips.
+    pub fn indent(&self) -> Option<Length> {
+        let indent = self.inner.properties.as_ref()?.indent.as_ref()?;
+        (indent.width_type == "dxa").then(|| Length::twips(indent.w))
+    }
+
+    /// Get the authored table layout mode.
+    pub fn layout(&self) -> Option<TableLayout> {
+        match self.inner.properties.as_ref()?.layout.as_deref()? {
+            "fixed" => Some(TableLayout::Fixed),
+            "autofit" => Some(TableLayout::AutoFit),
+            _ => None,
+        }
+    }
+
+    /// Get the direct table shading fill.
+    pub fn shading_fill(&self) -> Option<&str> {
+        self.inner
+            .properties
+            .as_ref()?
+            .shading
+            .as_ref()?
+            .fill
+            .as_deref()
+    }
+
+    /// Get one direct table border, including an explicit invisible edge.
+    pub fn border(&self, position: TableBorderEdge) -> Option<TableBorderRef<'_>> {
+        let borders = self.inner.properties.as_ref()?.borders.as_ref()?;
+        let inner = match position {
+            TableBorderEdge::Top => borders.top.as_ref(),
+            TableBorderEdge::Bottom => borders.bottom.as_ref(),
+            TableBorderEdge::Left => borders.left.as_ref(),
+            TableBorderEdge::Right => borders.right.as_ref(),
+            TableBorderEdge::InsideHorizontal => borders.inside_h.as_ref(),
+            TableBorderEdge::InsideVertical => borders.inside_v.as_ref(),
+        }?;
+        Some(TableBorderRef { inner })
+    }
+
+    /// Get the direct default cell margins.
+    pub fn cell_margins(&self) -> Option<TableCellMargins> {
+        let margins = self.inner.properties.as_ref()?.cell_margin.as_ref()?;
+        Some(TableCellMargins {
+            top: margins.top.map(|value| Length::twips(value.0)),
+            right: margins.right.map(|value| Length::twips(value.0)),
+            bottom: margins.bottom.map(|value| Length::twips(value.0)),
+            left: margins.left.map(|value| Length::twips(value.0)),
+        })
+    }
+
+    /// Get the active grid column widths in source order.
+    pub fn grid_widths(&self) -> Vec<Length> {
+        self.inner
+            .grid
+            .as_ref()
+            .map(|grid| {
+                grid.columns
+                    .iter()
+                    .map(|column| Length::twips(column.width.0))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the selected conditional table-style regions.
+    pub fn look(&self) -> Option<TableLook> {
+        let look = self.inner.properties.as_ref()?.look.as_ref()?;
+        let mask = look
+            .val
+            .as_deref()
+            .and_then(|value| u16::from_str_radix(value, 16).ok());
+        let enabled = |explicit: Option<bool>, bit: u16| {
+            explicit.unwrap_or_else(|| mask.is_some_and(|value| value & bit != 0))
+        };
+        Some(TableLook {
+            first_row: enabled(look.first_row, 0x20),
+            last_row: enabled(look.last_row, 0x40),
+            first_column: enabled(look.first_column, 0x80),
+            last_column: enabled(look.last_column, 0x100),
+            horizontal_banding: !enabled(look.no_h_band, 0x200),
+            vertical_banding: !enabled(look.no_v_band, 0x400),
+        })
     }
 
     /// Whether explicit table width is present.

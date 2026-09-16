@@ -1,6 +1,6 @@
 # F-257, Complete M23 table authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-253
@@ -82,11 +82,11 @@ baseline update.
 
 ## Implementation checklist
 
-- [ ] Add sanitized failing table property and layout differentials.
-- [ ] Complete checked table width, layout, appearance, border, margin, and grid setters.
-- [ ] Preserve explicit invisible edges and unrelated raw property slots.
-- [ ] Verify public-only construction, reopen, geometry, and failure atomicity.
-- [ ] Run parser, layout, public API, oracle, hash harness, full verification, and microscope gates.
+- [x] Add sanitized failing table property and layout differentials.
+- [x] Complete checked table width, layout, appearance, border, margin, and grid setters.
+- [x] Preserve explicit invisible edges and unrelated raw property slots.
+- [x] Verify public-only construction, reopen, geometry, and failure atomicity.
+- [x] Run parser, layout, public API, oracle, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

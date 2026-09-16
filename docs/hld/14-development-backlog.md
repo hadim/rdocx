@@ -2449,13 +2449,18 @@ split-range, or exhausted dependencies abort without changing the destination.
 collisions and reopens with every reference resolved.
 
 ### F-257, Complete M23 table authoring (L)
-Author table width modes, alignment, indentation, layout, shading, borders,
-cell margins, grid, style look, and the layout-table behavior used by the
-private corpus. Invisible borders remain explicit modeled values rather than
-absence inferred by convention.
+The public native table facade authors auto, fixed, and percentage width modes,
+alignment, indentation, layout, shading, aggregate and individual borders,
+cell margins, complete active grids, and style-look flags. Checked mutation
+validates units, colors, grid omissions, spans, coverage, and overflow before
+publication. Grid replacement synchronizes table, column, and covering-cell
+widths. Invisible borders remain explicit modeled values rather than absence
+inferred by convention, and unrelated producer XML remains exact.
 **Depends on**: F-253.
-**Test gate**: differential. Sanitized layout and data tables match Word in XML
-semantics, column geometry, pagination, and deterministic rendering.
+**Test gate**: differential. `m23_layout_and_data_tables_match_word` proves the
+sanitized layout and data-table XML semantics, column geometry, reviewed
+pagination record, and deterministic rendering. Companion regressions prove
+complete typed reopen and failure atomicity.
 
 ### F-258, Complete M23 row and cell authoring (L)
 Author exact and minimum row heights, repeating headers, split policy, row

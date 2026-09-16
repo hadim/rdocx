@@ -1767,6 +1767,19 @@ must match normalized effective properties and deterministic 150 DPI bytes
 with a zero-byte difference threshold. The pinned LibreOffice build must save,
 reopen, and retain the valid graph, reciprocal links, and effective formatting.
 
+The M23 table-property gate is
+`m23_layout_and_data_tables_match_word`. It starts with `Document::new()`, uses
+only the public table facade, saves and reopens typed width, grid, indentation,
+layout, shading, border, margin, and look values, and checks canonical table
+property sequence. It compares the sanitized fixed-grid geometry and reviewed
+pagination record, then renders twice with deterministic bundled fonts and
+requires identical PNG bytes. Companion tests cover all width modes, valid
+spanning rows, aliased Word prefixes, legacy `w:tblLook` masks, explicit
+invisible borders, exact raw property and border-extension retention, row
+coverage, and atomic rejection of malformed values and overflow. The final
+five-document comparison and its pinned LibreOffice 26.2.5.2 and Poppler
+26.01.0 evidence remain owned by the required-private F-263 gate.
+
 The fresh-profile round-trip gate adds an unrelated unmodelled XML part and
 package relationship before reopen and repeat-save. The part bytes and
 relationship identity must survive exactly. The optional repair gate is pinned

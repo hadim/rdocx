@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
 use rdocx::paragraph::Alignment;
-use rdocx::table::VerticalAlignment;
+use rdocx::table::{
+    TableBorderEdge, TableCellMargins, TableLayout, TableLook, TableWidth, VerticalAlignment,
+};
 use rdocx::{
     BodyItemRef, BorderStyle, Length, ListLevel, MhtmlDiagnostic, ParagraphRef, RunPosition,
     RunRange, SectionBreak, StoryItemKind, StoryKind, StyleBuilder, TabAlignment, TabLeader,
@@ -6626,6 +6628,361 @@ fn document_xml(document: &mut Document) -> Vec<u8> {
     let bytes = document.to_bytes().unwrap();
     let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     package.get_part("/word/document.xml").unwrap().to_vec()
+}
+
+#[test]
+fn m23_layout_and_data_tables_match_word() {
+    let mut document = Document::new();
+    {
+        let mut table = document.add_table(2, 3);
+        table
+            .set_grid_widths(&[
+                Length::twips(1_200),
+                Length::twips(2_400),
+                Length::twips(1_800),
+            ])
+            .unwrap();
+        table.set_width_mode(TableWidth::Percentage(72.5)).unwrap();
+        table.set_indent_checked(Length::twips(240)).unwrap();
+        table.set_alignment(Alignment::Center);
+        table.set_layout(TableLayout::Fixed);
+        table.set_shading_checked("D9EAF7").unwrap();
+        table
+            .set_all_borders_checked(BorderStyle::Single, 8, "336699")
+            .unwrap();
+        table
+            .set_border_checked(TableBorderEdge::Top, BorderStyle::None, 0, "auto")
+            .unwrap();
+        table
+            .set_cell_margins_checked(
+                Length::twips(80),
+                Length::twips(120),
+                Length::twips(80),
+                Length::twips(120),
+            )
+            .unwrap();
+        table.set_look(TableLook {
+            first_row: true,
+            last_row: false,
+            first_column: true,
+            last_column: false,
+            horizontal_banding: true,
+            vertical_banding: false,
+        });
+        table.cell(0, 0).unwrap().set_text("Capability");
+        table.cell(0, 1).unwrap().set_text("Owner");
+        table.cell(0, 2).unwrap().set_text("Status");
+        table.cell(1, 0).unwrap().set_text("Public facade");
+        table.cell(1, 1).unwrap().set_text("M23");
+        table.cell(1, 2).unwrap().set_text("Pass");
+    }
+
+    let bytes = document.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    let table = reopened.table(0).unwrap();
+    assert_eq!(table.width_mode(), Some(TableWidth::Percentage(72.5)));
+    assert_eq!(table.indent(), Some(Length::twips(240)));
+    assert_eq!(table.layout(), Some(TableLayout::Fixed));
+    assert_eq!(table.shading_fill(), Some("D9EAF7"));
+    assert_eq!(
+        table.cell_margins(),
+        Some(TableCellMargins {
+            top: Some(Length::twips(80)),
+            right: Some(Length::twips(120)),
+            bottom: Some(Length::twips(80)),
+            left: Some(Length::twips(120)),
+        })
+    );
+    assert_eq!(table.border(TableBorderEdge::Top).unwrap().style(), "none");
+    assert_eq!(
+        table.grid_widths(),
+        vec![
+            Length::twips(1_200),
+            Length::twips(2_400),
+            Length::twips(1_800),
+        ]
+    );
+    assert_eq!(
+        table.look(),
+        Some(TableLook {
+            first_row: true,
+            last_row: false,
+            first_column: true,
+            last_column: false,
+            horizontal_banding: true,
+            vertical_banding: false,
+        })
+    );
+    assert_eq!(
+        table.cell(0, 0).unwrap().width(),
+        Some(Length::twips(1_200))
+    );
+    assert_eq!(
+        table.cell(0, 1).unwrap().width(),
+        Some(Length::twips(2_400))
+    );
+    assert_eq!(
+        table.cell(0, 2).unwrap().width(),
+        Some(Length::twips(1_800))
+    );
+
+    let layout = reopened.layout_deterministic().unwrap();
+    let fragments = layout.body_layout_fragments(0).unwrap();
+    assert_eq!(fragments.len(), 1);
+    assert!(
+        (fragments[0].width - 270.0).abs() < 0.01,
+        "{}",
+        fragments[0].width
+    );
+    let first_render = reopened
+        .render_page_to_png_deterministic(0, 72.0)
+        .unwrap()
+        .unwrap();
+    let second_render = reopened
+        .render_page_to_png_deterministic(0, 72.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_render, second_render);
+    assert!(first_render.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+    let xml = String::from_utf8(document_xml(&mut reopened)).unwrap();
+    let table_properties = &xml[xml.find("<w:tblPr>").unwrap()..xml.find("</w:tblPr>").unwrap()];
+    let positions = [
+        "<w:tblW",
+        "<w:jc",
+        "<w:tblInd",
+        "<w:tblBorders",
+        "<w:shd",
+        "<w:tblLayout",
+        "<w:tblCellMar",
+        "<w:tblLook",
+    ]
+    .map(|element| table_properties.find(element).unwrap());
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(
+        table_properties.contains(r#"<w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>"#)
+    );
+
+    let mut paginated = Document::new();
+    {
+        let mut table = paginated.add_table(80, 1);
+        table.set_grid_widths(&[Length::twips(4_000)]).unwrap();
+        table
+            .set_width_mode(TableWidth::Fixed(Length::twips(4_000)))
+            .unwrap();
+        table.set_layout(TableLayout::Fixed);
+        for row in 0..80 {
+            table
+                .cell(row, 0)
+                .unwrap()
+                .set_text(&format!("Reviewed data row {row:02}"));
+        }
+    }
+    let pagination = paginated.layout_deterministic().unwrap();
+    assert_eq!(pagination.layout.pages.len(), 3);
+    assert_eq!(pagination.body_layout_fragments(0).unwrap().len(), 3);
+}
+
+#[test]
+fn complete_table_width_modes_round_trip() {
+    let mut document = Document::new();
+    {
+        let mut table = document.add_table(1, 1);
+        table.set_width_mode(TableWidth::Auto).unwrap();
+        table.set_layout(TableLayout::AutoFit);
+    }
+    document
+        .add_table(1, 1)
+        .set_width_mode(TableWidth::Fixed(Length::twips(3_600)))
+        .unwrap();
+    document
+        .add_table(1, 1)
+        .set_width_mode(TableWidth::Percentage(55.5))
+        .unwrap();
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.table(0).unwrap().width_mode(),
+        Some(TableWidth::Auto)
+    );
+    assert_eq!(
+        reopened.table(0).unwrap().layout(),
+        Some(TableLayout::AutoFit)
+    );
+    assert_eq!(
+        reopened.table(1).unwrap().width_mode(),
+        Some(TableWidth::Fixed(Length::twips(3_600)))
+    );
+    assert_eq!(
+        reopened.table(2).unwrap().width_mode(),
+        Some(TableWidth::Percentage(55.5))
+    );
+}
+
+#[test]
+fn checked_table_setters_are_atomic() {
+    let mut document = Document::new();
+    document.add_table(1, 2);
+    let before = document.to_bytes().unwrap();
+
+    {
+        let mut table = document.table_mut(0).unwrap();
+        assert!(
+            table
+                .set_width_mode(TableWidth::Percentage(f64::NAN))
+                .is_err()
+        );
+        assert!(
+            table
+                .set_width_mode(TableWidth::Fixed(Length::emu(i64::MAX)))
+                .is_err()
+        );
+        assert!(table.set_indent_checked(Length::twips(-1)).is_err());
+        assert!(table.set_shading_checked("not-a-color").is_err());
+        assert!(
+            table
+                .set_all_borders_checked(BorderStyle::Single, 0, "000000")
+                .is_err()
+        );
+        assert!(
+            table
+                .set_border_checked(TableBorderEdge::Left, BorderStyle::Single, 8, "12345G")
+                .is_err()
+        );
+        assert!(
+            table
+                .set_cell_margins_checked(
+                    Length::twips(0),
+                    Length::twips(0),
+                    Length::twips(-1),
+                    Length::twips(0),
+                )
+                .is_err()
+        );
+        assert!(table.set_grid_widths(&[Length::twips(1_000)]).is_err());
+        assert!(
+            table
+                .set_grid_widths(&[Length::twips(i32::MAX), Length::twips(i32::MAX),])
+                .is_err()
+        );
+    }
+
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document
+        .table_mut(0)
+        .unwrap()
+        .cell(0, 1)
+        .unwrap()
+        .set_grid_span(0);
+    let zero_span = document.to_bytes().unwrap();
+    assert!(
+        document
+            .table_mut(0)
+            .unwrap()
+            .set_grid_widths(&[Length::twips(1_000), Length::twips(2_000)])
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), zero_span);
+
+    document
+        .table_mut(0)
+        .unwrap()
+        .cell(0, 1)
+        .unwrap()
+        .set_grid_span(2);
+    let invalid_coverage = document.to_bytes().unwrap();
+    assert!(
+        document
+            .table_mut(0)
+            .unwrap()
+            .set_grid_widths(&[Length::twips(1_000), Length::twips(2_000)])
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), invalid_coverage);
+}
+
+#[test]
+fn checked_table_mutation_preserves_raw_property_slots_and_border_extensions() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:m23-table">
+  <q:body>
+    <q:tbl>
+      <q:tblPr>
+        <ext:pre ext:value="exact"/>
+        <q:tblW q:w="2400" q:type="dxa"/>
+        <q:tblBorders><q:top q:val="single" q:sz="8" q:color="112233"/><ext:diagonal ext:value="exact"/></q:tblBorders>
+        <ext:after ext:value="exact"/>
+        <q:tblLook q:val="04A0"/>
+      </q:tblPr>
+      <q:tblGrid><q:gridCol q:w="1200"/><q:gridCol q:w="1200"/></q:tblGrid>
+      <q:tr><q:tc><q:tcPr><q:tcW q:w="2400" q:type="dxa"/><q:gridSpan q:val="2"/></q:tcPr><q:p/></q:tc></q:tr>
+    </q:tbl>
+    <q:sectPr/>
+  </q:body>
+</q:document>"#
+            .to_vec(),
+    );
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    assert_eq!(
+        document.table(0).unwrap().look(),
+        Some(TableLook {
+            first_row: true,
+            last_row: false,
+            first_column: true,
+            last_column: false,
+            horizontal_banding: true,
+            vertical_banding: false,
+        })
+    );
+    let first_xml = String::from_utf8(document_xml(&mut document)).unwrap();
+    {
+        let mut table = document.table_mut(0).unwrap();
+        table
+            .set_grid_widths(&[Length::twips(1_200), Length::twips(2_400)])
+            .unwrap();
+        table
+            .set_border_checked(TableBorderEdge::Bottom, BorderStyle::None, 0, "auto")
+            .unwrap();
+        table.set_shading_checked("ABCDEF").unwrap();
+    }
+    let second_xml = String::from_utf8(document_xml(&mut document)).unwrap();
+    assert_eq!(
+        document.table(0).unwrap().cell(0, 0).unwrap().width(),
+        Some(Length::twips(3_600))
+    );
+
+    let raw_element = |xml: &str, marker: &str| {
+        let start = xml.find(&format!("<{marker}")).unwrap();
+        let end = xml[start..].find("/>").unwrap() + start + 2;
+        xml[start..end].to_owned()
+    };
+    for marker in ["ext:pre", "ext:diagonal", "ext:after"] {
+        assert_eq!(first_xml.matches(marker).count(), 1, "{first_xml}");
+        assert_eq!(second_xml.matches(marker).count(), 1, "{second_xml}");
+        assert_eq!(
+            raw_element(&first_xml, marker),
+            raw_element(&second_xml, marker)
+        );
+    }
+    assert!(second_xml.contains(r#"<w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>"#));
+    let width = second_xml.find("<w:tblW").unwrap();
+    let borders = second_xml.find("<w:tblBorders").unwrap();
+    let after = second_xml.find("<ext:after").unwrap();
+    let shading = second_xml.find("<w:shd").unwrap();
+    let look = second_xml.find("<w:tblLook").unwrap();
+    assert!(
+        width < borders && borders < after && after < shading && shading < look,
+        "{second_xml}"
+    );
 }
 
 #[test]

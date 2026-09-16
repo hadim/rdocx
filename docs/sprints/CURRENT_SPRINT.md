@@ -44,7 +44,7 @@ both Rust package families and both version-aligned Python distributions.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-257 | Complete M23 table authoring | L | pending | - |
+| F-257 | Complete M23 table authoring | L | done | codex |
 | F-260 | Ordered run content authoring | L | done | codex |
 | F-X097 | Preserve namespace-scoped drawings and complex fields in comparison | M | done | codex |
 | F-X098 | Preserve content-control type payloads | M | done | codex |

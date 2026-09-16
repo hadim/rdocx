@@ -627,6 +627,14 @@ A table without an explicit style uses the authored default table style.
 Its modeled base width, alignment, indent, borders, shading, look, and cell
 margins resolve base-first before direct table and cell overlays. Existing
 direct width and alignment behavior remains unchanged.
+The direct table facade can author auto, fixed, and percentage width modes,
+left indentation, fixed or autofit layout, shading, aggregate or individual
+borders, default cell margins, conditional look flags, and the complete active
+grid. Grid replacement synchronizes the fixed table and covering-cell widths,
+including cells that span multiple columns and rows with leading or trailing
+grid omissions. Invalid coverage and overflow do not reach layout because the
+mutation is rejected before publication. Explicit `none` borders remain
+modeled inputs, so layout can distinguish suppression from an omitted edge.
 Paragraphs without an explicit style use the authored default paragraph style.
 When a run names a paragraph style with a reciprocal character-style link, the
 linked character inheritance chain supplies its run properties. All three

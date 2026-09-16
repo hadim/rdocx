@@ -934,6 +934,22 @@ empty `tblGridChange` remains unmodelled in its original slot. Serialization
 writes active columns first and the modeled historical change after them in
 schema order.
 
+The native table facade authors auto, fixed-twip, and percentage widths through
+one typed width mode. Checked physical measurements must be nonnegative and fit
+the signed twip representation after the repository's pinned truncating unit
+conversion. Percentages must be finite and between zero and 100, inclusive,
+and serialize in fiftieths of a percent. Checked shading and border colors are
+`auto` or six hexadecimal digits. A visible border has a checked nonzero width,
+while an invisible edge remains an explicit `none` value rather than becoming
+an absent child.
+
+Complete grid replacement validates the active column count, positive widths,
+signed total, row omissions, cell spans, and row coverage before mutation. A
+successful update writes the active grid, fixed table width, and every covering
+cell width together. Table property setters retain unrelated raw property
+slots, border extensions, namespace aliases on read, and canonical fixed `w`
+prefixes on changed modeled children.
+
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
 with every inherited namespace binding they use. Typed table, cell, border,

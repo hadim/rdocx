@@ -14370,3 +14370,53 @@ Python 3.9, with strict mypy and stubtest passing on Python 3.12.
 keep raw alternate-content XML coupled to its parseable drawing projection.
 Do not count zero-width ordered children as characters or serialize the raw
 and projected forms independently.
+
+### F-257, Complete M23 table authoring
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native table facade now provides typed width and layout
+modes, checked indentation, shading, aggregate and individual borders, default
+cell margins, conditional table-look flags, complete active-grid replacement,
+and matching borrowed readers. Complete-grid mutation validates every row and
+publishes the grid, fixed table width, and covering cell widths together.
+
+**Non-obvious choices.** Percentage widths retain the repository's truncating
+fiftieth-percent conversion. Invisible borders are explicit `none` edges.
+Checked operations validate all input and derived geometry before mutation,
+while changed modeled children use the canonical `w` prefix and unrelated raw
+property slots, border extensions, and namespace aliases remain exact.
+
+**Deviations from the design plan.** The private five-document comparison stays
+with F-263 because its corpus cannot be committed. F-257 instead provides the
+named sanitized public gate, deterministic geometry and pagination evidence,
+and exact structural preservation checks required before that boundary.
+Microscope pass 1 found missing legacy table-look mask decoding and incomplete
+autofit, span, coverage, and overflow coverage. Both were corrected. Passes 2
+and 3 report zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, modern DOCX
+table authoring, `docs/hld/04-opc-and-packaging.md`, checked table serialization
+and preservation, `docs/hld/08-rendering-spec.md`, direct table layout inputs,
+`docs/hld/10-bindings-spec.md`, additive native APIs,
+`docs/hld/12-testing-strategy.md`, the sanitized M23 gate, and the F-257 entry
+in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `m23_layout_and_data_tables_match_word` first failed at the story
+baseline because the complete checked table API did not exist. It now proves
+public-only construction, typed reopen, canonical property order, explicit
+invisible borders, deterministic geometry, three-page pagination, and stable
+raster bytes. Companion tests cover every width mode, atomic invalid-input
+rejection, spanning grids, legacy look masks, aliased Word prefixes, and exact
+raw XML retention. Full workspace, no-default-font, WASM, rustdoc, README,
+workflow, package, archive-size, and supply-chain gates pass with pinned
+external tools.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep complete-grid validation ahead of all
+mutation. Treat an absent border differently from an explicit invisible edge,
+and preserve raw table-property and border-extension slots when changing one
+modeled value.

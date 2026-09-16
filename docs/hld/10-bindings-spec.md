@@ -747,13 +747,22 @@ is an additive native Rust method. Python, WASM, and CLI surfaces gain no
 transfer method.
 
 Paragraph mutation supports explicit hard breaks and hyperlinks backed by a
-document relationship. Table column mutation keeps the table width, grid
-column, and every covering cell width consistent. A cell with `gridSpan`
-receives the sum of its covered grid columns. Negative widths, invalid spans,
-and overflowing totals are rejected without mutation. These are additive
-stable APIs. Existing binding surfaces do not gain new methods implicitly, but
-their owned `rdocx::Document` remains package-preserving when native code uses
-the new operations.
+document relationship. Native tables expose the additive `TableWidth`,
+`TableLayout`, `TableBorderEdge`, `TableLook`, `TableCellMargins`, and
+`TableBorderRef` values. Checked setters cover width modes, indentation,
+layout, shading, aggregate and individual borders, default cell margins, style
+look, and complete active-grid replacement. Matching borrowed readers expose
+the stored typed values after reopen.
+
+Grid mutation keeps the table width, every active column, and every covering
+cell width consistent. A cell with `gridSpan` receives the sum of its covered
+grid columns, and row-level leading and trailing omissions constrain coverage.
+Negative or zero column widths, invalid spans or coverage, and overflowing
+totals are rejected without mutation. The earlier unchecked compatibility
+setters remain available. These are additive pre-1.0 native APIs. Python,
+WASM, and CLI do not gain new table-property methods, but their owned
+`rdocx::Document` remains package-preserving when native code uses the new
+operations.
 
 Native Word table inspection includes additive
 `TableRef::has_grid_change()`. It reports whether the low-level grid preserves
