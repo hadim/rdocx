@@ -70,7 +70,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-263 | Layout-backed fields and M23 corpus gate | L | in-progress | codex |
 | F-X113 | Preserve appended paragraphs in document comparison | M | done | codex |
 | F-X114 | Rebuild TOC entries with document styles and geometry | M | pending | - |
-| F-X115 | Preserve modern comment metadata and identity | M | pending | - |
+| F-X115 | Preserve modern comment metadata and identity | M | in-progress | codex |
 | F-X116 | Make Python story reads linear and complete | L | pending | - |
 | F-X117 | Render transparent and large raster pictures safely | M | pending | - |
 | F-X118 | Make notes rendering and replacement safe | L | pending | - |
