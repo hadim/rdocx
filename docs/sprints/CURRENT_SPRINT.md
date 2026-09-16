@@ -44,38 +44,38 @@ both Rust package families and both version-aligned Python distributions.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-257 | Complete M23 table authoring | L | done | codex |
-| F-260 | Ordered run content authoring | L | done | codex |
-| F-X097 | Preserve namespace-scoped drawings and complex fields in comparison | M | done | codex |
-| F-X098 | Preserve content-control type payloads | M | done | codex |
-| F-X099 | Expose direct body ownership for story items | M | done | codex |
-| F-X100 | Preserve explicit false table toggles | S | done | codex |
-| F-X102 | Resolve header and footer pictures in their story scope | M | done | codex |
-| F-X104 | Render DrawingML picture transparency | M | done | codex |
-| F-X105 | Separate slide-owned placeholders from master header flags | M | done | codex |
-| F-X110 | Control field updates on document open | S | done | codex |
-| F-X111 | Attach portable CLI binaries to Rust releases | L | done | codex |
-| F-258 | Complete M23 row and cell authoring | L | done | codex |
-| F-X101 | Honor run-level page breaks during pagination | M | done | codex |
-| F-X103 | Accept standard TOC switches and report rebuild diagnostics | M | done | codex |
-| F-X106a | Expose indexed content mutation and counted replacement in Python | L | done | codex |
-| F-X106b | Expose paragraph and run formatting mutations in Python | M | done | codex |
-| F-X106c | Expose story mutation, hyperlinks, revisions, fields, and XML in Python | L | done | codex |
-| F-259 | Container measurement and equal-height layout | M | done | codex |
-| F-261 | Rich HTML fragments in arbitrary containers | L | done | codex |
-| F-262 | Corpus drawings, text boxes, and watermarks | L | done | codex |
-| F-X107 | Clone and remove existing table rows | M | done | codex |
-| F-X108 | Replace an existing picture atomically | M | done | codex |
-| F-X109 | Split text runs at Unicode character offsets | M | done | codex |
+| F-257 | Complete M23 table authoring | L | done | - |
+| F-260 | Ordered run content authoring | L | done | - |
+| F-X097 | Preserve namespace-scoped drawings and complex fields in comparison | M | done | - |
+| F-X098 | Preserve content-control type payloads | M | done | - |
+| F-X099 | Expose direct body ownership for story items | M | done | - |
+| F-X100 | Preserve explicit false table toggles | S | done | - |
+| F-X102 | Resolve header and footer pictures in their story scope | M | done | - |
+| F-X104 | Render DrawingML picture transparency | M | done | - |
+| F-X105 | Separate slide-owned placeholders from master header flags | M | done | - |
+| F-X110 | Control field updates on document open | S | done | - |
+| F-X111 | Attach portable CLI binaries to Rust releases | L | done | - |
+| F-258 | Complete M23 row and cell authoring | L | done | - |
+| F-X101 | Honor run-level page breaks during pagination | M | done | - |
+| F-X103 | Accept standard TOC switches and report rebuild diagnostics | M | done | - |
+| F-X106a | Expose indexed content mutation and counted replacement in Python | L | done | - |
+| F-X106b | Expose paragraph and run formatting mutations in Python | M | done | - |
+| F-X106c | Expose story mutation, hyperlinks, revisions, fields, and XML in Python | L | done | - |
+| F-259 | Container measurement and equal-height layout | M | done | - |
+| F-261 | Rich HTML fragments in arbitrary containers | L | done | - |
+| F-262 | Corpus drawings, text boxes, and watermarks | L | done | - |
+| F-X107 | Clone and remove existing table rows | M | done | - |
+| F-X108 | Replace an existing picture atomically | M | done | - |
+| F-X109 | Split text runs at Unicode character offsets | M | done | - |
 | F-263 | Layout-backed fields and M23 corpus gate | L | in-progress | codex |
-| F-X113 | Preserve appended paragraphs in document comparison | M | done | codex |
+| F-X113 | Preserve appended paragraphs in document comparison | M | done | - |
 | F-X114 | Rebuild TOC entries with document styles and geometry | M | pending | - |
 | F-X115 | Preserve modern comment metadata and identity | M | done | - |
 | F-X116 | Make Python story reads linear and complete | L | done | - |
 | F-X117 | Render transparent and large raster pictures safely | M | done | - |
 | F-X118 | Make notes rendering and replacement safe | L | done | - |
 | F-X119 | Complete round-three Python authoring and inspection | L | pending | - |
-| F-X120 | Accept fractional DOCX line spacing values | S | done | codex |
+| F-X120 | Accept fractional DOCX line spacing values | S | done | - |
 | F-X121 | Adopt PR 123 authored line-chart portability | S | done | - |
 | F-X112 | Publish the complete S73 package families | L | pending | - |
 
