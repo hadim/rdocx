@@ -14282,3 +14282,46 @@ and ran on Python 3.9, then passed strict typing and stub checks on Python 3.12.
 **Notes for future sessions.** Keep StoryItem XML immutable and keep every
 mutation behind the native staged facade. Do not broaden empty-hyperlink
 cleanup to links that were already empty before a replacement.
+
+### F-X108, Replace an existing picture atomically
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native Rust and Python callers can now replace the bytes
+referenced by an existing body, header, or footer picture without changing its
+drawing XML or relationship identifier. Replacement validates the image
+signature, stages the complete package change, and reopens the candidate before
+publishing it.
+
+**Non-obvious choices.** Contributor PR 107 supplied the initial native and
+Python surface. The integrated implementation uses relationship-local
+copy-on-write for shared targets, reuses only compatible unshared targets,
+allocates deterministic format-correct media names, and removes an old part or
+facade-authored content-type default only after its final reference disappears.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that the
+last facade-authored default content type survived orphan cleanup. The cleanup
+and regression were added, and pass 2 reports zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, staged mutation and
+story ownership, `docs/hld/04-opc-and-packaging.md`, relationship-local media
+and content types, `docs/hld/10-bindings-spec.md`, native and Python media
+replacement, `docs/hld/12-testing-strategy.md`, package and clean-wheel gates,
+and the F-X108 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `replace_image_preserves_drawings_and_story_relationship_ownership`
+first failed at the story baseline because the replacement API did not exist.
+It now covers body, header, and footer ownership, shared and unshared targets,
+PNG and JPEG changes, unchanged drawing XML, orphan cleanup, and atomic failure
+for invalid relationships and bytes. The full workspace, no-default-font,
+WASM, docs, README, package, archive-size, supply-chain, and 58-test Python
+gates pass. A fresh cp39-abi3 wheel passed on Python 3.9, with strict mypy and
+stubtest passing on Python 3.12.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep replacement scoped to the relationship
+owner. Do not mutate a shared media target in place, and do not remove producer
+content-type defaults merely because the facade no longer needs them.

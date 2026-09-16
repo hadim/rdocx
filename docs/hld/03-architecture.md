@@ -235,6 +235,14 @@ The facade uses the existing `oxml-opc` relationship vocabulary and a direct
 `sha2` dependency. It adds no cross-family edge, decoder, binding, WASM, or CLI
 surface.
 
+Word picture replacement stays at the same facade and package boundary.
+`rdocx` resolves one exact body or story relationship and `oxml-media` sniffs
+the replacement format. An unshared target with a compatible extension may be
+reused. A shared target or format change allocates a new media part and changes
+only the selected relationship target. The drawing XML and relationship
+identifier remain stable. The live document receives only a serialized and
+reopened candidate.
+
 Deterministic animation export also belongs to the `rpptx` facade. It validates
 and samples explicit segments, prepares the package, resolver, font, chart,
 picture, and media state once, then evaluates and lowers one timeline sample at

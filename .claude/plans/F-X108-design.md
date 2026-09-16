@@ -1,6 +1,6 @@
 # F-X108, Replace an existing picture atomically
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-255, F-X106c
@@ -73,11 +73,11 @@ Expected to be unchanged because the samples do not invoke image replacement.
 
 ## Implementation checklist
 
-- [ ] Add failing body and related-story replacement tests.
-- [ ] Implement checked owner and target resolution with copy-on-write.
-- [ ] Reconcile media names, content types, orphans, and identifiers atomically.
-- [ ] Bind the operation in Python and verify lifecycle behavior.
-- [ ] Run package, binding, API, hash harness, full verification, and microscope gates.
+- [x] Add failing body and related-story replacement tests.
+- [x] Implement checked owner and target resolution with copy-on-write.
+- [x] Reconcile media names, content types, orphans, and identifiers atomically.
+- [x] Bind the operation in Python and verify lifecycle behavior.
+- [x] Run package, binding, API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

@@ -509,6 +509,15 @@ relationship attributes in standalone footnotes and endnotes. Semantic reorder
 coverage extracts references from the exact body and text-box paragraphs and
 resolves them to their original media bytes and URLs.
 
+The picture-replacement binding gate keeps body, header, and footer drawing XML
+byte-identical while replacing PNG and JPEG targets through native Rust and an
+installed Python wheel. It proves relationship-local copy-on-write for a shared
+media target, deterministic target extensions, exact content types, and orphan
+cleanup after an unshared format change. Missing, external, wrong-type, and
+unsupported-byte requests compare the complete saved document before and after
+the rejected operation. Save and reopen must retain every replacement and the
+same relationship identifier in its original owner scope.
+
 The cross-document fragment gate selects a main-body range containing custom
 styles, direct and style-carried numbering, a bookmark and REF field, a
 picture, an editable chart and workbook, an exact foreign subtree, and a

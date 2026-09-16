@@ -11979,6 +11979,147 @@ impl Document {
             .ok_or_else(|| Error::Other(format!("image relationship target {target} is missing")))
     }
 
+    /// Replace a picture through a checked story-local relationship.
+    pub fn replace_image_for_story(
+        &mut self,
+        story: &StoryId,
+        relationship_id: &str,
+        image_data: &[u8],
+    ) -> Result<()> {
+        self.validate_internal_relationship_for_story(story, relationship_id, rel_types::IMAGE)?;
+        self.replace_image_relationship(&story.part_name, relationship_id, image_data)
+    }
+
+    fn replace_image_relationship(
+        &mut self,
+        owner: &str,
+        relationship_id: &str,
+        image_data: &[u8],
+    ) -> Result<()> {
+        let format = oxml_media::ImageFormat::sniff(image_data).ok_or_else(|| {
+            Error::Other("replacement bytes are not a supported image".to_owned())
+        })?;
+        let old_target = self
+            .package
+            .get_part_rels(owner)
+            .and_then(|relationships| relationships.get_by_id(relationship_id))
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::IMAGE
+                    && relationship_is_internal(relationship)
+            })
+            .map(|relationship| OpcPackage::resolve_rel_target(owner, &relationship.target))
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "relationship owner {owner} has no internal image relationship {relationship_id}"
+                ))
+            })?;
+        if !self.package.contains_part(&old_target) {
+            return Err(Error::Other(format!(
+                "image relationship target {old_target} is missing"
+            )));
+        }
+
+        let mut candidate = self.clone_for_staging();
+        let reference_count = std::iter::once(("/", &candidate.package.package_rels))
+            .chain(
+                candidate
+                    .package
+                    .part_rels
+                    .iter()
+                    .map(|(source, relationships)| (source.as_str(), relationships)),
+            )
+            .flat_map(|(source, relationships)| {
+                relationships
+                    .items
+                    .iter()
+                    .map(move |relationship| (source, relationship))
+            })
+            .filter(|(source, relationship)| {
+                relationship_is_internal(relationship)
+                    && OpcPackage::resolve_rel_target(source, &relationship.target) == old_target
+            })
+            .count();
+        let compatible_extension = old_target
+            .rsplit_once('.')
+            .and_then(|(_, extension)| oxml_media::ImageFormat::from_extension(extension))
+            == Some(format);
+        let new_target = if reference_count == 1 && compatible_extension {
+            old_target.clone()
+        } else {
+            candidate
+                .identifiers
+                .reserve_part_name("/word/media", "image", format.extension())?
+        };
+
+        if new_target != old_target {
+            let relationship = candidate
+                .package
+                .get_part_rels_mut(owner)
+                .and_then(|relationships| {
+                    relationships
+                        .items
+                        .iter_mut()
+                        .find(|relationship| relationship.id == relationship_id)
+                })
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "image relationship {relationship_id} disappeared during replacement"
+                    ))
+                })?;
+            relationship.target = relative_target(owner, &new_target);
+        }
+        candidate.install_reserved_image_part(&new_target, image_data, format);
+
+        if new_target != old_target {
+            let old_target_is_referenced = std::iter::once(("/", &candidate.package.package_rels))
+                .chain(
+                    candidate
+                        .package
+                        .part_rels
+                        .iter()
+                        .map(|(source, relationships)| (source.as_str(), relationships)),
+                )
+                .any(|(source, relationships)| {
+                    relationships.items.iter().any(|relationship| {
+                        relationship_is_internal(relationship)
+                            && OpcPackage::resolve_rel_target(source, &relationship.target)
+                                == old_target
+                    })
+                });
+            if !old_target_is_referenced {
+                candidate.package.remove_part(&old_target);
+                candidate.package.remove_part_rels(&old_target);
+                candidate.package.content_types.remove_override(&old_target);
+                candidate.identifiers.retire_authored_part(&old_target);
+                if let Some((_, extension)) = old_target.rsplit_once('.') {
+                    let extension = extension.to_ascii_lowercase();
+                    let default_is_used = candidate.package.parts.keys().any(|part_name| {
+                        !candidate.package.content_types.contains_override(part_name)
+                            && part_name.rsplit_once('.').is_some_and(|(_, candidate)| {
+                                candidate.eq_ignore_ascii_case(&extension)
+                            })
+                    });
+                    if !default_is_used
+                        && candidate
+                            .identifiers
+                            .authored_content_type_defaults
+                            .remove(&extension)
+                    {
+                        candidate.package.content_types.remove_default(&extension);
+                        candidate
+                            .identifiers
+                            .content_type_defaults
+                            .remove(&extension);
+                    }
+                }
+            }
+        }
+        candidate.invalidate_layout();
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
     /// Resolve an external hyperlink through a checked story-local relationship.
     pub fn hyperlink_url_for_story(
         &self,
@@ -13124,6 +13265,16 @@ impl Document {
         })?;
         let target = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
         self.package.get_part(&target).map(|b| b.to_vec())
+    }
+
+    /// Replace an embedded body picture by its relationship ID.
+    ///
+    /// The relationship and every drawing that shows the picture, with its
+    /// extent, alt text and position, stay as they are. Shared target parts use
+    /// copy-on-write, and the target name and content type follow the new bytes.
+    pub fn replace_image(&mut self, rel_id: &str, image_data: &[u8]) -> Result<()> {
+        let owner = self.doc_part_name.clone();
+        self.replace_image_relationship(&owner, rel_id, image_data)
     }
 
     /// Resolve a hyperlink relationship ID to its external URL.

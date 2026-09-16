@@ -5222,13 +5222,15 @@ installed typing, and save-reopen output.
 
 ### F-X108, Replace an existing picture atomically (M)
 
-Replace image bytes through an existing body or story-local relationship while
-preserving the relationship identifier and drawing markup. A format change
+`Document::replace_image` and `replace_image_for_story` replace image bytes
+through an existing body or story-local relationship while preserving the
+relationship identifier and drawing markup. A format change
 allocates a correctly named media part, updates the selected relationship and
 content types, and removes the old part only when it is no longer referenced.
 Shared targets use copy-on-write behavior so replacing one occurrence does not
-silently change another. Native and Python operations publish only a fully
-validated package candidate.
+silently change another. Python exposes matching operations over `Story`
+snapshots. Native and Python operations publish only a fully validated package
+candidate.
 
 **Depends on**: F-255, F-X106c.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/96>.

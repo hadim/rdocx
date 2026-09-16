@@ -993,6 +993,41 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    fn image_data<'py>(
+        &self,
+        py: Python<'py>,
+        relationship_id: &str,
+    ) -> Option<Bound<'py, PyBytes>> {
+        self.inner
+            .image_data(relationship_id)
+            .map(|bytes| PyBytes::new(py, &bytes))
+    }
+
+    fn replace_image(
+        &mut self,
+        py: Python<'_>,
+        relationship_id: &str,
+        data: &[u8],
+    ) -> PyResult<()> {
+        // No content moves, so live handles stay valid.
+        self.inner
+            .replace_image(relationship_id, data)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn replace_image_for_story(
+        &mut self,
+        py: Python<'_>,
+        story: PyRef<'_, PyStory>,
+        relationship_id: &str,
+        data: &[u8],
+    ) -> PyResult<()> {
+        let story = self.native_story(py, &story)?;
+        self.inner
+            .replace_image_for_story(&story, relationship_id, data)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
     fn to_pdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         py.detach(|| self.inner.to_pdf())
             .map(|bytes| PyBytes::new(py, &bytes))

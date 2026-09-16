@@ -137,6 +137,15 @@ Image and hyperlink lookup applies the same owner boundary. New relationships,
 media parts, content types, XML, and drawing identities publish only after the
 staged package serializes and reopens.
 
+Existing-picture replacement uses that owner boundary without changing the
+drawing's relationship identifier. Unsupported byte signatures fail before a
+candidate exists. Compatible unshared targets can be updated in place. Shared
+targets and format changes use copy-on-write with the next deterministic
+`/word/media/imageN.<ext>` name. The old part and its override are removed only
+after the complete relationship graph proves the part unreachable. The new
+extension and content type come from the sniffed bytes, and publication follows
+a successful package reopen.
+
 Hyperlink inventory follows the same rule. Each modeled story item discovers
 its own hyperlink elements, then resolves each relationship identifier through
 the checked story owner. Equal identifiers in the main part and a header or

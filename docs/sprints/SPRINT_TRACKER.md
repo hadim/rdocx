@@ -450,6 +450,7 @@ defended.
 | F-X101 | S73 | M | 2 | 1 | 2026-09-15 | Honored run-level page breaks in physical pagination and every page-dependent output from contributor PR 102 |
 | F-X106b | S73 | M | 2 | 1 | 2026-09-15 | Added paragraph and run formatting mutation with named Word highlights and separate shading from contributor PR 108 |
 | F-X106c | S73 | L | 4 | 1 | 2026-09-15 | Added typed Python story mutation, scoped hyperlinks, revision resolution, field updates, exact XML snapshots, and Issue 94 hardening from contributor PRs 109 and 110 |
+| F-X108 | S73 | M | 2 | 1 | 2026-09-15 | Added atomic story-scoped image replacement with shared-target copy-on-write and format-aware package cleanup from contributor PR 107 |
 
 ## Velocity
 

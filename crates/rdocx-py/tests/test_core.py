@@ -1,5 +1,9 @@
 import io
+import posixpath
+import re
+import struct
 import zipfile
+import zlib
 
 import pytest
 
@@ -236,6 +240,93 @@ def test_update_fields_on_open_sets_clears_and_removes_the_setting():
         with pytest.raises(rdocx.XmlError, match="ambiguous or malformed"):
             document.update_fields_on_open = True
         assert document.to_bytes() == before
+
+
+def _one_pixel_png():
+    def chunk(kind, data):
+        crc = struct.pack(">I", zlib.crc32(kind + data))
+        return struct.pack(">I", len(data)) + kind + data + crc
+
+    header = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _relationship_target(document, part_name, relationship_id):
+    owner = part_name.lstrip("/")
+    directory, filename = posixpath.split(owner)
+    relationships = posixpath.join(directory, "_rels", f"{filename}.rels")
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        xml = archive.read(relationships)
+        match = re.search(
+            rb'<Relationship Id="'
+            + re.escape(relationship_id.encode())
+            + rb'" Type="[^"]+" Target="([^"]+)"',
+            xml,
+        )
+        assert match is not None
+        target = match.group(1).decode()
+        return posixpath.normpath(posixpath.join(directory, target)).lstrip("/")
+
+
+def test_replace_image_preserves_drawings_and_story_relationship_ownership():
+    docx = pytest.importorskip("docx")
+    import rdocx
+
+    source = docx.Document()
+    source.add_picture(io.BytesIO(_one_pixel_png()))
+    source.sections[0].header.paragraphs[0].add_run().add_picture(
+        io.BytesIO(_one_pixel_png())
+    )
+    source.sections[0].footer.paragraphs[0].add_run().add_picture(
+        io.BytesIO(_one_pixel_png())
+    )
+    buffer = io.BytesIO()
+    source.save(buffer)
+    document = rdocx.Document.from_bytes(buffer.getvalue())
+    held = document.paragraphs[0]
+    stories = {story.kind: story for story in document.stories}
+    relationship_id = re.search(
+        rb'r:embed="([^"]+)"', _document_xml(document)
+    ).group(1).decode()
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        drawing_xml = {
+            story.part_name: archive.read(story.part_name.lstrip("/"))
+            for story in (stories["body"], stories["header"], stories["footer"])
+        }
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        header_id = re.search(
+            rb'r:embed="([^"]+)"', archive.read(stories["header"].part_name.lstrip("/"))
+        ).group(1).decode()
+        footer_id = re.search(
+            rb'r:embed="([^"]+)"', archive.read(stories["footer"].part_name.lstrip("/"))
+        ).group(1).decode()
+
+    jpeg = b"\xff\xd8\xff\xd9"
+    document.replace_image(relationship_id, jpeg)
+    document.replace_image_for_story(stories["header"], header_id, jpeg)
+    document.replace_image_for_story(stories["footer"], footer_id, jpeg)
+    assert document.image_data(relationship_id) == jpeg
+    assert held.text == ""
+    assert rdocx.Document.from_bytes(document.to_bytes()).image_data(relationship_id) == jpeg
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        assert b'ContentType="image/jpeg"' in archive.read("[Content_Types].xml")
+        for story, rel_id in [
+            (stories["body"], relationship_id),
+            (stories["header"], header_id),
+            (stories["footer"], footer_id),
+        ]:
+            target = _relationship_target(document, story.part_name, rel_id)
+            assert archive.read(target) == jpeg
+            assert archive.read(story.part_name.lstrip("/")) == drawing_xml[story.part_name]
+
+    with pytest.raises(rdocx.RdocxError):
+        document.replace_image("rIdMissing", jpeg)
+    assert document.image_data("rIdMissing") is None
 
 
 def _document_with_structure_snapshots(document):

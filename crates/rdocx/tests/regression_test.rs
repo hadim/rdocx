@@ -984,6 +984,198 @@ fn f255_story_document() -> Document {
     Document::from_bytes(&bytes.into_inner()).unwrap()
 }
 
+#[test]
+fn replace_image_preserves_drawings_and_story_relationship_ownership() {
+    let png: &[u8] = b"\x89PNG\r\n\x1a\noriginal";
+    let replacement_png: &[u8] = b"\x89PNG\r\n\x1a\nreplacement";
+    let jpeg: &[u8] = b"\xff\xd8\xff\xd9";
+    let mut authored = f255_story_document();
+    authored.add_picture(png, "body.png", Length::pt(20.0), Length::pt(10.0));
+    let header = f254_story(&authored, StoryKind::Header);
+    authored
+        .add_picture_to_story(&header, png, "header.png", Length::pt(1.0), Length::pt(1.0))
+        .unwrap();
+    let footer = f254_story(&authored, StoryKind::Footer);
+    authored
+        .add_picture_to_story(&footer, png, "footer.png", Length::pt(2.0), Length::pt(2.0))
+        .unwrap();
+    let bytes = authored.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let body_relationship = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .clone();
+    let body_target =
+        oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &body_relationship.target);
+    let header_relationship = package
+        .get_part_rels(header.part_name())
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .clone();
+    let header_original_target =
+        oxml_opc::OpcPackage::resolve_rel_target(header.part_name(), &header_relationship.target);
+    package
+        .get_part_rels_mut(header.part_name())
+        .unwrap()
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == header_relationship.id)
+        .unwrap()
+        .target = body_target.clone();
+    package.remove_part(&header_original_target);
+    package
+        .content_types
+        .remove_override(&header_original_target);
+    let footer_relationship = package
+        .get_part_rels(footer.part_name())
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .clone();
+    let footer_original_target =
+        oxml_opc::OpcPackage::resolve_rel_target(footer.part_name(), &footer_relationship.target);
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .items
+        .extend([
+            oxml_opc::Relationship {
+                id: "externalImage".to_owned(),
+                rel_type: oxml_opc::relationship::rel_types::IMAGE.to_owned(),
+                target: "https://example.test/image.png".to_owned(),
+                target_mode: Some("External".to_owned()),
+            },
+            oxml_opc::Relationship {
+                id: "notImage".to_owned(),
+                rel_type: oxml_opc::relationship::rel_types::HYPERLINK.to_owned(),
+                target: body_target.clone(),
+                target_mode: None,
+            },
+        ]);
+    let drawing_xml_before = ["/word/document.xml", header.part_name(), footer.part_name()]
+        .map(|part| package.get_part(part).unwrap().to_vec());
+    let mut shared_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut shared_bytes).unwrap();
+    let mut document = Document::from_bytes(&shared_bytes.into_inner()).unwrap();
+    let header = f254_story(&document, StoryKind::Header);
+    let footer = f254_story(&document, StoryKind::Footer);
+
+    let before = document.to_bytes().unwrap();
+    for (relationship_id, bytes) in [
+        ("rIdMissing", jpeg),
+        (&body_relationship.id, b"not an image"),
+        ("externalImage", jpeg),
+        ("notImage", jpeg),
+    ] {
+        assert!(document.replace_image(relationship_id, bytes).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    document.replace_image(&body_relationship.id, jpeg).unwrap();
+    assert_eq!(
+        document.image_data(&body_relationship.id).as_deref(),
+        Some(jpeg)
+    );
+    assert_eq!(
+        document
+            .image_data_for_story(&header, &header_relationship.id)
+            .unwrap(),
+        png
+    );
+    document
+        .replace_image_for_story(&header, &header_relationship.id, replacement_png)
+        .unwrap();
+    assert_eq!(
+        document
+            .image_data_for_story(&header, &header_relationship.id)
+            .unwrap(),
+        replacement_png
+    );
+    document
+        .replace_image_for_story(&footer, &footer_relationship.id, jpeg)
+        .unwrap();
+
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let body_target_after = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .get_by_id(&body_relationship.id)
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target)
+        })
+        .unwrap();
+    let header_target_after = package
+        .get_part_rels(header.part_name())
+        .unwrap()
+        .get_by_id(&header_relationship.id)
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target(header.part_name(), &relationship.target)
+        })
+        .unwrap();
+    let footer_target_after = package
+        .get_part_rels(footer.part_name())
+        .unwrap()
+        .get_by_id(&footer_relationship.id)
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target(footer.part_name(), &relationship.target)
+        })
+        .unwrap();
+    assert_ne!(body_target_after, header_target_after);
+    assert!(body_target_after.ends_with(".jpeg"));
+    assert!(header_target_after.ends_with(".png"));
+    assert!(footer_target_after.ends_with(".jpeg"));
+    assert_eq!(package.get_part(&body_target_after), Some(jpeg));
+    assert_eq!(
+        package.get_part(&header_target_after),
+        Some(replacement_png)
+    );
+    assert_eq!(package.get_part(&footer_target_after), Some(jpeg));
+    assert!(!package.contains_part(&footer_original_target));
+    for target in [&body_target_after, &footer_target_after] {
+        assert_eq!(
+            package.content_types.content_type_for(target),
+            Some("image/jpeg")
+        );
+    }
+    assert_eq!(
+        package.content_types.content_type_for(&header_target_after),
+        Some("image/png")
+    );
+    let drawing_xml_after = ["/word/document.xml", header.part_name(), footer.part_name()]
+        .map(|part| package.get_part(part).unwrap().to_vec());
+    assert_eq!(drawing_xml_after, drawing_xml_before);
+    assert!(
+        package
+            .parts
+            .iter()
+            .all(|(part, _)| part != &header_original_target)
+    );
+
+    let mut last_png = Document::new();
+    last_png.add_picture(png, "only.png", Length::pt(1.0), Length::pt(1.0));
+    let relationship_id = last_png.images()[0].embed_id.clone();
+    last_png.replace_image(&relationship_id, jpeg).unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(last_png.to_bytes().unwrap()))
+            .unwrap();
+    assert!(!package.content_types.contains_default("png"));
+    assert!(
+        package
+            .parts
+            .keys()
+            .all(|part_name| !part_name.ends_with(".png"))
+    );
+}
+
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
     let mut document = f255_story_document();
     document.add_picture(b"body image", "body.png", Length::pt(1.0), Length::pt(1.0));

@@ -84,6 +84,9 @@ def exercise_rdocx_types(path: Path) -> None:
     sections: tuple[Section, ...] = document.sections
     styles: tuple[Style, ...] = document.styles
     stories: tuple[Story, ...] = document.stories
+    image_data: bytes | None = document.image_data("rId1")
+    document.replace_image("rId1", b"image")
+    document.replace_image_for_story(stories[0], "rId1", b"image")
     story_items: tuple[StoryItem, ...] = document.story_items
     direct_body_index: int | None = story_items[0].direct_body_index if story_items else None
     variants: tuple[HeaderFooterVariant, ...] = document.header_footer_variants
@@ -159,6 +162,7 @@ def exercise_rdocx_types(path: Path) -> None:
         update_fields_on_open,
         replacement_count,
         regex_count,
+        image_data,
         fragment_kind,
     )
     accepted, dated, replaced, matched, updated
