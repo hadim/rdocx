@@ -57,6 +57,7 @@ The **test gate** is the differential test named in the backlog.
 
 ## HLD impact
 
+- `docs/hld/02-scope-and-non-goals.md`
 - `docs/hld/03-architecture.md`
 - `docs/hld/04-opc-and-packaging.md`
 - `docs/hld/05-drawingml-model.md`
@@ -89,6 +90,7 @@ Each delta must be reviewed as an intentional drawing behavior change.
 - [x] Complete story-aware typed drawing and text-box authoring.
 - [x] Complete section-aware watermark selection and modeled compatibility branches.
 - [x] Validate and reopen the complete package before publishing any mutation.
+- [x] Retire the completed DOCX-027 capability owner and its workflow expectation.
 - [x] Run parser, layout, public API, oracle, hash harness, full verification, and microscope gates.
 
 ## Open questions

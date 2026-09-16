@@ -231,7 +231,7 @@ bytes remain in the ZIP package.
 | DOCX-024 | tables | container measurement and equal-height layout | Y | Y | Y | NA | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs`,test:`crates/rdocx/tests/integration_test.rs` | - |
 | DOCX-025 | run | ordered text, tabs, breaks, fields, and drawings | Y | Y | Y | Y | Y | body | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/run.rs:272`,implementation:`crates/rdocx-layout/src/paginator.rs:2119`,test:`crates/rdocx/tests/regression_test.rs:12440` | - |
 | DOCX-026 | stories | rich HTML fragments in arbitrary containers | Y | NA | Y | NA | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/html.rs`,test:`crates/rdocx/tests/integration_test.rs` | - |
-| DOCX-027 | drawing | M23 pictures, text boxes, and watermarks | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3436` | F-262 |
+| DOCX-027 | drawing | M23 pictures, text boxes, and watermarks | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs`,test:`crates/rdocx/tests/integration_test.rs` | - |
 | DOCX-028 | fields | M23 pagination fields and private corpus gate | N | P | N | N | PV | all | N | N | N | P | B | B | B | unsupported | boundary:F-263 | F-263 |
 | DOCX-029 | paragraph | ordinary text, alignment, spacing, indentation, and pagination | Y | Y | Y | Y | Y | body | Y | Y | Y | Y | Y | B | B | complete | implementation:`crates/rdocx/src/paragraph.rs:279` | - |
 | DOCX-030 | paragraph | borders, shading, tabs, frames, direction, and mark properties | P | Y | P | P | P | body | P | P | P | P | B | B | B | partial | boundary:F-264 | F-264 |

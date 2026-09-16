@@ -14715,10 +14715,13 @@ package before publication. Tight and through wraps include their required
 polygon. Selecting an even watermark header does not silently enable the
 document-wide even-and-odd setting, which remains caller-owned.
 
-**Deviations from the design plan.** None. Microscope pass 1 reports zero
-defects, zero smells, and zero nitpicks.
+**Deviations from the design plan.** The completion follow-up added the
+capability matrix to the HLD impact list after the first completion commit left
+DOCX-027 marked partial with F-262 as its owner. Microscope pass 2 reports zero
+defects, zero smells, and zero nitpicks after retiring that stale owner.
 
-**Spec sections touched.** `docs/hld/03-architecture.md`, story and identity
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, the completed
+DOCX-027 capability row, `docs/hld/03-architecture.md`, story and identity
 ownership, `docs/hld/04-opc-and-packaging.md`, package staging and compatibility
 branches, `docs/hld/05-drawingml-model.md`, crop, anchors, wraps, and text-box
 serialization, `docs/hld/08-rendering-spec.md`, selected text-box and watermark
