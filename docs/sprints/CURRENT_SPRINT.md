@@ -76,7 +76,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X118 | Make notes rendering and replacement safe | L | in-progress | codex |
 | F-X119 | Complete round-three Python authoring and inspection | L | pending | - |
 | F-X120 | Accept fractional DOCX line spacing values | S | done | codex |
-| F-X121 | Adopt PR 123 authored line-chart portability | S | pending | - |
+| F-X121 | Adopt PR 123 authored line-chart portability | S | in-progress | codex |
 | F-X112 | Publish the complete S73 package families | L | pending | - |
 
 ## Sequencing note
