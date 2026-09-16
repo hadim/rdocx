@@ -75,6 +75,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X117 | Render transparent and large raster pictures safely | M | pending | - |
 | F-X118 | Make notes rendering and replacement safe | L | pending | - |
 | F-X119 | Complete round-three Python authoring and inspection | L | pending | - |
+| F-X120 | Accept fractional DOCX line spacing values | S | pending | - |
 | F-X112 | Publish the complete S73 package families | L | pending | - |
 
 ## Sequencing note
@@ -95,7 +96,8 @@ comment anchoring, F-X116 follows the complete story binding and split-run
 paths, and F-X118 establishes notes mutation before F-X119 completes the
 round-three binding surface. F-263 starts after every behavior needed by the
 private corpus and reported pagination fields is integrated. F-X112 is the
-final release boundary after every non-release story. The five client
+final release boundary after every non-release story, including PR 122 through
+F-X120. The five client
 documents and all derived evidence remain private and uncommitted.
 
 ## Definition of done for this sprint
@@ -107,6 +109,8 @@ documents and all derived evidence remain private and uncommitted.
   headers, split policy, alignment, grid omissions, merges, borders, margins,
   width, shading, vertical alignment, text direction, conditional formatting,
   wrapping, and nested tables without unexplained fallback.
+- Producer-written fractional paragraph line spacing opens, rounds to the
+  nearest integer twip, saves canonically, and retains deterministic layout.
 - Caller-width measurement uses the same deterministic fonts and rules as
   whole-document layout, reports height and diagnostics without mutation, and
   produces matching equal-height nested-table layout.

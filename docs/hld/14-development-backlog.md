@@ -5318,7 +5318,7 @@ immediate approval, verifies registry ownership and artifacts, and posts a
 human release result to every included issue and pull request. The stable Rust
 release supersedes rather than backfills the unpublished 0.13.2 crate set.
 
-**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X119.
+**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X120.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/99>.
 **Test gate**: release preparation.
 `s73_release_contract_requires_four_version_aligned_families` proves exact
@@ -5433,6 +5433,22 @@ the existing direct-body RunPosition source compatible.
 `python_round_three_authoring_and_inspection_is_typed_and_lossless` exercises
 every added Word and PowerPoint operation from installed wheels, then verifies
 typing, relationships, properties, save-reopen behavior, and failure atomicity.
+
+### F-X120, Accept fractional DOCX line spacing values (S)
+
+Accept producer-written plain decimal `w:spacing/@w:line` values and normalize
+them to the nearest signed integer twip, with exact half values rounded away
+from zero. Preserve the existing integer path. Reject exponent notation,
+non-finite values, malformed decimals, and values outside the signed 32-bit
+range without weakening any other spacing attribute. Save the normalized value
+canonically as an integer.
+
+**Depends on**: none.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/122>.
+**Test gate**: regression.
+`word_fractional_line_spacing_opens_with_nearest_twip_values` covers observed
+producer values, exact positive and negative halves, signed boundaries,
+canonical save and reopen, invalid forms, and deterministic layout.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

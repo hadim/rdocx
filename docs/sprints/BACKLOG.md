@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 20 | 0 | 4 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 129 | 113 | 1 | 11 |
-| **Total** | **447** | **359** | **1** | **83** |
+| X, Cross-cutting (opportunistic)            | 130 | 113 | 1 | 12 |
+| **Total** | **448** | **359** | **1** | **84** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -666,4 +666,5 @@ regenerated, never hand-edited.
 | F-X117 | Render transparent and large raster pictures safely | S73 | M | pending |
 | F-X118 | Make notes rendering and replacement safe | S73 | L | pending |
 | F-X119 | Complete round-three Python authoring and inspection | S73 | L | pending |
+| F-X120 | Accept fractional DOCX line spacing values | S73 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
