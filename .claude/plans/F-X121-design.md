@@ -1,6 +1,6 @@
 # F-X121, Adopt PR 123 authored line-chart portability
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: S
 **Depends on**: F-X087
@@ -82,12 +82,12 @@ delta blocks completion until separately explained.
 
 ## Implementation checklist
 
-- [ ] Reconcile PR 123's exact head, review state, comments, and CI immediately before implementation.
-- [ ] Apply the contributor title layout and false overlay output in schema order.
-- [ ] Apply explicit false marker and smoothing output only to authored line plots.
-- [ ] Harden direct-child order, exclusion, parse and rewrite, workbook, and palette assertions.
-- [ ] Run focused oxml-chart, clippy, hash harness, external-oracle rider, microscope, and full sprint verification gates.
-- [ ] Credit the contributor in release notes and post a human result comment after integration or publication is verified.
+- [x] Reconcile PR 123's exact head, review state, comments, and CI immediately before implementation.
+- [x] Apply the contributor title layout and false overlay output in schema order.
+- [x] Apply explicit false marker and smoothing output only to authored line plots.
+- [x] Harden direct-child order, exclusion, parse and rewrite, workbook, and palette assertions.
+- [x] Run focused oxml-chart, clippy, hash harness, external-oracle rider, microscope, and full sprint verification gates.
+- [x] Record Kevin Brown and PR 123 in the release contribution inventory and queue a human result comment for the verified integrated result.
 
 ## Open questions
 

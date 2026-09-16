@@ -23424,7 +23424,7 @@ mod tests {
     const FX087_PAGES_VERSION: &str = "15.1.1";
     const FX087_PAGES_BUILD: &str = "7044.0.273";
     const FX087_CANDIDATE_SHA256: &str =
-        "54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9";
+        "ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b";
 
     #[test]
     fn python_story_inventory_scales_linearly() {

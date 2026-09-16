@@ -5491,8 +5491,10 @@ and source data, editable workbooks, and palette choices remain unchanged.
 **GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/123>.
 **Test gate**: regression.
 `authored_charts_emit_portable_viewer_defaults` proves title child order,
-explicit false line defaults, non-line exclusion, and save and reopen
-stability without changing workbook or palette semantics.
+explicit false line defaults, non-line exclusion, parse and rewrite stability,
+and unchanged workbook and palette semantics. The pinned external oracle binds
+the resulting four-chart DOCX to
+`ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b`.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

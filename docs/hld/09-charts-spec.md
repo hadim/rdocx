@@ -440,6 +440,13 @@ impl Document {
 }
 ```
 
+Newly authored axis titles emit `c:tx`, an empty `c:layout`, and
+`c:overlay val="0"` in schema order. Newly authored line plots emit
+`c:marker val="0"` followed by `c:smooth val="0"` before their axis ids.
+Those explicit false defaults prevent viewers from inventing point markers,
+smoothing the path, or overlaying title text on axis labels. Non-line plot
+families do not acquire the line-only defaults.
+
 `ChartKind`, `ChartData`, validation, and the concrete ChartML plus workbook
 construction live in `oxml-chart`. Both facades re-export the input types.
 The shared helper validates the complete data value before producing either
@@ -508,7 +515,7 @@ part only when the caller enables related-part reuse. Missing, external, or
 malformed chart closure edges reject the complete fragment transaction.
 
 The source-built portable candidate has SHA-256
-`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`.
+`ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b`.
 Its automated gate saves and reopens line, bar, pie, and doughnut charts with
 exact ChartML and editable-workbook semantics. The external gate remains bound
 to Microsoft Word 16.112.3 build 16.112.26083020 and Pages Creator Studio

@@ -832,9 +832,15 @@ one-series legends, percentage labels, the doughnut hole, exact workbook data,
 complete staged identifiers, typed theme reuse, collision handling, malformed
 theme replacement, failure atomicity, and save/reopen preservation. A facade
 test proves that `oxml-chart`, `rdocx`, and `rpptx` expose the same `RgbColor`.
+The line portability case requires each authored axis title to order `c:tx`,
+`c:layout`, and false `c:overlay`, then requires false `c:marker` and
+`c:smooth` before the line plot's axis ids. Parse and rewrite retains those
+defaults and the palette. Bar, pie, doughnut, area, scatter, and radar omit the
+line-only defaults, while every non-scatter workbook remains byte-identical to
+the line workbook for the same source data.
 
 The ignored external oracle generates the exact
-`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`
+`ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b`
 candidate in code. Microsoft Word 16.112.3 build 16.112.26083020 must open it
 without repair. Pages Creator Studio 15.1.1 build 7044.0.273 must render the
 declared axes, colours, percentages, legend, and doughnut shape, then export
