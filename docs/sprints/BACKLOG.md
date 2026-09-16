@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 22 | 2 | 0 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 130 | 116 | 3 | 7  |
-| **Total** | **448** | **364** | **5** | **75** |
+| X, Cross-cutting (opportunistic)            | 130 | 116 | 4 | 6  |
+| **Total** | **448** | **364** | **6** | **74** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -662,7 +662,7 @@ regenerated, never hand-edited.
 | F-X113 | Preserve appended paragraphs in document comparison | S73 | M | done |
 | F-X114 | Rebuild TOC entries with document styles and geometry | S73 | M | pending |
 | F-X115 | Preserve modern comment metadata and identity | S73 | M | in-progress |
-| F-X116 | Make Python story reads linear and complete | S73 | L | pending |
+| F-X116 | Make Python story reads linear and complete | S73 | L | in-progress |
 | F-X117 | Render transparent and large raster pictures safely | S73 | M | in-progress |
 | F-X118 | Make notes rendering and replacement safe | S73 | L | pending |
 | F-X119 | Complete round-three Python authoring and inspection | S73 | L | pending |
