@@ -9830,7 +9830,6 @@ impl Document {
 
     fn canonicalize_typed_identifiers(&mut self) -> Result<()> {
         self.canonicalize_bookmark_ids()?;
-        self.canonicalize_comment_ids()?;
         self.canonicalize_numbering_ids()?;
         Ok(())
     }
@@ -9913,99 +9912,6 @@ impl Document {
             self.identifiers.preserved_bookmark_ids.insert(new);
             self.identifiers.authored_toc_bookmark_ids.remove(&old);
             self.identifiers.authored_toc_bookmark_ids.insert(new);
-        }
-        Ok(())
-    }
-
-    fn canonicalize_comment_ids(&mut self) -> Result<()> {
-        let mut semantic = Vec::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
-            for marker in &paragraph.comment_ranges {
-                if let rdocx_oxml::text::CommentRangeMarker::Start { id, .. } = marker
-                    && self.identifiers.comment_ids.contains(id)
-                    && !self.identifiers.preserved_comment_ids.contains(id)
-                    && !semantic.contains(id)
-                {
-                    semantic.push(*id);
-                }
-            }
-        });
-        if let Some(comments) = &self.comments {
-            for comment in &comments.comments {
-                if !self.identifiers.preserved_comment_ids.contains(&comment.id)
-                    && self.identifiers.comment_ids.contains(&comment.id)
-                    && !semantic.contains(&comment.id)
-                {
-                    semantic.push(comment.id);
-                }
-            }
-        }
-        let mut occupied = self.identifiers.preserved_comment_ids.clone();
-        let mut remap = HashMap::new();
-        for old in semantic {
-            remap.insert(old, reserve_i32(&mut occupied, 0, "comment")?);
-        }
-        if remap.is_empty() {
-            return Ok(());
-        }
-        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
-            for marker in &mut paragraph.comment_ranges {
-                match marker {
-                    rdocx_oxml::text::CommentRangeMarker::Start { id, .. }
-                    | rdocx_oxml::text::CommentRangeMarker::End { id, .. } => {
-                        if let Some(updated) = remap.get(id) {
-                            *id = *updated;
-                        }
-                    }
-                }
-            }
-            for run in &mut paragraph.runs {
-                for content in &mut run.content {
-                    if let RunContent::CommentReference { id, .. } = content
-                        && let Some(updated) = remap.get(id)
-                    {
-                        *id = *updated;
-                    }
-                }
-            }
-        });
-        if let Some(comments) = &mut self.comments {
-            for comment in &mut comments.comments {
-                if let Some(updated) = remap.get(&comment.id) {
-                    comment.id = *updated;
-                }
-            }
-            if self.identifiers.preserved_comment_ids.is_empty() {
-                comments.comments.sort_by_key(|comment| comment.id);
-                let mut para_remap = HashMap::new();
-                let mut next_para_id = 1u32;
-                for comment in &mut comments.comments {
-                    for para_id in comment.paragraph_ids.iter_mut().flatten() {
-                        let updated = format!("{next_para_id:08X}");
-                        next_para_id = next_para_id.checked_add(1).ok_or_else(|| {
-                            Error::Other("comment paragraph id range is exhausted".to_owned())
-                        })?;
-                        para_remap.insert(para_id.clone(), updated.clone());
-                        *para_id = updated;
-                    }
-                }
-                if let Some(extended) = &mut self.comments_extended {
-                    for entry in &mut extended.comments {
-                        if let Some(updated) = para_remap.get(&entry.para_id) {
-                            entry.para_id.clone_from(updated);
-                        }
-                        if let Some(parent) = &mut entry.para_id_parent
-                            && let Some(updated) = para_remap.get(parent)
-                        {
-                            parent.clone_from(updated);
-                        }
-                    }
-                    extended
-                        .comments
-                        .sort_by(|left, right| left.para_id.cmp(&right.para_id));
-                }
-            }
-            self.comments_dirty = true;
         }
         Ok(())
     }

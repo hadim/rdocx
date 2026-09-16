@@ -614,14 +614,23 @@ def test_priority_word_operations_return_typed_snapshots_and_remain_atomic():
     commented.add_paragraph("review this")
     held_before_comment = commented.paragraphs[0]
     comment_id = commented.add_comment(
-        range_, author="Ada", text="Please revise", initials="AL"
+        range_,
+        author="Ada",
+        text="Please revise",
+        initials="AL",
+        date="2026-09-16T10:15:30Z",
     )
     with pytest.raises(
         rdocx.StaleElementError, match=r"revision 1, but the document is now at revision 2"
     ):
         _ = held_before_comment.text
     held_before_reply = commented.paragraphs[0]
-    reply_id = commented.reply_to(comment_id, author="Grace", text="Done")
+    reply_id = commented.reply_to(
+        comment_id,
+        author="Grace",
+        text="Done",
+        date="2026-09-16T11:00:00+01:00",
+    )
     with pytest.raises(
         rdocx.StaleElementError, match=r"revision 2, but the document is now at revision 3"
     ):
@@ -637,7 +646,7 @@ def test_priority_word_operations_return_typed_snapshots_and_remain_atomic():
             id=comment_id,
             author="Ada",
             initials="AL",
-            date=None,
+            date="2026-09-16T10:15:30Z",
             text="Please revise",
             parent_id=None,
             resolved=True,
@@ -646,7 +655,7 @@ def test_priority_word_operations_return_typed_snapshots_and_remain_atomic():
             id=reply_id,
             author="Grace",
             initials=None,
-            date=None,
+            date="2026-09-16T11:00:00+01:00",
             text="Done",
             parent_id=comment_id,
             resolved=False,
@@ -654,6 +663,13 @@ def test_priority_word_operations_return_typed_snapshots_and_remain_atomic():
     )
     reopened_comments = rdocx.Document.from_bytes(commented.to_bytes())
     assert reopened_comments.comments == commented.comments
+
+    before_invalid_date = reopened_comments.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="invalid RFC 3339 comment timestamp"):
+        reopened_comments.add_comment(
+            range_, author="Ada", text="invalid", date="2026-02-30"
+        )
+    assert reopened_comments.to_bytes() == before_invalid_date
 
     live = reopened_comments.paragraphs[0]
     before_failure = reopened_comments.to_bytes()

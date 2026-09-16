@@ -820,7 +820,13 @@ Rust source impact does not add Python, WASM, or CLI methods.
 
 Native Word callers can inspect comments through `Document::comments` and
 author threads through `add_comment`, `reply_to`, `resolve_comment`, and
-`remove_comment`. `RunPosition` and `RunRange` define top-level paragraph run
+`remove_comment`. The additive native `add_comment_with_date` and
+`reply_to_with_date` methods accept an optional validated RFC 3339 timestamp.
+The Python `add_comment` and `reply_to` methods expose the same value as the
+optional `date` keyword. Omission writes no date and remains deterministic.
+Returned ids keep naming the same comment or reply after rdocx save and reopen,
+although third-party editors may renumber them. `RunPosition` and `RunRange`
+define top-level paragraph run
 boundaries with an inclusive start and exclusive end. `Document::split_run`
 splits one direct-body run at a Unicode scalar offset of its literal text, so
 such a boundary can fall inside what was one run. The second part keeps the run

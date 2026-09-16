@@ -1,6 +1,6 @@
 # F-X115, Preserve modern comment metadata and identity
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-X109
@@ -69,13 +69,20 @@ The **test gate** is the regression test named in the backlog.
 
 Expected to be unchanged because samples contain no modern comments.
 
+The dedicated SHA-bound Word comment candidate is an intentional behavioural
+delta. Its SHA-256 changes from
+`a5ad0e8eb2d1a676daa07431deb2a0f11ee32e8bb92d099d14d5d16d43708adb` to
+`d5b38f5ebbf3279cb3b77215ba667aaa149f0ddd4d29e66e13518201acf483cf`
+because `[Content_Types].xml` now carries the standard commentsExtended
+content type. The candidate's document content and thread model are unchanged.
+
 ## Implementation checklist
 
-- [ ] Add failing content-type, stable-id, thread, and date regressions.
-- [ ] Correct modern comment content type and no-op preservation.
-- [ ] Preserve ids and allocate new stable identities without collision.
-- [ ] Add optional validated native and Python dates.
-- [ ] Run collaboration, package, binding, hash harness, full verification, and microscope gates.
+- [x] Add failing content-type, stable-id, thread, and date regressions.
+- [x] Correct modern comment content type and no-op preservation.
+- [x] Preserve ids and allocate new stable identities without collision.
+- [x] Add optional validated native and Python dates.
+- [x] Run collaboration, package, binding, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

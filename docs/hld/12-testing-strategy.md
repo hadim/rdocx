@@ -525,6 +525,14 @@ OXML regressions split hyperlink-owned and mixed runs containing tabs, breaks,
 field markup, alternate-content drawings, symbols, and unknown raw children,
 then compare their exact serialized order and layout-projection ownership.
 
+`comments_keep_standard_content_type_ids_dates_and_threads` creates comments
+out of document order, replies to the first allocated identity, resolves its
+thread, and saves and reopens. It requires the standard comments-extended
+content type, stable comment and parent ids, exact optional RFC 3339 dates, the
+no-date deterministic default, invalid-date rollback, and retained unrelated
+sidecar XML. Installed Python tests, strict mypy, and stubtest cover the same
+optional date keywords and frozen snapshots.
+
 The cross-document fragment gate selects a main-body range containing custom
 styles, direct and style-carried numbering, a bookmark and REF field, a
 picture, an editable chart and workbook, an exact foreign subtree, and a

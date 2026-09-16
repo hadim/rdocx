@@ -522,6 +522,11 @@ The comments-extended model owns paragraph-id parent linkage and resolved state,
 with unmodelled attributes and root children retained at their original
 boundaries. The `rdocx` facade owns the relationship-resolved pair of comment
 parts and coordinates them with the anchors in the main document.
+Authored and parsed comment ids are stable facade identities across rdocx save
+and reopen. Allocation takes the lowest unused nonnegative id and never
+reorders existing comments to canonicalize ids. Dates are optional RFC 3339
+values validated before staging. An absent date remains the deterministic
+default. Third-party editors may independently renumber comment identities.
 
 The Word text model projects bookmark starts and ends at accepted-view and
 tracked-view run boundaries while retaining every marker as ordered raw XML.
@@ -1343,6 +1348,8 @@ read-only view over the typed comment and its comments-extended thread entry.
 Replies follow paragraph-id parent linkage, resolution applies to the thread
 root, and removal deletes the selected comment plus descendant replies without
 deleting unrelated runs or producer XML.
+The additive `add_comment_with_date` and `reply_to_with_date` operations own
+validated optional timestamps. The original operations delegate with no date.
 
 `Document::split_run` creates an exact accepted-view run boundary without
 changing `RunPosition`. It clones the selected paragraph, counts Unicode scalar

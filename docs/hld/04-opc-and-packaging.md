@@ -613,10 +613,13 @@ the document-wide even-and-odd setting.
 
 Threaded comments add a document relationship using the Microsoft
 `commentsExtended` relationship type. The facade retains its resolved target
-and writes the comments-extended content type at that exact part. New comment
-state creates both relationships and both overrides together. Existing custom
-targets remain authoritative, and removal of the final API-owned thread removes
-only the parts, relationships, and overrides created by the typed model.
+and writes the standard
+`application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml`
+content type at that exact part. New comment state creates both relationships
+and both overrides together. An ordinary save retains an accepted standard
+override and unrelated comments-extended sidecar XML. Existing custom targets
+remain authoritative, and removal of the final API-owned thread removes only
+the parts, relationships, and overrides created by the typed model.
 
 Modern PowerPoint collaboration follows two independent relationship scopes.
 The presentation part owns at most one Microsoft authors relationship, and
@@ -687,6 +690,9 @@ occur in another part. Every accepted value joins the package-wide occupied set
 so later authored drawings remain globally fresh. Other duplicate definitions,
 exhausted ranges, and pending collisions fail before a staged candidate is
 published.
+Comment ids are facade identities rather than serialization-order values.
+Authored values take the lowest unused nonnegative slot, and rdocx save and
+reopen do not renumber them or their reply links.
 
 Canonical part layouts:
 

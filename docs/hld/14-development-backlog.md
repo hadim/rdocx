@@ -5384,9 +5384,10 @@ save, reopen, layout, and pinned Word comparison.
 
 Use the standard Open XML commentsExtended content type, keep comment ids and
 parent links stable through rdocx save and reopen, and add optional validated
-RFC 3339 dates to native and Python comment and reply creation. New ids use the
-unused nonnegative space. No date remains the deterministic default, and docs
-state that third-party editors may independently renumber comments.
+RFC 3339 dates through native `add_comment_with_date` and
+`reply_to_with_date` and the Python `date` keyword. New ids use the unused
+nonnegative space. No date remains the deterministic default, and docs state
+that third-party editors may independently renumber comments.
 
 **Depends on**: F-X109.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/117>.

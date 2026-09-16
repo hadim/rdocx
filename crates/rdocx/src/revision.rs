@@ -1291,7 +1291,7 @@ fn xml_error(error: quick_xml::Error) -> Error {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Instant {
+pub(crate) struct Instant {
     seconds: i64,
     fraction: String,
 }
@@ -1303,7 +1303,7 @@ impl Instant {
     }
 }
 
-fn parse_rfc3339(value: &str) -> Option<Instant> {
+pub(crate) fn parse_rfc3339(value: &str) -> Option<Instant> {
     let separator = value
         .as_bytes()
         .iter()

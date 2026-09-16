@@ -1306,34 +1306,36 @@ impl PyDocument {
         Ok(())
     }
 
-    #[pyo3(signature = (range, *, author, text, initials = None))]
+    #[pyo3(signature = (range, *, author, text, initials = None, date = None))]
     fn add_comment(
         &mut self,
         range: PyRef<'_, PyRunRange>,
         author: &str,
         text: &str,
         initials: Option<&str>,
+        date: Option<&str>,
         py: Python<'_>,
     ) -> PyResult<i32> {
         let id = self
             .inner
-            .add_comment((*range).into(), author, initials, text)
+            .add_comment_with_date((*range).into(), author, initials, text, date)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.revisions.bump();
         Ok(id)
     }
 
-    #[pyo3(signature = (parent_id, *, author, text))]
+    #[pyo3(signature = (parent_id, *, author, text, date = None))]
     fn reply_to(
         &mut self,
         parent_id: i32,
         author: &str,
         text: &str,
+        date: Option<&str>,
         py: Python<'_>,
     ) -> PyResult<i32> {
         let id = self
             .inner
-            .reply_to(parent_id, author, text)
+            .reply_to_with_date(parent_id, author, text, date)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.revisions.bump();
         Ok(id)

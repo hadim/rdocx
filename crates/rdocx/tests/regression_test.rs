@@ -14199,6 +14199,110 @@ fn a_ranged_comment_reply_and_resolution_keep_one_intact_thread() {
 }
 
 #[test]
+fn comments_keep_standard_content_type_ids_dates_and_threads() {
+    let mut document = Document::new();
+    document.add_paragraph("First paragraph");
+    document.add_paragraph("Second paragraph");
+    let range = |body_index| RunRange {
+        start: RunPosition {
+            body_index,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index,
+            run_index: 1,
+        },
+    };
+    let second = document
+        .add_comment_with_date(
+            range(1),
+            "Ada",
+            Some("AL"),
+            "Second",
+            Some("2026-09-16T10:15:30Z"),
+        )
+        .unwrap();
+    let first = document
+        .add_comment_with_date(range(0), "Ben", None, "First", None)
+        .unwrap();
+    let reply = document
+        .reply_to_with_date(second, "Grace", "Reply", Some("2026-09-16T11:00:00+01:00"))
+        .unwrap();
+    assert!(document.resolve_comment(second, true).unwrap());
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let comments = reopened.comments();
+    assert_eq!(
+        comments
+            .iter()
+            .map(|comment| (comment.id(), comment.parent_id(), comment.date()))
+            .collect::<Vec<_>>(),
+        vec![
+            (second, None, Some("2026-09-16T10:15:30Z")),
+            (first, None, None),
+            (reply, Some(second), Some("2026-09-16T11:00:00+01:00")),
+        ]
+    );
+    assert!(comments[0].resolved());
+
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    assert_eq!(
+        package
+            .content_types
+            .overrides
+            .get("/word/commentsExtended.xml")
+            .map(String::as_str),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml")
+    );
+
+    let before_invalid = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_comment_with_date(range(0), "Invalid", None, "No write", Some("2026-02-30"))
+            .unwrap_err()
+            .to_string()
+            .contains("invalid RFC 3339 comment timestamp")
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_invalid);
+
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let extended = String::from_utf8(
+        package
+            .get_part("/word/commentsExtended.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+    .replace(
+        "<w15:commentsEx ",
+        "<w15:commentsEx xmlns:ext=\"urn:producer\" ",
+    )
+    .replace(
+        "</w15:commentsEx>",
+        "<ext:kept token=\"same\"/></w15:commentsEx>",
+    );
+    package.set_part("/word/commentsExtended.xml", extended.into_bytes());
+    let mut seeded = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut seeded).unwrap();
+    let mut no_op = Document::from_bytes(seeded.get_ref()).unwrap();
+    let saved = no_op.to_bytes().unwrap();
+    let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    assert_eq!(
+        saved
+            .content_types
+            .overrides
+            .get("/word/commentsExtended.xml")
+            .map(String::as_str),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml")
+    );
+    assert!(
+        String::from_utf8_lossy(saved.get_part("/word/commentsExtended.xml").unwrap())
+            .contains("<ext:kept token=\"same\"/>")
+    );
+}
+
+#[test]
 fn removing_a_comment_removes_only_its_anchors_and_thread_metadata() {
     let mut document = Document::new();
     let mut paragraph = document.add_paragraph("");
@@ -27297,22 +27401,18 @@ fn f249_equivalent_document(reverse: bool) -> Document {
     if reverse {
         document.add_bookmark("Second", range(1)).unwrap();
         document.add_bookmark("First", range(0)).unwrap();
-        document
-            .add_comment(range(3), "Author", Some("A"), "Second comment")
-            .unwrap();
-        document
-            .add_comment(range(2), "Author", Some("A"), "First comment")
-            .unwrap();
     } else {
         document.add_bookmark("First", range(0)).unwrap();
         document.add_bookmark("Second", range(1)).unwrap();
-        document
-            .add_comment(range(2), "Author", Some("A"), "First comment")
-            .unwrap();
-        document
-            .add_comment(range(3), "Author", Some("A"), "Second comment")
-            .unwrap();
     }
+    // Comment IDs are caller-visible stable identities, so equivalent-package
+    // construction keeps their allocation order fixed.
+    document
+        .add_comment(range(2), "Author", Some("A"), "First comment")
+        .unwrap();
+    document
+        .add_comment(range(3), "Author", Some("A"), "Second comment")
+        .unwrap();
     document.add_paragraph("bullet").set_numbering(bullet, 0);
     document.add_paragraph("decimal").set_numbering(decimal, 0);
     let mut table = document.add_table(1, 2);

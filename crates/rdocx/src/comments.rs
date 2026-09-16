@@ -20,7 +20,7 @@ pub(crate) const COMMENTS_EXTENDED_REL_TYPE: &str =
 pub(crate) const COMMENTS_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml";
 pub(crate) const COMMENTS_EXTENDED_CONTENT_TYPE: &str =
-    "application/vnd.ms-word.commentsExtended+xml";
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml";
 const DEFAULT_COMMENTS_PART: &str = "/word/comments.xml";
 const DEFAULT_COMMENTS_EXTENDED_PART: &str = "/word/commentsExtended.xml";
 
@@ -474,8 +474,23 @@ impl Document {
         initials: Option<&str>,
         text: &str,
     ) -> Result<i32> {
+        self.add_comment_with_date(range, author, initials, text, None)
+    }
+
+    /// Add a dated comment over a half-open range of body paragraph runs.
+    ///
+    /// `date`, when present, must be an RFC 3339 timestamp. No date is the
+    /// deterministic default used by [`Document::add_comment`].
+    pub fn add_comment_with_date(
+        &mut self,
+        range: RunRange,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
         let mut candidate = self.clone_for_staging();
-        let id = candidate.add_comment_staged(range, author, initials, text)?;
+        let id = candidate.add_comment_staged(range, author, initials, text, date)?;
         candidate.flush_dirty_related_story_models()?;
         self.commit_staged_mutation(candidate);
         Ok(id)
@@ -487,7 +502,9 @@ impl Document {
         author: &str,
         initials: Option<&str>,
         text: &str,
+        date: Option<&str>,
     ) -> Result<i32> {
+        validate_comment_date(date)?;
         self.validate_run_range(range)?;
         self.ensure_comment_models()?;
         self.ensure_comment_relationships()?;
@@ -504,7 +521,7 @@ impl Document {
             .push(CT_Comment {
                 id,
                 author: Some(author.to_owned()),
-                date: None,
+                date: date.map(str::to_owned),
                 initials: initials.map(str::to_owned),
                 paragraphs: vec![paragraph],
                 paragraph_ids: vec![Some(para_id.clone())],
@@ -549,14 +566,34 @@ impl Document {
 
     /// Add a reply linked to the selected comment paragraph.
     pub fn reply_to(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
+        self.reply_to_with_date(parent_id, author, text, None)
+    }
+
+    /// Add a dated reply linked to the selected comment paragraph.
+    ///
+    /// `date`, when present, must be an RFC 3339 timestamp.
+    pub fn reply_to_with_date(
+        &mut self,
+        parent_id: i32,
+        author: &str,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
         let mut candidate = self.clone_for_staging();
-        let id = candidate.reply_to_staged(parent_id, author, text)?;
+        let id = candidate.reply_to_staged(parent_id, author, text, date)?;
         candidate.flush_dirty_related_story_models()?;
         self.commit_staged_mutation(candidate);
         Ok(id)
     }
 
-    fn reply_to_staged(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
+    fn reply_to_staged(
+        &mut self,
+        parent_id: i32,
+        author: &str,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
+        validate_comment_date(date)?;
         let parent_index = self
             .comments
             .as_ref()
@@ -602,7 +639,7 @@ impl Document {
         comments.comments.push(CT_Comment {
             id,
             author: Some(author.to_owned()),
-            date: None,
+            date: date.map(str::to_owned),
             initials: None,
             paragraphs: vec![paragraph],
             paragraph_ids: vec![Some(para_id.clone())],
@@ -904,6 +941,17 @@ impl Document {
             self.comments_extended_owned = false;
         }
     }
+}
+
+fn validate_comment_date(date: Option<&str>) -> Result<()> {
+    if let Some(value) = date
+        && crate::revision::parse_rfc3339(value).is_none()
+    {
+        return Err(Error::Other(format!(
+            "invalid RFC 3339 comment timestamp: {value}"
+        )));
+    }
+    Ok(())
 }
 
 fn selected_fragment_comment_ids(
@@ -1482,7 +1530,7 @@ mod tests {
     const WORD_VERSION: &str = "16.104";
     const WORD_BUILD: &str = "16.104.25121423";
     const WORD_COMMENT_CANDIDATE_SHA256: &str =
-        "a5ad0e8eb2d1a676daa07431deb2a0f11ee32e8bb92d099d14d5d16d43708adb";
+        "d5b38f5ebbf3279cb3b77215ba667aaa149f0ddd4d29e66e13518201acf483cf";
 
     fn word_comment_candidate() -> Document {
         let mut document =

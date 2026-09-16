@@ -11387,7 +11387,7 @@ fn comment_parts_relationships_and_content_types_are_word_compatible() {
     );
     assert_eq!(
         package.content_types.content_type_for(&extended_part),
-        Some("application/vnd.ms-word.commentsExtended+xml")
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml")
     );
     let comments_xml =
         String::from_utf8(package.get_part(&comments_part).unwrap().to_vec()).unwrap();
@@ -11408,7 +11408,8 @@ fn comment_parts_relationships_and_content_types_are_word_compatible() {
 fn comments_extended_part_uses_its_existing_relationship_target() {
     const COMMENTS_EXTENDED_REL_TYPE: &str =
         "http://schemas.microsoft.com/office/2011/relationships/commentsExtended";
-    const COMMENTS_EXTENDED_CONTENT_TYPE: &str = "application/vnd.ms-word.commentsExtended+xml";
+    const COMMENTS_EXTENDED_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml";
 
     let mut document = Document::new();
     document.add_paragraph("review this");

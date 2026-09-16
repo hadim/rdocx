@@ -80,9 +80,18 @@ def exercise_rdocx_types(path: Path) -> None:
     position = RunPosition(body_index=0, run_index=0)
     range_ = RunRange(start=position, end=RunPosition(body_index=0, run_index=1))
     comment_id: int = document.add_comment(
-        range_, author="Ada", text="review", initials=None
+        range_,
+        author="Ada",
+        text="review",
+        initials=None,
+        date="2026-09-16T10:15:30Z",
     )
-    reply_id: int = document.reply_to(comment_id, author="Grace", text="done")
+    reply_id: int = document.reply_to(
+        comment_id,
+        author="Grace",
+        text="done",
+        date="2026-09-16T11:00:00+01:00",
+    )
     comments: tuple[Comment, ...] = document.comments
     sections: tuple[Section, ...] = document.sections
     styles: tuple[Style, ...] = document.styles
