@@ -1470,19 +1470,26 @@ content types by resolved media ID. Only embedded picture relationships enter
 those maps. The target must be present, its declared content type must match its
 sniffed PNG or JPEG format. JPEG inputs must use the 8-bit, three-component
 layout supported by both the raster decoder and PDF pass-through path. Encoded
-bytes and decoded scanline or pixel storage must remain within 16 MiB caps, and
-the stricter raster backend must visibly
-decode it at its native pixel bounds before it enters renderer input. Native
-bounds retain sparse visible pixels that a one-pixel probe could miss. This
-also covers the PDF backend, whose JPEG path is a less strict pass-through.
-Missing, unsupported, malformed,
-invisible or content-type-mismatched media stay unresolved so the owning shape
-can retain its visible fallback and diagnostic. Linked media remains diagnosed
-and no renderer performs network access. Direct background picture fills use
+bytes remain within 16 MiB and decoded scanline or pixel storage remains within
+64 MiB. Every dimension and byte multiplication is checked before allocation.
+The stricter raster backend must visibly decode the image at its native pixel
+bounds before it enters renderer input. Native bounds retain sparse visible
+pixels that a one-pixel probe could miss. This also covers the PDF backend,
+whose JPEG path is a less strict pass-through. A rejected relationship records
+its scope and stable failure reason separately from admitted media. The owning
+picture produces that one diagnostic and lowers as a visible bounds fallback.
+Missing, unsupported, malformed, invisible or content-type-mismatched media
+also stay unresolved. Linked media remains diagnosed and no renderer performs
+network access. Direct background picture fills use
 the scope of the slide, layout, or master that
 supplied `p:bg`. Theme-referenced picture fills are rejected
 precisely until a theme media scope exists. They never fall back to a same-named
 identifier in another scope.
+
+Decoded PNG colour channels are straight alpha until the shared raster backend
+constructs a tiny-skia pixmap. That ownership boundary premultiplies RGB once
+with tiny-skia's byte rounding. PDF image data remains unchanged, and fully or
+partly transparent stored RGB cannot add colour during raster composition.
 
 Audio and video package relationships remain upstream of `RenderInput`.
 Media-aware assembly reads their typed playback settings and timing commands,

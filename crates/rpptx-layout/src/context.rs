@@ -51,8 +51,8 @@ use crate::{
     ResolvedRectAlignment, ResolvedRunStyle, ResolvedShape, ResolvedSlide,
     ResolvedSlideTextDirections, ResolvedTable, ResolvedTableBorder, ResolvedTableCell,
     ResolvedTableRow, ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip,
-    ResolvedTilePlacement, ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
-    TextAnchor, TextDirection, TextInsets,
+    ResolvedTilePlacement, ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaFailures,
+    ScopedMediaIds, TextAnchor, TextDirection, TextInsets,
 };
 
 /// The producer part that supplied the effective background.
@@ -133,6 +133,7 @@ pub struct ResolveCtx<'a> {
     pub table_styles: Option<&'a CT_TableStyleList>,
     pub(crate) list_style_cache: RefCell<HashMap<Option<PlaceholderKey>, EffectiveListStyle>>,
     media_poster_diagnostic_identity: bool,
+    media_failures: Option<&'a ScopedMediaFailures>,
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -154,6 +155,7 @@ impl<'a> ResolveCtx<'a> {
             table_styles: None,
             list_style_cache: RefCell::new(HashMap::new()),
             media_poster_diagnostic_identity: false,
+            media_failures: None,
         }
     }
 
@@ -167,6 +169,13 @@ impl<'a> ResolveCtx<'a> {
     #[doc(hidden)]
     pub fn with_media_poster_diagnostic_identity(mut self) -> Self {
         self.media_poster_diagnostic_identity = true;
+        self
+    }
+
+    /// Adds renderer-owned failures for media rejected before layout.
+    #[doc(hidden)]
+    pub fn with_media_failures(mut self, failures: &'a ScopedMediaFailures) -> Self {
+        self.media_failures = Some(failures);
         self
     }
 
@@ -668,7 +677,7 @@ impl<'a> ResolveCtx<'a> {
                     .and_then(|effects| effects.outer_shadow.as_ref())
                     .map(|shadow| self.concrete_shadow(shadow))
                     .transpose()?;
-                let (geometry, geometry_unsupported) =
+                let (mut geometry, geometry_unsupported) =
                     self.concrete_picture_geometry(picture, (bounds.width, bounds.height));
                 if let Some(category) = geometry_unsupported {
                     diagnostics.push(Diagnostic {
@@ -676,8 +685,16 @@ impl<'a> ResolveCtx<'a> {
                     });
                 }
                 let diagnostic_start = diagnostics.len();
-                let (content, media_unsupported) =
-                    resolve_picture_content(picture, source, media, diagnostics);
+                let (content, media_unsupported) = resolve_picture_content(
+                    picture,
+                    source,
+                    media,
+                    self.media_failures,
+                    diagnostics,
+                );
+                if media_unsupported.is_some() {
+                    geometry = ResolvedGeometry::BoundsFallback;
+                }
                 if self.media_poster_diagnostic_identity
                     && media_unsupported.is_some()
                     && picture.media.is_some()
@@ -740,8 +757,12 @@ impl<'a> ResolveCtx<'a> {
                         (ResolvedContent::None, Some("SmartArt"), true)
                     }
                     GraphicDataPayload::Ole { preview, .. } => {
-                        if let Some(image) = resolve_ole_preview(preview.as_deref(), source, media)
-                        {
+                        if let Some(image) = resolve_ole_preview(
+                            preview.as_deref(),
+                            source,
+                            media,
+                            self.media_failures,
+                        ) {
                             diagnostics.push(Diagnostic {
                                 message: "OLE object rendered as a static PNG preview. Embedded OLE interactivity is not rendered".to_owned(),
                             });
@@ -916,7 +937,13 @@ impl<'a> ResolveCtx<'a> {
                         diagnostics,
                     )?
                 } else if let Some(picture) = alternate.picture_fallback() {
-                    let (content, _) = resolve_picture_content(picture, source, media, diagnostics);
+                    let (content, _) = resolve_picture_content(
+                        picture,
+                        source,
+                        media,
+                        self.media_failures,
+                        diagnostics,
+                    );
                     let has_image = matches!(content, ResolvedContent::Image(_));
                     (content, Some("chart"), !has_image)
                 } else {
@@ -1016,7 +1043,8 @@ impl<'a> ResolveCtx<'a> {
         };
 
         if let Some(picture) = fallback {
-            let (content, _) = resolve_picture_content(picture, source, media, diagnostics);
+            let (content, _) =
+                resolve_picture_content(picture, source, media, self.media_failures, diagnostics);
             let relationship_id = picture
                 .blip_fill
                 .as_ref()
@@ -1086,7 +1114,7 @@ impl<'a> ResolveCtx<'a> {
             Some(Fill::Blip(fill))
                 if matches!(shape.shape_properties.fill, Some(Fill::Blip(_))) =>
             {
-                match resolve_image_fill(fill, source, media, "shape") {
+                match resolve_image_fill(fill, source, media, self.media_failures, "shape") {
                     Ok(image) => (None, Some(image), None, None),
                     Err((category, message)) => (None, None, Some(category), Some(message)),
                 }
@@ -1286,6 +1314,7 @@ fn resolve_picture_content(
     picture: &rpptx_oxml::picture::CT_Picture,
     source: FlattenedSource,
     media: Option<&ScopedMediaIds>,
+    failures: Option<&ScopedMediaFailures>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (ResolvedContent, Option<&'static str>) {
     let Some(fill) = picture.blip_fill.as_ref() else {
@@ -1295,7 +1324,7 @@ fn resolve_picture_content(
             diagnostics,
         );
     };
-    match resolve_image_fill(fill, source, media, "picture") {
+    match resolve_image_fill(fill, source, media, failures, "picture") {
         Ok(image) => (ResolvedContent::Image(image), None),
         Err((category, message)) => unsupported_picture(category, &message, diagnostics),
     }
@@ -1305,6 +1334,7 @@ fn resolve_ole_preview(
     preview: Option<&rpptx_oxml::picture::CT_Picture>,
     source: FlattenedSource,
     media: Option<&ScopedMediaIds>,
+    failures: Option<&ScopedMediaFailures>,
 ) -> Option<ResolvedImage> {
     let fill = preview?.blip_fill.as_ref()?;
     let relationship_id = fill.blip.as_ref()?.embed.as_deref()?;
@@ -1315,13 +1345,14 @@ fn resolve_ole_preview(
     {
         return None;
     }
-    resolve_image_fill(fill, source, Some(media), "picture").ok()
+    resolve_image_fill(fill, source, Some(media), failures, "picture").ok()
 }
 
 fn resolve_image_fill(
     fill: &BlipFill,
     source: FlattenedSource,
     media: Option<&ScopedMediaIds>,
+    failures: Option<&ScopedMediaFailures>,
     role: &str,
 ) -> Result<ResolvedImage, (&'static str, String)> {
     let missing_blip_category = match role {
@@ -1354,6 +1385,12 @@ fn resolve_image_fill(
             format!("{role} image media pending relationship resolution"),
         ));
     };
+    if let Some(failure) = failures.and_then(|failures| failures.get(source, relationship_id)) {
+        return Err((
+            "image render failure",
+            format!("{role} image relationship `{relationship_id}` {failure}"),
+        ));
+    }
     let Some(media_id) = media.get(source, relationship_id) else {
         return Err((
             "missing image relationship",
@@ -1575,7 +1612,7 @@ impl ResolveCtx<'_> {
     ) -> Result<(Option<ResolvedBackground>, Option<&'static str>), ResolveError> {
         if let Fill::Blip(fill) = fill {
             return Ok(
-                match resolve_image_fill(fill, source, media, "background") {
+                match resolve_image_fill(fill, source, media, self.media_failures, "background") {
                     Ok(image) => (Some(ResolvedBackground::Image(image)), None),
                     Err((_category, message)) => {
                         diagnostics.push(Diagnostic { message });
@@ -3842,7 +3879,7 @@ mod tests {
         ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize,
         ResolvedParagraph, ResolvedRectAlignment, ResolvedRunStyle, ResolvedSlide, ResolvedTextRun,
         ResolvedTextSpacing, ResolvedTileFlip, ScopedChartResources, ScopedHyperlinkTargets,
-        ScopedMediaIds, TextAnchor as ResolvedTextAnchor, TextDirection,
+        ScopedMediaFailures, ScopedMediaIds, TextAnchor as ResolvedTextAnchor, TextDirection,
     };
     use oxml_layout::{
         Color, Effect, FontManager, MediaId, Paint, PathCommand, Point, PositionedElement, Rect,
@@ -5401,6 +5438,37 @@ mod tests {
             resolved.diagnostics,
             [Diagnostic {
                 message: "missing slide shape image relationship `rId404`".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn rejected_picture_relationship_reports_and_uses_visible_bounds() {
+        let fixture = Fixture::new(&picture("rId7", "", "", 0), "", "");
+        let failures = ScopedMediaFailures {
+            slide: HashMap::from([(
+                "rId7".to_owned(),
+                "exceeds the 64 MiB decoded-image render limit".to_owned(),
+            )]),
+            ..ScopedMediaFailures::default()
+        };
+
+        let resolved = fixture
+            .context()
+            .with_media_failures(&failures)
+            .resolve_slide_with_media((720.0, 540.0), &ScopedMediaIds::default())
+            .unwrap();
+
+        assert_eq!(
+            resolved.shapes[0].geometry,
+            ResolvedGeometry::BoundsFallback
+        );
+        assert_eq!(resolved.shapes[0].unsupported, Some("image render failure"));
+        assert_eq!(
+            resolved.diagnostics,
+            [Diagnostic {
+                message: "picture image relationship `rId7` exceeds the 64 MiB decoded-image render limit"
+                    .to_owned(),
             }]
         );
     }

@@ -1060,7 +1060,8 @@ fn render_image(
         let mut rgba = Vec::with_capacity(decoded.width as usize * decoded.height as usize * 4);
         if let Some(alpha) = &decoded.alpha {
             for (rgb, &a) in decoded.data.chunks_exact(3).zip(alpha.iter()) {
-                rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], a]);
+                let color = tiny_skia::ColorU8::from_rgba(rgb[0], rgb[1], rgb[2], a).premultiply();
+                rgba.extend_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
             }
         } else {
             for rgb in decoded.data.chunks_exact(3) {
@@ -1210,6 +1211,71 @@ mod tests {
             decoder.next_image().expect("advance TIFF image");
         }
         pages
+    }
+
+    fn append_png_chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        png.extend_from_slice(kind);
+        png.extend_from_slice(data);
+        let mut crc = 0xffff_ffff_u32;
+        for byte in kind.iter().chain(data) {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(crc & 1));
+            }
+        }
+        png.extend_from_slice(&(!crc).to_be_bytes());
+    }
+
+    fn one_pixel_rgba_png(pixel: [u8; 4]) -> Vec<u8> {
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&1_u32.to_be_bytes());
+        ihdr.extend_from_slice(&1_u32.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        append_png_chunk(&mut png, b"IHDR", &ihdr);
+        append_png_chunk(
+            &mut png,
+            b"IDAT",
+            &miniz_oxide::deflate::compress_to_vec_zlib(
+                &[0, pixel[0], pixel[1], pixel[2], pixel[3]],
+                6,
+            ),
+        );
+        append_png_chunk(&mut png, b"IEND", &[]);
+        png
+    }
+
+    fn transparent_pixel_layout(stored_rgb: [u8; 3]) -> LayoutResult {
+        let mut frame = page(vec![
+            PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 32.0,
+                    height: 32.0,
+                },
+                color: Color {
+                    r: 0.0,
+                    g: 32.0 / 255.0,
+                    b: 96.0 / 255.0,
+                    a: 1.0,
+                },
+            },
+            PositionedElement::Image {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 32.0,
+                    height: 32.0,
+                },
+                data: one_pixel_rgba_png([stored_rgb[0], stored_rgb[1], stored_rgb[2], 0]),
+                content_type: "image/png".to_owned(),
+                media_id: MediaId(1),
+            },
+        ]);
+        frame.background = None;
+        layout(vec![frame])
     }
 
     #[test]
@@ -1369,6 +1435,29 @@ mod tests {
         };
         let blue = tiny_skia::Pixmap::decode_png(&pages[0]).expect("decode painted PNG");
         assert_eq!(blue.pixel(0, 0).unwrap().alpha(), 255);
+    }
+
+    #[test]
+    fn straight_alpha_images_composite_with_premultiplied_pixels() {
+        let white_storage = transparent_pixel_layout([255, 255, 255]);
+        let black_storage = transparent_pixel_layout([0, 0, 0]);
+
+        for format in [
+            RasterFormat::Png {
+                transparent_background: false,
+            },
+            RasterFormat::Jpeg { quality: 90 },
+            RasterFormat::Tiff,
+        ] {
+            let white = render_pages(&white_storage, &[0], RasterOptions { dpi: 72.0, format })
+                .expect("transparent white storage renders");
+            let black = render_pages(&black_storage, &[0], RasterOptions { dpi: 72.0, format })
+                .expect("transparent black storage renders");
+            assert_eq!(
+                white, black,
+                "stored RGB must not affect transparent pixels"
+            );
+        }
     }
 
     #[test]

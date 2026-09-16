@@ -5414,10 +5414,11 @@ gate proves nested visible runs agree across every text view.
 ### F-X117, Render transparent and large raster pictures safely (M)
 
 Premultiply decoded RGBA before constructing tiny-skia pixmaps. Raise the
-checked decoded-image ceiling enough for the reported 4000 by 1500 and 2100 by
-2100 assets while retaining finite dimension and allocation bounds. Supported
-images render in PDF and every raster format. An image beyond the bound reports
-one stable diagnostic or error with a visible fallback instead of disappearing.
+checked decoded-image ceiling to 64 MiB for the reported 4000 by 1500 and 2100
+by 2100 assets while retaining the 16 MiB encoded ceiling and checked dimension
+and allocation bounds. Supported images render in PDF and every raster format.
+An image beyond the bound records its scoped rejection, reports one stable
+diagnostic, and lowers as a visible bounds fallback instead of disappearing.
 
 **Depends on**: F-X104.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/119>.

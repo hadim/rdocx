@@ -315,6 +315,21 @@ Completion requires the selected PyPI version, all seven files, authenticated
 owner or maintainer roles, an exact reviewed GitHub release body, and every
 planned contributor comment.
 
+### R15, raster media exhausts memory or disappears silently
+
+Compressed picture dimensions can imply much larger decoded storage. An
+unbounded decoder can exhaust memory, while a low silent ceiling can remove an
+ordinary screenshot or print-resolution figure from both PDF and raster
+output. Straight-alpha bytes passed to a premultiplied surface can also paint
+colour from pixels that should be transparent.
+
+*Mitigation*: presentation admission keeps a 16 MiB encoded ceiling and a
+64 MiB decoded ceiling with checked arithmetic before allocation. Rejected
+relationships carry a stable scoped failure into one diagnostic and a visible
+bounds fallback. The shared raster backend premultiplies decoded PNG channels
+exactly once at the tiny-skia boundary. Deterministic format, large-image,
+malformed-header, overflow, diagnostic, and fallback tests gate these rules.
+
 ## Assumptions that would invalidate the plan if wrong
 
 - **That a slide is a page.** The entire rendering reuse argument rests on it.

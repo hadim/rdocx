@@ -2258,6 +2258,13 @@ required, and no binary fixture enters the repository.
   dimensions, distinct page pixels, transparent PNG behavior, JPEG quality
   validation, TIFF cardinality and byte-identical opaque PNG compatibility
   wrappers.
+- `straight_alpha_images_composite_with_premultiplied_pixels` proves that
+  transparent stored white and black pixels compose identically over navy in
+  PNG, JPEG and TIFF output. `large_pictures_render_or_report_the_decode_limit`
+  admits the reported 4000 by 1500 and 2100 by 2100 PNGs through presentation
+  raster and PDF output. It also requires one 64 MiB rejection diagnostic and
+  one visible bounds fallback. Focused unit gates reject malformed headers,
+  overflowing dimensions, and over-limit decoded sizes before allocation.
 - Linear and radial path gradients produce type 2 patterns, type 2 or type 3
   shadings, and type 3 stitching functions over interval type 2 functions.
   Structural tests also pin stop normalization, fill and stroke pattern

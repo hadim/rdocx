@@ -13468,6 +13468,34 @@ fn sparse_preview_png() -> Vec<u8> {
     png
 }
 
+fn solid_rgba_png(width: u32, height: u32, pixel: [u8; 4]) -> Vec<u8> {
+    let row_bytes = usize::try_from(width).unwrap().checked_mul(4).unwrap();
+    let mut row = Vec::with_capacity(row_bytes + 1);
+    row.push(0);
+    for _ in 0..width {
+        row.extend_from_slice(&pixel);
+    }
+    let mut pixels = Vec::with_capacity(
+        usize::try_from(height)
+            .unwrap()
+            .checked_mul(row_bytes + 1)
+            .unwrap(),
+    );
+    for _ in 0..height {
+        pixels.extend_from_slice(&row);
+    }
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&pixels, 6);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    append_png_chunk(&mut png, b"IHDR", &ihdr);
+    append_png_chunk(&mut png, b"IDAT", &compressed);
+    append_png_chunk(&mut png, b"IEND", &[]);
+    png
+}
+
 fn append_png_chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     png.extend_from_slice(&(data.len() as u32).to_be_bytes());
     png.extend_from_slice(kind);
@@ -13806,6 +13834,84 @@ fn picture_without_explicit_size_uses_native_dimensions() {
     assert_eq!(transform.offset.unwrap().y, Emu(20));
     assert_eq!(transform.extent.unwrap().cx, Emu(406_400));
     assert_eq!(transform.extent.unwrap().cy, Emu(203_200));
+}
+
+#[test]
+fn large_pictures_render_or_report_the_decode_limit() {
+    for (width, height) in [(4_000, 1_500), (2_100, 2_100)] {
+        let png = solid_rgba_png(width, height, [0, 0, 0, 255]);
+        assert!(
+            png.len() < 16 * 1024 * 1024,
+            "fixture must isolate decoded size"
+        );
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(6).expect("add blank slide");
+        presentation
+            .add_picture(
+                0,
+                &png,
+                "large.png",
+                Emu::from_cm(1.0),
+                Emu::from_cm(1.0),
+                Some(Emu::from_cm(4.0)),
+                Some(Emu::from_cm(2.0)),
+            )
+            .expect("add reported large picture");
+
+        let layout = render_presentation_package(&presentation.to_bytes().unwrap());
+        assert!(layout.diagnostics.is_empty(), "{:?}", layout.diagnostics);
+        let mut image_count = 0;
+        walk(&layout.pages[0].elements, &mut |element, _| {
+            if matches!(element, PositionedElement::Image { .. }) {
+                image_count += 1;
+            }
+        });
+        assert_eq!(image_count, 1, "{width} by {height} picture must render");
+        let raster = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let raster = tiny_skia::Pixmap::decode_png(&raster).unwrap();
+        let sample = raster.pixel(60, 45).unwrap();
+        assert_eq!((sample.red(), sample.green(), sample.blue()), (0, 0, 0));
+        assert!(
+            presentation
+                .to_pdf_deterministic()
+                .unwrap()
+                .starts_with(b"%PDF")
+        );
+    }
+
+    let over_limit = png_header(5_000, 4_000);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    presentation
+        .add_picture(
+            0,
+            &over_limit,
+            "over-limit.png",
+            Emu::from_cm(1.0),
+            Emu::from_cm(1.0),
+            Some(Emu::from_cm(4.0)),
+            Some(Emu::from_cm(2.0)),
+        )
+        .expect("add over-limit picture");
+    let layout = render_presentation_package(&presentation.to_bytes().unwrap());
+    assert_eq!(layout.diagnostics.len(), 1, "{:?}", layout.diagnostics);
+    assert!(
+        layout.diagnostics[0]
+            .message
+            .contains("exceeds the 64 MiB decoded-image render limit"),
+        "{:?}",
+        layout.diagnostics
+    );
+    let mut visible_fallbacks = 0;
+    walk(&layout.pages[0].elements, &mut |element, _| {
+        if matches!(element, PositionedElement::Path(path) if path.stroke.is_some()) {
+            visible_fallbacks += 1;
+        }
+    });
+    assert_eq!(
+        visible_fallbacks, 1,
+        "over-limit picture needs one fallback"
+    );
 }
 
 #[test]

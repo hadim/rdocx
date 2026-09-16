@@ -1,6 +1,6 @@
 # F-X117, Render transparent and large raster pictures safely
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-X104
@@ -68,11 +68,11 @@ straight-alpha pixels nor images above the old ceiling.
 
 ## Implementation checklist
 
-- [ ] Add straight-alpha and reported large-image failures.
-- [ ] Premultiply RGBA bytes at the tiny-skia ownership boundary.
-- [ ] Raise and document the bounded decoded-image ceiling.
-- [ ] Make every over-limit path diagnostic and visibly non-silent.
-- [ ] Run raster, PDF, security, hash harness, full verification, and microscope gates.
+- [x] Add straight-alpha and reported large-image failures.
+- [x] Premultiply RGBA bytes at the tiny-skia ownership boundary.
+- [x] Raise and document the bounded decoded-image ceiling.
+- [x] Make every over-limit path diagnostic and visibly non-silent.
+- [x] Run raster, PDF, security, hash harness, full verification, and microscope gates.
 
 ## Open questions
 
