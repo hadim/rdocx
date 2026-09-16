@@ -1,6 +1,6 @@
 # F-259, Container measurement and equal-height layout
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-257, F-258
@@ -75,11 +75,11 @@ samples do not use it.
 
 ## Implementation checklist
 
-- [ ] Add failing paragraph, table, nested-table, and invalid-location measurements.
-- [ ] Expose one owned measurement result and one concrete native entry point.
-- [ ] Reuse production input, fonts, layout rules, and diagnostics without mutation.
-- [ ] Prove measured equal height matches final whole-document geometry.
-- [ ] Run layout, public API, hash harness, full verification, and microscope gates.
+- [x] Add failing paragraph, table, nested-table, and invalid-location measurements.
+- [x] Expose one owned measurement result and one concrete native entry point.
+- [x] Reuse production input, fonts, layout rules, and diagnostics without mutation.
+- [x] Prove measured equal height matches final whole-document geometry.
+- [x] Run layout, public API, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

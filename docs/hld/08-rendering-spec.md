@@ -667,6 +667,23 @@ owns rows in source order. Repeating header rows use `TH`, ordinary cells use
 header repeated on another page creates another marked-content occurrence for
 the same logical cell.
 
+### Caller-width Word block measurement
+
+The deterministic Word engine can measure one modeled paragraph or table at a
+positive caller width without constructing pages. It loads the same embedded
+and bundled fonts, revision projection, styles, numbering, images, paragraph
+line breaker, table grid, cell margins, borders, spans, nested-table recursion,
+and ordered diagnostics as whole-document layout. Related header and footer
+blocks use the same relationship-scoped media registry. Paragraph height
+includes before and after spacing. Table height is the sum of resolved row
+heights.
+
+Measurement returns fractional point height. A caller that writes the result
+to a Word twip field rounds upward before constructing `Length::twips`, so the
+minimum does not become smaller through `Length::pt` truncation. Measurement
+uses a fresh deterministic engine and does not publish pagination state or
+touch facade layout caches.
+
 ### Autofit
 
 **PowerPoint stores its own computed answer in the file.** Trust it.

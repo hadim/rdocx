@@ -2480,10 +2480,18 @@ failure atomicity and exact producer XML preservation.
 ### F-259, Container measurement and equal-height layout (M)
 Measure supported paragraphs and tables at a caller-supplied width using the
 same deterministic fonts and layout rules as whole-document pagination. The
-result reports height and diagnostics without mutating the document.
+owned `ContentMeasurement` reports fractional point height and ordered layout
+diagnostics. `Document::measure_content` accepts an existing checked
+`ContentLocation`, positive `Length` width, and `RenderOptions`. It resolves one
+paragraph or table, builds the ordinary layout input, and runs the production
+paragraph or recursive table path through a fresh deterministic engine without
+pagination, mutation, or cache publication. Callers round upward at the twip
+boundary before applying an equal minimum row height.
 **Depends on**: F-257, F-258.
 **Test gate**: regression. Two independently measured nested tables align to
-the same final row height and match whole-document layout.
+the same final row height and match whole-document layout. Companion coverage
+proves wrapping, margins, borders, spans, ordered diagnostics, checked failure,
+byte purity, and deterministic-cache purity.
 
 ### F-260, Ordered run content authoring (L)
 Author tabs, line, page, and column breaks, drawings, fields, symbols, and text

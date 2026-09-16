@@ -1127,6 +1127,15 @@ remain isolated on the bundled-font-only path. The built-in PDF, raster, and
 page accessors consume their existing paths. These additions are pre-1.0 native
 Rust APIs and do not add Python, WASM, or CLI methods.
 
+Native Word callers measure a checked paragraph or table with
+`Document::measure_content(&ContentLocation, Length, RenderOptions)`. Width must
+be positive. The owned `ContentMeasurement` reports fractional
+`height_points` and ordered `oxml_layout::Diagnostic` values from a fresh
+deterministic production engine. Invalid, stale, unsupported, or mismatched
+locations return an error. The document bytes and normal, deterministic, and
+caller-font cache state remain unchanged. This is an additive pre-1.0 native
+Rust API. Python, WASM, and CLI gain no measurement surface.
+
 Native Word callers author watermarks with `Document::set_text_watermark` and
 `Document::set_image_watermark`. Text uses fixed Word-like defaults of 468 by
 117 points, 315 degree rotation, `D9D9D9`, Calibri, and 50 percent opacity.

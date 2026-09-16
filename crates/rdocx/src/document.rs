@@ -401,6 +401,15 @@ pub struct ContentFragment {
     namespace_scope: BTreeMap<String, String>,
 }
 
+/// Caller-width layout measurement for one supported story item.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContentMeasurement {
+    /// Total occupied height in points, including paragraph spacing or table rows.
+    pub height_points: f64,
+    /// Ordered approximation and fallback diagnostics from production layout.
+    pub diagnostics: Vec<oxml_layout::Diagnostic>,
+}
+
 /// An owned main-body range and the package dependencies it can reach.
 #[derive(Debug, Clone)]
 pub struct DocumentFragment {
@@ -19046,6 +19055,83 @@ impl Document {
         options: RenderOptions,
     ) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         self.layout_for_options(options, true)
+    }
+
+    /// Measure one checked paragraph or table at a positive caller width.
+    ///
+    /// Measurement uses deterministic bundled fonts and the same layout input,
+    /// revision projection, and block rules as whole-document layout. It does
+    /// not mutate the document or either reusable layout cache.
+    pub fn measure_content(
+        &self,
+        location: &ContentLocation,
+        width: Length,
+        options: RenderOptions,
+    ) -> Result<ContentMeasurement> {
+        if width.to_emu() <= 0 {
+            return Err(Error::Other(
+                "content measurement width must be positive".to_owned(),
+            ));
+        }
+        let (source, item) = self.story_item_source(location)?;
+        if !matches!(item.kind, StoryItemKind::Paragraph | StoryItemKind::Table) {
+            return Err(Error::Other(format!(
+                "story item kind {:?} cannot be measured",
+                item.kind
+            )));
+        }
+        let namespace_scope = story_namespace_scope_at(source.xml.as_ref(), item.full.start)?;
+        let fragment = close_content_fragment_namespaces(
+            &source.xml.as_ref()[item.full.clone()],
+            &namespace_scope,
+        )?;
+        let mut wrapped =
+            format!(r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>"#).into_bytes();
+        wrapped.extend(fragment);
+        wrapped.extend_from_slice(b"</w:body></w:document>");
+        let mut parsed = CT_Document::from_xml(&wrapped)?;
+        let content = parsed
+            .body
+            .content
+            .pop()
+            .ok_or_else(|| Error::Other("measurable story item did not parse".to_owned()))?;
+        if !parsed.body.content.is_empty()
+            || !matches!(
+                (&content, item.kind),
+                (BodyContent::Paragraph(_), StoryItemKind::Paragraph)
+                    | (BodyContent::Table(_), StoryItemKind::Table)
+            )
+        {
+            return Err(Error::Other(
+                "measurable story item did not parse as one matching block".to_owned(),
+            ));
+        }
+        let related_story_scope = self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .and_then(|relationships| {
+                relationships.items.iter().find(|relationship| {
+                    relationship_is_internal(relationship)
+                        && matches!(
+                            relationship.rel_type.as_str(),
+                            rel_types::HEADER | rel_types::FOOTER
+                        )
+                        && OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
+                            == location.story.part_name
+                })
+            })
+            .map(|relationship| relationship.id.as_str());
+        let input = self.build_layout_input_with_fonts(&[], options);
+        let (height_points, diagnostics) = rdocx_layout::measure_content_deterministic(
+            &input,
+            &content,
+            width.to_pt(),
+            related_story_scope,
+        )?;
+        Ok(ContentMeasurement {
+            height_points,
+            diagnostics,
+        })
     }
 
     /// Return an uncached layout using user-provided font files.

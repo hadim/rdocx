@@ -14602,3 +14602,49 @@ pass.
 **Notes for future sessions.** Keep paragraph-mark ownership explicit when a
 body alignment ends in inserted paragraphs. Do not remove an empty terminal
 paragraph after resolution because it may have existed in the original.
+
+### F-259, Container measurement and equal-height layout
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native `Document` facade now measures a checked
+paragraph or table at a caller-supplied positive width and returns an owned
+height in points with production layout diagnostics. The M23 equal-height gate
+measures two independent nested tables, rounds the greater fractional height
+up to an exact twip, and proves final whole-document layout gives both rows the
+same requested geometry.
+
+**Non-obvious choices.** Measurement builds the normal deterministic layout
+input, resolves the selected subtree through the existing checked content
+location, and calls the production paragraph or table path without pagination
+or cache mutation. Header and footer media resolve in their related story
+scope. Unsupported content diagnostics retain production order, and the
+public result owns them so it does not borrow document state.
+
+**Deviations from the design plan.** None. Microscope pass 2 reports zero
+defects, zero smells, and zero nitpicks after pass 1 requested explicit ordered
+diagnostic coverage.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, pure facade and
+layout ownership, `docs/hld/08-rendering-spec.md`, production measurement and
+equal-height geometry, `docs/hld/10-bindings-spec.md`, the additive native
+result and method, `docs/hld/12-testing-strategy.md`, deterministic purity and
+geometry gates, and the F-259 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `independent_nested_tables_measure_to_one_final_height` first
+failed at the story baseline because the public measurement operation did not
+exist. It now proves caller-width table measurement, spans, margins, borders,
+nested tables, upward twip rounding, and final row-height parity. Companion
+tests prove paragraph wrapping, invalid widths and locations, byte and cache
+purity, and exact ordered production diagnostics. Full format, clippy,
+changed-crate, workspace, hash, prose, workflow, no-default-font, WASM,
+rustdoc, README, package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep this API a pure production-layout query.
+Do not add a second approximate measurer or measurement cache, and preserve
+related-story relationship scope when new measurable content kinds are added.

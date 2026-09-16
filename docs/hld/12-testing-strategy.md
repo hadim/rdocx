@@ -1804,6 +1804,18 @@ namespace aliases, foreign same-local children, and exact row, cell, and border
 extension retention. The final private corpus comparison remains F-263 and is
 pinned to LibreOffice 26.2.5.2 and Poppler 26.01.0.
 
+The caller-width measurement gate is
+`independent_nested_tables_measure_to_one_final_height`. It measures two
+independent tables with nested tables through checked body locations. The
+fixtures cover wrapping, cell margins, borders, horizontal spans, and recursive
+row height. The larger fractional point result is rounded upward to one twip
+minimum and applied to both outer rows. Deterministic whole-document layout
+must then report equal table fragments at that exact rounded height. A companion
+paragraph test proves narrower wrapping is taller, rejects zero width and kind
+mismatch, preserves package bytes, and retains the same cached deterministic
+layout `Arc`. A second companion authors two preserved OfficeMath fallbacks and
+requires their two production diagnostics in exact source order.
+
 The row mutation gate is
 `table_rows_clone_remove_and_clear_through_native_and_python`. It clones a row
 with exact height, direct toggles, and a nested table, clears the copied

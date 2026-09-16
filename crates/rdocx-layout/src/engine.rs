@@ -38,10 +38,10 @@ use crate::table;
 use crate::{WordBodyLayoutFragment, WordSourcePath, WordStory};
 use oxml_layout::{
     Color, Diagnostic, DocumentMetadata, DocumentStructure, FieldKind, FontId, FontManager,
-    GlyphRun, GroupElement, InlineItem, LayoutResult, LineItem, NoteRef, NoteStream, PageFrame,
-    Point, PositionedElement, Rect, Result, SourceNodeId, SourceSpan, StructureId, StructureNode,
-    StructureRole, TextDirection, TextSegment, Transform, Underline, break_into_lines,
-    break_multilingual_into_lines,
+    GlyphRun, GroupElement, InlineItem, LayoutError, LayoutResult, LineItem, NoteRef, NoteStream,
+    PageFrame, Point, PositionedElement, Rect, Result, SourceNodeId, SourceSpan, StructureId,
+    StructureNode, StructureRole, TextDirection, TextSegment, Transform, Underline,
+    break_into_lines, break_multilingual_into_lines,
 };
 
 #[derive(Clone)]
@@ -1636,6 +1636,52 @@ impl Engine {
     /// Lay out the entire document.
     pub fn layout(&mut self, input: &LayoutInput) -> Result<LayoutResult> {
         self.layout_inner(input, None)
+    }
+
+    pub(crate) fn measure_content(
+        &mut self,
+        input: &LayoutInput,
+        content: &BodyContent,
+        available_width: f64,
+        related_story_scope: Option<&str>,
+    ) -> Result<(f64, Vec<Diagnostic>)> {
+        self.font_manager.load_additional_fonts(&input.fonts);
+        self.font_manager.begin_layout();
+        let media = MediaRegistry::new(&input.images);
+        let scoped_media = related_story_scope.map(|scope| media.scoped_to_part(scope));
+        let media = scoped_media.as_ref().unwrap_or(&media);
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let height = match content {
+            BodyContent::Paragraph(paragraph) => layout_paragraph(
+                paragraph,
+                available_width,
+                &input.styles,
+                input,
+                media,
+                &mut self.font_manager,
+                &mut numbering,
+                &mut diagnostics,
+            )?
+            .total_height(),
+            BodyContent::Table(table) => crate::table::layout_table(
+                table,
+                available_width,
+                &input.styles,
+                input,
+                media,
+                &mut self.font_manager,
+                &mut numbering,
+                &mut diagnostics,
+            )?
+            .total_height(),
+            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                return Err(LayoutError::Layout(
+                    "only paragraphs and tables can be measured".to_owned(),
+                ));
+            }
+        };
+        Ok((height, diagnostics))
     }
 
     /// Lay out the document and retain its result-local Word source table.

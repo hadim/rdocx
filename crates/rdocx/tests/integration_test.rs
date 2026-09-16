@@ -7528,6 +7528,206 @@ fn checked_row_cell_topology_is_atomic() {
 }
 
 #[test]
+fn content_measurement_reuses_production_layout_and_is_pure() {
+    let mut document = Document::new();
+    document.add_paragraph(
+        "A caller-width paragraph must wrap through the production deterministic line breaker.",
+    );
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let location = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let before = document.to_bytes().unwrap();
+    let cached = document.layout_deterministic().unwrap();
+
+    let narrow = document
+        .measure_content(&location, Length::pt(90.0), rdocx::RenderOptions::default())
+        .unwrap();
+    let wide = document
+        .measure_content(
+            &location,
+            Length::pt(360.0),
+            rdocx::RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert!(narrow.height_points > wide.height_points);
+    assert_eq!(narrow.diagnostics, wide.diagnostics);
+    assert!(
+        document
+            .measure_content(&location, Length::emu(0), rdocx::RenderOptions::default(),)
+            .is_err()
+    );
+    let wrong_kind =
+        rdocx::ContentLocation::new(story, StoryItemKind::Table, location.index_path().to_vec());
+    assert!(
+        document
+            .measure_content(
+                &wrong_kind,
+                Length::pt(90.0),
+                rdocx::RenderOptions::default(),
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert!(std::sync::Arc::ptr_eq(
+        &cached,
+        &document.layout_deterministic().unwrap()
+    ));
+}
+
+#[test]
+fn content_measurement_preserves_layout_diagnostic_order() {
+    const MATH: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+    let mut document = Document::new();
+    let mut paragraph = document.add_paragraph("");
+    for name in ["firstUnsupported", "secondUnsupported"] {
+        let equation = rdocx::CT_OMath::from_xml(
+            format!(r#"<m:oMath xmlns:m="{MATH}"><m:{name}/></m:oMath>"#).as_bytes(),
+        )
+        .unwrap();
+        paragraph
+            .add_equation(rdocx::OfficeMath::Inline(equation))
+            .unwrap();
+    }
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let location = document.story_items(&body).unwrap()[0].location().clone();
+
+    let measurement = document
+        .measure_content(
+            &location,
+            Length::pt(180.0),
+            rdocx::RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        measurement
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "OfficeMath content at paragraph/run-boundary/0/raw-child/0 was preserved but could not be rendered",
+            "OfficeMath content at paragraph/run-boundary/0/raw-child/1 was preserved but could not be rendered",
+        ]
+    );
+}
+
+#[test]
+fn independent_nested_tables_measure_to_one_final_height() {
+    let margin = Length::pt(6.0);
+    let mut document = Document::new();
+    {
+        let mut table = document.add_table(1, 2);
+        table.set_cell_grid_span_checked(0, 0, Some(2)).unwrap();
+        table
+            .cell(0, 0)
+            .unwrap()
+            .set_margins_checked(margin, margin, margin, margin)
+            .unwrap();
+        table
+            .cell(0, 0)
+            .unwrap()
+            .set_border_checked(CellBorderEdge::Bottom, BorderStyle::Single, 8, "4472C4")
+            .unwrap();
+        let mut cell = table.cell(0, 0).unwrap();
+        let mut nested = cell.add_table_checked(1, 1).unwrap();
+        nested.cell(0, 0).unwrap().set_text("Short nested table");
+    }
+    {
+        let mut table = document.add_table(1, 2);
+        table.set_cell_grid_span_checked(0, 0, Some(2)).unwrap();
+        table
+            .cell(0, 0)
+            .unwrap()
+            .set_margins_checked(margin, margin, margin, margin)
+            .unwrap();
+        table
+            .cell(0, 0)
+            .unwrap()
+            .set_border_checked(CellBorderEdge::Bottom, BorderStyle::Single, 8, "4472C4")
+            .unwrap();
+        let mut cell = table.cell(0, 0).unwrap();
+        let mut nested = cell.add_table_checked(2, 1).unwrap();
+        nested.cell(0, 0).unwrap().set_text(
+            "A longer nested table cell wraps at the caller width and establishes the maximum.",
+        );
+        nested.cell(1, 0).unwrap().set_text("Second nested row");
+    }
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let locations = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == StoryItemKind::Table)
+        .map(|item| item.location().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(locations.len(), 2);
+    let measurements = locations
+        .iter()
+        .map(|location| {
+            document
+                .measure_content(location, Length::pt(180.0), rdocx::RenderOptions::default())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let final_height = measurements
+        .iter()
+        .map(|measurement| measurement.height_points)
+        .fold(0.0_f64, f64::max);
+    let final_height_twips = (final_height * 20.0).ceil() as i32;
+    assert!(measurements[0].height_points < final_height);
+    assert!(
+        measurements
+            .iter()
+            .all(|result| result.diagnostics.is_empty())
+    );
+
+    for index in 0..2 {
+        document
+            .table_mut(index)
+            .unwrap()
+            .row(0)
+            .unwrap()
+            .set_height_checked(RowHeight::AtLeast(Length::twips(final_height_twips)))
+            .unwrap();
+    }
+    let layout = document
+        .layout_deterministic_with_options(rdocx::RenderOptions::default())
+        .unwrap();
+    let first = layout.body_layout_fragments(0).unwrap();
+    let second = layout.body_layout_fragments(1).unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert!((first[0].height - second[0].height).abs() < 0.001);
+    assert!(
+        (first[0].height - f64::from(final_height_twips) / 20.0).abs() < 0.001,
+        "measured {final_height}, rounded to {final_height_twips} twips, laid out {}",
+        first[0].height
+    );
+}
+
+#[test]
 fn checked_row_cell_mutation_preserves_raw_slots_and_aliases() {
     let mut seed = Document::new();
     let mut package =

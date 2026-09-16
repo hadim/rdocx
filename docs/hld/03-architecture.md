@@ -853,6 +853,14 @@ cloned page access borrow the backend-neutral `layout` field from the same
 bundle, so external renderers receive the exact font bytes and source table
 used for each glyph run.
 
+Caller-width content measurement stays on this ownership boundary. The
+`rdocx` facade resolves one checked paragraph or table location and builds the
+ordinary `LayoutInput`. A fresh deterministic `rdocx-layout::Engine` then uses
+the production paragraph or recursive table path and returns point height plus
+ordered layout diagnostics without pagination. The query never enters or
+invalidates either facade cache. Related header and footer content uses the
+same part-scoped media view as whole-document layout.
+
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
 normal Word engine caches only ordinary body paragraphs that are independent
