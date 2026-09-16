@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
+use std::ops::Range;
 use std::path::Path;
 
 use base64::Engine as _;
@@ -12,7 +13,7 @@ use rdocx_oxml::document::BodyContent;
 use rdocx_oxml::table::{
     CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, VMerge,
 };
-use rdocx_oxml::text::CT_P;
+use rdocx_oxml::text::{CT_P, RunContent};
 use rdocx_oxml::units::Twips;
 use scraper::{ElementRef, Html, Node, Selector};
 use sha2::{Digest, Sha256};
@@ -22,7 +23,7 @@ use crate::run::{DrawingKind, DrawingRelationshipKind, Run};
 use crate::table::Cell;
 use crate::{
     BodyItemRef, CellItemRef, Document, Error, HyperlinkItemRef, HyperlinkRef, Length, ListLevel,
-    ParagraphItemRef, ParagraphRef, Result, RunItemRef, RunRef, TableRef,
+    ParagraphItemRef, ParagraphRef, Result, RunItemRef, RunRef, StoryId, TableRef,
 };
 
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
@@ -39,6 +40,28 @@ pub struct HtmlDiagnostic {
 
 pub struct HtmlReadResult {
     pub document: Document,
+    pub diagnostics: Vec<HtmlDiagnostic>,
+}
+
+/// One caller-owned image available to an HTML fragment insertion.
+#[derive(Clone, Copy, Debug)]
+pub struct HtmlImageResource<'a> {
+    /// Exact `src` attribute value used as the lookup key.
+    pub source: &'a str,
+    /// Caller-owned raster image bytes.
+    pub bytes: &'a [u8],
+    /// Filename used to select the package media extension after byte sniffing.
+    pub filename: &'a str,
+}
+
+/// The direct story range inserted by one HTML fragment operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HtmlFragmentInsertResult {
+    /// Refreshed destination identity valid for the mutated document.
+    pub story: StoryId,
+    /// Half-open range of inserted direct children in the destination story.
+    pub direct_range: Range<usize>,
+    /// Ordered location-aware diagnostics for dropped or approximated input.
     pub diagnostics: Vec<HtmlDiagnostic>,
 }
 
@@ -89,14 +112,16 @@ struct MhtmlResource {
     filename: String,
 }
 
-struct MhtmlProjection {
+struct HtmlProjection {
     resources: HashMap<String, MhtmlResource>,
     hyperlinks: HashMap<String, String>,
+    strict_references: bool,
 }
 
 #[derive(Clone, Debug)]
-struct EmbeddedMhtmlImage {
+struct EmbeddedHtmlImage {
     rel_id: String,
+    drawing_id: Option<u32>,
     width: Length,
     height: Length,
 }
@@ -227,7 +252,7 @@ struct CssRule {
 enum InlinePiece {
     Text(String, Box<ComputedStyle>, bool),
     Break,
-    Image(EmbeddedMhtmlImage),
+    Image(EmbeddedHtmlImage),
 }
 
 #[derive(Debug)]
@@ -266,7 +291,7 @@ fn from_html_with_limits(html: &str, limits: Limits) -> Result<HtmlReadResult> {
 fn from_html_with_resources(
     html: &str,
     limits: Limits,
-    projection: Option<&MhtmlProjection>,
+    projection: Option<&HtmlProjection>,
 ) -> Result<HtmlReadResult> {
     if html.len() > limits.input_bytes {
         return Err(html_error("input", "HTML input exceeds the 64 MiB limit"));
@@ -282,9 +307,12 @@ fn from_html_with_resources(
     };
     validate_dom(&dom, limits)?;
 
-    let mut importer = Importer {
+    let mut document = Document::new();
+    let importer = Importer {
         dom: &dom,
-        document: Document::new(),
+        document: &mut document,
+        story: None,
+        output: Vec::new(),
         diagnostics: Vec::new(),
         diagnostic_keys: HashSet::new(),
         rules: Vec::new(),
@@ -296,11 +324,193 @@ fn from_html_with_resources(
         projection,
         embedded_images: HashMap::new(),
     };
+    let mut importer = importer;
     importer.record_parser_repairs()?;
     importer.record_head_resources()?;
     importer.collect_styles()?;
     importer.project()?;
     importer.finish()
+}
+
+pub(crate) struct HtmlFragmentProjection {
+    pub content: Vec<BodyContent>,
+    pub diagnostics: Vec<HtmlDiagnostic>,
+}
+
+pub(crate) fn project_html_fragment(
+    document: &mut Document,
+    story: &StoryId,
+    html: &str,
+    images: &[HtmlImageResource<'_>],
+) -> Result<HtmlFragmentProjection> {
+    let limits = Limits::default();
+    if html.len() > limits.input_bytes {
+        return Err(html_error("input", "HTML input exceeds the 64 MiB limit"));
+    }
+    preflight_markup(html, limits)?;
+    let is_document = contains_ascii_case_insensitive(html, b"<html")
+        || contains_ascii_case_insensitive(html, b"<!doctype");
+    let dom = if is_document {
+        Html::parse_document(html)
+    } else {
+        Html::parse_fragment(html)
+    };
+    validate_dom(&dom, limits)?;
+    let projection = fragment_projection(&dom, images, limits)?;
+    let mut importer = Importer {
+        dom: &dom,
+        document,
+        story: Some(story),
+        output: Vec::new(),
+        diagnostics: Vec::new(),
+        diagnostic_keys: HashSet::new(),
+        rules: Vec::new(),
+        limits,
+        blocks: 0,
+        runs: 0,
+        rows: 0,
+        cells: 0,
+        projection: Some(&projection),
+        embedded_images: HashMap::new(),
+    };
+    importer.record_parser_repairs()?;
+    importer.record_head_resources()?;
+    importer.collect_styles()?;
+    importer.project()?;
+    Ok(HtmlFragmentProjection {
+        content: importer.output,
+        diagnostics: importer.diagnostics,
+    })
+}
+
+fn fragment_projection(
+    dom: &Html,
+    images: &[HtmlImageResource<'_>],
+    limits: Limits,
+) -> Result<HtmlProjection> {
+    if images.len() > MAX_MHTML_PARTS {
+        return Err(html_error("images", "HTML image count exceeds the limit"));
+    }
+    let mut resources = HashMap::with_capacity(images.len());
+    let mut total_bytes = 0_usize;
+    for resource in images {
+        if resource.source.is_empty() {
+            return Err(html_error("images", "image source names must not be empty"));
+        }
+        if resource.filename.is_empty() {
+            return Err(html_error(
+                format!("images/{}", resource.source),
+                "image filenames must not be empty",
+            ));
+        }
+        let info = oxml_media::probe(resource.bytes).ok_or_else(|| {
+            html_error(
+                format!("images/{}", resource.source),
+                "image bytes are unsupported or malformed",
+            )
+        })?;
+        total_bytes = total_bytes
+            .checked_add(resource.bytes.len())
+            .ok_or_else(|| html_error("images", "image byte count overflowed"))?;
+        if total_bytes > limits.input_bytes {
+            return Err(html_error("images", "HTML images exceed the 64 MiB limit"));
+        }
+        let projected = MhtmlResource {
+            bytes: resource.bytes.to_vec(),
+            content_type: info.format.content_type().to_owned(),
+            filename: resource.filename.to_owned(),
+        };
+        if resources
+            .insert(resource.source.to_owned(), projected)
+            .is_some()
+        {
+            return Err(html_error(
+                format!("images/{}", resource.source),
+                "duplicate HTML image source",
+            ));
+        }
+    }
+
+    let image_selector = Selector::parse("img[src]").expect("static selector");
+    let mut inline_index = 0_usize;
+    for image in dom.select(&image_selector) {
+        let source = image.attr("src").expect("image source selected");
+        if !source
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+            || resources.contains_key(source)
+        {
+            continue;
+        }
+        let (metadata, encoded) = source[5..].split_once(',').ok_or_else(|| {
+            html_error(
+                element_path(image),
+                "image data URI has no payload separator",
+            )
+        })?;
+        let (content_type, encoding) = metadata.split_once(';').ok_or_else(|| {
+            html_error(element_path(image), "image data URI has no base64 encoding")
+        })?;
+        if !encoding.eq_ignore_ascii_case("base64") {
+            return Err(html_error(
+                element_path(image),
+                "image data URI must use base64 encoding",
+            ));
+        }
+        let bytes = BASE64.decode(encoded).map_err(|_| {
+            html_error(
+                element_path(image),
+                "image data URI has invalid base64 data",
+            )
+        })?;
+        total_bytes = total_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| html_error("images", "image byte count overflowed"))?;
+        if total_bytes > limits.input_bytes {
+            return Err(html_error("images", "HTML images exceed the 64 MiB limit"));
+        }
+        let info = oxml_media::probe(&bytes).ok_or_else(|| {
+            html_error(
+                element_path(image),
+                "image data URI bytes are unsupported or malformed",
+            )
+        })?;
+        if !content_type.eq_ignore_ascii_case(info.format.content_type()) {
+            return Err(html_error(
+                element_path(image),
+                "image data URI MIME type does not match its bytes",
+            ));
+        }
+        let filename = format!("inline-{inline_index}.{}", info.format.extension());
+        inline_index = inline_index
+            .checked_add(1)
+            .ok_or_else(|| html_error("images", "inline image count overflowed"))?;
+        resources.insert(
+            source.to_owned(),
+            MhtmlResource {
+                bytes,
+                content_type: info.format.content_type().to_owned(),
+                filename,
+            },
+        );
+    }
+    if resources.len() > MAX_MHTML_PARTS {
+        return Err(html_error("images", "HTML image count exceeds the limit"));
+    }
+
+    let anchor_selector = Selector::parse("a[href]").expect("static selector");
+    let hyperlinks = dom
+        .select(&anchor_selector)
+        .filter_map(|anchor| {
+            let href = anchor.attr("href").expect("anchor href selected");
+            safe_hyperlink(href, None).map(|target| (href.to_owned(), target))
+        })
+        .collect();
+    Ok(HtmlProjection {
+        resources,
+        hyperlinks,
+        strict_references: false,
+    })
 }
 
 impl Document {
@@ -1586,7 +1796,7 @@ fn image_dimension(element: ElementRef<'_>, name: &str) -> Result<Option<Length>
     Ok(Some(Length::emu(emu as i64)))
 }
 
-fn parse_mhtml(bytes: &[u8], limits: MhtmlLimits) -> Result<(String, MhtmlProjection)> {
+fn parse_mhtml(bytes: &[u8], limits: MhtmlLimits) -> Result<(String, HtmlProjection)> {
     if bytes.len() > limits.input_bytes {
         return Err(mhtml_error(None, 0, "MHTML input exceeds the 64 MiB limit"));
     }
@@ -1924,16 +2134,19 @@ fn parse_mhtml(bytes: &[u8], limits: MhtmlLimits) -> Result<(String, MhtmlProjec
     }
     Ok((
         html,
-        MhtmlProjection {
+        HtmlProjection {
             resources,
             hyperlinks,
+            strict_references: true,
         },
     ))
 }
 
 struct Importer<'a> {
     dom: &'a Html,
-    document: Document,
+    document: &'a mut Document,
+    story: Option<&'a StoryId>,
+    output: Vec<BodyContent>,
     diagnostics: Vec<HtmlDiagnostic>,
     diagnostic_keys: HashSet<HtmlDiagnostic>,
     rules: Vec<CssRule>,
@@ -1942,7 +2155,7 @@ struct Importer<'a> {
     runs: usize,
     rows: usize,
     cells: usize,
-    projection: Option<&'a MhtmlProjection>,
+    projection: Option<&'a HtmlProjection>,
     embedded_images: HashMap<String, String>,
 }
 
@@ -2155,11 +2368,7 @@ impl Importer<'_> {
                 numbering: None,
             };
             let paragraph = self.build_paragraph(model)?;
-            self.document
-                .document
-                .body
-                .content
-                .push(BodyContent::Paragraph(paragraph));
+            self.output.push(BodyContent::Paragraph(paragraph));
         } else {
             pieces.clear();
         }
@@ -2194,11 +2403,7 @@ impl Importer<'_> {
                     numbering: None,
                 };
                 let paragraph = self.build_paragraph(model)?;
-                self.document
-                    .document
-                    .body
-                    .content
-                    .push(BodyContent::Paragraph(paragraph));
+                self.output.push(BodyContent::Paragraph(paragraph));
                 Ok(())
             }
             _ => {
@@ -2221,11 +2426,7 @@ impl Importer<'_> {
     ) -> Result<()> {
         for model in self.list_models(list, inherited, level, list_id)? {
             let paragraph = self.build_paragraph(model)?;
-            self.document
-                .document
-                .body
-                .content
-                .push(BodyContent::Paragraph(paragraph));
+            self.output.push(BodyContent::Paragraph(paragraph));
         }
         Ok(())
     }
@@ -2333,11 +2534,7 @@ impl Importer<'_> {
                 paragraph_style: None,
                 numbering: None,
             })?;
-            self.document
-                .document
-                .body
-                .content
-                .push(BodyContent::Paragraph(paragraph));
+            self.output.push(BodyContent::Paragraph(paragraph));
         }
         let row_selector = Selector::parse("tr").expect("static selector");
         let rows: Vec<_> = table
@@ -2523,11 +2720,7 @@ impl Importer<'_> {
             output.rows.push(row);
         }
         self.bump_blocks(&element_path(table))?;
-        self.document
-            .document
-            .body
-            .content
-            .push(BodyContent::Table(output));
+        self.output.push(BodyContent::Table(output));
         Ok(())
     }
 
@@ -2662,12 +2855,47 @@ impl Importer<'_> {
             "style" | "head" | "title" => return Ok(()),
             "img" => {
                 if let Some(projection) = self.projection {
-                    let source = element
-                        .attr("src")
-                        .ok_or_else(|| mhtml_error(None, 0, "MHTML image has no src"))?;
-                    let resource = projection.resources.get(source).ok_or_else(|| {
-                        mhtml_error(None, 0, format!("unresolved image resource `{source}`"))
-                    })?;
+                    let Some(source) = element.attr("src") else {
+                        if projection.strict_references {
+                            return Err(mhtml_error(None, 0, "MHTML image has no src"));
+                        }
+                        self.diagnostic(
+                            &location,
+                            None,
+                            "dropped HTML image without a source and retained alternate text"
+                                .to_string(),
+                        )?;
+                        if let Some(alt) = element.attr("alt")
+                            && !alt.is_empty()
+                        {
+                            let style = self.computed_style(element, inherited)?;
+                            pieces.push(InlinePiece::Text(alt.to_string(), Box::new(style), pre));
+                        }
+                        return Ok(());
+                    };
+                    let Some(resource) = projection.resources.get(source) else {
+                        if projection.strict_references {
+                            return Err(mhtml_error(
+                                None,
+                                0,
+                                format!("unresolved image resource `{source}`"),
+                            ));
+                        }
+                        self.diagnostic(
+                            &location,
+                            None,
+                            format!(
+                                "dropped unresolved HTML image `{source}` and retained alternate text"
+                            ),
+                        )?;
+                        if let Some(alt) = element.attr("alt")
+                            && !alt.is_empty()
+                        {
+                            let style = self.computed_style(element, inherited)?;
+                            pieces.push(InlinePiece::Text(alt.to_string(), Box::new(style), pre));
+                        }
+                        return Ok(());
+                    };
                     let declared_width = image_dimension(element, "width")?;
                     let declared_height = image_dimension(element, "height")?;
                     let (width, height) = match (declared_width, declared_height) {
@@ -2709,15 +2937,26 @@ impl Importer<'_> {
                     let rel_id = if let Some(rel_id) = self.embedded_images.get(source) {
                         rel_id.clone()
                     } else {
-                        let rel_id = self
-                            .document
-                            .embed_image(&resource.bytes, &resource.filename);
+                        let rel_id = if let Some(story) = self.story {
+                            self.document.add_html_image_relationship_to_story(
+                                story,
+                                &resource.bytes,
+                                &resource.filename,
+                            )?
+                        } else {
+                            self.document
+                                .embed_image(&resource.bytes, &resource.filename)
+                        };
                         self.embedded_images
                             .insert(source.to_owned(), rel_id.clone());
                         rel_id
                     };
-                    let image = EmbeddedMhtmlImage {
+                    let image = EmbeddedHtmlImage {
                         rel_id,
+                        drawing_id: self
+                            .story
+                            .map(|story| self.document.reserve_html_drawing_id(story))
+                            .transpose()?,
                         width,
                         height,
                     };
@@ -2764,7 +3003,12 @@ impl Importer<'_> {
                 return Ok(());
             }
             "a" if element.attr("href").is_some() => {
-                if self.projection.is_none() {
+                let href = element.attr("href").expect("anchor href checked");
+                if self.projection.is_none()
+                    || self.projection.is_some_and(|projection| {
+                        !projection.strict_references && !projection.hyperlinks.contains_key(href)
+                    })
+                {
                     self.diagnostic(
                         &location,
                         None,
@@ -2794,15 +3038,15 @@ impl Importer<'_> {
             && let Some(href) = element.attr("href")
             && let Some(projection) = self.projection
         {
-            style.hyperlink = Some(
-                projection
-                    .hyperlinks
-                    .get(href)
-                    .ok_or_else(|| {
-                        mhtml_error(None, 0, format!("unsafe hyperlink target `{href}`"))
-                    })?
-                    .clone(),
-            );
+            if let Some(target) = projection.hyperlinks.get(href) {
+                style.hyperlink = Some(target.clone());
+            } else if projection.strict_references {
+                return Err(mhtml_error(
+                    None,
+                    0,
+                    format!("unsafe hyperlink target `{href}`"),
+                ));
+            }
         }
         self.collect_inline_children(element, &style, pre, pieces)
     }
@@ -2859,7 +3103,12 @@ impl Importer<'_> {
                 && let Some(url) = &style.hyperlink
                 && !hyperlink_ids.contains_key(url)
             {
-                let relationship_id = self.document.add_hyperlink_relationship(url);
+                let relationship_id = if let Some(story) = self.story {
+                    self.document
+                        .add_html_hyperlink_relationship_to_story(story, url)?
+                } else {
+                    self.document.add_hyperlink_relationship(url)
+                };
                 hyperlink_ids.insert(url.clone(), relationship_id);
             }
         }
@@ -2887,7 +3136,13 @@ impl Importer<'_> {
                     }
                     InlinePiece::Image(image) => {
                         self.bump_runs()?;
-                        paragraph.add_picture(&image.rel_id, image.width, image.height);
+                        let run = paragraph.add_picture(&image.rel_id, image.width, image.height);
+                        if let Some(drawing_id) = image.drawing_id
+                            && let Some(RunContent::Drawing(drawing)) = run.content.last_mut()
+                            && let Some(inline) = drawing.inline.as_mut()
+                        {
+                            inline.doc_pr_id = drawing_id;
+                        }
                         emitted = true;
                         pending_space = false;
                     }
@@ -2979,6 +3234,7 @@ impl Importer<'_> {
     }
 
     fn finish(mut self) -> Result<HtmlReadResult> {
+        self.document.document.body.content.append(&mut self.output);
         let bytes = self.document.to_bytes()?;
         let document = Document::from_bytes(&bytes)?;
         Ok(HtmlReadResult {

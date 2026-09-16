@@ -2504,9 +2504,12 @@ properties copied to the cached result and each surrounding physical run.
 the same order and renders each break and tab at the expected position.
 
 ### F-261, Rich HTML fragments in arbitrary containers (L)
-Insert HTML fragments at any supported content location with bounded inline
-and embedded CSS, nested lists, tables, data-URI images, links, and explicit
-resource resolution. Every dropped construct produces an ordered diagnostic.
+`Document::insert_html_fragment` inserts bounded inline and embedded CSS,
+nested lists, tables, data-URI images, links, and exact-key explicit image
+resources at a checked body, cell, header, or footer `ContentLocation`. The
+owned result returns a refreshed story identity, direct range, and ordered
+diagnostics. Destination-scoped numbering, media, relationships, and drawing
+identifiers publish atomically after reopen. No external resource is fetched.
 **Depends on**: F-253 through F-260.
 **Test gate**: differential. The supported fragment subset produces equivalent
 Word content and rendering in body, cell, header, and footer containers.

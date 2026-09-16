@@ -571,6 +571,30 @@ gate serializes and reopens the generated DOCX before comparing its public
 structure. No binary fixture or sample is added, so all 49 hash entries remain
 unchanged.
 
+The rich-fragment gate
+`rich_html_fragments_match_word_in_every_supported_container` inserts the same
+source-built CSS, nested-list, table, link, explicit-image, and data-URI subset
+into body, cell, header, and footer owners. Every result serializes and reopens
+before the test compares content, refreshed story identity, direct range,
+owner-local image and hyperlink relationships, and exact ordered diagnostics.
+A companion boundary regression inserts before a cell paragraph and proves an
+adjacent opaque child remains byte-preserved and in order. Malformed image
+bytes are rejected against a byte-identical live-document snapshot. The gate
+adds no sample, so all 49 hash entries remain unchanged.
+
+The ignored render regeneration authenticates Microsoft Word 16.112.4 build
+16.112.26090911, LibreOffice 26.2.5.2
+cd7284b4cbbfeb507e630c1aac019f4157393acb, and Poppler `pdftotext` 26.09.0.
+Both viewers render the clean source-built four-container candidate as one
+612 by 792 point page. Poppler layout extraction removes whitespace and the
+viewer-specific bullet glyph, then requires the same complete ordered token
+record for header, body, cell, and footer fragment content. Both pages are
+rasterised at 150 DPI and compared with the shared global luminance SSIM
+metric. The floor is 0.75 because Word and LibreOffice use different list
+indentation, paragraph spacing, and table width while the exact token, page,
+and page-size checks independently forbid missing or reordered content. The
+reviewed pair scores 0.7853882556046246.
+
 The MHTML gate stays in the existing `rdocx` HTML unit tests and Word
 integration binary. Source-built MIME cases cover folded headers, root
 selection, Content-ID and Content-Location resolution, every supported transfer

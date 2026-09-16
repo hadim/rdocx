@@ -62,7 +62,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X106b | Expose paragraph and run formatting mutations in Python | M | done | codex |
 | F-X106c | Expose story mutation, hyperlinks, revisions, fields, and XML in Python | L | done | codex |
 | F-259 | Container measurement and equal-height layout | M | done | codex |
-| F-261 | Rich HTML fragments in arbitrary containers | L | pending | - |
+| F-261 | Rich HTML fragments in arbitrary containers | L | done | codex |
 | F-262 | Corpus drawings, text boxes, and watermarks | L | pending | - |
 | F-X107 | Clone and remove existing table rows | M | done | codex |
 | F-X108 | Replace an existing picture atomically | M | done | codex |

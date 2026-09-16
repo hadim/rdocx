@@ -458,6 +458,7 @@ defended.
 | F-X107 | S73 | M | 2 | 1 | 2026-09-16 | Integrated and hardened contributor PR 113 with atomic native and Python formatted-row cloning and removal |
 | F-X113 | S73 | M | 2 | 1 | 2026-09-16 | Preserved one, two, and three appended comparison paragraphs through exact accept and reject reconstruction |
 | F-259 | S73 | M | 2 | 1 | 2026-09-16 | Added pure deterministic paragraph and table measurement at caller width with ordered diagnostics and exact equal-height layout proof |
+| F-261 | S73 | L | 4 | 1 | 2026-09-16 | Added atomic rich HTML fragment insertion across body, cell, header, and footer stories with explicit images and ordered diagnostics |
 
 ## Velocity
 

@@ -1,6 +1,6 @@
 # F-261, Rich HTML fragments in arbitrary containers
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-253 through F-260
@@ -53,6 +53,7 @@ The **test gate** is the differential test named in the backlog.
 
 ## HLD impact
 
+- `docs/hld/02-scope-and-non-goals.md`
 - `docs/hld/03-architecture.md`
 - `docs/hld/04-opc-and-packaging.md`
 - `docs/hld/10-bindings-spec.md`
@@ -77,11 +78,11 @@ not a replacement baseline.
 
 ## Implementation checklist
 
-- [ ] Add failing body, cell, header, and footer fragment differentials.
-- [ ] Reuse the existing HTML parser and projection without a second model.
-- [ ] Reconcile container-local numbering, links, media, and identifiers atomically.
-- [ ] Return the inserted range and exact ordered diagnostics.
-- [ ] Run parser, package, public API, oracle, hash harness, full verification, and microscope gates.
+- [x] Add failing body, cell, header, and footer fragment differentials.
+- [x] Reuse the existing HTML parser and projection without a second model.
+- [x] Reconcile container-local numbering, links, media, and identifiers atomically.
+- [x] Return the inserted range and exact ordered diagnostics.
+- [x] Run parser, package, public API, oracle, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

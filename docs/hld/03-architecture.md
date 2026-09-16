@@ -97,6 +97,13 @@ not claim a codec decoder.
 content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
 dependency cycle and avoids a second public intermediate document model.
+`Document::insert_html_fragment` reuses that importer against a staged document
+and emits concrete body content at a checked `ContentLocation`. Body and
+main-document cell destinations mutate their typed owners so retained sibling
+XML keeps its exact boundary. Other supported stories receive namespace-closed
+fixed-prefix fragments. Numbering, media, hyperlinks, and drawing identifiers
+are allocated in the destination story scope before the staged package reopens.
+No resource callback, network access, or second fragment model is introduced.
 
 **Word package identifiers belong to the `rdocx` facade.** One private
 `DocumentIdentifiers` value owns category-specific occupied sets for each

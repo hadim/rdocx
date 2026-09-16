@@ -14648,3 +14648,51 @@ rustdoc, README, package, archive-size, and supply-chain gates pass.
 **Notes for future sessions.** Keep this API a pure production-layout query.
 Do not add a second approximate measurer or measurement cache, and preserve
 related-story relationship scope when new measurable content kinds are added.
+
+### F-261, Rich HTML fragments in arbitrary containers
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native `Document` facade now inserts a rich HTML
+fragment at a checked body, table-cell, header, or footer location. The
+operation supports styled paragraphs, lists, tables, links, data-URI images,
+and caller-supplied image resources, then returns the inserted direct range
+and ordered diagnostics.
+
+**Non-obvious choices.** Fragment insertion reuses the existing HTML5 repair
+and CSS projection rather than introducing a second importer. The projected
+content is staged before publication, while relationships, media names,
+numbering, and drawing identifiers are allocated in the destination story.
+External resource fetching remains absent, and unsupported story locations
+fail without changing the live document.
+
+**Deviations from the design plan.** The HLD impact list was expanded to
+include the capability matrix after the workflow invariant exposed its stale
+completion owner. The implementation contract did not change. Microscope pass
+3 reports zero defects and zero smells, with one non-blocking diagnostic-wording
+nitpick.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, the completed
+DOCX-026 capability row, `docs/hld/03-architecture.md`, staged fragment
+projection, `docs/hld/04-opc-and-packaging.md`, story-scoped reconciliation,
+`docs/hld/10-bindings-spec.md`, the native-only boundary,
+`docs/hld/12-testing-strategy.md`, fragment and oracle gates, and the F-261
+entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `rich_html_fragments_match_word_in_every_supported_container` first
+failed at the story baseline because `Document::insert_html_fragment` did not
+exist. It now covers body, table-cell, header, and footer insertion, rich
+content, explicit and data-URI images, package reconciliation, direct cell
+routing, unsupported stories, atomic failure, reopen, and deterministic
+rendering. The external Word 16.112.4, LibreOffice 26.2.5.2, and Poppler
+26.09.0 oracle matched token and page counts with SSIM at or above 0.75. The
+full workspace, no-default-font, WASM, rustdoc, README, workflow, package,
+archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep fragment resources explicit and preserve
+story-local relationship ownership. Extend the shared HTML projection when the
+supported subset grows instead of adding a parallel fragment parser.

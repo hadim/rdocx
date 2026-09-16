@@ -73,7 +73,8 @@ pub use field::{
     MailMergeValue, TcField, TocEntrySelection, TocField, TocRebuildReport,
 };
 pub use html::{
-    HtmlDiagnostic, HtmlReadResult, MhtmlDiagnostic, MhtmlReadResult, MhtmlWriteResult,
+    HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult, MhtmlDiagnostic,
+    MhtmlReadResult, MhtmlWriteResult,
 };
 pub use math::{
     MathConversionDiagnostic, MathConversionResult, equation_from_latex, equation_from_mathml,

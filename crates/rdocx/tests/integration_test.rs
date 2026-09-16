@@ -26,6 +26,16 @@ const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aa
 const MHTML_ORACLE_VERSION: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_SECTION_ORACLE: &str = "Microsoft Word 16.112.3 build 16.112.26083020";
 const WORD_ROW_CELL_ORACLE: &str = "Microsoft Word 16.112.4 build 16.112.26090911";
+const WORD_HTML_FRAGMENT_ORACLE: &str = "Microsoft Word 16.112.4 build 16.112.26090911";
+const LIBREOFFICE_HTML_FRAGMENT_ORACLE: &str =
+    "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+const POPPLER_HTML_FRAGMENT_ORACLE: &str = "pdftotext version 26.09.0";
+const HTML_FRAGMENT_RENDER_RECORD: &[&str] = &[
+    "header", "fragment", "link", "3.", "outer", "inner", "head", "cell", "rendered", "fallback",
+    "body", "cell", "fragment", "link", "3.", "outer", "inner", "head", "cell", "rendered",
+    "fallback", "fragment", "link", "3.", "outer", "inner", "head", "cell", "rendered", "fallback",
+    "footer", "fragment", "link", "3.", "outer", "inner", "head", "cell", "rendered", "fallback",
+];
 const WORD_ROW_CELL_RECORDS: &[&str] = &[
     "table | rows=6 | grid=1200,1800,2400",
     "row 0 | cells=3 | before=None | after=None",
@@ -4831,6 +4841,447 @@ fn html_import_projects_a_reopenable_word_document() {
         .unwrap();
     assert!(Document::open_html(&oversized_path).is_err());
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rich_html_fragments_match_word_in_every_supported_container() {
+    use base64::Engine as _;
+
+    let mut document = container_neutral_story_fixture();
+    let png = mhtml_pixel_png();
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    );
+    let html = format!(
+        "<style>strong {{ color: #336699; }}</style><p><strong>fragment</strong> <a href='https://example.test/path'>link</a><img src='resolved.png' width='2' height='3'><img src='{data_uri}' width='1' height='1'></p><ol start='3'><li>outer<ul><li>inner</li></ul></li></ol><table><tr><th>head</th></tr><tr><td>cell</td></tr></table><p><a href='javascript:alert(1)'>unsafe</a><img src='missing.png' alt='fallback'><iframe>lost</iframe></p>"
+    );
+    let images = [rdocx::HtmlImageResource {
+        source: "resolved.png",
+        bytes: &png,
+        filename: "resolved.png",
+    }];
+
+    for kind in [
+        StoryKind::Body,
+        StoryKind::TableCell,
+        StoryKind::Header,
+        StoryKind::Footer,
+    ] {
+        let story = document
+            .stories()
+            .expect("discover fragment destination stories")
+            .into_iter()
+            .find(|story| story.kind() == kind)
+            .unwrap_or_else(|| panic!("{kind:?} story"));
+        let direct_start = if kind == StoryKind::Body { 6 } else { 2 };
+        let destination = rdocx::ContentLocation::end(story.clone());
+        let result = document
+            .insert_html_fragment(&destination, &html, &images)
+            .unwrap_or_else(|error| panic!("{kind:?} HTML fragment insertion: {error}"));
+
+        assert_eq!(result.story.kind(), story.kind());
+        assert_eq!(result.story.part_name(), story.part_name());
+        assert_eq!(result.story.owner_index(), story.owner_index());
+        document
+            .story_items(&result.story)
+            .expect("result returns the refreshed story identity");
+        assert_eq!(result.direct_range, direct_start..direct_start + 5);
+        assert_eq!(
+            result
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "dropped HTML link target and retained anchor text",
+                "dropped unresolved HTML image `missing.png` and retained alternate text",
+                "dropped HTML iframe content",
+            ]
+        );
+
+        let bytes = document.to_bytes().expect("fragment document serializes");
+        document = Document::from_bytes(&bytes).expect("fragment document reopens");
+        let reopened_story = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == kind)
+            .unwrap();
+        let projected_text = document
+            .story_items(&reopened_story)
+            .unwrap()
+            .into_iter()
+            .filter_map(|item| item.text().unwrap())
+            .collect::<Vec<_>>()
+            .join("|");
+        for expected in ["fragment", "link", "outer", "inner", "unsafe", "fallback"] {
+            assert!(
+                projected_text.contains(expected),
+                "{kind:?} omitted {expected:?}: {projected_text}"
+            );
+        }
+        let projected_xml = document
+            .story_items(&reopened_story)
+            .unwrap()
+            .into_iter()
+            .map(|item| String::from_utf8_lossy(item.xml().unwrap().as_ref()).into_owned())
+            .collect::<String>();
+        assert!(projected_xml.contains(">head<"));
+        assert!(projected_xml.contains(">cell<"));
+        let links = document
+            .story_items(&reopened_story)
+            .unwrap()
+            .into_iter()
+            .flat_map(|item| item.links().unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            links.iter().any(|link| {
+                link.text.trim() == "link"
+                    && link.url.as_deref() == Some("https://example.test/path")
+            }),
+            "{kind:?} links: {links:?}"
+        );
+    }
+
+    let relationship_bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(relationship_bytes)).unwrap();
+    for (owner, expected_images, expected_links) in [
+        ("/word/document.xml", 4, 2),
+        ("/word/header-story.xml", 2, 1),
+        ("/word/footer-story.xml", 2, 1),
+    ] {
+        let relationships = package.get_part_rels(owner).unwrap();
+        assert_eq!(
+            relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == rel_types::IMAGE)
+                .count(),
+            expected_images,
+            "image relationship owner {owner}"
+        );
+        assert_eq!(
+            relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == rel_types::HYPERLINK)
+                .count(),
+            expected_links,
+            "hyperlink relationship owner {owner}"
+        );
+    }
+    assert_eq!(
+        WORD_HTML_FRAGMENT_ORACLE,
+        "Microsoft Word 16.112.4 build 16.112.26090911"
+    );
+    assert_eq!(
+        LIBREOFFICE_HTML_FRAGMENT_ORACLE,
+        "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb"
+    );
+    assert_eq!(POPPLER_HTML_FRAGMENT_ORACLE, "pdftotext version 26.09.0");
+    let rendered = document
+        .to_pdf_deterministic()
+        .expect("fragment document renders through the production layout path");
+    assert!(rendered.starts_with(b"%PDF-"));
+    assert!(rendered.ends_with(b"%%EOF"));
+
+    let stable = document.to_bytes().expect("serialize atomicity baseline");
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let error = document
+        .insert_html_fragment(
+            &rdocx::ContentLocation::end(body),
+            "<p><img src='broken.png'></p>",
+            &[rdocx::HtmlImageResource {
+                source: "broken.png",
+                bytes: b"not an image",
+                filename: "broken.png",
+            }],
+        )
+        .expect_err("malformed explicit image must fail");
+    assert!(error.to_string().contains("unsupported or malformed"));
+    assert_eq!(
+        document
+            .to_bytes()
+            .expect("serialize after rejected fragment"),
+        stable,
+        "a rejected fragment changed the live document"
+    );
+}
+
+#[test]
+fn html_fragment_insertion_respects_a_cell_boundary_and_preserved_raw_siblings() {
+    let mut document = container_neutral_story_fixture();
+    let cell = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::TableCell)
+        .unwrap();
+    let destination = rdocx::ContentLocation::new(cell, StoryItemKind::Paragraph, vec![0]);
+    let result = document
+        .insert_html_fragment(&destination, "<p>before cell</p>", &[])
+        .unwrap();
+    assert_eq!(result.direct_range, 0..1);
+
+    let items = document.story_items(&result.story).unwrap();
+    assert_eq!(items[0].text().unwrap().as_deref(), Some("before cell"));
+    assert_eq!(items[1].text().unwrap().as_deref(), Some("cell"));
+    assert_eq!(items[2].kind(), StoryItemKind::PreservedNode);
+    assert!(String::from_utf8_lossy(items[2].xml().unwrap().as_ref()).contains("x:flag=\"exact\""));
+}
+
+#[test]
+fn html_fragment_cell_routing_uses_the_direct_body_container() {
+    let mut seed = container_neutral_story_fixture();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let xml = xml.replacen(
+        "<w:tbl>",
+        "<w:sdt><w:sdtContent><w:tbl><w:tr><w:tc><w:p><w:r><w:t>earlier controlled cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:sdtContent></w:sdt><w:tbl>",
+        1,
+    );
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let cells = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .filter(|story| story.kind() == StoryKind::TableCell)
+        .collect::<Vec<_>>();
+    assert_eq!(cells.len(), 2);
+    assert_eq!(cells[1].owner_index(), 1);
+
+    let result = document
+        .insert_html_fragment(
+            &rdocx::ContentLocation::end(cells[1].clone()),
+            "<p>ordinary body cell insertion</p>",
+            &[],
+        )
+        .unwrap();
+    let text = document
+        .story_items(&result.story)
+        .unwrap()
+        .into_iter()
+        .filter_map(|item| item.text().unwrap())
+        .collect::<String>();
+    assert!(text.contains("ordinary body cell insertion"));
+    let earlier = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::TableCell && story.owner_index() == 0)
+        .unwrap();
+    assert_eq!(
+        document.story_items(&earlier).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("earlier controlled cell")
+    );
+}
+
+#[test]
+fn html_fragment_rejects_unreviewed_story_kinds_atomically() {
+    let mut document = container_neutral_story_fixture();
+    let stable = document.to_bytes().unwrap();
+    let comment = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Comment)
+        .unwrap();
+    let error = document
+        .insert_html_fragment(
+            &rdocx::ContentLocation::end(comment),
+            "<p>not allowed</p>",
+            &[],
+        )
+        .expect_err("comments are outside the F-261 contract");
+    assert!(
+        error
+            .to_string()
+            .contains("support body, table-cell, header, and footer")
+    );
+    assert_eq!(document.to_bytes().unwrap(), stable);
+}
+
+#[test]
+#[ignore = "requires pinned Word, LibreOffice, and Poppler render artifacts"]
+fn regenerate_f261_html_fragment_render_oracle() {
+    use base64::Engine as _;
+
+    let plist = "/Applications/Microsoft Word.app/Contents/Info.plist";
+    for (key, expected) in [
+        ("CFBundleShortVersionString", "16.112.4"),
+        ("CFBundleVersion", "16.112.26090911"),
+    ] {
+        let output = std::process::Command::new("plutil")
+            .args(["-extract", key, "raw", plist])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+    }
+    assert_eq!(
+        WORD_HTML_FRAGMENT_ORACLE,
+        "Microsoft Word 16.112.4 build 16.112.26090911"
+    );
+    let libreoffice = std::process::Command::new("soffice")
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(libreoffice.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&libreoffice.stdout).trim(),
+        LIBREOFFICE_HTML_FRAGMENT_ORACLE
+    );
+    for command in ["pdftotext", "pdftoppm"] {
+        let poppler = std::process::Command::new(command)
+            .arg("-v")
+            .output()
+            .unwrap();
+        assert!(poppler.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&poppler.stderr).lines().next(),
+            Some(format!("{command} version 26.09.0").as_str())
+        );
+    }
+    assert_eq!(POPPLER_HTML_FRAGMENT_ORACLE, "pdftotext version 26.09.0");
+
+    let output = std::env::var("RDOCX_F261_ORACLE_DOCX")
+        .expect("set RDOCX_F261_ORACLE_DOCX to a temporary output path");
+    let png = mhtml_pixel_png();
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    );
+    let html = format!(
+        "<style>strong {{ color: #336699; }}</style><p><strong>fragment</strong> <a href='https://example.test/path'>link</a><img src='resolved.png' width='2' height='3'><img src='{data_uri}' width='1' height='1'></p><ol start='3'><li>outer<ul><li>inner</li></ul></li></ol><table><tr><th>head</th></tr><tr><td>cell</td></tr></table><p>rendered fallback</p>"
+    );
+    let images = [rdocx::HtmlImageResource {
+        source: "resolved.png",
+        bytes: &png,
+        filename: "resolved.png",
+    }];
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    document
+        .add_table(1, 1)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("cell");
+    document.set_header("header");
+    document.set_footer("footer");
+    for kind in [
+        StoryKind::Body,
+        StoryKind::TableCell,
+        StoryKind::Header,
+        StoryKind::Footer,
+    ] {
+        let story = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == kind)
+            .unwrap();
+        document
+            .insert_html_fragment(&rdocx::ContentLocation::end(story), &html, &images)
+            .unwrap();
+    }
+    document.save(output).unwrap();
+    let native_pdf = std::env::var("RDOCX_F261_NATIVE_PDF")
+        .expect("set RDOCX_F261_NATIVE_PDF to a temporary output path");
+    std::fs::write(native_pdf, document.to_pdf_deterministic().unwrap()).unwrap();
+
+    let pdfs = [
+        (
+            "RDOCX_F261_WORD_PDF",
+            std::env::var("RDOCX_F261_WORD_PDF").expect("set RDOCX_F261_WORD_PDF"),
+        ),
+        (
+            "RDOCX_F261_LIBREOFFICE_PDF",
+            std::env::var("RDOCX_F261_LIBREOFFICE_PDF").expect("set RDOCX_F261_LIBREOFFICE_PDF"),
+        ),
+    ];
+    for (variable, path) in &pdfs {
+        let info = std::process::Command::new("pdfinfo")
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(info.status.success());
+        let info = String::from_utf8(info.stdout).unwrap();
+        assert!(info.lines().any(|line| line == "Pages:           1"));
+        assert!(
+            info.lines()
+                .any(|line| line == "Page size:       612 x 792 pts (letter)")
+        );
+        let text = std::process::Command::new("pdftotext")
+            .args(["-layout", path, "-"])
+            .output()
+            .unwrap();
+        assert!(text.status.success());
+        let record = String::from_utf8(text.stdout)
+            .unwrap()
+            .split_whitespace()
+            .filter(|token| *token != "◦")
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(record, HTML_FRAGMENT_RENDER_RECORD, "{variable}");
+    }
+
+    let raster_root = std::env::temp_dir().join(format!(
+        "rdocx-f261-render-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&raster_root).unwrap();
+    let mut pngs = Vec::new();
+    for (index, (_, pdf)) in pdfs.iter().enumerate() {
+        let prefix = raster_root.join(format!("viewer-{index}"));
+        let raster = std::process::Command::new("pdftoppm")
+            .args(["-f", "1", "-singlefile", "-png", "-r", "150"])
+            .arg(pdf)
+            .arg(&prefix)
+            .output()
+            .unwrap();
+        assert!(
+            raster.status.success(),
+            "pdftoppm failed: {}",
+            String::from_utf8_lossy(&raster.stderr)
+        );
+        pngs.push(prefix.with_extension("png"));
+    }
+    let scripts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts");
+    let score = std::process::Command::new("python3")
+        .args([
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from golden_png_harness import decode_png; from pptx_ssim_harness import structural_similarity; print(structural_similarity(decode_png(Path(sys.argv[2])), decode_png(Path(sys.argv[3]))))",
+        ])
+        .arg(scripts)
+        .args(&pngs)
+        .output()
+        .unwrap();
+    assert!(
+        score.status.success(),
+        "SSIM comparison failed: {}",
+        String::from_utf8_lossy(&score.stderr)
+    );
+    let score = String::from_utf8(score.stdout)
+        .unwrap()
+        .trim()
+        .parse::<f64>()
+        .unwrap();
+    assert!(score >= 0.75, "Word and LibreOffice render SSIM {score}");
+    std::fs::remove_dir_all(raster_root).unwrap();
 }
 
 #[test]

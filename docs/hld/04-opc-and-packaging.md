@@ -128,6 +128,16 @@ raw direct Word children. Foreign raw subtrees stay opaque. Invalid locations,
 relationships, identities, XML, and reopen results discard the staged
 candidate without changing the live document.
 
+HTML fragment insertion uses the same transaction. `HtmlImageResource` maps an
+exact source string to caller-owned bytes and a filename. Data-URI images are
+decoded within the aggregate input bound. Raster headers must pass
+`oxml-media` probing, duplicate explicit sources fail closed, and unresolved
+markup images produce ordered diagnostics with alternate text retained. Image
+and hyperlink relationships are created under the selected story part. Every
+image occurrence receives its own drawing identifier, while repeated source
+strings reuse their relationship within one projection. Numbering, media,
+content types, owner XML, and identifiers publish only after package reopen.
+
 Story-scoped picture and hyperlink authoring resolves the relationship owner
 from the checked `StoryId`. Body, cell, and text-box stories use the main
 document relationship set. Headers, footers, notes, and comments use the
@@ -804,6 +814,13 @@ resources are diagnosed, duplicate keys and aggregate byte overflow fail
 closed, and no URL or filesystem path from markup is fetched. Successful
 images enter the normal presentation media insertion path with caller-supplied
 filenames and explicit CSS geometry.
+
+The Word HTML fragment importer uses the corresponding native
+`rdocx::HtmlImageResource` slice plus self-contained image data URIs. It never
+resolves a URL or filesystem path from markup. Explicit width and height use
+the existing CSS pixel conversion. A missing dimension uses the probed native
+size at 96 DPI. Malformed bytes, MIME mismatches, count overflow, and aggregate
+byte overflow fail before the live document changes.
 
 The Word MHTML importer accepts contained PNG and JPEG resources only when the
 declared MIME type agrees with byte sniffing. Missing CSS pixel dimensions use

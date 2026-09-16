@@ -8005,6 +8005,267 @@ fn nth_table_in_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a m
     None
 }
 
+fn modeled_main_cell_route(xml: &[u8], target: &StoryOwnerSpan) -> Result<(usize, usize)> {
+    let body = scan_story_owners(xml, StoryKind::Body)?
+        .into_iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+    let direct_items = direct_story_content_items(xml, &body)?;
+    let (content_index, direct_item) = direct_items
+        .iter()
+        .enumerate()
+        .find(|(_, item)| item.full.start <= target.full.start && target.full.end <= item.full.end)
+        .ok_or_else(|| Error::Other("table-cell owner has no direct body container".to_owned()))?;
+    if !matches!(
+        direct_item.kind,
+        StoryItemKind::Table | StoryItemKind::ContentControl
+    ) {
+        return Err(Error::Other(
+            "HTML fragments require a modeled main-document table-cell owner".to_owned(),
+        ));
+    }
+    let cell_index = scan_story_owners(xml, StoryKind::Body)?
+        .into_iter()
+        .filter(|owner| {
+            owner.kind == StoryKind::TableCell
+                && direct_item.full.start <= owner.full.start
+                && owner.full.end <= direct_item.full.end
+        })
+        .position(|owner| owner.full == target.full)
+        .ok_or_else(|| Error::Other("modeled table-cell owner was not found".to_owned()))?;
+    Ok((content_index, cell_index))
+}
+
+fn nth_cell_in_control<'a>(control: &'a mut CT_Sdt, index: &mut usize) -> Option<&'a mut CT_Tc> {
+    for child in &mut control.content {
+        let cell = match child {
+            SdtContent::Table(table) => nth_cell_in_table(table, index),
+            SdtContent::Row(row) => nth_cell_in_row(row, index),
+            SdtContent::Cell(cell) => take_cell(cell, index),
+            SdtContent::ContentControl(control) => nth_cell_in_control(control, index),
+            SdtContent::Paragraph(_) | SdtContent::Run(_) | SdtContent::RawXml(_) => None,
+        };
+        if cell.is_some() {
+            return cell;
+        }
+    }
+    None
+}
+
+fn nth_cell_in_table<'a>(table: &'a mut CT_Tbl, index: &mut usize) -> Option<&'a mut CT_Tc> {
+    let CT_Tbl {
+        rows,
+        content_controls,
+        ..
+    } = table;
+    let mut selected_control = None;
+    let mut selected_row = None;
+    for boundary in 0..=rows.len() {
+        for (control_index, (_, _, control)) in content_controls
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _, _))| *at == boundary)
+        {
+            let count = cell_count_in_control(control);
+            if *index < count {
+                selected_control = Some(control_index);
+                break;
+            }
+            *index -= count;
+        }
+        if selected_control.is_some() {
+            break;
+        }
+        if let Some(row) = rows.get(boundary) {
+            let count = cell_count_in_row(row);
+            if *index < count {
+                selected_row = Some(boundary);
+                break;
+            }
+            *index -= count;
+        }
+    }
+    if let Some(control_index) = selected_control {
+        nth_cell_in_control(&mut content_controls[control_index].2, index)
+    } else if let Some(row_index) = selected_row {
+        nth_cell_in_row(&mut rows[row_index], index)
+    } else {
+        None
+    }
+}
+
+fn nth_cell_in_row<'a>(row: &'a mut CT_Row, index: &mut usize) -> Option<&'a mut CT_Tc> {
+    let CT_Row {
+        cells,
+        content_controls,
+        ..
+    } = row;
+    let mut selected_control = None;
+    let mut selected_cell = None;
+    for boundary in 0..=cells.len() {
+        for (control_index, (_, _, control)) in content_controls
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _, _))| *at == boundary)
+        {
+            let count = cell_count_in_control(control);
+            if *index < count {
+                selected_control = Some(control_index);
+                break;
+            }
+            *index -= count;
+        }
+        if selected_control.is_some() {
+            break;
+        }
+        if let Some(cell) = cells.get(boundary) {
+            let count = 1 + cell_count_in_cell(cell);
+            if *index < count {
+                selected_cell = Some(boundary);
+                break;
+            }
+            *index -= count;
+        }
+    }
+    if let Some(control_index) = selected_control {
+        nth_cell_in_control(&mut content_controls[control_index].2, index)
+    } else if let Some(cell_index) = selected_cell {
+        take_cell(&mut cells[cell_index], index)
+    } else {
+        None
+    }
+}
+
+fn take_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a mut CT_Tc> {
+    if *index == 0 {
+        Some(cell)
+    } else {
+        *index -= 1;
+        for child in &mut cell.content {
+            let nested = match child {
+                CellContent::Table(table) => nth_cell_in_table(table, index),
+                CellContent::ContentControl(control) => nth_cell_in_control(control, index),
+                CellContent::Paragraph(_) => None,
+            };
+            if nested.is_some() {
+                return nested;
+            }
+        }
+        None
+    }
+}
+
+fn cell_count_in_control(control: &CT_Sdt) -> usize {
+    control
+        .content
+        .iter()
+        .map(|child| match child {
+            SdtContent::Table(table) => cell_count_in_table(table),
+            SdtContent::Row(row) => cell_count_in_row(row),
+            SdtContent::Cell(cell) => 1 + cell_count_in_cell(cell),
+            SdtContent::ContentControl(control) => cell_count_in_control(control),
+            SdtContent::Paragraph(_) | SdtContent::Run(_) | SdtContent::RawXml(_) => 0,
+        })
+        .sum()
+}
+
+fn cell_count_in_table(table: &CT_Tbl) -> usize {
+    table
+        .content_controls
+        .iter()
+        .map(|(_, _, control)| cell_count_in_control(control))
+        .sum::<usize>()
+        + table.rows.iter().map(cell_count_in_row).sum::<usize>()
+}
+
+fn cell_count_in_row(row: &CT_Row) -> usize {
+    row.content_controls
+        .iter()
+        .map(|(_, _, control)| cell_count_in_control(control))
+        .sum::<usize>()
+        + row
+            .cells
+            .iter()
+            .map(|cell| 1 + cell_count_in_cell(cell))
+            .sum::<usize>()
+}
+
+fn cell_count_in_cell(cell: &CT_Tc) -> usize {
+    cell.content
+        .iter()
+        .map(|child| match child {
+            CellContent::Table(table) => cell_count_in_table(table),
+            CellContent::ContentControl(control) => cell_count_in_control(control),
+            CellContent::Paragraph(_) => 0,
+        })
+        .sum()
+}
+
+fn insert_html_content_into_cell(
+    cell: &mut CT_Tc,
+    direct_index: usize,
+    content: Vec<BodyContent>,
+) -> Result<()> {
+    let inserted = content
+        .into_iter()
+        .map(|item| match item {
+            BodyContent::Paragraph(paragraph) => Ok(CellContent::Paragraph(paragraph)),
+            BodyContent::Table(table) => Ok(CellContent::Table(table)),
+            BodyContent::ContentControl(control) => Ok(CellContent::ContentControl(control)),
+            BodyContent::RawXml(_) => Err(Error::Other(
+                "HTML projection produced unsupported raw cell content".to_owned(),
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let inserted_len = inserted.len();
+    let mut virtual_index = 0_usize;
+    let mut insertion = None;
+    for content_index in 0..=cell.content.len() {
+        for (raw_index, (position, _)) in cell.extra_xml.iter().enumerate() {
+            if *position != content_index {
+                continue;
+            }
+            if virtual_index == direct_index {
+                insertion = Some((content_index, raw_index));
+                break;
+            }
+            virtual_index += 1;
+        }
+        if insertion.is_some() {
+            break;
+        }
+        if content_index < cell.content.len() {
+            if virtual_index == direct_index {
+                let raw_index = cell
+                    .extra_xml
+                    .iter()
+                    .position(|(position, _)| *position > content_index)
+                    .unwrap_or(cell.extra_xml.len());
+                insertion = Some((content_index, raw_index));
+                break;
+            }
+            virtual_index += 1;
+        }
+    }
+    if virtual_index == direct_index && insertion.is_none() {
+        insertion = Some((cell.content.len(), cell.extra_xml.len()));
+    }
+    let Some((content_index, raw_shift_start)) = insertion else {
+        return Err(StoryError::OutOfBounds {
+            index: direct_index,
+            len: virtual_index,
+        }
+        .into());
+    };
+    for (position, _) in cell.extra_xml.iter_mut().skip(raw_shift_start) {
+        *position = position
+            .checked_add(inserted_len)
+            .ok_or_else(|| Error::Other("cell raw-content position overflowed".to_owned()))?;
+    }
+    cell.content.splice(content_index..content_index, inserted);
+    Ok(())
+}
+
 fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P)) {
     for item in content {
         match item {
@@ -11384,6 +11645,48 @@ impl Document {
         Ok(id)
     }
 
+    pub(crate) fn add_html_image_relationship_to_story(
+        &mut self,
+        story: &StoryId,
+        image_data: &[u8],
+        filename: &str,
+    ) -> Result<String> {
+        self.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let relationship_id = self.add_image_relationship_checked(&owner, image_data, filename)?;
+        if owner == self.doc_part_name && story.kind != StoryKind::Body {
+            self.identifiers
+                .register_nested_story_relationship(story, relationship_id.clone());
+        }
+        Ok(relationship_id)
+    }
+
+    pub(crate) fn add_html_hyperlink_relationship_to_story(
+        &mut self,
+        story: &StoryId,
+        url: &str,
+    ) -> Result<String> {
+        self.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let relationship_id =
+            self.add_external_relationship_checked(&owner, rel_types::HYPERLINK, url)?;
+        if owner == self.doc_part_name && story.kind != StoryKind::Body {
+            self.identifiers
+                .register_nested_story_relationship(story, relationship_id.clone());
+        }
+        Ok(relationship_id)
+    }
+
+    pub(crate) fn reserve_html_drawing_id(&mut self, story: &StoryId) -> Result<u32> {
+        self.story_source_and_owner(story)?;
+        let drawing_id = self.identifiers.reserve_drawing_id()?;
+        if story.part_name == self.doc_part_name && story.kind != StoryKind::Body {
+            self.identifiers
+                .register_nested_story_drawing(story, drawing_id);
+        }
+        Ok(drawing_id)
+    }
+
     /// Stage a chart, its editable workbook, and the Word drawing that reaches them.
     fn add_chart_package(
         &mut self,
@@ -12275,6 +12578,101 @@ impl Document {
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
+    }
+
+    /// Insert one bounded HTML fragment at a checked direct-child boundary.
+    ///
+    /// Images are resolved only from data URIs or the explicit resource slice.
+    /// The document remains unchanged if parsing, projection, package
+    /// reconciliation, insertion, or reopen validation fails.
+    pub fn insert_html_fragment(
+        &mut self,
+        destination: &ContentLocation,
+        html: &str,
+        images: &[crate::HtmlImageResource<'_>],
+    ) -> Result<crate::HtmlFragmentInsertResult> {
+        if !matches!(
+            destination.story.kind,
+            StoryKind::Body | StoryKind::TableCell | StoryKind::Header | StoryKind::Footer
+        ) {
+            return Err(Error::Other(
+                "HTML fragments support body, table-cell, header, and footer stories".to_owned(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&destination.story)?;
+        let part_name = source.part_name.clone();
+        let mut source_xml = source.xml.into_owned();
+        let (boundary, direct_index, _) =
+            validated_content_boundary(&source_xml, &owner, destination)?;
+        let modeled_cell_route = (destination.story.kind == StoryKind::TableCell
+            && part_name == candidate.doc_part_name)
+            .then(|| modeled_main_cell_route(&source_xml, &owner))
+            .transpose()?;
+        let projected =
+            crate::html::project_html_fragment(&mut candidate, &destination.story, html, images)?;
+        let inserted_count = projected.content.len();
+        if destination.story.kind == StoryKind::Body && part_name == candidate.doc_part_name {
+            candidate
+                .document
+                .body
+                .content
+                .splice(direct_index..direct_index, projected.content);
+        } else if destination.story.kind == StoryKind::TableCell
+            && part_name == candidate.doc_part_name
+        {
+            let (content_index, mut cell_index) = modeled_cell_route.ok_or_else(|| {
+                Error::Other("modeled table-cell route disappeared before insertion".to_owned())
+            })?;
+            let content = candidate
+                .document
+                .body
+                .content
+                .get_mut(content_index)
+                .ok_or_else(|| StoryError::OwnerNotFound {
+                    story: destination.story.clone(),
+                })?;
+            let cell = match content {
+                BodyContent::Table(table) => nth_cell_in_table(table, &mut cell_index),
+                BodyContent::ContentControl(control) => {
+                    nth_cell_in_control(control, &mut cell_index)
+                }
+                BodyContent::Paragraph(_) | BodyContent::RawXml(_) => None,
+            }
+            .ok_or_else(|| StoryError::OwnerNotFound {
+                story: destination.story.clone(),
+            })?;
+            insert_html_content_into_cell(cell, direct_index, projected.content)?;
+        } else {
+            let mut fragment_xml = Vec::new();
+            for content in projected.content {
+                fragment_xml.extend_from_slice(&serialize_content_fragment(content)?);
+            }
+            insert_story_fragment(&mut source_xml, &owner, boundary, fragment_xml)?;
+            set_story_source_xml(&mut candidate, &part_name, source_xml)?;
+        }
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let result_story = reopened
+            .stories()?
+            .into_iter()
+            .find(|story| {
+                story.kind == destination.story.kind
+                    && story.part_name == destination.story.part_name
+                    && story.owner_index == destination.story.owner_index
+            })
+            .ok_or_else(|| StoryError::OwnerNotFound {
+                story: destination.story.clone(),
+            })?;
+        let range_end = direct_index
+            .checked_add(inserted_count)
+            .ok_or_else(|| Error::Other("HTML fragment range overflowed".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(crate::HtmlFragmentInsertResult {
+            story: result_story,
+            direct_range: direct_index..range_end,
+            diagnostics: projected.diagnostics,
+        })
     }
 
     /// Import an owned cross-document main-body fragment at a checked boundary.

@@ -383,7 +383,7 @@ impl<'a> Paragraph<'a> {
     }
 
     /// Append an inline picture run using an existing document relationship.
-    pub(crate) fn add_picture(&mut self, rel_id: &str, width: Length, height: Length) {
+    pub(crate) fn add_picture(&mut self, rel_id: &str, width: Length, height: Length) -> &mut CT_R {
         use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
 
         let inline = CT_Inline::new(rel_id, width.to_emu(), height.to_emu());
@@ -391,6 +391,10 @@ impl<'a> Paragraph<'a> {
         let mut run = CT_R::new("");
         run.content = vec![RunContent::Drawing(drawing)];
         self.inner.runs.push(run);
+        self.inner
+            .runs
+            .last_mut()
+            .expect("picture run was appended")
     }
 
     /// Add a run wrapped in an external hyperlink relationship.

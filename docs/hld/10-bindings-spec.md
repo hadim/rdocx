@@ -586,6 +586,18 @@ spanned tables plus the bounded inline and embedded CSS subset. It does not
 fetch external resources. Python, WASM, and CLI surfaces gain no HTML import
 entry point and retain their existing methods and error contracts.
 
+Native Rust callers can also insert rich HTML into an existing Word story with
+`Document::insert_html_fragment(&ContentLocation, &str,
+&[HtmlImageResource])`. The additive `HtmlImageResource` value contains an
+exact source key, caller-owned bytes, and a filename. The operation accepts
+body, cell, header, and footer destinations supported by the story API. Its
+`HtmlFragmentInsertResult` returns the refreshed `StoryId`, the half-open direct
+child range, and ordered `HtmlDiagnostic` values. Links and images are scoped
+to the physical destination part. Unsupported or unresolved markup is
+diagnosed, while invalid locations, malformed resources, bound failures, and
+package failures leave the document unchanged. This surface remains native
+Rust only.
+
 Native Rust callers can import and export bounded MHTML through
 `Document::from_mhtml_bytes`, `Document::open_mhtml`,
 `Document::to_mhtml_bytes`, and `Document::save_mhtml`. Concrete
