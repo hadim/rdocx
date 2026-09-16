@@ -14746,3 +14746,225 @@ structure record and did not claim a successful GUI render.
 and self-contained. Preserve caller ownership of even-header policy and add new
 wrap variants only with their required schema children and exact round-trip
 coverage.
+
+### F-X115, Preserve modern comment metadata and identity
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Modern Word comments now use the standard
+commentsExtended content type, retain their numeric ids and parent links across
+save and reopen, and allocate new ids without colliding with accepted source
+identities. Native and Python comment and reply creation also accept an
+optional validated RFC 3339 date while preserving deterministic no-date
+authoring by default.
+
+**Non-obvious choices.** Comment identity is preserved rather than rebuilt
+from document order, so mutation results continue to address the same thread.
+The allocator uses the unused nonnegative id space, and date validation occurs
+before staged package publication. Existing producer sidecars and unrelated
+XML remain preservation boundaries.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, comment identity and
+staged mutation, `docs/hld/04-opc-and-packaging.md`, content types and package
+preservation, `docs/hld/10-bindings-spec.md`, native and Python comment inputs,
+`docs/hld/12-testing-strategy.md`, collaboration gates, and the F-X115 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `comments_keep_standard_content_type_ids_dates_and_threads` first
+failed at the story baseline because ids were renumbered and the modern part
+used the wrong content type. It now proves standard package metadata, stable
+ids, replies, resolved state, optional dates, save and reopen, and preservation
+of unrelated sidecar XML. Installed Python tests cover valid and invalid dates,
+stable ids, runtime signatures, strict typing, and stub parity. The dedicated
+Word comment candidate changed only by its declared content-type correction.
+The full workspace, Python, no-default-font, WASM, rustdoc, README, workflow,
+package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep wall-clock time out of default comment
+authoring. A third-party editor may renumber comments independently, but an
+rdocx no-op save must not do so.
+
+### F-X116, Make Python story reads linear and complete
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Python story snapshots now construct one native source and
+owner inventory per public call, then project story items, hyperlinks,
+paragraphs, and runs from that immutable inventory. Visible runs nested inside
+accepted revisions and inline content controls carry recursive source paths so
+formatting, splitting, and comment operations address the same text callers
+read.
+
+**Non-obvious choices.** One accepted-view walker defines visible text across
+all projections and excludes deleted and move-source content consistently.
+Live nested handles retain checked owner paths instead of flattened copied
+strings, and structural mutation invalidates stale handles through the existing
+document lifecycle contract.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 found
+recursive mutation atomicity and accepted-view inconsistencies, which were
+corrected with composed owner-path and move-source coverage. Passes 3 and 4
+report zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, story inventory and
+accepted text ownership, `docs/hld/10-bindings-spec.md`, paragraph and run
+handle semantics, `docs/hld/12-testing-strategy.md`, counted complexity and
+binding gates, and the F-X116 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_story_inventory_scales_linearly` first failed at the story
+baseline because the binding rebuilt and rescanned the complete inventory for
+each result. It now proves one counted native traversal and a bounded
+installed-wheel scaling ratio. Companion tests cover accepted insertions,
+inline controls, nested revisions, deletion and move-source exclusion,
+formatting, splitting, comment anchoring, atomic failed refresh, stale handles,
+strict mypy, and stubtest. The full workspace, Python oracle,
+no-default-font, WASM, rustdoc, README, workflow, package, archive-size, and
+supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep snapshots bounded to one inventory per
+call. Extend the shared accepted-view walker when new recursive inline owners
+appear instead of adding a second text projection.
+
+### F-X117, Render transparent and large raster pictures safely
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Raster output now premultiplies decoded straight-alpha
+RGBA channels exactly once before tiny-skia consumes them. Presentation image
+previewing accepts checked decoded buffers up to 64 MiB, covering the reported
+large assets, and returns a stable diagnostic with a visible fallback when an
+image exceeds that ceiling.
+
+**Non-obvious choices.** The decoded-size ceiling remains finite and every
+dimension, multiplication, and expected buffer length is checked before
+allocation. Render failures remain ordered diagnostics on the existing public
+result shape, preserving source compatibility while preventing silent picture
+loss.
+
+**Deviations from the design plan.** None. Microscope pass 1 identified a
+public struct-literal compatibility break in the first diagnostic design. The
+result was remediated without weakening the visible failure contract, and pass
+2 reports zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`, alpha composition,
+decoded image limits, and fallback output, `docs/hld/12-testing-strategy.md`,
+pixel and resource-bound gates, `docs/hld/13-risks-and-open-questions.md`, the
+reviewed allocation ceiling, and the F-X117 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `straight_alpha_images_composite_with_premultiplied_pixels` proves
+transparent white and black storage produce identical navy output across PNG,
+JPEG, and TIFF. `large_pictures_render_or_report_the_decode_limit` proves the
+reported 22.9 MiB and 16.8 MiB pictures render in PDF and raster output, while
+an over-limit image produces one stable diagnostic and visible placeholder.
+Malformed and overflowing image cases fail before allocation. The full
+workspace, pinned Poppler and LibreOffice riders, no-default-font, WASM,
+rustdoc, README, workflow, package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep straight-alpha conversion at the
+tiny-skia ownership boundary. Any future limit change needs a named producer
+case, checked arithmetic, and an explicit failure rendering.
+
+### F-X118, Make notes rendering and replacement safe
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Notes rendering now uses the presentation graph's known
+owning slide when a producer-valid notes slide omits its reverse relationship,
+while conflicting or multiple owners still fail closed. Native and Python APIs
+can replace notes text while preserving placeholder identity and effective run
+formatting. Presentation replacement counts both slide and notes matches, and
+the CLI adds guarded destinations, expected-count validation, and atomic
+publication.
+
+**Non-obvious choices.** Rendering does not rewrite a valid Google-style
+relationship graph just to synthesize a reverse link. Notes mutation and
+replacement stage the full operation before publication. Zero matches fail by
+default, while an explicit expected count of zero remains a caller-controlled
+success.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, graph ownership and
+staged presentation mutation, `docs/hld/10-bindings-spec.md`, notes mutation
+and guarded CLI replacement, `docs/hld/12-testing-strategy.md`, producer,
+binding, and command gates, and the F-X118 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `rpptx_replace_is_guarded_counted_and_includes_notes` first failed
+at the story baseline because the command could overwrite output, publish after
+zero matches, and ignore notes. It now covers input equality, existing output,
+zero and mismatched counts, exact stdout, slide and notes replacement, staged
+cleanup, and package preservation. Companion tests prove Google-style and
+control notes graphs render equivalently, conflicting owners fail closed, and
+native plus installed Python edits preserve formatting through reopen. The
+full workspace, clean abi3 Python rider, no-default-font, WASM, rustdoc, README,
+workflow, package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the presentation graph as the source
+of ownership truth. Keep CLI publication behind complete count validation, and
+route future searchable notes content through the same atomic native operation.
+
+### F-X121, Adopt PR 123 authored line-chart portability
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Kevin Brown's PR 123 was integrated and hardened so newly
+authored chart axis titles emit explicit layout and false overlay children,
+and authored line plots emit explicit false marker and smoothing values. The
+children occupy their required ChartML schema positions and survive parse and
+rewrite.
+
+**Non-obvious choices.** The correction seeds the existing ordered raw title
+boundary and typed line-plot lexical state. It does not add public options,
+change workbook references or palette output, or affect bar, pie, doughnut,
+area, scatter, or radar charts.
+
+**Deviations from the design plan.** None. The contributor implementation at
+exact PR head `1375b6342548e79ec17faa99ac76a57e4a1c5e9b` was retained, then its
+regression was strengthened for direct-child order, false values, exclusion,
+parse and rewrite, workbook references, and palette stability. Microscope pass
+1 reports zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`, portable authored
+ChartML defaults, `docs/hld/12-testing-strategy.md`, authored chart and viewer
+gates, and the F-X121 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `authored_charts_emit_portable_viewer_defaults` first failed at the
+story baseline because title layout, overlay, marker, and smoothing children
+were absent. It now proves exact schema order, line-only false values,
+non-line exclusion, stable workbook formulas and caches, palette preservation,
+and parse and rewrite stability. The repository-pinned Pages Creator Studio
+15.1.1 export matched the reviewed output, all 50 pinned presentation corpus
+decks passed, and the focused oxml-chart plus full workspace, LibreOffice,
+no-default-font, WASM, rustdoc, README, workflow, package, archive-size, and
+supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the explicit false defaults limited to
+newly authored line plots. Preserve Kevin Brown and PR 123 in release notes and
+the final human result comment.

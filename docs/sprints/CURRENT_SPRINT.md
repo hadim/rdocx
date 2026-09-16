@@ -70,13 +70,13 @@ both Rust package families and both version-aligned Python distributions.
 | F-263 | Layout-backed fields and M23 corpus gate | L | in-progress | codex |
 | F-X113 | Preserve appended paragraphs in document comparison | M | done | codex |
 | F-X114 | Rebuild TOC entries with document styles and geometry | M | pending | - |
-| F-X115 | Preserve modern comment metadata and identity | M | in-progress | codex |
-| F-X116 | Make Python story reads linear and complete | L | in-progress | codex |
-| F-X117 | Render transparent and large raster pictures safely | M | in-progress | codex |
-| F-X118 | Make notes rendering and replacement safe | L | in-progress | codex |
+| F-X115 | Preserve modern comment metadata and identity | M | done | - |
+| F-X116 | Make Python story reads linear and complete | L | done | - |
+| F-X117 | Render transparent and large raster pictures safely | M | done | - |
+| F-X118 | Make notes rendering and replacement safe | L | done | - |
 | F-X119 | Complete round-three Python authoring and inspection | L | pending | - |
 | F-X120 | Accept fractional DOCX line spacing values | S | done | codex |
-| F-X121 | Adopt PR 123 authored line-chart portability | S | in-progress | codex |
+| F-X121 | Adopt PR 123 authored line-chart portability | S | done | - |
 | F-X112 | Publish the complete S73 package families | L | pending | - |
 
 ## Sequencing note
