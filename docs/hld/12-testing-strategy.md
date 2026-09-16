@@ -2251,6 +2251,12 @@ because the whole value proposition is compatibility:
   and cells with each writer, reads both files through both libraries, and
   directly compares normalized public records including distinct relative and
   absolute line spacing, units, enums, and saved table style.
+- Fractional Word paragraph line-spacing coverage opens observed producer
+  decimals through the public facade, checks exact positive and negative half
+  boundaries and signed overflow, saves canonical integer values, and reopens
+  them. Aliased prefixes and sibling spacing attributes remain modeled, while
+  equivalent fractional and integer documents render byte-identical pages in
+  deterministic font mode.
 - The same for `rpptx` and `python-pptx`.
 
 The rpptx binding gate executes the seven python-pptx 1.0.2 Getting Started

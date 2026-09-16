@@ -498,7 +498,10 @@ retains exact logical source intervals. Shared shaping still owns script and
 coverage segmentation, clusters, offsets, and line fitting. Exact Word line
 spacing places rich text on the Word baseline at 0.8 of the largest run em for
 the line. Automatic spacing and the established Latin-only path retain their
-existing metrics and output bytes.
+existing metrics and output bytes. Producer-written fractional paragraph line
+spacing enters layout only after exact normalization to its nearest integer
+twip, so it produces the same geometry and raster bytes as that canonical
+integer input.
 
 Word `w:bidi` selects the paragraph base direction and `w:rtl` selects the
 direction of its exact logical run span. Start and end justification and

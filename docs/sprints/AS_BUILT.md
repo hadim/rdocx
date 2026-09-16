@@ -14470,3 +14470,49 @@ README, workflow, package, archive-size, and supply-chain gates pass.
 publishing any row or cell edit. Keep stored cell widths synchronized with the
 active grid when changing spans, and preserve foreign same-local-name property
 elements as raw XML.
+
+### F-X120, Accept fractional DOCX line spacing values
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** DOCX paragraph parsing now accepts producer-written plain
+decimal line-spacing values and normalizes them to the nearest signed integer
+twip. Integer inputs retain their existing path, and saved modeled values use
+the canonical integer spelling.
+
+**Non-obvious choices.** Pedro Assumpcao's PR 122 supplied the observed
+producer values and initial bounded parser. The integrated implementation uses
+the source decimal digits instead of binary floating point, so arbitrarily
+long fractions cannot cross a half-twip boundary. Exact halves round away from
+zero, while numeric values outside the signed 32-bit range remain errors even
+when rounding could bring them back inside.
+
+**Deviations from the design plan.** None. The contributor patch was hardened
+as planned with exact decimal arithmetic, alias and sibling coverage,
+canonical reopen, and deterministic layout parity. Microscope pass 1 reports
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, bounded decimal
+parsing and canonical serialization, `docs/hld/08-rendering-spec.md`, integer
+layout equivalence, `docs/hld/12-testing-strategy.md`, parser and deterministic
+rendering gates, and the F-X120 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `word_fractional_line_spacing_opens_with_nearest_twip_values` first
+failed at the story baseline because the OXML parser required a direct `i32`.
+It now opens the reported values through the public facade, saves and reopens
+canonical integers, and compares deterministic raster bytes with equivalent
+integer input. Unit tests cover positive and negative halves, long fractions,
+signs, signed limits, malformed forms, exponent notation, namespace aliases,
+and sibling spacing attributes. The full workspace, corpus, no-default-font,
+WASM, rustdoc, README, workflow, package, archive-size, and supply-chain gates
+pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep this compatibility exception limited to
+paragraph `w:line`. Do not route it through floating point or widen decimal
+acceptance to unrelated OOXML measures without a separate producer case and
+story.

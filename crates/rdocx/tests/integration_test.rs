@@ -7803,6 +7803,73 @@ fn public_body_items_preserve_opened_document_order() {
 }
 
 #[test]
+fn word_fractional_line_spacing_opens_with_nearest_twip_values() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:spacing w:line="257.1432" w:lineRule="auto"/></w:pPr><w:r><w:t>one</w:t></w:r></w:p>
+    <w:p><w:pPr><w:spacing w:line="320.00879999999995" w:lineRule="auto"/></w:pPr><w:r><w:t>two</w:t></w:r></w:p>
+    <w:p><w:pPr><w:spacing w:line="342.8616" w:lineRule="auto"/></w:pPr><w:r><w:t>three</w:t></w:r></w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", document_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    let multiples = document
+        .paragraphs()
+        .iter()
+        .map(|paragraph| paragraph.line_spacing_multiple().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(multiples, [257.0 / 240.0, 320.0 / 240.0, 343.0 / 240.0]);
+
+    let saved = document.to_bytes().unwrap();
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml =
+        std::str::from_utf8(saved_package.get_part("/word/document.xml").unwrap()).unwrap();
+    for value in ["257", "320", "343"] {
+        assert!(saved_xml.contains(&format!(r#"w:line="{value}""#)));
+    }
+    for value in ["257.1432", "320.00879999999995", "342.8616"] {
+        assert!(!saved_xml.contains(value));
+    }
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(
+        reopened
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.line_spacing_multiple().unwrap())
+            .collect::<Vec<_>>(),
+        multiples
+    );
+
+    let integer_xml = String::from_utf8(document_xml.to_vec())
+        .unwrap()
+        .replace("257.1432", "257")
+        .replace("320.00879999999995", "320")
+        .replace("342.8616", "343");
+    let mut integer_seed = Document::new();
+    let mut integer_package =
+        OpcPackage::from_reader(std::io::Cursor::new(integer_seed.to_bytes().unwrap())).unwrap();
+    integer_package.set_part("/word/document.xml", integer_xml.into_bytes());
+    let mut integer_bytes = std::io::Cursor::new(Vec::new());
+    integer_package.write_to(&mut integer_bytes).unwrap();
+    let integer_document = Document::from_bytes(integer_bytes.get_ref()).unwrap();
+    assert_eq!(
+        document.render_page_to_png_deterministic(0, 72.0).unwrap(),
+        integer_document
+            .render_page_to_png_deterministic(0, 72.0)
+            .unwrap()
+    );
+}
+
+#[test]
 fn bounded_document_reader_rejects_package_expansion() {
     let bytes = Document::new().to_bytes().unwrap();
     let result = Document::from_bytes_with_limits(

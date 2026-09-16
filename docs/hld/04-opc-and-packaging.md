@@ -417,6 +417,14 @@ Malformed or ambiguous declarations fail closed. After a successful canonical
 publication, the document refreshes its root and body namespace facts from the
 published main-story bytes so a later save applies the same classification.
 
+Paragraph line spacing retains the signed integer path required by
+WordprocessingML and accepts one bounded producer deviation. A plain signed
+decimal `w:spacing/@w:line` value is normalized with exact decimal arithmetic
+to the nearest integer twip, with exact halves rounded away from zero.
+Exponent notation, malformed forms, non-finite spellings, and numeric values
+outside the signed 32-bit range remain errors. The modeled value serializes as
+one canonical integer without widening decimal acceptance to sibling measures.
+
 Direct paragraph `m:oMath` and `m:oMathPara` children use that same owner and
 boundary discipline. The reader accepts any prefix bound to the Transitional
 OfficeMath namespace. Canonical typed writes use `m:` and replay the inherited

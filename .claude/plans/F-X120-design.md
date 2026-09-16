@@ -1,6 +1,6 @@
 # F-X120, Accept fractional DOCX line spacing values
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: S
 **Depends on**: none
@@ -77,11 +77,11 @@ paragraph line spacing. Any delta blocks completion until separately explained.
 
 ## Implementation checklist
 
-- [ ] Add the contributor's observed public-open regression as a failing gate.
-- [ ] Normalize signed plain decimals with exact nearest-twip arithmetic.
-- [ ] Cover half boundaries, long fractions, overflow, aliases, and canonical reopen.
-- [ ] Prove normalized integer and fractional inputs render identically.
-- [ ] Run parser, round-trip, layout, hash harness, full verification, and microscope gates.
+- [x] Add the contributor's observed public-open regression as a failing gate.
+- [x] Normalize signed plain decimals with exact nearest-twip arithmetic.
+- [x] Cover half boundaries, long fractions, overflow, aliases, and canonical reopen.
+- [x] Prove normalized integer and fractional inputs render identically.
+- [x] Run parser, round-trip, layout, hash harness, full verification, and microscope gates.
 
 ## Open questions
 
