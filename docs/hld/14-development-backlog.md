@@ -5339,7 +5339,7 @@ immediate approval, verifies registry ownership and artifacts, and posts a
 human release result to every included issue and pull request. The stable Rust
 release supersedes rather than backfills the unpublished 0.13.2 crate set.
 
-**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X120.
+**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X121.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/99>.
 **Test gate**: release preparation.
 `s73_release_contract_requires_four_version_aligned_families` proves exact
@@ -5475,6 +5475,22 @@ canonically as an integer.
 `word_fractional_line_spacing_opens_with_nearest_twip_values` covers observed
 producer values, exact positive and negative halves, signed boundaries,
 canonical save and reopen, invalid forms, and deterministic layout.
+
+### F-X121, Adopt PR 123 authored line-chart portability (S)
+
+Adopt Kevin Brown's PR 123 at exact head
+`1375b6342548e79ec17faa99ac76a57e4a1c5e9b`. Authored axis titles declare an
+empty layout followed by non-overlay semantics. Authored line plots explicitly
+disable chart-level markers and smoothing so viewers do not invent per-point
+markers or smooth the path. Other chart families retain their existing output,
+and source data, editable workbooks, and palette choices remain unchanged.
+
+**Depends on**: F-X087.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/123>.
+**Test gate**: regression.
+`authored_charts_emit_portable_viewer_defaults` proves title child order,
+explicit false line defaults, non-line exclusion, and save and reopen
+stability without changing workbook or palette semantics.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

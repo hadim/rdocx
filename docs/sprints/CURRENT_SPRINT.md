@@ -3,7 +3,7 @@
 **Milestone**: M23 From-scratch business documents.
 
 **Goal**: close M23 with complete corpus authoring, resolve Issues 75, 83
-through 100, and 115 through 121, and incorporate PR 101 onward through
+through 100, and 115 through 121, and incorporate PR 101 through PR 123 through
 verified native, binding, rendering, and release outcomes.
 Five generators must start from `Document::new()`, use only the public `rdocx`
 facade, and reproduce the required private references without templates, raw
@@ -35,7 +35,7 @@ both Rust package families and both version-aligned Python distributions.
   vocabulary, private-corpus confidentiality boundary, and atomic cross-part
   invariant rule.
 - `docs/hld/14-development-backlog.md`, for the F-257 through F-263 and
-  F-X097 through F-X119 acceptance contracts, dependencies, sizes, issue
+  F-X097 through F-X121 acceptance contracts, dependencies, sizes, issue
   mappings, and release gate.
 - `docs/hld/15-build-and-toolchain.md`, for package-family allowlists, portable
   CLI assets, version alignment, trusted publication, and release approval.
@@ -76,6 +76,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X118 | Make notes rendering and replacement safe | L | in-progress | codex |
 | F-X119 | Complete round-three Python authoring and inspection | L | pending | - |
 | F-X120 | Accept fractional DOCX line spacing values | S | done | codex |
+| F-X121 | Adopt PR 123 authored line-chart portability | S | pending | - |
 | F-X112 | Publish the complete S73 package families | L | pending | - |
 
 ## Sequencing note
@@ -95,9 +96,9 @@ F-X114 follows the completed field and corpus layout path. F-X115 follows exact
 comment anchoring, F-X116 follows the complete story binding and split-run
 paths, and F-X118 establishes notes mutation before F-X119 completes the
 round-three binding surface. F-263 starts after every behavior needed by the
-private corpus and reported pagination fields is integrated. F-X112 is the
-final release boundary after every non-release story, including PR 122 through
-F-X120. The five client
+private corpus and reported pagination fields is integrated. F-X121 is an
+independent chart portability correction from PR 123. F-X112 is the final
+release boundary after every non-release story through F-X121. The five client
 documents and all derived evidence remain private and uncommitted.
 
 ## Definition of done for this sprint
@@ -111,6 +112,8 @@ documents and all derived evidence remain private and uncommitted.
   wrapping, and nested tables without unexplained fallback.
 - Producer-written fractional paragraph line spacing opens, rounds to the
   nearest integer twip, saves canonically, and retains deterministic layout.
+- Authored line charts declare non-overlay axis-title layout and explicit false
+  marker and smoothing defaults in schema order for portable viewer behavior.
 - Caller-width measurement uses the same deterministic fonts and rules as
   whole-document layout, reports height and diagnostics without mutation, and
   produces matching equal-height nested-table layout.
