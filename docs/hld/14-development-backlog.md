@@ -5351,9 +5351,11 @@ because packaged stable crates require the shared 0.12.0 registry family.
 **Test gate**: release preparation.
 `s73_release_contract_requires_four_version_aligned_families` proves exact
 Rust and Python version agreement, the 7-package stable and 15-package
-incubating allowlists, both seven-file Python artifact sets, selected-family
-CLI release assets, reviewed notes, separate tag approvals, registry owners,
-and complete issue and pull-request notifications.
+incubating allowlists, the four reviewed tags, and reviewed notes whose
+linked issues, pull requests, and credited contributors equal the per-family
+inventory required by the stories each family ships. The seven-file Python
+artifact sets, selected-family CLI release assets, separate tag approvals,
+registry owners, and posted notifications are proved by `/release`.
 
 ### F-X113, Preserve appended paragraphs in document comparison (M)
 

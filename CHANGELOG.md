@@ -48,8 +48,9 @@ binaries attached to its GitHub release.
 ### Fixed
 
 - Raster output now premultiplies straight-alpha pictures before compositing,
-  and pictures larger than 16 MiB decode within a checked 64 MiB ceiling
-  instead of being skipped silently. This resolves
+  and the decoded-pixel render limit rises from 16 MiB to 64 MiB, so larger
+  pictures render instead of being skipped silently. The 16 MiB encoded-file
+  limit is unchanged. This resolves
   [Issue 119](https://github.com/tensorbee/rdocx/issues/119).
 - Notes render when a producer-valid notes slide omits its reverse
   relationship to the slide, while conflicting owners still fail closed. This
@@ -471,8 +472,8 @@ replacement, together with correct transparency and notes rendering.
 - Picture transparency is applied in every output
   ([Issue 91](https://github.com/tensorbee/rdocx/issues/91),
   [PR 105](https://github.com/tensorbee/rdocx/pull/105)), straight-alpha
-  pictures composite correctly, and pictures larger than 16 MiB render within
-  a checked 64 MiB decode ceiling
+  pictures composite correctly, and the decoded-pixel render limit rises from
+  16 MiB to 64 MiB, so larger pictures render instead of being skipped
   ([Issue 119](https://github.com/tensorbee/rdocx/issues/119)).
 - Slide-owned date, footer, and slide-number placeholders stay visible under
   master header and footer flags
