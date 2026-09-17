@@ -876,12 +876,35 @@ impl<'a> Paragraph<'a> {
         self
     }
 
+    /// Add a bottom border with an explicit content gap in points.
+    pub fn border_bottom_with_space(
+        mut self,
+        style: BorderStyle,
+        size_eighths_pt: u32,
+        space_points: u32,
+        color: &str,
+    ) -> Self {
+        self.set_border_bottom_with_space(style, size_eighths_pt, space_points, color);
+        self
+    }
+
     /// Add a bottom border in place.
     pub fn set_border_bottom(&mut self, style: BorderStyle, size_eighths_pt: u32, color: &str) {
+        self.set_border_bottom_with_space(style, size_eighths_pt, 1, color);
+    }
+
+    /// Add a bottom border with an explicit content gap in points in place.
+    pub fn set_border_bottom_with_space(
+        &mut self,
+        style: BorderStyle,
+        size_eighths_pt: u32,
+        space_points: u32,
+        color: &str,
+    ) {
         let edge = CT_BorderEdge {
             val: style.to_st(),
             sz: Some(size_eighths_pt),
-            space: Some(1),
+            space: Some(space_points),
             color: Some(color.to_string()),
         };
         let borders = self
@@ -1480,5 +1503,19 @@ mod tests {
         assert_eq!(hyperlink.tooltip(), Some("Open link"));
         assert_eq!(hyperlink.doc_location(), Some("section-two"));
         assert!(hyperlink.has_unmodeled_semantic_attributes());
+    }
+
+    #[test]
+    fn bottom_border_accepts_an_explicit_content_gap() {
+        let mut inner = CT_P::new();
+        let mut paragraph = Paragraph { inner: &mut inner };
+        paragraph.set_border_bottom_with_space(BorderStyle::Single, 14, 6, "auto");
+
+        let paragraph = ParagraphRef { inner: &inner };
+        let border = paragraph.bottom_border().expect("bottom border");
+        assert_eq!(border.style(), "single");
+        assert_eq!(border.size_eighths_pt(), Some(14));
+        assert_eq!(border.space_points(), Some(6));
+        assert_eq!(border.color(), Some("auto"));
     }
 }

@@ -238,6 +238,20 @@ pub struct PyTocRebuildReport {
     diagnostics: Vec<String>,
 }
 
+#[pyclass(
+    name = "LayoutBackedFieldUpdateReport",
+    frozen,
+    eq,
+    skip_from_py_object
+)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyLayoutBackedFieldUpdateReport {
+    page_fields: usize,
+    num_pages_fields: usize,
+    page_reference_fields: usize,
+    diagnostics: Vec<String>,
+}
+
 #[pyclass(name = "Revision", frozen, get_all, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyRevision {
@@ -713,6 +727,55 @@ impl PyTocRebuildReport {
     #[getter]
     fn bookmark_count(&self) -> usize {
         self.bookmark_count
+    }
+
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.diagnostics)
+    }
+
+    #[getter]
+    fn diagnostic_count(&self) -> usize {
+        self.diagnostics.len()
+    }
+}
+
+#[pymethods]
+impl PyLayoutBackedFieldUpdateReport {
+    #[new]
+    #[pyo3(signature = (*, page_fields, num_pages_fields, page_reference_fields, diagnostics))]
+    fn new(
+        page_fields: usize,
+        num_pages_fields: usize,
+        page_reference_fields: usize,
+        diagnostics: Vec<String>,
+    ) -> Self {
+        Self {
+            page_fields,
+            num_pages_fields,
+            page_reference_fields,
+            diagnostics,
+        }
+    }
+
+    #[getter]
+    fn page_fields(&self) -> usize {
+        self.page_fields
+    }
+
+    #[getter]
+    fn num_pages_fields(&self) -> usize {
+        self.num_pages_fields
+    }
+
+    #[getter]
+    fn page_reference_fields(&self) -> usize {
+        self.page_reference_fields
+    }
+
+    #[getter]
+    fn updated_count(&self) -> usize {
+        self.page_fields + self.num_pages_fields + self.page_reference_fields
     }
 
     #[getter]
@@ -1674,6 +1737,34 @@ impl PyDocument {
             merge_sequence_number,
         };
         self.counted_mutation(py, |document| document.update_fields(&context))
+    }
+
+    fn update_page_fields(&mut self, py: Python<'_>) -> PyResult<usize> {
+        let updated = py
+            .detach(|| self.inner.update_page_fields())
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if updated != 0 {
+            self.revisions.bump();
+        }
+        Ok(updated)
+    }
+
+    fn update_layout_backed_fields(
+        &mut self,
+        py: Python<'_>,
+    ) -> PyResult<PyLayoutBackedFieldUpdateReport> {
+        let report = py
+            .detach(|| self.inner.update_layout_backed_fields())
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if report.updated_count() != 0 {
+            self.revisions.bump();
+        }
+        Ok(PyLayoutBackedFieldUpdateReport {
+            page_fields: report.page_fields,
+            num_pages_fields: report.num_pages_fields,
+            page_reference_fields: report.page_reference_fields,
+            diagnostics: report.diagnostics,
+        })
     }
 
     #[getter]

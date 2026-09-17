@@ -209,10 +209,13 @@ confidentiality failure.
 *Mitigation*: the corpus stays in a configured ignored private directory.
 Tracked tests contain only synthetic fixtures, anonymous P1 through P5 family
 requirements, and non-identifying capability assertions. Local required-corpus
-mode records hashes and evidence outside the repository, scans staged and
-tracked paths for forbidden artifacts, and fails closed when the configured
-private corpus is incomplete. Public CI proves the same API boundary through
-synthetic documents.
+mode records hashes, pure Rust generator sources, embedded approved raster
+evidence, and comparison output outside the repository. It scans staged and
+tracked paths for forbidden artifacts and fails closed when the configured
+private corpus is incomplete. Each generator depends only on public `rdocx`,
+starts from `Document::new()`, cannot import HTML or raw package content, and
+must produce identical bytes twice. Public CI proves the same API boundary
+through synthetic documents.
 
 ### R13, a public facade writes only half of an OOXML invariant
 

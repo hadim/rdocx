@@ -11,7 +11,7 @@ _Path = str | _os.PathLike[str]
 __all__ = [
     "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
     "Comment", "ComparisonDiagnostic", "ContentFragment", "Document", "Font", "HeaderFooterVariant",
-    "Hyperlink", "LayoutFragment", "LayoutPage", "Paragraph", "ParagraphCollection",
+    "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
     "RunRange", "Section", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style", "Table", "TableCollection",
     "TocRebuildReport",
@@ -127,6 +127,30 @@ class LayoutPage:
     def width(self) -> float: ...
     @property
     def height(self) -> float: ...
+
+
+@_final
+class LayoutBackedFieldUpdateReport:
+    def __new__(
+        cls,
+        *,
+        page_fields: int,
+        num_pages_fields: int,
+        page_reference_fields: int,
+        diagnostics: tuple[str, ...],
+    ) -> LayoutBackedFieldUpdateReport: ...
+    @property
+    def page_fields(self) -> int: ...
+    @property
+    def num_pages_fields(self) -> int: ...
+    @property
+    def page_reference_fields(self) -> int: ...
+    @property
+    def updated_count(self) -> int: ...
+    @property
+    def diagnostics(self) -> tuple[str, ...]: ...
+    @property
+    def diagnostic_count(self) -> int: ...
 
 
 @_final
@@ -492,6 +516,8 @@ class Document:
         *,
         after: StoryItem | None = None,
     ) -> StoryItem: ...
+    def update_page_fields(self) -> int: ...
+    def update_layout_backed_fields(self) -> LayoutBackedFieldUpdateReport: ...
     @property
     def paragraphs(self) -> ParagraphCollection: ...
     @property

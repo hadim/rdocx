@@ -1274,3 +1274,14 @@ the following paragraph content. Isolated instruction-run projection injects
 the inherited namespace bindings required by every copied qualified name. It
 locates the start-tag boundary with the XML parser and does not repeat a
 declaration already local to the run.
+
+Pagination-aware cache publication uses the same staged package boundary. One
+deterministic layout records PAGE, NUMPAGES, and resolved PAGEREF values against
+the owning paragraph node and top-level field position. Main-story fields are
+updated through typed document content. Referenced headers, footers, footnotes,
+and a uniquely owned endnotes part are patched through their relationship-
+resolved source spans. Unsupported switches, unresolved targets, ambiguous
+story ownership, and non-decimal section page formats retain their original
+cache. Every written field becomes clean. A parse, layout, source-correlation,
+serialization, or reopen failure publishes neither package bytes nor typed
+state.

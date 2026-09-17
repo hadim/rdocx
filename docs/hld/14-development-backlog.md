@@ -2530,9 +2530,12 @@ portable gate when Word GUI automation is unavailable.
 
 ### F-263, Layout-backed fields and M23 corpus gate (L)
 Materialize PAGE, NUMPAGES, PAGEREF, and supported TOC caches from deterministic
-layout, including numbered headings inside table cells. Build all five private
-documents through public `Document::new()` programs and enforce package,
-semantic, visual, deterministic, and no-fallback acceptance.
+layout, including numbered headings inside table cells. The native and Python
+operations publish atomically and return an owned report with separate field
+counts and ordered diagnostics. Build all five private documents through pure
+Rust public `Document::new()` programs, rerun each generator for exact byte
+determinism, and enforce package, semantic, visual, repair, and no-runtime-
+fallback acceptance.
 **Depends on**: F-241 through F-262.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/93>.
 **Test gate**: differential. Required private-corpus mode passes all five

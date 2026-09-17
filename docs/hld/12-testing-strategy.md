@@ -1790,22 +1790,33 @@ required-private entry modes. The two evidence paths are:
    normalized support graph, deterministic relationship identities, omitted
    fresh timestamps, and absence of a synthesized VBA project.
 2. Local required-corpus mode builds the five target documents through their
-   Rust generators and compares them with the configured private references.
-   Missing input, unexpected input count, a digest change, or missing evidence
-   fails closed. An optional-private invocation reports a skip when the ignored
+   pure Rust generators and compares them with the configured private
+   references. Each temporary consumer depends only on the public `rdocx`
+   facade, starts exactly once from `Document::new()`, and reopens only its own
+   output. Static boundary checks reject HTML import, raw package access,
+   private crates, source templates, and runtime access to the private corpus.
+   Every generator runs twice and must produce identical DOCX bytes. Missing
+   input, unexpected input count, a digest change, or missing evidence fails
+   closed. An optional-private invocation reports a skip when the ignored
    directory is absent, while required-private mode rejects that absence. This
    mode never prints document text or embeds source XML in a tracked report.
 
-The local comparison first normalizes ZIP metadata that is not document state,
-then checks content types, relationships, part inventory, schema child order,
-modeled properties, and required compatibility branches. It renders both sides
+The local comparison first normalizes ZIP metadata that is not document state.
+Generated packages must resolve every internal relationship and expose exactly
+one package-root office-document relationship to `word/document.xml`. The gate
+then checks the modeled projection, schema child order, required compatibility
+branches, and successful reopen. Pinned LibreOffice opens and exports every
+generated DOCX through an isolated profile. A conversion failure, repair or
+corruption diagnostic, missing output, invalid package graph, or invalid root
+relationship fails the gate. The harness renders both reference and candidate
 with deterministic bundled fonts at the pinned resolution and records page
 count, exact dimensions, and image similarity against a reviewed per-case
-threshold outside the repository. The ignored manifest binds the anonymous
-P1 through P5 aliases to exact local digests, page expectations, and tool
-identities. Tracked-path and staged-path scans reject private document formats
-without echoing a path or digest. Feature-level tests remain authoritative when
-byte identity is not a valid expectation.
+threshold outside the repository. The ignored manifest binds the anonymous P1
+through P5 aliases to exact local digests, page expectations, and tool
+identities. Any approved embedded raster evidence stays inside the ignored pure
+Rust generator sources. Tracked-path and staged-path scans reject private
+document formats without echoing a path or digest. Feature-level tests remain
+authoritative when byte identity is not a valid expectation.
 
 The feature-level property gate authors core, application, and custom
 properties plus the bounded settings defaults through public APIs. It saves and

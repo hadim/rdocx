@@ -1,6 +1,6 @@
 # F-263, Layout-backed fields and M23 corpus gate
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-241 through F-262
@@ -95,11 +95,11 @@ entries and their evidence remains outside the repository.
 
 ## Implementation checklist
 
-- [ ] Add failing body, related-story, table-cell, PAGEREF, and TOC cache updates.
-- [ ] Materialize page-dependent values from one deterministic layout snapshot.
-- [ ] Expose the atomic owned report through native Rust and Python.
-- [ ] Complete public-only and required-private conformance orchestration.
-- [ ] Run all five generators, private-leak scan, repair evidence, oracle comparison, hash harness, full verification, and microscope gates.
+- [x] Add failing body, related-story, table-cell, PAGEREF, and TOC cache updates.
+- [x] Materialize page-dependent values from one deterministic layout snapshot.
+- [x] Expose the atomic owned report through native Rust and Python.
+- [x] Complete public-only and required-private conformance orchestration.
+- [x] Run all five generators, private-leak scan, repair evidence, oracle comparison, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

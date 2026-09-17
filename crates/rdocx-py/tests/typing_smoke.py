@@ -15,6 +15,7 @@ from rdocx import (
     Hyperlink,
     Inches,
     LayoutFragment,
+    LayoutBackedFieldUpdateReport,
     LayoutPage,
     RGBColor,
     Paragraph,
@@ -160,6 +161,10 @@ def exercise_rdocx_types(path: Path) -> None:
     assert_type(compatible_story_item.xml, bytes)
     text_content_index: int = document.find_content_index("typed")
     text_content_indices: tuple[int, ...] = document.find_content_indices("typed")
+    page_fields_updated: int = document.update_page_fields()
+    layout_field_report: LayoutBackedFieldUpdateReport = (
+        document.update_layout_backed_fields()
+    )
     if fragments:
         bounds: BoundingBox = fragments[0].bounds
         assert_type(bounds.width, float)

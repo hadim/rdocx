@@ -610,6 +610,16 @@ or malformed producer value stays unmodelled and byte-preserved, and an
 explicit mutation rejects that ambiguous ownership before publication. The two
 methods are additive pre-1.0 `rdocx` API.
 
+`Document::update_layout_backed_fields` is the separate pagination-aware entry
+point for PAGE, NUMPAGES, and resolved PAGEREF caches. It lays out one staged
+candidate deterministically, reads each placed field through its layout field
+identity, and writes only those caches through the same traversal and
+validated story patching. The owned report separates the three updated counts
+and retains ordered layout diagnostics. `Document::update_page_fields` is the
+count-only compatibility wrapper over that operation. Every unsupported or
+unplaced field keeps its cache and dirty spelling, and `update_fields` still
+defers every layout-backed field kind.
+
 The native facade also rebuilds supported existing main-story table of
 contents fields. It reparses each owned instruction through the same recursive
 field grammar, discovers selected headings, custom paragraph styles, direct

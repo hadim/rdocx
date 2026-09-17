@@ -72,9 +72,9 @@ pub use epub::{EpubDiagnostic, EpubWriteResult};
 pub use error::{Error, Result};
 pub use field::{
     BarcodeCaseStyle, BarcodeField, BarcodeKind, BarcodePointOfSaleStyle, FieldDateTime,
-    FieldEvaluation, FieldEvaluationContext, FieldOutcome, LegacyFormFieldInfo,
-    LegacyFormFieldKind, LegacyFormFieldValue, MailMergeControl, MailMergeData,
-    MailMergeFormatContext, MailMergeFormattedText, MailMergeImage, MailMergeRecord,
+    FieldEvaluation, FieldEvaluationContext, FieldOutcome, LayoutBackedFieldUpdateReport,
+    LegacyFormFieldInfo, LegacyFormFieldKind, LegacyFormFieldValue, MailMergeControl,
+    MailMergeData, MailMergeFormatContext, MailMergeFormattedText, MailMergeImage, MailMergeRecord,
     MailMergeValue, TcField, TocEntrySelection, TocField, TocRebuildReport,
 };
 pub use html::{

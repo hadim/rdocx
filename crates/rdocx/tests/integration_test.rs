@@ -2762,6 +2762,24 @@ mod public_authoring_conformance_harness {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+
+    #[test]
+    #[ignore = "requires the ignored M23 private corpus and pinned renderers"]
+    fn m23_private_from_scratch_corpus_passes_required_mode() {
+        let root = repository_root();
+        let script = root.join("scripts/docx_authoring_conformance.py");
+        let output = Command::new("python3")
+            .arg(&script)
+            .arg("--private-generate-required")
+            .current_dir(&root)
+            .output()
+            .expect("private authoring conformance harness must start");
+        assert!(
+            output.status.success(),
+            "private from-scratch authoring conformance failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 mod flat_opc_package_class_tests {

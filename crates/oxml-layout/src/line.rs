@@ -4,7 +4,9 @@
 
 use crate::error::{LayoutError, Result};
 use crate::font::{FontManager, MultilingualTextSegment, TextDirection, explicit_direction_levels};
-use crate::output::{Color, FieldKind, FontId, GroupElement, MediaId, SourceSpan, StructureId};
+use crate::output::{
+    Color, FieldKind, FieldSource, FontId, GroupElement, MediaId, SourceSpan, StructureId,
+};
 
 /// A tab stop positioned in typographic points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -170,6 +172,8 @@ pub struct TextSegment {
     pub hyperlink_url: Option<String>,
     /// If this segment is a field placeholder, the kind of field.
     pub field_kind: Option<FieldKind>,
+    /// Source field of a page-number placeholder, when attributable.
+    pub field_source: Option<FieldSource>,
     /// If this segment is a note reference marker, which note it points at.
     pub note: Option<NoteRef>,
 }
@@ -1025,6 +1029,7 @@ fn split_text_subsegment(
         baseline_offset: seg.baseline_offset,
         hyperlink_url: seg.hyperlink_url.clone(),
         field_kind: seg.field_kind,
+        field_source: seg.field_source,
         note: seg.note,
     }))
 }
@@ -1147,6 +1152,7 @@ fn generated_hyphen(segment: &TextSegment, spacing: f64, fm: &FontManager) -> Re
         baseline_offset: segment.baseline_offset,
         hyperlink_url: segment.hyperlink_url.clone(),
         field_kind: segment.field_kind,
+        field_source: segment.field_source,
         note: segment.note,
     })
 }
@@ -1409,6 +1415,7 @@ fn shape_leader(
         baseline_offset: 0.0,
         hyperlink_url: None,
         field_kind: None,
+        field_source: None,
         note: None,
     })
 }
@@ -1556,6 +1563,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
+            field_source: None,
             note: None,
         }
     }
@@ -1596,6 +1604,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
+            field_source: None,
             note: None,
         }
     }
@@ -2118,6 +2127,7 @@ mod tests {
             bold: segment.bold,
             italic: segment.italic,
             field_kind: segment.field_kind,
+            field_source: segment.field_source,
             note: segment.note,
         };
     }

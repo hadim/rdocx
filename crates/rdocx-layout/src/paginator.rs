@@ -1478,6 +1478,13 @@ fn push_multilingual_text(
         bold: base.bold,
         italic: base.italic,
         field_kind: base.field_kind,
+        field_source: match source_node {
+            Some(source_node) => base.field_source.and_then(|mut field_source| {
+                field_source.node = source_node?;
+                Some(field_source)
+            }),
+            None => base.field_source,
+        },
         note: base.note,
     }));
     if let Some(underline) = base.underline {
@@ -1581,6 +1588,7 @@ fn draw_note(
             bold: note.marker.bold,
             italic: note.marker.italic,
             field_kind: None,
+            field_source: None,
             note: None,
         }));
     }
@@ -2586,6 +2594,13 @@ fn render_paragraph_lines(
                         bold: seg.bold,
                         italic: seg.italic,
                         field_kind: seg.field_kind,
+                        field_source: match para.source_node() {
+                            Some(source_node) => seg.field_source.and_then(|mut field_source| {
+                                field_source.node = source_node?;
+                                Some(field_source)
+                            }),
+                            None => seg.field_source,
+                        },
                         note: seg.note,
                     }));
                     text_provenance.push(ReflowTextProvenance {
@@ -2738,6 +2753,7 @@ fn render_paragraph_lines(
                             bold: leader_seg.bold,
                             italic: leader_seg.italic,
                             field_kind: None,
+                            field_source: None,
                             note: None,
                         }));
                         text_provenance.push(ReflowTextProvenance {
@@ -4030,6 +4046,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind,
+            field_source: None,
             note: None,
         }
     }
@@ -4999,6 +5016,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
+            field_source: None,
             note: None,
         };
         LayoutLine {
@@ -5133,6 +5151,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
+            field_source: None,
             note: None,
         };
         let line = LayoutLine {
@@ -5360,6 +5379,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
+            field_source: None,
             note: None,
         };
         LayoutLine {
@@ -5402,6 +5422,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: Some("https://example.com".to_string()),
             field_kind: None,
+            field_source: None,
             note: None,
         };
         let line = LayoutLine {
