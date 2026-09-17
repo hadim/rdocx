@@ -5380,8 +5380,9 @@ characters inside `w:t`.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/116>.
 **Test gate**: regression.
 `rebuilt_toc_uses_localized_styles_section_tabs_and_structural_suffixes` covers
-localized ids, A4 margins, style-defined tabs, and numbered headings through
-save, reopen, layout, and pinned Word comparison.
+localized ids, effective style tabs, A4 margins, invalid geometry fallback,
+unmodelled style-child preservation, and numbered headings through save,
+reopen, layout, and pinned Word 16.113 comparison.
 
 ### F-X115, Preserve modern comment metadata and identity (M)
 

@@ -1,6 +1,6 @@
 # F-X114, Rebuild TOC entries with document styles and geometry
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-X103, F-263
@@ -69,11 +69,11 @@ Expected to be unchanged because samples do not rebuild a TOC.
 
 ## Implementation checklist
 
-- [ ] Add localized-style, A4, style-tab, and numbered-heading failures.
-- [ ] Resolve TOC styles by built-in name without replacing producer ids.
-- [ ] Derive fallback tabs from effective section geometry.
-- [ ] Serialize numbering suffix tabs as ordered run content.
-- [ ] Run field, style, layout, oracle, hash harness, full verification, and microscope gates.
+- [x] Add localized-style, A4, style-tab, and numbered-heading failures.
+- [x] Resolve TOC styles by built-in name without replacing producer ids.
+- [x] Derive fallback tabs from effective section geometry.
+- [x] Serialize numbering suffix tabs as ordered run content.
+- [x] Run field, style, layout, oracle, hash harness, full verification, and microscope gates.
 
 ## Open questions
 

@@ -23,7 +23,8 @@ use rdocx_oxml::namespace::{R_NS, W_NS, matches_local_name};
 use rdocx_oxml::numbering::ST_LvlSuffix;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
-use rdocx_oxml::shared::ST_SectionType;
+use rdocx_oxml::shared::{ST_SectionType, ST_TabJc};
+use rdocx_oxml::styles::StyleType;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{
     CT_P, CT_R, CT_Text, Field, FieldArgument, FieldInstruction, RunContent,
@@ -1056,6 +1057,8 @@ impl Document {
             &bookmark_state,
             &numbering_layout,
         )?;
+        let toc_entry_styles = ensure_toc_entry_styles(&mut candidate, &sources)?;
+        candidate.flush_to_package()?;
         let rebuilt_toc_spans = toc_spans
             .iter()
             .zip(&toc_fields)
@@ -1181,6 +1184,8 @@ impl Document {
                 toc_index,
                 toc,
                 toc_sources,
+                &toc_entry_styles,
+                toc_section_text_width(&candidate.document.body, span.begin_paragraph),
                 &bookmark_by_paragraph,
                 &provisional_xml,
                 &mut placeholders,
@@ -5523,7 +5528,19 @@ struct TocSource {
     omit_page_number: bool,
     needs_bookmark: bool,
     sequence_prefix: Option<String>,
-    numbering_prefix: Option<String>,
+    numbering_prefix: Option<TocNumberingPrefix>,
+}
+
+#[derive(Debug, Clone)]
+struct TocNumberingPrefix {
+    marker: String,
+    suffix: ST_LvlSuffix,
+}
+
+#[derive(Debug, Clone)]
+struct TocEntryStyle {
+    style_id: String,
+    has_right_tab: bool,
 }
 
 fn discover_toc_sources(
@@ -5696,17 +5713,110 @@ fn discover_toc_sources(
 fn toc_numbering_prefix(
     layout: &rdocx_layout::WordLayoutResult,
     paragraph_index: usize,
-) -> Option<String> {
+) -> Option<TocNumberingPrefix> {
     let numbering = layout.document_paragraph_numbering(paragraph_index)?;
     if numbering.marker_text.is_empty() {
         return None;
     }
-    let suffix = match numbering.suffix {
-        ST_LvlSuffix::Tab => "\t",
-        ST_LvlSuffix::Space => " ",
-        ST_LvlSuffix::Nothing => "",
+    Some(TocNumberingPrefix {
+        marker: numbering.marker_text.clone(),
+        suffix: numbering.suffix,
+    })
+}
+
+fn ensure_toc_entry_styles(
+    document: &mut Document,
+    sources: &[Vec<TocSource>],
+) -> Result<BTreeMap<u8, TocEntryStyle>> {
+    let mut levels = sources
+        .iter()
+        .flatten()
+        .map(|source| source.level)
+        .collect::<Vec<_>>();
+    levels.sort_unstable();
+    levels.dedup();
+    let mut resolved = BTreeMap::new();
+    for level in levels {
+        let built_in_name = format!("toc {level}");
+        let canonical_id = format!("TOC{level}");
+        let style_id = document
+            .styles
+            .styles
+            .iter()
+            .find(|style| {
+                style.style_type == StyleType::Paragraph
+                    && style
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.trim().eq_ignore_ascii_case(&built_in_name))
+            })
+            .map(|style| style.style_id.clone())
+            .or_else(|| {
+                document
+                    .styles
+                    .get_by_id(&canonical_id)
+                    .map(|style| style.style_id.clone())
+            })
+            .unwrap_or_else(|| {
+                let (style, _) =
+                    style::StyleBuilder::paragraph(&canonical_id, &format!("TOC {level}")).build();
+                document.styles.styles.push(style);
+                canonical_id
+            });
+        let effective = style::resolve_paragraph_properties(Some(&style_id), &document.styles);
+        let has_right_tab = effective
+            .tabs
+            .as_ref()
+            .is_some_and(|tabs| tabs.tabs.iter().any(|tab| tab.val == ST_TabJc::Right));
+        resolved.insert(
+            level,
+            TocEntryStyle {
+                style_id,
+                has_right_tab,
+            },
+        );
+    }
+    style::validate_style_graph(&document.styles)?;
+    Ok(resolved)
+}
+
+fn toc_section_text_width(body: &CT_Body, paragraph_index: usize) -> i32 {
+    const DEFAULT_PAGE_WIDTH: i32 = 12_240;
+    const DEFAULT_MARGIN: i32 = 1_440;
+    const DEFAULT_TEXT_WIDTH: i32 = DEFAULT_PAGE_WIDTH - 2 * DEFAULT_MARGIN;
+
+    let mut paragraphs = Vec::new();
+    collect_body_paragraphs(body, &mut paragraphs);
+    let section = paragraphs
+        .iter()
+        .skip(paragraph_index)
+        .find_map(|paragraph| {
+            paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.sect_pr.as_ref())
+        })
+        .or(body.sect_pr.as_ref());
+    let Some(section) = section else {
+        return DEFAULT_TEXT_WIDTH;
     };
-    Some(format!("{}{suffix}", numbering.marker_text))
+    let page_width = section
+        .page_width
+        .map(|width| width.0)
+        .unwrap_or(DEFAULT_PAGE_WIDTH);
+    let left = section
+        .margin_left
+        .map(|margin| margin.0)
+        .unwrap_or(DEFAULT_MARGIN);
+    let right = section
+        .margin_right
+        .map(|margin| margin.0)
+        .unwrap_or(DEFAULT_MARGIN);
+    page_width
+        .checked_sub(left)
+        .and_then(|width| width.checked_sub(right))
+        .filter(|width| *width > 0)
+        .unwrap_or(DEFAULT_TEXT_WIDTH)
 }
 
 fn toc_source_position_is_owned(spans: &[DynamicTocSpan], position: TocOwnedPosition) -> bool {
@@ -6239,6 +6349,8 @@ fn render_toc_entries(
     toc_index: usize,
     toc: &TocField,
     sources: &[TocSource],
+    entry_styles: &BTreeMap<u8, TocEntryStyle>,
+    fallback_right_tab: i32,
     bookmarks: &BTreeMap<usize, TocBookmark>,
     source_xml: &[u8],
     placeholders: &mut Vec<TocPagePlaceholder>,
@@ -6251,13 +6363,22 @@ fn render_toc_entries(
                 "table of contents source bookmark was not allocated".to_owned(),
             ));
         }
-        output.push_str("<w:p><w:pPr><w:pStyle w:val=\"TOC");
-        output.push_str(&source.level.to_string());
+        let entry_style = entry_styles.get(&source.level).ok_or_else(|| {
+            Error::Other(format!(
+                "table of contents level {} has no entry style",
+                source.level
+            ))
+        })?;
+        output.push_str("<w:p><w:pPr><w:pStyle w:val=\"");
+        output.push_str(&xml_escape_attribute(&entry_style.style_id));
         output.push_str("\"/>");
-        if !source.omit_page_number && toc.page_number_separator.is_none() {
-            output.push_str(
-                "<w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9350\"/></w:tabs>",
-            );
+        if !source.omit_page_number
+            && toc.page_number_separator.is_none()
+            && !entry_style.has_right_tab
+        {
+            output.push_str("<w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"");
+            output.push_str(&fallback_right_tab.to_string());
+            output.push_str("\"/></w:tabs>");
         }
         output.push_str("</w:pPr>");
         if toc.hyperlink {
@@ -6267,10 +6388,19 @@ fn render_toc_entries(
             ));
             output.push_str("\">");
         }
-        output.push_str("<w:r><w:t>");
-        if let Some(prefix) = source.numbering_prefix.as_deref() {
-            output.push_str(&xml_escape_text(prefix));
+        if let Some(prefix) = source.numbering_prefix.as_ref() {
+            output.push_str("<w:r><w:t>");
+            output.push_str(&xml_escape_text(&prefix.marker));
+            output.push_str("</w:t></w:r>");
+            match prefix.suffix {
+                ST_LvlSuffix::Tab => output.push_str("<w:r><w:tab/></w:r>"),
+                ST_LvlSuffix::Space => {
+                    output.push_str("<w:r><w:t xml:space=\"preserve\"> </w:t></w:r>")
+                }
+                ST_LvlSuffix::Nothing => {}
+            }
         }
+        output.push_str("<w:r><w:t>");
         output.push_str(&xml_escape_text(&source.title));
         output.push_str("</w:t></w:r>");
         if toc.hyperlink {

@@ -372,6 +372,14 @@ preservation case keeps alternate-prefix field scaffolding and neighbouring raw
 XML while proving an untouched custom part is byte-identical after save and
 reopen. Failure cases compare the live document before and after the rejected
 rebuild.
+The entry-style and geometry regression supplies localized style ids, an A4
+section with 1417 twip side margins, a style-owned 7777 twip right tab, one
+missing TOC style, and a numbered heading with a tab suffix. It proves
+localized id reuse, canonical creation only for the missing level, a 9072 twip
+section fallback, structural tabs, safe default geometry under extreme parsed
+values, and exact preservation of an unrelated unmodelled style child. The
+normalized differential records are pinned to Microsoft Word 16.113 build
+16.113.26091433 on macOS with the `fx114-toc-entry-records-v1` contract.
 The Word-default instruction case retains argument-free `TOC \\z`, rebuilds
 through an existing content-control payload, and saves and reopens the result.
 A mixed simple and unsupported complex TOC case asserts exact diagnostic text

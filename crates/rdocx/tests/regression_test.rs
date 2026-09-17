@@ -56,6 +56,14 @@ const WORD_F252_ENVIRONMENT: &str = "macOS 26.6.2 build 25G83; locale=en-GB; nor
 const WORD_FX101_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_FX101_ENVIRONMENT: &str =
     "macOS; locale=en-GB; normalization=fx101-run-page-break-pages-v1";
+const WORD_FX114_ORACLE: &str = "Microsoft Word 16.113 build 16.113.26091433";
+const WORD_FX114_ENVIRONMENT: &str =
+    "macOS; locale=en-GB; normalization=fx114-toc-entry-records-v1";
+const WORD_FX114_RECORDS: &[&str] = &[
+    "toc 1 | right-tab=7777 | structural-tabs=2 | literal-tab=false | text=1.\\tNumbered\\t",
+    "toc 2 | right-tab=9072 | structural-tabs=1 | literal-tab=false | text=Localized fallback\\t",
+    "toc 3 | right-tab=9072 | structural-tabs=1 | literal-tab=false | text=Canonical fallback\\t",
+];
 const WORD_F252_RECORDS: [&str; 9] = [
     "page=1 | width_pt=612 | header=H-FIRST | body=S0-FIRST | footer=F-FIRST",
     "page=2 | width_pt=612 | header=H-EVEN | body=S0-EVEN | footer=F-EVEN",
@@ -8180,6 +8188,341 @@ fn numbered_toc_entries_reuse_the_visible_layout_marker() {
         toc_entry_signatures(&document_xml(&mut document))[0].0,
         "1.\tOverview\t1"
     );
+}
+
+fn fx114_toc_document() -> Document {
+    use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
+    use rdocx_oxml::properties::CT_PPr;
+    use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
+    use rdocx_oxml::units::Twips;
+
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-3"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Numbered</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Localized fallback</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>Canonical fallback</w:t></w:r></w:p>
+        <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:left="1417" w:right="1417"/></w:sectPr>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    document
+        .add_style(
+            StyleBuilder::paragraph("Inhaltsverzeichnis1", "ToC 1").paragraph_properties(CT_PPr {
+                tabs: Some(CT_Tabs {
+                    tabs: vec![CT_TabStop {
+                        val: ST_TabJc::Right,
+                        pos: Twips(7777),
+                        leader: Some(ST_TabLeader::Dot),
+                        source_occurrence: None,
+                    }],
+                }),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    document
+        .add_style(StyleBuilder::paragraph("SommaireDeux", "toc 2"))
+        .unwrap();
+    let definition = document
+        .add_numbering_definition(&[ListLevel::decimal()])
+        .unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .link_style_to_numbering("Heading1", instance, 0)
+        .unwrap();
+    document
+}
+
+fn fx114_toc_records(bytes: &[u8]) -> Vec<String> {
+    use rdocx_oxml::shared::ST_TabJc;
+    use rdocx_oxml::text::RunContent;
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).expect("open package");
+    let document = CT_Document::from_xml(
+        package
+            .get_part("/word/document.xml")
+            .expect("document part"),
+    )
+    .expect("parse document");
+    let styles = rdocx_oxml::styles::CT_Styles::from_xml(
+        package.get_part("/word/styles.xml").expect("styles part"),
+    )
+    .expect("parse styles");
+    document
+        .body
+        .paragraphs()
+        .filter_map(|paragraph| {
+            let properties = paragraph.properties.as_ref()?;
+            let style_id = properties.style_id.as_deref()?;
+            let style = styles.get_by_id(style_id)?;
+            let name = style.name.as_deref()?;
+            let normalized = name.trim().to_ascii_lowercase();
+            if !matches!(normalized.as_str(), "toc 1" | "toc 2" | "toc 3") {
+                return None;
+            }
+            let direct_right_tab = properties.tabs.as_ref().and_then(|tabs| {
+                tabs.tabs
+                    .iter()
+                    .find(|tab| tab.val == ST_TabJc::Right)
+            });
+            let style_right_tab = style.ppr.as_ref().and_then(|properties| {
+                properties.tabs.as_ref().and_then(|tabs| {
+                    tabs.tabs
+                        .iter()
+                        .find(|tab| tab.val == ST_TabJc::Right)
+                })
+            });
+            let right_tab = direct_right_tab.or(style_right_tab)?.pos.0;
+            let structural_tabs = paragraph
+                .runs
+                .iter()
+                .flat_map(|run| &run.content)
+                .filter(|content| matches!(content, RunContent::Tab))
+                .count();
+            let literal_tab = paragraph.runs.iter().any(|run| {
+                run.content.iter().any(|content| match content {
+                    RunContent::Text(text) => text.text.contains('\t'),
+                    _ => false,
+                })
+            });
+            let mut text = String::new();
+            let mut seen_tabs = 0usize;
+            for content in paragraph.runs.iter().flat_map(|run| &run.content) {
+                match content {
+                    RunContent::Text(value) if seen_tabs < structural_tabs => {
+                        text.push_str(&value.text)
+                    }
+                    RunContent::Tab => {
+                        text.push_str("\\t");
+                        seen_tabs += 1;
+                    }
+                    _ => {}
+                }
+            }
+            Some(format!(
+                "{normalized} | right-tab={right_tab} | structural-tabs={structural_tabs} | literal-tab={literal_tab} | text={text}"
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn rebuilt_toc_uses_localized_styles_section_tabs_and_structural_suffixes() {
+    use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
+    use rdocx_oxml::text::RunContent;
+    use rdocx_oxml::units::Twips;
+
+    assert_eq!(
+        WORD_FX114_ORACLE,
+        "Microsoft Word 16.113 build 16.113.26091433"
+    );
+    assert_eq!(
+        WORD_FX114_ENVIRONMENT,
+        "macOS; locale=en-GB; normalization=fx114-toc-entry-records-v1"
+    );
+    let mut document = fx114_toc_document();
+    let preserved_style_child = r#"<producer:opaque xmlns:producer="urn:producer" producer:value="keep"><producer:child/></producer:opaque>"#;
+    let bytes = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    let unrelated_style = format!(
+        r#"<w:style w:type="paragraph" w:styleId="ProducerKeep"><w:name w:val="Producer keep"/>{preserved_style_child}</w:style>"#
+    );
+    let styles = styles.replace("</w:styles>", &format!("{unrelated_style}</w:styles>"));
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut injected = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut injected).unwrap();
+    document = Document::from_bytes(injected.get_ref()).unwrap();
+
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 3);
+    let bytes = document.to_bytes().unwrap();
+    assert_eq!(
+        fx114_toc_records(&bytes)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        WORD_FX114_RECORDS
+    );
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert!(reopened.style("Inhaltsverzeichnis1").is_some());
+    assert!(reopened.style("SommaireDeux").is_some());
+    assert!(reopened.style("TOC3").is_some());
+    assert!(reopened.style("ProducerKeep").is_some());
+    let saved_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let saved_styles =
+        std::str::from_utf8(saved_package.get_part("/word/styles.xml").unwrap()).unwrap();
+    assert!(
+        saved_styles.contains(preserved_style_child),
+        "{saved_styles}"
+    );
+
+    let body = body_from_document(&mut Document::from_bytes(&bytes).unwrap());
+    let entries = body
+        .paragraphs()
+        .filter(|paragraph| {
+            paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref())
+                .is_some_and(|style| {
+                    matches!(style, "Inhaltsverzeichnis1" | "SommaireDeux" | "TOC3")
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 3);
+    for (entry, expected) in entries
+        .iter()
+        .zip(["Inhaltsverzeichnis1", "SommaireDeux", "TOC3"])
+    {
+        assert_eq!(
+            entry
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref()),
+            Some(expected)
+        );
+    }
+    assert!(
+        entries[0]
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.tabs.as_ref())
+            .is_none()
+    );
+    for entry in &entries[1..] {
+        let tabs = entry
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.tabs.as_ref())
+            .expect("fallback tab");
+        assert_eq!(tabs.tabs.len(), 1);
+        assert_eq!(tabs.tabs[0].val, ST_TabJc::Right);
+        assert_eq!(tabs.tabs[0].pos, Twips(9072));
+        assert_eq!(tabs.tabs[0].leader, Some(ST_TabLeader::Dot));
+    }
+
+    let numbered = body
+        .paragraphs()
+        .find(|paragraph| {
+            paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref())
+                == Some("Inhaltsverzeichnis1")
+        })
+        .unwrap();
+    assert!(numbered.runs.iter().all(|run| {
+        run.content.iter().all(|content| match content {
+            RunContent::Text(text) => !text.text.contains('\t'),
+            _ => true,
+        })
+    }));
+    assert!(numbered.runs.iter().any(|run| {
+        run.content
+            .iter()
+            .any(|content| matches!(content, RunContent::Tab))
+    }));
+    assert_eq!(numbered.text(), "1.\tNumbered\t");
+    reopened.layout_deterministic().unwrap();
+
+    let extreme_body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Extreme geometry</w:t></w:r></w:p>
+        <w:sectPr><w:pgSz w:w="2147483647" w:h="16838"/><w:pgMar w:left="-2147483648" w:right="-2147483648"/></w:sectPr>
+    "#;
+    let mut extreme = document_with_field_parts(&wrap_word_body(extreme_body), None, None);
+    assert_eq!(extreme.rebuild_toc().unwrap().entry_count, 1);
+    let body = body_from_document(&mut extreme);
+    let tab = body
+        .paragraphs()
+        .find(|paragraph| {
+            paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref())
+                == Some("TOC1")
+        })
+        .and_then(|paragraph| paragraph.properties.as_ref())
+        .and_then(|properties| properties.tabs.as_ref())
+        .and_then(|tabs| tabs.tabs.first())
+        .expect("safe fallback tab");
+    assert_eq!(tab.pos, Twips(9360));
+}
+
+#[test]
+#[ignore = "requires installed Microsoft Word 16.113 GUI automation"]
+fn capture_fx114_word_toc_entry_records() {
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    for (key, expected) in [
+        ("CFBundleShortVersionString", "16.113"),
+        ("CFBundleVersion", "16.113.26091433"),
+    ] {
+        let output = Command::new("plutil")
+            .args([
+                "-extract",
+                key,
+                "raw",
+                "/Applications/Microsoft Word.app/Contents/Info.plist",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+    }
+
+    let mut document = fx114_toc_document();
+    document.rebuild_toc().unwrap();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::path::Path::new(
+        "/Users/atulsharma/Library/Containers/com.microsoft.Word/Data/Documents/rdocx-fx114-word-oracle",
+    )
+    .join(format!("{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("fx114-source.docx");
+    let round_trip = directory.join("fx114-word.docx");
+    document.save(&source).unwrap();
+
+    let script = format!(
+        r#"with timeout of 60 seconds
+tell application "Microsoft Word"
+activate
+open file name "{}" read only false add to recent files false
+set fx114Doc to document 1
+save as fx114Doc file name "{}" file format format document default add to recent files false
+set fx114Doc to active document
+close fx114Doc saving no
+end tell
+end timeout"#,
+        source.display(),
+        round_trip.display(),
+    );
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Word round trip failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = std::fs::read(&round_trip).unwrap();
+    assert_eq!(
+        fx114_toc_records(&bytes)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        WORD_FX114_RECORDS
+    );
+    std::fs::remove_dir_all(&directory).unwrap();
 }
 
 #[test]

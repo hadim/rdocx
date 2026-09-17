@@ -1236,6 +1236,13 @@ correlates the existing complex TOC begin, separator, and end markers, and
 records exact byte offsets for the owned cached-result range. Bookmark markers
 are inserted at schema-valid unowned boundaries by byte-position edits. Source
 selection retains paragraph, run, and raw-child positions for bookmark scope.
+Each required built-in entry level resolves a paragraph style by the
+case-insensitive built-in name `toc N` and retains the producer's style id. An
+existing canonical `TOCN` id is the collision-safe fallback, and a canonical
+style is created only when neither form exists. Effective paragraph properties
+decide whether the style already owns a right tab. Style-graph validation and
+styles-part serialization complete inside the staged candidate, so unrelated
+styles and unmodelled style children retain their source bytes.
 Old-result exclusion adds a total nested-run order within each accepted
 revision or content-control owner, so fields on opposite sides of a marker in
 one wrapper remain distinguishable. The outer coordinate is the typed

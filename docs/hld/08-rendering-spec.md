@@ -1078,6 +1078,15 @@ and restarted pagination, including a restarted final section. PAGE fields on
 those pages consume the continued displayed value. Number format, chapter
 style, and chapter separator remain preserved but do not affect M23 layout.
 
+Dynamic TOC entry materialization uses the section that owns the TOC field.
+When the effective entry style has no right tab, the generated paragraph adds
+one at page width minus the section's left and right margins. Missing,
+nonpositive, or arithmetically invalid geometry uses the standard 9360 twip
+text width. A style-owned right tab remains authoritative and receives no
+direct duplicate. Numbering marker text and its suffix are separate ordered
+run content. A tab suffix is `w:tab`, a space suffix is preserved whitespace,
+and neither becomes a literal control character inside `w:t`.
+
 ### Word watermarks
 
 Header `w:pict` content has a conservative renderer-only projection. A direct
