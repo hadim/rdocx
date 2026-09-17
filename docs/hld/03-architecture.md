@@ -975,12 +975,16 @@ an endnote sharing a number.
 ## Versioning
 
 The 15 shared and PowerPoint publication candidates use the explicit common
-incubating version 0.12.0 in their manifests and workspace pins, prepared for
-the S73 `rpptx-v0.12.0` release. The latest published coherent family is
+incubating version 0.12.1 in their manifests and workspace pins, prepared for
+the S73 `rpptx-v0.12.1` recovery release. The failed immutable
+`rpptx-v0.12.0` tag targets reviewed SHA
+`54f4567b54b4028cd5126bcf66054f3e0588a4a9`. Its Windows CLI archive used CRLF
+for reviewed text, so aggregate asset validation stopped before any registry
+publication or GitHub release. The latest published coherent family is
 0.11.0 from immutable annotated tag `rpptx-v0.11.0` at reviewed SHA
 `0b6bd622f8a14189d7d1281d011f81319ef8ad2a`. All 15 registry entries and their
 sole owner are verified, while the `rpptx-wasm` preparation member remains
-unpublished at 0.12.0. The earlier 0.10.0 family remains available. The family
+unpublished at 0.12.1. The earlier 0.10.0 family remains available. The family
 includes `oxml-chart` as the format-neutral owner while
 retaining `rpptx-chart` as a source-compatible deprecated shim. The released
 `rdocx-*` crates use the separate workspace version. The stable workspace, its
@@ -991,7 +995,7 @@ metadata-complete `rdocx` Python distribution is published at 0.13.2 from
 immutable annotated tag `py-rdocx-v0.13.2` at reviewed SHA
 `2b009243ed39ab66470d7484d490985368e865a8`. The unpublished 0.13.2 crates.io
 train is superseded by 0.14.0 rather than backfilled. The `rpptx` Python
-project follows the native incubating version, now prepared at 0.12.0, and
+project follows the native incubating version, now prepared at 0.12.1, and
 0.11.0 is published from immutable annotated tag `py-rpptx-v0.11.0` at reviewed
 SHA `2b009243ed39ab66470d7484d490985368e865a8`. The exact
 seven-package stable crates.io family is published from immutable annotated

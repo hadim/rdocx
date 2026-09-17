@@ -1629,8 +1629,10 @@ crates.io train is superseded rather than backfilled. S73 prepares four
 version-aligned releases at one reviewed SHA. The stable source, `rdocx` Python
 project, and `rdocx-wasm` track 0.14.0 for `v0.14.0` and `py-rdocx-v0.14.0`.
 The shared and PowerPoint source, `rpptx` Python project, and unpublished
-`rpptx-wasm` crate track 0.12.0 for `rpptx-v0.12.0` and `py-rpptx-v0.12.0`.
-Because packaged stable crates require the shared family, `rpptx-v0.12.0`
+`rpptx-wasm` crate track 0.12.1 for `rpptx-v0.12.1` and `py-rpptx-v0.12.1`.
+The failed immutable `rpptx-v0.12.0` workflow published no registry packages
+and created no GitHub release. Because packaged stable crates require the
+shared family, `rpptx-v0.12.1`
 publishes before `v0.14.0`. Each tag needs its own immediate final approval.
 Every binding and WASM crate remains unpublished on crates.io. Neither Rust
 release gives binding, WASM, npm, or Python package publication authority. Every

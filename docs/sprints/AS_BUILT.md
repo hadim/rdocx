@@ -15109,3 +15109,47 @@ supply-chain gates pass at `e82dac08`.
 **Notes for future sessions.** Select TOC styles by built-in name, never by a
 fixed id list. Keep generated tab stops tied to the owning section, and keep
 numbering suffixes structural so no renderer sees a raw control character.
+
+### F-X122, Recover the immutable rpptx 0.12.0 release attempt
+
+**Sprint.** S73
+**Completed.** 2026-09-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Rust release asset validation now treats CRLF and LF as
+equivalent only for packaged README and licence text. The complete shared and
+PowerPoint family, its Python and WASM carriers, stable shared dependency pins,
+release notes, and release mappings are prepared coherently at 0.12.1.
+
+**Non-obvious choices.** The failed immutable `rpptx-v0.12.0` tag remains at
+reviewed SHA `54f4567b54b4028cd5126bcf66054f3e0588a4a9`. Workflow run
+`35268763196` stopped during aggregate CLI asset validation before any crate or
+GitHub release was published. Archive names, exact member sets, executable
+mode, nonempty binaries, checksums, and reviewed text content remain enforced.
+Only newline representation is normalized for the two prose members.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and one harmless naming nitpick in an unused historical
+release-note helper.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, package-family
+versioning, `docs/hld/10-bindings-spec.md`, aligned Python and WASM carriers,
+`docs/hld/12-testing-strategy.md`, newline-safe asset validation and recovery
+contracts, the F-X122 entry in `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`, release ordering and publication state.
+
+**Tests.** `rpptx_0_12_1_recovery_is_version_aligned_and_line_ending_safe`
+failed before implementation on the missing normalization contract. It now
+proves exact 0.12.1 carriers, CRLF equivalence, changed-text rejection, and both
+reviewed text comparisons. The 122-test workflow suite, full workspace gate,
+no-default-font path, WASM graphs, warning-free docs, 27 README inventories,
+22-package publish dry run, archive-size gate, cargo-deny, and clean-source
+Python 3.9 and 3.12 binding rider all pass. Both abi3 wheels pass their complete
+test suites, strict mypy 2.3.0, stubtest, and exact ABI tag checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Publish `rpptx-v0.12.1` before `v0.14.0` because
+the stable archives require shared 0.12.1 from the registry. Never move or
+delete the failed 0.12.0 tag, and retain exact validation for every archive
+property other than the reviewed prose newline representation.

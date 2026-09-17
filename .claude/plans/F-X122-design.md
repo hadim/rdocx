@@ -1,6 +1,6 @@
 # F-X122, Recover the immutable rpptx 0.12.0 release attempt
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: M
 **Depends on**: F-X111, F-X119, F-X121
@@ -83,15 +83,15 @@ normalization do not change document or rendering output.
 
 ## Implementation checklist
 
-- [ ] Add a failing regression for CRLF-safe text validation and the coherent
+- [x] Add a failing regression for CRLF-safe text validation and the coherent
       0.12.1 recovery contract.
-- [ ] Normalize only README and licence newlines in the aggregate validator.
-- [ ] Move every incubating carrier, pin, lock entry, example, and assertion to
+- [x] Normalize only README and licence newlines in the aggregate validator.
+- [x] Move every incubating carrier, pin, lock entry, example, and assertion to
       0.12.1 while retaining stable 0.14.0.
-- [ ] Add reviewed 0.12.1 Rust and Python release notes without rewriting the
+- [x] Add reviewed 0.12.1 Rust and Python release notes without rewriting the
       immutable 0.12.0 record.
-- [ ] Update F-X112 notification and release mappings to the recovery tags.
-- [ ] Run every routed check, the full gate, and a clean microscope review.
+- [x] Update F-X112 notification and release mappings to the recovery tags.
+- [x] Run every routed check, the full gate, and a clean microscope review.
 
 ## Open questions
 

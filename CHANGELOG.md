@@ -4,6 +4,122 @@
 
 No changes have been recorded since the S73 package family preparations.
 
+## rpptx-v0.12.1
+
+### Highlights
+
+This patch recovery replaces the failed immutable `rpptx-v0.12.0` workflow
+attempt. That tag published no crates and created no GitHub release. The
+package content below is the reviewed S73 incubating family prepared at the
+new coherent version.
+
+The shared OOXML and PowerPoint family moves to 0.12.1 with correct picture
+transparency, safe rendering of large and transparent raster pictures, notes
+that render and update reliably, portable authored charts, and searchable PDF
+output in logical reading order. The `rpptx` CLI now ships as prebuilt
+binaries attached to its GitHub release.
+
+### Added
+
+- Picture transparency from `a:alphaModFix` is applied across slide, layout,
+  master, background, preview, SVG, PDF, and raster output, based on
+  [PR 105](https://github.com/tensorbee/rdocx/pull/105) for
+  [Issue 91](https://github.com/tensorbee/rdocx/issues/91).
+- Speaker notes text can be replaced while keeping the notes shape identity
+  and run formatting. Presentation replacement counts slide and notes
+  matches, and `rpptx replace` refuses to overwrite its input or an existing
+  output, validates an expected match count, and publishes atomically. This
+  resolves the replacement half of
+  [Issue 120](https://github.com/tensorbee/rdocx/issues/120).
+- Native presentation APIs expose shape geometry and identity, run font
+  details, autofit mode, and formatting-preserving run text replacement for
+  the requests in [Issue 121](https://github.com/tensorbee/rdocx/issues/121).
+- Rust release tags attach checksummed `rpptx` CLI archives for six Linux,
+  macOS, and Windows targets, and `cargo binstall rpptx-cli` resolves them, as
+  requested in [Issue 100](https://github.com/tensorbee/rdocx/issues/100).
+- Authored charts emit explicit title layout, overlay, marker, and smoothing
+  defaults that viewers such as Word and Pages read consistently. This
+  builds on [PR 71](https://github.com/tensorbee/rdocx/pull/71) and
+  [PR 123](https://github.com/tensorbee/rdocx/pull/123).
+- `Presentation::slide_png_deterministic` and `slide_pngs_deterministic` render
+  slides with bundled fonts only, supporting the presentation rendering
+  automation requested in
+  [Issue 76](https://github.com/tensorbee/rdocx/issues/76).
+- Layout output exposes `FieldSource` provenance on field glyph runs so
+  page-dependent field caches can be written from one deterministic
+  pagination pass, as planned in
+  [Issue 93](https://github.com/tensorbee/rdocx/issues/93).
+
+### Fixed
+
+- Raster output now premultiplies straight-alpha pictures before compositing,
+  and the decoded-pixel render limit rises from 16 MiB to 64 MiB, so larger
+  pictures render instead of being skipped silently. The 16 MiB encoded-file
+  limit is unchanged. This resolves
+  [Issue 119](https://github.com/tensorbee/rdocx/issues/119).
+- Notes render when a producer-valid notes slide omits its reverse
+  relationship to the slide, while conflicting owners still fail closed. This
+  resolves the rendering half of
+  [Issue 120](https://github.com/tensorbee/rdocx/issues/120).
+- Date, footer, and slide-number placeholders placed on the slide itself stay
+  visible regardless of master `p:hf` flags, which only govern inherited
+  placeholders. This answers
+  [Issue 92](https://github.com/tensorbee/rdocx/issues/92).
+- Generated PDFs keep complete logical text lines for search and extraction,
+  which resolves the shared renderer part of
+  [Issue 74](https://github.com/tensorbee/rdocx/issues/74).
+- Shared line layout honors run-level page breaks for page-dependent Word
+  output, from [Issue 88](https://github.com/tensorbee/rdocx/issues/88) and
+  [PR 102](https://github.com/tensorbee/rdocx/pull/102).
+
+### Compatibility
+
+The exact 15-package shared OOXML and PowerPoint crates.io family moves
+together from 0.11.0 to 0.12.1. The selected set is `oxml-core`, `oxml-opc`,
+`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, `oxml-sml`,
+`oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
+`rpptx-render`, `rpptx`, and `rpptx-cli`.
+
+This pre-1.0 minor release contains source-incompatible Rust changes. Public
+structs gained fields, including `ChartData` (axis titles and a palette, now
+with `Default`), `LayoutLine` (`forced_break_after`), field glyph runs
+(`field_source`), and `ResolvedImage` (`opacity`). Exhaustive enums gained
+variants, including `OpcError::DuplicatePartName`. Code that builds these
+structs with full struct literals or matches these enums exhaustively must be
+updated. `Presentation::replace_text` now also replaces matches in speaker notes
+and includes them in its returned count. Callers that must leave notes untouched
+need to account for that change.
+
+`rpptx replace` now fails when no match is found unless an expected count of
+zero is given, and it refuses to overwrite an existing output file. Scripts
+that relied on silent zero-match success or in-place overwrite must pass an
+explicit expected count and a new output path.
+
+Stable Word crates, Python distributions, WASM, and npm packages are outside
+this release. `rpptx-wasm@0.12.1` is not a crates.io package.
+
+### Contributors
+
+[@hadim](https://github.com/hadim) reported the rendering, notes, header and
+footer flag, automation, field, and binding gaps in Issues
+[74](https://github.com/tensorbee/rdocx/issues/74),
+[76](https://github.com/tensorbee/rdocx/issues/76),
+[88](https://github.com/tensorbee/rdocx/issues/88),
+[91](https://github.com/tensorbee/rdocx/issues/91),
+[92](https://github.com/tensorbee/rdocx/issues/92),
+[93](https://github.com/tensorbee/rdocx/issues/93),
+[100](https://github.com/tensorbee/rdocx/issues/100),
+[119](https://github.com/tensorbee/rdocx/issues/119),
+[120](https://github.com/tensorbee/rdocx/issues/120), and
+[121](https://github.com/tensorbee/rdocx/issues/121). They also contributed the
+picture transparency implementation in
+[PR 105](https://github.com/tensorbee/rdocx/pull/105) and the run page-break
+layout in [PR 102](https://github.com/tensorbee/rdocx/pull/102).
+[@chevinbrown](https://github.com/chevinbrown) contributed portable authored
+charts in [PR 71](https://github.com/tensorbee/rdocx/pull/71) and the line-chart
+viewer defaults in [PR 123](https://github.com/tensorbee/rdocx/pull/123).
+Atul Sharma integrated, hardened, and released the family.
+
 ## rpptx-v0.12.0
 
 ### Highlights
@@ -232,7 +348,7 @@ to crates.io, together with prebuilt `rdocx` CLI binaries.
 The exact seven-package stable crates.io family moves together from 0.13.1 to
 0.14.0. The selected set is `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
 `rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`. It depends on the
-separately published shared OOXML 0.12.0 family. This release also satisfies
+separately published shared OOXML 0.12.1 family. This release also satisfies
 the crates.io publication request in
 [Issue 99](https://github.com/tensorbee/rdocx/issues/99). The unpublished 0.13.2
 crates.io train is superseded rather than backfilled.
@@ -446,6 +562,63 @@ implementations reconciled from PRs
 [@pedroassumpcao](https://github.com/pedroassumpcao) contributed fractional
 line spacing in [PR 122](https://github.com/tensorbee/rdocx/pull/122). Atul
 Sharma integrated, hardened, and released the distribution.
+
+## py-rpptx-v0.12.1
+
+### Highlights
+
+This patch recovery follows the failed immutable `rpptx-v0.12.0` Rust tag,
+which published no crates and created no GitHub release. It keeps the Python
+distribution aligned with the recovered native family.
+
+`rpptx 0.12.1` for Python matches the native 0.12.1 presentation family and
+adds notes editing, shape inspection, and formatting-preserving text
+replacement, together with correct transparency and notes rendering.
+
+### Added
+
+- Set speaker notes text through `Slide.notes_text` while keeping the notes
+  shape identity and run formatting, requested in
+  [Issue 121](https://github.com/tensorbee/rdocx/issues/121) and
+  [Issue 120](https://github.com/tensorbee/rdocx/issues/120).
+- Inspect shape geometry and identity, run font details, and autofit mode, and
+  replace run text without losing formatting, from
+  [Issue 121](https://github.com/tensorbee/rdocx/issues/121).
+
+### Fixed
+
+- Notes render when the notes slide omits its reverse relationship
+  ([Issue 120](https://github.com/tensorbee/rdocx/issues/120)).
+- Picture transparency is applied in every output
+  ([Issue 91](https://github.com/tensorbee/rdocx/issues/91),
+  [PR 105](https://github.com/tensorbee/rdocx/pull/105)), straight-alpha
+  pictures composite correctly, and the decoded-pixel render limit rises from
+  16 MiB to 64 MiB, so larger pictures render instead of being skipped
+  ([Issue 119](https://github.com/tensorbee/rdocx/issues/119)).
+- Slide-owned date, footer, and slide-number placeholders stay visible under
+  master header and footer flags
+  ([Issue 92](https://github.com/tensorbee/rdocx/issues/92)).
+
+### Compatibility
+
+The distribution and import name remains `rpptx`, now at 0.12.1 to match the
+native crate. It requires Python 3.9 or newer through six `cp39-abi3` platform
+wheels and one source distribution. Existing 0.11.0 calls remain source
+compatible. This release does not publish `rdocx`, any crates.io package, WASM
+package, or npm package.
+
+### Contributors
+
+[@hadim](https://github.com/hadim) reported the transparency, header and footer
+flag, raster, notes, and binding gaps in Issues
+[91](https://github.com/tensorbee/rdocx/issues/91),
+[92](https://github.com/tensorbee/rdocx/issues/92),
+[119](https://github.com/tensorbee/rdocx/issues/119),
+[120](https://github.com/tensorbee/rdocx/issues/120), and
+[121](https://github.com/tensorbee/rdocx/issues/121), and contributed the
+transparency implementation in
+[PR 105](https://github.com/tensorbee/rdocx/pull/105). Atul Sharma integrated,
+hardened, and released the distribution.
 
 ## py-rpptx-v0.12.0
 

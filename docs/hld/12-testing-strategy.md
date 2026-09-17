@@ -2553,24 +2553,24 @@ The stable 0.14.0 carrier regression pins all ten inherited version carriers,
 the `rdocx` Python project version, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
-are 0.12.0 while `rpptx-wasm` remains ineligible for publication.
+are 0.12.1 while `rpptx-wasm` remains ineligible for publication.
 The paired incubating regression pins all seventeen explicit manifests,
 sixteen workspace dependency requirements, seventeen lockfile entries,
 publication flags, README examples, Rust assertions, the CI WASM literal, and
-the exact 15-package publication preflight at 0.12.0. It separately proves the
+the exact 15-package publication preflight at 0.12.1. It separately proves the
 stable workspace remains at its prepared 0.14.0 boundary and both `rpptx-py`
 and `rpptx-wasm` remain ineligible for crates.io publication.
 The S73 release contract regression requires the 7 stable crates at 0.14.0,
-the 15 incubating crates at 0.12.0, and both Python projects at their native
-versions. It renders the `v0.14.0`, `rpptx-v0.12.0`, `py-rdocx-v0.14.0`, and
-`py-rpptx-v0.12.0` notes and requires each rendered issue and pull-request set
+the 15 incubating crates at 0.12.1, and both Python projects at their native
+versions. It renders the `v0.14.0`, `rpptx-v0.12.1`, `py-rdocx-v0.14.0`, and
+`py-rpptx-v0.12.1` notes and requires each rendered issue and pull-request set
 and each credited handle to equal the reviewed contribution inventory. Every
 linked record must also appear in its section's contributor credit. A reviewed
 map assigns each included S71 to S73 story to the families that ship it, and
 every GitHub record its backlog entry links or its AS_BUILT entry names as a
 pull request must appear in each assigned family's inventory. The stable
 `v0.14.0` package proof compiles packaged `rdocx` against registry-only shared
-0.12.0, so `rpptx-v0.12.0` must be published first.
+0.12.1, so `rpptx-v0.12.1` must be published first.
 The Python metadata regression requires both projects to name a crate-local
 Markdown README and provide their reviewed summary, author, keywords,
 classifiers, and project URLs. Artifact validation repeats that check against
@@ -2801,12 +2801,14 @@ skill contracts.
 The Rust CLI release-preparation contract parses `publish.yml` and both CLI
 manifests. It requires the six exact native runner and target pairs, selected
 family package and binary names, version and help smoke commands, exact archive
-members, executable mode for tar archives, README and licence byte equality,
+members, executable mode for tar archives, README and licence text equality
+after CRLF-to-LF normalization,
 the complete sorted SHA-256 manifest, and full commit pins for every external
 action. It also proves the registry token exists only in the crates.io publish
 job. Negative mutations remove a target, swap a family, bypass checksum
-verification, start publication before asset validation, or start release
-creation before publication and assets. Each mutation must fail the contract.
+verification, remove either reviewed text comparison, start publication before
+asset validation, or start release creation before publication and assets.
+Each mutation must fail the contract.
 The hosted matrix remains the execution proof for platforms unavailable to one
 local machine.
 

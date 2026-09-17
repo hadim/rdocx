@@ -37,7 +37,7 @@ shared 0.12.1 registry family. Verify all 22
 Rust crates, both seven-file Python distributions, both GitHub CLI asset sets,
 owners, releases, and human notification comments before completing the F-ID.
 The notification inventory includes every issue and pull request incorporated
-through F-X121, whether it is open or closed at publication time.
+through F-X122, whether it is open or closed at publication time.
 
 ## Rejected alternatives
 
@@ -53,7 +53,7 @@ through F-X121, whether it is open or closed at publication time.
 
 | Category | Test | Asserts |
 |---|---|---|
-| release preparation | `s73_release_contract_requires_four_version_aligned_families` | Exact versions, 7 stable crates, 15 incubating crates, two Python distributions, four tags, selected assets, and the through-F-X121 notification inventory. |
+| release preparation | `s73_release_contract_requires_four_version_aligned_families` | Exact versions, 7 stable crates, 15 incubating crates, two Python distributions, four tags, selected assets, and the through-F-X122 notification inventory. |
 | package | patched workspace dry-run | All 22 publishable Rust archives stage from the reviewed source graph and remain within size limits. |
 | Python | build-only wheel matrix | Each selected distribution has six cp39-abi3 wheels and one source archive with complete metadata. |
 | release | registry and notification verification | Every package, owner, release body, CLI asset, issue, PR, and comment URL is verified before completion. |

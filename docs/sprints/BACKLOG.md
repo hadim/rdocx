@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 132 | 126 | 1 | 1  |
-| **Total** | **450** | **376** | **1** | **69** |
+| X, Cross-cutting (opportunistic)            | 132 | 127 | 1 | 0  |
+| **Total** | **450** | **377** | **1** | **68** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -668,5 +668,5 @@ regenerated, never hand-edited.
 | F-X119 | Complete round-three Python authoring and inspection | S73 | L | done |
 | F-X120 | Accept fractional DOCX line spacing values | S73 | S | done |
 | F-X121 | Adopt PR 123 authored line-chart portability | S73 | S | done |
-| F-X122 | Recover the immutable rpptx 0.12.0 release attempt | S73 | M | pending |
+| F-X122 | Recover the immutable rpptx 0.12.0 release attempt | S73 | M | done |
 <!-- AUTOGEN:backlog-MX END -->

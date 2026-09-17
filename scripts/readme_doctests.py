@@ -228,7 +228,7 @@ README_REQUIRED_TEXT = {
     REPO_ROOT / "crates/oxml-chart/README.md": ("AxisId::new(10_000_001)?",),
     REPO_ROOT / "crates/rpptx-chart/README.md": ("AxisId::new(10_000_001)?",),
     REPO_ROOT / "crates/rpptx-cli/README.md": (
-        "cargo install rpptx-cli --version '^0.12.0'",
+        "cargo install rpptx-cli --version '^0.12.1'",
         "rpptx convert deck.pptx --to pdf -o deck.pdf",
     ),
     REPO_ROOT / "crates/rpptx-py/README.md": (
