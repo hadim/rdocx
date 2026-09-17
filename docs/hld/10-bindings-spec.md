@@ -1623,20 +1623,22 @@ reviewed SHA `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published only
 `rdocx-opc` and `rdocx-oxml`. It created no GitHub release and posted no
 contribution notifications. The complete seven-package recovery is published
 at 0.11.1, and all six reviewed leave-open notifications are posted. The
-The immutable PyPI `rdocx 0.13.1` release remains available with its short
-summary. The corrective stable source, `rdocx` Python project, and
-`rdocx-wasm` track 0.13.2, while crates.io remains at the complete 0.13.1
-family until a separately authorized Rust release.
-The `rpptx` Python project and unpublished `rpptx-wasm` crate track the native
-incubating version 0.11.0. Every binding and WASM crate remains unpublished on
-crates.io. Neither Rust release
-gives binding, WASM, npm, or Python package publication authority. Every later
-release still requires its selected-family gate and a separate final approval
-at the reviewed SHA. Complete coherent stable releases remain live and
-unyanked. After separate immediate approval, the incomplete
-`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` entries are yanked. Their package
-bytes, every other version, the immutable v0.11.0 tag, and GitHub release state
-remain unchanged.
+immutable PyPI `rdocx 0.13.1` release remains available with its short
+summary. PyPI `rdocx 0.13.2` carried the corrective Python metadata, and its
+crates.io train is superseded rather than backfilled. S73 prepares four
+version-aligned releases at one reviewed SHA. The stable source, `rdocx` Python
+project, and `rdocx-wasm` track 0.14.0 for `v0.14.0` and `py-rdocx-v0.14.0`.
+The shared and PowerPoint source, `rpptx` Python project, and unpublished
+`rpptx-wasm` crate track 0.12.0 for `rpptx-v0.12.0` and `py-rpptx-v0.12.0`.
+Because packaged stable crates require the shared family, `rpptx-v0.12.0`
+publishes before `v0.14.0`. Each tag needs its own immediate final approval.
+Every binding and WASM crate remains unpublished on crates.io. Neither Rust
+release gives binding, WASM, npm, or Python package publication authority. Every
+later release still requires its selected-family gate and a separate final
+approval at the reviewed SHA. Complete coherent stable releases remain live and
+unyanked. After separate immediate approval, the incomplete `rdocx-opc@0.11.0`
+and `rdocx-oxml@0.11.0` entries are yanked. Their package bytes, every other
+version, the immutable v0.11.0 tag, and GitHub release state remain unchanged.
 
 ## CI
 

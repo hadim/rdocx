@@ -33,7 +33,7 @@ let _ = renderer;
 
 ```toml
 [dependencies]
-rdocx-pdf = "0.13.2"
+rdocx-pdf = "0.14.0"
 ```
 
 For new code, replace both the dependency and the import with `oxml-pdf` and

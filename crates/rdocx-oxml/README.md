@@ -36,5 +36,5 @@ assert_eq!(document.body.paragraphs().count(), 1);
 
 ```toml
 [dependencies]
-rdocx-oxml = "0.13.2"
+rdocx-oxml = "0.14.0"
 ```

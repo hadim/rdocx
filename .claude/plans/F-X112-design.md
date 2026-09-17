@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S73
 **Size**: L
-**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X119
+**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X121
 
 ## Problem
 
@@ -30,11 +30,13 @@ lock entry, README example,
 workflow assertion, package metadata record, and four CHANGELOG sections.
 Assign all four exact tags to this release F-ID. At the reviewed SHA, execute
 four separate `/release` actions with a fresh immediate approval before each
-tag: stable Rust, incubating Rust, Python rdocx, and Python rpptx. Verify all 22
+tag: incubating Rust, stable Rust, Python rdocx, and Python rpptx. The
+incubating family publishes first because packaged stable crates require the
+shared 0.12.0 registry family. Verify all 22
 Rust crates, both seven-file Python distributions, both GitHub CLI asset sets,
 owners, releases, and human notification comments before completing the F-ID.
 The notification inventory includes every issue and pull request incorporated
-through F-X119, whether it is open or closed at publication time.
+through F-X121, whether it is open or closed at publication time.
 
 ## Rejected alternatives
 
@@ -50,7 +52,7 @@ through F-X119, whether it is open or closed at publication time.
 
 | Category | Test | Asserts |
 |---|---|---|
-| release preparation | `s73_release_contract_requires_four_version_aligned_families` | Exact versions, 7 stable crates, 15 incubating crates, two Python distributions, four tags, selected assets, and the through-F-X119 notification inventory. |
+| release preparation | `s73_release_contract_requires_four_version_aligned_families` | Exact versions, 7 stable crates, 15 incubating crates, two Python distributions, four tags, selected assets, and the through-F-X121 notification inventory. |
 | package | patched workspace dry-run | All 22 publishable Rust archives stage from the reviewed source graph and remain within size limits. |
 | Python | build-only wheel matrix | Each selected distribution has six cp39-abi3 wheels and one source archive with complete metadata. |
 | release | registry and notification verification | Every package, owner, release body, CLI asset, issue, PR, and comment URL is verified before completion. |
@@ -59,6 +61,7 @@ The **test gate** is the release-preparation test named in the backlog.
 
 ## HLD impact
 
+- `docs/hld/03-architecture.md`
 - `docs/hld/10-bindings-spec.md`
 - `docs/hld/12-testing-strategy.md`
 - `docs/hld/14-development-backlog.md`
@@ -81,11 +84,11 @@ release preparation itself must add no unexplained output delta.
 
 ## Implementation checklist
 
-- [ ] Approve exact stable and incubating next-minor versions and standard family scope.
-- [ ] Prepare every version carrier, pin, lock entry, README, workflow assertion, and release note.
+- [x] Approve exact stable and incubating next-minor versions and standard family scope.
+- [x] Prepare every version carrier, pin, lock entry, README, workflow assertion, and release note.
 - [ ] Run the full gate, all release riders, and clean sprint review at one exact SHA.
-- [ ] Obtain fresh approval and release the stable Rust family with CLI assets.
 - [ ] Obtain fresh approval and release the incubating Rust family with CLI assets.
+- [ ] Obtain fresh approval and release the stable Rust family with CLI assets.
 - [ ] Obtain fresh approval and release PyPI rdocx from its reviewed seven artifacts.
 - [ ] Obtain fresh approval and release PyPI rpptx from its reviewed seven artifacts.
 - [ ] Verify registries, owners, releases, assets, notes, and every human issue and PR comment.

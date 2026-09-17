@@ -95,7 +95,7 @@ Most Rust applications need only the facade:
 
 ```toml
 [dependencies]
-rdocx = "0.13.2"
+rdocx = "0.14.0"
 ```
 
 Bundled metric-compatible fonts are always available through deterministic
@@ -104,14 +104,14 @@ features when an application must use only the bundled set:
 
 ```toml
 [dependencies]
-rdocx = { version = "0.13.2", default-features = false }
+rdocx = { version = "0.14.0", default-features = false }
 ```
 
 Native encryption and signing APIs are opt-in:
 
 ```toml
 [dependencies]
-rdocx = { version = "0.13.2", features = ["agile-encryption", "digital-signatures"] }
+rdocx = { version = "0.14.0", features = ["agile-encryption", "digital-signatures"] }
 ```
 
 The workspace requires Rust 1.93 or newer and uses edition 2024.
@@ -121,7 +121,7 @@ The workspace requires Rust 1.93 or newer and uses edition 2024.
 Install the CLI version from the same stable family:
 
 ```sh
-cargo install rdocx-cli --version '^0.13.2'
+cargo install rdocx-cli --version '^0.14.0'
 ```
 
 Common commands:

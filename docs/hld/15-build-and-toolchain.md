@@ -378,8 +378,8 @@ and 0.4.0 registry releases remain available, and no existing version or tag
 was moved. Manifest eligibility and allowlist membership do not authorize a
 later publication without a separately approved `/release` invocation at the
 exact reviewed SHA. The unpublished `rpptx-wasm` preparation member and all
-incubating source carriers are prepared at 0.11.0 without gaining another
-publication path.
+incubating source carriers are prepared at 0.12.0 for `rpptx-v0.12.0` without
+gaining another publication path.
 
 The complete stable 0.11.1 family is published against the shared 0.8.0 family
 from the immutable annotated `v0.11.1` tag at reviewed SHA
@@ -405,11 +405,11 @@ registry `oxml-opc@0.10.0` lacks the F-238 Word main content-type constants.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace version 0.13.2, eight internal
+stable regression requires prepared workspace version 0.14.0, eight internal
 pins, ten inherited lockfile packages, the `rdocx` Python project version,
 unpublished `rdocx-wasm`, stable README requirements, and the exact
 seven-package crates.io set. The incubating regression requires the exact
-0.11.0 versions including `rpptx-py`, pins, lockfile entries, publication
+0.12.0 versions including `rpptx-py`, pins, lockfile entries, publication
 flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -503,12 +503,14 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
 That shared-version group, the `rdocx` Python project, and the rdocx WASM
-contract literals are prepared at 0.13.2. The exact
+contract literals are prepared at 0.14.0. The exact
 seven-package stable family remains published from immutable annotated `v0.13.1`
 tag at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`. Its published
-archives require shared 0.11.0. The Python, binding, and WASM carriers remain
-unpublished on crates.io. The source version move gives no Rust publication
-authority.
+archives require shared 0.11.0. The prepared 0.14.0 archives require shared
+0.12.0, so `rpptx-v0.12.0` publishes before `v0.14.0`. The unpublished 0.13.2
+crates.io train is superseded rather than backfilled. The Python, binding, and
+WASM carriers remain unpublished on crates.io. The source version move gives no
+Rust publication authority.
 The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
 before package verification failed against the published shared 0.7.0 API.
 The remaining five packages and GitHub release were not published at that
@@ -520,7 +522,7 @@ immutable registry releases, including the complete 0.12.0 family, remain
 available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 17 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.11.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
+0.12.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 preparation group contains unpublished `rpptx-py` and `rpptx-wasm`, while the crates.io
 allowlist remains exactly 15 packages. The latest published complete family is
 the immutable `rpptx-v0.11.0` release at reviewed SHA
@@ -615,7 +617,9 @@ The current Python release boundary is reviewed SHA
 wheels and one source distribution. Tag workflows `34934221487` and
 `34939929652` passed exact publication-set validation and trusted publishing,
 and each matching GitHub release uses the byte-identical reviewed changelog
-body.
+body. The S73 preparation moves the `rdocx` project to 0.14.0 and the `rpptx`
+project to 0.12.0 for `py-rdocx-v0.14.0` and `py-rpptx-v0.12.0`. Neither version
+is published until its own `/release` approval.
 
 Both Python `pyproject.toml` versions and their Rust binding crate versions are
 exact release carriers. The Python preflight checks all four values instead of

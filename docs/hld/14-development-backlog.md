@@ -5341,6 +5341,10 @@ SHA. Each action retains its existing exact family allowlist, requires a fresh
 immediate approval, verifies registry ownership and artifacts, and posts a
 human release result to every included issue and pull request. The stable Rust
 release supersedes rather than backfills the unpublished 0.13.2 crate set.
+The approved versions are stable Rust and PyPI `rdocx` 0.14.0 and incubating
+Rust and PyPI `rpptx` 0.12.0, under tags `rpptx-v0.12.0`, `v0.14.0`,
+`py-rdocx-v0.14.0`, and `py-rpptx-v0.12.0`. The incubating tag publishes first
+because packaged stable crates require the shared 0.12.0 registry family.
 
 **Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X121.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/99>.

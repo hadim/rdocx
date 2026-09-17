@@ -2549,17 +2549,28 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.13.2 carrier regression pins all ten inherited version carriers,
+The stable 0.14.0 carrier regression pins all ten inherited version carriers,
 the `rdocx` Python project version, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
-are 0.11.0 while `rpptx-wasm` remains ineligible for publication.
+are 0.12.0 while `rpptx-wasm` remains ineligible for publication.
 The paired incubating regression pins all seventeen explicit manifests,
 sixteen workspace dependency requirements, seventeen lockfile entries,
 publication flags, README examples, Rust assertions, the CI WASM literal, and
-the exact 15-package publication preflight at 0.11.0. It separately proves the
-stable workspace remains at its prepared 0.13.2 boundary and both `rpptx-py`
+the exact 15-package publication preflight at 0.12.0. It separately proves the
+stable workspace remains at its prepared 0.14.0 boundary and both `rpptx-py`
 and `rpptx-wasm` remain ineligible for crates.io publication.
+The S73 release contract regression requires the 7 stable crates at 0.14.0,
+the 15 incubating crates at 0.12.0, and both Python projects at their native
+versions. It renders the `v0.14.0`, `rpptx-v0.12.0`, `py-rdocx-v0.14.0`, and
+`py-rpptx-v0.12.0` notes and requires each rendered issue and pull-request set
+and each credited handle to equal the reviewed contribution inventory. Every
+linked record must also appear in its section's contributor credit. A reviewed
+map assigns each included S71 to S73 story to the families that ship it, and
+every GitHub record its backlog entry links or its AS_BUILT entry names as a
+pull request must appear in each assigned family's inventory. The stable
+`v0.14.0` package proof compiles packaged `rdocx` against registry-only shared
+0.12.0, so `rpptx-v0.12.0` must be published first.
 The Python metadata regression requires both projects to name a crate-local
 Markdown README and provide their reviewed summary, author, keywords,
 classifiers, and project URLs. Artifact validation repeats that check against
