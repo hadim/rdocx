@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S73
 **Size**: L
-**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X121
+**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X122
 
 ## Problem
 
@@ -25,14 +25,15 @@ included issues and pull requests, including the later Issue 115 through Issue
 ## Approach
 
 Prepare one reviewed S73 SHA for stable Rust and PyPI rdocx at 0.14.0, and
-incubating Rust and PyPI rpptx at 0.12.0. Update every manifest, internal pin,
-lock entry, README example,
-workflow assertion, package metadata record, and four CHANGELOG sections.
+incubating Rust and PyPI rpptx at 0.12.1. Preserve the failed immutable
+`rpptx-v0.12.0` tag, which published no registry packages and created no GitHub
+release. Update every manifest, internal pin, lock entry, README example,
+workflow assertion, package metadata record, and recovery CHANGELOG sections.
 Assign all four exact tags to this release F-ID. At the reviewed SHA, execute
 four separate `/release` actions with a fresh immediate approval before each
 tag: incubating Rust, stable Rust, Python rdocx, and Python rpptx. The
 incubating family publishes first because packaged stable crates require the
-shared 0.12.0 registry family. Verify all 22
+shared 0.12.1 registry family. Verify all 22
 Rust crates, both seven-file Python distributions, both GitHub CLI asset sets,
 owners, releases, and human notification comments before completing the F-ID.
 The notification inventory includes every issue and pull request incorporated
@@ -95,7 +96,8 @@ release preparation itself must add no unexplained output delta.
 
 ## Open questions
 
-None. The user approved rdocx 0.14.0 and rpptx 0.12.0 with matching native and
-PyPI versions. The standard flow selects the 7-package stable crates.io family,
-15-package incubating crates.io family, PyPI rdocx, and PyPI rpptx. Unpublished
-WASM and binding support crates keep their current publication policy.
+None. The user approved the immutable-tag recovery with rdocx 0.14.0 and rpptx
+0.12.1 in matching native and PyPI versions. The standard flow selects the
+7-package stable crates.io family, 15-package incubating crates.io family, PyPI
+rdocx, and PyPI rpptx. Unpublished WASM and binding support crates keep their
+current publication policy.

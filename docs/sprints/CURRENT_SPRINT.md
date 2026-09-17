@@ -35,7 +35,7 @@ both Rust package families and both version-aligned Python distributions.
   vocabulary, private-corpus confidentiality boundary, and atomic cross-part
   invariant rule.
 - `docs/hld/14-development-backlog.md`, for the F-257 through F-263 and
-  F-X097 through F-X121 acceptance contracts, dependencies, sizes, issue
+  F-X097 through F-X122 acceptance contracts, dependencies, sizes, issue
   mappings, and release gate.
 - `docs/hld/15-build-and-toolchain.md`, for package-family allowlists, portable
   CLI assets, version alignment, trusted publication, and release approval.
@@ -77,7 +77,8 @@ both Rust package families and both version-aligned Python distributions.
 | F-X119 | Complete round-three Python authoring and inspection | L | done | - |
 | F-X120 | Accept fractional DOCX line spacing values | S | done | - |
 | F-X121 | Adopt PR 123 authored line-chart portability | S | done | - |
-| F-X112 | Publish the complete S73 package families | L | in-progress | claude |
+| F-X122 | Recover the immutable rpptx 0.12.0 release attempt | M | pending | - |
+| F-X112 | Publish the complete S73 package families | L | in-progress | codex |
 
 ## Sequencing note
 
@@ -97,8 +98,9 @@ comment anchoring, F-X116 follows the complete story binding and split-run
 paths, and F-X118 establishes notes mutation before F-X119 completes the
 round-three binding surface. F-263 starts after every behavior needed by the
 private corpus and reported pagination fields is integrated. F-X121 is an
-independent chart portability correction from PR 123. F-X112 is the final
-release boundary after every non-release story through F-X121. The five client
+independent chart portability correction from PR 123. F-X122 repairs the
+failed immutable incubating release attempt. F-X112 is the final release
+boundary after every non-release story through F-X122. The five client
 documents and all derived evidence remain private and uncommitted.
 
 ## Definition of done for this sprint

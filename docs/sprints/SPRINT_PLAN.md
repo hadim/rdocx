@@ -1446,6 +1446,7 @@ document.
 | F-X119 | Complete round-three Python authoring and inspection | L |
 | F-X120 | Accept fractional DOCX line spacing values | S |
 | F-X121 | Adopt PR 123 authored line-chart portability | S |
+| F-X122 | Recover the immutable rpptx 0.12.0 release attempt | M |
 | F-X112 | Publish the complete S73 package families | L |
 
 The model stories land before layout and conversion consumers. F-X100 lands
@@ -1457,10 +1458,12 @@ surface. F-X113 and F-X117 are independent corrections. F-X114 follows the
 field and private-corpus layout foundations. F-X115 follows exact comment
 anchoring, F-X116 follows the complete story binding and split-run paths, and
 F-X118 establishes notes mutation before F-X119 closes the round-three binding
-surface. F-X120 and F-X121 are independent contributor corrections. F-263
+surface. F-X120 and F-X121 are independent contributor corrections. F-X122
+repairs the failed immutable incubating release attempt and prepares its patch
+family. F-263
 remains the private-corpus milestone gate. F-X111 prepares portable CLI assets
 before F-X112 releases the exact two Rust and two Python families after F-X113
-through F-X121 are complete, using separate approvals.
+through F-X122 are complete, using separate approvals.
 PR 101 contributes the F-X100 explicit
 false table-toggle fix and the F-X103 TOC `\\z` support. Its current two-commit
 shape is incorporated directly where conflict-free or through a reviewed

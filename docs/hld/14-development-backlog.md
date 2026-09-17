@@ -5342,11 +5342,13 @@ immediate approval, verifies registry ownership and artifacts, and posts a
 human release result to every included issue and pull request. The stable Rust
 release supersedes rather than backfills the unpublished 0.13.2 crate set.
 The approved versions are stable Rust and PyPI `rdocx` 0.14.0 and incubating
-Rust and PyPI `rpptx` 0.12.0, under tags `rpptx-v0.12.0`, `v0.14.0`,
-`py-rdocx-v0.14.0`, and `py-rpptx-v0.12.0`. The incubating tag publishes first
-because packaged stable crates require the shared 0.12.0 registry family.
+Rust and PyPI `rpptx` 0.12.1, under tags `rpptx-v0.12.1`, `v0.14.0`,
+`py-rdocx-v0.14.0`, and `py-rpptx-v0.12.1`. The failed immutable
+`rpptx-v0.12.0` tag published no packages and created no GitHub release. The
+recovery incubating tag publishes first because packaged stable crates require
+the shared 0.12.1 registry family.
 
-**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X121.
+**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X122.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/99>.
 **Test gate**: release preparation.
 `s73_release_contract_requires_four_version_aligned_families` proves exact
@@ -5506,6 +5508,25 @@ explicit false line defaults, non-line exclusion, parse and rewrite stability,
 and unchanged workbook and palette semantics. The pinned external oracle binds
 the resulting four-chart DOCX to
 `ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b`.
+
+### F-X122, Recover the immutable rpptx 0.12.0 release attempt (M)
+
+Treat CRLF and LF as equivalent representations when the Rust release
+workflow validates packaged README and licence text. Keep exact archive names,
+member sets, executable checks, nonempty payload checks, archive checksums, and
+text content after newline normalization. The failed immutable
+`rpptx-v0.12.0` tag remains at its reviewed commit with no registry packages or
+GitHub release. Prepare the complete 15-package incubating Rust family,
+unpublished WASM and binding carriers, stable shared dependency pins, and PyPI
+`rpptx` together at 0.12.1. F-X112 then publishes `rpptx-v0.12.1` before the
+unchanged stable 0.14.0 family and finishes with `py-rpptx-v0.12.1`.
+
+**Depends on**: F-X111, F-X119, F-X121.
+**Test gate**: release regression.
+`rpptx_0_12_1_recovery_is_version_aligned_and_line_ending_safe` proves exact
+0.12.1 version carriers and dependency pins, the revised four-tag S73 contract,
+CRLF acceptance for packaged text, and rejection of changed text or weakened
+archive validation.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
