@@ -77,7 +77,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X119 | Complete round-three Python authoring and inspection | L | done | - |
 | F-X120 | Accept fractional DOCX line spacing values | S | done | - |
 | F-X121 | Adopt PR 123 authored line-chart portability | S | done | - |
-| F-X112 | Publish the complete S73 package families | L | pending | - |
+| F-X112 | Publish the complete S73 package families | L | in-progress | claude |
 
 ## Sequencing note
 
