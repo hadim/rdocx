@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 131 | 124 | 0 | 3  |
-| **Total** | **449** | **374** | **0** | **71** |
+| X, Cross-cutting (opportunistic)            | 131 | 126 | 0 | 1  |
+| **Total** | **449** | **376** | **0** | **69** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
