@@ -15035,13 +15035,14 @@ Word model, and required-private evidence remains ignored local state.
 field identity, report, and corpus-boundary defects that were remediated. Pass
 3 and integration pass 4 report zero defects, zero smells, and zero nitpicks.
 
-**Spec sections touched.** `docs/hld/03-architecture.md`, field staging and
-layout ownership, `docs/hld/04-opc-and-packaging.md`, typed field caches and
-bookmark ownership, `docs/hld/08-rendering-spec.md`, physical page and target
-resolution, `docs/hld/10-bindings-spec.md`, native and Python field reports,
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, the completed
+DOCX-028 capability row, `docs/hld/03-architecture.md`, field staging and layout
+ownership, `docs/hld/04-opc-and-packaging.md`, typed field caches and bookmark
+ownership, `docs/hld/08-rendering-spec.md`, physical page and target resolution,
+`docs/hld/10-bindings-spec.md`, native and Python field reports,
 `docs/hld/12-testing-strategy.md`, the required-private conformance gate,
-`docs/hld/13-risks-and-open-questions.md`, private corpus controls, and the
-F-263 entry in `docs/hld/14-development-backlog.md`.
+`docs/hld/13-risks-and-open-questions.md`, private corpus controls, and the F-263
+entry in `docs/hld/14-development-backlog.md`.
 
 **Tests.** `layout_backed_page_fields_update_cached_results` proves body,
 header, footer, table-cell, PAGEREF, and TOC publication, deterministic reopen,

@@ -9072,6 +9072,7 @@ Pedro Assumpcao and the rdocx maintainers.
                 260,
                 261,
                 262,
+                263,
             }
         }
         self.assertEqual(

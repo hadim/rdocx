@@ -66,6 +66,7 @@ The **test gate** is the differential test named in the backlog.
 
 ## HLD impact
 
+- `docs/hld/02-scope-and-non-goals.md`
 - `docs/hld/03-architecture.md`
 - `docs/hld/04-opc-and-packaging.md`
 - `docs/hld/08-rendering-spec.md`
