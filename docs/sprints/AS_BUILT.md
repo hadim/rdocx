@@ -14968,3 +14968,93 @@ supply-chain gates pass.
 **Notes for future sessions.** Keep the explicit false defaults limited to
 newly authored line plots. Preserve Kevin Brown and PR 123 in release notes and
 the final human result comment.
+
+### F-X119, Complete round-three Python authoring and inspection
+
+**Sprint.** S73
+**Completed.** 2026-09-17
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Python can now insert Word pictures from bytes at checked
+story positions and target comment ranges inside table-cell paragraphs.
+Presentation bindings expose notes mutation, shape geometry and identity, run
+font details, autofit mode, and formatting-preserving run text replacement.
+
+**Non-obvious choices.** The existing direct-body `RunPosition` call shape
+remains source compatible, while a separate path-aware range carries nested
+table ownership. Picture insertion resolves relationships in the owning story
+part, and presentation text mutation updates the selected run without
+reconstructing its paragraph or discarding producer formatting.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and zero nitpicks. Integration with F-263 retained both
+binding surfaces, and the reconciliation review reports no interaction defect.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, staged package
+mutation and ownership, `docs/hld/05-drawingml-model.md`, presentation geometry
+and text properties, `docs/hld/10-bindings-spec.md`, the Python document and
+presentation surfaces, `docs/hld/12-testing-strategy.md`, installed binding and
+typing gates, and the F-X119 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_round_three_authoring_and_inspection_is_typed_and_lossless`
+passes in both distributions. Clean `cp39-abi3` wheels built from the reviewed
+SHA installed together and passed all 80 binding tests on Python 3.9 and 3.12.
+Strict mypy passed seven rdocx and six rpptx sources, and live stubtest passed
+all eleven installed modules. Both wheels carry the exact ABI tag, typed marker,
+stubs, extension, README metadata, and no development cache files. The full
+workspace, no-default-font, WASM, rustdoc, README, package, archive-size,
+workflow, supply-chain, and private corpus gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep nested Word positions owner checked rather
+than flattening them to body indices. Build release wheels from a clean checkout
+so ignored interpreter caches cannot enter the archive.
+
+### F-263, Layout-backed fields and M23 corpus gate
+
+**Sprint.** S73
+**Completed.** 2026-09-17
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** A pagination-aware field update now materializes PAGE,
+NUMPAGES, PAGEREF, and supported TOC caches from one deterministic layout
+snapshot, returns an owned native and Python report, and publishes the staged
+document only after every cache update succeeds. The M23 required-private gate
+now generates all five business-document examples from blank packages through
+pure Rust public facade programs and validates the complete reviewed evidence
+set without committed private artifacts.
+
+**Non-obvious choices.** Ordinary field evaluation remains layout independent.
+A shared header or footer field stores the first physical page on which that
+story variant appears because one OOXML part has only one cache. Layout exposes
+stable field provenance without making the format-neutral output depend on the
+Word model, and required-private evidence remains ignored local state.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 found
+field identity, report, and corpus-boundary defects that were remediated. Pass
+3 and integration pass 4 report zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, field staging and
+layout ownership, `docs/hld/04-opc-and-packaging.md`, typed field caches and
+bookmark ownership, `docs/hld/08-rendering-spec.md`, physical page and target
+resolution, `docs/hld/10-bindings-spec.md`, native and Python field reports,
+`docs/hld/12-testing-strategy.md`, the required-private conformance gate,
+`docs/hld/13-risks-and-open-questions.md`, private corpus controls, and the
+F-263 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `layout_backed_page_fields_update_cached_results` proves body,
+header, footer, table-cell, PAGEREF, and TOC publication, deterministic reopen,
+and atomic rejection. Python tests prove the same owned report and GIL-safe
+operation. `m23_private_from_scratch_corpus_passes_required_mode` generated all
+five examples with pure Rust, then passed package, semantic, schema, render,
+determinism, repair, and no-fallback validation under LibreOffice 26.2.5.2 and
+Poppler 26.01.0. The consolidated full workspace, binding, no-default-font,
+WASM, rustdoc, README, package, archive-size, workflow, and supply-chain gates
+pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep every corpus generator on the public Rust
+facade. Do not use HTML conversion, commit private names or evidence, or let
+ordinary field evaluation acquire a pagination dependency.

@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 22 | 2 | 0 |
+| M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 131 | 122 | 1 | 4  |
-| **Total** | **449** | **370** | **3** | **72** |
+| X, Cross-cutting (opportunistic)            | 131 | 123 | 0 | 4  |
+| **Total** | **449** | **373** | **0** | **72** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -475,7 +475,7 @@ regenerated, never hand-edited.
 | F-260 | Ordered run content authoring | S73 | L | done |
 | F-261 | Rich HTML fragments in arbitrary containers | S73 | L | done |
 | F-262 | Corpus drawings, text boxes, and watermarks | S73 | L | done |
-| F-263 | Layout-backed fields and M23 corpus gate | S73 | L | in-progress |
+| F-263 | Layout-backed fields and M23 corpus gate | S73 | L | done |
 <!-- AUTOGEN:backlog-M23 END -->
 
 ### M24, Modern DOCX authoring completeness
@@ -665,7 +665,7 @@ regenerated, never hand-edited.
 | F-X116 | Make Python story reads linear and complete | S73 | L | done |
 | F-X117 | Render transparent and large raster pictures safely | S73 | M | done |
 | F-X118 | Make notes rendering and replacement safe | S73 | L | done |
-| F-X119 | Complete round-three Python authoring and inspection | S73 | L | in-progress |
+| F-X119 | Complete round-three Python authoring and inspection | S73 | L | done |
 | F-X120 | Accept fractional DOCX line spacing values | S73 | S | done |
 | F-X121 | Adopt PR 123 authored line-chart portability | S73 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

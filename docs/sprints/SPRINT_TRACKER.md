@@ -462,9 +462,11 @@ defended.
 | F-262 | S73 | L | 4 | 1 | 2026-09-16 | Added typed crop and floating picture controls, story text boxes with modeled compatibility, and section-aware text watermarks |
 | F-X115 | S73 | M | 2 | 1 | 2026-09-16 | Preserved modern comment content types, stable identities, thread links, resolved state, and optional native and Python dates |
 | F-X116 | S73 | L | 4 | 1 | 2026-09-16 | Made Python story snapshots linear and complete with one accepted-view inventory and recursive live run paths |
-| F-X117 | S73 | M | 2 | 1 | Premultiplied raster image pixels and rendered large presentation pictures within a checked 64 MiB decode ceiling |
-| F-X118 | S73 | L | 4 | 1 | Rendered producer-valid notes graphs and added guarded counted slide and notes replacement across native, Python, and CLI surfaces |
-| F-X121 | S73 | S | 1 | 1 | Integrated and hardened Kevin Brown's PR 123 with portable authored line-chart title, marker, and smoothing defaults |
+| F-X117 | S73 | M | 2 | 1 | 2026-09-16 | Premultiplied raster image pixels and rendered large presentation pictures within a checked 64 MiB decode ceiling |
+| F-X118 | S73 | L | 4 | 1 | 2026-09-16 | Rendered producer-valid notes graphs and added guarded counted slide and notes replacement across native, Python, and CLI surfaces |
+| F-X121 | S73 | S | 1 | 1 | 2026-09-16 | Integrated and hardened Kevin Brown's PR 123 with portable authored line-chart title, marker, and smoothing defaults |
+| F-X119 | S73 | L | 4 | 1 | 2026-09-17 | Completed round-three Python authoring and inspection across clean rdocx and rpptx abi3 wheels |
+| F-263 | S73 | L | 4 | 1 | 2026-09-17 | Added atomic layout-backed field caches and passed the five-document pure Rust private corpus gate |
 
 ## Velocity
 
