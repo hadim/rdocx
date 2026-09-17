@@ -69,7 +69,7 @@ both Rust package families and both version-aligned Python distributions.
 | F-X109 | Split text runs at Unicode character offsets | M | done | - |
 | F-263 | Layout-backed fields and M23 corpus gate | L | done | - |
 | F-X113 | Preserve appended paragraphs in document comparison | M | done | - |
-| F-X114 | Rebuild TOC entries with document styles and geometry | M | pending | - |
+| F-X114 | Rebuild TOC entries with document styles and geometry | M | in-progress | codex |
 | F-X115 | Preserve modern comment metadata and identity | M | done | - |
 | F-X116 | Make Python story reads linear and complete | L | done | - |
 | F-X117 | Render transparent and large raster pictures safely | M | done | - |

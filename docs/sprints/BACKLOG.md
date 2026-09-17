@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 131 | 123 | 0 | 4  |
-| **Total** | **449** | **373** | **0** | **72** |
+| X, Cross-cutting (opportunistic)            | 131 | 123 | 1 | 3  |
+| **Total** | **449** | **373** | **1** | **71** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -660,7 +660,7 @@ regenerated, never hand-edited.
 | F-X111 | Attach portable CLI binaries to Rust releases | S73 | L | done |
 | F-X112 | Publish the complete S73 package families | S73 | L | pending |
 | F-X113 | Preserve appended paragraphs in document comparison | S73 | M | done |
-| F-X114 | Rebuild TOC entries with document styles and geometry | S73 | M | pending |
+| F-X114 | Rebuild TOC entries with document styles and geometry | S73 | M | in-progress |
 | F-X115 | Preserve modern comment metadata and identity | S73 | M | done |
 | F-X116 | Make Python story reads linear and complete | S73 | L | done |
 | F-X117 | Render transparent and large raster pictures safely | S73 | M | done |
