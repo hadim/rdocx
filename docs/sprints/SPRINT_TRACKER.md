@@ -467,6 +467,7 @@ defended.
 | F-X121 | S73 | S | 1 | 1 | 2026-09-16 | Integrated and hardened Kevin Brown's PR 123 with portable authored line-chart title, marker, and smoothing defaults |
 | F-X119 | S73 | L | 4 | 1 | 2026-09-17 | Completed round-three Python authoring and inspection across clean rdocx and rpptx abi3 wheels |
 | F-263 | S73 | L | 4 | 1 | 2026-09-17 | Added atomic layout-backed field caches and passed the five-document pure Rust private corpus gate |
+| F-X114 | S73 | M | 2 | 1 | 2026-09-17 | Rebuilt TOC entries with localized built-in styles, section-derived tab stops, and structural numbering suffix tabs from Issue 116 |
 
 ## Velocity
 

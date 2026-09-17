@@ -15059,3 +15059,53 @@ pass.
 **Notes for future sessions.** Keep every corpus generator on the public Rust
 facade. Do not use HTML conversion, commit private names or evidence, or let
 ordinary field evaluation acquire a pagination dependency.
+
+### F-X114, Rebuild TOC entries with document styles and geometry
+
+**Sprint.** S73
+**Completed.** 2026-09-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rebuild_toc()` now resolves each entry level by the
+built-in style name `toc N` and keeps the producer's localized style id. It
+creates a canonical style only when no matching style exists. A right tab owned
+by the effective entry style stays authoritative. Otherwise the page-number stop
+comes from the text width of the section that owns the field. A numbered
+heading's suffix tab is emitted as ordered `w:tab` run content instead of a
+literal control character inside `w:t`. This resolves Issue 116 reported by
+hadim.
+
+**Non-obvious choices.** An existing canonical `TOCN` id is the collision-safe
+fallback when no style carries the built-in name. Section width uses checked
+arithmetic, and missing, nonpositive, or overflowing geometry falls back to the
+standard 9360 twip text width. Style resolution and styles-part serialization
+run inside the staged candidate, so unrelated styles and unmodelled style
+children keep their source bytes.
+
+**Deviations from the design plan.** None. Microscope pass 1 found an unchecked
+margin subtraction and a missing style-preservation assertion. Both were
+remediated, and pass 2 reports zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, TOC entry style
+resolution and staged styles serialization, `docs/hld/08-rendering-spec.md`,
+section-derived TOC tab stops and structural suffixes,
+`docs/hld/12-testing-strategy.md`, the entry-style and geometry regression and
+pinned Word records, and the F-X114 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `rebuilt_toc_uses_localized_styles_section_tabs_and_structural_suffixes`
+failed at the story baseline on fixed style ids, the 9350 twip stop, and the
+literal tab. It now proves localized id reuse, canonical creation only for the
+missing level, a style-owned 7777 twip tab, a 9072 twip A4 section fallback,
+safe default geometry under extreme parsed values, structural suffix tabs, and
+byte preservation of an unrelated unmodelled style child through save, reopen,
+and layout. Normalized entry records match Microsoft Word 16.113 build
+16.113.26091433 on macOS. The integrated full workspace, clippy, no-default-font,
+WASM, rustdoc, README, workflow, 22-crate package, archive-size, and
+supply-chain gates pass at `e82dac08`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Select TOC styles by built-in name, never by a
+fixed id list. Keep generated tab stops tied to the owning section, and keep
+numbering suffixes structural so no renderer sees a raw control character.
