@@ -799,6 +799,13 @@ rejected, saved, and reopened views. The legacy/default compatibility test
 keeps `Document::compare` byte-identical to default options. No sample invokes
 comparison, so the 49-entry hash harness remains unchanged.
 
+`comparison_tracks_changed_table_grids_as_table_replacement` source-builds
+tables that gain a column, lose a column, and resize both columns. Each tracked
+document saves and reopens with deletion before insertion. Acceptance compares
+cleanly with the edited table and rejection compares cleanly with the original.
+The surrounding comparison matrix retains focused row, cell, and table
+property revisions when the active grid is unchanged.
+
 Drawing preservation coverage keeps inline and anchored drawings in changed
 main-story and header owners. It checks exact wrapper bytes, local prefix
 bindings, extended `docPr` payloads, relationship targets, media bytes, and

@@ -17296,6 +17296,77 @@ fn comparison_replaces_paragraphs_and_tables_before_an_anchor() {
 }
 
 #[test]
+fn comparison_tracks_changed_table_grids_as_table_replacement() {
+    fn document_xml_for_grid(widths: &[i32]) -> String {
+        let grid = widths
+            .iter()
+            .map(|width| format!(r#"<w:gridCol w:w="{width}"/>"#))
+            .collect::<String>();
+        let cells = widths
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                format!(r#"<w:tc><w:p><w:r><w:t>cell {index}</w:t></w:r></w:p></w:tc>"#)
+            })
+            .collect::<String>();
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t>opening</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid>{grid}</w:tblGrid><w:tr>{cells}</w:tr></w:tbl><w:p><w:r><w:t>closing</w:t></w:r></w:p>"#
+        ))
+    }
+
+    for (label, original_widths, edited_widths) in [
+        ("gain", vec![2400, 2400], vec![1600, 1600, 1600]),
+        ("loss", vec![1600, 1600, 1600], vec![2400, 2400]),
+        ("resize", vec![2400, 2400], vec![3000, 1800]),
+    ] {
+        let original_xml = document_xml_for_grid(&original_widths);
+        let edited_xml = document_xml_for_grid(&edited_widths);
+        let original = document_with_content_controls(&original_xml);
+        let edited = document_with_content_controls(&edited_xml);
+        let mut compared = document_with_content_controls(&original_xml);
+        compared
+            .compare(&edited, "Ada", "2026-09-18T12:00:00Z")
+            .unwrap_or_else(|error| panic!("{label}: {error}"));
+
+        let tracked = document_xml(&mut compared);
+        let deletion = tracked.find("<w:del ").expect("tracked table deletion");
+        let insertion = tracked.find("<w:ins ").expect("tracked table insertion");
+        assert!(deletion < insertion, "{label}: {tracked}");
+        let revisions = compared.revisions();
+        assert_eq!(revisions.len(), 2, "{label}: {tracked}");
+        assert_eq!(revisions[0].kind(), rdocx::RevisionKind::Deletion);
+        assert_eq!(revisions[1].kind(), rdocx::RevisionKind::Insertion);
+        assert!(revisions.iter().all(|revision| revision.author() == "Ada"));
+        assert!(
+            revisions
+                .iter()
+                .all(|revision| revision.timestamp() == Some("2026-09-18T12:00:00Z"))
+        );
+
+        let tracked_bytes = compared.to_bytes().unwrap();
+        let mut accepted = Document::from_bytes(&tracked_bytes).unwrap();
+        accepted.accept_all().unwrap();
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-09-18T12:01:00Z")
+                .unwrap()
+                .is_empty(),
+            "{label}: accepted table differs"
+        );
+
+        let mut rejected = Document::from_bytes(&tracked_bytes).unwrap();
+        rejected.reject_all().unwrap();
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-09-18T12:01:00Z")
+                .unwrap()
+                .is_empty(),
+            "{label}: rejected table differs"
+        );
+    }
+}
+
+#[test]
 fn comparison_preserves_unrelated_modeled_fields() {
     let field =
         r#"<w:fldSimple w:instr="AUTHOR"><w:r><w:t>stored author</w:t></w:r></w:fldSimple>"#;

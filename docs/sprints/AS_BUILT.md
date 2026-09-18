@@ -15357,3 +15357,39 @@ relationship scope, namespace replay, and atomic rejection.
 **Notes for future sessions.** Use the owned story inventory when more than one
 binding location must be resolved. Keep section-property checks behind the
 preserved-node kind test so ordinary direct children remain linear.
+
+### F-X125, Compare table grid changes
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Document comparison now represents unequal active table
+grids as the original table marked for deletion followed by the edited table
+marked for insertion. This handles gained, lost, and resized columns while
+retaining focused row and cell comparison for equal grids.
+
+**Non-obvious choices.** The implementation reuses the established row-marker
+table representation. Revision resolution already removes the unused table
+shell, so no unsupported block-level wrapper or new grammar was required.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx` comparison and revision code at the user's direction. The named gate,
+29 comparison regressions, the inserted and deleted table-resolution case,
+scoped clippy, formatting, prose, and the hash harness passed.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for the tracked
+replacement representation, `docs/hld/12-testing-strategy.md`, for the grid
+matrix and postconditions, and `docs/hld/14-development-backlog.md`, for the
+F-X125 acceptance contract.
+
+**Tests.** `comparison_tracks_changed_table_grids_as_table_replacement` proves
+column gain, column loss, and width-only changes. It pins deletion before
+insertion, exact author and timestamp metadata, save and reopen, acceptance
+equal to the edited document, and rejection equal to the original.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Use whole-table replacement whenever two active
+grids cannot share one cell-level revision model. Keep equal-grid edits on the
+more focused row and cell path.

@@ -5570,6 +5570,8 @@ Represent a changed table grid as one tracked table deletion followed by one
 tracked table insertion when a cell-level revision cannot reproduce both
 grids. Acceptance yields the edited table and rejection yields the original,
 while surrounding paragraphs and unchanged tables retain normal comparison.
+The established row-marker representation removes the unused table shell
+during revision resolution, so no new block wrapper grammar is introduced.
 
 **Depends on**: F-X065, F-X097.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/127>.

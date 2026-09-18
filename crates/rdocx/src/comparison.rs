@@ -3756,9 +3756,9 @@ fn compare_table(
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
     if original.grid != edited.grid {
-        return Err(Error::Other(format!(
-            "comparison cannot revise a table grid change at {location}"
-        )));
+        let deleted = marked_table(original, "del", metadata)?;
+        let inserted = marked_table(edited, "ins", metadata)?;
+        return Ok(format!("{deleted}{inserted}"));
     }
     if original.extra_xml != edited.extra_xml
         || table_control_boundaries(original) != table_control_boundaries(edited)

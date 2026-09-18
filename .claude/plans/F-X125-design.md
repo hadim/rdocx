@@ -1,6 +1,6 @@
 # F-X125, Compare table grid changes
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: M
 **Depends on**: F-X065, F-X097
@@ -57,10 +57,10 @@ Expected unchanged. Sample generation does not call comparison.
 
 ## Implementation checklist
 
-- [ ] Add the reported grid gain, loss, and resize matrix.
-- [ ] Emit one deletion and insertion replacement for unequal grids.
-- [ ] Preserve equal-grid row and cell comparison.
-- [ ] Run comparison, revision, round-trip, hash, and full verification gates.
+- [x] Add the reported grid gain, loss, and resize matrix.
+- [x] Emit one deletion and insertion replacement for unequal grids.
+- [x] Preserve equal-grid row and cell comparison.
+- [x] Run focused comparison, revision, round-trip, and hash verification gates.
 
 ## Open questions
 

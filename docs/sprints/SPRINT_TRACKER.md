@@ -473,6 +473,7 @@ defended.
 | F-X112 | S73 | L | 4 | 2 | 2026-09-18 | Published and verified all four S73 Rust and Python package families, notified every included contributor record, and closed every fully addressed open record |
 | F-X123 | S74 | S | 1 | 1 | 2026-09-18 | Accepted producer TOC style lists with a trailing separator and duplicate style identifiers without weakening strict style mutation validation |
 | F-X124 | S74 | M | 2 | 1 | 2026-09-18 | Made Python content cloning linear through one owned body inventory and added explicit source and destination type errors |
+| F-X125 | S74 | M | 2 | 1 | 2026-09-18 | Compared gained, lost, and resized table grids as exact tracked table replacements with clean accept and reject outcomes |
 
 ## Velocity
 

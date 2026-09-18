@@ -40,7 +40,7 @@ differential evidence where the contract requires it.
 | F-268 | Floating and advanced table layout | L | pending | - |
 | F-X123 | Accept producer TOC style variants | S | done | - |
 | F-X124 | Make content cloning linear and explicit | M | done | - |
-| F-X125 | Compare table grid changes | M | pending | - |
+| F-X125 | Compare table grid changes | M | done | - |
 | F-X126 | Preserve drawings through comparison acceptance | M | pending | - |
 | F-X127 | Collapse adjacent page break requests | S | pending | - |
 | F-X128 | Preserve Word paragraph and revision identities | M | pending | - |

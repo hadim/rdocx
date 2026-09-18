@@ -1134,6 +1134,10 @@ projection removes only the selected comparison facts. Ignored formatting,
 textual whitespace, fields, comments, and story categories retain the original
 bytes. Character and word alignment carries source ownership and raw-child
 boundaries, keeps non-text content atomic, and emits each preserved child once.
+Tables with different active grids use one deleted-table record followed by
+one inserted-table record at the aligned boundary. Row markers carry the
+revision metadata, so acceptance retains only the edited grid and rejection
+retains only the original grid. Equal-grid tables keep row and cell comparison.
 Generated revisions use canonical `w`, `xml`, and `mc` prefixes in schema
 order, while reparse remains prefix tolerant. Source-span patching interleaves
 changed owner bytes with the exact original gaps, preserving unowned
