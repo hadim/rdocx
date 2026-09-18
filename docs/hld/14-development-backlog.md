@@ -5599,7 +5599,8 @@ self-comparison, relationship ownership, and changed-drawing sensitivity.
 
 Treat a paragraph-level `pageBreakBefore` immediately after a run-level page
 break as one page transition. Do not collapse either request across intervening
-visible content, tables, section transitions, columns, or non-page breaks.
+visible content, paragraph shading or borders, revision marks, drawing-clear
+offsets, tables, section transitions, columns, or non-page breaks.
 
 **Depends on**: F-X101.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/129>.

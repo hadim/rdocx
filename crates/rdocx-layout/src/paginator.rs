@@ -547,8 +547,10 @@ fn paginate_pass_from<B: LayoutBlockLike>(
     );
 
     for (block_idx, block) in blocks.iter().enumerate().skip(first_block_index) {
+        let follows_trailing_run_page_break =
+            pager.consume_trailing_run_page_break_before(block_idx);
         // Check for page break before
-        if block.page_break_before() && pager.has_content() {
+        if block.page_break_before() && pager.has_content() && !follows_trailing_run_page_break {
             pager.finish_page_before(block_idx);
             if pager.stopped_at.is_some() {
                 break;
@@ -718,6 +720,9 @@ struct Pager<'a> {
     checkpoints: Vec<PaginationCheckpoint>,
     stop_at: Option<PaginationCheckpoint>,
     stopped_at: Option<PaginationCheckpoint>,
+    /// The next block may share the page transition made by a run-level page
+    /// break at the end of the preceding paragraph.
+    trailing_run_page_break_before: Option<usize>,
 }
 
 impl<'a> Pager<'a> {
@@ -763,11 +768,18 @@ impl<'a> Pager<'a> {
             checkpoints: Vec::new(),
             stop_at,
             stopped_at: None,
+            trailing_run_page_break_before: None,
         }
     }
 
     fn has_content(&self) -> bool {
         self.has_content_flag
+    }
+
+    fn consume_trailing_run_page_break_before(&mut self, block_index: usize) -> bool {
+        let matches = self.trailing_run_page_break_before == Some(block_index);
+        self.trailing_run_page_break_before = None;
+        matches
     }
 
     /// Height the note area needs for a given set of notes, in full.
@@ -2375,6 +2387,18 @@ fn render_para_split(
     // Handle remaining lines, which may themselves need splitting
     let remaining_lines = &para.lines[split_at..];
     let remaining_height: f64 = remaining_lines.iter().map(|l| l.height).sum();
+    let ends_with_run_page_break = para.shading.is_none()
+        && para.borders.is_none()
+        && !para.has_visible_revision
+        && para.content_offset_top == 0.0
+        && para.lines[split_at - 1].forced_break_after == Some(ForcedBreakKind::Page)
+        && remaining_lines.iter().all(|line| {
+            line.forced_break_after.is_none()
+                && line.items.iter().all(|item| match item {
+                    LineItem::Text(segment) | LineItem::Marker(segment) => segment.text.is_empty(),
+                    _ => false,
+                })
+        });
 
     // Split again where the remaining lines are still too tall, or at a page
     // break among them, whichever comes first.
@@ -2459,6 +2483,9 @@ fn render_para_split(
     pager.ink_bottom = remaining_height;
     pager.cursor_y = remaining_height + para.space_after;
     pager.mark_content();
+    if ends_with_run_page_break {
+        pager.trailing_run_page_break_before = Some(block_idx + 1);
+    }
 }
 
 /// Render paragraph lines as positioned elements.
@@ -4971,6 +4998,94 @@ mod tests {
             let mut paragraph = make_para(2, 14.0);
             paragraph.lines[0].forced_break_after = Some(kind);
             assert_eq!(page_count(paragraph), 1);
+        }
+    }
+
+    #[test]
+    fn adjacent_trailing_run_and_paragraph_page_breaks_share_one_transition() {
+        let fm = FontManager::new();
+        let page_count = |blocks: Vec<LayoutBlock>| {
+            paginate(
+                &blocks,
+                PageGeometry::default(),
+                None,
+                false,
+                &fm,
+                &empty_media(),
+                &NoteRegistry::default(),
+            )
+            .0
+            .len()
+        };
+
+        let mut trailing_run_break = make_para(2, 14.0);
+        trailing_run_break.lines[0].forced_break_after = Some(ForcedBreakKind::Page);
+        trailing_run_break.lines[1].items.clear();
+        let mut paragraph_break = make_para(1, 14.0);
+        paragraph_break.page_break_before = true;
+
+        assert_eq!(
+            page_count(vec![
+                LayoutBlock::Paragraph(trailing_run_break.clone()),
+                LayoutBlock::Paragraph(paragraph_break.clone()),
+            ]),
+            2
+        );
+
+        let mut visible_boundaries = Vec::new();
+        let mut shaded = trailing_run_break.clone();
+        shaded.shading = Some(Color::BLACK);
+        visible_boundaries.push(shaded);
+        let mut revised = trailing_run_break.clone();
+        revised.has_visible_revision = true;
+        visible_boundaries.push(revised);
+        let mut cleared = trailing_run_break.clone();
+        cleared.content_offset_top = 12.0;
+        visible_boundaries.push(cleared);
+        let mut bordered = trailing_run_break.clone();
+        bordered.borders = Some(rdocx_oxml::borders::CT_PBdr {
+            top: Some(rdocx_oxml::borders::CT_BorderEdge {
+                val: ST_Border::Single,
+                sz: Some(4),
+                space: Some(0),
+                color: Some("000000".to_owned()),
+            }),
+            ..Default::default()
+        });
+        visible_boundaries.push(bordered);
+        for visible in visible_boundaries {
+            assert_eq!(
+                page_count(vec![
+                    LayoutBlock::Paragraph(visible),
+                    LayoutBlock::Paragraph(paragraph_break.clone()),
+                ]),
+                3
+            );
+        }
+
+        assert_eq!(
+            page_count(vec![
+                LayoutBlock::Paragraph(trailing_run_break),
+                LayoutBlock::Paragraph(make_para(1, 14.0)),
+                LayoutBlock::Paragraph(paragraph_break),
+            ]),
+            3
+        );
+
+        for intervening_break in [ForcedBreakKind::Line, ForcedBreakKind::Column] {
+            let mut mixed_breaks = make_para(3, 14.0);
+            mixed_breaks.lines[0].forced_break_after = Some(ForcedBreakKind::Page);
+            mixed_breaks.lines[1].forced_break_after = Some(intervening_break);
+            mixed_breaks.lines[2].items.clear();
+            let mut paragraph_break = make_para(1, 14.0);
+            paragraph_break.page_break_before = true;
+            assert_eq!(
+                page_count(vec![
+                    LayoutBlock::Paragraph(mixed_breaks),
+                    LayoutBlock::Paragraph(paragraph_break),
+                ]),
+                3
+            );
         }
     }
 

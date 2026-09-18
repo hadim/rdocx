@@ -15393,3 +15393,43 @@ equal to the edited document, and rejection equal to the original.
 **Notes for future sessions.** Use whole-table replacement whenever two active
 grids cannot share one cell-level revision model. Keep equal-grid edits on the
 more focused row and cell path.
+
+### F-X127, Collapse adjacent page break requests
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Pagination now records the transition created by a
+run-level page break at the end of a paragraph and lets an immediately
+following `pageBreakBefore` share it. The one-block state is consumed before
+any later block can inherit it.
+
+**Non-obvious choices.** Collapse is allowed only when the continuation is the
+synthetic empty line after the run break. Intervening content, line and column
+breaks, shading, borders, revision bars, and drawing-clear offsets retain
+separate transitions.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx-layout` and `rdocx` crates and changed pagination code at the user's
+direction. The named gate, focused paginator matrix, existing run-break and PDF
+consumer regressions, scoped clippy, formatting, prose, generated-skill drift,
+and hash harness passed. A workspace-wide test suite was not run.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`, for the one-block
+transition state, `docs/hld/12-testing-strategy.md`, for the pinned reporter
+oracle and boundary controls, and `docs/hld/14-development-backlog.md`, for the
+F-X127 acceptance contract.
+
+**Tests.** `adjacent_run_and_paragraph_page_breaks_share_one_transition` pins
+the LibreOffice Writer 26.2.5.2 page and text result supplied with Issue 129.
+The paginator unit matrix proves single transition sharing and separate pages
+for intervening content, visible continuation formatting, line breaks, and
+column breaks. Existing run-level fragmentation, field, PNG, and pinned
+Poppler PDF coverage remains green.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep adjacency state local to the next block.
+Do not generalize it into suppression of page breaks on empty pages, since
+explicit blank pages remain valid authored content.

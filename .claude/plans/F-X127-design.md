@@ -1,6 +1,6 @@
 # F-X127, Collapse adjacent page break requests
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: S
 **Depends on**: F-X101
@@ -57,10 +57,10 @@ Expected unchanged. Existing samples do not contain adjacent break requests.
 
 ## Implementation checklist
 
-- [ ] Add combined, single, and separation-boundary fixtures.
-- [ ] Track and consume only an adjacent run page transition.
-- [ ] Record the pinned LibreOffice result.
-- [ ] Run paginator, render, differential, hash, and full verification gates.
+- [x] Add combined, single, and separation-boundary fixtures.
+- [x] Track and consume only an adjacent run page transition.
+- [x] Record the pinned LibreOffice result.
+- [x] Run paginator, render, differential, hash, and scoped verification gates.
 
 ## Open questions
 

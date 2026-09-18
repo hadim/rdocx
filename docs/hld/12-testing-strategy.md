@@ -1587,7 +1587,11 @@ regression proves one split paragraph produces ordered body fragments on two
 physical pages, resolves PAGE, NUMPAGES, and PAGEREF from that sequence, emits
 two deterministic PNG pages, and reports two pages from the deterministic PDF
 through pinned Poppler. No binary fixture or runtime oracle dependency enters
-the published crates.
+the published crates. The adjacent-break differential pins the reporter's
+LibreOffice Writer 26.2.5.2 page and text result for a trailing run page break
+followed by `pageBreakBefore`. Single-break controls remain two pages. Focused
+paginator controls retain separate transitions across intervening content,
+visible continuation formatting, line breaks, and column breaks.
 
 The contributor reader-fact regression combines strict document and body
 boundaries, first section properties, missing revision authors, empty simple

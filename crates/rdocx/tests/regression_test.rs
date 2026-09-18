@@ -13414,6 +13414,69 @@ fn run_level_page_breaks_match_word_pagination() {
 }
 
 #[test]
+fn adjacent_run_and_paragraph_page_breaks_share_one_transition() {
+    const ORACLE: &str = "LibreOffice 26.2.5.2";
+    assert_eq!(ORACLE, "LibreOffice 26.2.5.2");
+
+    let page_texts = |document: &mut Document| {
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        reopened
+            .layout_deterministic()
+            .unwrap()
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<Vec<_>>()
+    };
+    let build = |run_break: bool, page_break_before: bool, separated: bool| {
+        let mut document = Document::new();
+        let mut first = document.add_paragraph("Section one body text.");
+        if run_break {
+            first.add_run("").add_break(BreakKind::Page);
+        }
+        if separated {
+            document.add_paragraph("Intervening content.");
+        }
+        document
+            .add_paragraph("Section two heading")
+            .page_break_before(page_break_before);
+        document.add_paragraph("Section two body text.");
+        page_texts(&mut document)
+    };
+
+    assert_eq!(
+        build(false, true, false),
+        [
+            "Section one body text.",
+            "Section two headingSection two body text."
+        ]
+    );
+    assert_eq!(
+        build(true, false, false),
+        [
+            "Section one body text.",
+            "Section two headingSection two body text."
+        ]
+    );
+    assert_eq!(
+        build(true, true, false),
+        [
+            "Section one body text.",
+            "Section two headingSection two body text."
+        ]
+    );
+    assert_eq!(
+        build(true, true, true),
+        [
+            "Section one body text.",
+            "Intervening content.",
+            "Section two headingSection two body text."
+        ]
+    );
+}
+
+#[test]
 fn run_page_break_pagination_reaches_fragments_fields_pdf_and_png() {
     let source = wrap_word_body(
         r#"<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:t>TOC</w:t></w:r><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>stored TOC target</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t>Alpha</w:t><w:br w:type="page"/></w:r><w:bookmarkStart w:id="7" w:name="destination"/><w:r><w:t>Bravo</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>stored page</w:t></w:r></w:fldSimple><w:r><w:t>/</w:t></w:r><w:fldSimple w:instr="NUMPAGES"><w:r><w:t>stored count</w:t></w:r></w:fldSimple><w:r><w:t>/</w:t></w:r><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>stored reference</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="7"/></w:p>"#,

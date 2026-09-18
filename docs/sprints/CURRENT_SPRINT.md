@@ -42,7 +42,7 @@ differential evidence where the contract requires it.
 | F-X124 | Make content cloning linear and explicit | M | done | - |
 | F-X125 | Compare table grid changes | M | done | - |
 | F-X126 | Preserve drawings through comparison acceptance | M | pending | - |
-| F-X127 | Collapse adjacent page break requests | S | pending | - |
+| F-X127 | Collapse adjacent page break requests | S | done | - |
 | F-X128 | Preserve Word paragraph and revision identities | M | pending | - |
 | F-X129 | Tolerate unmatched notes placeholders | S | pending | - |
 

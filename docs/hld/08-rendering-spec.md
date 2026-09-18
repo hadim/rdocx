@@ -1047,10 +1047,15 @@ immediately after a page-marked line when continuation content exists, before
 widow and keep decisions can move that continuation back onto the same page.
 Overflow splitting chooses the earlier of the next page break and the number of
 lines that fit, then applies the same rule recursively. A trailing page break
-has no continuation to move. Line breaks remain line-only, and column breaks
-remain distinguishable without becoming page breaks while layout is
-single-column. Body fragments, page fields, cross-reference targets, PDF, and
-raster output all consume the resulting shared page sequence.
+has no visible continuation to move. Its synthetic empty continuation records
+one page transition for the immediately following block. A paragraph-level
+`pageBreakBefore` on that block consumes the existing transition instead of
+creating an empty page. Intervening blocks, visible continuation formatting,
+line or column breaks, and section boundaries clear or prevent that state.
+Line breaks remain line-only, and column breaks remain distinguishable without
+becoming page breaks while layout is single-column. Body fragments, page
+fields, cross-reference targets, PDF, and raster output all consume the
+resulting shared page sequence.
 
 A tracked paragraph with visible revised content or a property-only revision
 carries a changed marker into pagination. Visible-revision detection follows
