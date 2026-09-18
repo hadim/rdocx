@@ -15433,3 +15433,43 @@ Poppler PDF coverage remains green.
 **Notes for future sessions.** Keep adjacency state local to the next block.
 Do not generalize it into suppression of page breaks on empty pages, since
 explicit blank pages remain valid authored content.
+
+### F-X129, Tolerate unmatched notes placeholders
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Notes-page composition now skips a notes-slide placeholder
+overlay whose complete key has no notes-master match. It continues rendering
+matched overlays and ordinary notes content and records one diagnostic per
+skipped key in source order.
+
+**Non-obvious choices.** Only unmatched overlays are tolerated. Ambiguous and
+duplicate matching, invalid relationship ownership, and a missing required
+slide-image placeholder retain their fail-closed behavior.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rpptx` notes rendering code at the user's direction. The named gate, 15
+notes-focused integration tests, the diagnostic and hard-failure unit matrix,
+scoped clippy, formatting, and the hash harness passed. A workspace-wide test
+suite was not run.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md`, for notes
+placeholder ownership, `docs/hld/08-rendering-spec.md`, for skip and diagnostic
+behavior, `docs/hld/12-testing-strategy.md`, for the source-built gate and hard
+failure controls, and `docs/hld/14-development-backlog.md`, for the F-X129
+acceptance contract.
+
+**Tests.** `notes_pdf_skips_only_unmatched_slide_placeholder_overlays` proves
+the Google Slides index variant produces byte-identical notes PDF and PNG
+output to its matched control, exact page geometry and text, and no package
+mutation. `notes_placeholder_skip_diagnostics_are_ordered_and_hard_failures_remain`
+proves ordered diagnostics, ambiguity rejection, and the required slide-image
+failure.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not generalize this tolerance to relationship
+errors or ambiguous placeholder ownership. Only a complete-key miss is safe to
+skip.

@@ -1,6 +1,6 @@
 # F-X129, Tolerate unmatched notes placeholders
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: S
 **Depends on**: F-X118
@@ -59,10 +59,10 @@ Expected unchanged. The checked samples do not render notes pages.
 
 ## Implementation checklist
 
-- [ ] Add the source-built unmatched index and matched controls.
-- [ ] Skip only unmatched overlays and report them in order.
-- [ ] Preserve ambiguity and required slide-image failures.
-- [ ] Run rpptx, render, differential, hash, and full verification gates.
+- [x] Add the source-built unmatched index and matched controls.
+- [x] Skip only unmatched overlays and report them in order.
+- [x] Preserve ambiguity and required slide-image failures.
+- [x] Run the impacted rpptx, render, differential, and hash gates.
 
 ## Open questions
 

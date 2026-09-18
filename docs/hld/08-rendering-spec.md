@@ -98,6 +98,12 @@ the six fixed one, two, three, four, six, and nine-up grids. Thumbnails preserve
 aspect ratio, clip to their assigned cells, carry a one-point border and slide
 label, and the three-up layout adds five note rules per slide.
 
+Notes-slide placeholder overlays that have no complete-key match on the notes
+master are skipped rather than aborting the page. The renderer reports each
+skipped key in source order. It still fails closed for ambiguous or duplicate
+matching, invalid relationship ownership, and a missing required slide-image
+placeholder.
+
 Raster notes and handout output accepts finite positive DPI up to 600 and
 rejects a decoded output estimate above 256 MiB before allocation. Deterministic
 font mode, shared paint and geometry resolution, PDF assembly, and PNG encoding

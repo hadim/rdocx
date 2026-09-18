@@ -1368,9 +1368,12 @@ Eight gates run against it:
    preservation. Relationship negatives cover missing, external, duplicate,
    wrong-type, malformed, and equal-id cross-scope cases. Placeholder cases
    prove index-first and type-fallback matching, ambiguity rejection, and
-   unmatched rejection. The geometry unit gate covers exact targets, clipping,
-   five rules, and rejection of a 1.01-point displacement. The 49-entry render
-   hash manifest remains unchanged.
+   source-ordered diagnostics for skipped unmatched notes-slide overlays. The
+   source-built Google Slides index variant must produce the same notes PDF and
+   PNG as its matched control while retaining the hard-failure cases. The
+   geometry unit gate covers exact targets, clipping, five rules, and rejection
+   of a 1.01-point displacement. The 49-entry render hash manifest remains
+   unchanged.
 
 The notes-owner regression removes both reverse slide relationships from the
 same source-built control and requires byte-identical deterministic notes PDF.

@@ -9026,6 +9026,53 @@ fn notes_render_without_a_reverse_slide_relationship() {
 }
 
 #[test]
+fn notes_pdf_skips_only_unmatched_slide_placeholder_overlays() {
+    assert_eq!(
+        LIBREOFFICE_VERSION,
+        "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb"
+    );
+
+    let build = |placeholder_index: u32| {
+        let mut package = open_opc(&f226_fixture_bytes(), "F-X129 unmatched notes placeholder");
+        let notes_part = "/custom/notes/notes1.xml";
+        let notes = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
+        let overlay = f226_shape(
+            12,
+            "Slide number overlay",
+            "sldNum",
+            placeholder_index,
+            (3_884_613, 8_685_213, 2_971_800, 457_200),
+            "stored overlay",
+        );
+        package.set_part(
+            notes_part,
+            notes
+                .replacen("</p:spTree>", &format!("{overlay}</p:spTree>"), 1)
+                .into_bytes(),
+        );
+        package_bytes(package)
+    };
+
+    let control = Presentation::from_bytes(&build(5)).unwrap();
+    let unmatched_bytes = build(12);
+    let unmatched = Presentation::from_bytes(&unmatched_bytes).unwrap();
+    let before_render = unmatched.to_bytes().unwrap();
+    let control_pdf = control.to_notes_pdf_deterministic().unwrap();
+    let unmatched_pdf = unmatched.to_notes_pdf_deterministic().unwrap();
+
+    assert_eq!(unmatched_pdf, control_pdf);
+    assert_eq!(f226_pdf_page_count(&unmatched_pdf, "F-X129 notes"), 2);
+    let text = f226_pdf_text(&unmatched_pdf, "F-X129 notes");
+    assert!(text.contains("speaker"));
+    assert!(text.contains('1'));
+    let control_pngs = control.notes_page_pngs_deterministic(72.0).unwrap();
+    let unmatched_pngs = unmatched.notes_page_pngs_deterministic(72.0).unwrap();
+    assert_eq!(unmatched_pngs, control_pngs);
+    assert_eq!(f226_png_dimensions(&unmatched_pngs[0]), (540, 720));
+    assert_eq!(unmatched.to_bytes().unwrap(), before_render);
+}
+
+#[test]
 fn notes_text_mutation_is_staged_and_preserves_the_body_run() {
     let mut package = open_opc(&f226_fixture_bytes(), "formatted notes mutation");
     let notes_part = "/custom/notes/notes1.xml";
@@ -9297,18 +9344,6 @@ fn notes_and_handout_export_fail_closed_for_broken_hierarchy_and_invalid_dpi() {
 
     let mut package = open_opc(&bytes, "malformed F-226 master");
     package.set_part("/custom/masters/notes.xml", b"<p:notesMaster".to_vec());
-    assert!(rejects_notes(package));
-
-    let mut package = open_opc(&bytes, "unmatched F-226 placeholder");
-    let notes_part = "/custom/notes/notes1.xml";
-    let notes = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
-    assert!(notes.contains("type=\"body\" idx=\"3\""));
-    package.set_part(
-        notes_part,
-        notes
-            .replacen("type=\"body\" idx=\"3\"", "type=\"body\" idx=\"99\"", 1)
-            .into_bytes(),
-    );
     assert!(rejects_notes(package));
 
     let mut package = open_opc(&bytes, "ambiguous F-226 placeholder");

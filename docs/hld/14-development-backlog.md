@@ -5634,9 +5634,11 @@ as hard failures and return one ordered diagnostic for each skipped overlay.
 **Depends on**: F-X118.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/131>.
 **Test gate**: differential.
-`notes_pdf_skips_only_unmatched_slide_placeholder_overlays` proves the Google
-Slides index variant, unchanged matched overlay behavior, diagnostics,
-ambiguity rejection, and the pinned LibreOffice notes-page text and geometry.
+`notes_pdf_skips_only_unmatched_slide_placeholder_overlays` source-builds the
+Google Slides index variant and proves unchanged matched output, exact notes
+text and geometry, and package-byte preservation. Its focused unit matrix
+proves source-ordered diagnostics, ambiguity rejection, and the required
+slide-image failure.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
