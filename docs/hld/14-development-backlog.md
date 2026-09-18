@@ -5643,6 +5643,38 @@ text and geometry, and package-byte preservation. Its focused unit matrix
 proves source-ordered diagnostics, ambiguity rejection, and the required
 slide-image failure.
 
+### F-X130, Show package depth, footprint, and speed (L)
+
+Strengthen the root and all 26 crate-local READMEs after the S74 authoring
+surface is complete. Each page must explain the depth that matters to its own
+consumer, lead with concrete implemented outcomes, and connect specialist
+crates to the complete Rust, CLI, Python, and browser families. The `rdocx-py`
+and `rpptx-py` pages remain the long descriptions published on PyPI and must
+make their native engine, typed API, local execution, rendering, review, and
+package-preservation advantages immediately visible.
+
+Add reproducible, dated evidence for package footprint and speed where the
+measurement applies. Rust crate archive sizes, CLI release assets, Python wheel
+and source archive sizes, installed footprint, large-document layout and PDF
+throughput, and any Python boundary measurements must name the exact version,
+platform, build mode, input, command, and statistic. Every uniqueness statement
+must be bounded to a named, dated set of reviewed official sources. Do not make
+an unqualified claim about every library, or compare timings produced by
+different workloads or environments.
+
+Extend the existing README validator and its mutation tests so capability,
+comparison, size, and performance evidence cannot drift from the command that
+produced it. All Rust examples still compile, Python and shell snippets still
+match the installed surfaces, local links resolve, and every published crate,
+wheel, source archive, and CLI bundle carries the intended README text.
+
+**Depends on**: F-X089, F-264, F-265, F-266, F-267, F-268, F-269, F-270.
+**Test gate**: regression.
+`readme_depth_footprint_and_speed_claims_are_evidence_backed` proves the exact
+27-page inventory, complete family and Python depth summaries, bounded official
+comparisons, reproducible measurement provenance, checked examples, and
+byte-identical packaged long descriptions.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

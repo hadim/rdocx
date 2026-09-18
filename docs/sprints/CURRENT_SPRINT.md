@@ -6,7 +6,9 @@
 paragraph, run, table, section, and document-setting authoring. The sprint
 closes the first seven capability gaps in the M24 matrix with modeled
 round-trip ownership, deterministic layout and rendering, and pinned Word
-differential evidence where the contract requires it.
+differential evidence where the contract requires it. It then presents the
+completed Rust and Python package depth with reproducible footprint and speed
+evidence.
 
 ## Spec references
 
@@ -24,8 +26,10 @@ differential evidence where the contract requires it.
   pagination.
 - `docs/hld/12-testing-strategy.md`, for round-trip, differential, and golden
   gates using deterministic fonts and the pinned Word corpus.
-- `docs/hld/14-development-backlog.md`, for the F-264 through F-270
-  acceptance contracts, dependencies, sizes, and named test gates.
+- `docs/hld/14-development-backlog.md`, for the F-264 through F-270 and
+  F-X130 acceptance contracts, dependencies, sizes, and named test gates.
+- `docs/hld/15-build-and-toolchain.md`, for package READMEs, Python long
+  descriptions, release artifacts, and reproducible size evidence.
 
 ## The wave
 
@@ -45,6 +49,7 @@ differential evidence where the contract requires it.
 | F-X127 | Collapse adjacent page break requests | S | done | - |
 | F-X128 | Preserve Word paragraph and revision identities | M | done | - |
 | F-X129 | Tolerate unmatched notes placeholders | S | done | - |
+| F-X130 | Show package depth, footprint, and speed | L | pending | - |
 
 ## Sequencing note
 
@@ -61,6 +66,10 @@ F-X123 through F-X129 are independent compatibility corrections reported in
 Issues 124 through 132. F-X124 covers the two reports on the same clone API.
 The correction stories precede the planned M24 authoring work so later stories
 build on the repaired round-trip, comparison, layout, and binding contracts.
+
+F-X130 follows F-264 through F-270. It documents the final S74 public surface
+across every crate and both Python distributions, with dated and reproducible
+evidence for differentiated capability, package footprint, and speed.
 
 ## Definition of done for this sprint
 
@@ -81,6 +90,9 @@ build on the repaired round-trip, comparison, layout, and binding contracts.
 - Public-authored settings and web settings report no unmodeled supported
   children, support typed removal and diagnostics, and preserve unknown
   extensions byte for byte.
+- The root and all 26 crate READMEs, including both PyPI long descriptions,
+  lead with their deepest implemented outcomes and carry reproducible,
+  appropriately scoped capability, footprint, and speed evidence.
 - The full workspace, deterministic hash harness, Word corpus, packaging,
   documentation, binding, and supply-chain gates pass without unexplained
   output changes.
