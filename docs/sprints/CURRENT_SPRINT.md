@@ -40,8 +40,13 @@ evidence.
 | F-267 | Complete table style and conditional formatting authoring | L | pending | - |
 | F-269 | Complete section page semantics | L | pending | - |
 | F-270 | Complete settings and web settings authoring | L | pending | - |
-| F-266 | International and vertical typography | L | pending | - |
-| F-268 | Floating and advanced table layout | L | pending | - |
+| F-266 | International and vertical typography | L | split | - |
+| F-266a | Script identity and font slot resolution | L | pending | - |
+| F-266b | Ruby and emphasis marks | L | pending | - |
+| F-266c | Character grid and vertical text | L | pending | - |
+| F-268 | Floating and advanced table layout | L | split | - |
+| F-268a | Advanced table authoring and geometry | L | pending | - |
+| F-268b | Floating table placement and wrap | M | pending | - |
 | F-X123 | Accept producer TOC style variants | S | done | - |
 | F-X124 | Make content cloning linear and explicit | M | done | - |
 | F-X125 | Compare table grid changes | M | done | - |
@@ -61,6 +66,15 @@ requires both complete paragraph and run properties. F-268 follows the
 completed table property and conditional-style surface so its floating,
 bidirectional, autofit, and advanced grid behavior resolves the final authored
 table state.
+
+F-266 and F-268 were split at implementation in the S74 consolidated design
+round. F-266a carries script identity, font slot resolution, and the bundled
+deterministic subset faces. F-266b carries ruby and emphasis marks. F-266c
+carries the character grid and vertical text, and follows F-269 because F-269
+owns `w:sectPr/w:textDirection` authoring while F-266c owns only its render
+projection. F-268a carries authoring and advanced geometry and follows F-267.
+F-268b carries the paginator float and follows F-268a. Each parent closes only
+after every child closes, and neither parent is started directly.
 
 F-X123 through F-X129 are independent compatibility corrections reported in
 Issues 124 through 132. F-X124 covers the two reports on the same clone API.

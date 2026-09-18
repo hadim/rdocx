@@ -39,9 +39,9 @@ regenerated, never hand-edited.
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
-| M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
+| M24, Modern DOCX authoring completeness        | 52 | 0 | 0 | 52 |
 | X, Cross-cutting (opportunistic)            | 140 | 135 | 0 | 1  |
-| **Total** | **458** | **385** | **0** | **69** |
+| **Total** | **463** | **385** | **0** | **74** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -486,8 +486,13 @@ regenerated, never hand-edited.
 | F-264 | Complete paragraph property authoring | S74 | L | pending |
 | F-265 | Complete run property and inline authoring | S74 | L | pending |
 | F-266 | International and vertical typography | S74 | L | pending |
+| F-266a | Script identity and font slot resolution | S74 | L | pending |
+| F-266b | Ruby and emphasis marks | S74 | L | pending |
+| F-266c | Character grid and vertical text | S74 | L | pending |
 | F-267 | Complete table style and conditional formatting authoring | S74 | L | pending |
 | F-268 | Floating and advanced table layout | S74 | L | pending |
+| F-268a | Advanced table authoring and geometry | S74 | L | pending |
+| F-268b | Floating table placement and wrap | S74 | M | pending |
 | F-269 | Complete section page semantics | S74 | L | pending |
 | F-270 | Complete settings and web settings authoring | S74 | L | pending |
 | F-271 | Uniform rich header and footer editing | S75 | L | pending |

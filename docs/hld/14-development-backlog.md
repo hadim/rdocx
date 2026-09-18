@@ -2580,12 +2580,44 @@ content. Explicit-font replacement has a documented theme-clearing policy.
 **Test gate**: differential. Effective run formatting and inline ordering match
 the pinned Word reference across save, reopen, and render.
 
-### F-266, International and vertical typography (L)
+### F-266, International and vertical typography (L, split at implementation)
 Author and render bidirectional, East Asian, complex-script, vertical, ruby,
 phonetic, emphasis-mark, character-grid, and locale-sensitive text behavior.
 **Depends on**: F-264, F-265.
 **Test gate**: golden. Mixed Arabic, Hebrew, Korean, Japanese, and Latin pages
 match the pinned deterministic geometry and reading order.
+
+F-266 is split into the three implementation stories below. The parent closes
+only after every child closes. The split was taken in the S74 consolidated
+design round, because the six work groups separate cleanly and the bundled
+font decision belongs to the first child alone.
+
+### F-266a, Script identity and font slot resolution (L)
+Hangul and Kana script identity, `w:rFonts` script-slot font resolution, the
+East Asian and complex-script theme references, and the bundled deterministic
+Hebrew, Korean, and Japanese subset faces.
+**Depends on**: F-264, F-265.
+**Test gate**: golden.
+`mixed_script_page_matches_the_pinned_geometry_and_reading_order` pins the
+mixed Arabic, Hebrew, Korean, Japanese, and Latin page geometry and reading
+order in deterministic font mode.
+
+### F-266b, Ruby and emphasis marks (L)
+`w:ruby` typed paragraph content with its base and phonetic lines, and `w:em`
+emphasis marks projected into layout.
+**Depends on**: F-266a.
+**Test gate**: golden.
+`ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order` pins the
+ruby and emphasis page and asserts the F-266a digest is unmoved.
+
+### F-266c, Character grid and vertical text (L)
+`w:eastAsianLayout`, `w:docGrid`, the East Asian paragraph toggles, and the
+`w:textDirection` render projection for vertical cell and section text.
+**Depends on**: F-266a, F-269.
+**Test gate**: golden.
+`grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order` pins
+the vertical and character-grid page and asserts the earlier digests are
+unmoved.
 
 ### F-267, Complete table style and conditional formatting authoring (L)
 Create and mutate table styles, conditional regions, band sizes, table look,
@@ -2595,12 +2627,37 @@ property layers.
 **Test gate**: differential. Every conditional region resolves and renders like
 the pinned Word-authored table.
 
-### F-268, Floating and advanced table layout (L)
+### F-268, Floating and advanced table layout (L, split at implementation)
 Author floating table positioning, overlap, bidirectional visual order, complete
 width modes, autofit, captions, descriptions, and advanced row-grid behavior.
 **Depends on**: F-257 through F-259.
 **Test gate**: golden. Fixed, autofit, nested, and floating tables match the
 reviewed Word page geometry and pagination.
+
+F-268 is split into the two implementation stories below. The parent closes
+only after both children close. The split was taken in the S74 consolidated
+design round, to separate the authoring and geometry work from the paginator
+float, which is the part that touches the shared obstacle machinery.
+
+### F-268a, Advanced table authoring and geometry (L)
+The `w:tblpPr`, `w:tblOverlap`, `w:bidiVisual`, `w:tblCellSpacing`,
+`w:tblCaption`, and `w:tblDescription` grammar, the row `w:wBefore` and
+`w:wAfter` offsets, the public authoring surface, autofit column widths, and
+bidirectional visual column order.
+**Depends on**: F-267.
+**Test gate**: golden.
+`fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages` pins the
+page count, per-row origins, and column widths for a fixed-grid, an autofit,
+and a nested table in deterministic font mode.
+
+### F-268b, Floating table placement and wrap (M)
+Floating table lowering, `place_floating_table`, the wrap and `ResolvedWraps`
+integration, and float against float resolution within one page.
+**Depends on**: F-268a.
+**Test gate**: golden.
+`floating_tables_match_reviewed_word_page_geometry_and_pagination` pins the
+float origins, page count, and the wrapped line boxes beside a margin-anchored,
+a page-anchored, and a text-anchored float.
 
 ### F-269, Complete section page semantics (L)
 Add page borders, line numbering, variable-width columns, separators, vertical
