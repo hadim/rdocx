@@ -471,6 +471,7 @@ defended.
 | F-X114 | S73 | M | 2 | 1 | 2026-09-17 | Rebuilt TOC entries with localized built-in styles, section-derived tab stops, and structural numbering suffix tabs from Issue 116 |
 | F-X122 | S73 | M | 2 | 1 | 2026-09-17 | Recovered the immutable rpptx release attempt with newline-safe asset validation and a coherent 0.12.1 package family |
 | F-X112 | S73 | L | 4 | 2 | 2026-09-18 | Published and verified all four S73 Rust and Python package families, notified every included contributor record, and closed every fully addressed open record |
+| F-X123 | S74 | S | 1 | 1 | 2026-09-18 | Accepted producer TOC style lists with a trailing separator and duplicate style identifiers without weakening strict style mutation validation |
 
 ## Velocity
 

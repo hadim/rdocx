@@ -8167,6 +8167,51 @@ fn dynamic_toc_rebuild_matches_the_pinned_word_update() {
 }
 
 #[test]
+fn toc_rebuild_accepts_trailing_style_separator_and_duplicate_style_ids() {
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \t "Normal,1,"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:t>First heading</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:t>Second heading</w:t></w:r></w:p>
+    "#;
+    let mut source = document_with_field_parts(&wrap_word_body(body), None, None);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let normal_id = styles.find("w:styleId=\"Normal\"").unwrap();
+    let normal_start = styles[..normal_id].rfind("<w:style").unwrap();
+    let normal_end =
+        styles[normal_start..].find("</w:style>").unwrap() + normal_start + "</w:style>".len();
+    let duplicate = styles[normal_start..normal_end].to_owned();
+    let styles = styles.replacen("</w:styles>", &format!("{duplicate}</w:styles>"), 1);
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    assert!(document.validate_style_graph().is_err());
+    let report = document.rebuild_toc().unwrap();
+    assert_eq!(report.entry_count, 2);
+    assert_eq!(report.bookmark_count, 2);
+    assert_eq!(
+        report.diagnostics,
+        ["duplicate style ID 'Normal' used first definition while rebuilding TOC"]
+    );
+    assert_eq!(toc_entry_signatures(&document_xml(&mut document)).len(), 2);
+
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    assert_eq!(
+        styles.matches("w:styleId=\"Normal\"").count(),
+        2,
+        "{styles}"
+    );
+}
+
+#[test]
 fn numbered_toc_entries_reuse_the_visible_layout_marker() {
     let body = r#"
         <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>

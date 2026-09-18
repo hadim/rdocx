@@ -15277,3 +15277,40 @@ new shared registry version. A Python release is incomplete until canonical
 PyPI installs, typing, stubs, ownership, and byte-identical GitHub notes all
 verify. Contributor comments are part of the release gate, not optional
 follow-up work.
+
+### F-X123, Accept producer TOC style variants
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** TOC rebuilding now accepts one trailing separator in the
+custom-style switch and resolves duplicate style identifiers from the first
+source definition. It reports each duplicate choice once and retains every
+producer style definition through save and reopen.
+
+**Non-obvious choices.** The tolerant lookup is local to TOC rebuilding. The
+public style-graph validator remains strict for mutations, and interior empty
+custom-style components remain malformed.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx` crate and the changed TOC code at the user's direction. The scoped
+crate suite, focused regressions, formatting, prose, generated-skill drift,
+and hash harness passed. The interrupted workspace-wide test was not treated
+as evidence.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for tolerant
+dynamic TOC discovery, `docs/hld/12-testing-strategy.md`, for the named
+producer-variant regression, and `docs/hld/14-development-backlog.md`, for the
+F-X123 acceptance contract.
+
+**Tests.** `toc_rebuild_accepts_trailing_style_separator_and_duplicate_style_ids`
+proves both reported producer variants, stable diagnostics, preserved source
+styles, and unchanged strict validation. The full `rdocx` crate suite passed
+with the pinned Poppler and LibreOffice oracles.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep producer tolerance at the consuming read
+surface. Do not weaken mutation validation or remove duplicate producer XML to
+make a derived feature succeed.

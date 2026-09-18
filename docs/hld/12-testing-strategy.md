@@ -380,6 +380,12 @@ section fallback, structural tabs, safe default geometry under extreme parsed
 values, and exact preservation of an unrelated unmodelled style child. The
 normalized differential records are pinned to Microsoft Word 16.113 build
 16.113.26091433 on macOS with the `fx114-toc-entry-records-v1` contract.
+The producer-variant regression
+`toc_rebuild_accepts_trailing_style_separator_and_duplicate_style_ids`
+combines a final empty custom-style component with a duplicate `Normal` style.
+It requires two rebuilt entries, one ordered diagnostic, both style definitions
+after save and reopen, and unchanged strict failure from the public style-graph
+validator. Unit controls retain stored display for interior empty components.
 The Word-default instruction case retains argument-free `TOC \\z`, rebuilds
 through an existing content-control payload, and saves and reopens the result.
 A mixed simple and unsupported complex TOC case asserts exact diagnostic text

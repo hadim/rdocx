@@ -5531,6 +5531,108 @@ unchanged stable 0.14.0 family and finishes with `py-rpptx-v0.12.1`.
 CRLF acceptance for packaged text, and rejection of changed text or weakened
 archive validation.
 
+### F-X123, Accept producer TOC style variants (S)
+
+Rebuild TOC fields whose custom-style list ends in one producer-added comma.
+Resolve duplicate style identifiers deterministically for TOC discovery without
+weakening the strict public style-graph validator used by style mutations.
+Report each duplicate choice while retaining the package's complete style XML.
+
+**Depends on**: F-X114.
+**GitHub issues**: <https://github.com/tensorbee/rdocx/issues/124> and
+<https://github.com/tensorbee/rdocx/issues/125>.
+**Test gate**: regression.
+`toc_rebuild_accepts_trailing_style_separator_and_duplicate_style_ids` proves
+both producer variants, deterministic first-definition lookup, diagnostics,
+entry generation, save and reopen, and unchanged strict mutation validation.
+
+### F-X124, Make content cloning linear and explicit (M)
+
+Clone one direct body child with bounded linear package work rather than
+repeated whole-story discovery and reopen cycles. Preserve transactional
+identity freshening, relationship scope, and stale-handle behavior. Python
+type errors name `source` and `destination` and state that the latter is a
+direct body index.
+
+**Depends on**: F-X106a, F-X116.
+**GitHub issues**: <https://github.com/tensorbee/rdocx/issues/126> and
+<https://github.com/tensorbee/rdocx/issues/132>.
+**Test gate**: regression.
+`clone_content_scales_linearly_and_names_invalid_arguments` proves bounded
+growth over source-built body sizes, unchanged cloned content and identities,
+and exact Python errors for the two reversed-signature cases.
+
+### F-X125, Compare table grid changes (M)
+
+Represent a changed table grid as one tracked table deletion followed by one
+tracked table insertion when a cell-level revision cannot reproduce both
+grids. Acceptance yields the edited table and rejection yields the original,
+while surrounding paragraphs and unchanged tables retain normal comparison.
+
+**Depends on**: F-X065, F-X097.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/127>.
+**Test gate**: regression.
+`comparison_tracks_changed_table_grids_as_table_replacement` covers gained,
+lost, and resized columns, exact acceptance and rejection, revision inventory,
+schema order, save and reopen, and unchanged row and cell comparison.
+
+### F-X126, Preserve drawings through comparison acceptance (M)
+
+Normalize drawing namespace ownership and retained raw markup consistently on
+the compared candidate, accepted result, edited target, rejected result, and
+original target. Text-only edits around unchanged body, header, and footer
+drawings must pass the acceptance and rejection postconditions without hiding
+a real drawing change.
+
+**Depends on**: F-X097, F-X102.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/128>.
+**Test gate**: regression.
+`text_only_comparison_with_body_header_and_footer_drawings_accepts_exactly`
+uses source-built scoped drawing variants and proves acceptance, rejection,
+self-comparison, relationship ownership, and changed-drawing sensitivity.
+
+### F-X127, Collapse adjacent page break requests (S)
+
+Treat a paragraph-level `pageBreakBefore` immediately after a run-level page
+break as one page transition. Do not collapse either request across intervening
+visible content, tables, section transitions, columns, or non-page breaks.
+
+**Depends on**: F-X101.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/129>.
+**Test gate**: differential.
+`adjacent_run_and_paragraph_page_breaks_share_one_transition` proves two pages
+for the combined case, unchanged single-break controls, separation boundaries,
+and the pinned LibreOffice page and text result in deterministic font mode.
+
+### F-X128, Preserve Word paragraph and revision identities (M)
+
+Retain namespace-aware root attributes on modeled paragraphs, runs, and
+section properties, including `w14:paraId`, `w14:textId`, and every `w:rsid*`
+value. Serialize them in deterministic source order, preserve foreign and
+unknown attributes, and keep authored identity allocation separate from this
+lossless reader correction.
+
+**Depends on**: F-X115.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/130>.
+**Test gate**: round-trip.
+`paragraph_run_and_section_identity_attributes_survive_noop_save` proves exact
+modeled and foreign root attributes across save and reopen, aliases, edits,
+comments metadata, schema order, and deterministic bytes.
+
+### F-X129, Tolerate unmatched notes placeholders (S)
+
+Ignore a notes-slide placeholder whose complete placeholder key has no notes
+master match. Continue overlaying every matched placeholder and rendering
+non-placeholder notes content. Keep ambiguous or multiply matched placeholders
+as hard failures and return one ordered diagnostic for each skipped overlay.
+
+**Depends on**: F-X118.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/131>.
+**Test gate**: differential.
+`notes_pdf_skips_only_unmatched_slide_placeholder_overlays` proves the Google
+Slides index variant, unchanged matched overlay behavior, diagnostics,
+ambiguity rejection, and the pinned LibreOffice notes-page text and geometry.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

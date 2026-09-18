@@ -1243,6 +1243,12 @@ style is created only when neither form exists. Effective paragraph properties
 decide whether the style already owns a right tab. Style-graph validation and
 styles-part serialization complete inside the staged candidate, so unrelated
 styles and unmodelled style children retain their source bytes.
+One final empty component in a custom-style list is a tolerated producer
+separator. Interior empty names, missing levels, and invalid levels remain
+malformed. TOC discovery resolves duplicate style identifiers from the first
+source definition and reports each duplicated identifier once. Validation of
+that staged TOC view ignores later definitions without deleting or rewriting
+them. Public style mutation retains strict duplicate rejection.
 Old-result exclusion adds a total nested-run order within each accepted
 revision or content-control owner, so fields on opposite sides of a marker in
 one wrapper remain distinguishable. The outer coordinate is the typed
