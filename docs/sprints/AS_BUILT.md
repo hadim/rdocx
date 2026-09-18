@@ -15153,3 +15153,127 @@ test suites, strict mypy 2.3.0, stubtest, and exact ABI tag checks.
 the stable archives require shared 0.12.1 from the registry. Never move or
 delete the failed 0.12.0 tag, and retain exact validation for every archive
 property other than the reviewed prose newline representation.
+
+### F-X112, Publish the complete S73 package families
+
+**Sprint.** S73
+**Completed.** 2026-09-18
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** Four separately approved immutable releases publish the
+complete S73 package families from reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`. `rpptx-v0.12.1` publishes all 15
+shared and presentation crates, `v0.14.0` publishes all seven stable document
+crates, `py-rdocx-v0.14.0` publishes `rdocx 0.14.0`, and
+`py-rpptx-v0.12.1` publishes `rpptx 0.12.1`. Both Rust releases include six
+checksummed CLI archives. Both Python releases include six `cp39-abi3` wheels
+and one source distribution with their reviewed README descriptions and
+metadata.
+
+**Non-obvious choices.** The incubating Rust family published first because
+the packaged stable family requires shared 0.12.1 from crates.io. The failed
+immutable `rpptx-v0.12.0` tag remains unchanged. Each successful tag received
+fresh approval immediately before its first mutation, so the user's earlier
+advance approval was recorded but not used as a substitute for the required
+release boundary. The user separately authorized closing included open issues
+and pull requests after every comment was posted and verified.
+
+**Deviations from the design plan.** The original 0.12.0 incubating target was
+recovered as 0.12.1 by F-X122 after the immutable failed workflow. The approved
+F-X112 plan already carried that recovery version. The post-release checklist
+was extended to record the user's explicit state-cleanup authorization. No
+package, version, or release-order scope changed after review.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, current package-family
+versions, `docs/hld/10-bindings-spec.md`, native and Python release alignment,
+`docs/hld/12-testing-strategy.md`, complete release evidence,
+`docs/hld/14-development-backlog.md`, the F-X112 publication and cleanup gate,
+and `docs/hld/15-build-and-toolchain.md`, current registry and workflow state.
+
+**Tests.** `s73_release_contract_requires_four_version_aligned_families`
+passes and pins every version, allowlist, tag, contribution inventory, and
+credit set. Workflow runs
+[35285117271](https://github.com/tensorbee/rdocx/actions/runs/35285117271),
+[35311114834](https://github.com/tensorbee/rdocx/actions/runs/35311114834),
+[35314444102](https://github.com/tensorbee/rdocx/actions/runs/35314444102), and
+[35317913616](https://github.com/tensorbee/rdocx/actions/runs/35317913616)
+completed successfully. Every Rust package reports its selected version and
+sole `mantissaman` owner. Every CLI checksum and release asset is verified.
+Both PyPI projects report the same owner and exact seven-file inventory. Clean
+Python 3.9 and 3.12 installs passed 66 rdocx tests and 14 rpptx tests per
+interpreter. Exact mypy 2.3.0 strict checks and stubtest passed under Python
+3.12. Each GitHub release body matches a fresh reviewed render byte for byte.
+All 51 notification URLs resolve to the exact prepared body from authenticated
+author `mantissaman`, and all 51 included records are closed with completed
+issue state reasons.
+
+**Release evidence.** The verified releases are
+[rpptx-v0.12.1](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.12.1),
+[v0.14.0](https://github.com/tensorbee/rdocx/releases/tag/v0.14.0),
+[py-rdocx-v0.14.0](https://github.com/tensorbee/rdocx/releases/tag/py-rdocx-v0.14.0),
+and
+[py-rpptx-v0.12.1](https://github.com/tensorbee/rdocx/releases/tag/py-rpptx-v0.12.1).
+The authenticated contributor handles are `@emptinessform`, `@hadim`,
+`@pedroassumpcao`, and `@chevinbrown`. The complete inventory and notification
+evidence is:
+
+- [Issue 69](https://github.com/tensorbee/rdocx/issues/69), `@emptinessform`, hardened, [comment](https://github.com/tensorbee/rdocx/issues/69#issuecomment-5726610019)
+- [Issue 72](https://github.com/tensorbee/rdocx/issues/72), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/72#issuecomment-5726610157)
+- [Issue 73](https://github.com/tensorbee/rdocx/issues/73), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/73#issuecomment-5726610288)
+- [Issue 74](https://github.com/tensorbee/rdocx/issues/74), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/74#issuecomment-5726610413)
+- [Issue 75](https://github.com/tensorbee/rdocx/issues/75), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/75#issuecomment-5726610533)
+- [Issue 76](https://github.com/tensorbee/rdocx/issues/76), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/76#issuecomment-5726610648)
+- [Issue 83](https://github.com/tensorbee/rdocx/issues/83), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/83#issuecomment-5726610777)
+- [Issue 84](https://github.com/tensorbee/rdocx/issues/84), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/84#issuecomment-5726610879)
+- [Issue 85](https://github.com/tensorbee/rdocx/issues/85), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/issues/85#issuecomment-5726610997)
+- [Issue 86](https://github.com/tensorbee/rdocx/issues/86), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/86#issuecomment-5726611133)
+- [Issue 88](https://github.com/tensorbee/rdocx/issues/88), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/88#issuecomment-5726611275)
+- [Issue 89](https://github.com/tensorbee/rdocx/issues/89), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/89#issuecomment-5726611381)
+- [Issue 90](https://github.com/tensorbee/rdocx/issues/90), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/90#issuecomment-5726611483)
+- [Issue 91](https://github.com/tensorbee/rdocx/issues/91), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/91#issuecomment-5726611595)
+- [Issue 92](https://github.com/tensorbee/rdocx/issues/92), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/92#issuecomment-5726611710)
+- [Issue 93](https://github.com/tensorbee/rdocx/issues/93), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/issues/93#issuecomment-5726611844)
+- [Issue 94](https://github.com/tensorbee/rdocx/issues/94), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/94#issuecomment-5726611983)
+- [Issue 95](https://github.com/tensorbee/rdocx/issues/95), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/issues/95#issuecomment-5726612120)
+- [Issue 96](https://github.com/tensorbee/rdocx/issues/96), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/96#issuecomment-5726612243)
+- [Issue 97](https://github.com/tensorbee/rdocx/issues/97), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/97#issuecomment-5726612380)
+- [Issue 98](https://github.com/tensorbee/rdocx/issues/98), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/98#issuecomment-5726612497)
+- [Issue 99](https://github.com/tensorbee/rdocx/issues/99), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/99#issuecomment-5726612587)
+- [Issue 100](https://github.com/tensorbee/rdocx/issues/100), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/100#issuecomment-5726612716)
+- [Issue 115](https://github.com/tensorbee/rdocx/issues/115), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/115#issuecomment-5726612853)
+- [Issue 116](https://github.com/tensorbee/rdocx/issues/116), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/116#issuecomment-5726612952)
+- [Issue 117](https://github.com/tensorbee/rdocx/issues/117), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/117#issuecomment-5726613080)
+- [Issue 118](https://github.com/tensorbee/rdocx/issues/118), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/118#issuecomment-5726613181)
+- [Issue 119](https://github.com/tensorbee/rdocx/issues/119), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/119#issuecomment-5726613317)
+- [Issue 120](https://github.com/tensorbee/rdocx/issues/120), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/120#issuecomment-5726613453)
+- [Issue 121](https://github.com/tensorbee/rdocx/issues/121), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/121#issuecomment-5726613599)
+- [Pull request 71](https://github.com/tensorbee/rdocx/pull/71), `@chevinbrown`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/71#issuecomment-5726613766)
+- [Pull request 77](https://github.com/tensorbee/rdocx/pull/77), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/77#issuecomment-5726613892)
+- [Pull request 78](https://github.com/tensorbee/rdocx/pull/78), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/78#issuecomment-5726614015)
+- [Pull request 79](https://github.com/tensorbee/rdocx/pull/79), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/79#issuecomment-5726614142)
+- [Pull request 80](https://github.com/tensorbee/rdocx/pull/80), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/80#issuecomment-5726614274)
+- [Pull request 101](https://github.com/tensorbee/rdocx/pull/101), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/101#issuecomment-5726614402)
+- [Pull request 102](https://github.com/tensorbee/rdocx/pull/102), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/102#issuecomment-5726614578)
+- [Pull request 103](https://github.com/tensorbee/rdocx/pull/103), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/103#issuecomment-5726614732)
+- [Pull request 104](https://github.com/tensorbee/rdocx/pull/104), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/104#issuecomment-5726614870)
+- [Pull request 105](https://github.com/tensorbee/rdocx/pull/105), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/105#issuecomment-5726615009)
+- [Pull request 106](https://github.com/tensorbee/rdocx/pull/106), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/106#issuecomment-5726615103)
+- [Pull request 107](https://github.com/tensorbee/rdocx/pull/107), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/107#issuecomment-5726615229)
+- [Pull request 108](https://github.com/tensorbee/rdocx/pull/108), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/108#issuecomment-5726615368)
+- [Pull request 109](https://github.com/tensorbee/rdocx/pull/109), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/109#issuecomment-5726615473)
+- [Pull request 110](https://github.com/tensorbee/rdocx/pull/110), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/110#issuecomment-5726615553)
+- [Pull request 111](https://github.com/tensorbee/rdocx/pull/111), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/111#issuecomment-5726615655)
+- [Pull request 112](https://github.com/tensorbee/rdocx/pull/112), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/112#issuecomment-5726615794)
+- [Pull request 113](https://github.com/tensorbee/rdocx/pull/113), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/113#issuecomment-5726615929)
+- [Pull request 114](https://github.com/tensorbee/rdocx/pull/114), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/114#issuecomment-5726616038)
+- [Pull request 122](https://github.com/tensorbee/rdocx/pull/122), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/122#issuecomment-5726616170)
+- [Pull request 123](https://github.com/tensorbee/rdocx/pull/123), `@chevinbrown`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/123#issuecomment-5726616293)
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep release families disjoint and preserve the
+incubating-before-stable order whenever stable package archives depend on the
+new shared registry version. A Python release is incomplete until canonical
+PyPI installs, typing, stubs, ownership, and byte-identical GitHub notes all
+verify. Contributor comments are part of the release gate, not optional
+follow-up work.

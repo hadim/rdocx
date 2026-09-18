@@ -975,34 +975,30 @@ an endnote sharing a number.
 ## Versioning
 
 The 15 shared and PowerPoint publication candidates use the explicit common
-incubating version 0.12.1 in their manifests and workspace pins, prepared for
-the S73 `rpptx-v0.12.1` recovery release. The failed immutable
+incubating version 0.12.1 in their manifests and workspace pins. They are
+published from immutable annotated tag `rpptx-v0.12.1` at reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`. Every registry entry and its
+sole owner are verified. The failed immutable
 `rpptx-v0.12.0` tag targets reviewed SHA
 `54f4567b54b4028cd5126bcf66054f3e0588a4a9`. Its Windows CLI archive used CRLF
 for reviewed text, so aggregate asset validation stopped before any registry
-publication or GitHub release. The latest published coherent family is
-0.11.0 from immutable annotated tag `rpptx-v0.11.0` at reviewed SHA
-`0b6bd622f8a14189d7d1281d011f81319ef8ad2a`. All 15 registry entries and their
-sole owner are verified, while the `rpptx-wasm` preparation member remains
-unpublished at 0.12.1. The earlier 0.10.0 family remains available. The family
+publication or GitHub release. The `rpptx-wasm` preparation member remains
+unpublished at 0.12.1. Earlier coherent families remain available. The family
 includes `oxml-chart` as the format-neutral owner while
 retaining `rpptx-chart` as a source-compatible deprecated shim. The released
 `rdocx-*` crates use the separate workspace version. The stable workspace, its
 eight stable-version internal pins, ten inherited lockfile packages, the
-`rdocx` Python project, and unpublished `rdocx-wasm` package are at 0.14.0,
-prepared for the S73 `v0.14.0` and `py-rdocx-v0.14.0` releases. The
-metadata-complete `rdocx` Python distribution is published at 0.13.2 from
-immutable annotated tag `py-rdocx-v0.13.2` at reviewed SHA
-`2b009243ed39ab66470d7484d490985368e865a8`. The unpublished 0.13.2 crates.io
-train is superseded by 0.14.0 rather than backfilled. The `rpptx` Python
-project follows the native incubating version, now prepared at 0.12.1, and
-0.11.0 is published from immutable annotated tag `py-rpptx-v0.11.0` at reviewed
-SHA `2b009243ed39ab66470d7484d490985368e865a8`. The exact
-seven-package stable crates.io family is published from immutable annotated
-`v0.13.1` tag at reviewed SHA
-`c391d12422c288be5db314bad8338dd08bb47d9a`. Every registry entry and its sole
-owner are verified. The published family depends on shared 0.11.0, while the
-binding and WASM carriers remain unpublished. The immutable v0.13.0 tag at reviewed SHA
+`rdocx` Python project, and unpublished `rdocx-wasm` package are at 0.14.0.
+The exact seven-package stable crates.io family is published from immutable
+annotated tag `v0.14.0` at reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b` and depends on shared 0.12.1.
+PyPI `rdocx 0.14.0` and `rpptx 0.12.1` are published from the corresponding
+Python tags at the same reviewed SHA. Each has six `cp39-abi3` wheels and one
+source distribution with complete crate-local README metadata. Every selected
+registry owner is verified as `mantissaman`, while binding and WASM crates
+remain unpublished on crates.io. The unpublished 0.13.2 crates.io train is
+superseded by 0.14.0 rather than backfilled. Earlier coherent Rust and Python
+releases remain available. The immutable v0.13.0 tag at reviewed SHA
 `05332b17f481741e7d5ab4e39699c6d1536475af` published five low-level stable
 packages, then stopped because packaged `rdocx` required the four Word main
 content-type constants added after shared 0.10.0. `rdocx`, `rdocx-cli`, and the
@@ -1015,11 +1011,8 @@ The separately approved cleanup yanked exactly the incomplete
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` entries. Complete coherent stable
 releases remain live and unyanked. The v0.11.0 tag remains immutable, and no
 v0.11.0 GitHub release exists. Earlier immutable registry releases, including
-the complete 0.12.0 family, remain available. The immutable `rdocx 0.13.1`
-PyPI release remains available. PyPI `rdocx 0.13.2` and `rpptx 0.11.0` each
-contain six `cp39-abi3` wheels and one source distribution with their
-crate-local README as the Markdown long description. Version preparation and
-manifest eligibility do not authorize any later publication.
+the complete 0.12.0 family, remain available. Version preparation and manifest
+eligibility do not authorize any later publication.
 `oxml-cli-support` is the
 format-neutral owner of range parsing,
 JSON envelope, and output-path contracts. It has no dependency on either

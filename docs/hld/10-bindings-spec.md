@@ -1607,13 +1607,12 @@ Full-description comparison normalizes platform CRLF to LF and ignores terminal
 newline count. All prose and other metadata remain exact.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
-PowerPoint workspace family is published at 0.11.0 from immutable annotated tag
-`rpptx-v0.11.0` at reviewed SHA
-`0b6bd622f8a14189d7d1281d011f81319ef8ad2a`. Every registry entry and its sole
-owner are verified. The stable workspace is published as the exact
-seven-package 0.13.1 family from immutable annotated tag `v0.13.1` at reviewed
-SHA `c391d12422c288be5db314bad8338dd08bb47d9a`. Every stable registry entry and
-its sole owner are verified, and the published archives require shared 0.11.0.
+PowerPoint workspace family is published at 0.12.1 from immutable annotated tag
+`rpptx-v0.12.1` at reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`. The stable workspace is published
+as the exact seven-package 0.14.0 family from immutable annotated tag `v0.14.0`
+at the same reviewed SHA. Every selected registry entry and its sole owner are
+verified, and the stable archives require shared 0.12.1.
 The immutable v0.13.0 tag at
 reviewed SHA `05332b17f481741e7d5ab4e39699c6d1536475af` published five
 low-level stable packages, then stopped because packaged `rdocx` required the
@@ -1625,15 +1624,15 @@ contribution notifications. The complete seven-package recovery is published
 at 0.11.1, and all six reviewed leave-open notifications are posted. The
 immutable PyPI `rdocx 0.13.1` release remains available with its short
 summary. PyPI `rdocx 0.13.2` carried the corrective Python metadata, and its
-crates.io train is superseded rather than backfilled. S73 prepares four
+crates.io train is superseded rather than backfilled. S73 published four
 version-aligned releases at one reviewed SHA. The stable source, `rdocx` Python
 project, and `rdocx-wasm` track 0.14.0 for `v0.14.0` and `py-rdocx-v0.14.0`.
 The shared and PowerPoint source, `rpptx` Python project, and unpublished
 `rpptx-wasm` crate track 0.12.1 for `rpptx-v0.12.1` and `py-rpptx-v0.12.1`.
 The failed immutable `rpptx-v0.12.0` workflow published no registry packages
 and created no GitHub release. Because packaged stable crates require the
-shared family, `rpptx-v0.12.1`
-publishes before `v0.14.0`. Each tag needs its own immediate final approval.
+shared family, `rpptx-v0.12.1` was published before `v0.14.0`. Each tag used
+its own immediate final approval.
 Every binding and WASM crate remains unpublished on crates.io. Neither Rust
 release gives binding, WASM, npm, or Python package publication authority. Every
 later release still requires its selected-family gate and a separate final

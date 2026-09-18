@@ -5333,7 +5333,7 @@ for both CLI crates.
 
 ### F-X112, Publish the complete S73 package families (L)
 
-Prepare the next reviewed minor version for the stable rdocx family and its
+Publish the next reviewed minor version for the stable rdocx family and its
 matching PyPI `rdocx` distribution, plus the next reviewed minor version for
 the incubating rpptx and shared family and its matching PyPI `rpptx`
 distribution. Run four separate `/release` actions at one clean reviewed S73
@@ -5358,6 +5358,9 @@ linked issues, pull requests, and credited contributors equal the per-family
 inventory required by the stories each family ships. The seven-file Python
 artifact sets, selected-family CLI release assets, separate tag approvals,
 registry owners, and posted notifications are proved by `/release`.
+After comment verification, close each included issue or pull request that
+remains open and is fully addressed by the published outcome. Leave already
+closed records unchanged.
 
 ### F-X113, Preserve appended paragraphs in document comparison (M)
 

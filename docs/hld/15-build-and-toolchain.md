@@ -372,15 +372,15 @@ and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`,
 `rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15
-are published at 0.11.0 from immutable annotated `rpptx-v0.11.0` tag at
-reviewed SHA `0b6bd622f8a14189d7d1281d011f81319ef8ad2a`. The earlier 0.10.0,
+are published at 0.12.1 from immutable annotated `rpptx-v0.12.1` tag at
+reviewed SHA `58ca5a279277f7cd8de0b8f250fb4650de14371b`. The earlier 0.11.0, 0.10.0,
 0.9.0, 0.8.0, 0.7.0, 0.6.0, 0.5.0,
 and 0.4.0 registry releases remain available, and no existing version or tag
 was moved. Manifest eligibility and allowlist membership do not authorize a
 later publication without a separately approved `/release` invocation at the
-exact reviewed SHA. The unpublished `rpptx-wasm` preparation member and all
-incubating source carriers are prepared at 0.12.1 for `rpptx-v0.12.1` without
-gaining another publication path. The failed immutable `rpptx-v0.12.0` tag
+exact reviewed SHA. The unpublished `rpptx-wasm` preparation member remains at
+0.12.1 without gaining another publication path. The failed immutable
+`rpptx-v0.12.0` tag
 published no registry packages and created no GitHub release.
 
 The complete stable 0.11.1 family is published against the shared 0.8.0 family
@@ -395,10 +395,10 @@ leave-open notifications are verified. After separate approval, exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` are yanked. Complete coherent stable
 releases remain live and unyanked. The tag is never moved or deleted, no
 v0.11.0 GitHub release exists, and no other external state changes. Current
-stable source is published as the exact seven-package 0.13.1 family from
-immutable annotated `v0.13.1` tag at reviewed SHA
-`c391d12422c288be5db314bad8338dd08bb47d9a`. All seven registry entries and
-their sole owner are verified, and the release depends on shared 0.11.0.
+stable source is published as the exact seven-package 0.14.0 family from
+immutable annotated `v0.14.0` tag at reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`. All seven registry entries and
+their sole owner are verified, and the release depends on shared 0.12.1.
 The immutable v0.13.0 tag at reviewed SHA
 `05332b17f481741e7d5ab4e39699c6d1536475af` published five stable packages,
 then stopped before `rdocx`, `rdocx-cli`, and the GitHub release because
@@ -506,10 +506,10 @@ that inherit `[workspace.package].version`, including the unpublished
 effective `workspace` shared-version group and the `v{{version}}` tag template.
 That shared-version group, the `rdocx` Python project, and the rdocx WASM
 contract literals are prepared at 0.14.0. The exact
-seven-package stable family remains published from immutable annotated `v0.13.1`
-tag at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`. Its published
-archives require shared 0.11.0. The prepared 0.14.0 archives require shared
-0.12.1, so `rpptx-v0.12.1` publishes before `v0.14.0`. The unpublished 0.13.2
+seven-package stable family is published from immutable annotated `v0.14.0`
+tag at reviewed SHA `58ca5a279277f7cd8de0b8f250fb4650de14371b`. Its published
+archives require shared 0.12.1, and `rpptx-v0.12.1` was published first. The
+unpublished 0.13.2
 crates.io train is superseded rather than backfilled. The Python, binding, and
 WASM carriers remain unpublished on crates.io. The source version move gives no
 Rust publication authority.
@@ -519,7 +519,7 @@ The remaining five packages and GitHub release were not published at that
 version. Shared 0.8.0 and stable 0.11.1 form the published recovery sequence.
 After separate immediate approval, the post-recovery cleanup yanked exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`. Complete coherent stable releases
-remain live and unyanked. The current complete stable family is 0.13.1. Earlier
+remain live and unyanked. The current complete stable family is 0.14.0. Earlier
 immutable registry releases, including the complete 0.12.0 family, remain
 available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
@@ -527,8 +527,8 @@ The 17 implemented `oxml-*` and `rpptx*` package manifests use explicit version
 0.12.1, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 preparation group contains unpublished `rpptx-py` and `rpptx-wasm`, while the crates.io
 allowlist remains exactly 15 packages. The latest published complete family is
-the immutable `rpptx-v0.11.0` release at reviewed SHA
-`0b6bd622f8a14189d7d1281d011f81319ef8ad2a`, and earlier registry releases
+the immutable `rpptx-v0.12.1` release at reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`, and earlier registry releases
 remain available. The stable 0.10.1 registry consumer proof remains pinned to
 the immutable `oxml-layout@0.6.0` dependency rather than the current workspace
 family. Shared 0.11.0 contains the additive `oxml-opc` constants required by
@@ -613,15 +613,14 @@ inherits the stable workspace version but stays `publish = false` because its
 distribution path is npm.
 
 The current Python release boundary is reviewed SHA
-`2b009243ed39ab66470d7484d490985368e865a8`. Immutable tags
-`py-rdocx-v0.13.2` and `py-rpptx-v0.11.0` select only `rdocx 0.13.2` and
-`rpptx 0.11.0` respectively. Each live PyPI version contains six `cp39-abi3`
-wheels and one source distribution. Tag workflows `34934221487` and
-`34939929652` passed exact publication-set validation and trusted publishing,
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`. Immutable tags
+`py-rdocx-v0.14.0` and `py-rpptx-v0.12.1` select only `rdocx 0.14.0` and
+`rpptx 0.12.1` respectively. Each live PyPI version contains six `cp39-abi3`
+wheels and one source distribution. Tag workflows `35314444102` and
+`35317913616` passed exact publication-set validation and trusted publishing,
 and each matching GitHub release uses the byte-identical reviewed changelog
-body. The S73 preparation moves the `rdocx` project to 0.14.0 and the `rpptx`
-project to 0.12.1 for `py-rdocx-v0.14.0` and `py-rpptx-v0.12.1`. Neither version
-is published until its own `/release` approval.
+body. Both projects are owned by `mantissaman`. Earlier immutable Python
+releases remain available.
 
 Both Python `pyproject.toml` versions and their Rust binding crate versions are
 exact release carriers. The Python preflight checks all four values instead of

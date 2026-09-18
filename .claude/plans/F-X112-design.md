@@ -1,6 +1,6 @@
 # F-X112, Publish the complete S73 package families
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S73
 **Size**: L
 **Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X122
@@ -38,6 +38,10 @@ Rust crates, both seven-file Python distributions, both GitHub CLI asset sets,
 owners, releases, and human notification comments before completing the F-ID.
 The notification inventory includes every issue and pull request incorporated
 through F-X122, whether it is open or closed at publication time.
+After the verified comments are posted, close each included record that remains
+open and whose released outcome fully addresses the record. Do not reopen or
+otherwise change records that were already closed. The user explicitly
+authorized this post-release state cleanup.
 
 ## Rejected alternatives
 
@@ -87,12 +91,13 @@ release preparation itself must add no unexplained output delta.
 
 - [x] Approve exact stable and incubating next-minor versions and standard family scope.
 - [x] Prepare every version carrier, pin, lock entry, README, workflow assertion, and release note.
-- [ ] Run the full gate, all release riders, and clean sprint review at one exact SHA.
-- [ ] Obtain fresh approval and release the incubating Rust family with CLI assets.
-- [ ] Obtain fresh approval and release the stable Rust family with CLI assets.
-- [ ] Obtain fresh approval and release PyPI rdocx from its reviewed seven artifacts.
-- [ ] Obtain fresh approval and release PyPI rpptx from its reviewed seven artifacts.
-- [ ] Verify registries, owners, releases, assets, notes, and every human issue and PR comment.
+- [x] Run the full gate, all release riders, and clean sprint review at one exact SHA.
+- [x] Obtain fresh approval and release the incubating Rust family with CLI assets.
+- [x] Obtain fresh approval and release the stable Rust family with CLI assets.
+- [x] Obtain fresh approval and release PyPI rdocx from its reviewed seven artifacts.
+- [x] Obtain fresh approval and release PyPI rpptx from its reviewed seven artifacts.
+- [x] Verify registries, owners, releases, assets, notes, and every human issue and PR comment.
+- [x] Close each fully addressed included issue and pull request that remains open.
 
 ## Open questions
 
