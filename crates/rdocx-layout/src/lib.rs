@@ -13,10 +13,12 @@ pub mod style_resolver;
 pub mod table;
 
 pub use input::{ImageData, LayoutInput, MediaRegistry, RevisionView};
+use oxml_layout::Diagnostic;
 pub use oxml_layout::{
     Color, DocumentMetadata, FontData, FontFile, FontId, GlyphRun, LayoutError, LayoutResult,
     PageFrame, Point, PositionedElement, Rect, Result, SourceNodeId, SourceSpan,
 };
+use rdocx_oxml::document::BodyContent;
 
 /// Word story containing a source paragraph.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -197,6 +199,25 @@ pub fn layout_document_with_caller_fonts_and_provenance(
 /// Lay out a DOCX using bundled fonts without system font discovery.
 pub fn layout_document_deterministic(input: &LayoutInput) -> Result<LayoutResult> {
     engine::Engine::new_deterministic()?.layout(input)
+}
+
+/// Measure one supported Word block with the deterministic production engine.
+///
+/// This hidden facade hook keeps caller-width measurement on the same font,
+/// paragraph, table, media, and numbering path as whole-document layout.
+#[doc(hidden)]
+pub fn measure_content_deterministic(
+    input: &LayoutInput,
+    content: &BodyContent,
+    available_width: f64,
+    related_story_scope: Option<&str>,
+) -> Result<(f64, Vec<Diagnostic>)> {
+    engine::Engine::new_deterministic()?.measure_content(
+        input,
+        content,
+        available_width,
+        related_story_scope,
+    )
 }
 
 /// Lay out a DOCX deterministically and retain exact Word paragraph provenance.

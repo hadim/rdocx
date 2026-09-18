@@ -34,4 +34,4 @@ let missing = relationships.get(RelScope::Slide, "rId1");
 assert!(missing.is_err());
 ```
 
-Add `rpptx-render = "0.11.0"` to your dependencies. See the [rendering API](https://docs.rs/rpptx-render) for input and output types.
+Add `rpptx-render = "0.12.1"` to your dependencies. See the [rendering API](https://docs.rs/rpptx-render) for input and output types.

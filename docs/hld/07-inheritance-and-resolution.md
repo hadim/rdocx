@@ -280,12 +280,15 @@ Two further suppressions while flattening passes 2 and 3:
   occupies it. A layout placeholder suppresses the master placeholder it
   inherits from, and a slide placeholder suppresses the layout one with the same
   `idx`.
-- An occupied slide-level `dt`, `ftr` or `sldNum` renders when the effective
-  layout and master `p:hf` flags permit it. An inherited layout or master latent
-  placeholder additionally requires a `p:hf` container on at least one of
-  those parts. Omitting both containers does not make template date and slide
-  number fields visible. Their text comes from the slide's own shape when
-  present, otherwise from the occupied layout or master shape.
+- An occupied slide-level `dt`, `ftr` or `sldNum` is direct slide content and
+  renders independently of layout and master `p:hf` flags. An occupied latent
+  placeholder inherited from a layout or master requires a `p:hf` container on
+  that same source part, and that container must permit its type. An absent
+  attribute on a present container retains the schema default of enabled.
+  Omitting the source container does not make template date and slide-number
+  fields visible. Their text comes from the slide's own shape when present,
+  otherwise from the deepest occupied layout or master shape selected by the
+  shadowing rule below.
 
 This logic belongs in the flattener, not the renderer.
 
@@ -323,10 +326,13 @@ slide `showMasterSp` controls only the layout non-placeholder pass. An absent
 value means true. Ordinary master and layout placeholders remain templates and
 are omitted. An occupied latent placeholder has nonempty field or run text.
 Latent placeholders match by type across the level-specific indices used by
-masters, layouts and slides. The deepest matching occupied latent placeholder
-is emitted once when the header-footer policy permits its source and type.
-Empty latent shapes fall back to the deepest eligible occupied layout or master
-match.
+masters, layouts and slides. Direct slide placeholders stay in slide document
+order and suppress the matching inherited type once. The deepest matching
+occupied layout placeholder claims the inherited type before source visibility
+is evaluated, so a hidden layout date cannot expose a stale master date. The
+selected layout or master placeholder is emitted once when its own source
+header-footer policy permits its type. Empty latent shapes fall back to the
+deepest occupied layout or master match.
 
 ## The chains
 

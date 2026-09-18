@@ -1420,10 +1420,55 @@ document.
 | F-261 | Rich HTML fragments in arbitrary containers | L |
 | F-262 | Corpus drawings, text boxes, and watermarks | L |
 | F-263 | Layout-backed fields and M23 corpus gate | L |
+| F-X097 | Preserve namespace-scoped drawings and complex fields in comparison | M |
+| F-X098 | Preserve content-control type payloads | M |
+| F-X099 | Expose direct body ownership for story items | M |
+| F-X100 | Preserve explicit false table toggles | S |
+| F-X101 | Honor run-level page breaks during pagination | M |
+| F-X102 | Resolve header and footer pictures in their story scope | M |
+| F-X103 | Accept standard TOC switches and report rebuild diagnostics | M |
+| F-X104 | Render DrawingML picture transparency | M |
+| F-X105 | Separate slide-owned placeholders from master header flags | M |
+| F-X106a | Expose indexed content mutation and counted replacement in Python | L |
+| F-X106b | Expose paragraph and run formatting mutations in Python | M |
+| F-X106c | Expose story mutation, hyperlinks, revisions, fields, and XML in Python | L |
+| F-X107 | Clone and remove existing table rows | M |
+| F-X108 | Replace an existing picture atomically | M |
+| F-X109 | Split text runs at Unicode character offsets | M |
+| F-X110 | Control field updates on document open | S |
+| F-X111 | Attach portable CLI binaries to Rust releases | L |
+| F-X113 | Preserve appended paragraphs in document comparison | M |
+| F-X114 | Rebuild TOC entries with document styles and geometry | M |
+| F-X115 | Preserve modern comment metadata and identity | M |
+| F-X116 | Make Python story reads linear and complete | L |
+| F-X117 | Render transparent and large raster pictures safely | M |
+| F-X118 | Make notes rendering and replacement safe | L |
+| F-X119 | Complete round-three Python authoring and inspection | L |
+| F-X120 | Accept fractional DOCX line spacing values | S |
+| F-X121 | Adopt PR 123 authored line-chart portability | S |
+| F-X122 | Recover the immutable rpptx 0.12.0 release attempt | M |
+| F-X112 | Publish the complete S73 package families | L |
 
-The model stories land before layout and conversion consumers. F-263 is the
-milestone gate and starts only after every other M23 story is integrated. The
-five client documents and their renders remain private and uncommitted.
+The model stories land before layout and conversion consumers. F-X100 lands
+before F-258 so the row and cell setters inherit lossless toggle semantics.
+F-X101 and F-X109 follow ordered runs, F-X102 precedes corpus drawings, and
+F-X103 precedes layout-backed fields. F-X106a through F-X106c serialize the
+second Python binding round, then the row and image mutations consume that
+surface. F-X113 and F-X117 are independent corrections. F-X114 follows the
+field and private-corpus layout foundations. F-X115 follows exact comment
+anchoring, F-X116 follows the complete story binding and split-run paths, and
+F-X118 establishes notes mutation before F-X119 closes the round-three binding
+surface. F-X120 and F-X121 are independent contributor corrections. F-X122
+repairs the failed immutable incubating release attempt and prepares its patch
+family. F-263
+remains the private-corpus milestone gate. F-X111 prepares portable CLI assets
+before F-X112 releases the exact two Rust and two Python families after F-X113
+through F-X122 are complete, using separate approvals.
+PR 101 contributes the F-X100 explicit
+false table-toggle fix and the F-X103 TOC `\\z` support. Its current two-commit
+shape is incorporated directly where conflict-free or through a reviewed
+hardened equivalent, with contributor credit retained. The five client
+documents and their renders remain private and uncommitted.
 
 ### M24, Modern DOCX authoring completeness
 

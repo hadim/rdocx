@@ -45,20 +45,25 @@ pub mod table;
 mod template;
 
 pub use building_block::{BuildingBlock, BuildingBlockInfo, BuildingBlockKind};
-pub use comments::{BookmarkRef, CommentRef, RunPosition, RunRange};
+pub use comments::{
+    BookmarkRef, CommentRef, RunPosition, RunRange, StoryRunPosition, StoryRunRange,
+};
 pub use comparison::{
     ComparisonDiagnostic, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind,
 };
 pub use content_control::ContentControlRef;
 pub use document::{
-    AccessibilityIssue, BodyContentRef, BodyItemRef, ContentFragment, ContentLocation, Document,
-    DocumentFragment, EmbeddedFont, EmbeddedFontKind, FontDefinition, FontEmbeddingLicense,
+    AccessibilityIssue, BodyContentRef, BodyItemRef, ContentFragment, ContentLocation,
+    ContentMeasurement, Document, DocumentFragment, DrawingHorizontalAlignment,
+    DrawingHorizontalRelativeFrom, DrawingVerticalAlignment, DrawingVerticalRelativeFrom,
+    DrawingWrap, EmbeddedFont, EmbeddedFontKind, FontDefinition, FontEmbeddingLicense,
     FragmentConflictPolicy, HeaderFooterKind, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
     ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
-    NumberingLevelOverride, OutlineNode, RenderOptions, Section, SectionRef, SectionStory,
-    StoryError, StoryId, StoryItemKind, StoryItemRef, StoryKind, UnsupportedXmlRef,
-    WordCreationProfile, WordPackageClass,
+    NumberingLevelOverride, OutlineNode, PictureAnchor, PictureCrop, PictureOptions, RenderOptions,
+    Section, SectionRef, SectionStory, StoryError, StoryId, StoryItemKind, StoryItemRef,
+    StoryItemSnapshot, StoryKind, TextBoxDirection, TextBoxOptions, TextWatermarkOptions,
+    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
@@ -67,13 +72,14 @@ pub use epub::{EpubDiagnostic, EpubWriteResult};
 pub use error::{Error, Result};
 pub use field::{
     BarcodeCaseStyle, BarcodeField, BarcodeKind, BarcodePointOfSaleStyle, FieldDateTime,
-    FieldEvaluation, FieldEvaluationContext, FieldOutcome, LegacyFormFieldInfo,
-    LegacyFormFieldKind, LegacyFormFieldValue, MailMergeControl, MailMergeData,
-    MailMergeFormatContext, MailMergeFormattedText, MailMergeImage, MailMergeRecord,
+    FieldEvaluation, FieldEvaluationContext, FieldOutcome, LayoutBackedFieldUpdateReport,
+    LegacyFormFieldInfo, LegacyFormFieldKind, LegacyFormFieldValue, MailMergeControl,
+    MailMergeData, MailMergeFormatContext, MailMergeFormattedText, MailMergeImage, MailMergeRecord,
     MailMergeValue, TcField, TocEntrySelection, TocField, TocRebuildReport,
 };
 pub use html::{
-    HtmlDiagnostic, HtmlReadResult, MhtmlDiagnostic, MhtmlReadResult, MhtmlWriteResult,
+    HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult, MhtmlDiagnostic,
+    MhtmlReadResult, MhtmlWriteResult,
 };
 pub use math::{
     MathConversionDiagnostic, MathConversionResult, equation_from_latex, equation_from_mathml,
@@ -110,6 +116,7 @@ pub use rdocx_oxml::settings::{
     CryptProviderType, DocumentProtection, ProtectionMode, ThemeFontLanguage,
 };
 pub use rdocx_oxml::styles::StyleType;
+pub use rdocx_oxml::text::{AcceptedRunPath, AcceptedRunPathSegment};
 pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
@@ -120,7 +127,9 @@ pub use run::{
 pub use style::{Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};
 pub use table::{
-    Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VMerge, VerticalAlignment,
+    Cell, CellBorderEdge, CellItemRef, CellRef, CellTextDirection, Row, RowHeight, RowRef, Table,
+    TableBorderEdge, TableBorderRef, TableCellMargins, TableConditionalFormatting, TableLayout,
+    TableLook, TableRef, TableWidth, VMerge, VerticalAlignment,
 };
 
 #[cfg(test)]

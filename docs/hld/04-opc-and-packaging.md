@@ -128,6 +128,16 @@ raw direct Word children. Foreign raw subtrees stay opaque. Invalid locations,
 relationships, identities, XML, and reopen results discard the staged
 candidate without changing the live document.
 
+HTML fragment insertion uses the same transaction. `HtmlImageResource` maps an
+exact source string to caller-owned bytes and a filename. Data-URI images are
+decoded within the aggregate input bound. Raster headers must pass
+`oxml-media` probing, duplicate explicit sources fail closed, and unresolved
+markup images produce ordered diagnostics with alternate text retained. Image
+and hyperlink relationships are created under the selected story part. Every
+image occurrence receives its own drawing identifier, while repeated source
+strings reuse their relationship within one projection. Numbering, media,
+content types, owner XML, and identifiers publish only after package reopen.
+
 Story-scoped picture and hyperlink authoring resolves the relationship owner
 from the checked `StoryId`. Body, cell, and text-box stories use the main
 document relationship set. Headers, footers, notes, and comments use the
@@ -136,6 +146,15 @@ checks exact type, internal mode, normalized target, and target existence.
 Image and hyperlink lookup applies the same owner boundary. New relationships,
 media parts, content types, XML, and drawing identities publish only after the
 staged package serializes and reopens.
+
+Existing-picture replacement uses that owner boundary without changing the
+drawing's relationship identifier. Unsupported byte signatures fail before a
+candidate exists. Compatible unshared targets can be updated in place. Shared
+targets and format changes use copy-on-write with the next deterministic
+`/word/media/imageN.<ext>` name. The old part and its override are removed only
+after the complete relationship graph proves the part unreachable. The new
+extension and content type come from the sniffed bytes, and publication follows
+a successful package reopen.
 
 Hyperlink inventory follows the same rule. Each modeled story item discovers
 its own hyperlink elements, then resolves each relationship identifier through
@@ -408,6 +427,14 @@ Malformed or ambiguous declarations fail closed. After a successful canonical
 publication, the document refreshes its root and body namespace facts from the
 published main-story bytes so a later save applies the same classification.
 
+Paragraph line spacing retains the signed integer path required by
+WordprocessingML and accepts one bounded producer deviation. A plain signed
+decimal `w:spacing/@w:line` value is normalized with exact decimal arithmetic
+to the nearest integer twip, with exact halves rounded away from zero.
+Exponent notation, malformed forms, non-finite spellings, and numeric values
+outside the signed 32-bit range remain errors. The modeled value serializes as
+one canonical integer without widening decimal acceptance to sibling measures.
+
 Direct paragraph `m:oMath` and `m:oMathPara` children use that same owner and
 boundary discipline. The reader accepts any prefix bound to the Transitional
 OfficeMath namespace. Canonical typed writes use `m:` and replay the inherited
@@ -443,6 +470,9 @@ malformed row revision markers in their original slots. Drawing relationship
 projection requires the direct WordprocessingML and DrawingML picture path and
 the Office relationships namespace. Foreign attributes, descendant
 lookalikes, ambiguous pictures, and ambiguous blips remain opaque.
+The typed `tblHeader`, `cantSplit`, and `noWrap` values use the shared on-off
+vocabulary. Absence remains distinct from explicit true and false, and present
+values write canonically in their existing row or cell property slots.
 
 Raw Word run children receive semantic classification only at the OXML parse
 boundary. A WordprocessingML `pict` is classified as a legacy horizontal rule
@@ -451,6 +481,20 @@ enabled Office `hr` attribute and whitespace otherwise. The classification is
 stored in the existing raw-child position sidecar, while the subtree bytes and
 ancestor namespace ownership remain unchanged. Foreign, malformed, numeric,
 false, visible, or structurally ambiguous content stays unmodelled raw XML.
+Authored mixed runs keep typed children and raw boundaries in one logical
+sequence. Because `w:fldSimple` and complex field sequences are paragraph
+children, the writer emits physical `w:r` segments around each field. Direct
+run properties are copied to authored segments and the cached field result.
+Positioned raw children stay on the same side of each field boundary. Legacy
+unordered raw children remain at the final run boundary. Readers remain prefix
+tolerant and writers use the fixed Word prefixes.
+
+Run splitting uses the same encoded raw-child position sidecar. A second
+private classification bit associates each parsed `mc:AlternateContent`
+drawing projection with its verbatim compatibility block, so both move to the
+same split run while serialization still writes the raw block exactly once.
+Tabs, breaks, field markup, drawings, references, symbols, and unknown children
+remain zero-width and keep their relative schema positions around literal text.
 
 The Word facade resolves an existing comments part through the main document's
 `COMMENTS` relationship and retains the normalized target. Saving serializes
@@ -487,6 +531,16 @@ aliases. Each mutation replaces only its modeled child or repeated child set,
 uses fixed `w:` prefixes for new XML, and inserts at the schema position.
 Unmodeled children inside `w:compat` and `w:docVars`, plus every unrelated
 top-level settings child, retain their bytes and namespace context.
+
+One valid `w:updateFields` child is a typed optional on-off value. Absence reads
+as `None`, a bare element reads as true, and the complete shared false
+vocabulary reads as false. Setting a value writes one fixed-prefix child after
+`w:characterSpacingControl` and before `w:compat`. Setting `None` removes only
+the modeled occurrence, while an already absent value is byte-identical and
+does not allocate a settings graph. Duplicate or malformed producer forms remain
+unmodelled and byte-identical, and their mutation returns an error rather than
+collapsing ownership. Every facade change uses the staged settings candidate,
+including collision-safe part and relationship allocation, before commit.
 
 The font-table reader accepts any in-scope Word and relationship namespace
 prefixes. It models font names, alternate names, family, pitch, and the four
@@ -548,12 +602,24 @@ stage all header, relationship, media, and content-type changes on a cloned
 package. A missing part, invalid dimension, parse error, or serialization error
 leaves the live document and package unchanged.
 
+Story-scoped picture options are validated before media publication. The
+owning story receives the image relationship, while crop rectangles remain in
+the picture blip fill and floating geometry remains in the WordprocessingDrawing
+anchor. Authored text boxes carry local namespace declarations and a complete
+VML shape-type definition so either compatibility branch is independently
+resolvable. Section-aware text watermark replacement touches only the selected
+API-owned shape. It neither synthesizes unrelated header variants nor enables
+the document-wide even-and-odd setting.
+
 Threaded comments add a document relationship using the Microsoft
 `commentsExtended` relationship type. The facade retains its resolved target
-and writes the comments-extended content type at that exact part. New comment
-state creates both relationships and both overrides together. Existing custom
-targets remain authoritative, and removal of the final API-owned thread removes
-only the parts, relationships, and overrides created by the typed model.
+and writes the standard
+`application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml`
+content type at that exact part. New comment state creates both relationships
+and both overrides together. An ordinary save retains an accepted standard
+override and unrelated comments-extended sidecar XML. Existing custom targets
+remain authoritative, and removal of the final API-owned thread removes only
+the parts, relationships, and overrides created by the typed model.
 
 Modern PowerPoint collaboration follows two independent relationship scopes.
 The presentation part owns at most one Microsoft authors relationship, and
@@ -624,6 +690,9 @@ occur in another part. Every accepted value joins the package-wide occupied set
 so later authored drawings remain globally fresh. Other duplicate definitions,
 exhausted ranges, and pending collisions fail before a staged candidate is
 published.
+Comment ids are facade identities rather than serialization-order values.
+Authored values take the lowest unused nonnegative slot, and rdocx save and
+reopen do not renumber them or their reply links.
 
 Canonical part layouts:
 
@@ -760,6 +829,13 @@ resources are diagnosed, duplicate keys and aggregate byte overflow fail
 closed, and no URL or filesystem path from markup is fetched. Successful
 images enter the normal presentation media insertion path with caller-supplied
 filenames and explicit CSS geometry.
+
+The Word HTML fragment importer uses the corresponding native
+`rdocx::HtmlImageResource` slice plus self-contained image data URIs. It never
+resolves a URL or filesystem path from markup. Explicit width and height use
+the existing CSS pixel conversion. A missing dimension uses the probed native
+size at 96 DPI. Malformed bytes, MIME mismatches, count overflow, and aggregate
+byte overflow fail before the live document changes.
 
 The Word MHTML importer accepts contained PNG and JPEG resources only when the
 declared MIME type agrees with byte sniffing. Missing CSS pixel dimensions use
@@ -898,6 +974,48 @@ empty `tblGridChange` remains unmodelled in its original slot. Serialization
 writes active columns first and the modeled historical change after them in
 schema order.
 
+The native table facade authors auto, fixed-twip, and percentage widths through
+one typed width mode. Checked physical measurements must be nonnegative and fit
+the signed twip representation after the repository's pinned truncating unit
+conversion. Percentages must be finite and between zero and 100, inclusive,
+and serialize in fiftieths of a percent. Checked shading and border colors are
+`auto` or six hexadecimal digits. A visible border has a checked nonzero width,
+while an invisible edge remains an explicit `none` value rather than becoming
+an absent child.
+
+Complete grid replacement validates the active column count, positive widths,
+signed total, row omissions, cell spans, and row coverage before mutation. A
+successful update writes the active grid, fixed table width, and every covering
+cell width together. Table property setters retain unrelated raw property
+slots, border extensions, namespace aliases on read, and canonical fixed `w`
+prefixes on changed modeled children.
+
+Checked row authoring covers minimum and exact heights, repeating-header and
+split toggles including explicit false and removal, alignment, conditional
+regions, and leading or trailing grid omissions. Checked cell authoring covers
+width, borders, margins, shading, vertical alignment, text direction,
+conditional regions, wrapping, horizontal spans, vertical merges, and nested
+tables. Topology-changing operations clone the complete table, reconcile only
+untouched empty cells, validate positive grid widths, exact row coverage, and
+immediately adjacent vertical merge ranges, then replace the live table.
+
+Existing direct table rows clone and remove through a staged `Document`
+mutation. A clone retains the complete row, cell, nested-content, relationship,
+and raw XML model, then freshens bookmark, content-control, and drawing
+identities and omits copied comment anchors. Body namespace declaration names
+are converted to fragment prefixes before freshening, including the empty
+prefix for a root default namespace. Table-level raw XML and content controls
+move with their logical row boundary. Removing a vertical-merge restart
+promotes a matching continuation below, and a table always retains one direct
+row. Invalid indexes, topology, XML, or reopen results discard the candidate.
+
+Row and cell property readers select modeled elements and attributes by their
+bound WordprocessingML namespace. Foreign same-local children remain raw in
+their exact schema slots. Changed modeled children use canonical `w` prefixes
+and row or cell `xsd:sequence`, while unrelated row, cell, and border extension
+bytes remain exact. Checked nested tables are nonempty and retain the required
+trailing cell paragraph.
+
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
 with every inherited namespace binding they use. Typed table, cell, border,
@@ -1024,6 +1142,12 @@ rejected independently to prove both package-wide policy postconditions. Any
 metadata, policy, alignment, unsupported-shell, parse, serialization, or
 postcondition failure leaves the original package, typed state, and caches
 unchanged.
+Comparison staging closes only the inherited bindings used by detached inline
+and anchor wrappers. Bindings already present on the story root remain there,
+while bindings declared on an outer drawing owner travel with the detached
+wrapper. Dirty typed inputs recover matching package drawing payloads before
+their staged flush. Physical complex-field runs project onto one modeled owner,
+including several sibling fields that share one physical run.
 
 Literal redaction also uses the complete package boundary. The Word facade
 flushes a staged clone, removes one non-empty exact literal from relationship-
@@ -1112,6 +1236,13 @@ correlates the existing complex TOC begin, separator, and end markers, and
 records exact byte offsets for the owned cached-result range. Bookmark markers
 are inserted at schema-valid unowned boundaries by byte-position edits. Source
 selection retains paragraph, run, and raw-child positions for bookmark scope.
+Each required built-in entry level resolves a paragraph style by the
+case-insensitive built-in name `toc N` and retains the producer's style id. An
+existing canonical `TOCN` id is the collision-safe fallback, and a canonical
+style is created only when neither form exists. Effective paragraph properties
+decide whether the style already owns a right tab. Style-graph validation and
+styles-part serialization complete inside the staged candidate, so unrelated
+styles and unmodelled style children retain their source bytes.
 Old-result exclusion adds a total nested-run order within each accepted
 revision or content-control owner, so fields on opposite sides of a marker in
 one wrapper remain distinguishable. The outer coordinate is the typed
@@ -1139,9 +1270,25 @@ Each modeled content control owns only its first `w:sdtContent` child. A later
 same-namespace content container remains opaque. The scan applies typed block
 grammar and the 32-level revision nesting bound, counting property-change
 revision elements as well as content revisions.
+The first supported `w:sdtPr` type child also owns its producer attributes and
+ordered child payload. Prefix-tolerant parsing records the typed discriminator,
+while serialization uses the fixed type prefix and retains that payload only
+when the discriminator is unchanged. Duplicate type children remain ordered
+raw properties.
 When a supported instruction is wrapped by inline ownership elements, staged
 parsing and replacement close that exact balanced owner chain before emitting
 the following paragraph content. Isolated instruction-run projection injects
 the inherited namespace bindings required by every copied qualified name. It
 locates the start-tag boundary with the XML parser and does not repeat a
 declaration already local to the run.
+
+Pagination-aware cache publication uses the same staged package boundary. One
+deterministic layout records PAGE, NUMPAGES, and resolved PAGEREF values against
+the owning paragraph node and top-level field position. Main-story fields are
+updated through typed document content. Referenced headers, footers, footnotes,
+and a uniquely owned endnotes part are patched through their relationship-
+resolved source spans. Unsupported switches, unresolved targets, ambiguous
+story ownership, and non-decimal section page formats retain their original
+cache. Every written field becomes clean. A parse, layout, source-correlation,
+serialization, or reopen failure publishes neither package bytes nor typed
+state.

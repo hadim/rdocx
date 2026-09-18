@@ -2449,61 +2449,95 @@ split-range, or exhausted dependencies abort without changing the destination.
 collisions and reopens with every reference resolved.
 
 ### F-257, Complete M23 table authoring (L)
-Author table width modes, alignment, indentation, layout, shading, borders,
-cell margins, grid, style look, and the layout-table behavior used by the
-private corpus. Invisible borders remain explicit modeled values rather than
-absence inferred by convention.
+The public native table facade authors auto, fixed, and percentage width modes,
+alignment, indentation, layout, shading, aggregate and individual borders,
+cell margins, complete active grids, and style-look flags. Checked mutation
+validates units, colors, grid omissions, spans, coverage, and overflow before
+publication. Grid replacement synchronizes table, column, and covering-cell
+widths. Invisible borders remain explicit modeled values rather than absence
+inferred by convention, and unrelated producer XML remains exact.
 **Depends on**: F-253.
-**Test gate**: differential. Sanitized layout and data tables match Word in XML
-semantics, column geometry, pagination, and deterministic rendering.
+**Test gate**: differential. `m23_layout_and_data_tables_match_word` proves the
+sanitized layout and data-table XML semantics, column geometry, reviewed
+pagination record, and deterministic rendering. Companion regressions prove
+complete typed reopen and failure atomicity.
 
 ### F-258, Complete M23 row and cell authoring (L)
-Author exact and minimum row heights, repeating headers, split policy, row
-alignment, grid omissions, merges, per-cell borders and margins, width,
-shading, vertical alignment, text direction, conditional formatting, and
-wrapping.
-**Depends on**: F-257.
-**Test gate**: differential. The corpus-required nested tables reproduce every
-reviewed row and cell property without unmodeled fallback.
+The native facade authors checked exact and minimum row heights, explicit
+repeating-header and split toggles, row alignment and conditional regions,
+grid omissions, horizontal and vertical merges, per-cell borders and margins,
+width, shading, vertical alignment, six text directions, conditional regions,
+wrapping, and checked nested tables. Topology changes reconcile only untouched
+empty cells and publish only a complete validated table. Aliased modeled
+properties remain readable, foreign same-local children remain raw, and
+unrelated property and border-extension slots remain exact.
+**Depends on**: F-257, F-X100.
+**Test gate**: differential. `m23_nested_rows_and_cells_match_word` proves the
+sanitized nested-table property matrix, canonical schema order, typed reopen,
+merge topology, and deterministic rendering. Companion regressions prove
+failure atomicity and exact producer XML preservation.
 
 ### F-259, Container measurement and equal-height layout (M)
 Measure supported paragraphs and tables at a caller-supplied width using the
 same deterministic fonts and layout rules as whole-document pagination. The
-result reports height and diagnostics without mutating the document.
+owned `ContentMeasurement` reports fractional point height and ordered layout
+diagnostics. `Document::measure_content` accepts an existing checked
+`ContentLocation`, positive `Length` width, and `RenderOptions`. It resolves one
+paragraph or table, builds the ordinary layout input, and runs the production
+paragraph or recursive table path through a fresh deterministic engine without
+pagination, mutation, or cache publication. Callers round upward at the twip
+boundary before applying an equal minimum row height.
 **Depends on**: F-257, F-258.
 **Test gate**: regression. Two independently measured nested tables align to
-the same final row height and match whole-document layout.
+the same final row height and match whole-document layout. Companion coverage
+proves wrapping, margins, borders, spans, ordered diagnostics, checked failure,
+byte purity, and deterministic-cache purity.
 
 ### F-260, Ordered run content authoring (L)
 Author tabs, line, page, and column breaks, drawings, fields, symbols, and text
 inside one run while preserving mixed-content order. Existing formatting
-setters operate on the run without replacing non-text children.
+setters operate on the run without replacing non-text children. Fields are
+normalized to schema-valid paragraph children on write, with the direct run
+properties copied to the cached result and each surrounding physical run.
 **Depends on**: F-253.
 **Test gate**: round-trip. A run containing every supported child reopens in
 the same order and renders each break and tab at the expected position.
 
 ### F-261, Rich HTML fragments in arbitrary containers (L)
-Insert HTML fragments at any supported content location with bounded inline
-and embedded CSS, nested lists, tables, data-URI images, links, and explicit
-resource resolution. Every dropped construct produces an ordered diagnostic.
+`Document::insert_html_fragment` inserts bounded inline and embedded CSS,
+nested lists, tables, data-URI images, links, and exact-key explicit image
+resources at a checked body, cell, header, or footer `ContentLocation`. The
+owned result returns a refreshed story identity, direct range, and ordered
+diagnostics. Destination-scoped numbering, media, relationships, and drawing
+identifiers publish atomically after reopen. No external resource is fetched.
 **Depends on**: F-253 through F-260.
 **Test gate**: differential. The supported fragment subset produces equivalent
 Word content and rendering in body, cell, header, and footer containers.
 
 ### F-262, Corpus drawings, text boxes, and watermarks (L)
-Author inline and floating images, crop and size, anchors, wrapping, rotated
-text boxes, text direction, section-aware watermarks, and the required modeled
-AlternateContent and VML fallback. Raw header XML is not used by the generator.
+`PictureOptions` authors inline and floating images with crop, size, relative
+position, wrapping, distances, z-order, and behind-text control. Checked story
+text boxes carry rotation and all three supported text directions in a WPS
+primary branch with a self-contained VML fallback. Section-aware text
+watermarks target one header variant without changing caller-owned parity
+settings. Every mutation publishes only after save and reopen. Raw header XML
+is not used by the generator.
 **Depends on**: F-252, F-255, F-260.
 **Test gate**: differential. Every private-corpus drawing and watermark matches
-the reviewed Word geometry and compatibility structure.
+the reviewed Word geometry and compatibility structure. Companion exact XML,
+relationship, option-matrix, header-selection, and rollback tests cover the
+portable gate when Word GUI automation is unavailable.
 
 ### F-263, Layout-backed fields and M23 corpus gate (L)
 Materialize PAGE, NUMPAGES, PAGEREF, and supported TOC caches from deterministic
-layout, including numbered headings inside table cells. Build all five private
-documents through public `Document::new()` programs and enforce package,
-semantic, visual, deterministic, and no-fallback acceptance.
+layout, including numbered headings inside table cells. The native and Python
+operations publish atomically and return an owned report with separate field
+counts and ordered diagnostics. Build all five private documents through pure
+Rust public `Document::new()` programs, rerun each generator for exact byte
+determinism, and enforce package, semantic, visual, repair, and no-runtime-
+fallback acceptance.
 **Depends on**: F-241 through F-262.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/93>.
 **Test gate**: differential. Required private-corpus mode passes all five
 references without LibreOffice post-processing, raw XML, or source-template
 access at generation time.
@@ -4964,6 +4998,538 @@ one matching distribution. Manual dispatch remains build-only.
 crate and project version agreement, disjoint tag routing, six wheels and one
 source archive per selected distribution, manual build-only behavior, and
 fail-closed rejection of a version or family mismatch.
+
+### F-X097, Preserve namespace-scoped drawings and complex fields in comparison (M)
+
+Document comparison retains namespace bindings inherited by inline and anchored
+drawing wrappers, including declarations owned by a story-part root or the
+outer `w:drawing`. Run ownership maps physical complex-field XML onto the
+modeled runs used by comparison, so a text edit next to a field does not fail
+because the source contains more physical `w:r` elements than modeled runs.
+Malformed drawings still fail atomically.
+
+**Depends on**: F-X093, F-234.
+**GitHub issues**: <https://github.com/tensorbee/rdocx/issues/75> and
+<https://github.com/tensorbee/rdocx/issues/85>.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/106>.
+**Test gate**: regression.
+`comparison_preserves_inherited_drawing_namespaces_and_complex_fields` compares
+body and header drawings with declarations at each reported ancestor scope,
+then compares a changed paragraph containing a complex field. Save, reopen,
+accept, and reject retain relationships, drawing identity, field structure,
+and changed text without a count mismatch or partial mutation.
+
+### F-X098, Preserve content-control type payloads (M)
+
+Retain the selected content-control type element's attributes, ordered children,
+and local namespace bindings while exposing the existing typed discriminator.
+An unchanged type writes its preserved payload under the fixed output prefix.
+Changing the public discriminator replaces that payload with the canonical
+empty element for the selected type, without disturbing other `w:sdtPr`
+children.
+
+**Depends on**: F-253.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/84>.
+**Test gate**: round-trip.
+`content_control_type_payload_round_trips_until_type_changes` preserves reported
+checkbox, date, combo-box, repeating-section, citation, and equation attributes
+and child payloads, then proves an explicit type mutation emits only the
+canonical replacement in schema order.
+
+### F-X099, Expose direct body ownership for story items (M)
+
+Keep the existing recursive `StoryItem.index_path` contract and add an optional
+direct main-body owner index for items that can safely seed `RunPosition` and
+other direct-body APIs. Native and Python snapshots expose the same value.
+Nested items identify their containing direct body child rather than their flat
+scan ordinal, and items outside the main story report no body owner.
+
+**Depends on**: F-253, F-X094d.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/86>.
+**Test gate**: binding.
+`story_items_expose_safe_direct_body_owners` verifies direct paragraphs and
+tables, nested fields, drawings, and content controls map to the correct body
+child through native and installed Python surfaces. Header and footer items
+remain unanchored, and the legacy recursive path remains unchanged.
+
+### F-X100, Preserve explicit false table toggles (S)
+
+Parse `w:tblHeader`, `w:cantSplit`, and `w:noWrap` through the shared OOXML
+on-off vocabulary rather than element presence. Preserve explicit false values
+as false and serialize them canonically, while retaining the existing meaning
+of absent and bare true elements. F-258 builds its authoring setters on this
+lossless low-level representation.
+
+**Depends on**: F-253.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/83>.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/101>.
+**Test gate**: round-trip.
+`explicit_false_table_toggles_remain_false` opens every accepted false lexical
+form for row header, split policy, and cell wrapping, then saves and reopens
+without converting any value to true.
+
+### F-X101, Honor run-level page breaks during pagination (M)
+
+Carry forced page-break identity from ordered run content through line breaking
+into Word pagination. A page break in its own paragraph or between two pieces
+of text ends the current physical page immediately. Line breaks keep their
+current line-only behavior, and column breaks remain separately classified for
+the existing single-column limitation rather than silently becoming page
+breaks. `LayoutLine::forced_break_after` carries the non-exhaustive
+`ForcedBreakKind`, and overflow pagination chooses the earlier of its ordinary
+fit boundary and the next page break.
+
+**Depends on**: F-260.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/88>.
+**Test gate**: differential.
+`run_level_page_breaks_match_word_pagination` constructs both reported page
+break shapes, compares their page count and page text with the pinned Word
+layout oracle, and proves PDF, PNG, page fields, and TOC page targets use the
+same resulting pagination.
+
+### F-X102, Resolve header and footer pictures in their story scope (M)
+
+Lay out inline and anchored header and footer drawings against the relationship
+scope of the physical story part that owns them. Body, header, and footer
+relationship identifiers may collide without sharing media. Missing or
+external story relationships produce one stable diagnostic and never fall
+back to a document-level image with the same identifier.
+
+The layout input keys related images by selecting main-part relationship and
+story-local relationship. Each header or footer lowers its paragraphs through
+a scoped `MediaRegistry` view that shares the immutable media payload map.
+Footer loading follows the same internal-target rules as header loading, and
+ordinary drawing diagnostics are deduplicated by scoped relationship.
+
+**Depends on**: F-255.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/89>.
+**Test gate**: differential.
+`header_and_footer_pictures_render_from_story_relationships` builds body,
+header, and footer pictures with colliding local relationship identifiers,
+then compares deterministic PNG and PDF output with the pinned LibreOffice
+render and verifies the expected image objects and alternate text.
+The deterministic sample baseline changes only for the feature-showcase PDF.
+The existing 400 by 40 header logo is now present on page 11.
+
+### F-X103, Accept standard TOC switches and report rebuild diagnostics (M)
+
+Accept Word's argument-free `TOC \\z` switch as a retained display policy that
+does not block rebuilding in paginated output. Keep the switch in the field
+instruction. Return the ordered diagnostic messages produced by a TOC rebuild
+through native and Python reports, with `diagnostic_count` derived from the
+same collection rather than maintained separately.
+
+**Depends on**: F-X098.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/90>.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/101>.
+**Test gate**: binding.
+`word_default_toc_switch_rebuilds_and_reports_ordered_diagnostics` rebuilds the
+reported Word-default instruction, preserves its content-control payload,
+exposes no diagnostic, and returns exact ordered messages for malformed and
+unsupported controls through Rust, Python, typing, and save-reopen checks.
+The native report owns `Vec<String>` diagnostics and derives its compatibility
+count through an accessor. Python exposes the same messages as a tuple and
+derives its count from that tuple-backed snapshot.
+
+### F-X104, Render DrawingML picture transparency (M)
+
+Model the bounded `a:alphaModFix` child of an embedded picture blip as a
+validated zero-to-100000 amount while preserving unsupported sibling effects
+and duplicate or foreign lookalikes in order. Namespace resolution accepts the
+conventional prefix and aliases declared through the enclosing picture fill.
+Propagate its effective opacity through slide, layout, master,
+background, cached preview, SVG, PDF, and raster rendering without changing
+opaque pictures or animation opacity.
+
+**Depends on**: F-217.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/91>.
+**Test gate**: differential.
+`picture_alpha_mod_fix_matches_presentation_renderers` compares slide and
+layout pictures at 30 percent opacity plus an opaque control against the pinned
+LibreOffice raster, then checks round-trip XML, SVG group opacity, PDF alpha,
+and repeated deterministic PNG output.
+
+### F-X105, Separate slide-owned placeholders from master header flags (M)
+
+Treat an occupied date, footer, or slide-number placeholder physically present
+on a slide as slide content. Master and layout `p:hf` flags govern only latent
+placeholders inherited from that same source part. An inherited layout or
+master placeholder still requires its own enabling container and is suppressed
+by an occupied slide placeholder of the same latent type. The pinned secondary
+oracle records the decision while native PowerPoint confirmation remains
+optional.
+
+**Depends on**: F-226.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/92>.
+**Test gate**: differential.
+`slide_owned_latent_placeholders_ignore_master_header_flags` covers absent,
+all-false, and slide-number-only master `p:hf` containers. Slide-owned numbers
+remain, unoccupied inherited dates remain hidden, and deterministic Rust text
+and raster visibility match LibreOffice 26.2.5.2 through Poppler 26.01.0.
+
+### F-X106a, Expose indexed content mutation and counted replacement in Python (L)
+
+Expose native direct-body paragraph insertion, content cloning and movement,
+content-index lookup, counted run-aware literal replacement, and counted regex
+replacement through the existing Python `Document` and content handles.
+Inputs use existing body coordinates and live Paragraph or Table handles.
+Popping returns an opaque reusable `ContentFragment` whose typed kind is its
+only exposed content. Each successful structural mutation advances the binding
+revision exactly once. Counted replacements advance it only for a nonzero
+count, while a failed preflight leaves the document and all handles unchanged.
+
+**Depends on**: F-254, F-X099.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/94>.
+**GitHub pull requests**: <https://github.com/tensorbee/rdocx/pull/109>,
+<https://github.com/tensorbee/rdocx/pull/111>.
+**Test gate**: binding.
+`python_indexed_content_mutation_is_counted_and_atomic` inserts, clones, moves,
+locates, and replaces content split across runs, then verifies exact counts,
+stale-handle behavior, typing, save-reopen output, and rollback on invalid
+coordinates or replacement syntax.
+
+### F-X106b, Expose paragraph and run formatting mutations in Python (M)
+
+Expose paragraph style and numbering readers and setters, run `style_id`
+readers and setters, and highlight read and write access through the existing
+Python paragraph, run, and font handles. Highlight uses Word's named
+`ST_HighlightColor` vocabulary in both directions, while run shading remains a
+separate six-digit hexadecimal or `auto` property. Values use the established
+typed enums and nullable property conventions. Setters preserve unrelated
+ordered run content and do not advance the binding revision because formatting
+mutation does not change structural identity.
+
+**Depends on**: F-X106a.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/94>.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/108>.
+**Test gate**: binding.
+`python_paragraph_and_run_formatting_matches_native_facades` applies styles,
+numbering, named highlights, and shading to mixed-content runs, checks
+native-equivalent values after reopen, rejects invalid names without mutation,
+and passes installed strict typing and stub checks.
+
+### F-X106c, Expose story mutation, hyperlinks, revisions, fields, and XML in Python (L)
+
+Expose story text replacement, default header and footer text, story-scoped
+hyperlink creation, revision snapshots and the current accept and reject
+filters, field-cache updates, and read-only story-item XML through typed Python
+methods and frozen values. Reuse native staged operations and StoryId ownership.
+Do not expose a mutable raw-XML injection path or create a second document
+model. Cloning removes duplicate comment anchors, story replacement removes
+only hyperlinks made empty by that replacement, StoryItem snapshots carry and
+reject stale binding revisions, and content lookup returns direct paragraph
+matches before enclosing controls while exposing every ambiguous coordinate.
+The compatibility StoryItem constructor maps omitted or `None` XML to empty
+immutable bytes.
+
+**Depends on**: F-X103, F-X106b.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/94>.
+**Test gate**: binding.
+`python_story_revision_field_and_xml_operations_are_typed_and_atomic` mutates
+body and related stories, creates a scoped link, resolves revisions through
+every requested filter, updates field caches, reads exact item XML, and proves
+runtime, typing, GIL, revision, clone-anchor, direct-match lookup, and
+failure-atomicity contracts.
+
+### F-X107, Clone and remove existing table rows (M)
+
+Add native and Python table operations that clone an existing row before or
+after a requested position and remove a row by index. Cloning retains row
+properties, cell properties, nested content, and preserved XML while assigning
+fresh identities where the package-wide identifier contract requires them.
+The native document methods return the inserted boundary and removal result.
+Python Table methods accept negative source indexes, insert after the source by
+default, and stale structural handles once after success. Row header and split
+setters accept true, false, and removal using F-X100's lossless toggle
+representation. Root namespace attribute names are converted to the prefix
+vocabulary expected by content fragments, so an unused default namespace never
+becomes an illegal `xmlns:xmlns` declaration. Removing a vertical-merge restart
+promotes the matching continuation below. Every invalid index, topology, XML,
+or reopen result fails without mutation.
+
+**Depends on**: F-258, F-X106a.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/95>.
+**Test gate**: binding.
+`table_rows_clone_remove_and_clear_through_native_and_python` clones a formatted
+nested row, clears both row toggles, removes the source row, and verifies
+schema order, identities, rendering, a Word-style root default namespace,
+installed typing, and save-reopen output.
+
+### F-X108, Replace an existing picture atomically (M)
+
+`Document::replace_image` and `replace_image_for_story` replace image bytes
+through an existing body or story-local relationship while preserving the
+relationship identifier and drawing markup. A format change
+allocates a correctly named media part, updates the selected relationship and
+content types, and removes the old part only when it is no longer referenced.
+Shared targets use copy-on-write behavior so replacing one occurrence does not
+silently change another. Python exposes matching operations over `Story`
+snapshots. Native and Python operations publish only a fully validated package
+candidate.
+
+**Depends on**: F-255, F-X106c.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/96>.
+**Test gate**: binding.
+`replace_image_preserves_drawings_and_story_relationship_ownership` replaces
+shared and unshared body, header, and footer images across PNG and JPEG,
+verifies copy-on-write targets and content types, and proves Rust and Python
+failure atomicity through save and reopen.
+
+### F-X109, Split text runs at Unicode character offsets (M)
+
+Add a checked native and Python `split_run` primitive for direct-body
+paragraphs. The offset is a Unicode scalar-value index in the run's visible
+literal text, and zero or end offsets are defined no-op boundaries. A split
+copies run properties, treats tabs, breaks, fields, drawings, references,
+symbols, and raw children as zero-width, keeps them in original order, updates
+hyperlink and marker spans, and returns the selected or new run boundary so
+existing half-open `RunRange` comment APIs can anchor exact words without
+changing the stable `RunPosition` struct.
+
+**Depends on**: F-260, F-X106a.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/97>.
+**Test gate**: binding.
+`split_run_enables_exact_comment_ranges_without_losing_content` splits ASCII,
+multibyte, hyperlink, field-adjacent, and mixed-content runs, anchors a comment
+to the selected words, and verifies accepted text, formatting, marker ranges,
+typing, rollback, and save-reopen order.
+
+### F-X110, Control field updates on document open (S)
+
+Model `w:updateFields` in settings with the shared Word on-off vocabulary and
+preserve its schema slot. Native and Python accessors return `None` when the
+element is absent or unmodelled and accept `None`, true, or false to remove or
+set one modeled occurrence through the existing staged settings mutation
+boundary. Duplicate and malformed forms remain byte-preserved and reject
+ambiguous mutation. No field update operation changes this policy implicitly.
+
+**Depends on**: F-244, F-X100.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/98>.
+**Test gate**: binding.
+`update_fields_on_open_is_typed_optional_and_schema_ordered` covers absent,
+bare true, explicit false, namespace aliases, duplicate preservation,
+set-clear-reopen behavior, Python typing, and rollback on relationship
+allocation failure.
+
+### F-X111, Attach portable CLI binaries to Rust releases (L)
+
+Build `rdocx` for stable tags and `rpptx` for incubating tags on the six
+reviewed Linux, macOS, and Windows targets. Package one executable, its crate
+README, and the workspace licence per target-specific archive. The aggregate
+job rejects missing, extra, empty, non-executable, or byte-mismatched members
+and produces the complete SHA-256 checksum manifest. Asset validation completes
+before crates.io publication can start, and the GitHub release waits for both.
+Exact `cargo-binstall` metadata resolves the same selected-family archives.
+The static musl binary disables system font discovery while retaining bundled
+fonts. Python releases remain unchanged and carry no CLI assets.
+
+**Depends on**: F-X095.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/100>.
+**Test gate**: release preparation.
+`rust_release_assets_are_complete_family_scoped_and_installable` mutation-tests
+tag routing, runner and target coverage, archive names and contents, checksums,
+failure propagation, release upload ordering, and `cargo binstall` resolution
+for both CLI crates.
+
+### F-X112, Publish the complete S73 package families (L)
+
+Publish the next reviewed minor version for the stable rdocx family and its
+matching PyPI `rdocx` distribution, plus the next reviewed minor version for
+the incubating rpptx and shared family and its matching PyPI `rpptx`
+distribution. Run four separate `/release` actions at one clean reviewed S73
+SHA. Each action retains its existing exact family allowlist, requires a fresh
+immediate approval, verifies registry ownership and artifacts, and posts a
+human release result to every included issue and pull request. The stable Rust
+release supersedes rather than backfills the unpublished 0.13.2 crate set.
+The approved versions are stable Rust and PyPI `rdocx` 0.14.0 and incubating
+Rust and PyPI `rpptx` 0.12.1, under tags `rpptx-v0.12.1`, `v0.14.0`,
+`py-rdocx-v0.14.0`, and `py-rpptx-v0.12.1`. The failed immutable
+`rpptx-v0.12.0` tag published no packages and created no GitHub release. The
+recovery incubating tag publishes first because packaged stable crates require
+the shared 0.12.1 registry family.
+
+**Depends on**: F-257 through F-263, F-X097 through F-X111, F-X113 through F-X122.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/99>.
+**Test gate**: release preparation.
+`s73_release_contract_requires_four_version_aligned_families` proves exact
+Rust and Python version agreement, the 7-package stable and 15-package
+incubating allowlists, the four reviewed tags, and reviewed notes whose
+linked issues, pull requests, and credited contributors equal the per-family
+inventory required by the stories each family ships. The seven-file Python
+artifact sets, selected-family CLI release assets, separate tag approvals,
+registry owners, and posted notifications are proved by `/release`.
+After comment verification, close each included issue or pull request that
+remains open and is fully addressed by the published outcome. Leave already
+closed records unchanged.
+
+### F-X113, Preserve appended paragraphs in document comparison (M)
+
+Correct terminal paragraph-mark ownership when comparison inserts two or more
+paragraphs after the original final paragraph. Rejecting the staged revisions
+must reproduce the original without an extra empty paragraph, and accepting
+must reproduce the edited story. Start and middle insertions, intentional empty
+paragraphs, fields, drawings, and unrelated package parts retain their current
+behavior. A self-closing original final paragraph expands around the tracked
+boundary instead of emitting paragraph properties as raw body content.
+
+**Depends on**: F-X097.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/115>.
+**Test gate**: regression.
+`comparison_appends_multiple_terminal_paragraphs_without_residue` compares one,
+two, and three appended paragraphs and proves exact accept and reject
+reconstruction with no synthetic terminal content.
+
+### F-X114, Rebuild TOC entries with document styles and geometry (M)
+
+Resolve built-in TOC levels by `w:name="toc N"` so localized style ids remain
+authoritative. Use an effective style right tab when present and otherwise
+derive the page-number stop from the field's section text width. Numbering tab
+suffixes become ordered `w:tab` run content rather than literal control
+characters inside `w:t`.
+
+**Depends on**: F-X103, F-263.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/116>.
+**Test gate**: regression.
+`rebuilt_toc_uses_localized_styles_section_tabs_and_structural_suffixes` covers
+localized ids, effective style tabs, A4 margins, invalid geometry fallback,
+unmodelled style-child preservation, and numbered headings through save,
+reopen, layout, and pinned Word 16.113 comparison.
+
+### F-X115, Preserve modern comment metadata and identity (M)
+
+Use the standard Open XML commentsExtended content type, keep comment ids and
+parent links stable through rdocx save and reopen, and add optional validated
+RFC 3339 dates through native `add_comment_with_date` and
+`reply_to_with_date` and the Python `date` keyword. New ids use the unused
+nonnegative space. No date remains the deterministic default, and docs state
+that third-party editors may independently renumber comments.
+
+**Depends on**: F-X109.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/117>.
+**Test gate**: regression.
+`comments_keep_standard_content_type_ids_dates_and_threads` proves content
+type, ids, dates, parents, replies, resolved state, Python typing, and no-op
+sidecar preservation through reopen.
+
+### F-X116, Make Python story reads linear and complete (L)
+
+Materialize one story source and owner inventory per Python snapshot rather
+than rebuilding the package for every item. Use the same accepted-view walker
+for StoryItem text, Paragraph text, and Paragraph runs. Visible runs nested in
+tracked insertions and inline content controls retain recursive source paths,
+support checked mutation, and become stale after structural edits.
+
+**Depends on**: F-X106c, F-X109.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/118>.
+**Test gate**: performance.
+`python_story_inventory_scales_linearly` counts complete-story traversals while
+doubling paragraphs, table cells, and hyperlinks, and the companion binding
+gate proves nested visible runs agree across every text view. Story-item and
+hyperlink snapshots each build their source inventory once, and path-backed
+nested run mutation is checked through save, reopen, and stale-handle failure.
+
+### F-X117, Render transparent and large raster pictures safely (M)
+
+Premultiply decoded RGBA before constructing tiny-skia pixmaps. Raise the
+checked decoded-image ceiling to 64 MiB for the reported 4000 by 1500 and 2100
+by 2100 assets while retaining the 16 MiB encoded ceiling and checked dimension
+and allocation bounds. Supported images render in PDF and every raster format.
+An image beyond the bound records its scoped rejection, reports one stable
+diagnostic, and lowers as a visible bounds fallback instead of disappearing.
+
+**Depends on**: F-X104.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/119>.
+**Test gate**: raster.
+`straight_alpha_images_composite_with_premultiplied_pixels` proves transparent
+stored white and black pixels compose identically, while the large-image gate
+covers both reported successful sizes and one explicit over-limit failure.
+
+### F-X118, Make notes rendering and replacement safe (L)
+
+Render a notes slide from its already known owning slide when the producer
+omits the reverse relationship, while rejecting conflicting owners. Add staged
+formatting-preserving notes text mutation and include notes in presentation
+replacement counts. The CLI shares the guarded output policy, adds `--expect`,
+rejects zero unexpected matches, and publishes only after validation.
+
+**Depends on**: F-X105, F-X111.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/120>.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/121>.
+**Test gate**: CLI.
+`rpptx_replace_is_guarded_counted_and_includes_notes` covers existing outputs,
+input equality, zero and expected counts, speaker notes, formatting, rollback,
+and staged-file cleanup. The companion
+`notes_render_without_a_reverse_slide_relationship` regression covers
+Google-style notes relationship graphs and rejects conflicting owners.
+
+### F-X119, Complete round-three Python authoring and inspection (L)
+
+The Python bindings accept in-memory Word picture insertion with checked
+StoryItem placement and source-compatible path-aware comment positions for
+table-cell paragraphs. Presentation handles expose shape bounds and identity,
+run font name, size and color, text autofit mode, and a Run text setter that
+preserves formatting. The existing direct-body RunPosition remains source
+compatible.
+
+**Depends on**: F-X106c, F-X108, F-X109, F-X115, F-X118.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/121>.
+**Test gate**: binding.
+`python_round_three_authoring_and_inspection_is_typed_and_lossless` exercises
+every added Word and PowerPoint operation from installed wheels, then verifies
+typing, relationships, properties, save-reopen behavior, and failure atomicity.
+
+### F-X120, Accept fractional DOCX line spacing values (S)
+
+Accept producer-written plain decimal `w:spacing/@w:line` values and normalize
+them to the nearest signed integer twip, with exact half values rounded away
+from zero. Preserve the existing integer path. Reject exponent notation,
+non-finite values, malformed decimals, and values outside the signed 32-bit
+range without weakening any other spacing attribute. Save the normalized value
+canonically as an integer.
+
+**Depends on**: none.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/122>.
+**Test gate**: regression.
+`word_fractional_line_spacing_opens_with_nearest_twip_values` covers observed
+producer values, exact positive and negative halves, signed boundaries,
+canonical save and reopen, invalid forms, and deterministic layout.
+
+### F-X121, Adopt PR 123 authored line-chart portability (S)
+
+Adopt Kevin Brown's PR 123 at exact head
+`1375b6342548e79ec17faa99ac76a57e4a1c5e9b`. Authored axis titles declare an
+empty layout followed by non-overlay semantics. Authored line plots explicitly
+disable chart-level markers and smoothing so viewers do not invent per-point
+markers or smooth the path. Other chart families retain their existing output,
+and source data, editable workbooks, and palette choices remain unchanged.
+
+**Depends on**: F-X087.
+**GitHub pull request**: <https://github.com/tensorbee/rdocx/pull/123>.
+**Test gate**: regression.
+`authored_charts_emit_portable_viewer_defaults` proves title child order,
+explicit false line defaults, non-line exclusion, parse and rewrite stability,
+and unchanged workbook and palette semantics. The pinned external oracle binds
+the resulting four-chart DOCX to
+`ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b`.
+
+### F-X122, Recover the immutable rpptx 0.12.0 release attempt (M)
+
+Treat CRLF and LF as equivalent representations when the Rust release
+workflow validates packaged README and licence text. Keep exact archive names,
+member sets, executable checks, nonempty payload checks, archive checksums, and
+text content after newline normalization. The failed immutable
+`rpptx-v0.12.0` tag remains at its reviewed commit with no registry packages or
+GitHub release. Prepare the complete 15-package incubating Rust family,
+unpublished WASM and binding carriers, stable shared dependency pins, and PyPI
+`rpptx` together at 0.12.1. F-X112 then publishes `rpptx-v0.12.1` before the
+unchanged stable 0.14.0 family and finishes with `py-rpptx-v0.12.1`.
+
+**Depends on**: F-X111, F-X119, F-X121.
+**Test gate**: release regression.
+`rpptx_0_12_1_recovery_is_version_aligned_and_line_ending_safe` proves exact
+0.12.1 version carriers and dependency pins, the revised four-tag S73 contract,
+CRLF acceptance for packaged text, and rejection of changed text or weakened
+archive validation.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

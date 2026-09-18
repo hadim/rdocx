@@ -23,6 +23,7 @@ pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu};
+use oxml_drawing::color::ColorChoice;
 #[cfg(feature = "render")]
 use oxml_drawing::color::ColorMap;
 pub use oxml_drawing::fill::Fill;
@@ -33,7 +34,7 @@ use oxml_drawing::table::CT_TableStyleList;
 use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
 #[cfg(feature = "render")]
 use oxml_drawing::text::CT_TextListStyle;
-use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph, TextRun};
+use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph, TextAutofit, TextRun};
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
     TextBulletChoice, TextFont,
@@ -67,7 +68,7 @@ use rpptx_layout::timeline::{ResolvedTimelineSlide, evaluate_media_playback};
 #[cfg(feature = "render")]
 use rpptx_layout::{
     ChartResource, FlattenedItem, FlattenedSource, ResolveCtx, ResolvedContent, ResolvedSlide,
-    ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
+    ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaFailures, ScopedMediaIds,
 };
 pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
 use rpptx_oxml::comments::{CommentAuthorList, CommentList};
@@ -1681,13 +1682,39 @@ impl Presentation {
         self.slides
             .iter_mut()
             .map(|record| {
-                replace_text_in_children(
+                let slide_count = replace_text_in_children(
                     &mut record.slide.common_slide_data.shape_tree.children,
                     placeholder,
                     value,
-                )
+                );
+                let notes_count = record.notes.as_mut().map_or(0, |notes| {
+                    replace_text_in_children(
+                        &mut notes.notes.common_slide_data.shape_tree.children,
+                        placeholder,
+                        value,
+                    )
+                });
+                slide_count + notes_count
             })
             .sum()
+    }
+
+    /// Replaces literal slide and speaker-note text on a staged candidate.
+    ///
+    /// The candidate is serialized before it replaces the live presentation,
+    /// so a malformed retained subtree cannot publish a partial mutation.
+    pub fn try_replace_text(&mut self, placeholder: &str, value: &str) -> Result<usize> {
+        if placeholder.is_empty() {
+            return Err(Error::InvalidSlideMutation {
+                operation: "replace text",
+                message: "placeholder must not be empty".to_owned(),
+            });
+        }
+        let mut candidate = self.clone();
+        let count = candidate.replace_text(placeholder, value);
+        candidate.staged_package(false)?;
+        *self = candidate;
+        Ok(count)
     }
 
     /// Returns the optional slide dimensions in EMUs.
@@ -3073,7 +3100,8 @@ fn render_prepared_timeline_request(
         &incoming_source.layout,
         &incoming_source.slide,
         &assembly.default_text_style,
-    );
+    )
+    .with_media_failures(&incoming_source.media_failures);
     if let Some(styles) = assembly.table_styles.as_ref() {
         incoming_context = incoming_context.with_table_styles(styles);
     }
@@ -3125,7 +3153,8 @@ fn render_prepared_timeline_request(
                 &source.layout,
                 &source.slide,
                 &assembly.default_text_style,
-            );
+            )
+            .with_media_failures(&source.media_failures);
             if let Some(styles) = assembly.table_styles.as_ref() {
                 context = context.with_table_styles(styles);
             }
@@ -4801,6 +4830,33 @@ impl<'a> SlideMut<'a> {
         self.record.slide.clear_background();
     }
 
+    /// Replaces speaker-note text while preserving its body placeholder.
+    pub fn set_notes_text(&mut self, text: &str) -> Result<()> {
+        let notes = self
+            .record
+            .notes
+            .as_mut()
+            .ok_or_else(|| Error::InvalidSlideMutation {
+                operation: "set notes text",
+                message: "slide has no notes part".to_owned(),
+            })?;
+        let mut candidate = notes.notes.clone();
+        let body = first_notes_body_mut(&mut candidate.common_slide_data.shape_tree.children)
+            .ok_or_else(|| Error::InvalidSlideMutation {
+                operation: "set notes text",
+                message: "notes slide has no body placeholder".to_owned(),
+            })?;
+        body.set_text(text);
+        candidate
+            .to_xml()
+            .map_err(|error| Error::InvalidSlideMutation {
+                operation: "set notes text",
+                message: error.to_string(),
+            })?;
+        notes.notes = candidate;
+        Ok(())
+    }
+
     /// Appends a rectangular table at the top of the slide's z-order.
     pub fn add_table(
         &mut self,
@@ -5093,6 +5149,14 @@ pub enum ShapeKind {
     Group,
     Connector,
     AlternateContent,
+}
+
+/// The direct autofit choice stored on a DrawingML text body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutofitMode {
+    None,
+    Normal,
+    Shape,
 }
 
 /// A borrowed shape-tree child.
@@ -6011,6 +6075,19 @@ impl<'a> TextFrameRef<'a> {
             .get(index)
             .map(|paragraph| TextParagraphRef { paragraph })
     }
+
+    /// Returns the direct autofit choice on the text body.
+    pub fn autofit_mode(&self) -> Option<AutofitMode> {
+        self.body
+            .body_properties
+            .autofit
+            .as_ref()
+            .map(|autofit| match autofit {
+                TextAutofit::NoAutofit => AutofitMode::None,
+                TextAutofit::Normal(_) => AutofitMode::Normal,
+                TextAutofit::ShapeAutofit => AutofitMode::Shape,
+            })
+    }
 }
 
 impl<'a> TextParagraphRef<'a> {
@@ -6075,6 +6152,30 @@ impl TextRunRef<'_> {
     /// Returns direct character properties when present.
     pub fn properties(&self) -> Option<&CT_TextCharacterProperties> {
         self.run.properties.as_ref()
+    }
+
+    /// Returns the direct Latin typeface on this run.
+    pub fn font_name(&self) -> Option<&str> {
+        self.properties()?
+            .latin
+            .as_ref()
+            .map(|font| font.typeface.as_str())
+    }
+
+    /// Returns the direct run size in hundredths of a point.
+    pub fn font_size(&self) -> Option<i32> {
+        self.properties()?.font_size
+    }
+
+    /// Returns the direct sRGB run colour as `RRGGBB`.
+    pub fn font_color(&self) -> Option<String> {
+        let Fill::Solid(fill) = self.properties()?.fill.as_ref()? else {
+            return None;
+        };
+        let ColorChoice::Srgb { value, .. } = fill.color.as_ref()? else {
+            return None;
+        };
+        Some(value.to_string())
     }
 }
 
@@ -6146,6 +6247,11 @@ pub struct TextRunMut<'a> {
 }
 
 impl TextRunMut<'_> {
+    /// Returns direct character properties when present.
+    pub fn properties(&self) -> Option<&CT_TextCharacterProperties> {
+        self.run.properties.as_ref()
+    }
+
     /// Replaces text while retaining the run's typed and unmodelled state.
     pub fn set_text(&mut self, text: &str) {
         self.run.set_text(text);
@@ -6179,10 +6285,43 @@ fn shape_kind(child: &ShapeTreeChild) -> ShapeKind {
     }
 }
 
+fn shape_transform(child: &ShapeTreeChild) -> Option<&CT_Transform2D> {
+    match child {
+        ShapeTreeChild::Shape(shape) => shape.shape_properties.transform.as_ref(),
+        ShapeTreeChild::Picture(picture) => picture.shape_properties.transform.as_ref(),
+        ShapeTreeChild::GraphicFrame(frame) => Some(&frame.transform),
+        ShapeTreeChild::GroupShape(group) => group.group_transform(),
+        ShapeTreeChild::Connector(connector) => connector.shape_properties.transform.as_ref(),
+        ShapeTreeChild::AlternateContent(alternate) => Some(&alternate.chart_choice()?.transform),
+    }
+}
+
 impl<'a> ShapeRef<'a> {
     /// Returns the child's normalized structural kind.
     pub fn kind(&self) -> ShapeKind {
         shape_kind(self.child)
+    }
+
+    /// Returns the direct shape offset in EMU.
+    pub fn position(&self) -> Option<(Emu, Emu)> {
+        let offset = shape_transform(self.child)?.offset?;
+        Some((offset.x, offset.y))
+    }
+
+    /// Returns the direct shape extent in EMU.
+    pub fn size(&self) -> Option<(Emu, Emu)> {
+        let extent = shape_transform(self.child)?.extent?;
+        Some((extent.cx, extent.cy))
+    }
+
+    /// Returns the producer-facing non-visual shape id.
+    pub fn non_visual_id(&self) -> Option<u32> {
+        self.child.non_visual_id()
+    }
+
+    /// Returns the producer-facing non-visual shape name.
+    pub fn non_visual_name(&self) -> Option<String> {
+        self.child.non_visual_name()
     }
 
     /// Returns ordinary shape text or row-major table text when modelled.
@@ -6286,6 +6425,32 @@ fn collect_text(children: &[ShapeTreeChild], output: &mut Vec<String>) {
     }
 }
 
+fn first_notes_body_mut(children: &mut [ShapeTreeChild]) -> Option<&mut CT_TextBody> {
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape)
+                if shape
+                    .placeholder
+                    .as_ref()
+                    .is_some_and(|placeholder| placeholder.effective_type() == PhType::Body) =>
+            {
+                return Some(shape.text_body.get_or_insert_with(CT_TextBody::new));
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(body) = first_notes_body_mut(&mut group.children) {
+                    return Some(body);
+                }
+            }
+            ShapeTreeChild::Shape(_)
+            | ShapeTreeChild::Picture(_)
+            | ShapeTreeChild::GraphicFrame(_)
+            | ShapeTreeChild::Connector(_)
+            | ShapeTreeChild::AlternateContent(_) => {}
+        }
+    }
+    None
+}
+
 fn replace_text_in_children(
     children: &mut [ShapeTreeChild],
     placeholder: &str,
@@ -6361,6 +6526,9 @@ fn replace_text_in_paragraph(
 }
 
 fn replace_text_in_run_segment(runs: &mut [TextRun], placeholder: &str, value: &str) -> usize {
+    if placeholder.is_empty() {
+        return 0;
+    }
     let mut text = String::new();
     let mut ranges = Vec::with_capacity(runs.len());
     for run in runs.iter() {
@@ -6837,12 +7005,35 @@ fn validate_notes_export_graph(
             "{notes_part}: notes master {master} differs from presentation master {notes_master_part}"
         )));
     }
-    let slide =
-        render_exact_related_part(package, notes_part, rel_types::SLIDE, content_types::SLIDE)?;
-    if slide != slide_part {
+    let slide_relationships = package
+        .get_part_rels(notes_part)
+        .map(|relationships| relationships.get_all_by_type(rel_types::SLIDE))
+        .unwrap_or_default();
+    if slide_relationships.len() > 1 {
         return Err(render_failure(format!(
-            "{notes_part}: source slide {slide} differs from owner {slide_part}"
+            "{notes_part}: found {} relationships of type {}, expected at most one",
+            slide_relationships.len(),
+            rel_types::SLIDE
         )));
+    }
+    if let Some(relationship) = slide_relationships.first() {
+        reject_external(notes_part, relationship)?;
+        let slide = OpcPackage::resolve_rel_target(notes_part, &relationship.target);
+        required_part(package, &slide)?;
+        let actual = package.content_types.content_type_for(&slide);
+        if actual != Some(content_types::SLIDE) {
+            return Err(render_failure(format!(
+                "{notes_part}: relationship {} targets {slide} with content type {:?}, expected {}",
+                relationship.id,
+                actual,
+                content_types::SLIDE
+            )));
+        }
+        if slide != slide_part {
+            return Err(render_failure(format!(
+                "{notes_part}: source slide {slide} differs from owner {slide_part}"
+            )));
+        }
     }
     Ok(())
 }
@@ -7099,7 +7290,7 @@ fn render_export_surface(
     master.text_styles = None;
     master.header_footer = None;
     let empty: &[ShapeTreeChild] = &[];
-    let (media, hyperlinks, charts, diagrams) = render_scoped_resources(
+    let (media, media_failures, hyperlinks, charts, diagrams) = render_scoped_resources(
         package,
         [source_part, source_part, source_part],
         [&slide.common_slide_data.shape_tree.children, empty, empty],
@@ -7113,7 +7304,8 @@ fn render_export_surface(
         &layout,
         &slide,
         default_text_style,
-    );
+    )
+    .with_media_failures(&media_failures);
     if let Some(styles) = table_styles {
         context = context.with_table_styles(styles);
     }
@@ -7378,6 +7570,7 @@ fn handout_slide_number(
         bold: false,
         italic: false,
         field_kind: None,
+        field_source: None,
         note: None,
     }))
 }
@@ -7422,6 +7615,7 @@ struct PreparedSlideAssembly {
     master: CT_SlideMaster,
     theme: CT_OfficeStyleSheet,
     media: ScopedMediaIds,
+    media_failures: ScopedMediaFailures,
     hyperlinks: ScopedHyperlinkTargets,
     charts: ScopedChartResources,
     media_diagnostics: Vec<oxml_layout::Diagnostic>,
@@ -7590,7 +7784,7 @@ fn prepare_render_context(
                 message: error.to_string(),
             },
         )?;
-        let (slide_media, slide_hyperlinks, slide_charts, slide_diagrams) =
+        let (slide_media, slide_media_failures, slide_hyperlinks, slide_charts, slide_diagrams) =
             render_scoped_resources(
                 package,
                 [&slide_part, &layout_part, &master_part],
@@ -7624,7 +7818,8 @@ fn prepare_render_context(
             &layout,
             &slide,
             &default_text_style,
-        );
+        )
+        .with_media_failures(&slide_media_failures);
         if let Some(styles) = table_styles.as_ref() {
             context = context.with_table_styles(styles);
         }
@@ -7679,6 +7874,7 @@ fn prepare_render_context(
             master,
             theme,
             media: slide_media,
+            media_failures: slide_media_failures,
             hyperlinks: slide_hyperlinks,
             charts: slide_charts,
             media_diagnostics: prepared_media_diagnostics,
@@ -7987,6 +8183,7 @@ fn render_media_placeholder(
             bold: false,
             italic: false,
             field_kind: None,
+            field_source: None,
             note: None,
         })],
     })
@@ -8027,6 +8224,7 @@ fn render_scoped_resources(
     deck_media: &mut HashMap<MediaId, MediaData>,
 ) -> Result<(
     ScopedMediaIds,
+    ScopedMediaFailures,
     ScopedHyperlinkTargets,
     ScopedChartResources,
     ScopedDiagramResources,
@@ -8043,6 +8241,11 @@ fn render_scoped_resources(
                 .iter()
                 .map(|(media_id, media)| (*media_id, media.content_type.clone()))
                 .collect(),
+        },
+        ScopedMediaFailures {
+            slide: slide.media_failures,
+            layout: layout.media_failures,
+            master: master.media_failures,
         },
         ScopedHyperlinkTargets {
             slide: slide.hyperlinks,
@@ -8065,6 +8268,7 @@ fn render_scoped_resources(
 #[cfg(feature = "render")]
 struct RenderPartResources {
     media_ids: HashMap<String, MediaId>,
+    media_failures: HashMap<String, String>,
     hyperlinks: HashMap<String, String>,
     charts: HashMap<String, ChartResource>,
     diagrams: HashMap<String, DiagramResources>,
@@ -8078,12 +8282,14 @@ fn render_part_resources(
     deck_media: &mut HashMap<MediaId, MediaData>,
 ) -> Result<RenderPartResources> {
     let mut media_ids = HashMap::new();
+    let mut media_failures = HashMap::new();
     let mut hyperlinks = HashMap::new();
     let mut charts = HashMap::new();
     let diagrams = render_part_diagram_resources(package, source_part, shape_tree);
     let Some(relationships) = package.get_part_rels(source_part) else {
         return Ok(RenderPartResources {
             media_ids,
+            media_failures,
             hyperlinks,
             charts,
             diagrams,
@@ -8123,8 +8329,13 @@ fn render_part_resources(
             .content_type_for(&target)
             .unwrap_or("application/octet-stream")
             .to_owned();
-        if !render_compatible_media(bytes, &content_type) {
-            continue;
+        match render_compatible_media(bytes, &content_type) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(message) => {
+                media_failures.insert(relationship.id.clone(), message.to_owned());
+                continue;
+            }
         }
         let media_id = MediaId::from_bytes(bytes);
         deck_media.entry(media_id).or_insert_with(|| MediaData {
@@ -8135,6 +8346,7 @@ fn render_part_resources(
     }
     Ok(RenderPartResources {
         media_ids,
+        media_failures,
         hyperlinks,
         charts,
         diagrams,
@@ -8218,7 +8430,10 @@ fn diagram_part_result<T>(part: DiagramPart<T>) -> std::result::Result<Box<T>, S
 }
 
 #[cfg(feature = "render")]
-fn render_compatible_media(bytes: &[u8], content_type: &str) -> bool {
+fn render_compatible_media(
+    bytes: &[u8],
+    content_type: &str,
+) -> std::result::Result<bool, &'static str> {
     let format = match ImageFormat::sniff(bytes) {
         Some(ImageFormat::Png) if content_type.eq_ignore_ascii_case("image/png") => {
             ImageFormat::Png
@@ -8229,21 +8444,21 @@ fn render_compatible_media(bytes: &[u8], content_type: &str) -> bool {
         {
             ImageFormat::Jpeg
         }
-        _ => return false,
+        _ => return Ok(false),
     };
-    if !render_media_within_decode_bounds(bytes, format) {
-        return false;
+    if !render_media_within_decode_bounds(bytes, format)? {
+        return Ok(false);
     }
     let Some(info) = probe(bytes).filter(|info| info.width_px > 0 && info.height_px > 0) else {
-        return false;
+        return Ok(false);
     };
     if format == ImageFormat::Jpeg && (info.bit_depth != 8 || info.channels != 3) {
-        return false;
+        return Ok(false);
     }
     let width = f64::from(info.width_px);
     let height = f64::from(info.height_px);
     let media_id = MediaId::from_bytes(bytes);
-    [Color::BLACK, Color::WHITE].into_iter().any(|background| {
+    Ok([Color::BLACK, Color::WHITE].into_iter().any(|background| {
         let background_element = PositionedElement::FilledRect {
             rect: Rect {
                 x: 0.0,
@@ -8289,73 +8504,78 @@ fn render_compatible_media(bytes: &[u8], content_type: &str) -> bool {
         oxml_pdf::render_page_to_png(&baseline, 0, 72.0)
             .zip(oxml_pdf::render_page_to_png(&candidate, 0, 72.0))
             .is_some_and(|(baseline, candidate)| baseline != candidate)
-    })
+    }))
 }
 
 #[cfg(feature = "render")]
 const MAX_RENDER_PREVIEW_BYTES: usize = 16 * 1024 * 1024;
 #[cfg(feature = "render")]
-const MAX_RENDER_PREVIEW_DECODED_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RENDER_PREVIEW_DECODED_BYTES: usize = 64 * 1024 * 1024;
 
 #[cfg(feature = "render")]
-fn render_media_within_decode_bounds(bytes: &[u8], format: ImageFormat) -> bool {
+fn render_media_within_decode_bounds(
+    bytes: &[u8],
+    format: ImageFormat,
+) -> std::result::Result<bool, &'static str> {
     if bytes.len() > MAX_RENDER_PREVIEW_BYTES {
-        return false;
+        return Err("exceeds the 16 MiB encoded-image render limit");
     }
     let Some(info) = probe(bytes) else {
-        return false;
+        return Ok(false);
     };
     let Some(pixel_bytes) = usize::try_from(info.width_px)
         .ok()
         .and_then(|width| width.checked_mul(info.height_px as usize))
         .and_then(|pixels| pixels.checked_mul(4))
     else {
-        return false;
+        return Err("has dimensions that overflow the decoded-image size");
     };
     if pixel_bytes > MAX_RENDER_PREVIEW_DECODED_BYTES {
-        return false;
+        return Err("exceeds the 64 MiB decoded-image render limit");
     }
     if format != ImageFormat::Png {
-        return true;
+        return Ok(true);
     }
     let Some(expected) = usize::try_from(info.width_px)
         .ok()
         .and_then(|width| width.checked_mul(info.channels as usize))
         .and_then(|stride| stride.checked_add(1))
         .and_then(|row| row.checked_mul(info.height_px as usize))
-        .filter(|expected| *expected <= MAX_RENDER_PREVIEW_DECODED_BYTES)
     else {
-        return false;
+        return Err("has dimensions that overflow the decoded-image size");
     };
+    if expected > MAX_RENDER_PREVIEW_DECODED_BYTES {
+        return Err("exceeds the 64 MiB decoded-image render limit");
+    }
     let mut idat = Vec::new();
     let mut offset = 33usize;
     while offset < bytes.len() {
         let Some(length_bytes) = bytes.get(offset..offset.saturating_add(4)) else {
-            return false;
+            return Ok(false);
         };
         let length = u32::from_be_bytes(length_bytes.try_into().unwrap()) as usize;
         let Some(kind_start) = offset.checked_add(4) else {
-            return false;
+            return Ok(false);
         };
         let Some(payload_start) = kind_start.checked_add(4) else {
-            return false;
+            return Ok(false);
         };
         let Some(payload_end) = payload_start.checked_add(length) else {
-            return false;
+            return Ok(false);
         };
         let Some(chunk_end) = payload_end.checked_add(4) else {
-            return false;
+            return Ok(false);
         };
         let (Some(kind), Some(payload), Some(_)) = (
             bytes.get(kind_start..payload_start),
             bytes.get(payload_start..payload_end),
             bytes.get(payload_end..chunk_end),
         ) else {
-            return false;
+            return Ok(false);
         };
         if kind == b"IDAT" {
             if idat.len().saturating_add(payload.len()) > MAX_RENDER_PREVIEW_BYTES {
-                return false;
+                return Err("exceeds the 16 MiB encoded-image render limit");
             }
             idat.extend_from_slice(payload);
         }
@@ -8364,9 +8584,9 @@ fn render_media_within_decode_bounds(bytes: &[u8], format: ImageFormat) -> bool 
         }
         offset = chunk_end;
     }
-    !idat.is_empty()
+    Ok(!idat.is_empty()
         && miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&idat, expected)
-            .is_ok_and(|decoded| decoded.len() >= expected)
+            .is_ok_and(|decoded| decoded.len() >= expected))
 }
 
 #[cfg(feature = "render")]
@@ -8600,6 +8820,39 @@ mod write_tests {
     use rpptx_oxml::placeholder::PhType;
 
     use super::*;
+
+    #[cfg(feature = "render")]
+    fn render_bound_png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+        bytes.extend_from_slice(&[0; 4]);
+        bytes
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn render_media_bounds_reject_malformed_and_overflowing_dimensions() {
+        assert_eq!(
+            render_media_within_decode_bounds(b"not an image", ImageFormat::Png),
+            Ok(false)
+        );
+        assert_eq!(
+            render_media_within_decode_bounds(
+                &render_bound_png_header(u32::MAX, u32::MAX),
+                ImageFormat::Png,
+            ),
+            Err("has dimensions that overflow the decoded-image size")
+        );
+        assert_eq!(
+            render_media_within_decode_bounds(
+                &render_bound_png_header(5_000, 4_000),
+                ImageFormat::Png,
+            ),
+            Err("exceeds the 64 MiB decoded-image render limit")
+        );
+    }
 
     #[cfg(feature = "render")]
     #[test]

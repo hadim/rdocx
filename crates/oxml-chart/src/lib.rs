@@ -1415,6 +1415,7 @@ fn shape_label_with_properties(
         bold,
         italic,
         field_kind: None,
+        field_source: None,
         note: None,
     })
 }
@@ -8121,8 +8122,11 @@ impl CT_Title {
     fn plain_text(text: &str) -> Self {
         let mut body = CT_TextBody::new();
         body.set_text(text);
+        let mut raw_children = OrderedRawChildren::default();
+        raw_children.push(1, br#"<c:layout/><c:overlay val="0"/>"#.to_vec());
         Self {
             text: Some(body),
+            raw_children,
             ..Self::default()
         }
     }
@@ -8284,6 +8288,10 @@ impl CT_PlotArea {
             .iter()
             .map(|plot| {
                 let mut markup = PlotMarkup::default();
+                if matches!(plot, Plot::Line { .. }) {
+                    markup.marker = Some(ScalarMarkup::default());
+                    markup.smooth = Some(ScalarMarkup::default());
+                }
                 if matches!(plot, Plot::Doughnut { .. }) {
                     markup.hole_size = Some(ScalarMarkup::default());
                 }
@@ -11086,13 +11094,42 @@ mod tests {
                 RgbColor::parse("F0761F").unwrap(),
             ],
         };
-        let (line, _) = authored_chart_parts(ChartKind::Line, &data, "rId1").unwrap();
+        let (line, line_workbook) = authored_chart_parts(ChartKind::Line, &data, "rId1").unwrap();
         let line = std::str::from_utf8(&line).unwrap();
         assert_eq!(line.matches(r#"<c:delete val="0"/>"#).count(), 2);
         assert!(line.contains(r#"<c:numFmt formatCode="0.##\%" sourceLinked="0"/>"#));
         assert!(line.contains("<a:t>Month</a:t>"));
         assert!(line.contains("<a:t>Change</a:t>"));
         assert!(line.contains(r#"<a:srgbClr val="2B6FE3"/>"#));
+        let assert_portable_line = |xml: &str| {
+            let titles = xml
+                .split("<c:title>")
+                .skip(1)
+                .map(|tail| tail.split_once("</c:title>").unwrap().0)
+                .collect::<Vec<_>>();
+            assert_eq!(titles.len(), 2);
+            for title in titles {
+                let text = title.find("<c:tx>").unwrap();
+                let layout = title.find("<c:layout/>").unwrap();
+                let overlay = title.find(r#"<c:overlay val="0"/>"#).unwrap();
+                assert!(text < layout && layout < overlay);
+            }
+
+            let line_plot = xml
+                .split_once("<c:lineChart>")
+                .unwrap()
+                .1
+                .split_once("</c:lineChart>")
+                .unwrap()
+                .0;
+            assert_eq!(line_plot.matches(r#"<c:marker val="0"/>"#).count(), 1);
+            assert_eq!(line_plot.matches(r#"<c:smooth val="0"/>"#).count(), 1);
+            let marker = line_plot.find(r#"<c:marker val="0"/>"#).unwrap();
+            let smooth = line_plot.find(r#"<c:smooth val="0"/>"#).unwrap();
+            let axis_id = line_plot.find("<c:axId").unwrap();
+            assert!(marker < smooth && smooth < axis_id);
+        };
+        assert_portable_line(line);
         for axis in line.split("<c:crossAx").take(2) {
             let scaling = axis.rfind("<c:scaling").unwrap();
             let deleted = axis.rfind("<c:delete").unwrap();
@@ -11100,9 +11137,31 @@ mod tests {
             assert!(scaling < deleted && deleted < position);
         }
 
-        for kind in [ChartKind::Bar, ChartKind::Pie, ChartKind::Doughnut] {
-            let (chart, _) = authored_chart_parts(kind, &data, "rId1").unwrap();
+        let parsed = CT_ChartSpace::from_xml(line.as_bytes()).unwrap();
+        let rewritten = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert_portable_line(&rewritten);
+        assert!(rewritten.contains(r#"<a:srgbClr val="2B6FE3"/>"#));
+        assert!(rewritten.contains(r#"<c:externalData r:id="rId1">"#));
+
+        for kind in [
+            ChartKind::Bar,
+            ChartKind::Pie,
+            ChartKind::Doughnut,
+            ChartKind::Area,
+            ChartKind::Scatter,
+            ChartKind::Radar,
+        ] {
+            let mut kind_data = data.clone();
+            if kind == ChartKind::Scatter {
+                kind_data.categories = vec!["1".to_owned(), "2".to_owned()];
+            }
+            let (chart, workbook) = authored_chart_parts(kind, &kind_data, "rId1").unwrap();
             let chart = std::str::from_utf8(&chart).unwrap();
+            assert!(!chart.contains(r#"<c:marker val="0"/>"#));
+            assert!(!chart.contains(r#"<c:smooth val="0"/>"#));
+            if kind != ChartKind::Scatter {
+                assert_eq!(workbook, line_workbook);
+            }
             if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) {
                 assert!(chart.contains("<c:legend"));
                 assert!(chart.contains(r#"<c:showPercent val="1"/>"#));
@@ -11110,19 +11169,29 @@ mod tests {
             if kind == ChartKind::Doughnut {
                 assert!(chart.contains(r#"<c:holeSize val="50"/>"#));
             }
-            assert_eq!(chart.matches("<c:dPt>").count(), 2);
-            assert!(chart.contains(
-                r#"<c:dPt><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="2B6FE3"/>"#
-            ));
-            assert!(chart.contains(
-                r#"<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="F0761F"/>"#
-            ));
+            if matches!(kind, ChartKind::Bar | ChartKind::Pie | ChartKind::Doughnut) {
+                assert_eq!(chart.matches("<c:dPt>").count(), 2);
+                assert!(chart.contains(
+                    r#"<c:dPt><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="2B6FE3"/>"#
+                ));
+                assert!(chart.contains(
+                    r#"<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="F0761F"/>"#
+                ));
+            }
 
             let parsed = CT_ChartSpace::from_xml(chart.as_bytes()).unwrap();
             let rewritten = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
-            assert_eq!(rewritten.matches("<c:dPt>").count(), 2);
+            assert_eq!(
+                rewritten.matches("<c:dPt>").count(),
+                usize::from(matches!(
+                    kind,
+                    ChartKind::Bar | ChartKind::Pie | ChartKind::Doughnut
+                )) * 2
+            );
             assert!(rewritten.contains(r#"<a:srgbClr val="2B6FE3"/>"#));
-            assert!(rewritten.contains(r#"<a:srgbClr val="F0761F"/>"#));
+            if matches!(kind, ChartKind::Bar | ChartKind::Pie | ChartKind::Doughnut) {
+                assert!(rewritten.contains(r#"<a:srgbClr val="F0761F"/>"#));
+            }
         }
     }
 
@@ -15487,7 +15556,7 @@ mod tests {
     fn oxml_chart_is_an_explicit_publication_candidate() {
         let manifest = include_str!("../Cargo.toml");
         assert!(manifest.contains("name = \"oxml-chart\""));
-        assert!(manifest.contains("version = \"0.11.0\""));
+        assert!(manifest.contains("version = \"0.12.1\""));
         assert!(manifest.contains("publish = true"));
         for dependency in [
             "oxml-core.workspace",

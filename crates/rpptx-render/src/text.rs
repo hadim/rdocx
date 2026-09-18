@@ -211,6 +211,7 @@ fn shape_run(
         baseline_offset: style.baseline.unwrap_or(0.0) * font_size,
         hyperlink_url: style.hyperlink_url.clone(),
         field_kind: None,
+        field_source: None,
         note: None,
     })
 }
@@ -977,6 +978,7 @@ fn emit_segment(
         bold: segment.bold,
         italic: segment.italic,
         field_kind: segment.field_kind,
+        field_source: segment.field_source,
         note: segment.note,
     }));
 
@@ -1066,6 +1068,7 @@ fn emit_multilingual_segment(
         bold: base.bold,
         italic: base.italic,
         field_kind: base.field_kind,
+        field_source: base.field_source,
         note: base.note,
     }));
 
@@ -1917,6 +1920,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 100.0,
             is_last: true,
+            forced_break_after: None,
         };
         let mut elements = Vec::new();
 
@@ -2115,6 +2119,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
+            field_source: None,
             note: None,
         };
         let line = oxml_layout::LayoutLine {
@@ -2130,6 +2135,7 @@ mod tests {
             indent_left: 10.0,
             available_width: 80.0,
             is_last: true,
+            forced_break_after: None,
         };
 
         for (alignment, expected_x) in [
@@ -2175,6 +2181,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 45.0,
             is_last: false,
+            forced_break_after: None,
         };
         let mut elements = Vec::new();
         let width = emit_line_items(
@@ -2229,6 +2236,7 @@ mod tests {
             indent_left: 0.0,
             available_width,
             is_last: false,
+            forced_break_after: None,
         };
         let mut elements = Vec::new();
 

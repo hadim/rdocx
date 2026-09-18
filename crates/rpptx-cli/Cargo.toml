@@ -2,7 +2,7 @@
 name = "rpptx-cli"
 description = "CLI tool for inspecting, converting, and manipulating PPTX files"
 readme = "README.md"
-version = "0.11.0"
+version = "0.12.1"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -16,6 +16,20 @@ publish = true
 [package.metadata.release]
 shared-version = "incubating"
 tag-name = "rpptx-v{{version}}"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/rpptx-v{ version }/rpptx-{ target }.tar.gz"
+bin-dir = "rpptx{ binary-ext }"
+pkg-fmt = "tgz"
+disabled-strategies = ["quick-install", "compile"]
+
+[package.metadata.binstall.overrides.'x86_64-pc-windows-msvc']
+pkg-url = "{ repo }/releases/download/rpptx-v{ version }/rpptx-{ target }.zip"
+pkg-fmt = "zip"
+
+[features]
+default = ["system-fonts"]
+system-fonts = ["rpptx/system-fonts"]
 
 [[bin]]
 name = "rpptx"

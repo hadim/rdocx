@@ -191,6 +191,20 @@ impl PySlide {
             .and_then(|slide| slide.notes_text()))
     }
 
+    #[setter]
+    fn set_notes_text(&self, py: Python<'_>, text: &str) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .slide_mut(index)
+            .ok_or_else(|| PyIndexError::new_err(format!("slide index {index} is out of range")))?
+            .set_notes_text(text)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
     #[getter]
     fn comments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let index = self.validate(py)?;

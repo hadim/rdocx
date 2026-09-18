@@ -37,11 +37,11 @@ use crate::style_resolver::{self, NumberingState, ResolvedNumbering};
 use crate::table;
 use crate::{WordBodyLayoutFragment, WordSourcePath, WordStory};
 use oxml_layout::{
-    Color, Diagnostic, DocumentMetadata, DocumentStructure, FieldKind, FontId, FontManager,
-    GlyphRun, GroupElement, InlineItem, LayoutResult, LineItem, NoteRef, NoteStream, PageFrame,
-    Point, PositionedElement, Rect, Result, SourceNodeId, SourceSpan, StructureId, StructureNode,
-    StructureRole, TextDirection, TextSegment, Transform, Underline, break_into_lines,
-    break_multilingual_into_lines,
+    Color, Diagnostic, DocumentMetadata, DocumentStructure, FieldKind, FieldSource, FontId,
+    FontManager, GlyphRun, GroupElement, InlineItem, LayoutError, LayoutResult, LineItem, NoteRef,
+    NoteStream, PageFrame, Point, PositionedElement, Rect, Result, SourceNodeId, SourceSpan,
+    StructureId, StructureNode, StructureRole, TextDirection, TextSegment, Transform, Underline,
+    break_into_lines, break_multilingual_into_lines,
 };
 
 #[derive(Clone)]
@@ -1636,6 +1636,52 @@ impl Engine {
     /// Lay out the entire document.
     pub fn layout(&mut self, input: &LayoutInput) -> Result<LayoutResult> {
         self.layout_inner(input, None)
+    }
+
+    pub(crate) fn measure_content(
+        &mut self,
+        input: &LayoutInput,
+        content: &BodyContent,
+        available_width: f64,
+        related_story_scope: Option<&str>,
+    ) -> Result<(f64, Vec<Diagnostic>)> {
+        self.font_manager.load_additional_fonts(&input.fonts);
+        self.font_manager.begin_layout();
+        let media = MediaRegistry::new(&input.images);
+        let scoped_media = related_story_scope.map(|scope| media.scoped_to_part(scope));
+        let media = scoped_media.as_ref().unwrap_or(&media);
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let height = match content {
+            BodyContent::Paragraph(paragraph) => layout_paragraph(
+                paragraph,
+                available_width,
+                &input.styles,
+                input,
+                media,
+                &mut self.font_manager,
+                &mut numbering,
+                &mut diagnostics,
+            )?
+            .total_height(),
+            BodyContent::Table(table) => crate::table::layout_table(
+                table,
+                available_width,
+                &input.styles,
+                input,
+                media,
+                &mut self.font_manager,
+                &mut numbering,
+                &mut diagnostics,
+            )?
+            .total_height(),
+            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                return Err(LayoutError::Layout(
+                    "only paragraphs and tables can be measured".to_owned(),
+                ));
+            }
+        };
+        Ok((height, diagnostics))
     }
 
     /// Lay out the document and retain its result-local Word source table.
@@ -4391,6 +4437,11 @@ fn rebind_text_source(text: &mut TextSegment, source_node: Option<SourceNodeId>)
         (Some(_), None) => text.source = None,
         (None, _) => {}
     }
+    match (text.field_source.as_mut(), source_node) {
+        (Some(field_source), Some(node)) => field_source.node = node,
+        (Some(_), None) => text.field_source = None,
+        (None, _) => {}
+    }
 }
 
 fn rebind_multilingual_source(
@@ -5048,6 +5099,71 @@ fn substitute_fields(
                     run.advances = shaped.advances;
                 }
             }
+            PositionedElement::MultilingualText(run) => {
+                let Some(fk) = run.field_kind else {
+                    continue;
+                };
+                let value = match fk {
+                    FieldKind::Page => page_number.to_string(),
+                    FieldKind::NumPages => total_pages.to_string(),
+                    FieldKind::TargetPage(target) => {
+                        let Some(page) = bookmark_pages.get(&target) else {
+                            run.field_kind = None;
+                            continue;
+                        };
+                        page.to_string()
+                    }
+                    FieldKind::Target(_) => continue,
+                };
+                let segment = TextSegment {
+                    text: value.clone(),
+                    direction: run.direction,
+                    source: run.source,
+                    font_id: run.font_id,
+                    font_size: run.font_size,
+                    glyph_ids: Vec::new(),
+                    advances: Vec::new(),
+                    width: 0.0,
+                    ascent: 0.0,
+                    descent: 0.0,
+                    line_gap: 0.0,
+                    color: run.color,
+                    bold: run.bold,
+                    italic: run.italic,
+                    underline: None,
+                    strike: false,
+                    dstrike: false,
+                    highlight: None,
+                    baseline_offset: 0.0,
+                    hyperlink_url: None,
+                    field_kind: run.field_kind,
+                    field_source: run.field_source,
+                    note: run.note,
+                };
+                if let Ok(mut shaped) = fm.shape_multilingual_text(
+                    segment,
+                    run.language.as_deref(),
+                    run.direction,
+                    true,
+                ) && shaped.len() == 1
+                {
+                    let Some(shaped) = shaped.pop() else {
+                        continue;
+                    };
+                    run.font_id = shaped.font_id();
+                    run.glyph_ids = shaped.glyph_ids().to_vec();
+                    run.x_advances = shaped.x_advances().to_vec();
+                    run.y_advances = shaped.y_advances().to_vec();
+                    run.x_offsets = shaped.x_offsets().to_vec();
+                    run.y_offsets = shaped.y_offsets().to_vec();
+                    run.clusters = shaped.clusters().to_vec();
+                    run.logical_text = value;
+                    run.script = shaped.script();
+                    run.language = shaped.language().map(str::to_owned);
+                    run.direction = shaped.direction();
+                    run.bidi_level = shaped.bidi_level();
+                }
+            }
             PositionedElement::Group(group) => substitute_fields(
                 &mut group.children,
                 page_number,
@@ -5063,6 +5179,9 @@ fn substitute_fields(
     }
     elements.retain(|element| match element {
         PositionedElement::Text(run) => !matches!(run.field_kind, Some(FieldKind::Target(_))),
+        PositionedElement::MultilingualText(run) => {
+            !matches!(run.field_kind, Some(FieldKind::Target(_)))
+        }
         PositionedElement::MarkedContent { children, .. } => !children.is_empty(),
         _ => true,
     });
@@ -5704,6 +5823,7 @@ fn layout_paragraph_with_source_and_table(
                     baseline_offset: 0.0,
                     hyperlink_url: None,
                     field_kind: None,
+                    field_source: None,
                     note: None,
                 }));
 
@@ -5733,6 +5853,7 @@ fn layout_paragraph_with_source_and_table(
                             baseline_offset: 0.0,
                             hyperlink_url: None,
                             field_kind: None,
+                            field_source: None,
                             note: None,
                         }));
                     }
@@ -5754,6 +5875,23 @@ fn layout_paragraph_with_source_and_table(
             }
         }
     }
+
+    // A page-number field is identified by its position among the top-level
+    // fields of `CT_P::runs`, the order field evaluation and updates use.
+    // Fields that only a revision projection reaches get no identity.
+    let field_indices = source_node
+        .map(|_| {
+            para.runs()
+                .into_iter()
+                .flat_map(|run| &run.content)
+                .filter_map(|content| match content {
+                    RunContent::Field(field) => Some(std::ptr::from_ref(field)),
+                    _ => None,
+                })
+                .zip(0u32..)
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
 
     // Process ordinary and revision-wrapped runs in their preserved order.
     let mut projection_char_offset = 0usize;
@@ -5920,6 +6058,7 @@ fn layout_paragraph_with_source_and_table(
                         baseline_offset,
                         hyperlink_url: current_hyperlink_url.clone(),
                         field_kind: None,
+                        field_source: None,
                         note: None,
                     };
                     let item_index = inline_items.len();
@@ -5973,7 +6112,10 @@ fn layout_paragraph_with_source_and_table(
                             InlineItem::Image {
                                 width,
                                 height,
-                                media_id: media.id_for_relationship(&inline.embed_id),
+                                media_id: media.id_for_relationship_with_diagnostic(
+                                    &inline.embed_id,
+                                    diagnostics,
+                                ),
                             }
                         };
                         if let Some(alternate_text) = inline
@@ -6040,6 +6182,19 @@ fn layout_paragraph_with_source_and_table(
                         }
                         _ => (None, None),
                     };
+                    let field_source = source_node
+                        .filter(|_| {
+                            matches!(
+                                field_kind,
+                                Some(
+                                    FieldKind::Page
+                                        | FieldKind::NumPages
+                                        | FieldKind::TargetPage(_)
+                                )
+                            )
+                        })
+                        .zip(field_indices.get(&std::ptr::from_ref(field)).copied())
+                        .map(|(node, index)| FieldSource { node, index });
                     let stored_segments = field.cached_display_segments();
                     let segments = if let Some(value) = computed_value.as_deref() {
                         let stored_properties = stored_segments
@@ -6172,6 +6327,7 @@ fn layout_paragraph_with_source_and_table(
                                     baseline_offset: segment_baseline_offset,
                                     hyperlink_url: current_hyperlink_url.clone(),
                                     field_kind,
+                                    field_source,
                                     note: None,
                                 }));
                             }
@@ -6219,6 +6375,7 @@ fn layout_paragraph_with_source_and_table(
                         baseline_offset: sup_offset,
                         hyperlink_url: None,
                         field_kind: None,
+                        field_source: None,
                         note: Some(NoteRef { stream, id: *id }),
                     }));
                 }
@@ -6285,6 +6442,7 @@ fn layout_paragraph_with_source_and_table(
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
+            field_source: None,
             note: None,
         }));
     }
@@ -6454,6 +6612,7 @@ fn push_bookmark_marker(items: &mut Vec<InlineItem>, target: usize, font_id: oxm
         baseline_offset: 0.0,
         hyperlink_url: None,
         field_kind: Some(FieldKind::Target(target)),
+        field_source: None,
         note: None,
     }));
 }
@@ -6924,7 +7083,8 @@ fn collect_anchored_drawings(
                     }
                     None if anchor.embed_id.is_empty() => continue,
                     None => block::AnchoredContent::Image {
-                        media_id: media.id_for_relationship(&anchor.embed_id),
+                        media_id: media
+                            .id_for_relationship_with_diagnostic(&anchor.embed_id, diagnostics),
                     },
                 }
             };
@@ -7500,6 +7660,7 @@ fn layout_header_footer_variant_uncached(
             relationship_id: relationship_id.to_owned(),
         },
     };
+    let part_media = media.scoped_to_part(relationship_id);
     let mut blocks = Vec::with_capacity(part.paragraphs.len());
     let mut directions = Vec::with_capacity(part.paragraphs.len());
     for (paragraph_index, paragraph) in part.paragraphs.iter().enumerate() {
@@ -7513,7 +7674,7 @@ fn layout_header_footer_variant_uncached(
             width,
             styles,
             input,
-            media,
+            &part_media,
             fm,
             num_state,
             diagnostics,
@@ -7598,6 +7759,7 @@ fn layout_watermark(
                 bold: false,
                 italic: false,
                 field_kind: None,
+                field_source: None,
                 note: None,
             })]
         }
@@ -15145,6 +15307,19 @@ mod tests {
             runs.iter()
                 .any(|run| run.field_kind == Some(FieldKind::Page) && run.source.is_none())
         );
+        assert!(runs.iter().any(|run| {
+            run.field_kind == Some(FieldKind::Page)
+                && run.field_source.is_some_and(|field| {
+                    field.index == 0
+                        && matches!(
+                            result.source_node(field.node),
+                            Some(WordSourcePath {
+                                story: WordStory::Document,
+                                children,
+                            }) if children == &[2]
+                        )
+                })
+        }));
         assert!(
             runs.iter()
                 .any(|run| run.note.is_some() && run.source.is_none())
@@ -15332,6 +15507,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         }];
         let cell = |is_first_row: bool| table::TableCell {
             structure_id: None,
@@ -15527,17 +15703,17 @@ mod tests {
     }
 
     #[test]
-    fn colliding_media_ids_keep_inline_and_anchored_image_bytes_distinct() {
+    fn story_scoped_media_keeps_inline_and_anchored_image_bytes_distinct() {
         let mut input = make_input_with_text("");
         input.images.insert(
-            "rIdInline".to_string(),
+            "rIdStory\0rIdInline".to_string(),
             ImageData {
                 data: vec![1, 2, 3],
                 content_type: "image/png".to_string(),
             },
         );
         input.images.insert(
-            "rIdAnchor".to_string(),
+            "rIdStory\0rIdAnchor".to_string(),
             ImageData {
                 data: vec![4, 5, 6],
                 content_type: "image/jpeg".to_string(),
@@ -15545,8 +15721,9 @@ mod tests {
         );
 
         let media = MediaRegistry::with_hasher(&input.images, |_| MediaId(7));
-        let inline_id = media.id_for_relationship("rIdInline");
-        let anchor_id = media.id_for_relationship("rIdAnchor");
+        let part_media = media.scoped_to_part("rIdStory");
+        let inline_id = part_media.id_for_relationship("rIdInline");
+        let anchor_id = part_media.id_for_relationship("rIdAnchor");
         assert_ne!(inline_id, anchor_id);
 
         let line = oxml_layout::LayoutLine {
@@ -15563,6 +15740,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         };
         let mut paragraph = block::build_paragraph_block(
             vec![line],
@@ -15709,6 +15887,7 @@ mod tests {
             indent_left: 0.0,
             available_width: 468.0,
             is_last: true,
+            forced_break_after: None,
         };
         let paragraph = block::build_paragraph_block(
             vec![line],

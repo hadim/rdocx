@@ -13,9 +13,10 @@ use pyo3::types::{PyAny, PyType};
 use oxml_py_support::StaleElementError;
 
 use document::{
-    PyBoundingBox, PyComment, PyComparisonDiagnostic, PyDocument, PyHeaderFooterVariant,
-    PyHyperlink, PyLayoutFragment, PyLayoutPage, PyRunPosition, PyRunRange, PySection, PyStory,
-    PyStoryItem, PyStyle, PyTocRebuildReport,
+    PyBoundingBox, PyComment, PyComparisonDiagnostic, PyContentFragment, PyDocument,
+    PyHeaderFooterVariant, PyHyperlink, PyLayoutBackedFieldUpdateReport, PyLayoutFragment,
+    PyLayoutPage, PyRevision, PyRunPosition, PyRunRange, PySection, PyStory, PyStoryItem,
+    PyStoryRunPosition, PyStoryRunRange, PyStyle, PyTocRebuildReport,
 };
 use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
@@ -91,14 +92,19 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDocument>()?;
     module.add_class::<PyRunPosition>()?;
     module.add_class::<PyRunRange>()?;
+    module.add_class::<PyStoryRunPosition>()?;
+    module.add_class::<PyStoryRunRange>()?;
     module.add_class::<PyComment>()?;
     module.add_class::<PyComparisonDiagnostic>()?;
     module.add_class::<PyBoundingBox>()?;
     module.add_class::<PyLayoutFragment>()?;
     module.add_class::<PyLayoutPage>()?;
+    module.add_class::<PyLayoutBackedFieldUpdateReport>()?;
     module.add_class::<PyTocRebuildReport>()?;
+    module.add_class::<PyRevision>()?;
     module.add_class::<PyStory>()?;
     module.add_class::<PyStoryItem>()?;
+    module.add_class::<PyContentFragment>()?;
     module.add_class::<PyHyperlink>()?;
     module.add_class::<PyHeaderFooterVariant>()?;
     module.add_class::<PySection>()?;

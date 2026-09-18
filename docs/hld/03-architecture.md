@@ -97,6 +97,13 @@ not claim a codec decoder.
 content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
 dependency cycle and avoids a second public intermediate document model.
+`Document::insert_html_fragment` reuses that importer against a staged document
+and emits concrete body content at a checked `ContentLocation`. Body and
+main-document cell destinations mutate their typed owners so retained sibling
+XML keeps its exact boundary. Other supported stories receive namespace-closed
+fixed-prefix fragments. Numbering, media, hyperlinks, and drawing identifiers
+are allocated in the destination story scope before the staged package reopens.
+No resource callback, network access, or second fragment model is introduced.
 
 **Word package identifiers belong to the `rdocx` facade.** One private
 `DocumentIdentifiers` value owns category-specific occupied sets for each
@@ -234,6 +241,14 @@ model. It commits only a serialized, reopened, and re-inventoried candidate.
 The facade uses the existing `oxml-opc` relationship vocabulary and a direct
 `sha2` dependency. It adds no cross-family edge, decoder, binding, WASM, or CLI
 surface.
+
+Word picture replacement stays at the same facade and package boundary.
+`rdocx` resolves one exact body or story relationship and `oxml-media` sniffs
+the replacement format. An unshared target with a compatible extension may be
+reused. A shared target or format change allocates a new media part and changes
+only the selected relationship target. The drawing XML and relationship
+identifier remain stable. The live document receives only a serialized and
+reopened candidate.
 
 Deterministic animation export also belongs to the `rpptx` facade. It validates
 and samples explicit segments, prepares the package, resolver, font, chart,
@@ -507,6 +522,11 @@ The comments-extended model owns paragraph-id parent linkage and resolved state,
 with unmodelled attributes and root children retained at their original
 boundaries. The `rdocx` facade owns the relationship-resolved pair of comment
 parts and coordinates them with the anchors in the main document.
+Authored and parsed comment ids are stable facade identities across rdocx save
+and reopen. Allocation takes the lowest unused nonnegative id and never
+reorders existing comments to canonicalize ids. Dates are optional RFC 3339
+values validated before staging. An absent date remains the deterministic
+default. Third-party editors may independently renumber comment identities.
 
 The Word text model projects bookmark starts and ends at accepted-view and
 tracked-view run boundaries while retaining every marker as ordered raw XML.
@@ -524,6 +544,12 @@ Complex fields expose ordered cached-display segments with each segment's
 direct run properties. Tracked insertion projection retains inline paragraph
 structure and nested revision boundaries, with a fixed depth ceiling checked
 before recursive projection.
+The mutable native run facade owns one logical ordered sequence of text, tabs,
+typed breaks, inline pictures, fields, and Unicode symbols. A field remains a
+paragraph child in physical WordprocessingML. Serialization therefore divides
+the surrounding logical run into schema-valid physical runs, copies the direct
+run properties to each authored segment and field result, and preserves the
+logical child order on reopen.
 Unchanged fields therefore write their original bytes. Cache and dirty updates
 rewrite only the typed values while preserving run formatting and unmodelled
 neighbours. Markers are recognized only as direct run children through their
@@ -577,7 +603,22 @@ retry them. Only validated staged XML
 is committed, then both layout caches are invalidated once. Existing save and
 byte methods remain leave alone operations that preserve cache content and
 dirty spelling. Update-aware save methods opt into the same atomic operation
-before writing. The settings-level `w:updateFields` value remains untouched.
+before writing. The settings-level `w:updateFields` value remains untouched by
+these updates. Callers read, set, or remove it explicitly through
+`Document::update_fields_on_open` and `set_update_fields_on_open`. A duplicate
+or malformed producer value stays unmodelled and byte-preserved, and an
+explicit mutation rejects that ambiguous ownership before publication. The two
+methods are additive pre-1.0 `rdocx` API.
+
+`Document::update_layout_backed_fields` is the separate pagination-aware entry
+point for PAGE, NUMPAGES, and resolved PAGEREF caches. It lays out one staged
+candidate deterministically, reads each placed field through its layout field
+identity, and writes only those caches through the same traversal and
+validated story patching. The owned report separates the three updated counts
+and retains ordered layout diagnostics. `Document::update_page_fields` is the
+count-only compatibility wrapper over that operation. Every unsupported or
+unplaced field keeps its cache and dirty spelling, and `update_fields` still
+defers every layout-backed field kind.
 
 The native facade also rebuilds supported existing main-story table of
 contents fields. It reparses each owned instruction through the same recursive
@@ -662,8 +703,11 @@ are chosen outside the complete source and generated byte sets, then
 substituted only at their unique owned result offsets. Bookmark ids and names
 are allocated lazily, including the final representable id when it is the next
 free value.
-Unsupported valid TOCs stay unchanged and increment the report diagnostic
-count. Malformed ownership, ambiguous bookmarks, missing selected bookmarks,
+Unsupported valid TOCs stay unchanged and append their exact retained-display
+message to the report in physical source order. Simple TOCs contribute the
+same ordered report without mutation. The compatibility diagnostic count is
+derived from that collection. Malformed ownership, ambiguous bookmarks,
+missing selected bookmarks,
 layout failure, or serialization failure rejects the whole staged operation.
 The candidate is reopened before deterministic bundled-font pagination and
 again after final displayed page substitution. The live document receives the
@@ -786,6 +830,13 @@ with existing modeled revisions or differing story and control shells are
 rejected unless their story category is ignored. Attributed text alignment
 retains owner, formatting, content position, and raw-child boundaries, then
 coalesces adjacent equal-owner edits into minimal revision wrappers.
+When a main story gains a trailing run of paragraphs, comparison marks the
+original final paragraph boundary once, marks each intermediate inserted
+paragraph boundary once, and leaves the final inserted paragraph mark as the
+story terminator. A self-closing original final paragraph expands around its
+marker without creating a raw sibling. This ownership lets acceptance retain
+every appended paragraph and rejection reconstruct the original without an
+empty terminal residue.
 Comparison patches only owned source spans, preserves every unowned byte,
 stages the complete package, proves that acceptance matches the edited policy
 projection and rejection matches the original, then commits once.
@@ -824,6 +875,14 @@ cloned page access borrow the backend-neutral `layout` field from the same
 bundle, so external renderers receive the exact font bytes and source table
 used for each glyph run.
 
+Caller-width content measurement stays on this ownership boundary. The
+`rdocx` facade resolves one checked paragraph or table location and builds the
+ordinary `LayoutInput`. A fresh deterministic `rdocx-layout::Engine` then uses
+the production paragraph or recursive table path and returns point height plus
+ordered layout diagnostics without pagination. The query never enters or
+invalidates either facade cache. Related header and footer content uses the
+same part-scoped media view as whole-document layout.
+
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
 normal Word engine caches only ordinary body paragraphs that are independent
@@ -857,6 +916,16 @@ even variants. `rdocx-layout` consumes that projection, resolves header images
 through the shared `MediaRegistry`, and lowers each selected watermark to a
 backend-neutral group before pagination. Unsupported VML stays opaque and no
 backend parses WordprocessingML.
+
+Configured picture and text-box authoring follows the same story ownership.
+The facade stages the selected story, allocates package-global drawing ids, and
+creates media relationships only on that story's OPC owner. Pictures carry
+typed crop, size, inline or floating position, wrap, distance, and z-order
+choices. Text boxes emit one DrawingML WPS primary branch plus a self-contained
+VML fallback inside `mc:AlternateContent`. Section-aware text watermarks target
+one effective header variant without changing the caller-owned even-and-odd
+header setting. Every operation serializes and reopens the staged package
+before publishing it.
 
 Footnotes and endnotes are laid out into a `NoteRegistry` before pagination, and
 the paginator reserves, splits and draws them. Note placement is part of
@@ -906,28 +975,30 @@ an endnote sharing a number.
 ## Versioning
 
 The 15 shared and PowerPoint publication candidates use the explicit common
-incubating version 0.11.0 in their manifests and workspace pins. The latest
-published coherent family is 0.11.0 from immutable annotated tag
-`rpptx-v0.11.0` at reviewed SHA
-`0b6bd622f8a14189d7d1281d011f81319ef8ad2a`. All 15 registry entries and their
-sole owner are verified, while the `rpptx-wasm` preparation member remains
-unpublished at 0.11.0. The earlier 0.10.0 family remains available. The family
+incubating version 0.12.1 in their manifests and workspace pins. They are
+published from immutable annotated tag `rpptx-v0.12.1` at reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`. Every registry entry and its
+sole owner are verified. The failed immutable
+`rpptx-v0.12.0` tag targets reviewed SHA
+`54f4567b54b4028cd5126bcf66054f3e0588a4a9`. Its Windows CLI archive used CRLF
+for reviewed text, so aggregate asset validation stopped before any registry
+publication or GitHub release. The `rpptx-wasm` preparation member remains
+unpublished at 0.12.1. Earlier coherent families remain available. The family
 includes `oxml-chart` as the format-neutral owner while
 retaining `rpptx-chart` as a source-compatible deprecated shim. The released
 `rdocx-*` crates use the separate workspace version. The stable workspace, its
 eight stable-version internal pins, ten inherited lockfile packages, the
-`rdocx` Python project, and unpublished `rdocx-wasm` package are at 0.13.2. The
-metadata-complete `rdocx` Python distribution is published at 0.13.2 from
-immutable annotated tag `py-rdocx-v0.13.2` at reviewed SHA
-`2b009243ed39ab66470d7484d490985368e865a8`. This source version does not
-authorize a crates.io publication. The `rpptx` Python project follows the
-native incubating version 0.11.0 and is published from immutable annotated tag
-`py-rpptx-v0.11.0` at the same reviewed SHA. The exact
-seven-package stable crates.io family is published from immutable annotated
-`v0.13.1` tag at reviewed SHA
-`c391d12422c288be5db314bad8338dd08bb47d9a`. Every registry entry and its sole
-owner are verified. The published family depends on shared 0.11.0, while the
-binding and WASM carriers remain unpublished. The immutable v0.13.0 tag at reviewed SHA
+`rdocx` Python project, and unpublished `rdocx-wasm` package are at 0.14.0.
+The exact seven-package stable crates.io family is published from immutable
+annotated tag `v0.14.0` at reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b` and depends on shared 0.12.1.
+PyPI `rdocx 0.14.0` and `rpptx 0.12.1` are published from the corresponding
+Python tags at the same reviewed SHA. Each has six `cp39-abi3` wheels and one
+source distribution with complete crate-local README metadata. Every selected
+registry owner is verified as `mantissaman`, while binding and WASM crates
+remain unpublished on crates.io. The unpublished 0.13.2 crates.io train is
+superseded by 0.14.0 rather than backfilled. Earlier coherent Rust and Python
+releases remain available. The immutable v0.13.0 tag at reviewed SHA
 `05332b17f481741e7d5ab4e39699c6d1536475af` published five low-level stable
 packages, then stopped because packaged `rdocx` required the four Word main
 content-type constants added after shared 0.10.0. `rdocx`, `rdocx-cli`, and the
@@ -940,11 +1011,8 @@ The separately approved cleanup yanked exactly the incomplete
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` entries. Complete coherent stable
 releases remain live and unyanked. The v0.11.0 tag remains immutable, and no
 v0.11.0 GitHub release exists. Earlier immutable registry releases, including
-the complete 0.12.0 family, remain available. The immutable `rdocx 0.13.1`
-PyPI release remains available. PyPI `rdocx 0.13.2` and `rpptx 0.11.0` each
-contain six `cp39-abi3` wheels and one source distribution with their
-crate-local README as the Markdown long description. Version preparation and
-manifest eligibility do not authorize any later publication.
+the complete 0.12.0 family, remain available. Version preparation and manifest
+eligibility do not authorize any later publication.
 `oxml-cli-support` is the
 format-neutral owner of range parsing,
 JSON envelope, and output-path contracts. It has no dependency on either
@@ -958,9 +1026,11 @@ or registry version was moved or overwritten.
 
 The `rpptx` facade owns formatting-preserving presentation text replacement.
 `Presentation::replace_text` applies literal, non-recursive replacement across
-contiguous regular runs in ordinary shapes, nested groups, and table cells.
-Fields, breaks, and selected alternate-content fallbacks remain traversal
-boundaries so the facade preserves their unmodelled or separately typed XML.
+contiguous regular runs in ordinary shapes, nested groups, table cells, and
+speaker notes. `Presentation::try_replace_text` stages that complete mutation,
+serializes the candidate, and publishes it only after validation. Fields,
+breaks, and selected alternate-content fallbacks remain traversal boundaries
+so the facade preserves their unmodelled or separately typed XML.
 
 The facade also owns modern PresentationML package identity. The exact main
 part content type distinguishes PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Normal
@@ -1059,6 +1129,24 @@ text boxes remain separate owners and are not folded into the enclosing item.
 `Document::story_links` merges item-owned links by their physical XML position
 and returns each existing `LinkInfo` with its checked `ContentLocation`. This
 keeps nested content-control ownership without reordering interleaved links.
+Owned story-item and story-link snapshots build the package source and owner
+inventory once per accessor. Namespace scopes for all selected owners are
+collected in one source pass, then item text and links are projected from that
+bounded inventory without restarting discovery for each returned value.
+
+The Python projection materializes each story item as a frozen value with its
+exact XML bytes and the binding revision that produced it. Story mutation
+resolves the story kind, part name, owner index, item kind, and item path
+against the live native document, then rejects a stale revision before calling
+the staged native operation. Default header and footer setters and story or
+paragraph hyperlink creation use the same native ownership and relationship
+paths. Cloning omits comment anchors from the copy, while story text replacement
+removes only hyperlinks that had visible content before the replacement and
+became empty because of it. Body text lookup returns direct paragraph matches
+before enclosing content controls and exposes every matching body coordinate.
+Paragraph text and run handles use one accepted-view walk. Direct runs, inline
+content-control runs, insertion runs, and move-destination runs retain recursive
+source paths in exact order. Deletion and move-source text stays excluded.
 
 `ContentFragment` owns one paragraph, table, block content control, or removed
 preserved node. Insert, remove, clone, and move resolve canonical
@@ -1106,11 +1194,27 @@ is controlled separately by the typed document setting. Rich edits continue
 through the container-neutral story operations rather than a second header or
 footer content model.
 
+Word layout retains that physical ownership. The facade loads header and
+footer images under the main-part relationship that selects the story plus the
+story-local image relationship. `MediaRegistry` exposes a scoped view for each
+selected part while sharing one immutable media payload map. An equal local
+relationship identifier in the body, a header, and a footer therefore resolves
+to three independent images.
+
 The Python facade projects sections, styles, stories, story items, effective
 header and footer variants, and hyperlinks into detached frozen records.
 Document accessors return tuples in native source order. Records retain the
 physical story owner, item index path, inheritance source, and relationship
 identifier without exposing raw XML or adding a second binding-side tree.
+
+The Python document facade also exposes direct-body structural editing through
+live Paragraph and Table handles. Native identity mapping converts their lazy
+paragraph or table ordinal to the interleaved body coordinate and rejects a
+nested, stale, or foreign handle. Popping returns one opaque owned
+`ContentFragment`, and insertion clones that value without exposing its XML.
+Insert, pop, clone, and move publish their native staged result before advancing
+the binding revision once. Counted literal and regular-expression replacement
+advance the revision only when the native operation reports a nonzero count.
 
 `rdocx-oxml` authors only `w:pgNumType/@w:start` for M23. Number format,
 chapter style, chapter separator, and every other unsupported attribute or
@@ -1197,7 +1301,10 @@ Low-level content-control traversal is recursive and ordered. Body, table,
 row, cell, and paragraph accessors expose each wrapped ordinary paragraph,
 table, row, cell, and run once while retaining the surrounding `CT_Sdt` for
 metadata lookup. The facade consumes this single WordprocessingML ownership
-tree and does not maintain a second content-control representation.
+tree and does not maintain a second content-control representation. The first
+supported type child keeps its unmodelled attributes and ordered child bytes.
+Its typed discriminator selects a fixed-prefix type wrapper on output, and a
+discriminator change replaces only that payload with the canonical empty type.
 
 `Document::body_items` exposes the direct body ownership vector without
 flattening it. Its borrowed items distinguish paragraphs, tables, body-level
@@ -1212,7 +1319,10 @@ The same ordered compatibility view extends through `CellRef::items`,
 non-exhaustive borrowed item enums retain each typed child and unsupported raw
 subtree at its direct source boundary, including borrowed drawing and field
 facts. Existing flattened run, paragraph, table, and body accessors keep their
-established semantics. `Document::body_content` reports unsupported modeled
+established semantics. `StoryItemRef::direct_body_index` returns the containing
+direct main-body child for any safely anchored body item while preserving the
+flat recursive `index_path`. Items from another story and final section
+properties return no body coordinate. `Document::body_content` reports unsupported modeled
 content through `UnsupportedXmlRef` name, namespace, and child-content facts,
 while exposing raw bytes only when the facade owns an actual preserved raw
 subtree. Save replays the namespace scope required by retained raw content and
@@ -1253,9 +1363,31 @@ boundaries. `Document` validates both endpoints before mutation, allocates
 collision-free comment and paragraph ids, updates the comment parts and all
 three anchors together, then invalidates layout once. `CommentRef` is a
 read-only view over the typed comment and its comments-extended thread entry.
+`StoryRunPosition` and `StoryRunRange` add checked `ContentLocation` ownership
+for body and table-cell paragraphs without changing `RunPosition`. The staged
+path validates both endpoints and edits cloned paragraphs before it creates
+comment relationships, so any path, run, or package failure publishes nothing.
 Replies follow paragraph-id parent linkage, resolution applies to the thread
 root, and removal deletes the selected comment plus descendant replies without
 deleting unrelated runs or producer XML.
+The additive `add_comment_with_date` and `reply_to_with_date` operations own
+validated optional timestamps. The original operations delegate with no date.
+
+Checked picture insertion uses the same story owner and package relationship
+scope. `insert_picture_to_story` accepts bytes, a safe filename, paired
+explicit dimensions or native 72 DPI sizing, and an optional direct item after
+which to insert. It serializes, reopens, and returns the refreshed paragraph
+location only after the image part, relationship, drawing identity, and story
+content all validate together.
+
+`Document::split_run` creates an exact accepted-view run boundary without
+changing `RunPosition`. It clones the selected paragraph, resolves the selected
+recursive source path, counts Unicode scalar values only in literal text,
+partitions ordered zero-width children at their source boundary, repairs
+hyperlink and marker coordinates, and publishes the clone only on success.
+Zero and end offsets select existing boundaries and leave typed state, layout,
+and binding revisions unchanged. A structural edit makes an earlier path-backed
+Python run handle stale.
 
 Word bookmark mutation input reuses the same top-level `RunPosition` and
 half-open `RunRange` boundary as comments. `Document::bookmarks` returns
@@ -1303,7 +1435,12 @@ their themes from the OPC relationship graph, remaps notes-master and
 notes-slide relationship scopes into one collision-free transient package
 scope, and composes ordinary `PageFrame` values. The existing layout and render
 crates consume those frames without a notes-specific parser, renderer, public
-type, or dependency.
+type, or dependency. The resolved slide-to-notes edge is authoritative when a
+producer omits the optional reverse notes-to-slide edge. A present reverse edge
+must still be internal, singular, correctly typed, and equal to the known
+owner. Notes text mutation stages one body placeholder, retains its identity
+and first regular-run formatting and raw XML, and publishes only serializable
+notes state.
 
 The facade also owns package-to-render-input assembly. Its deterministic render
 entry points resolve the current package once and return either the shared

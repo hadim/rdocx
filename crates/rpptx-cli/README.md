@@ -22,7 +22,7 @@ It uses `oxml-cli-support` for shared command conventions and the real `rpptx` f
 ## Example
 
 ```sh
-cargo install rpptx-cli --version '^0.11.0'
+cargo install rpptx-cli --version '^0.12.1'
 rpptx inspect deck.pptx --json
 rpptx convert deck.pptx --to pdf -o deck.pdf
 rpptx thumbnail deck.pptx -o thumbnail.png

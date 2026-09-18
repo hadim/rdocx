@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
+use oxml_opc::{OpcPackage, content_types};
 use rpptx::{CT_TextCharacterProperties, Emu, Presentation};
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -50,6 +50,36 @@ fn write_deck(path: &Path, texts: &[&str]) {
             .expect("set slide text");
     }
     presentation.save(path).expect("write fixture deck");
+}
+
+fn add_speaker_notes(path: &Path, text: &str) {
+    let mut package = OpcPackage::open(path).expect("open notes fixture package");
+    let notes_part = "/ppt/notesSlides/notesSlide1.xml";
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes Placeholder"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr b="1"><a:extLst><a:ext uri="{{6D487B31-4C56-4F45-AED3-4C741AC43E77}}"><x:payload xmlns:x="urn:rdocx:test"/></a:ext></a:extLst></a:rPr><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>"#
+    );
+    package.set_part(notes_part, xml.into_bytes());
+    package
+        .content_types
+        .add_override(notes_part, content_types::NOTES_SLIDE);
+    package
+        .get_or_create_part_rels("/ppt/slides/slide1.xml")
+        .add_with_id(
+            "notes",
+            rel_types::NOTES_SLIDE,
+            "../notesSlides/notesSlide1.xml",
+        );
+    package.get_or_create_part_rels(notes_part).add_with_id(
+        "master",
+        rel_types::NOTES_MASTER,
+        "../notesMasters/notesMaster1.xml",
+    );
+    package.get_or_create_part_rels(notes_part).add_with_id(
+        "slide",
+        rel_types::SLIDE,
+        "../slides/slide1.xml",
+    );
+    package.save(path).expect("write notes fixture package");
 }
 
 fn png_dimensions(bytes: &[u8]) -> (u32, u32) {
@@ -775,4 +805,161 @@ fn replacement_preserves_formatting_and_opaque_parts() {
         package.get_part("/custom/opaque.bin"),
         Some(b"opaque bytes".as_slice())
     );
+}
+
+#[test]
+fn rpptx_replace_is_guarded_counted_and_includes_notes() {
+    let temp = TempWorkspace::new("guarded-replace");
+    let source = temp.path.join("source.pptx");
+    write_deck(&source, &["Draft title Draft"]);
+    add_speaker_notes(&source, "Draft speaker note");
+    let source_bytes = fs::read(&source).unwrap();
+
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "Draft",
+        "--value",
+        "Final",
+        "--expect",
+        "3",
+        "--output",
+        source.to_str().unwrap(),
+    ]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("output already exists"));
+    assert_eq!(fs::read(&source).unwrap(), source_bytes);
+
+    let existing = temp.path.join("existing.pptx");
+    fs::write(&existing, b"keep me").unwrap();
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "Draft",
+        "--value",
+        "Final",
+        "--expect",
+        "3",
+        "--output",
+        existing.to_str().unwrap(),
+    ]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("output already exists"));
+    assert_eq!(fs::read(&existing).unwrap(), b"keep me");
+
+    let zero_output = temp.path.join("zero.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "Missing",
+        "--value",
+        "Final",
+        "--output",
+        zero_output.to_str().unwrap(),
+    ]);
+    assert!(!result.status.success());
+    assert!(!zero_output.exists());
+
+    let mismatch = temp.path.join("mismatch.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "Draft",
+        "--value",
+        "Final",
+        "--expect",
+        "2",
+        "--output",
+        mismatch.to_str().unwrap(),
+    ]);
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr)
+            .contains("expected 2 replacement(s) of \"Draft\", found 3")
+    );
+    assert!(!mismatch.exists());
+
+    let explicit_zero = temp.path.join("explicit-zero.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "Missing",
+        "--value",
+        "Final",
+        "--expect",
+        "0",
+        "--output",
+        explicit_zero.to_str().unwrap(),
+    ]);
+    assert!(result.status.success());
+    assert_eq!(
+        String::from_utf8(result.stdout).unwrap(),
+        format!(
+            "Replaced 0 occurrence(s) of \"Missing\" -> \"Final\"\nWritten to {}\n",
+            explicit_zero.display()
+        )
+    );
+    assert_eq!(
+        Presentation::open(&explicit_zero)
+            .unwrap()
+            .slide(0)
+            .unwrap()
+            .notes_text()
+            .as_deref(),
+        Some("Draft speaker note")
+    );
+
+    let output = temp.path.join("replaced.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "Draft",
+        "--value",
+        "Final",
+        "--expect",
+        "3",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "replace failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(result.stdout).unwrap(),
+        format!(
+            "Replaced 3 occurrence(s) of \"Draft\" -> \"Final\"\nWritten to {}\n",
+            output.display()
+        )
+    );
+    let reopened = Presentation::open(&output).unwrap();
+    assert_eq!(reopened.slide(0).unwrap().text(), "Final title Final");
+    assert_eq!(
+        reopened.slide(0).unwrap().notes_text().as_deref(),
+        Some("Final speaker note")
+    );
+    let package = OpcPackage::open(&output).unwrap();
+    let notes_xml = String::from_utf8(
+        package
+            .get_part("/ppt/notesSlides/notesSlide1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(notes_xml.contains(r#"b="1""#));
+    assert!(notes_xml.contains("x:payload"));
+    assert!(fs::read_dir(&temp.path).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")
+    }));
 }

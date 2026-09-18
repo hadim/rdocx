@@ -723,7 +723,10 @@ def _add_speaker_notes(source, target, text):
         "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Notes Placeholder\"/>"
         "<p:cNvSpPr/><p:nvPr><p:ph type=\"body\" idx=\"1\"/></p:nvPr>"
         "</p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p>"
-        f"<a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"
+        '<a:r><a:rPr b="1"><a:extLst>'
+        '<a:ext uri="{6D487B31-4C56-4F45-AED3-4C741AC43E77}">'
+        '<x:payload xmlns:x="urn:rdocx:test"/></a:ext></a:extLst></a:rPr>'
+        f"<a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"
         "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/>"
         "</p:clrMapOvr></p:notes>"
     ).encode()
@@ -863,6 +866,102 @@ def test_presentation_render_comments_and_notes_match_native_snapshots(tmp_path)
     reopened = rpptx.Presentation(output)
     assert reopened.comment_authors == presentation.comment_authors
     assert reopened.slides[0].comments == presentation.slides[0].comments
+
+
+def test_notes_mutation_preserves_text_through_save_and_reopen(tmp_path):
+    import rpptx
+
+    presentation = rpptx.Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    source = tmp_path / "source.pptx"
+    with_notes = tmp_path / "with-notes.pptx"
+    output = tmp_path / "updated-notes.pptx"
+    presentation.save(source)
+    _add_speaker_notes(source, with_notes, "Draft speaker note")
+
+    presentation = rpptx.Presentation(with_notes)
+    held = presentation.slides[0]
+    held.notes_text = "Final speaker note"
+    assert presentation.slides[0].notes_text == "Final speaker note"
+    with pytest.raises(rpptx.StaleElementError):
+        _ = held.notes_text
+
+    presentation.save(output)
+    assert rpptx.Presentation(output).slides[0].notes_text == "Final speaker note"
+    with zipfile.ZipFile(output) as archive:
+        notes_xml = archive.read("ppt/notesSlides/notesSlide1.xml").decode()
+    assert '<p:ph type="body" idx="1"' in notes_xml
+    assert 'b="1"' in notes_xml
+    assert "x:payload" in notes_xml
+
+    without_notes = rpptx.Presentation()
+    held = without_notes.slides.add_slide(without_notes.slide_layouts[6])
+    before = without_notes.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="no notes part"):
+        held.notes_text = "must fail"
+    assert without_notes.to_bytes() == before
+    assert held.notes_text is None
+
+
+def test_python_round_three_authoring_and_inspection_is_typed_and_lossless(tmp_path):
+    import rpptx
+
+    source = tmp_path / "round-three-source.pptx"
+    rich = tmp_path / "round-three-rich.pptx"
+    with_notes = tmp_path / "round-three-notes.pptx"
+    output = tmp_path / "round-three-output.pptx"
+    presentation = rpptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    shape = slide.shapes.add_textbox(
+        rpptx.Inches(1), rpptx.Inches(2), rpptx.Inches(3), rpptx.Inches(1)
+    )
+    shape.text = "formatted"
+    presentation.save(source)
+
+    with zipfile.ZipFile(source) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    slide_xml = parts["ppt/slides/slide1.xml"]
+    slide_xml = slide_xml.replace(b"<a:bodyPr/>", b"<a:bodyPr><a:spAutoFit/></a:bodyPr>", 1)
+    slide_xml = slide_xml.replace(
+        b"<a:r>",
+        b'<a:r><a:rPr sz="1800"><a:solidFill><a:srgbClr val="123456"/>'
+        b'</a:solidFill><a:latin typeface="Aptos"/><a:extLst><a:ext uri="round-three">'
+        b'<x:payload xmlns:x="urn:rdocx:test"/></a:ext></a:extLst></a:rPr>',
+        1,
+    )
+    parts["ppt/slides/slide1.xml"] = slide_xml
+    with zipfile.ZipFile(rich, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in parts.items():
+            archive.writestr(name, data)
+    _add_speaker_notes(rich, with_notes, "draft note")
+
+    presentation = rpptx.Presentation(with_notes)
+    shape = presentation.slides[0].shapes[0]
+    assert (shape.left, shape.top, shape.width, shape.height) == (
+        rpptx.Inches(1),
+        rpptx.Inches(2),
+        rpptx.Inches(3),
+        rpptx.Inches(1),
+    )
+    assert shape.shape_id is not None
+    assert shape.name is not None
+    assert shape.text_frame.autofit == "shape"
+    run = shape.text_frame.paragraphs[0].runs[0]
+    assert run.font.name == "Aptos"
+    assert run.font.size == rpptx.Pt(18)
+    assert run.font.color == "123456"
+    run.text = "updated"
+    presentation.slides[0].notes_text = "final note"
+    presentation.save(output)
+
+    reopened = rpptx.Presentation(output)
+    assert reopened.slides[0].shapes[0].text == "updated"
+    assert reopened.slides[0].notes_text == "final note"
+    with zipfile.ZipFile(output) as archive:
+        preserved = archive.read("ppt/slides/slide1.xml")
+    assert b"urn:rdocx:test" in preserved
+    assert b'sz="1800"' in preserved
+    assert b"updated" in preserved
 
 
 def _assert_rpptx_releases_gil(operation):

@@ -30,7 +30,7 @@ conventions with `rpptx-cli` through `oxml-cli-support`.
 ## Example
 
 ```sh
-cargo install rdocx-cli --version '^0.13.2'
+cargo install rdocx-cli --version '^0.14.0'
 
 rdocx inspect report.docx
 rdocx text report.docx

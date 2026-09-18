@@ -498,7 +498,10 @@ retains exact logical source intervals. Shared shaping still owns script and
 coverage segmentation, clusters, offsets, and line fitting. Exact Word line
 spacing places rich text on the Word baseline at 0.8 of the largest run em for
 the line. Automatic spacing and the established Latin-only path retain their
-existing metrics and output bytes.
+existing metrics and output bytes. Producer-written fractional paragraph line
+spacing enters layout only after exact normalization to its nearest integer
+twip, so it produces the same geometry and raster bytes as that canonical
+integer input.
 
 Word `w:bidi` selects the paragraph base direction and `w:rtl` selects the
 direction of its exact logical run span. Start and end justification and
@@ -627,6 +630,27 @@ A table without an explicit style uses the authored default table style.
 Its modeled base width, alignment, indent, borders, shading, look, and cell
 margins resolve base-first before direct table and cell overlays. Existing
 direct width and alignment behavior remains unchanged.
+The direct table facade can author auto, fixed, and percentage width modes,
+left indentation, fixed or autofit layout, shading, aggregate or individual
+borders, default cell margins, conditional look flags, and the complete active
+grid. Grid replacement synchronizes the fixed table and covering-cell widths,
+including cells that span multiple columns and rows with leading or trailing
+grid omissions. Invalid coverage and overflow do not reach layout because the
+mutation is rejected before publication. Explicit `none` borders remain
+modeled inputs, so layout can distinguish suppression from an omitted edge.
+Rows can directly author minimum or exact height, repeat and split policy,
+alignment, grid omissions, and conditional regions. Cells can directly author
+horizontal and vertical merge topology, width, borders, margins, fill,
+vertical alignment, six Word text directions, wrapping, conditional regions,
+and nested tables. Layout receives only candidates whose rows cover the active
+grid exactly and whose vertical continuations match the immediately preceding
+row at the same grid range. An explicit false toggle remains a direct layout
+input rather than becoming absence.
+Cloned rows enter layout as ordinary reopened rows. Their minimum or exact
+height, repeat and split policy, grid omissions, nested tables, and merge ranges
+use the same validated inputs as an authored row. Removing a merge restart
+promotes the matching continuation below before layout, so pagination never
+receives an orphan continuation from a successful row removal.
 Paragraphs without an explicit style use the authored default paragraph style.
 When a run names a paragraph style with a reciprocal character-style link, the
 linked character inheritance chain supplies its run properties. All three
@@ -642,6 +666,23 @@ owns rows in source order. Repeating header rows use `TH`, ordinary cells use
 `TD`, and each cell owns its source-ordered paragraph and nested-table nodes. A
 header repeated on another page creates another marked-content occurrence for
 the same logical cell.
+
+### Caller-width Word block measurement
+
+The deterministic Word engine can measure one modeled paragraph or table at a
+positive caller width without constructing pages. It loads the same embedded
+and bundled fonts, revision projection, styles, numbering, images, paragraph
+line breaker, table grid, cell margins, borders, spans, nested-table recursion,
+and ordered diagnostics as whole-document layout. Related header and footer
+blocks use the same relationship-scoped media registry. Paragraph height
+includes before and after spacing. Table height is the sum of resolved row
+heights.
+
+Measurement returns fractional point height. A caller that writes the result
+to a Word twip field rounds upward before constructing `Length::twips`, so the
+minimum does not become smaller through `Length::pt` truncation. Measurement
+uses a fresh deterministic engine and does not publish pagination state or
+touch facade layout caches.
 
 ### Autofit
 
@@ -830,6 +871,14 @@ VML watermarks remain reusable because the part, complete section geometry,
 resolved media bytes, and reusable context are all authoritative identity
 inputs.
 
+Facade-authored text boxes expose their selected DrawingML WPS branch to the
+normal Word story projection after save and reopen. Rotation and horizontal,
+vertical, or vertical-270 text direction therefore reach the same deterministic
+layout boundary as retained producer text boxes. Section-aware watermarks keep
+the existing selected-header projection. Authoring a watermark for an even
+header does not change page selection policy, so layout observes it only when
+the caller has enabled even and odd headers.
+
 Retained block and restart state share a 5,216-entry and 64 MiB ceiling.
 Paragraph blocks receive 4,096 entries and 50 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
@@ -985,6 +1034,23 @@ Provenance ranges are local to this selected projection. The field model's
 advances a run's projection offset, which prevents repeated cached and literal
 text from producing a plausible but false range. Field display glyphs remain
 unattributed even when a parsed complex cache contributes to later offsets.
+Logical mixed runs reach this projection in authored child order. Text and
+Unicode symbols contribute ordinary text spans. Tabs and typed line, page, and
+column breaks retain their exact positions, pictures contribute the established
+drawing element, and fields contribute one cached display. Schema-required
+physical run splitting does not change that logical order. Deterministic font
+mode is the acceptance path for the resulting PDF.
+
+Line breaking records the exact explicit break that ended each `LayoutLine` as
+`ForcedBreakKind::Line`, `Page`, or `Column`. Word pagination splits a paragraph
+immediately after a page-marked line when continuation content exists, before
+widow and keep decisions can move that continuation back onto the same page.
+Overflow splitting chooses the earlier of the next page break and the number of
+lines that fit, then applies the same rule recursively. A trailing page break
+has no continuation to move. Line breaks remain line-only, and column breaks
+remain distinguishable without becoming page breaks while layout is
+single-column. Body fragments, page fields, cross-reference targets, PDF, and
+raster output all consume the resulting shared page sequence.
 
 A tracked paragraph with visible revised content or a property-only revision
 carries a changed marker into pagination. Visible-revision detection follows
@@ -1011,6 +1077,15 @@ last page. Appended endnote pages continue after the final body page for fresh
 and restarted pagination, including a restarted final section. PAGE fields on
 those pages consume the continued displayed value. Number format, chapter
 style, and chapter separator remain preserved but do not affect M23 layout.
+
+Dynamic TOC entry materialization uses the section that owns the TOC field.
+When the effective entry style has no right tab, the generated paragraph adds
+one at page width minus the section's left and right margins. Missing,
+nonpositive, or arithmetically invalid geometry uses the standard 9360 twip
+text width. A style-owned right tab remains authoritative and receives no
+direct duplicate. Numbering marker text and its suffix are separate ordered
+run content. A tab suffix is `w:tab`, a space suffix is preserved whitespace,
+and neither becomes a literal control character inside `w:t`.
 
 ### Word watermarks
 
@@ -1051,6 +1126,15 @@ while inheriting it removes the direct reference. Cloned and replaced stories
 retain their part-local images, links, drawings, fields, tables, and supported
 nested content, so layout receives the same relationship-resolved content at
 the geometry of the section that selects it.
+
+Inline and anchored pictures in a selected header or footer resolve only
+through that physical story's relationship scope. The scoped registry shares
+the immutable image map without copying bytes, but exposes only keys prefixed
+by the selected main-part relationship. A missing, external, or wrong-owner
+image relationship produces one stable diagnostic and the empty-media
+sentinel. It never falls back to a body image with an equal local identifier.
+The complete relationship identity and resolved part bytes remain part of the
+header and footer cache key.
 
 Every public document mutation and mutable-accessor entry point clears both
 completed result caches before changing or exposing content. It preserves the
@@ -1216,6 +1300,25 @@ single post-pagination substitution pass and does not trigger layout. `REF`
 resolves the same unique typed bookmark text used by layout, so pure
 evaluation and rendering share the same target-validity boundary.
 
+Layout gives each PAGE, NUMPAGES, and PAGEREF placeholder run an optional
+`FieldSource` beside its `FieldKind`. It names the source paragraph node and the
+field's position among that paragraph's top-level fields in `CT_P::runs` order,
+the order the field evaluator and cache updates use. Main-story and related-
+story cache reuse rebinds it together with the paragraph's source spans. It is
+not a `SourceSpan`, so PDF ActualText grouping and extracted text do not
+change. Fields that only a revision projection reaches, and text box
+paragraphs, carry no identity. `Document::update_layout_backed_fields` lays out
+one staged candidate deterministically and writes the values the substitution
+pass renders. PAGE takes the displayed page number of the first page that
+places the field, so a header or footer shared by many pages takes its first
+page. NUMPAGES takes the page count. PAGEREF takes the parsed target-page text
+already produced by post-pagination substitution. Written fields are marked
+clean. A field whose switches the evaluator cannot format keeps its cache.
+PAGE also keeps its cache when any section declares a non-decimal
+`w:pgNumType` format or a chapter style, because layout substitutes decimal
+page numbers only. The count-only `update_page_fields` wrapper publishes the
+same complete operation.
+
 REF switch evaluation uses the bookmarked paragraph's resolved numbering in
 the flattened main-story paragraph order, including paragraphs inside tables
 and those after a table. `\n` returns the target level and `\w` returns its full
@@ -1328,8 +1431,10 @@ same `FontManager` that produced the group and then shapes ordinary slide text.
 backend-neutral `Paint` or a shared `ResolvedImage`. `ResolvedContent::Image`
 and `ResolvedShape::image_fill` use the same `ResolvedImage` structure, which
 carries media ID, source crop, stretch or tile placement, declared DPI, and
-rotation policy. A background image lowers through the existing picture path
-before every slide shape. A shape image fill lowers through that path and its
+rotation policy. It also carries the effective zero-to-one opacity derived
+from the modelled blip `a:alphaModFix`. A background image lowers through the
+existing picture path before every slide shape. A shape image fill lowers
+through that path and its
 concrete geometry clip before the shape stroke and text. It stays separate from
 `ResolvedContent`, so picture-filled text retains both layers. Paint backgrounds
 remain in `PageFrame::background`.
@@ -1393,19 +1498,26 @@ content types by resolved media ID. Only embedded picture relationships enter
 those maps. The target must be present, its declared content type must match its
 sniffed PNG or JPEG format. JPEG inputs must use the 8-bit, three-component
 layout supported by both the raster decoder and PDF pass-through path. Encoded
-bytes and decoded scanline or pixel storage must remain within 16 MiB caps, and
-the stricter raster backend must visibly
-decode it at its native pixel bounds before it enters renderer input. Native
-bounds retain sparse visible pixels that a one-pixel probe could miss. This
-also covers the PDF backend, whose JPEG path is a less strict pass-through.
-Missing, unsupported, malformed,
-invisible or content-type-mismatched media stay unresolved so the owning shape
-can retain its visible fallback and diagnostic. Linked media remains diagnosed
-and no renderer performs network access. Direct background picture fills use
+bytes remain within 16 MiB and decoded scanline or pixel storage remains within
+64 MiB. Every dimension and byte multiplication is checked before allocation.
+The stricter raster backend must visibly decode the image at its native pixel
+bounds before it enters renderer input. Native bounds retain sparse visible
+pixels that a one-pixel probe could miss. This also covers the PDF backend,
+whose JPEG path is a less strict pass-through. A rejected relationship records
+its scope and stable failure reason separately from admitted media. The owning
+picture produces that one diagnostic and lowers as a visible bounds fallback.
+Missing, unsupported, malformed, invisible or content-type-mismatched media
+also stay unresolved. Linked media remains diagnosed and no renderer performs
+network access. Direct background picture fills use
 the scope of the slide, layout, or master that
 supplied `p:bg`. Theme-referenced picture fills are rejected
 precisely until a theme media scope exists. They never fall back to a same-named
 identifier in another scope.
+
+Decoded PNG colour channels are straight alpha until the shared raster backend
+constructs a tiny-skia pixmap. That ownership boundary premultiplies RGB once
+with tiny-skia's byte rounding. PDF image data remains unchanged, and fully or
+partly transparent stored RGB cannot add colour during raster composition.
 
 Audio and video package relationships remain upstream of `RenderInput`.
 Media-aware assembly reads their typed playback settings and timing commands,
@@ -1450,6 +1562,12 @@ rectangle, and clips it to the destination and picture geometry. When picture
 content does not rotate with the shape, stretch and tile coverage expands to
 the rotated geometry's axis-aligned bounds before inverse rotation, then clips
 to the rotated picture path. Picture content is emitted before its outline.
+An image whose effective opacity is below one is wrapped in a
+backend-neutral identity group. This applies once to the complete stretch or
+tile layer and therefore reaches SVG, PDF, and raster output without backend
+picture exceptions. Slide, layout, master, background, and cached-preview
+pictures use the same lowering path. Enclosing shape and animation opacity
+multiply the picture group opacity.
 
 Tile size starts from probed pixel dimensions. A positive declared blip DPI
 overrides both embedded axes, embedded DPI overrides the 96 DPI fallback, and

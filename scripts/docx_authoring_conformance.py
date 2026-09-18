@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -20,13 +21,14 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from golden_png_harness import decode_png
-from pptx_ssim_harness import assert_tool_versions, structural_similarity
+from pptx_ssim_harness import SOFFICE, assert_tool_versions, structural_similarity
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PRIVATE_ROOT = REPO_ROOT / "corpus" / "private-docx"
 PRIVATE_MANIFEST = PRIVATE_ROOT / "manifest.json"
 PRIVATE_EVIDENCE = PRIVATE_ROOT / "evidence"
+PRIVATE_GENERATORS = PRIVATE_ROOT / "generators"
 PUBLIC_DPI = 150
 PRIVATE_CASES = ("P1", "P2", "P3", "P4", "P5")
 MAX_PACKAGE_MEMBERS = 2048
@@ -318,6 +320,31 @@ def normalized_package_graph(
     return tuple(sorted(types.items())), relationships
 
 
+def validate_generated_package(path: Path) -> None:
+    members = package_members(path)
+    _, relationships = normalized_package_graph(path)
+    office_document_targets = []
+    for relationship_part, _, relationship_type, target, target_mode in relationships:
+        if target_mode == "External":
+            continue
+        if relationship_part == "_rels/.rels":
+            source_directory = ""
+        else:
+            relationship_path = PurePosixPath(relationship_part)
+            source_directory = relationship_path.parent.parent.as_posix()
+        resolved = posixpath.normpath(posixpath.join(source_directory, target)).lstrip("/")
+        if resolved == ".." or resolved.startswith("../") or resolved not in members:
+            raise ConformanceError("generated package has a missing relationship target")
+        if (
+            relationship_part == "_rels/.rels"
+            and relationship_type
+            == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+        ):
+            office_document_targets.append(resolved)
+    if office_document_targets != ["word/document.xml"]:
+        raise ConformanceError("generated package has an invalid office document relationship")
+
+
 def validate_word_compatible_profile(path: Path, extension: str) -> None:
     members = package_members(path)
     expected_members = {
@@ -470,6 +497,7 @@ def validate_public_boundary(manifest: str, source: str) -> None:
         "set_raw_",
         "RawXml",
         "include_bytes!",
+        "include_str!",
         "Document::from_bytes",
     )
     if any(token in source for token in forbidden):
@@ -478,6 +506,72 @@ def validate_public_boundary(manifest: str, source: str) -> None:
         raise ConformanceError("public fixture must start from Document::new()")
     if "Document::open(&authored_path)" not in source:
         raise ConformanceError("public fixture does not reopen its own output")
+
+
+def validate_private_generator_boundary(manifest: str, source: str) -> None:
+    try:
+        parsed = tomllib.loads(manifest)
+    except tomllib.TOMLDecodeError as error:
+        raise ConformanceError("private generator manifest is invalid") from error
+    dependencies = parsed.get("dependencies")
+    rdocx_dependency = dependencies.get("rdocx") if isinstance(dependencies, dict) else None
+    if (
+        not isinstance(dependencies, dict)
+        or set(dependencies) != {"rdocx"}
+        or not isinstance(rdocx_dependency, dict)
+        or set(rdocx_dependency) != {"path"}
+        or rdocx_dependency["path"]
+        != (REPO_ROOT / "crates" / "rdocx").as_posix()
+    ):
+        raise ConformanceError("private generator depends on a private crate")
+    forbidden = (
+        "rdocx_oxml",
+        "rdocx-oxml",
+        "oxml_",
+        "oxml-",
+        "OpcPackage",
+        "set_raw_",
+        "RawXml",
+        "include_bytes!",
+        "Document::from_bytes",
+        "Document::open_mhtml",
+        "Document::from_mhtml_bytes",
+        "Document::open_html",
+        "Document::from_html",
+        "insert_html_fragment",
+        "insert_html_fragment_with_resources",
+        "reference-",
+        "candidate-",
+        "manifest.json",
+        "private-docx",
+        "std::process",
+        "process::Command",
+        "Command::new",
+        "std::fs::read",
+        "fs::read",
+        "File::open",
+        "OpenOptions",
+        ".read_to_end(",
+        ".read_to_string(",
+        "std::fs::copy",
+        "fs::copy",
+        "std::fs::rename",
+        "fs::rename",
+        "hard_link",
+        "symlink",
+        "std::net",
+        'extern "C"',
+        "#[link",
+        '"soffice"',
+        '"libreoffice"',
+        '"pandoc"',
+    )
+    if any(token in source for token in forbidden):
+        raise ConformanceError("private generator bypasses the rdocx authoring boundary")
+    if source.count("Document::new()") != 1:
+        raise ConformanceError("private generator must start from Document::new()")
+    if source.count("Document::open(") != 1 or "Document::open(&output)" not in source:
+        raise ConformanceError("private generator must reopen only its own output")
 
 
 def parse_public_report(path: Path) -> dict[str, int]:
@@ -514,8 +608,9 @@ def run_public() -> None:
         (root / "Cargo.toml").write_text(manifest, encoding="utf-8")
         (source_root / "main.rs").write_text(PUBLIC_CONSUMER_SOURCE, encoding="utf-8")
         environment = os.environ.copy()
-        environment["CARGO_TARGET_DIR"] = str(
-            REPO_ROOT / "target" / "docx-authoring-conformance"
+        environment.setdefault(
+            "CARGO_TARGET_DIR",
+            str(REPO_ROOT / "target" / "docx-authoring-conformance"),
         )
         completed = subprocess.run(
             ("cargo", "run", "--quiet", "--offline", "--", str(output)),
@@ -651,7 +746,7 @@ def load_private_manifest(root: Path) -> dict[str, object]:
 def private_inventory(root: Path) -> tuple[str, ...]:
     inventory = []
     for path in root.iterdir():
-        if path.name == "evidence" and path.is_dir():
+        if path.name in {"evidence", "generators"} and path.is_dir():
             continue
         if not path.is_file():
             raise ConformanceError("private input inventory is missing or unexpected")
@@ -677,6 +772,66 @@ def validate_private_inventory(root: Path, payload: dict[str, object]) -> None:
             raise ConformanceError("private reference identity changed")
         if sha256(candidate) != case["candidate_sha256"]:
             raise ConformanceError("private candidate identity changed")
+
+
+def generate_private_candidates(
+    root: Path, payload: dict[str, object], output_root: Path
+) -> dict[str, Path]:
+    generator_root = root / "generators"
+    expected = {f"{alias}.rs" for alias in PRIVATE_CASES}
+    try:
+        actual = {
+            path.name
+            for path in generator_root.iterdir()
+            if path.is_file()
+        }
+    except OSError as error:
+        raise ConformanceError("private generator inventory is unavailable") from error
+    if actual != expected or any(path.is_dir() for path in generator_root.iterdir()):
+        raise ConformanceError("private generator inventory is incomplete")
+
+    manifest = public_consumer_manifest()
+    cases = payload["cases"]
+    assert isinstance(cases, list)
+    generated = {}
+    output_root.mkdir(exist_ok=True)
+    with TemporaryDirectory(prefix="rdocx-private-build-") as directory:
+        temporary = Path(directory)
+        environment = os.environ.copy()
+        environment.setdefault(
+            "CARGO_TARGET_DIR",
+            str(REPO_ROOT / "target" / "docx-authoring-conformance"),
+        )
+        for case in cases:
+            assert isinstance(case, dict)
+            alias = str(case["id"])
+            try:
+                source = (generator_root / f"{alias}.rs").read_text(encoding="utf-8")
+            except OSError as error:
+                raise ConformanceError(f"{alias} private generator is unavailable") from error
+            validate_private_generator_boundary(manifest, source)
+            project = temporary / alias
+            (project / "src").mkdir(parents=True)
+            (project / "Cargo.toml").write_text(manifest, encoding="utf-8")
+            (project / "src" / "main.rs").write_text(source, encoding="utf-8")
+            outputs = []
+            for attempt in ("first", "second"):
+                output = output_root / f"{alias}-{attempt}.docx"
+                completed = subprocess.run(
+                    ("cargo", "run", "--quiet", "--offline", "--", str(output)),
+                    cwd=project,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                if completed.returncode != 0 or not output.is_file():
+                    raise ConformanceError(f"{alias} private generator failed")
+                outputs.append(output)
+            if outputs[0].read_bytes() != outputs[1].read_bytes():
+                raise ConformanceError(f"{alias} private generator is not deterministic")
+            generated[alias] = outputs[0]
+    return generated
 
 
 def render_private_alias(source: Path, alias: str, output: Path) -> list[Path]:
@@ -758,18 +913,62 @@ def modeled_projection(source: Path, alias: str) -> dict[str, object]:
         return projection
 
 
+def libreoffice_repair_evidence(candidate: Path, alias: str) -> bool:
+    with TemporaryDirectory(prefix="rdocx-private-libreoffice-") as directory:
+        temporary = Path(directory)
+        input_root = temporary / "input"
+        output_root = temporary / "output"
+        profile_root = temporary / "profile"
+        input_root.mkdir()
+        output_root.mkdir()
+        generic_input = input_root / f"{alias}.docx"
+        shutil.copyfile(candidate, generic_input)
+        profile = f"-env:UserInstallation={profile_root.resolve().as_uri()}"
+        completed = subprocess.run(
+            (
+                SOFFICE,
+                "--headless",
+                profile,
+                "--convert-to",
+                "docx",
+                "--outdir",
+                str(output_root),
+                str(generic_input),
+            ),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        diagnostics = f"{completed.stdout}\n{completed.stderr}".lower()
+        if completed.returncode != 0:
+            raise ConformanceError(f"{alias} LibreOffice conversion failed")
+        if re.search(r"\b(?:repair(?:ed|ing)?|corrupt(?:ed|ion)?)\b", diagnostics):
+            raise ConformanceError(f"{alias} LibreOffice reported package repair")
+        reopened = output_root / generic_input.name
+        if not reopened.is_file():
+            raise ConformanceError(f"{alias} LibreOffice did not reopen the package")
+        normalized_package_graph(reopened)
+        validate_generated_package(reopened)
+    return True
+
+
 def private_case_evidence(
-    root: Path, case: dict[str, object], evidence: Path
+    root: Path,
+    case: dict[str, object],
+    evidence: Path,
+    generated_candidate: Path | None = None,
 ) -> dict[str, object]:
     alias = str(case["id"])
     reference = root / str(case["reference"])
-    candidate = root / str(case["candidate"])
-    if normalized_package_graph(reference) != normalized_package_graph(candidate):
-        raise ConformanceError(f"{alias} normalized package graph differs")
+    candidate = generated_candidate or root / str(case["candidate"])
+    normalized_package_graph(reference)
+    validate_generated_package(candidate)
     if modeled_projection(reference, f"{alias}-reference") != modeled_projection(
         candidate, f"{alias}-candidate"
     ):
         raise ConformanceError(f"{alias} modeled projection differs")
+    repair_free = libreoffice_repair_evidence(candidate, alias)
     reference_pages = render_private_alias(reference, f"{alias}-reference", evidence)
     candidate_pages = render_private_alias(candidate, f"{alias}-candidate", evidence)
     if len(reference_pages) != case["reference_pages"]:
@@ -800,10 +999,13 @@ def private_case_evidence(
         "dimensions": dimensions,
         "scores": scores,
         "minimum_ssim": case["minimum_ssim"],
+        "libreoffice_repair_free": repair_free,
     }
 
 
-def run_private(required: bool, root: Path = PRIVATE_ROOT) -> bool:
+def run_private(
+    required: bool, root: Path = PRIVATE_ROOT, generate: bool = False
+) -> bool:
     reject_tracked_or_staged_private_artifacts()
     if not root.is_dir() or not (root / "manifest.json").is_file():
         if required:
@@ -820,16 +1022,25 @@ def run_private(required: bool, root: Path = PRIVATE_ROOT) -> bool:
     assert isinstance(tools, dict)
     if tools["libreoffice"] != expected_soffice or tools["pdftoppm"] != expected_pdftoppm:
         raise ConformanceError("private manifest tool identities changed")
-    evidence = root / "evidence"
-    if evidence.exists():
-        shutil.rmtree(evidence)
-    evidence.mkdir()
-    records = []
-    cases = payload["cases"]
-    assert isinstance(cases, list)
-    for case in cases:
-        assert isinstance(case, dict)
-        records.append(private_case_evidence(root, case, evidence))
+    with TemporaryDirectory(prefix="rdocx-private-generated-") as directory:
+        generated = (
+            generate_private_candidates(root, payload, Path(directory))
+            if generate
+            else {}
+        )
+        evidence = root / "evidence"
+        if evidence.exists():
+            shutil.rmtree(evidence)
+        evidence.mkdir()
+        records = []
+        cases = payload["cases"]
+        assert isinstance(cases, list)
+        for case in cases:
+            assert isinstance(case, dict)
+            alias = str(case["id"])
+            records.append(
+                private_case_evidence(root, case, evidence, generated.get(alias))
+            )
     (evidence / "results.json").write_text(
         json.dumps(
             {
@@ -866,6 +1077,145 @@ class HarnessSelfTests(unittest.TestCase):
             validate_public_boundary(
                 manifest, PUBLIC_CONSUMER_SOURCE.replace("Document::new()", "Document::default()")
             )
+
+    def test_private_generator_boundary_requires_new_and_own_output_only(self) -> None:
+        manifest = public_consumer_manifest()
+        source = """use rdocx::Document;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let output = std::path::PathBuf::from(std::env::args_os().nth(1).unwrap());
+    let mut document = Document::new();
+    document.save(&output)?;
+    Document::open(&output)?;
+    Ok(())
+}
+"""
+        validate_private_generator_boundary(manifest, source)
+        with self.assertRaisesRegex(ConformanceError, "authoring boundary"):
+            validate_private_generator_boundary(
+                manifest, source.replace("Document::new()", "Document::from_bytes(&[])?")
+            )
+        with self.assertRaisesRegex(ConformanceError, "authoring boundary"):
+            validate_private_generator_boundary(
+                manifest,
+                source.replace(
+                    "document.save(&output)?;",
+                    "document.insert_html_fragment(todo!(), \"<p>shortcut</p>\", &[])?;\n"
+                    "    document.save(&output)?;",
+                ),
+            )
+        with self.assertRaisesRegex(ConformanceError, "reopen only"):
+            validate_private_generator_boundary(
+                manifest, source.replace("Document::open(&output)", "Document::open(\"input.docx\")")
+            )
+        with self.assertRaisesRegex(ConformanceError, "authoring boundary"):
+            validate_private_generator_boundary(
+                manifest,
+                source.replace(
+                    "document.save(&output)?;",
+                    'std::process::Command::new("soffice").status()?;\n'
+                    "    document.save(&output)?;",
+                ),
+            )
+        with self.assertRaisesRegex(ConformanceError, "authoring boundary"):
+            validate_private_generator_boundary(
+                manifest,
+                source.replace(
+                    "document.save(&output)?;",
+                    'let _source = std::fs::read("reference.docx")?;\n'
+                    "    document.save(&output)?;",
+                ),
+            )
+
+    def test_private_generation_uses_deterministic_outputs_as_evidence(self) -> None:
+        source = """use rdocx::Document;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let output = std::path::PathBuf::from(std::env::args_os().nth(1).unwrap());
+    let mut document = Document::new();
+    document.save(&output)?;
+    Document::open(&output)?;
+    Ok(())
+}
+"""
+        with TemporaryDirectory(prefix="rdocx-private-generator-test-") as directory:
+            root = Path(directory)
+            generators = root / "generators"
+            generators.mkdir()
+            for alias in PRIVATE_CASES:
+                (generators / f"{alias}.rs").write_text(source, encoding="utf-8")
+            payload = {"cases": [{"id": alias} for alias in PRIVATE_CASES]}
+
+            def write_generated_output(arguments: tuple[str, ...], **_: object):
+                Path(arguments[-1]).write_bytes(b"generated-from-public-api")
+                return subprocess.CompletedProcess(arguments, 0)
+
+            with mock.patch(
+                f"{__name__}.subprocess.run", side_effect=write_generated_output
+            ):
+                generated = generate_private_candidates(
+                    root, payload, root / "generated"
+                )
+            self.assertEqual(set(generated), set(PRIVATE_CASES))
+            self.assertTrue(
+                all(
+                    path.read_bytes() == b"generated-from-public-api"
+                    for path in generated.values()
+                )
+            )
+
+    def test_generated_package_requires_resolved_targets_and_one_document_root(self) -> None:
+        content_types = f'''<Types xmlns="{CONTENT_TYPES_NS}">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="{WORD_MAIN_CONTENT_TYPES['docx']}"/>
+</Types>'''.encode()
+        document = f'''<w:document xmlns:w="{WORD_NS}"><w:body><w:sectPr/></w:body></w:document>'''.encode()
+
+        def write_package(path: Path, relationship_type: str, target: str) -> None:
+            relationships = f'''<Relationships xmlns="{RELATIONSHIPS_NS}">
+<Relationship Id="rId1" Type="{relationship_type}" Target="{target}"/>
+</Relationships>'''.encode()
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("[Content_Types].xml", content_types)
+                archive.writestr("_rels/.rels", relationships)
+                archive.writestr("word/document.xml", document)
+
+        office_document = (
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+        )
+        with TemporaryDirectory(prefix="rdocx-generated-package-test-") as directory:
+            root = Path(directory)
+            valid = root / "valid.docx"
+            write_package(valid, office_document, "word/document.xml")
+            validate_generated_package(valid)
+
+            def write_libreoffice_output(arguments: tuple[str, ...], **_: object):
+                output_root = Path(arguments[arguments.index("--outdir") + 1])
+                source = Path(arguments[-1])
+                shutil.copyfile(source, output_root / source.name)
+                return subprocess.CompletedProcess(arguments, 0, "converted", "")
+
+            with mock.patch(
+                f"{__name__}.subprocess.run", side_effect=write_libreoffice_output
+            ):
+                self.assertTrue(libreoffice_repair_evidence(valid, "P1"))
+            with mock.patch(
+                f"{__name__}.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    (SOFFICE,), 0, "package repaired", ""
+                ),
+            ):
+                with self.assertRaisesRegex(ConformanceError, "reported package repair"):
+                    libreoffice_repair_evidence(valid, "P1")
+
+            missing = root / "missing.docx"
+            write_package(missing, office_document, "word/missing.xml")
+            with self.assertRaisesRegex(ConformanceError, "missing relationship target"):
+                validate_generated_package(missing)
+
+            wrong_root = root / "wrong-root.docx"
+            write_package(wrong_root, "urn:not-an-office-document", "word/document.xml")
+            with self.assertRaisesRegex(ConformanceError, "invalid office document"):
+                validate_generated_package(wrong_root)
 
     def test_normalized_relationship_records_retain_ids(self) -> None:
         first = b'''<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="urn:test" Target="item.xml"/></Relationships>'''
@@ -956,6 +1306,7 @@ def parse_arguments() -> argparse.Namespace:
     mode.add_argument("--self-test", action="store_true")
     mode.add_argument("--public", action="store_true")
     mode.add_argument("--private-required", action="store_true")
+    mode.add_argument("--private-generate-required", action="store_true")
     return parser.parse_args()
 
 
@@ -972,6 +1323,9 @@ def main() -> int:
             return 0
         if arguments.private_required:
             run_private(True)
+            return 0
+        if arguments.private_generate_required:
+            run_private(True, generate=True)
             return 0
         reject_tracked_or_staged_private_artifacts()
         run_public()

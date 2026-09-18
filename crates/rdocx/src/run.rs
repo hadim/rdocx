@@ -1,12 +1,12 @@
 //! Run — a contiguous stretch of text with uniform formatting.
 
-use rdocx_oxml::drawing::CT_Drawing;
+use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
 use rdocx_oxml::properties::{CT_RPr, CT_Shd};
-use rdocx_oxml::shared::ST_Underline;
+use rdocx_oxml::shared::{ST_HighlightColor, ST_Underline};
 use rdocx_oxml::text::{BreakType, CT_R, CT_Text, Field, RunContent};
 use rdocx_oxml::units::{HalfPoint, Twips};
 
-use crate::Length;
+use crate::{Error, Length, Result};
 
 /// A break embedded in a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -386,6 +386,48 @@ impl<'a> Run<'a> {
             .append_content(RunContent::Text(CT_Text::new(text)));
     }
 
+    /// Append a tab at the current end of this run.
+    pub fn add_tab(&mut self) {
+        self.inner.append_content(RunContent::Tab);
+    }
+
+    /// Append a line, page, or column break at the current end of this run.
+    pub fn add_break(&mut self, kind: BreakKind) {
+        let kind = match kind {
+            BreakKind::Line => BreakType::Line,
+            BreakKind::Page => BreakType::Page,
+            BreakKind::Column => BreakType::Column,
+        };
+        self.inner.append_content(RunContent::Break(kind));
+    }
+
+    /// Append an inline picture using a relationship already embedded in the document.
+    ///
+    /// Obtain `relationship_id` from [`crate::Document::embed_image`].
+    pub fn add_picture(&mut self, relationship_id: &str, width: Length, height: Length) {
+        let inline = CT_Inline::new(relationship_id, width.to_emu(), height.to_emu());
+        self.inner
+            .append_content(RunContent::Drawing(CT_Drawing::inline(inline)));
+    }
+
+    /// Append a Word field with its cached display result.
+    pub fn add_field(&mut self, instruction: &str, cached_result: &str) -> Result<()> {
+        let field = Field::new(instruction, cached_result);
+        if field.instruction.name.is_empty() {
+            return Err(Error::Other(
+                "field instruction must contain a field name".to_owned(),
+            ));
+        }
+        self.inner.append_content(RunContent::Field(field));
+        Ok(())
+    }
+
+    /// Append one Unicode symbol as ordinary text in this run.
+    pub fn add_symbol(&mut self, symbol: char) {
+        let mut encoded = [0_u8; 4];
+        self.add_text(symbol.encode_utf8(&mut encoded));
+    }
+
     /// Set bold formatting.
     pub fn bold(mut self, val: bool) -> Self {
         self.set_bold(val);
@@ -577,6 +619,40 @@ impl<'a> Run<'a> {
         });
     }
 
+    /// Set or clear the named Word highlight in place.
+    ///
+    /// Returns false without mutation when `color` is not an
+    /// `ST_HighlightColor` keyword. This is separate from the shading fill
+    /// written by [`Run::set_highlight`] for source compatibility.
+    pub fn set_highlight_value(&mut self, color: Option<&str>) -> bool {
+        match color {
+            Some(color) => {
+                let Ok(color) = ST_HighlightColor::from_str(color) else {
+                    return false;
+                };
+                self.ensure_rpr().highlight = Some(color);
+            }
+            None => {
+                if let Some(properties) = self.inner.properties.as_mut() {
+                    properties.highlight = None;
+                }
+            }
+        }
+        true
+    }
+
+    /// Set or clear the direct run shading fill in place.
+    pub fn set_shading_value(&mut self, color: Option<&str>) {
+        match color {
+            Some(color) => self.set_highlight(color),
+            None => {
+                if let Some(properties) = self.inner.properties.as_mut() {
+                    properties.shading = None;
+                }
+            }
+        }
+    }
+
     /// Set strikethrough formatting.
     pub fn strike(mut self, val: bool) -> Self {
         self.set_strike(val);
@@ -704,6 +780,14 @@ impl<'a> Run<'a> {
     /// Set the character style by ID in place.
     pub fn set_style(&mut self, style_id: &str) {
         self.ensure_rpr().style_id = Some(style_id.to_string());
+    }
+
+    /// Set or clear the character style ID in place.
+    pub fn set_style_value(&mut self, style_id: Option<&str>) {
+        if style_id.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().style_id = style_id.map(str::to_owned);
     }
 
     fn ensure_rpr(&mut self) -> &mut CT_RPr {
@@ -881,6 +965,24 @@ impl<'a> RunRef<'a> {
             return Some(h.to_str().to_string());
         }
         rpr.shading.as_ref().and_then(|sh| sh.fill.clone())
+    }
+
+    /// Get the direct named Word highlight, without falling back to shading.
+    pub fn highlight_color(&self) -> Option<&'static str> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|rpr| rpr.highlight)
+            .map(ST_HighlightColor::to_str)
+    }
+
+    /// Get the direct run shading fill, if set.
+    pub fn shading_fill(&self) -> Option<&str> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|rpr| rpr.shading.as_ref())
+            .and_then(|shading| shading.fill.as_deref())
     }
 
     /// If this run contains an inline image, return (rel_id, alt text).
@@ -1186,5 +1288,66 @@ mod tests {
             run.set_language_value(None);
         }
         assert_eq!(inner.properties.as_ref().unwrap().language, None);
+    }
+
+    #[test]
+    fn named_highlight_and_shading_are_independent_direct_properties() {
+        let mut inner = CT_R::new("marked");
+        {
+            let mut run = Run { inner: &mut inner };
+            assert!(run.set_highlight_value(Some("darkBlue")));
+            run.set_shading_value(Some("FFFF00"));
+        }
+        let run = RunRef { inner: &inner };
+        assert_eq!(run.highlight_color(), Some("darkBlue"));
+        assert_eq!(run.shading_fill(), Some("FFFF00"));
+
+        {
+            let mut run = Run { inner: &mut inner };
+            assert!(!run.set_highlight_value(Some("FFFF00")));
+        }
+        let run = RunRef { inner: &inner };
+        assert_eq!(run.highlight_color(), Some("darkBlue"));
+        assert_eq!(run.shading_fill(), Some("FFFF00"));
+
+        {
+            let mut run = Run { inner: &mut inner };
+            assert!(run.set_highlight_value(None));
+            run.set_shading_value(None);
+        }
+        let run = RunRef { inner: &inner };
+        assert_eq!(run.highlight_color(), None);
+        assert_eq!(run.shading_fill(), None);
+    }
+
+    #[test]
+    fn style_highlight_and_shading_preserve_ordered_run_content() {
+        let mut inner = CT_R {
+            properties: None,
+            content: vec![
+                RunContent::Text(CT_Text::new("before")),
+                RunContent::Tab,
+                RunContent::Break(BreakType::Page),
+                RunContent::Field(Field::new("PAGE", "1")),
+                RunContent::Drawing(CT_Drawing::inline(CT_Inline::new("rId1", 1, 1))),
+                RunContent::Text(CT_Text::new("after")),
+            ],
+            extra_xml: vec![b"<w:sym w:font=\"Wingdings\" w:char=\"F0B7\"/>".to_vec()],
+            extra_xml_positions: vec![5],
+            alt_drawings: Vec::new(),
+        };
+        let expected_content = inner.content.clone();
+        let expected_raw = inner.extra_xml.clone();
+
+        {
+            let mut run = Run { inner: &mut inner };
+            run.set_style_value(Some("Strong"));
+            assert!(run.set_highlight_value(Some("yellow")));
+            run.set_shading_value(Some("FFFF00"));
+        }
+
+        assert_eq!(inner.content, expected_content);
+        assert_eq!(inner.extra_xml, expected_raw);
+        assert_eq!(inner.extra_xml_positions, vec![6]);
     }
 }

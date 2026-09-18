@@ -8954,6 +8954,153 @@ fn notes_pages_follow_master_geometry_text_metadata_and_slide_order() {
 }
 
 #[test]
+fn notes_render_without_a_reverse_slide_relationship() {
+    let control = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    let control_pdf = control.to_notes_pdf_deterministic().unwrap();
+
+    let mut package = open_opc(&f226_fixture_bytes(), "notes without reverse slide links");
+    for notes_part in ["/custom/notes/notes1.xml", "/custom/notes/notes2.xml"] {
+        package
+            .get_or_create_part_rels(notes_part)
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::SLIDE);
+    }
+    let google_style = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    assert_eq!(
+        google_style.to_notes_pdf_deterministic().unwrap(),
+        control_pdf
+    );
+
+    let mut conflicting = open_opc(&f226_fixture_bytes(), "conflicting notes owner");
+    conflicting
+        .get_or_create_part_rels("/custom/notes/notes1.xml")
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .unwrap()
+        .target = "../../ppt/slides/slide2.xml".to_owned();
+    let conflicting = Presentation::from_bytes(&package_bytes(conflicting)).unwrap();
+    assert!(
+        conflicting
+            .to_notes_pdf_deterministic()
+            .unwrap_err()
+            .to_string()
+            .contains("differs from owner")
+    );
+
+    let mut multiple = open_opc(&f226_fixture_bytes(), "multiple notes owners");
+    multiple
+        .get_or_create_part_rels("/custom/notes/notes1.xml")
+        .add_with_id(
+            "second-slide",
+            rel_types::SLIDE,
+            "../../ppt/slides/slide2.xml",
+        );
+    let multiple = Presentation::from_bytes(&package_bytes(multiple)).unwrap();
+    assert!(
+        multiple
+            .to_notes_pdf_deterministic()
+            .unwrap_err()
+            .to_string()
+            .contains("expected at most one")
+    );
+
+    let mut external = open_opc(&f226_fixture_bytes(), "external notes owner");
+    let relationship = external
+        .get_or_create_part_rels("/custom/notes/notes1.xml")
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .unwrap();
+    relationship.target = "https://example.com/slide.xml".to_owned();
+    relationship.target_mode = Some("External".to_owned());
+    let external = Presentation::from_bytes(&package_bytes(external)).unwrap();
+    assert!(
+        external
+            .to_notes_pdf_deterministic()
+            .unwrap_err()
+            .to_string()
+            .contains("external target")
+    );
+}
+
+#[test]
+fn notes_text_mutation_is_staged_and_preserves_the_body_run() {
+    let mut package = open_opc(&f226_fixture_bytes(), "formatted notes mutation");
+    let notes_part = "/custom/notes/notes1.xml";
+    let xml = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
+    let rich_run = r#"<a:rPr lang="en-US" b="1"><a:extLst><a:ext uri="{6D487B31-4C56-4F45-AED3-4C741AC43E77}"><x:payload xmlns:x="urn:rdocx:test"/></a:ext></a:extLst></a:rPr>"#;
+    let xml = xml.replacen(r#"<a:rPr lang="en-US"/>"#, rich_run, 1);
+    assert!(xml.contains("x:payload"));
+    package.set_part(notes_part, xml.into_bytes());
+
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .set_notes_text("Final speaker note")
+        .unwrap();
+    assert_eq!(
+        presentation.slide(0).unwrap().notes_text().as_deref(),
+        Some("Final speaker note")
+    );
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened.slide(0).unwrap().notes_text().as_deref(),
+        Some("Final speaker note")
+    );
+    let saved = open_opc(&bytes, "saved formatted notes mutation");
+    let xml = String::from_utf8(saved.get_part(notes_part).unwrap().to_vec()).unwrap();
+    assert_eq!(xml.matches(r#"<p:ph type="body" idx="3""#).count(), 1);
+    assert!(xml.contains(r#"b="1""#));
+    assert!(xml.contains(r#"lang="en-US""#));
+    assert!(xml.contains("x:payload"));
+    assert!(xml.contains("Final speaker note"));
+
+    let mut counted = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    assert_eq!(counted.try_replace_text("F-226", "Final").unwrap(), 4);
+    let counted = Presentation::from_bytes(&counted.to_bytes().unwrap()).unwrap();
+    assert!(counted.slide(0).unwrap().text().contains("Final slide one"));
+    assert_eq!(
+        counted.slide(0).unwrap().notes_text().as_deref(),
+        Some("Final speaker note 1")
+    );
+
+    let mut without_notes = Presentation::new().unwrap();
+    without_notes.add_slide(6).unwrap();
+    let before = without_notes.to_bytes().unwrap();
+    assert!(
+        without_notes
+            .slide_mut(0)
+            .unwrap()
+            .set_notes_text("must fail")
+            .unwrap_err()
+            .to_string()
+            .contains("no notes part")
+    );
+    assert_eq!(without_notes.to_bytes().unwrap(), before);
+
+    let mut package = open_opc(&f226_fixture_bytes(), "notes without body");
+    let xml = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
+    let xml = xml.replacen(r#"type="body""#, r#"type="title""#, 1);
+    package.set_part(notes_part, xml.into_bytes());
+    let mut without_body = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let before = without_body.to_bytes().unwrap();
+    assert!(
+        without_body
+            .slide_mut(0)
+            .unwrap()
+            .set_notes_text("must fail")
+            .unwrap_err()
+            .to_string()
+            .contains("no body placeholder")
+    );
+    assert_eq!(without_body.to_bytes().unwrap(), before);
+}
+
+#[test]
 fn handouts_follow_master_metadata_and_all_six_audience_layouts() {
     let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
     for (layout, pages) in [
@@ -13468,6 +13615,34 @@ fn sparse_preview_png() -> Vec<u8> {
     png
 }
 
+fn solid_rgba_png(width: u32, height: u32, pixel: [u8; 4]) -> Vec<u8> {
+    let row_bytes = usize::try_from(width).unwrap().checked_mul(4).unwrap();
+    let mut row = Vec::with_capacity(row_bytes + 1);
+    row.push(0);
+    for _ in 0..width {
+        row.extend_from_slice(&pixel);
+    }
+    let mut pixels = Vec::with_capacity(
+        usize::try_from(height)
+            .unwrap()
+            .checked_mul(row_bytes + 1)
+            .unwrap(),
+    );
+    for _ in 0..height {
+        pixels.extend_from_slice(&row);
+    }
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&pixels, 6);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    append_png_chunk(&mut png, b"IHDR", &ihdr);
+    append_png_chunk(&mut png, b"IDAT", &compressed);
+    append_png_chunk(&mut png, b"IEND", &[]);
+    png
+}
+
 fn append_png_chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     png.extend_from_slice(&(data.len() as u32).to_be_bytes());
     png.extend_from_slice(kind);
@@ -13809,6 +13984,84 @@ fn picture_without_explicit_size_uses_native_dimensions() {
 }
 
 #[test]
+fn large_pictures_render_or_report_the_decode_limit() {
+    for (width, height) in [(4_000, 1_500), (2_100, 2_100)] {
+        let png = solid_rgba_png(width, height, [0, 0, 0, 255]);
+        assert!(
+            png.len() < 16 * 1024 * 1024,
+            "fixture must isolate decoded size"
+        );
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(6).expect("add blank slide");
+        presentation
+            .add_picture(
+                0,
+                &png,
+                "large.png",
+                Emu::from_cm(1.0),
+                Emu::from_cm(1.0),
+                Some(Emu::from_cm(4.0)),
+                Some(Emu::from_cm(2.0)),
+            )
+            .expect("add reported large picture");
+
+        let layout = render_presentation_package(&presentation.to_bytes().unwrap());
+        assert!(layout.diagnostics.is_empty(), "{:?}", layout.diagnostics);
+        let mut image_count = 0;
+        walk(&layout.pages[0].elements, &mut |element, _| {
+            if matches!(element, PositionedElement::Image { .. }) {
+                image_count += 1;
+            }
+        });
+        assert_eq!(image_count, 1, "{width} by {height} picture must render");
+        let raster = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let raster = tiny_skia::Pixmap::decode_png(&raster).unwrap();
+        let sample = raster.pixel(60, 45).unwrap();
+        assert_eq!((sample.red(), sample.green(), sample.blue()), (0, 0, 0));
+        assert!(
+            presentation
+                .to_pdf_deterministic()
+                .unwrap()
+                .starts_with(b"%PDF")
+        );
+    }
+
+    let over_limit = png_header(5_000, 4_000);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    presentation
+        .add_picture(
+            0,
+            &over_limit,
+            "over-limit.png",
+            Emu::from_cm(1.0),
+            Emu::from_cm(1.0),
+            Some(Emu::from_cm(4.0)),
+            Some(Emu::from_cm(2.0)),
+        )
+        .expect("add over-limit picture");
+    let layout = render_presentation_package(&presentation.to_bytes().unwrap());
+    assert_eq!(layout.diagnostics.len(), 1, "{:?}", layout.diagnostics);
+    assert!(
+        layout.diagnostics[0]
+            .message
+            .contains("exceeds the 64 MiB decoded-image render limit"),
+        "{:?}",
+        layout.diagnostics
+    );
+    let mut visible_fallbacks = 0;
+    walk(&layout.pages[0].elements, &mut |element, _| {
+        if matches!(element, PositionedElement::Path(path) if path.stroke.is_some()) {
+            visible_fallbacks += 1;
+        }
+    });
+    assert_eq!(
+        visible_fallbacks, 1,
+        "over-limit picture needs one fallback"
+    );
+}
+
+#[test]
 fn picture_one_dimension_preserves_aspect_ratio_with_truncation() {
     let png = png_header(3, 2);
     let mut presentation = Presentation::new().expect("open bundled template");
@@ -13879,6 +14132,311 @@ fn duplicate_picture_bytes_share_one_media_part_across_slides() {
             media[0]
         );
     }
+}
+
+fn picture_alpha_mod_fix_fixture() -> Vec<u8> {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let png = valid_one_pixel_png();
+    for x in [1.0, 4.0] {
+        presentation
+            .add_picture(
+                0,
+                &png,
+                "red.png",
+                Emu::from_cm(x),
+                Emu::from_cm(1.0),
+                Some(Emu::from_cm(2.0)),
+                Some(Emu::from_cm(2.0)),
+            )
+            .unwrap();
+    }
+
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-X104 picture opacity source",
+    );
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::SLIDE).then_some(part.clone())
+        })
+        .unwrap();
+    let layout_part = {
+        let relationship = package
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_LAYOUT)
+            .unwrap();
+        OpcPackage::resolve_rel_target(&slide_part, &relationship.target)
+    };
+    let image_relationship = package
+        .get_part_rels(&slide_part)
+        .unwrap()
+        .get_by_type(rel_types::IMAGE)
+        .unwrap()
+        .clone();
+
+    let slide_xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let blip_end = format!(r#"r:embed="{}"/>"#, image_relationship.id);
+    let faded_blip_end = format!(
+        r#"r:embed="{}"><a:alphaModFix amt="30000"/></a:blip>"#,
+        image_relationship.id
+    );
+    let slide_xml = slide_xml.replacen(&blip_end, &faded_blip_end, 1);
+    assert!(slide_xml.contains(&faded_blip_end), "{slide_xml}");
+    let first_picture_start = slide_xml.find("<p:pic>").unwrap();
+    let first_picture_end = first_picture_start
+        + slide_xml[first_picture_start..].find("</p:pic>").unwrap()
+        + "</p:pic>".len();
+    let mut layout_picture = slide_xml[first_picture_start..first_picture_end].to_owned();
+    layout_picture = layout_picture.replacen(
+        r#"<a:off x="360000" y="360000"/>"#,
+        r#"<a:off x="2520000" y="360000"/>"#,
+        1,
+    );
+    assert!(layout_picture.contains(r#"<a:off x="2520000" y="360000"/>"#));
+    layout_picture = layout_picture.replacen(r#"<p:cNvPr id="2""#, r#"<p:cNvPr id="424242""#, 1);
+    package.set_part(&slide_part, slide_xml.into_bytes());
+
+    let layout_image_id = package
+        .get_or_create_part_rels(&layout_part)
+        .add(rel_types::IMAGE, &image_relationship.target);
+    layout_picture = layout_picture.replace(
+        &format!(r#"r:embed="{}""#, image_relationship.id),
+        &format!(r#"r:embed="{layout_image_id}""#),
+    );
+    let layout_xml = String::from_utf8(package.get_part(&layout_part).unwrap().to_vec()).unwrap();
+    let layout_xml = layout_xml.replacen("</p:spTree>", &format!("{layout_picture}</p:spTree>"), 1);
+    package.set_part(&layout_part, layout_xml.into_bytes());
+    package_bytes(package)
+}
+
+fn slide_owned_latent_placeholder_fixture(master_header_footer: Option<&str>) -> Vec<u8> {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-X105 slide placeholder source",
+    );
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::SLIDE).then_some(part.clone())
+        })
+        .unwrap();
+    let layout_part = {
+        let relationship = package
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_LAYOUT)
+            .unwrap();
+        OpcPackage::resolve_rel_target(&slide_part, &relationship.target)
+    };
+    let master_part = {
+        let relationship = package
+            .get_part_rels(&layout_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_MASTER)
+            .unwrap();
+        OpcPackage::resolve_rel_target(&layout_part, &relationship.target)
+    };
+
+    let layout_xml = String::from_utf8(package.get_part(&layout_part).unwrap().to_vec()).unwrap();
+    let slide_number_marker = layout_xml.find("type=\"sldNum\"").unwrap();
+    let slide_number_start = layout_xml[..slide_number_marker].rfind("<p:sp>").unwrap();
+    let slide_number_end = slide_number_marker
+        + layout_xml[slide_number_marker..].find("</p:sp>").unwrap()
+        + "</p:sp>".len();
+    let slide_number = &layout_xml[slide_number_start..slide_number_end];
+    let slide_xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let slide_xml = slide_xml.replacen("</p:spTree>", &format!("{slide_number}</p:spTree>"), 1);
+    package.set_part(&slide_part, slide_xml.into_bytes());
+
+    let master_xml = String::from_utf8(package.get_part(&master_part).unwrap().to_vec()).unwrap();
+    assert!(!master_xml.contains("<p:hf"));
+    let master_xml = master_header_footer.map_or(master_xml.clone(), |attributes| {
+        master_xml.replacen(
+            "<p:txStyles>",
+            &format!("<p:hf {attributes}/><p:txStyles>"),
+            1,
+        )
+    });
+    package.set_part(&master_part, master_xml.into_bytes());
+    package_bytes(package)
+}
+
+fn slide_owned_latent_placeholder_text(bytes: &[u8]) -> Vec<String> {
+    let presentation = Presentation::from_bytes(bytes).unwrap();
+    let (input, _) = presentation.render_deterministic().unwrap();
+    input.slides[0]
+        .shapes
+        .iter()
+        .map(|shape| resolved_content_text(&shape.content))
+        .filter(|text| !text.trim().is_empty())
+        .collect()
+}
+
+#[test]
+fn slide_owned_latent_placeholder_source_matrix_is_stable() {
+    for master_header_footer in [
+        None,
+        Some(r#"dt="0" ftr="0" hdr="0" sldNum="0""#),
+        Some(r#"sldNum="1""#),
+    ] {
+        let source = slide_owned_latent_placeholder_fixture(master_header_footer);
+        assert_eq!(
+            slide_owned_latent_placeholder_text(&source),
+            ["‹#›"],
+            "master header-footer: {master_header_footer:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pinned LibreOffice 26.2.5.2 and Poppler 26.01.0"]
+fn slide_owned_latent_placeholders_ignore_master_header_flags() {
+    slide_owned_latent_placeholder_source_matrix_is_stable();
+    for tool in ["pdftotext", "pdftoppm"] {
+        let version = Command::new(tool).arg("-v").output().unwrap();
+        let version_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&version.stdout),
+            String::from_utf8_lossy(&version.stderr)
+        );
+        assert!(
+            version_text.contains(&format!("{tool} version 26.01.0")),
+            "{version_text}"
+        );
+    }
+    let root = f222_temp_directory("f-x105-slide-placeholders");
+    fs::create_dir_all(&root).unwrap();
+
+    for (label, master_header_footer) in [
+        ("absent", None),
+        ("all-off", Some(r#"dt="0" ftr="0" hdr="0" sldNum="0""#)),
+        ("slide-number-only", Some(r#"sldNum="1""#)),
+    ] {
+        let source = slide_owned_latent_placeholder_fixture(master_header_footer);
+        let presentation = Presentation::from_bytes(&source).unwrap();
+        let (_, rust_layout) = presentation.render_deterministic().unwrap();
+        let rust_png = oxml_pdf::render_page_to_png(&rust_layout, 0, 72.0).unwrap();
+        let rust_tokens = m21_pdf_token_pages(
+            &presentation.to_pdf_deterministic().unwrap(),
+            &format!("f-x105-rust-{label}"),
+        );
+        let source_path = root.join(format!("{label}.pptx"));
+        fs::write(&source_path, source).unwrap();
+        f222_libreoffice_convert(&source_path, "pdf", &root);
+        let oracle_path = root.join(format!("{label}.pdf"));
+        let oracle_tokens = m21_pdf_token_pages(
+            &fs::read(&oracle_path).unwrap(),
+            &format!("f-x105-oracle-{label}"),
+        );
+        let oracle_pngs = m21_pdf_page_pngs(
+            &oracle_path,
+            &root.join(format!("f-x105-oracle-{label}")),
+            72,
+        );
+
+        assert_eq!(rust_tokens, vec![vec!["1"]], "Rust case: {label}");
+        assert_eq!(oracle_tokens, rust_tokens, "LibreOffice case: {label}");
+        assert_eq!(oracle_pngs.len(), 1);
+        let rust_size = f226_png_dimensions(&rust_png);
+        let oracle_size = f226_png_dimensions(&oracle_pngs[0]);
+        assert!(rust_size.0.abs_diff(oracle_size.0) <= 1);
+        assert!(rust_size.1.abs_diff(oracle_size.1) <= 1);
+        for (renderer, png) in [("Rust", &rust_png), ("LibreOffice", &oracle_pngs[0])] {
+            let size = f226_png_dimensions(png);
+            assert_eq!(
+                m21_ink_mass(png, (30, size.1 - 45, 190, 40)),
+                0,
+                "{renderer} exposed the inherited date in {label}"
+            );
+            assert!(
+                m21_ink_mass(png, (500, size.1 - 45, 190, 40)) > 0,
+                "{renderer} omitted the slide-owned number in {label}"
+            );
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn picture_alpha_pixel(pixmap: &tiny_skia::Pixmap, x: u32) -> (u8, u8, u8) {
+    let pixel = pixmap.pixel(x, 57).unwrap();
+    (pixel.red(), pixel.green(), pixel.blue())
+}
+
+#[test]
+fn picture_alpha_mod_fix_reaches_layout_pdf_and_raster_backends() {
+    let source = picture_alpha_mod_fix_fixture();
+    let presentation = Presentation::from_bytes(&source).unwrap();
+    let (input, layout) = presentation.render_deterministic().unwrap();
+    let opacities = input.slides[0]
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.content {
+            ResolvedContent::Image(image) => Some(image.opacity),
+            _ => shape.image_fill.as_ref().map(|image| image.opacity),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(opacities, vec![0.3, 0.3, 1.0]);
+
+    let first = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+    let second = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+    assert_eq!(first, second, "deterministic picture opacity raster");
+    let pixmap = tiny_skia::Pixmap::decode_png(&first).unwrap();
+    for x in [57, 227] {
+        let (red, green, blue) = picture_alpha_pixel(&pixmap, x);
+        assert_eq!(red, 255);
+        assert!((i16::from(green) - 178).abs() <= 1 && green == blue);
+    }
+    assert_eq!(picture_alpha_pixel(&pixmap, 142), (255, 0, 0));
+
+    let pdf = String::from_utf8_lossy(&presentation.to_pdf_deterministic().unwrap()).into_owned();
+    assert!(pdf.contains("/ExtGState"), "{pdf}");
+    assert!(pdf.contains("/ca 0.3"), "{pdf}");
+
+    let round_trip = presentation.to_bytes().unwrap();
+    let package = open_opc(&round_trip, "F-X104 picture opacity round trip");
+    let alpha_count = package
+        .parts
+        .values()
+        .filter_map(|bytes| std::str::from_utf8(bytes).ok())
+        .map(|xml| xml.matches(r#"<a:alphaModFix amt="30000"/>"#).count())
+        .sum::<usize>();
+    assert_eq!(alpha_count, 2);
+}
+
+#[test]
+#[ignore = "requires pinned LibreOffice 26.2.5.2 and Poppler"]
+fn picture_alpha_mod_fix_matches_presentation_renderers() {
+    picture_alpha_mod_fix_reaches_layout_pdf_and_raster_backends();
+    let root = f222_temp_directory("f-x104-alpha");
+    fs::create_dir_all(&root).unwrap();
+    let source_path = root.join("picture-alpha-mod-fix.pptx");
+    fs::write(&source_path, picture_alpha_mod_fix_fixture()).unwrap();
+    f222_libreoffice_convert(&source_path, "pdf", &root);
+    let oracle_path = root.join("picture-alpha-mod-fix.pdf");
+    let oracle_pages = m21_pdf_page_pngs(&oracle_path, &root.join("oracle"), 72);
+    assert_eq!(oracle_pages.len(), 1);
+    let oracle = tiny_skia::Pixmap::decode_png(&oracle_pages[0]).unwrap();
+
+    for x in [57, 227] {
+        let (red, green, blue) = picture_alpha_pixel(&oracle, x);
+        assert!(red >= 250, "oracle faded red at {x}: {red}");
+        assert!(
+            (170..=190).contains(&green) && (i16::from(green) - i16::from(blue)).abs() <= 2,
+            "oracle faded pixel at {x}: ({red}, {green}, {blue})"
+        );
+    }
+    let (red, green, blue) = picture_alpha_pixel(&oracle, 142);
+    assert!(red >= 250 && green <= 5 && blue <= 5);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -14944,10 +15502,10 @@ fn rpptx_is_an_explicit_publication_candidate() {
     let manifest = include_str!("../Cargo.toml");
     assert!(workspace.contains("\"crates/rpptx\""));
     assert!(workspace.contains(
-        "rpptx = { path = \"crates/rpptx\", version = \"0.11.0\", default-features = false }"
+        "rpptx = { path = \"crates/rpptx\", version = \"0.12.1\", default-features = false }"
     ));
     assert!(manifest.contains("name = \"rpptx\""));
-    assert!(manifest.contains("version = \"0.11.0\""));
+    assert!(manifest.contains("version = \"0.12.1\""));
     assert!(manifest.contains("publish = true"));
     assert!(manifest.contains("default = [\"default-template\", \"render\", \"system-fonts\"]"));
     assert!(manifest.contains("default-template = [\"dep:scraper\"]"));

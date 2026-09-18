@@ -87,6 +87,12 @@ style inheritance, concrete replacement formatting, base-level start and
 restart controls, and counter projection once, then shares that result with
 visible markers, TOC rebuild, and REF fields.
 
+Presentation latent placeholders use physical ownership as a policy boundary.
+Slide-owned date, footer, and number placeholders are direct content. An
+inherited layout or master placeholder requires its own source part's `p:hf`
+container and flag. The source-built pinned LibreOffice differential covers
+the absent, all-disabled, and slide-number-only master cases.
+
 ### R5, schema child ordering
 
 Diffuse, because it touches every writer, and violations are silent until
@@ -203,10 +209,13 @@ confidentiality failure.
 *Mitigation*: the corpus stays in a configured ignored private directory.
 Tracked tests contain only synthetic fixtures, anonymous P1 through P5 family
 requirements, and non-identifying capability assertions. Local required-corpus
-mode records hashes and evidence outside the repository, scans staged and
-tracked paths for forbidden artifacts, and fails closed when the configured
-private corpus is incomplete. Public CI proves the same API boundary through
-synthetic documents.
+mode records hashes, pure Rust generator sources, embedded approved raster
+evidence, and comparison output outside the repository. It scans staged and
+tracked paths for forbidden artifacts and fails closed when the configured
+private corpus is incomplete. Each generator depends only on public `rdocx`,
+starts from `Document::new()`, cannot import HTML or raw package content, and
+must produce identical bytes twice. Public CI proves the same API boundary
+through synthetic documents.
 
 ### R13, a public facade writes only half of an OOXML invariant
 
@@ -308,6 +317,21 @@ environment receives OIDC authority after a separate final approval.
 Completion requires the selected PyPI version, all seven files, authenticated
 owner or maintainer roles, an exact reviewed GitHub release body, and every
 planned contributor comment.
+
+### R15, raster media exhausts memory or disappears silently
+
+Compressed picture dimensions can imply much larger decoded storage. An
+unbounded decoder can exhaust memory, while a low silent ceiling can remove an
+ordinary screenshot or print-resolution figure from both PDF and raster
+output. Straight-alpha bytes passed to a premultiplied surface can also paint
+colour from pixels that should be transparent.
+
+*Mitigation*: presentation admission keeps a 16 MiB encoded ceiling and a
+64 MiB decoded ceiling with checked arithmetic before allocation. Rejected
+relationships carry a stable scoped failure into one diagnostic and a visible
+bounds fallback. The shared raster backend premultiplies decoded PNG channels
+exactly once at the tiny-skia boundary. Deterministic format, large-image,
+malformed-header, overflow, diagnostic, and fallback tests gate these rules.
 
 ## Assumptions that would invalidate the plan if wrong
 

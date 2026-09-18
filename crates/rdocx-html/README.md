@@ -37,5 +37,5 @@ fn export(input: &HtmlInput) -> (String, String) {
 
 ```toml
 [dependencies]
-rdocx-html = "0.13.2"
+rdocx-html = "0.14.0"
 ```

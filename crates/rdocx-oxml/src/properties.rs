@@ -10,7 +10,7 @@ use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::borders::{CT_PBdr, CT_Tabs};
 use crate::document::CT_SectPr;
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::{
     local_namespace_overrides, merged_owner_bindings, namespace_binding, namespace_bindings,
@@ -205,6 +205,67 @@ const PPR_END_SLOT: u8 = 36;
 const RAW_MODELED_ATTRIBUTES_FLAG: usize = 1 << (usize::BITS - 1);
 const RAW_MODELED_DUPLICATE_FLAG: usize = 1 << (usize::BITS - 2);
 const RAW_MODELED_FLAGS: usize = RAW_MODELED_ATTRIBUTES_FLAG | RAW_MODELED_DUPLICATE_FLAG;
+
+fn parse_line_spacing(value: &str) -> Result<Twips> {
+    let integer_error = match value.parse::<i32>() {
+        Ok(value) => return Ok(Twips(value)),
+        Err(error) => error,
+    };
+
+    let (negative, unsigned) = match value.as_bytes().first() {
+        Some(b'-') => (true, &value[1..]),
+        Some(b'+') => (false, &value[1..]),
+        _ => (false, value),
+    };
+    let Some((whole, fraction)) = unsigned.split_once('.') else {
+        return Err(integer_error.into());
+    };
+    if whole.is_empty()
+        || fraction.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(integer_error.into());
+    }
+
+    let significant_whole = whole.trim_start_matches('0');
+    if significant_whole.len() > 10 {
+        return Err(OxmlError::InvalidValue(format!(
+            "line spacing is out of range: {value}"
+        )));
+    }
+    let whole = if significant_whole.is_empty() {
+        0
+    } else {
+        significant_whole
+            .parse::<u64>()
+            .map_err(|_| OxmlError::InvalidValue(format!("invalid line spacing: {value}")))?
+    };
+    let limit = if negative {
+        i32::MAX as u64 + 1
+    } else {
+        i32::MAX as u64
+    };
+    let has_fraction = fraction.bytes().any(|byte| byte != b'0');
+    if whole > limit || (whole == limit && has_fraction) {
+        return Err(OxmlError::InvalidValue(format!(
+            "line spacing is out of range: {value}"
+        )));
+    }
+
+    let rounded = whole + u64::from(fraction.as_bytes()[0] >= b'5');
+    if rounded > limit {
+        return Err(OxmlError::InvalidValue(format!(
+            "line spacing rounds out of range: {value}"
+        )));
+    }
+    let signed = if negative {
+        -(rounded as i64)
+    } else {
+        rounded as i64
+    };
+    Ok(Twips(signed as i32))
+}
 
 fn raw_occurrence(position: (u8, usize)) -> usize {
     position.1 & !RAW_MODELED_FLAGS
@@ -680,7 +741,7 @@ impl CT_PPr {
                             } else if is_word_attribute(key, b"after", &prefixes) {
                                 ppr.space_after = Some(Twips(val_str.parse()?));
                             } else if is_word_attribute(key, b"line", &prefixes) {
-                                ppr.line_spacing = Some(Twips(val_str.parse()?));
+                                ppr.line_spacing = Some(parse_line_spacing(val_str)?);
                             } else if is_word_attribute(key, b"lineRule", &prefixes) {
                                 ppr.line_rule = Some(val_str.to_string());
                             } else if is_word_attribute(key, b"beforeAutospacing", &prefixes) {
@@ -2807,20 +2868,9 @@ pub(crate) fn get_word_val_attr(
     Ok(None)
 }
 
-fn parse_word_toggle(e: &BytesStart, word_prefixes: &[String]) -> Result<bool> {
+pub(crate) fn parse_word_toggle(e: &BytesStart, word_prefixes: &[String]) -> Result<bool> {
     let val = get_word_val_attr(e, word_prefixes)?;
     Ok(ST_OnOff::from_str_or_default(val.as_deref()).is_on())
-}
-
-/// Extract the `w:val` attribute from an element.
-pub(crate) fn get_val_attr(e: &BytesStart) -> Result<Option<String>> {
-    for attr in e.attributes() {
-        let attr = attr?;
-        if matches_local_name(attr.key.as_ref(), b"val") {
-            return Ok(Some(std::str::from_utf8(&attr.value)?.to_string()));
-        }
-    }
-    Ok(None)
 }
 
 /// Write a toggle element.
@@ -2844,7 +2894,7 @@ mod tests {
     use super::*;
     use crate::shared::ST_Border;
 
-    fn parse_ppr(xml: &str) -> CT_PPr {
+    fn try_parse_ppr(xml: &str) -> Result<CT_PPr> {
         let full = format!("<w:pPr>{xml}</w:pPr>");
         let mut reader = Reader::from_str(&full);
         reader.config_mut().trim_text(true);
@@ -2856,7 +2906,11 @@ mod tests {
             }
             buf.clear();
         }
-        CT_PPr::from_xml(&mut reader).unwrap()
+        CT_PPr::from_xml(&mut reader)
+    }
+
+    fn parse_ppr(xml: &str) -> CT_PPr {
+        try_parse_ppr(xml).unwrap()
     }
 
     fn parse_rpr(xml: &str) -> CT_RPr {
@@ -2887,6 +2941,69 @@ mod tests {
         assert_eq!(ppr.space_before, Some(Twips(240)));
         assert_eq!(ppr.space_after, Some(Twips(120)));
         assert_eq!(ppr.line_spacing, Some(Twips(360)));
+    }
+
+    #[test]
+    fn fractional_line_spacing_rounds_exactly_to_nearest_twip() {
+        for (value, expected) in [
+            ("257.1432", 257),
+            ("320.00879999999995", 320),
+            ("342.8616", 343),
+            ("+1.5", 2),
+            ("-1.5", -2),
+            ("0.499999999999999999999999999999999999", 0),
+            ("0.500000000000000000000000000000000000", 1),
+            ("-0.499999999999999999999999999999999999", 0),
+            ("-0.500000000000000000000000000000000000", -1),
+            ("2147483646.5", i32::MAX),
+            ("-2147483647.5", i32::MIN),
+            ("2147483647.0", i32::MAX),
+            ("-2147483648.0", i32::MIN),
+        ] {
+            let ppr = parse_ppr(&format!(r#"<w:spacing w:line="{value}"/>"#));
+            assert_eq!(ppr.line_spacing, Some(Twips(expected)), "{value}");
+        }
+    }
+
+    #[test]
+    fn invalid_fractional_line_spacing_remains_rejected() {
+        for value in [
+            "NaN",
+            "inf",
+            "-inf",
+            "1e3",
+            ".5",
+            "1.",
+            "1.2.3",
+            "2147483647.0000000000000000000000000000001",
+            "-2147483648.0000000000000000000000000000001",
+            "2147483648.0",
+            "-2147483649.0",
+        ] {
+            assert!(
+                try_parse_ppr(&format!(r#"<w:spacing w:line="{value}"/>"#)).is_err(),
+                "accepted invalid line spacing {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn fractional_line_spacing_accepts_aliases_and_writes_canonical_siblings() {
+        let xml = r#"<x:pPr xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><x:spacing x:before="120" x:after="240" x:line="342.8616" x:lineRule="auto" x:beforeAutospacing="false" x:afterAutospacing="true"/></x:pPr>"#;
+        let ppr = crate::numbering::parse_scoped_ppr(xml.as_bytes(), &["x".to_owned()]).unwrap();
+        assert_eq!(ppr.space_before, Some(Twips(120)));
+        assert_eq!(ppr.space_after, Some(Twips(240)));
+        assert_eq!(ppr.line_spacing, Some(Twips(343)));
+        assert_eq!(ppr.line_rule.as_deref(), Some("auto"));
+        assert_eq!(ppr.before_autospacing, Some(false));
+        assert_eq!(ppr.after_autospacing, Some(true));
+
+        let mut output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            r#"<w:pPr><w:spacing w:before="120" w:after="240" w:line="343" w:lineRule="auto" w:beforeAutospacing="0" w:afterAutospacing="1"/></w:pPr>"#
+        );
     }
 
     #[test]

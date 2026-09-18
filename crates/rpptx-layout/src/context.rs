@@ -33,7 +33,9 @@ use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
-use rpptx_oxml::slide_parts::{BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster};
+use rpptx_oxml::slide_parts::{
+    BackgroundRendering, CT_HeaderFooter, CT_Slide, CT_SlideLayout, CT_SlideMaster,
+};
 
 use crate::ResolveError;
 use crate::style::{referenced_fill, substitute_fill};
@@ -49,8 +51,8 @@ use crate::{
     ResolvedRectAlignment, ResolvedRunStyle, ResolvedShape, ResolvedSlide,
     ResolvedSlideTextDirections, ResolvedTable, ResolvedTableBorder, ResolvedTableCell,
     ResolvedTableRow, ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip,
-    ResolvedTilePlacement, ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
-    TextAnchor, TextDirection, TextInsets,
+    ResolvedTilePlacement, ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaFailures,
+    ScopedMediaIds, TextAnchor, TextDirection, TextInsets,
 };
 
 /// The producer part that supplied the effective background.
@@ -131,6 +133,7 @@ pub struct ResolveCtx<'a> {
     pub table_styles: Option<&'a CT_TableStyleList>,
     pub(crate) list_style_cache: RefCell<HashMap<Option<PlaceholderKey>, EffectiveListStyle>>,
     media_poster_diagnostic_identity: bool,
+    media_failures: Option<&'a ScopedMediaFailures>,
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -152,6 +155,7 @@ impl<'a> ResolveCtx<'a> {
             table_styles: None,
             list_style_cache: RefCell::new(HashMap::new()),
             media_poster_diagnostic_identity: false,
+            media_failures: None,
         }
     }
 
@@ -165,6 +169,13 @@ impl<'a> ResolveCtx<'a> {
     #[doc(hidden)]
     pub fn with_media_poster_diagnostic_identity(mut self) -> Self {
         self.media_poster_diagnostic_identity = true;
+        self
+    }
+
+    /// Adds renderer-owned failures for media rejected before layout.
+    #[doc(hidden)]
+    pub fn with_media_failures(mut self, failures: &'a ScopedMediaFailures) -> Self {
+        self.media_failures = Some(failures);
         self
     }
 
@@ -297,9 +308,16 @@ impl<'a> ResolveCtx<'a> {
         if let Some(background) = self.effective_background() {
             flattened.push(FlattenedItem::Background(background));
         }
-        let allow_latent = LatentPolicy::from_context(self);
-        let inherited_latent_enabled =
-            self.layout.header_footer.is_some() || self.master.header_footer.is_some();
+        let master_latent_policy = self
+            .master
+            .header_footer
+            .as_ref()
+            .map(LatentPolicy::from_header_footer);
+        let layout_latent_policy = self
+            .layout
+            .header_footer
+            .as_ref()
+            .map(LatentPolicy::from_header_footer);
         let mut master_deeper = layout_latent.clone();
         master_deeper.extend(slide_latent.iter().cloned());
         emit_tree(
@@ -307,9 +325,8 @@ impl<'a> ResolveCtx<'a> {
             PassRules {
                 source: FlattenedSource::Master,
                 emit_non_placeholders: self.layout.show_master_shapes.unwrap_or(true),
-                emit_inherited_latent: inherited_latent_enabled,
                 deeper_latent: &master_deeper,
-                latent_policy: allow_latent,
+                latent_policy: master_latent_policy,
             },
             &mut flattened,
         );
@@ -318,9 +335,8 @@ impl<'a> ResolveCtx<'a> {
             PassRules {
                 source: FlattenedSource::Layout,
                 emit_non_placeholders: self.slide.show_master_shapes.unwrap_or(true),
-                emit_inherited_latent: inherited_latent_enabled,
                 deeper_latent: &slide_latent,
-                latent_policy: allow_latent,
+                latent_policy: layout_latent_policy,
             },
             &mut flattened,
         );
@@ -329,9 +345,8 @@ impl<'a> ResolveCtx<'a> {
             PassRules {
                 source: FlattenedSource::Slide,
                 emit_non_placeholders: true,
-                emit_inherited_latent: true,
                 deeper_latent: &[],
-                latent_policy: allow_latent,
+                latent_policy: None,
             },
             &mut flattened,
         );
@@ -662,7 +677,7 @@ impl<'a> ResolveCtx<'a> {
                     .and_then(|effects| effects.outer_shadow.as_ref())
                     .map(|shadow| self.concrete_shadow(shadow))
                     .transpose()?;
-                let (geometry, geometry_unsupported) =
+                let (mut geometry, geometry_unsupported) =
                     self.concrete_picture_geometry(picture, (bounds.width, bounds.height));
                 if let Some(category) = geometry_unsupported {
                     diagnostics.push(Diagnostic {
@@ -670,8 +685,16 @@ impl<'a> ResolveCtx<'a> {
                     });
                 }
                 let diagnostic_start = diagnostics.len();
-                let (content, media_unsupported) =
-                    resolve_picture_content(picture, source, media, diagnostics);
+                let (content, media_unsupported) = resolve_picture_content(
+                    picture,
+                    source,
+                    media,
+                    self.media_failures,
+                    diagnostics,
+                );
+                if media_unsupported.is_some() {
+                    geometry = ResolvedGeometry::BoundsFallback;
+                }
                 if self.media_poster_diagnostic_identity
                     && media_unsupported.is_some()
                     && picture.media.is_some()
@@ -734,8 +757,12 @@ impl<'a> ResolveCtx<'a> {
                         (ResolvedContent::None, Some("SmartArt"), true)
                     }
                     GraphicDataPayload::Ole { preview, .. } => {
-                        if let Some(image) = resolve_ole_preview(preview.as_deref(), source, media)
-                        {
+                        if let Some(image) = resolve_ole_preview(
+                            preview.as_deref(),
+                            source,
+                            media,
+                            self.media_failures,
+                        ) {
                             diagnostics.push(Diagnostic {
                                 message: "OLE object rendered as a static PNG preview. Embedded OLE interactivity is not rendered".to_owned(),
                             });
@@ -910,7 +937,13 @@ impl<'a> ResolveCtx<'a> {
                         diagnostics,
                     )?
                 } else if let Some(picture) = alternate.picture_fallback() {
-                    let (content, _) = resolve_picture_content(picture, source, media, diagnostics);
+                    let (content, _) = resolve_picture_content(
+                        picture,
+                        source,
+                        media,
+                        self.media_failures,
+                        diagnostics,
+                    );
                     let has_image = matches!(content, ResolvedContent::Image(_));
                     (content, Some("chart"), !has_image)
                 } else {
@@ -1010,7 +1043,8 @@ impl<'a> ResolveCtx<'a> {
         };
 
         if let Some(picture) = fallback {
-            let (content, _) = resolve_picture_content(picture, source, media, diagnostics);
+            let (content, _) =
+                resolve_picture_content(picture, source, media, self.media_failures, diagnostics);
             let relationship_id = picture
                 .blip_fill
                 .as_ref()
@@ -1080,7 +1114,7 @@ impl<'a> ResolveCtx<'a> {
             Some(Fill::Blip(fill))
                 if matches!(shape.shape_properties.fill, Some(Fill::Blip(_))) =>
             {
-                match resolve_image_fill(fill, source, media, "shape") {
+                match resolve_image_fill(fill, source, media, self.media_failures, "shape") {
                     Ok(image) => (None, Some(image), None, None),
                     Err((category, message)) => (None, None, Some(category), Some(message)),
                 }
@@ -1280,6 +1314,7 @@ fn resolve_picture_content(
     picture: &rpptx_oxml::picture::CT_Picture,
     source: FlattenedSource,
     media: Option<&ScopedMediaIds>,
+    failures: Option<&ScopedMediaFailures>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (ResolvedContent, Option<&'static str>) {
     let Some(fill) = picture.blip_fill.as_ref() else {
@@ -1289,7 +1324,7 @@ fn resolve_picture_content(
             diagnostics,
         );
     };
-    match resolve_image_fill(fill, source, media, "picture") {
+    match resolve_image_fill(fill, source, media, failures, "picture") {
         Ok(image) => (ResolvedContent::Image(image), None),
         Err((category, message)) => unsupported_picture(category, &message, diagnostics),
     }
@@ -1299,6 +1334,7 @@ fn resolve_ole_preview(
     preview: Option<&rpptx_oxml::picture::CT_Picture>,
     source: FlattenedSource,
     media: Option<&ScopedMediaIds>,
+    failures: Option<&ScopedMediaFailures>,
 ) -> Option<ResolvedImage> {
     let fill = preview?.blip_fill.as_ref()?;
     let relationship_id = fill.blip.as_ref()?.embed.as_deref()?;
@@ -1309,13 +1345,14 @@ fn resolve_ole_preview(
     {
         return None;
     }
-    resolve_image_fill(fill, source, Some(media), "picture").ok()
+    resolve_image_fill(fill, source, Some(media), failures, "picture").ok()
 }
 
 fn resolve_image_fill(
     fill: &BlipFill,
     source: FlattenedSource,
     media: Option<&ScopedMediaIds>,
+    failures: Option<&ScopedMediaFailures>,
     role: &str,
 ) -> Result<ResolvedImage, (&'static str, String)> {
     let missing_blip_category = match role {
@@ -1348,6 +1385,12 @@ fn resolve_image_fill(
             format!("{role} image media pending relationship resolution"),
         ));
     };
+    if let Some(failure) = failures.and_then(|failures| failures.get(source, relationship_id)) {
+        return Err((
+            "image render failure",
+            format!("{role} image relationship `{relationship_id}` {failure}"),
+        ));
+    }
     let Some(media_id) = media.get(source, relationship_id) else {
         return Err((
             "missing image relationship",
@@ -1382,6 +1425,9 @@ fn resolve_image_fill(
         },
         dpi: fill.dpi.filter(|dpi| *dpi > 0).map(f64::from),
         rotate_with_shape: fill.rotate_with_shape.unwrap_or(true),
+        opacity: blip
+            .alpha_modulation_fix
+            .map_or(1.0, |amount| f64::from(amount.0) / 100_000.0),
     })
 }
 
@@ -1566,7 +1612,7 @@ impl ResolveCtx<'_> {
     ) -> Result<(Option<ResolvedBackground>, Option<&'static str>), ResolveError> {
         if let Fill::Blip(fill) = fill {
             return Ok(
-                match resolve_image_fill(fill, source, media, "background") {
+                match resolve_image_fill(fill, source, media, self.media_failures, "background") {
                     Ok(image) => (Some(ResolvedBackground::Image(image)), None),
                     Err((_category, message)) => {
                         diagnostics.push(Diagnostic { message });
@@ -2962,16 +3008,11 @@ struct LatentPolicy {
 }
 
 impl LatentPolicy {
-    fn from_context(context: &ResolveCtx<'_>) -> Self {
-        let layout = context.layout.header_footer.as_ref();
-        let master = context.master.header_footer.as_ref();
+    fn from_header_footer(header_footer: &CT_HeaderFooter) -> Self {
         Self {
-            date_time: layout.is_none_or(|hf| hf.date_time_enabled())
-                && master.is_none_or(|hf| hf.date_time_enabled()),
-            footer: layout.is_none_or(|hf| hf.footer_enabled())
-                && master.is_none_or(|hf| hf.footer_enabled()),
-            slide_number: layout.is_none_or(|hf| hf.slide_number_enabled())
-                && master.is_none_or(|hf| hf.slide_number_enabled()),
+            date_time: header_footer.date_time_enabled(),
+            footer: header_footer.footer_enabled(),
+            slide_number: header_footer.slide_number_enabled(),
         }
     }
 
@@ -2989,9 +3030,8 @@ impl LatentPolicy {
 struct PassRules<'a> {
     source: FlattenedSource,
     emit_non_placeholders: bool,
-    emit_inherited_latent: bool,
     deeper_latent: &'a [PlaceholderKey],
-    latent_policy: LatentPolicy,
+    latent_policy: Option<LatentPolicy>,
 }
 
 fn collect_occupied_latent(children: &[ShapeTreeChild], keys: &mut Vec<PlaceholderKey>) {
@@ -3553,7 +3593,7 @@ fn emit_leaf<'a>(
                 let already_emitted = emitted_latent
                     .iter()
                     .any(|key| placeholder_keys_match(&placeholder.key(), key));
-                if !rules.latent_policy.permits(&ph_type) || !occupied || already_emitted {
+                if !occupied || already_emitted {
                     return;
                 }
                 push_unmatched(emitted_latent, placeholder.key());
@@ -3572,8 +3612,9 @@ fn emit_leaf<'a>(
     let ph_type = placeholder.effective_type();
     let key = placeholder.key();
     if !is_latent(&ph_type)
-        || !rules.emit_inherited_latent
-        || !rules.latent_policy.permits(&ph_type)
+        || !rules
+            .latent_policy
+            .is_some_and(|policy| policy.permits(&ph_type))
         || !child_is_occupied(child)
         || rules
             .deeper_latent
@@ -3838,7 +3879,7 @@ mod tests {
         ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize,
         ResolvedParagraph, ResolvedRectAlignment, ResolvedRunStyle, ResolvedSlide, ResolvedTextRun,
         ResolvedTextSpacing, ResolvedTileFlip, ScopedChartResources, ScopedHyperlinkTargets,
-        ScopedMediaIds, TextAnchor as ResolvedTextAnchor, TextDirection,
+        ScopedMediaFailures, ScopedMediaIds, TextAnchor as ResolvedTextAnchor, TextDirection,
     };
     use oxml_layout::{
         Color, Effect, FontManager, MediaId, Paint, PathCommand, Point, PositionedElement, Rect,
@@ -4622,7 +4663,7 @@ mod tests {
 
     #[test]
     fn background_picture_relationship_uses_its_producer_scope() {
-        let background = r#"<p:bg><p:bgPr><a:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId9"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:bgPr></p:bg>"#;
+        let background = r#"<p:bg><p:bgPr><a:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId9"><a:alphaModFix amt="30000"/></a:blip><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:bgPr></p:bg>"#;
         let fixtures = [
             Fixture::from_xml(
                 &slide_xml_with("", background, ""),
@@ -4656,6 +4697,7 @@ mod tests {
                 panic!("expected source-scoped background image");
             };
             assert_eq!(image.media, expected);
+            assert_eq!(image.opacity, 0.3);
             assert!(resolved.diagnostics.is_empty());
         }
     }
@@ -4858,13 +4900,15 @@ mod tests {
     }
 
     #[test]
-    fn slide_placeholder_suppresses_layout_and_master_matches() {
+    fn slide_placeholder_keeps_source_order_and_suppresses_inherited_matches() {
+        let slide_children = [
+            shape_with_text(None, None, "before"),
+            shape_with_text(Some("ftr"), Some(9), "slide footer"),
+            shape_with_text(None, None, "after"),
+        ]
+        .join("");
         let fixture = Fixture::from_xml(
-            &slide_xml_with(
-                "",
-                "",
-                &shape_with_text(Some("ftr"), Some(9), "slide footer"),
-            ),
+            &slide_xml_with("", "", &slide_children),
             &layout_xml_with(
                 "",
                 "",
@@ -4878,38 +4922,191 @@ mod tests {
             ),
         );
 
-        let texts: Vec<_> = fixture
+        let sources_and_text: Vec<_> = fixture
             .context()
             .flatten()
             .iter()
-            .filter_map(item_text)
+            .filter_map(|item| item_text(item).map(|text| (item.source(), text)))
             .collect();
 
-        assert_eq!(texts, ["slide footer"]);
+        assert_eq!(
+            sources_and_text,
+            [
+                (FlattenedSource::Slide, "before".to_owned()),
+                (FlattenedSource::Slide, "slide footer".to_owned()),
+                (FlattenedSource::Slide, "after".to_owned()),
+            ]
+        );
     }
 
     #[test]
-    fn latent_placeholders_obey_header_footer_flags() {
+    fn inherited_latent_placeholders_obey_their_source_header_footer_flags() {
         let latent_shapes = [
             shape_with_text(Some("dt"), Some(1), "date"),
             shape_with_text(Some("ftr"), Some(2), "footer"),
             shape_with_text(Some("sldNum"), Some(3), "number"),
         ]
         .join("");
-        let fixture = Fixture::from_xml(
+        let layout_fixture = Fixture::from_xml(
             &slide_xml_with("", "", ""),
             &layout_xml_with("", "", &latent_shapes, "<p:hf dt=\"0\"/>"),
             &master_xml_with("", "", "<p:hf sldNum=\"0\"/>"),
         );
 
-        let texts: Vec<_> = fixture
+        let layout_sources_and_text = layout_fixture
             .context()
             .flatten()
             .iter()
-            .filter_map(item_text)
-            .collect();
+            .filter_map(|item| item_text(item).map(|text| (item.source(), text)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            layout_sources_and_text,
+            [
+                (FlattenedSource::Layout, "footer".to_owned()),
+                (FlattenedSource::Layout, "number".to_owned()),
+            ]
+        );
 
-        assert_eq!(texts, ["footer"]);
+        let master_fixture = Fixture::from_xml(
+            &slide_xml_with("", "", ""),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with(
+                "",
+                &latent_shapes,
+                "<p:hf dt=\"1\" ftr=\"1\" sldNum=\"0\"/>",
+            ),
+        );
+        let master_sources_and_text = master_fixture
+            .context()
+            .flatten()
+            .iter()
+            .filter_map(|item| item_text(item).map(|text| (item.source(), text)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            master_sources_and_text,
+            [
+                (FlattenedSource::Master, "date".to_owned()),
+                (FlattenedSource::Master, "footer".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_latent_placeholders_fall_back_by_type_and_source() {
+        fn source_texts(fixture: &Fixture) -> Vec<(FlattenedSource, String)> {
+            fixture
+                .context()
+                .flatten()
+                .iter()
+                .filter_map(|item| item_text(item).map(|text| (item.source(), text)))
+                .collect()
+        }
+
+        for ph_type in ["dt", "ftr", "sldNum"] {
+            let occupied_slide = Fixture::from_xml(
+                &slide_xml_with("", "", &shape_with_text(Some(ph_type), Some(1), "slide")),
+                &layout_xml_with(
+                    "",
+                    "",
+                    &shape_with_text(Some(ph_type), Some(2), "layout"),
+                    "<p:hf dt=\"0\" ftr=\"0\" sldNum=\"0\"/>",
+                ),
+                &master_xml_with(
+                    "",
+                    &shape_with_text(Some(ph_type), Some(3), "master"),
+                    "<p:hf dt=\"0\" ftr=\"0\" sldNum=\"0\"/>",
+                ),
+            );
+            assert_eq!(
+                source_texts(&occupied_slide),
+                [(FlattenedSource::Slide, "slide".to_owned())],
+                "occupied slide {ph_type}"
+            );
+
+            let empty_slide = Fixture::from_xml(
+                &slide_xml_with("", "", &shape_with_text(Some(ph_type), Some(1), "")),
+                &layout_xml_with(
+                    "",
+                    "",
+                    &shape_with_text(Some(ph_type), Some(2), "layout"),
+                    "<p:hf/>",
+                ),
+                &master_xml_with(
+                    "",
+                    &shape_with_text(Some(ph_type), Some(3), "master"),
+                    "<p:hf/>",
+                ),
+            );
+            assert_eq!(
+                source_texts(&empty_slide),
+                [(FlattenedSource::Layout, "layout".to_owned())],
+                "empty slide {ph_type}"
+            );
+
+            let empty_layout = Fixture::from_xml(
+                &slide_xml_with("", "", ""),
+                &layout_xml_with(
+                    "",
+                    "",
+                    &shape_with_text(Some(ph_type), Some(2), ""),
+                    "<p:hf/>",
+                ),
+                &master_xml_with(
+                    "",
+                    &shape_with_text(Some(ph_type), Some(3), "master"),
+                    "<p:hf/>",
+                ),
+            );
+            assert_eq!(
+                source_texts(&empty_layout),
+                [(FlattenedSource::Master, "master".to_owned())],
+                "empty layout {ph_type}"
+            );
+
+            let empty_master = Fixture::from_xml(
+                &slide_xml_with("", "", ""),
+                &layout_xml_with("", "", "", ""),
+                &master_xml_with("", &shape_with_text(Some(ph_type), Some(3), ""), "<p:hf/>"),
+            );
+            assert!(
+                source_texts(&empty_master).is_empty(),
+                "empty master {ph_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn slide_owned_latent_placeholder_source_matrix_matches_the_oracle_decision() {
+        let slide_number = shape_with_text(Some("sldNum"), Some(3), "slide number");
+        let layout_date = shape_with_text(Some("dt"), Some(1), "layout date");
+        let cases = [
+            ("", "", vec!["slide number"]),
+            (
+                "",
+                "<p:hf dt=\"0\" ftr=\"0\" hdr=\"0\" sldNum=\"0\"/>",
+                vec!["slide number"],
+            ),
+            (&layout_date, "<p:hf sldNum=\"1\"/>", vec!["slide number"]),
+        ];
+
+        for (layout_children, master_header_footer, expected) in cases {
+            let fixture = Fixture::from_xml(
+                &slide_xml_with("", "", &slide_number),
+                &layout_xml_with("", "", layout_children, ""),
+                &master_xml_with("", "", master_header_footer),
+            );
+            let texts = fixture
+                .context()
+                .flatten()
+                .iter()
+                .filter_map(item_text)
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                texts, expected,
+                "master header-footer: {master_header_footer}"
+            );
+        }
     }
 
     #[test]
@@ -5144,6 +5341,31 @@ mod tests {
     }
 
     #[test]
+    fn picture_fill_opacity_comes_from_alpha_modulation_fix() {
+        let opaque = shape_picture_fill("rId7", 0, None);
+        let faded = opaque.replace(
+            r#"r:embed="rId7"/>"#,
+            r#"r:embed="rId7"><a:alphaModFix amt="30000"/></a:blip>"#,
+        );
+        assert_ne!(faded, opaque);
+        let media = ScopedMediaIds {
+            slide: HashMap::from([("rId7".to_owned(), MediaId(7))]),
+            ..ScopedMediaIds::default()
+        };
+
+        for (shape, opacity) in [(opaque, 1.0), (faded, 0.3)] {
+            let fixture = Fixture::new(&shape, "", "");
+            let resolved = fixture
+                .context()
+                .resolve_slide_with_media((720.0, 540.0), &media)
+                .unwrap();
+            let image = resolved.shapes[0].image_fill.as_ref().unwrap();
+            assert_eq!(image.opacity, opacity);
+            assert!(resolved.diagnostics.is_empty());
+        }
+    }
+
+    #[test]
     fn theme_shape_picture_fill_cannot_use_a_part_relationship() {
         let mut fixture = Fixture::new(
             &shape_with_details(
@@ -5216,6 +5438,37 @@ mod tests {
             resolved.diagnostics,
             [Diagnostic {
                 message: "missing slide shape image relationship `rId404`".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn rejected_picture_relationship_reports_and_uses_visible_bounds() {
+        let fixture = Fixture::new(&picture("rId7", "", "", 0), "", "");
+        let failures = ScopedMediaFailures {
+            slide: HashMap::from([(
+                "rId7".to_owned(),
+                "exceeds the 64 MiB decoded-image render limit".to_owned(),
+            )]),
+            ..ScopedMediaFailures::default()
+        };
+
+        let resolved = fixture
+            .context()
+            .with_media_failures(&failures)
+            .resolve_slide_with_media((720.0, 540.0), &ScopedMediaIds::default())
+            .unwrap();
+
+        assert_eq!(
+            resolved.shapes[0].geometry,
+            ResolvedGeometry::BoundsFallback
+        );
+        assert_eq!(resolved.shapes[0].unsupported, Some("image render failure"));
+        assert_eq!(
+            resolved.diagnostics,
+            [Diagnostic {
+                message: "picture image relationship `rId7` exceeds the 64 MiB decoded-image render limit"
+                    .to_owned(),
             }]
         );
     }
@@ -6872,7 +7125,10 @@ mod tests {
 
     #[test]
     fn three_dimensional_chart_uses_cached_image_and_diagnostic() {
-        let alternate = chart_alternate("rIdChart", Some("rIdPreview"));
+        let alternate = chart_alternate("rIdChart", Some("rIdPreview")).replace(
+            r#"r:embed="rIdPreview"/>"#,
+            r#"r:embed="rIdPreview"><a:alphaModFix amt="30000"/></a:blip>"#,
+        );
         let fixture = Fixture::new(&alternate, "", "");
         let preview = MediaId(47);
         let media = ScopedMediaIds {
@@ -6902,7 +7158,7 @@ mod tests {
 
         assert!(matches!(
             resolved.shapes[0].content,
-            ResolvedContent::Image(ref image) if image.media == preview
+            ResolvedContent::Image(ref image) if image.media == preview && image.opacity == 0.3
         ));
         assert!(resolved.shapes[0].unsupported.is_some());
         assert!(resolved.diagnostics.iter().any(|diagnostic| {

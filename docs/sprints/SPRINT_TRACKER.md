@@ -87,6 +87,7 @@ defended.
 | S70 | M23, X | 7 | 7 | 0 | 19 | 2 | Established the modern DOCX capability matrix and private-corpus policy, added public from-scratch authoring conformance, replaced volatile README claims with evidence-backed coverage, and closed the three Issue 69 cache and restart gaps. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 5 clean. M23 continues in S71 with public API completion |
 | S71 | M23, X | 10 | 10 | 0 | 35 | 3 | Added complete blank-package, property, theme, font, style, numbering, and deterministic identifier foundations. Folded Kevin Brown's authored Word charts into the sprint, closed Issue 69 with measured evidence and reporter credit, and made the root and all 26 crate READMEs capability-led. The full close gate passed with all 49 reviewed hashes, every package archive below 10 MiB, and final sprint review pass 9 clean. M23 continues in S72 with sections, stories, and content ownership |
 | S72 | M23, X | 19 | 19 | 0 | 61 | 7 | Added ordered sections, relationship-safe story editing, transactional fragment import, searchable PDF text, CLI and Python surfaces, hardened outcomes from PRs 77 through 80, and deterministic hosted CI. Published metadata-complete `rdocx 0.13.2` and `rpptx 0.11.0` distributions with reporter and contributor credit. The full close gate passed with all 49 reviewed hashes, the declared seven-entry Word XML delta, every package archive below 10 MiB, and final sprint review pass 24 clean. M23 continues in S73 with tables, rich content, and the private corpus gate |
+| S73 | M23, X | 35 | 35 | 0 | 92 | 4 | Closed M23 with complete table and rich-content authoring, layout-backed fields, pure Rust generation of all five private corpus examples, contributor hardening, and verified Rust and Python publication. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and final sprint review pass 9 clean. M24 begins in S74 with complete text, table, section, and settings semantics |
 
 ## Completed features
 
@@ -435,6 +436,41 @@ defended.
 | F-X095 | S72 | L | 4 | 1 | 2026-09-14 | Integrated hardened equivalents of PRs 77 through 80, restored pinned Presentation fidelity CI, and preserved no-op comparison handles |
 | F-X096 | S72 | M | 2 | 1 | 2026-09-14 | Aligned each Python distribution with its native crate version and gave rdocx and rpptx independent PyPI tag routes |
 | F-X094f | S72 | M | 2 | 2 | 2026-09-15 | Published and verified metadata-complete rdocx 0.13.2 and rpptx 0.11.0 Python distributions, then notified and closed every included issue and pull request |
+| F-X097 | S73 | M | 2 | 1 | 2026-09-15 | Preserved ancestor-scoped drawing namespaces and exact complex-field ownership through comparison, accept, and reject |
+| F-X098 | S73 | M | 2 | 1 | 2026-09-15 | Preserved attributes and ordered child payloads on modeled content-control type elements until explicit type replacement |
+| F-X099 | S73 | M | 2 | 1 | 2026-09-15 | Added checked direct-body ownership to native and frozen Python story-item snapshots without changing recursive paths |
+| F-X100 | S73 | S | 1 | 1 | 2026-09-15 | Preserved explicit false row-header, row-split, and cell no-wrap values from contributor PR 101 |
+| F-X102 | S73 | M | 2 | 1 | 2026-09-15 | Resolved body, header, and footer pictures against their owning relationship scope from contributor PR 102 |
+| F-X103 | S73 | M | 2 | 1 | 2026-09-15 | Accepted Word-default TOC web layout switches and exposed ordered native and Python rebuild diagnostics from contributor PR 101 |
+| F-X104 | S73 | M | 2 | 1 | 2026-09-15 | Rendered namespace-aware DrawingML picture transparency through every presentation output backend from contributor PR 105 |
+| F-X105 | S73 | M | 2 | 1 | 2026-09-15 | Separated slide-owned latent placeholders from source-specific layout and master header-footer policy |
+| F-X110 | S73 | S | 1 | 1 | 2026-09-15 | Added lossless native and Python control of the Word update-fields-on-open setting from contributor PR 104 |
+| F-X111 | S73 | L | 4 | 1 | 2026-09-15 | Added selected-family six-target CLI release archives, exact checksums, cargo-binstall metadata, and pre-publication asset validation |
+| F-X106a | S73 | L | 4 | 1 | 2026-09-15 | Added owner-checked indexed Python content mutation and counted replacement from contributor PRs 109 and 111 |
+| F-260 | S73 | L | 4 | 1 | 2026-09-15 | Added ordered mixed run content authoring with schema-valid field segmentation and exact raw boundary preservation |
+| F-X101 | S73 | M | 2 | 1 | 2026-09-15 | Honored run-level page breaks in physical pagination and every page-dependent output from contributor PR 102 |
+| F-X106b | S73 | M | 2 | 1 | 2026-09-15 | Added paragraph and run formatting mutation with named Word highlights and separate shading from contributor PR 108 |
+| F-X106c | S73 | L | 4 | 1 | 2026-09-15 | Added typed Python story mutation, scoped hyperlinks, revision resolution, field updates, exact XML snapshots, and Issue 94 hardening from contributor PRs 109 and 110 |
+| F-X108 | S73 | M | 2 | 1 | 2026-09-15 | Added atomic story-scoped image replacement with shared-target copy-on-write and format-aware package cleanup from contributor PR 107 |
+| F-X109 | S73 | M | 2 | 1 | 2026-09-15 | Added atomic native and Python run splitting at Unicode scalar offsets from contributor PR 112 |
+| F-257 | S73 | L | 4 | 1 | 2026-09-15 | Completed checked native table properties and atomic full-grid mutation with typed reopen and exact producer XML preservation |
+| F-258 | S73 | L | 4 | 1 | 2026-09-16 | Completed checked row and cell authoring with grid and merge validation, nested tables, typed reopen, and Word parity |
+| F-X120 | S73 | S | 1 | 1 | 2026-09-16 | Integrated and hardened contributor PR 122 with exact fractional Word line-spacing normalization and deterministic layout parity |
+| F-X107 | S73 | M | 2 | 1 | 2026-09-16 | Integrated and hardened contributor PR 113 with atomic native and Python formatted-row cloning and removal |
+| F-X113 | S73 | M | 2 | 1 | 2026-09-16 | Preserved one, two, and three appended comparison paragraphs through exact accept and reject reconstruction |
+| F-259 | S73 | M | 2 | 1 | 2026-09-16 | Added pure deterministic paragraph and table measurement at caller width with ordered diagnostics and exact equal-height layout proof |
+| F-261 | S73 | L | 4 | 1 | 2026-09-16 | Added atomic rich HTML fragment insertion across body, cell, header, and footer stories with explicit images and ordered diagnostics |
+| F-262 | S73 | L | 4 | 1 | 2026-09-16 | Added typed crop and floating picture controls, story text boxes with modeled compatibility, and section-aware text watermarks |
+| F-X115 | S73 | M | 2 | 1 | 2026-09-16 | Preserved modern comment content types, stable identities, thread links, resolved state, and optional native and Python dates |
+| F-X116 | S73 | L | 4 | 1 | 2026-09-16 | Made Python story snapshots linear and complete with one accepted-view inventory and recursive live run paths |
+| F-X117 | S73 | M | 2 | 1 | 2026-09-16 | Premultiplied raster image pixels and rendered large presentation pictures within a checked 64 MiB decode ceiling |
+| F-X118 | S73 | L | 4 | 1 | 2026-09-16 | Rendered producer-valid notes graphs and added guarded counted slide and notes replacement across native, Python, and CLI surfaces |
+| F-X121 | S73 | S | 1 | 1 | 2026-09-16 | Integrated and hardened Kevin Brown's PR 123 with portable authored line-chart title, marker, and smoothing defaults |
+| F-X119 | S73 | L | 4 | 1 | 2026-09-17 | Completed round-three Python authoring and inspection across clean rdocx and rpptx abi3 wheels |
+| F-263 | S73 | L | 4 | 1 | 2026-09-17 | Added atomic layout-backed field caches and passed the five-document pure Rust private corpus gate |
+| F-X114 | S73 | M | 2 | 1 | 2026-09-17 | Rebuilt TOC entries with localized built-in styles, section-derived tab stops, and structural numbering suffix tabs from Issue 116 |
+| F-X122 | S73 | M | 2 | 1 | 2026-09-17 | Recovered the immutable rpptx release attempt with newline-safe asset validation and a coherent 0.12.1 package family |
+| F-X112 | S73 | L | 4 | 2 | 2026-09-18 | Published and verified all four S73 Rust and Python package families, notified every included contributor record, and closed every fully addressed open record |
 
 ## Velocity
 
@@ -522,6 +558,7 @@ five working days.
 | S70 | 7 | 2 | 17.50 |
 | S71 | 10 | 3 | 16.67 |
 | S72 | 19 | 7 | 13.57 |
+| S73 | 35 | 4 | 61.25 |
 
 ## Escalation record
 
@@ -597,3 +634,4 @@ was done about it. Empty is the expected state.
 | 2026-09-07 | Sprint estimate variance exceeded 30 percent | S70 | Record 2 actual days against 19 estimated. Isolated workers and established conformance, documentation, and cache verification paths allowed independent audit and implementation work to overlap safely. The resulting 17.50 stories per week is not a sustainable forecast, so retain the dependency-defined S71 boundary |
 | 2026-09-09 | Sprint estimate variance exceeded 30 percent | S71 | Record 3 actual days against 35 estimated. Isolated workers, dependency-prefix reviews, and established package, Word, Pages, layout, and README gates allowed independent work and contribution hardening to overlap safely. The resulting 16.67 stories per week is not a sustainable forecast, so retain the dependency-defined S72 boundary |
 | 2026-09-15 | Sprint estimate variance exceeded 30 percent | S72 | Record 7 actual days against 61 estimated. Parallel isolated workers, dependency-prefix reviews, established release workflows, and issue and contribution hardening allowed independent work and publication checks to overlap safely. The resulting 13.57 stories per week is not a sustainable forecast, so retain the dependency-defined S73 boundary |
+| 2026-09-18 | Sprint estimate variance exceeded 30 percent | S73 | Record 4 actual days against 92 estimated. Parallel isolated workers, reviewed contributor pull requests, established corpus and release workflows, and one consolidated publication boundary allowed implementation, review, and registry verification to overlap safely. The resulting 61.25 stories per week is not a sustainable forecast, so retain the dependency-defined S74 boundary |

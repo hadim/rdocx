@@ -372,6 +372,19 @@ preservation case keeps alternate-prefix field scaffolding and neighbouring raw
 XML while proving an untouched custom part is byte-identical after save and
 reopen. Failure cases compare the live document before and after the rejected
 rebuild.
+The entry-style and geometry regression supplies localized style ids, an A4
+section with 1417 twip side margins, a style-owned 7777 twip right tab, one
+missing TOC style, and a numbered heading with a tab suffix. It proves
+localized id reuse, canonical creation only for the missing level, a 9072 twip
+section fallback, structural tabs, safe default geometry under extreme parsed
+values, and exact preservation of an unrelated unmodelled style child. The
+normalized differential records are pinned to Microsoft Word 16.113 build
+16.113.26091433 on macOS with the `fx114-toc-entry-records-v1` contract.
+The Word-default instruction case retains argument-free `TOC \\z`, rebuilds
+through an existing content-control payload, and saves and reopens the result.
+A mixed simple and unsupported complex TOC case asserts exact diagnostic text
+in physical source order, the derived native count, the immutable Python tuple,
+strict typing, and runtime stub agreement.
 Block-owner coverage keeps a direct body `sdtContent` opaque. It also places
 invalid control paragraphs before a valid TOC to prove the byte scanner and
 typed projection retain identical paragraph coordinates, and keeps invalidly
@@ -447,6 +460,10 @@ discovery and layout.
 An alias-prefixed self-closing paragraph-property element retains exact producer
 attributes. An end-marker content control retains modeled identity, binding,
 type, end properties, and ordered raw property slots after save and reopen.
+The content-control type-payload gate covers Word and extension namespace type
+children with producer attributes and nested children. It proves unchanged
+payload retention under the fixed output prefix, canonical replacement after a
+typed discriminator change, and stable ordering of the other property slots.
 
 Word identifier allocation has a source-built regression gate. Two documents
 created through different request orders must produce identical complete DOCX
@@ -500,6 +517,30 @@ relationship attributes in standalone footnotes and endnotes. Semantic reorder
 coverage extracts references from the exact body and text-box paragraphs and
 resolves them to their original media bytes and URLs.
 
+The picture-replacement binding gate keeps body, header, and footer drawing XML
+byte-identical while replacing PNG and JPEG targets through native Rust and an
+installed Python wheel. It proves relationship-local copy-on-write for a shared
+media target, deterministic target extensions, exact content types, and orphan
+cleanup after an unshared format change. Missing, external, wrong-type, and
+unsupported-byte requests compare the complete saved document before and after
+the rejected operation. Save and reopen must retain every replacement and the
+same relationship identifier in its original owner scope.
+
+The run-splitting binding gate proves the native and Python direct-body entry
+points with ASCII and multibyte text, endpoint no-ops, copied formatting, an
+exact comment range, invalid-coordinate rollback, and save-reopen behavior.
+OXML regressions split hyperlink-owned and mixed runs containing tabs, breaks,
+field markup, alternate-content drawings, symbols, and unknown raw children,
+then compare their exact serialized order and layout-projection ownership.
+
+`comments_keep_standard_content_type_ids_dates_and_threads` creates comments
+out of document order, replies to the first allocated identity, resolves its
+thread, and saves and reopens. It requires the standard comments-extended
+content type, stable comment and parent ids, exact optional RFC 3339 dates, the
+no-date deterministic default, invalid-date rollback, and retained unrelated
+sidecar XML. Installed Python tests, strict mypy, and stubtest cover the same
+optional date keywords and frozen snapshots.
+
 The cross-document fragment gate selects a main-body range containing custom
 styles, direct and style-carried numbering, a bookmark and REF field, a
 picture, an editable chart and workbook, an exact foreign subtree, and a
@@ -545,6 +586,30 @@ blocks, all Word runs, rows, columns, cells, and diagnostics. The integration
 gate serializes and reopens the generated DOCX before comparing its public
 structure. No binary fixture or sample is added, so all 49 hash entries remain
 unchanged.
+
+The rich-fragment gate
+`rich_html_fragments_match_word_in_every_supported_container` inserts the same
+source-built CSS, nested-list, table, link, explicit-image, and data-URI subset
+into body, cell, header, and footer owners. Every result serializes and reopens
+before the test compares content, refreshed story identity, direct range,
+owner-local image and hyperlink relationships, and exact ordered diagnostics.
+A companion boundary regression inserts before a cell paragraph and proves an
+adjacent opaque child remains byte-preserved and in order. Malformed image
+bytes are rejected against a byte-identical live-document snapshot. The gate
+adds no sample, so all 49 hash entries remain unchanged.
+
+The ignored render regeneration authenticates Microsoft Word 16.112.4 build
+16.112.26090911, LibreOffice 26.2.5.2
+cd7284b4cbbfeb507e630c1aac019f4157393acb, and Poppler `pdftotext` 26.09.0.
+Both viewers render the clean source-built four-container candidate as one
+612 by 792 point page. Poppler layout extraction removes whitespace and the
+viewer-specific bullet glyph, then requires the same complete ordered token
+record for header, body, cell, and footer fragment content. Both pages are
+rasterised at 150 DPI and compared with the shared global luminance SSIM
+metric. The floor is 0.75 because Word and LibreOffice use different list
+indentation, paragraph spacing, and table width while the exact token, page,
+and page-size checks independently forbid missing or reordered content. The
+reviewed pair scores 0.7853882556046246.
 
 The MHTML gate stays in the existing `rdocx` HTML unit tests and Word
 integration binary. Source-built MIME cases cover folded headers, root
@@ -735,6 +800,15 @@ schema child order through compare, save, reopen, accept, and reject. Run,
 word, and character granularity each retain a stable multi-unit sibling once.
 A malformed drawing without `docPr/@id` fails before the original document or
 package changes.
+Inherited-binding coverage adds story-root and outer-drawing declarations plus
+an unrelated typed edit before comparison. It checks dirty staging, complex
+fields, sibling fields sharing one physical run, and both revision outcomes.
+
+Terminal paragraph comparison coverage inserts at the start, middle, and end
+of the main story, including one, two, and three appended paragraphs. It proves
+exact accept and reject reconstruction when the original ends in a
+self-closing empty paragraph and when retained content includes a field,
+drawing, media relationship, and unrelated opaque package part.
 
 The source-built external differential pins Microsoft Word 16.104 build
 16.104.25121423 and locale `en-US`. Its 24 normalized records cover every
@@ -766,9 +840,15 @@ one-series legends, percentage labels, the doughnut hole, exact workbook data,
 complete staged identifiers, typed theme reuse, collision handling, malformed
 theme replacement, failure atomicity, and save/reopen preservation. A facade
 test proves that `oxml-chart`, `rdocx`, and `rpptx` expose the same `RgbColor`.
+The line portability case requires each authored axis title to order `c:tx`,
+`c:layout`, and false `c:overlay`, then requires false `c:marker` and
+`c:smooth` before the line plot's axis ids. Parse and rewrite retains those
+defaults and the palette. Bar, pie, doughnut, area, scatter, and radar omit the
+line-only defaults, while every non-scatter workbook remains byte-identical to
+the line workbook for the same source data.
 
 The ignored external oracle generates the exact
-`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`
+`ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b`
 candidate in code. Microsoft Word 16.112.3 build 16.112.26083020 must open it
 without repair. Pages Creator Studio 15.1.1 build 7044.0.273 must render the
 declared axes, colours, percentages, legend, and doughnut shape, then export
@@ -793,6 +873,20 @@ image relationships, forced media-id collisions, blank selected variants,
 entity-decoded settings, unsupported colour and media diagnostics, atomic
 rejection, and margin-relative centering. No sample authors a watermark, so the
 49-entry hash harness remains unchanged.
+
+The M23 drawing gate is `m23_drawings_text_boxes_and_watermarks_match_word`.
+It authors cropped inline and floating pictures, every wrap family, rotated and
+vertical text boxes, compatibility fallbacks, and section-selected watermarks
+through the public facade. Save, reopen, and repeat-save retain exact owner
+relationships, schema order, source rectangles, wrap polygons, WPS geometry,
+and self-contained VML references. Companion tests cover the complete drawing
+option matrix, selected default, first, and even header variants, preserved
+leading and trailing text-box spaces, and atomic rejection of invalid or
+overflowing geometry. Deterministic bundled-font PDF and PNG output is checked
+with Poppler 26.01.0, while LibreOffice 26.2.5.2 provides the portable reopen
+and visual inspection. The Word 16.112.4 structure record is reviewed
+statically when GUI automation is unavailable. No sample opts into the new
+options, so all 49 hash entries remain unchanged.
 
 The Word glyph-provenance regression resolves every attributed run through its
 result-local `WordSourcePath` and requires the selected paragraph's exact
@@ -1265,6 +1359,13 @@ Eight gates run against it:
    five rules, and rejection of a 1.01-point displacement. The 49-entry render
    hash manifest remains unchanged.
 
+The notes-owner regression removes both reverse slide relationships from the
+same source-built control and requires byte-identical deterministic notes PDF.
+Companion mutations require conflicting, multiple, and external reverse owners
+to fail closed. Notes mutation saves and reopens while retaining the body
+placeholder identity, first-run formatting, and unmodelled run XML. Missing
+notes and missing body placeholders fail without changing package bytes.
+
 The portable M21 core test source-builds one macro-enabled signed deck that
 combines modern comments, sections, the self-contained minimal SmartArt
 preservation fixture, exact embedded audio and poster bytes, a typed fade
@@ -1372,6 +1473,15 @@ for the inherited placeholder run. The one-time PowerPoint record in the
 integration test names build 16.104.25121423, the exact original paths and the
 clean no-repair verdict.
 
+The source-built latent-placeholder differential is
+`slide_owned_latent_placeholders_ignore_master_header_flags`. It copies the
+bundled blank layout's slide-number field onto a slide and tests an absent
+master `p:hf`, every master flag disabled, and only `sldNum` enabled. The exact
+LibreOffice 26.2.5.2 and Poppler 26.01.0 path must agree with deterministic Rust
+PDF text, retain bottom-right slide-number ink, and leave the inherited date
+region empty. A one-pixel PDF page-width difference is accepted because the
+two PDF writers round the 10-inch page boundary differently at 72 DPI.
+
 These automated visual tests use the same external-corpus policy as the other
 corpus gates. A missing configured corpus skips them when
 `RDOCX_PPTX_CORPUS_REQUIRED` is unset and fails them when it is set. The
@@ -1443,6 +1553,29 @@ fields, namespace-complete owned projections, borrowed subtree semantics,
 opaque preservation boundaries, separator-note filtering, lifecycle state,
 and mutation of empty text nodes.
 
+The ordered mixed-run gate authors text, a tab, all three typed breaks, an
+inline picture, a field, a Unicode symbol, and trailing text through one native
+run handle. It applies the public formatting setters, saves and reopens the
+package, and compares the flattened logical child order across the physical
+field boundary. The cached field result and both surrounding run segments keep
+the authored properties. A companion regression inserts a field beside a
+positioned foreign run child, proves the raw bytes stay on their original side
+of the field boundary, and proves an invalid field instruction is atomic. The
+reopened document must render through deterministic bundled fonts.
+
+The run-level page-break differential gate authors both the break-only
+paragraph written by python-docx and a break between two pieces of text. Its
+source-built record pins Microsoft Word 16.104 build 16.104.25121423, the
+en-GB locale, and deterministic bundled fonts, then compares page count and
+page text. A line-layer unit matrix retains distinct line, page, and column
+break kinds. Paginator regressions cover two breaks, keep-lines, an overflow
+continuation, a trailing break, and the non-page break kinds. The consumer
+regression proves one split paragraph produces ordered body fragments on two
+physical pages, resolves PAGE, NUMPAGES, and PAGEREF from that sequence, emits
+two deterministic PNG pages, and reports two pages from the deterministic PDF
+through pinned Poppler. No binary fixture or runtime oracle dependency enters
+the published crates.
+
 The contributor reader-fact regression combines strict document and body
 boundaries, first section properties, missing revision authors, empty simple
 fields, bounded nested tables, marker child-content facts, effective complex
@@ -1495,6 +1628,17 @@ route pins Microsoft Word 16.112.4 build 16.112.26090911 on macOS 26.6.2 build
 25G83 and Poppler 26.09.0. It requires all nine exact page records and removes
 its unique artifact directory on success and unwind.
 
+The related-story picture gate is
+`header_and_footer_pictures_render_from_story_relationships`. It reserves the
+same local image relationship identifier in the main story, a header, and a
+footer, then proves layout returns each owner's exact bytes after save and
+reopen. Companion layout tests cover inline and anchored scoped identifiers,
+collision-safe media identities, and one deterministic diagnostic for a
+missing scoped relationship without body fallback. The sample harness records
+the existing 400 by 40 feature-showcase header logo as a PDF image, while the
+pinned LibreOffice 26.2.5.2 and Poppler checks confirm the same logo dimensions
+and 200 DPI placement in the external render.
+
 The installed Python structure gate is
 `word_structure_snapshots_preserve_order_ownership_and_types`. A source-built
 three-section package includes inherited and independent header and footer
@@ -1503,11 +1647,66 @@ identifiers in the body and two headers. It proves exact frozen records,
 source order, physical ownership, item paths, owner-scoped URL resolution,
 single ownership for a hyperlink in nested content controls, physical ordering
 when a nested link precedes an ancestor-owned link, snapshot stability after
-mutation, strict mypy, and stubtest after reopen.
+mutation, strict mypy, and stubtest after reopen. The body-owner matrix adds a
+direct paragraph, table, and body-level control plus nested field, drawing, and
+run-level control items. Native and installed Python assertions keep the flat
+path while returning the containing direct body coordinate. Header items and
+final section properties remain unanchored.
 The native companion
 `story_item_links_resolve_only_through_the_checked_owner` resolves an equal
 identifier to distinct body and header targets and checks the same interleaved
 source order. All 49 hash entries remain unchanged.
+
+The Python story-scale gate is `python_story_inventory_scales_linearly`. It
+doubles a corpus containing paragraphs, table cells, and hyperlinks, requires
+exact doubled inventory counts, and bounds the elapsed ratio without relying
+on an absolute machine speed. A native counted companion requires one complete
+story-source build for each item or hyperlink snapshot. The binding companion
+interleaves direct, inserted, inline-control, and deleted runs, then proves
+StoryItem text, Paragraph text, and live run handles use the same accepted
+order. Nested formatting and splitting survive save and reopen, while an old
+run handle fails after the structural split.
+
+The indexed Python content gate is
+`python_indexed_content_mutation_is_counted_and_atomic`. It maps live direct
+Paragraph and Table handles across interleaved content, inserts a paragraph,
+pops and reuses an opaque fragment, clones and moves content, then reopens the
+package in final source order. Nested, stale, foreign, and out-of-range inputs
+must fail without changing bytes or invalidating a live handle. Literal and
+regular-expression replacements return exact cross-run counts, a zero count
+keeps handles live, and invalid syntax is atomic. A native companion covers
+paragraph ordinals that include nested block-control paragraphs. The complete
+45-test installed cp39-abi3 wheel suite, strict mypy, stubtest, both WASM
+checks, the workspace gate, and the unchanged 49-entry hash set complete the
+binding proof.
+
+The Python story mutation gate is
+`python_story_revision_field_and_xml_operations_are_typed_and_atomic`. It
+accepts a compared revision set, authors default header and footer stories,
+adds a relationship-scoped hyperlink, reads exact immutable item XML, and
+reopens the edited package. The same gate proves stale StoryItems fail,
+replacement removes only newly empty hyperlinks, cloned comment anchors do not
+multiply, and direct paragraph lookup precedes an enclosing content control.
+Companion tests cover every revision filter, field context evaluation, revision
+invalidation, and GIL release. The complete 57-test source-tree suite runs
+against pinned Poppler 26.01.0. A fresh cp39-abi3 wheel installs and runs on
+Python 3.9, while strict mypy and stubtest validate that same wheel on Python
+3.12.
+
+The round-three installed binding gate is
+`python_round_three_authoring_and_inspection_is_typed_and_lossless`. Its Word
+half inserts an in-memory picture after a checked story item and anchors a
+comment in a table-cell paragraph. Its presentation half checks shape bounds
+and identity, direct run font facts, autofit, notes mutation, and run text
+replacement after reopen. The package assertions retain run properties,
+foreign children, media relationships, comment anchors, and unrelated XML.
+Strict mypy and stubtest cover the same optional values, frozen ranges, and
+setters.
+
+Table-property round-trip coverage opens `0`, `false`, and `off` for
+`w:tblHeader`, `w:cantSplit`, and `w:noWrap`, then saves and reopens the table.
+Existing bare-element and absent-property cases retain true and inherited
+semantics, and ordered raw siblings remain in their schema slots.
 
 `rich_section_stories_survive_reopen_replace_and_unlink` covers paragraphs,
 tables, fields, block controls with nested tables, hyperlinks, images, drawings,
@@ -1599,22 +1798,33 @@ required-private entry modes. The two evidence paths are:
    normalized support graph, deterministic relationship identities, omitted
    fresh timestamps, and absence of a synthesized VBA project.
 2. Local required-corpus mode builds the five target documents through their
-   Rust generators and compares them with the configured private references.
-   Missing input, unexpected input count, a digest change, or missing evidence
-   fails closed. An optional-private invocation reports a skip when the ignored
+   pure Rust generators and compares them with the configured private
+   references. Each temporary consumer depends only on the public `rdocx`
+   facade, starts exactly once from `Document::new()`, and reopens only its own
+   output. Static boundary checks reject HTML import, raw package access,
+   private crates, source templates, and runtime access to the private corpus.
+   Every generator runs twice and must produce identical DOCX bytes. Missing
+   input, unexpected input count, a digest change, or missing evidence fails
+   closed. An optional-private invocation reports a skip when the ignored
    directory is absent, while required-private mode rejects that absence. This
    mode never prints document text or embeds source XML in a tracked report.
 
-The local comparison first normalizes ZIP metadata that is not document state,
-then checks content types, relationships, part inventory, schema child order,
-modeled properties, and required compatibility branches. It renders both sides
+The local comparison first normalizes ZIP metadata that is not document state.
+Generated packages must resolve every internal relationship and expose exactly
+one package-root office-document relationship to `word/document.xml`. The gate
+then checks the modeled projection, schema child order, required compatibility
+branches, and successful reopen. Pinned LibreOffice opens and exports every
+generated DOCX through an isolated profile. A conversion failure, repair or
+corruption diagnostic, missing output, invalid package graph, or invalid root
+relationship fails the gate. The harness renders both reference and candidate
 with deterministic bundled fonts at the pinned resolution and records page
 count, exact dimensions, and image similarity against a reviewed per-case
-threshold outside the repository. The ignored manifest binds the anonymous
-P1 through P5 aliases to exact local digests, page expectations, and tool
-identities. Tracked-path and staged-path scans reject private document formats
-without echoing a path or digest. Feature-level tests remain authoritative when
-byte identity is not a valid expectation.
+threshold outside the repository. The ignored manifest binds the anonymous P1
+through P5 aliases to exact local digests, page expectations, and tool
+identities. Any approved embedded raster evidence stays inside the ignored pure
+Rust generator sources. Tracked-path and staged-path scans reject private
+document formats without echoing a path or digest. Feature-level tests remain
+authoritative when byte identity is not a valid expectation.
 
 The feature-level property gate authors core, application, and custom
 properties plus the bounded settings defaults through public APIs. It saves and
@@ -1626,6 +1836,15 @@ foreign subtrees before, inside, and after modeled settings. They assert exact
 foreign subtree bytes after mutation and assert the schema order of default tab
 stop, character spacing control, compatibility settings, document variables,
 and theme font language.
+
+`update_fields_on_open_is_typed_optional_and_schema_ordered` adds absent, bare
+true, explicit false, namespace alias, foreign lookalike, set, clear, remove,
+and save-reopen coverage for `w:updateFields`. Companion low-level cases keep
+duplicate and malformed producer forms byte-identical and reject mutation.
+The native allocation test exhausts the relationship identifier space and
+proves setting a value fails atomically while removing an absent value remains
+a successful byte-identical no-op. Installed Python tests, strict mypy, and
+stubtest cover the optional property and XML error surface.
 
 The theme and font feature gate authors a shared DrawingML theme, language
 defaults, descriptive font records, and an explicitly licensed caller font
@@ -1651,6 +1870,62 @@ differential pins Microsoft Word 16.104 build 16.104.25121423 and LibreOffice
 must match normalized effective properties and deterministic 150 DPI bytes
 with a zero-byte difference threshold. The pinned LibreOffice build must save,
 reopen, and retain the valid graph, reciprocal links, and effective formatting.
+
+The M23 table-property gate is
+`m23_layout_and_data_tables_match_word`. It starts with `Document::new()`, uses
+only the public table facade, saves and reopens typed width, grid, indentation,
+layout, shading, border, margin, and look values, and checks canonical table
+property sequence. It compares the sanitized fixed-grid geometry and reviewed
+pagination record, then renders twice with deterministic bundled fonts and
+requires identical PNG bytes. Companion tests cover all width modes, valid
+spanning rows, aliased Word prefixes, legacy `w:tblLook` masks, explicit
+invisible borders, exact raw property and border-extension retention, row
+coverage, and atomic rejection of malformed values and overflow. The final
+five-document comparison and its pinned LibreOffice 26.2.5.2 and Poppler
+26.01.0 evidence remain owned by the required-private F-263 gate.
+
+The M23 row-and-cell gate is `m23_nested_rows_and_cells_match_word`. It uses
+only the public native facade to author checked heights, explicit toggles,
+alignment, omissions, horizontal and vertical merges, cell appearance, all six
+text directions, conditional regions, and a nested table. Save and reopen must
+retain every typed value and canonical row and cell property sequence. The
+sanitized record is pinned to Microsoft Word 16.112.4 build 16.112.26090911.
+The comparison normalizes Word's removal of explicit false, default direction,
+and contextual conditional markers plus its inferred vertical-text row height.
+Exact source-form assertions cover those intentional writer differences.
+Deterministic bundled-font layout and two same-process PNG renders must agree.
+
+Companion regressions cover exact and minimum height pagination, repeated
+headers, split policy, every cell border edge and text direction, merge and
+omission rollback, nonempty-cell protection, malformed existing topology,
+namespace aliases, foreign same-local children, and exact row, cell, and border
+extension retention. The final private corpus comparison remains F-263 and is
+pinned to LibreOffice 26.2.5.2 and Poppler 26.01.0.
+
+The caller-width measurement gate is
+`independent_nested_tables_measure_to_one_final_height`. It measures two
+independent tables with nested tables through checked body locations. The
+fixtures cover wrapping, cell margins, borders, horizontal spans, and recursive
+row height. The larger fractional point result is rounded upward to one twip
+minimum and applied to both outer rows. Deterministic whole-document layout
+must then report equal table fragments at that exact rounded height. A companion
+paragraph test proves narrower wrapping is taller, rejects zero width and kind
+mismatch, preserves package bytes, and retains the same cached deterministic
+layout `Arc`. A second companion authors two preserved OfficeMath fallbacks and
+requires their two production diagnostics in exact source order.
+
+The row mutation gate is
+`table_rows_clone_remove_and_clear_through_native_and_python`. It clones a row
+with exact height, direct toggles, and a nested table, clears the copied
+toggles, removes the source, reopens, and renders twice with deterministic
+fonts. Identity coverage adds a picture, bookmark, comment anchors,
+content-control ID, producer XML, and a Word-style unused root default
+namespace. The copy has fresh document identities, one shared valid image
+relationship, no copied comment anchors, and no `xmlns:xmlns` declaration.
+Companion regressions cover vertical-merge promotion, table-level raw and
+content-control boundary order, the one-row guard, invalid coordinates,
+malformed existing topology, byte-atomic failure, stale Python handles,
+negative indexes, strict mypy, and stubtest.
 
 The fresh-profile round-trip gate adds an unrelated unmodelled XML part and
 package relationship before reopen and repeat-save. The part bytes and
@@ -1840,6 +2115,18 @@ CI retains `gate-evidence.json`, `render-manifest.tsv`, and
 trees stay job-local because the TSV identifies every deck, slide, score, and
 paired path without uploading hundreds of redundant raster files.
 
+The picture-transparency differential is
+`picture_alpha_mod_fix_matches_presentation_renderers`. Its source-built deck
+places a 30 percent picture on the slide and another on its layout beside an
+opaque control. The exact LibreOffice 26.2.5.2 build exports the deck to PDF,
+and Poppler rasterises it at 72 DPI for bounded channel comparisons. The
+regular companion gate checks the same resolved opacities, exact repeated PNG
+bytes, PDF `/ExtGState` alpha, and modelled slide and layout round trips.
+Unit gates cover inherited DrawingML prefix aliases, invalid amounts, raw
+sibling and duplicate preservation, picture backgrounds, cached previews, and
+multiplication with animation opacity. The existing shared SVG group-opacity
+gate covers the same backend-neutral group contract.
+
 Stand this harness up in M10 alongside the first text rendering, not afterwards.
 
 The M10 native spot-check uses Microsoft PowerPoint 16.104, Info.plist build
@@ -2023,6 +2310,13 @@ required, and no binary fixture enters the repository.
   dimensions, distinct page pixels, transparent PNG behavior, JPEG quality
   validation, TIFF cardinality and byte-identical opaque PNG compatibility
   wrappers.
+- `straight_alpha_images_composite_with_premultiplied_pixels` proves that
+  transparent stored white and black pixels compose identically over navy in
+  PNG, JPEG and TIFF output. `large_pictures_render_or_report_the_decode_limit`
+  admits the reported 4000 by 1500 and 2100 by 2100 PNGs through presentation
+  raster and PDF output. It also requires one 64 MiB rejection diagnostic and
+  one visible bounds fallback. Focused unit gates reject malformed headers,
+  overflowing dimensions, and over-limit decoded sizes before allocation.
 - Linear and radial path gradients produce type 2 patterns, type 2 or type 3
   shadings, and type 3 stitching functions over interval type 2 functions.
   Structural tests also pin stop normalization, fill and stroke pattern
@@ -2093,6 +2387,12 @@ because the whole value proposition is compatibility:
   and cells with each writer, reads both files through both libraries, and
   directly compares normalized public records including distinct relative and
   absolute line spacing, units, enums, and saved table style.
+- Fractional Word paragraph line-spacing coverage opens observed producer
+  decimals through the public facade, checks exact positive and negative half
+  boundaries and signed overflow, saves canonical integer values, and reopens
+  them. Aliased prefixes and sibling spacing attributes remain modeled, while
+  equivalent fractional and integer documents render byte-identical pages in
+  deterministic font mode.
 - The same for `rpptx` and `python-pptx`.
 
 The rpptx binding gate executes the seven python-pptx 1.0.2 Getting Started
@@ -2114,6 +2414,11 @@ Dedicated thread assertions prove both slide and notes raster calls release the
 GIL. The native companion gate compares every convenience PNG byte for byte
 with the resolved layout raster path and covers invalid DPI and missing slide
 indices.
+The binding notes-mutation gate assigns through `Slide.notes_text`, proves the
+held slide becomes stale after success, and checks text, placeholder identity,
+first-run formatting, and unmodelled run XML after save and reopen. A slide
+without notes rejects assignment while retaining both bytes and handle
+validity. Strict typing and stub checks require the writable property.
 
 Both libraries are test-only CI dependencies. Neither oracle is a runtime or
 published-crate dependency, and neither differential compares package bytes or
@@ -2170,6 +2475,12 @@ slide-one PNG and recursive paragraph output with stable level indentation.
 Regressions cover nonstandard aspect ratios, shared output defaulting, grouped
 text order, embedded paragraph-break normalization, and field-only title
 identity so the title appears exactly once.
+
+The guarded replacement gate refuses existing and input destinations, rejects
+unexpected zero and mismatched expected counts without output, accepts an
+explicit expected zero, and counts slide plus speaker-note matches exactly.
+Successful output retains notes formatting and unmodelled XML, reports exact
+stdout, reopens with replaced slide and notes text, and leaves no staged file.
 
 The `rdocx` CLI has one integration binary that invokes the compiled executable
 through `CARGO_BIN_EXE_rdocx`. Its tests cover `inspect`, `text`, `convert`,
@@ -2238,17 +2549,37 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.13.2 carrier regression pins all ten inherited version carriers,
+The stable 0.14.0 carrier regression pins all ten inherited version carriers,
 the `rdocx` Python project version, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
-are 0.11.0 while `rpptx-wasm` remains ineligible for publication.
+are 0.12.1 while `rpptx-wasm` remains ineligible for publication.
 The paired incubating regression pins all seventeen explicit manifests,
 sixteen workspace dependency requirements, seventeen lockfile entries,
 publication flags, README examples, Rust assertions, the CI WASM literal, and
-the exact 15-package publication preflight at 0.11.0. It separately proves the
-stable workspace remains at its prepared 0.13.2 boundary and both `rpptx-py`
+the exact 15-package publication preflight at 0.12.1. It separately proves the
+stable workspace remains at its prepared 0.14.0 boundary and both `rpptx-py`
 and `rpptx-wasm` remain ineligible for crates.io publication.
+The S73 release contract regression requires the 7 stable crates at 0.14.0,
+the 15 incubating crates at 0.12.1, and both Python projects at their native
+versions. It renders the `v0.14.0`, `rpptx-v0.12.1`, `py-rdocx-v0.14.0`, and
+`py-rpptx-v0.12.1` notes and requires each rendered issue and pull-request set
+and each credited handle to equal the reviewed contribution inventory. Every
+linked record must also appear in its section's contributor credit. A reviewed
+map assigns each included S71 to S73 story to the families that ship it, and
+every GitHub record its backlog entry links or its AS_BUILT entry names as a
+pull request must appear in each assigned family's inventory. The stable
+`v0.14.0` package proof compiles packaged `rdocx` against registry-only shared
+0.12.1, so `rpptx-v0.12.1` must be published first.
+The completed S73 release gate verified all 15 incubating crates at 0.12.1 and
+all seven stable crates at 0.14.0 under sole owner `mantissaman`, plus both
+seven-file PyPI distributions under the same owner. All four annotated tags
+target reviewed SHA `58ca5a279277f7cd8de0b8f250fb4650de14371b`, and every GitHub
+release body is byte-identical to its reviewed changelog section. Clean Python
+3.9 and 3.12 installs passed their priority suites, and Python 3.12 passed exact
+mypy 2.3.0 strict checks and stubtest. All 51 reviewed contribution comments
+were posted and verified before every fully addressed included record was
+closed as authorized.
 The Python metadata regression requires both projects to name a crate-local
 Markdown README and provide their reviewed summary, author, keywords,
 classifiers, and project URLs. Artifact validation repeats that check against
@@ -2476,6 +2807,20 @@ tag can reach the publication workflow. The same module holds the reviewed
 release-notes parser, command, publication-order, exact-body, and generated
 skill contracts.
 
+The Rust CLI release-preparation contract parses `publish.yml` and both CLI
+manifests. It requires the six exact native runner and target pairs, selected
+family package and binary names, version and help smoke commands, exact archive
+members, executable mode for tar archives, README and licence text equality
+after CRLF-to-LF normalization,
+the complete sorted SHA-256 manifest, and full commit pins for every external
+action. It also proves the registry token exists only in the crates.io publish
+job. Negative mutations remove a target, swap a family, bypass checksum
+verification, remove either reviewed text comparison, start publication before
+asset validation, or start release creation before publication and assets.
+Each mutation must fail the contract.
+The hosted matrix remains the execution proof for platforms unavailable to one
+local machine.
+
 Every Poppler-dependent CI job builds the reviewed 26.01.0 command-line oracle
 from the official source archive. `scripts/install_pinned_poppler.py` enforces
 the exact source SHA-256, an 8 MiB download ceiling, streaming extraction with
@@ -2529,6 +2874,15 @@ changed pull-request files. No job grants `id-token: write`. Checkout v6.0.2,
 setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
 revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.
+
+The rdocx binding formatting gate sets and reopens paragraph style and
+numbering, run character style, named Word highlight, and independent shading.
+Its mixed-content run includes text, a tab, a page break, a field, a drawing,
+a raw symbol, and trailing text, all of which retain their order after every
+formatting mutation. Invalid highlight names leave the run unchanged. The
+gate also runs strict typing and stub parity against a freshly installed
+`cp39-abi3` wheel so the runtime properties and their nullable declarations
+cannot drift apart.
 
 The Word namespace regression matrix covers an unused unknown default on the
 document root, an inherited use by an unprefixed element, unprefixed

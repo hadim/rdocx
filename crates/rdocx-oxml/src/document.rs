@@ -1524,17 +1524,33 @@ impl CT_Body {
 
     /// Find the index of the first paragraph whose text contains the given substring.
     pub fn find_paragraph_index(&self, text: &str) -> Option<usize> {
-        self.content.iter().position(|c| match c {
-            BodyContent::Paragraph(p) => p.text().contains(text),
-            BodyContent::ContentControl(sdt) => {
-                let mut paragraphs = Vec::new();
-                sdt.collect_paragraphs(SdtOwner::Body, &mut paragraphs);
-                paragraphs
-                    .iter()
-                    .any(|paragraph| paragraph.text().contains(text))
+        self.find_paragraph_indices(text).into_iter().next()
+    }
+
+    /// Find every matching body-content index, preferring direct paragraphs.
+    pub fn find_paragraph_indices(&self, text: &str) -> Vec<usize> {
+        let mut direct = Vec::new();
+        let mut enclosing = Vec::new();
+        for (index, content) in self.content.iter().enumerate() {
+            match content {
+                BodyContent::Paragraph(paragraph) if paragraph.text().contains(text) => {
+                    direct.push(index);
+                }
+                BodyContent::ContentControl(sdt) => {
+                    let mut paragraphs = Vec::new();
+                    sdt.collect_paragraphs(SdtOwner::Body, &mut paragraphs);
+                    if paragraphs
+                        .iter()
+                        .any(|paragraph| paragraph.text().contains(text))
+                    {
+                        enclosing.push(index);
+                    }
+                }
+                _ => {}
             }
-            _ => false,
-        })
+        }
+        direct.extend(enclosing);
+        direct
     }
 
     /// Return every content control in document order, including nested controls.
@@ -2741,6 +2757,16 @@ mod tests {
 
         assert_eq!(body.find_paragraph_index("INSERT_HERE"), Some(1));
         assert_eq!(body.find_paragraph_index("NONEXISTENT"), None);
+
+        let document = CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:sdt><w:sdtContent><w:p><w:r><w:t>Background</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>Background</w:t></w:r></w:p></w:body></w:document>"#,
+        )
+        .unwrap();
+        assert_eq!(document.body.find_paragraph_index("Background"), Some(1));
+        assert_eq!(
+            document.body.find_paragraph_indices("Background"),
+            vec![1, 0]
+        );
     }
 
     #[test]

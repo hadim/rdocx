@@ -20,8 +20,9 @@ use rdocx::{
     ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText, MailMergeImage,
     MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions,
     RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange, RunRef, StoryId,
-    StoryItemKind, StoryKind, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection,
-    TocField, TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    StoryItemKind, StoryKind, StoryRunPosition, StoryRunRange, StyleBuilder, StyleType, TableRef,
+    TcField, TocEntrySelection, TocField, TocRebuildReport, UnderlineStyle, UnsupportedXmlRef,
+    WordCreationProfile, WordPackageClass,
 };
 use rdocx_oxml::content_control::SdtContent;
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
@@ -52,6 +53,17 @@ fn f254_paragraph(text: &str) -> ContentFragment {
 
 const WORD_F252_ORACLE: &str = "Microsoft Word 16.112.4 build 16.112.26090911";
 const WORD_F252_ENVIRONMENT: &str = "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f252-section-story-pdf-v1; pdftotext=26.09.0; pdfinfo=26.09.0";
+const WORD_FX101_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+const WORD_FX101_ENVIRONMENT: &str =
+    "macOS; locale=en-GB; normalization=fx101-run-page-break-pages-v1";
+const WORD_FX114_ORACLE: &str = "Microsoft Word 16.113 build 16.113.26091433";
+const WORD_FX114_ENVIRONMENT: &str =
+    "macOS; locale=en-GB; normalization=fx114-toc-entry-records-v1";
+const WORD_FX114_RECORDS: &[&str] = &[
+    "toc 1 | right-tab=7777 | structural-tabs=2 | literal-tab=false | text=1.\\tNumbered\\t",
+    "toc 2 | right-tab=9072 | structural-tabs=1 | literal-tab=false | text=Localized fallback\\t",
+    "toc 3 | right-tab=9072 | structural-tabs=1 | literal-tab=false | text=Canonical fallback\\t",
+];
 const WORD_F252_RECORDS: [&str; 9] = [
     "page=1 | width_pt=612 | header=H-FIRST | body=S0-FIRST | footer=F-FIRST",
     "page=2 | width_pt=612 | header=H-EVEN | body=S0-EVEN | footer=F-EVEN",
@@ -172,6 +184,170 @@ fn f252_page_text(page: &oxml_layout::PageFrame) -> String {
         _ => {}
     });
     text
+}
+
+#[test]
+fn update_fields_on_open_is_typed_optional_and_schema_ordered() {
+    let with_settings = |xml: &str| {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/settings.xml", xml.as_bytes().to_vec());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    };
+    let settings_xml = |document: &mut Document| {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap()
+    };
+
+    let mut document = with_settings(&format!(
+        r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:foreign"><q:characterSpacingControl q:val="doNotCompress"/><q:updateFields q:val="off"/><x:updateFields/><q:compat/></q:settings>"#,
+    ));
+    assert_eq!(document.update_fields_on_open(), Some(false));
+    document.set_update_fields_on_open(Some(true)).unwrap();
+    let xml = settings_xml(&mut document);
+    assert!(xml.contains("<w:updateFields/>"), "{xml}");
+    assert!(xml.contains("<x:updateFields/>"), "{xml}");
+    assert!(xml.find("characterSpacingControl").unwrap() < xml.find("<w:updateFields").unwrap());
+    assert!(xml.find("<w:updateFields").unwrap() < xml.find("<q:compat").unwrap());
+
+    for value in [Some(false), None] {
+        document.set_update_fields_on_open(value).unwrap();
+        assert_eq!(document.update_fields_on_open(), value);
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(document.update_fields_on_open(), value);
+    }
+
+    let mut minimal =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+    let before = minimal.to_bytes().unwrap();
+    minimal.set_update_fields_on_open(None).unwrap();
+    assert_eq!(minimal.to_bytes().unwrap(), before);
+
+    for xml in [
+        format!(
+            r#"<w:settings xmlns:w="{W_NS}"><w:updateFields/><w:updateFields w:val="false"/></w:settings>"#,
+        ),
+        format!(r#"<w:settings xmlns:w="{W_NS}"><w:updateFields w:val="invalid"/></w:settings>"#,),
+    ] {
+        let mut ambiguous = with_settings(&xml);
+        assert_eq!(ambiguous.update_fields_on_open(), None);
+        let before = ambiguous.to_bytes().unwrap();
+        assert!(ambiguous.set_update_fields_on_open(Some(true)).is_err());
+        assert_eq!(ambiguous.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn header_and_footer_pictures_render_from_story_relationships() {
+    let marker_png = |marker: &str| {
+        let mut image = Document::new();
+        image.add_paragraph(marker);
+        image
+            .render_page_to_png_deterministic(0, 24.0)
+            .unwrap()
+            .unwrap()
+    };
+    let body_image = marker_png("body image");
+    let header_image = marker_png("header image");
+    let footer_image = marker_png("footer image");
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        f255_story_document().to_bytes().unwrap(),
+    ))
+    .unwrap();
+    for part in ["/word/stories/header.xml", "/word/stories/footer.xml"] {
+        package
+            .get_or_create_part_rels(part)
+            .items
+            .push(oxml_opc::relationship::Relationship {
+                id: "rId0".to_owned(),
+                rel_type: oxml_opc::relationship::rel_types::HYPERLINK.to_owned(),
+                target: "https://example.invalid/reserved".to_owned(),
+                target_mode: Some("External".to_owned()),
+            });
+    }
+    let mut serialized = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut serialized).unwrap();
+    let mut document = Document::from_bytes(&serialized.into_inner()).unwrap();
+    for (kind, bytes, name) in [
+        (StoryKind::Body, body_image.as_slice(), "body.png"),
+        (StoryKind::Header, header_image.as_slice(), "header.png"),
+        (StoryKind::Footer, footer_image.as_slice(), "footer.png"),
+    ] {
+        let story = f254_story(&document, kind);
+        document
+            .add_picture_to_story(&story, bytes, name, Length::pt(20.0), Length::pt(20.0))
+            .unwrap();
+    }
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let body_ids = f255_relationship_ids(
+        &package,
+        "/word/document.xml",
+        oxml_opc::relationship::rel_types::IMAGE,
+    );
+    let header_ids = f255_relationship_ids(
+        &package,
+        "/word/stories/header.xml",
+        oxml_opc::relationship::rel_types::IMAGE,
+    );
+    let footer_ids = f255_relationship_ids(
+        &package,
+        "/word/stories/footer.xml",
+        oxml_opc::relationship::rel_types::IMAGE,
+    );
+    assert_eq!(body_ids, header_ids);
+    assert_eq!(header_ids, footer_ids);
+
+    let document = Document::from_bytes(&bytes).unwrap();
+
+    let page = document
+        .layout_page(0)
+        .unwrap()
+        .expect("story document produces a page");
+    let mut images = Vec::new();
+    oxml_layout::walk(&page.elements, &mut |element, _| {
+        if let oxml_layout::PositionedElement::Image { data, .. } = element {
+            images.push(data.clone());
+        }
+    });
+    images.sort();
+    let mut expected = vec![body_image, header_image, footer_image];
+    expected.sort();
+    assert_eq!(images, expected);
+
+    let pdf = document.to_pdf_deterministic().unwrap();
+    assert!(pdf.starts_with(b"%PDF-"));
+    assert_eq!(pdf, document.to_pdf_deterministic().unwrap());
+    let png = document
+        .render_page_to_png_deterministic(0, 96.0)
+        .unwrap()
+        .unwrap();
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(
+        png,
+        document
+            .render_page_to_png_deterministic(0, 96.0)
+            .unwrap()
+            .unwrap()
+    );
+}
+
+#[test]
+fn update_fields_on_open_is_set_cleared_and_removed_through_the_settings_part() {
+    let mut document = Document::new();
+    assert_eq!(document.update_fields_on_open(), None);
+    for value in [Some(true), Some(false), None] {
+        document.set_update_fields_on_open(value).unwrap();
+        assert_eq!(document.update_fields_on_open(), value);
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(document.update_fields_on_open(), value);
+    }
 }
 
 #[test]
@@ -814,6 +990,317 @@ fn f255_story_document() -> Document {
     let mut bytes = std::io::Cursor::new(Vec::new());
     package.write_to(&mut bytes).unwrap();
     Document::from_bytes(&bytes.into_inner()).unwrap()
+}
+
+#[test]
+fn replace_image_preserves_drawings_and_story_relationship_ownership() {
+    let png: &[u8] = b"\x89PNG\r\n\x1a\noriginal";
+    let replacement_png: &[u8] = b"\x89PNG\r\n\x1a\nreplacement";
+    let jpeg: &[u8] = b"\xff\xd8\xff\xd9";
+    let mut authored = f255_story_document();
+    authored.add_picture(png, "body.png", Length::pt(20.0), Length::pt(10.0));
+    let header = f254_story(&authored, StoryKind::Header);
+    authored
+        .add_picture_to_story(&header, png, "header.png", Length::pt(1.0), Length::pt(1.0))
+        .unwrap();
+    let footer = f254_story(&authored, StoryKind::Footer);
+    authored
+        .add_picture_to_story(&footer, png, "footer.png", Length::pt(2.0), Length::pt(2.0))
+        .unwrap();
+    let bytes = authored.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let body_relationship = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .clone();
+    let body_target =
+        oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &body_relationship.target);
+    let header_relationship = package
+        .get_part_rels(header.part_name())
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .clone();
+    let header_original_target =
+        oxml_opc::OpcPackage::resolve_rel_target(header.part_name(), &header_relationship.target);
+    package
+        .get_part_rels_mut(header.part_name())
+        .unwrap()
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == header_relationship.id)
+        .unwrap()
+        .target = body_target.clone();
+    package.remove_part(&header_original_target);
+    package
+        .content_types
+        .remove_override(&header_original_target);
+    let footer_relationship = package
+        .get_part_rels(footer.part_name())
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .clone();
+    let footer_original_target =
+        oxml_opc::OpcPackage::resolve_rel_target(footer.part_name(), &footer_relationship.target);
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .items
+        .extend([
+            oxml_opc::Relationship {
+                id: "externalImage".to_owned(),
+                rel_type: oxml_opc::relationship::rel_types::IMAGE.to_owned(),
+                target: "https://example.test/image.png".to_owned(),
+                target_mode: Some("External".to_owned()),
+            },
+            oxml_opc::Relationship {
+                id: "notImage".to_owned(),
+                rel_type: oxml_opc::relationship::rel_types::HYPERLINK.to_owned(),
+                target: body_target.clone(),
+                target_mode: None,
+            },
+        ]);
+    let drawing_xml_before = ["/word/document.xml", header.part_name(), footer.part_name()]
+        .map(|part| package.get_part(part).unwrap().to_vec());
+    let mut shared_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut shared_bytes).unwrap();
+    let mut document = Document::from_bytes(&shared_bytes.into_inner()).unwrap();
+    let header = f254_story(&document, StoryKind::Header);
+    let footer = f254_story(&document, StoryKind::Footer);
+
+    let before = document.to_bytes().unwrap();
+    for (relationship_id, bytes) in [
+        ("rIdMissing", jpeg),
+        (&body_relationship.id, b"not an image"),
+        ("externalImage", jpeg),
+        ("notImage", jpeg),
+    ] {
+        assert!(document.replace_image(relationship_id, bytes).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    document.replace_image(&body_relationship.id, jpeg).unwrap();
+    assert_eq!(
+        document.image_data(&body_relationship.id).as_deref(),
+        Some(jpeg)
+    );
+    assert_eq!(
+        document
+            .image_data_for_story(&header, &header_relationship.id)
+            .unwrap(),
+        png
+    );
+    document
+        .replace_image_for_story(&header, &header_relationship.id, replacement_png)
+        .unwrap();
+    assert_eq!(
+        document
+            .image_data_for_story(&header, &header_relationship.id)
+            .unwrap(),
+        replacement_png
+    );
+    document
+        .replace_image_for_story(&footer, &footer_relationship.id, jpeg)
+        .unwrap();
+
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let body_target_after = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .get_by_id(&body_relationship.id)
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target)
+        })
+        .unwrap();
+    let header_target_after = package
+        .get_part_rels(header.part_name())
+        .unwrap()
+        .get_by_id(&header_relationship.id)
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target(header.part_name(), &relationship.target)
+        })
+        .unwrap();
+    let footer_target_after = package
+        .get_part_rels(footer.part_name())
+        .unwrap()
+        .get_by_id(&footer_relationship.id)
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target(footer.part_name(), &relationship.target)
+        })
+        .unwrap();
+    assert_ne!(body_target_after, header_target_after);
+    assert!(body_target_after.ends_with(".jpeg"));
+    assert!(header_target_after.ends_with(".png"));
+    assert!(footer_target_after.ends_with(".jpeg"));
+    assert_eq!(package.get_part(&body_target_after), Some(jpeg));
+    assert_eq!(
+        package.get_part(&header_target_after),
+        Some(replacement_png)
+    );
+    assert_eq!(package.get_part(&footer_target_after), Some(jpeg));
+    assert!(!package.contains_part(&footer_original_target));
+    for target in [&body_target_after, &footer_target_after] {
+        assert_eq!(
+            package.content_types.content_type_for(target),
+            Some("image/jpeg")
+        );
+    }
+    assert_eq!(
+        package.content_types.content_type_for(&header_target_after),
+        Some("image/png")
+    );
+    let drawing_xml_after = ["/word/document.xml", header.part_name(), footer.part_name()]
+        .map(|part| package.get_part(part).unwrap().to_vec());
+    assert_eq!(drawing_xml_after, drawing_xml_before);
+    assert!(
+        package
+            .parts
+            .iter()
+            .all(|(part, _)| part != &header_original_target)
+    );
+
+    let mut last_png = Document::new();
+    last_png.add_picture(png, "only.png", Length::pt(1.0), Length::pt(1.0));
+    let relationship_id = last_png.images()[0].embed_id.clone();
+    last_png.replace_image(&relationship_id, jpeg).unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(last_png.to_bytes().unwrap()))
+            .unwrap();
+    assert!(!package.content_types.contains_default("png"));
+    assert!(
+        package
+            .parts
+            .keys()
+            .all(|part_name| !part_name.ends_with(".png"))
+    );
+}
+
+#[test]
+fn split_run_enables_exact_comment_ranges_without_losing_content() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("Hello 🐝brave world")
+        .run_mut(0)
+        .unwrap()
+        .set_bold(true);
+
+    let before_no_ops = document.to_bytes().unwrap();
+    assert_eq!(document.split_run(0, 0, 0).unwrap(), 0);
+    assert_eq!(document.split_run(0, 0, 18).unwrap(), 1);
+    assert_eq!(document.to_bytes().unwrap(), before_no_ops);
+
+    let brave_start = document.split_run(0, 0, 6).unwrap();
+    let brave_end = document.split_run(0, brave_start, 6).unwrap();
+    assert_eq!((brave_start, brave_end), (1, 2));
+
+    document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: brave_start,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: brave_end,
+                },
+            },
+            "Ada",
+            None,
+            "Which one?",
+        )
+        .unwrap();
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let texts = reopened
+        .paragraph(0)
+        .unwrap()
+        .runs()
+        .map(|run| run.text())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["Hello ", "🐝brave", " world"]);
+    assert!(
+        reopened
+            .paragraph(0)
+            .unwrap()
+            .runs()
+            .filter(|run| !run.text().is_empty())
+            .all(|run| run.bold_value() == Some(true))
+    );
+    assert_eq!(reopened.comments().len(), 1);
+}
+
+#[test]
+fn checked_table_cell_comment_range_is_atomic_and_reopens() {
+    let mut document = Document::new();
+    document
+        .add_table(1, 1)
+        .row(0)
+        .unwrap()
+        .cell(0)
+        .unwrap()
+        .set_text("cell text");
+    let cell = f254_story(&document, StoryKind::TableCell);
+    let location = document
+        .story_items(&cell)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let before_invalid = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_story_comment(
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 2,
+                    },
+                },
+                "Ada",
+                None,
+                "invalid",
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_invalid);
+
+    let id = document
+        .add_story_comment(
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "review",
+        )
+        .unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.comments()[0].id(), id);
+    assert_eq!(reopened.comments()[0].text(), "review");
 }
 
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
@@ -7084,6 +7571,238 @@ fn every_supported_field_matches_the_pinned_word_result() {
     assert_eq!(actual, expected, "{WORD_FIELD_ORACLE_INPUT}");
 }
 
+fn top_level_field_caches<'a>(
+    paragraphs: impl IntoIterator<Item = &'a CT_P>,
+) -> Vec<(String, String, Option<bool>)> {
+    paragraphs
+        .into_iter()
+        .flat_map(CT_P::runs)
+        .flat_map(|run| &run.content)
+        .filter_map(|content| match content {
+            rdocx_oxml::text::RunContent::Field(field) => Some((
+                field.instruction.name.clone(),
+                field.cached_result.clone(),
+                field.dirty,
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn update_page_fields_writes_first_placed_page_values_through_staged_parts() {
+    fn complex_field(instruction: &str, cached: &str) -> String {
+        format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>{cached}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+        )
+    }
+
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let (first_footer_id, footer_id, even_footer_id) = {
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        (
+            relationships.add(oxml_opc::relationship::rel_types::FOOTER, "footer1.xml"),
+            relationships.add(oxml_opc::relationship::rel_types::FOOTER, "footer1.xml"),
+            relationships.add(oxml_opc::relationship::rel_types::FOOTER, "footer2.xml"),
+        )
+    };
+    assert_ne!(first_footer_id, footer_id);
+    for (part_name, paragraph) in [
+        (
+            "/word/footer1.xml",
+            format!(
+                r#"<w:r><w:t xml:space="preserve">Page </w:t></w:r>{}<w:r><w:t xml:space="preserve"> of </w:t></w:r>{}"#,
+                complex_field("PAGE", "7"),
+                complex_field("NUMPAGES", "9")
+            ),
+        ),
+        ("/word/footer2.xml", complex_field("PAGE", "7")),
+    ] {
+        package.set_part(
+            part_name,
+            format!(r#"<w:ftr xmlns:w="{W_NS}"><w:p>{paragraph}</w:p></w:ftr>"#).into_bytes(),
+        );
+        package.content_types.add_override(
+            part_name,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        );
+    }
+    let nested_if = format!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> IF </w:instrText></w:r>{}<w:r><w:instrText xml:space="preserve"> = 2 "two" "other" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>other</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        complex_field("PAGE", "5")
+    );
+    let body = format!(
+        r#"<w:p><w:pPr><w:sectPr><w:footerReference w:type="default" r:id="{first_footer_id}"/></w:sectPr></w:pPr><w:r><w:t>Page one.</w:t></w:r><w:fldSimple w:instr="AUTHOR"><w:r><w:t>stale author</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t xml:space="preserve">Body </w:t></w:r>{}{}{}{nested_if}<w:fldSimple w:instr=" NUMPAGES "><w:r><w:t>9</w:t></w:r></w:fldSimple></w:p><w:sectPr><w:footerReference w:type="default" r:id="{footer_id}"/><w:footerReference w:type="even" r:id="{even_footer_id}"/></w:sectPr>"#,
+        complex_field("PAGE", "7"),
+        complex_field(r"PAGE \* roman", "x"),
+        complex_field(r"PAGE \* CardText", "stale words"),
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}</w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    // The shared footer part is laid out once per relationship, and each
+    // placement keeps the identity of its own relationship.
+    let layout = document.layout_deterministic().unwrap();
+    let placed = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| {
+            let mut fields = Vec::new();
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let rdocx_layout::PositionedElement::Text(run) = element
+                    && run.field_kind == Some(oxml_layout::FieldKind::Page)
+                    && let Some(field) = run.field_source
+                {
+                    let path = layout.source_node(field.node).unwrap();
+                    fields.push((path.story.clone(), path.children.clone(), field.index));
+                }
+            });
+            fields
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(placed.len(), 2);
+    let footer_story = |relationship_id: &str| rdocx_layout::WordStory::Footer {
+        relationship_id: relationship_id.to_owned(),
+    };
+    assert_eq!(
+        placed[0],
+        vec![(footer_story(&first_footer_id), vec![0], 0)]
+    );
+    for index in 0..3 {
+        assert!(placed[1].contains(&(rdocx_layout::WordStory::Document, vec![1], index)));
+    }
+    assert!(placed[1].contains(&(footer_story(&footer_id), vec![0], 0)));
+    drop(layout);
+
+    assert_eq!(document.update_page_fields().unwrap(), 5);
+    let updated = document.to_bytes().unwrap();
+    assert_eq!(document.update_page_fields().unwrap(), 5);
+    assert_eq!(document.to_bytes().unwrap(), updated);
+
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(updated)).unwrap();
+    let document_xml = package.get_part("/word/document.xml").unwrap();
+    let body = CT_Document::from_xml(document_xml).unwrap().body;
+    let paragraphs = body.content.iter().filter_map(|content| match content {
+        BodyContent::Paragraph(paragraph) => Some(paragraph),
+        _ => None,
+    });
+    let caches = |values: &[(&str, &str, Option<bool>)]| {
+        values
+            .iter()
+            .map(|(name, cached, dirty)| ((*name).to_owned(), (*cached).to_owned(), *dirty))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        top_level_field_caches(paragraphs),
+        caches(&[
+            ("AUTHOR", "stale author", None),
+            ("PAGE", "2", Some(false)),
+            ("PAGE", "ii", Some(false)),
+            ("PAGE", "stale words", None),
+            ("IF", "other", None),
+            ("NUMPAGES", "2", Some(false)),
+        ])
+    );
+    assert!(
+        String::from_utf8_lossy(document_xml).contains("<w:t>5</w:t>"),
+        "the nested PAGE is not laid out and keeps its cache"
+    );
+    let footer = |part_name: &str| {
+        rdocx_oxml::header_footer::CT_HdrFtr::from_xml(package.get_part(part_name).unwrap())
+            .unwrap()
+    };
+    assert_eq!(
+        top_level_field_caches(&footer("/word/footer1.xml").paragraphs),
+        caches(&[("PAGE", "1", Some(false)), ("NUMPAGES", "2", Some(false))])
+    );
+    assert_eq!(
+        top_level_field_caches(&footer("/word/footer2.xml").paragraphs),
+        caches(&[("PAGE", "7", None)]),
+        "the even footer is not laid out while even and odd headers are off"
+    );
+}
+
+#[test]
+fn update_page_fields_keeps_page_caches_layout_does_not_format() {
+    let body = r#"<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>7</w:t></w:r></w:fldSimple><w:fldSimple w:instr="NUMPAGES"><w:r><w:t>9</w:t></w:r></w:fldSimple></w:p><w:sectPr><w:pgNumType w:fmt="lowerRoman"/></w:sectPr>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    assert_eq!(document.update_page_fields().unwrap(), 1);
+    let body = body_from_document(&mut document);
+    let paragraphs = body.content.iter().filter_map(|content| match content {
+        BodyContent::Paragraph(paragraph) => Some(paragraph),
+        _ => None,
+    });
+    assert_eq!(
+        top_level_field_caches(paragraphs),
+        vec![
+            ("PAGE".to_owned(), "7".to_owned(), None),
+            ("NUMPAGES".to_owned(), "1".to_owned(), Some(false)),
+        ]
+    );
+
+    let mut unchanged = Document::new();
+    unchanged.add_paragraph("no page fields");
+    let before = unchanged.to_bytes().unwrap();
+    assert_eq!(unchanged.update_page_fields().unwrap(), 0);
+    assert_eq!(unchanged.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn layout_backed_page_fields_update_cached_results() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>stale page</w:t></w:r></w:fldSimple><w:fldSimple w:instr="NUMPAGES"><w:r><w:t>stale count</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>stale TOC page</w:t></w:r></w:fldSimple></w:p>
+        <w:tbl><w:tr><w:tc><w:p><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>stale table page</w:t></w:r></w:fldSimple></w:p></w:tc></w:tr></w:tbl>
+        <w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:bookmarkStart w:id="7" w:name="destination"/><w:r><w:t>Target</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.page_fields, 1);
+    assert_eq!(report.num_pages_fields, 1);
+    assert_eq!(report.page_reference_fields, 2);
+    assert_eq!(report.updated_count(), 4);
+
+    let xml = document_xml(&mut document);
+    for stale in [
+        "stale page",
+        "stale count",
+        "stale TOC page",
+        "stale table page",
+    ] {
+        assert!(!xml.contains(stale), "{stale} cache was not refreshed");
+    }
+    assert!(xml.contains("<w:t>1</w:t>"), "{xml}");
+    assert!(xml.matches("<w:t>2</w:t>").count() >= 3, "{xml}");
+}
+
+#[test]
+fn layout_backed_pageref_updates_a_directional_cached_result() {
+    let body = r#"
+        <w:p><w:pPr><w:bidi/></w:pPr><w:fldSimple w:instr="PAGEREF destination"><w:r><w:rPr><w:rtl/><w:lang w:val="en-US" w:bidi="ar-SA"/></w:rPr><w:t>99</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:bookmarkStart w:id="7" w:name="destination"/><w:r><w:t>Target</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.page_reference_fields, 1);
+
+    let xml = document_xml(&mut document);
+    assert!(!xml.contains("<w:t>99</w:t>"), "{xml}");
+    assert!(xml.contains("<w:t>2</w:t>"), "{xml}");
+}
+
 #[test]
 fn extended_field_families_match_the_pinned_word_result() {
     assert_eq!(
@@ -7348,7 +8067,7 @@ fn dynamic_toc_rebuild_matches_the_pinned_word_update() {
         TocRebuildReport {
             entry_count: 4,
             bookmark_count: 4,
-            diagnostic_count: 0,
+            diagnostics: Vec::new(),
         }
     );
 
@@ -7417,7 +8136,7 @@ fn dynamic_toc_rebuild_matches_the_pinned_word_update() {
         TocRebuildReport {
             entry_count: 2,
             bookmark_count: 1,
-            diagnostic_count: 0,
+            diagnostics: Vec::new(),
         }
     );
     let xml = document_xml(&mut document);
@@ -7469,6 +8188,341 @@ fn numbered_toc_entries_reuse_the_visible_layout_marker() {
         toc_entry_signatures(&document_xml(&mut document))[0].0,
         "1.\tOverview\t1"
     );
+}
+
+fn fx114_toc_document() -> Document {
+    use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
+    use rdocx_oxml::properties::CT_PPr;
+    use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
+    use rdocx_oxml::units::Twips;
+
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-3"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Numbered</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Localized fallback</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>Canonical fallback</w:t></w:r></w:p>
+        <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:left="1417" w:right="1417"/></w:sectPr>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    document
+        .add_style(
+            StyleBuilder::paragraph("Inhaltsverzeichnis1", "ToC 1").paragraph_properties(CT_PPr {
+                tabs: Some(CT_Tabs {
+                    tabs: vec![CT_TabStop {
+                        val: ST_TabJc::Right,
+                        pos: Twips(7777),
+                        leader: Some(ST_TabLeader::Dot),
+                        source_occurrence: None,
+                    }],
+                }),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    document
+        .add_style(StyleBuilder::paragraph("SommaireDeux", "toc 2"))
+        .unwrap();
+    let definition = document
+        .add_numbering_definition(&[ListLevel::decimal()])
+        .unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .link_style_to_numbering("Heading1", instance, 0)
+        .unwrap();
+    document
+}
+
+fn fx114_toc_records(bytes: &[u8]) -> Vec<String> {
+    use rdocx_oxml::shared::ST_TabJc;
+    use rdocx_oxml::text::RunContent;
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).expect("open package");
+    let document = CT_Document::from_xml(
+        package
+            .get_part("/word/document.xml")
+            .expect("document part"),
+    )
+    .expect("parse document");
+    let styles = rdocx_oxml::styles::CT_Styles::from_xml(
+        package.get_part("/word/styles.xml").expect("styles part"),
+    )
+    .expect("parse styles");
+    document
+        .body
+        .paragraphs()
+        .filter_map(|paragraph| {
+            let properties = paragraph.properties.as_ref()?;
+            let style_id = properties.style_id.as_deref()?;
+            let style = styles.get_by_id(style_id)?;
+            let name = style.name.as_deref()?;
+            let normalized = name.trim().to_ascii_lowercase();
+            if !matches!(normalized.as_str(), "toc 1" | "toc 2" | "toc 3") {
+                return None;
+            }
+            let direct_right_tab = properties.tabs.as_ref().and_then(|tabs| {
+                tabs.tabs
+                    .iter()
+                    .find(|tab| tab.val == ST_TabJc::Right)
+            });
+            let style_right_tab = style.ppr.as_ref().and_then(|properties| {
+                properties.tabs.as_ref().and_then(|tabs| {
+                    tabs.tabs
+                        .iter()
+                        .find(|tab| tab.val == ST_TabJc::Right)
+                })
+            });
+            let right_tab = direct_right_tab.or(style_right_tab)?.pos.0;
+            let structural_tabs = paragraph
+                .runs
+                .iter()
+                .flat_map(|run| &run.content)
+                .filter(|content| matches!(content, RunContent::Tab))
+                .count();
+            let literal_tab = paragraph.runs.iter().any(|run| {
+                run.content.iter().any(|content| match content {
+                    RunContent::Text(text) => text.text.contains('\t'),
+                    _ => false,
+                })
+            });
+            let mut text = String::new();
+            let mut seen_tabs = 0usize;
+            for content in paragraph.runs.iter().flat_map(|run| &run.content) {
+                match content {
+                    RunContent::Text(value) if seen_tabs < structural_tabs => {
+                        text.push_str(&value.text)
+                    }
+                    RunContent::Tab => {
+                        text.push_str("\\t");
+                        seen_tabs += 1;
+                    }
+                    _ => {}
+                }
+            }
+            Some(format!(
+                "{normalized} | right-tab={right_tab} | structural-tabs={structural_tabs} | literal-tab={literal_tab} | text={text}"
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn rebuilt_toc_uses_localized_styles_section_tabs_and_structural_suffixes() {
+    use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
+    use rdocx_oxml::text::RunContent;
+    use rdocx_oxml::units::Twips;
+
+    assert_eq!(
+        WORD_FX114_ORACLE,
+        "Microsoft Word 16.113 build 16.113.26091433"
+    );
+    assert_eq!(
+        WORD_FX114_ENVIRONMENT,
+        "macOS; locale=en-GB; normalization=fx114-toc-entry-records-v1"
+    );
+    let mut document = fx114_toc_document();
+    let preserved_style_child = r#"<producer:opaque xmlns:producer="urn:producer" producer:value="keep"><producer:child/></producer:opaque>"#;
+    let bytes = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    let unrelated_style = format!(
+        r#"<w:style w:type="paragraph" w:styleId="ProducerKeep"><w:name w:val="Producer keep"/>{preserved_style_child}</w:style>"#
+    );
+    let styles = styles.replace("</w:styles>", &format!("{unrelated_style}</w:styles>"));
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut injected = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut injected).unwrap();
+    document = Document::from_bytes(injected.get_ref()).unwrap();
+
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 3);
+    let bytes = document.to_bytes().unwrap();
+    assert_eq!(
+        fx114_toc_records(&bytes)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        WORD_FX114_RECORDS
+    );
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert!(reopened.style("Inhaltsverzeichnis1").is_some());
+    assert!(reopened.style("SommaireDeux").is_some());
+    assert!(reopened.style("TOC3").is_some());
+    assert!(reopened.style("ProducerKeep").is_some());
+    let saved_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let saved_styles =
+        std::str::from_utf8(saved_package.get_part("/word/styles.xml").unwrap()).unwrap();
+    assert!(
+        saved_styles.contains(preserved_style_child),
+        "{saved_styles}"
+    );
+
+    let body = body_from_document(&mut Document::from_bytes(&bytes).unwrap());
+    let entries = body
+        .paragraphs()
+        .filter(|paragraph| {
+            paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref())
+                .is_some_and(|style| {
+                    matches!(style, "Inhaltsverzeichnis1" | "SommaireDeux" | "TOC3")
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 3);
+    for (entry, expected) in entries
+        .iter()
+        .zip(["Inhaltsverzeichnis1", "SommaireDeux", "TOC3"])
+    {
+        assert_eq!(
+            entry
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref()),
+            Some(expected)
+        );
+    }
+    assert!(
+        entries[0]
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.tabs.as_ref())
+            .is_none()
+    );
+    for entry in &entries[1..] {
+        let tabs = entry
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.tabs.as_ref())
+            .expect("fallback tab");
+        assert_eq!(tabs.tabs.len(), 1);
+        assert_eq!(tabs.tabs[0].val, ST_TabJc::Right);
+        assert_eq!(tabs.tabs[0].pos, Twips(9072));
+        assert_eq!(tabs.tabs[0].leader, Some(ST_TabLeader::Dot));
+    }
+
+    let numbered = body
+        .paragraphs()
+        .find(|paragraph| {
+            paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref())
+                == Some("Inhaltsverzeichnis1")
+        })
+        .unwrap();
+    assert!(numbered.runs.iter().all(|run| {
+        run.content.iter().all(|content| match content {
+            RunContent::Text(text) => !text.text.contains('\t'),
+            _ => true,
+        })
+    }));
+    assert!(numbered.runs.iter().any(|run| {
+        run.content
+            .iter()
+            .any(|content| matches!(content, RunContent::Tab))
+    }));
+    assert_eq!(numbered.text(), "1.\tNumbered\t");
+    reopened.layout_deterministic().unwrap();
+
+    let extreme_body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Extreme geometry</w:t></w:r></w:p>
+        <w:sectPr><w:pgSz w:w="2147483647" w:h="16838"/><w:pgMar w:left="-2147483648" w:right="-2147483648"/></w:sectPr>
+    "#;
+    let mut extreme = document_with_field_parts(&wrap_word_body(extreme_body), None, None);
+    assert_eq!(extreme.rebuild_toc().unwrap().entry_count, 1);
+    let body = body_from_document(&mut extreme);
+    let tab = body
+        .paragraphs()
+        .find(|paragraph| {
+            paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref())
+                == Some("TOC1")
+        })
+        .and_then(|paragraph| paragraph.properties.as_ref())
+        .and_then(|properties| properties.tabs.as_ref())
+        .and_then(|tabs| tabs.tabs.first())
+        .expect("safe fallback tab");
+    assert_eq!(tab.pos, Twips(9360));
+}
+
+#[test]
+#[ignore = "requires installed Microsoft Word 16.113 GUI automation"]
+fn capture_fx114_word_toc_entry_records() {
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    for (key, expected) in [
+        ("CFBundleShortVersionString", "16.113"),
+        ("CFBundleVersion", "16.113.26091433"),
+    ] {
+        let output = Command::new("plutil")
+            .args([
+                "-extract",
+                key,
+                "raw",
+                "/Applications/Microsoft Word.app/Contents/Info.plist",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+    }
+
+    let mut document = fx114_toc_document();
+    document.rebuild_toc().unwrap();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::path::Path::new(
+        "/Users/atulsharma/Library/Containers/com.microsoft.Word/Data/Documents/rdocx-fx114-word-oracle",
+    )
+    .join(format!("{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("fx114-source.docx");
+    let round_trip = directory.join("fx114-word.docx");
+    document.save(&source).unwrap();
+
+    let script = format!(
+        r#"with timeout of 60 seconds
+tell application "Microsoft Word"
+activate
+open file name "{}" read only false add to recent files false
+set fx114Doc to document 1
+save as fx114Doc file name "{}" file format format document default add to recent files false
+set fx114Doc to active document
+close fx114Doc saving no
+end tell
+end timeout"#,
+        source.display(),
+        round_trip.display(),
+    );
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Word round trip failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = std::fs::read(&round_trip).unwrap();
+    assert_eq!(
+        fx114_toc_records(&bytes)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        WORD_FX114_RECORDS
+    );
+    std::fs::remove_dir_all(&directory).unwrap();
 }
 
 #[test]
@@ -7621,7 +8675,7 @@ fn toc_rebuild_rejects_ambiguous_or_malformed_sources_atomically() {
     }
 
     let unsupported = r#"
-        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \z</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \x</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
         <w:p><w:r><w:t>stored unsupported cache</w:t></w:r></w:p>
         <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
     "#;
@@ -7632,7 +8686,9 @@ fn toc_rebuild_rejects_ambiguous_or_malformed_sources_atomically() {
         TocRebuildReport {
             entry_count: 0,
             bookmark_count: 0,
-            diagnostic_count: 1,
+            diagnostics: vec![
+                "field TOC uses unsupported switch \\x, stored display retained".to_owned()
+            ],
         }
     );
     assert_eq!(document_xml(&mut document), before);
@@ -7640,12 +8696,67 @@ fn toc_rebuild_rejects_ambiguous_or_malformed_sources_atomically() {
     let simple = r#"<w:p><w:fldSimple w:instr="TOC"><w:r><w:t>stored simple cache</w:t></w:r></w:fldSimple></w:p>"#;
     let mut document = document_with_field_parts(&wrap_word_body(simple), None, None);
     let before = document_xml(&mut document);
-    assert_eq!(document.rebuild_toc().unwrap().diagnostic_count, 1);
+    assert_eq!(document.rebuild_toc().unwrap().diagnostic_count(), 1);
     assert_eq!(document_xml(&mut document), before);
 
     let mut no_toc = Document::new();
     no_toc.add_paragraph("Heading").style("Heading1");
     assert_eq!(no_toc.rebuild_toc().unwrap(), TocRebuildReport::default());
+}
+
+#[test]
+fn word_default_toc_switch_rebuilds_and_reports_ordered_diagnostics() {
+    let body = r#"
+        <w:sdt>
+          <w:sdtPr><w:id w:val="17"/><w:dropDownList producer:flag="keep"><w:listItem w:displayText="A" w:value="a"/></w:dropDownList></w:sdtPr>
+          <w:sdtContent>
+            <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+            <w:p><w:r><w:t>stale cache</w:t></w:r></w:p>
+            <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+          </w:sdtContent>
+        </w:sdt>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Alpha</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+
+    let report = document.rebuild_toc().unwrap();
+    assert_eq!(report.entry_count, 1);
+    assert_eq!(report.diagnostic_count(), 0);
+    assert!(report.diagnostics.is_empty());
+    let bytes = document.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    let repeat_report = reopened.rebuild_toc().unwrap();
+    assert_eq!(repeat_report.entry_count, 1);
+    assert!(repeat_report.diagnostics.is_empty());
+    let xml = document_xml(&mut reopened);
+    assert!(!xml.contains("stale cache"), "{xml}");
+    for preserved in [
+        r#" TOC \o "1-3" \h \z \u "#,
+        "producer:flag=\"keep\"",
+        "w:listItem",
+        "w:displayText=\"A\"",
+    ] {
+        assert!(xml.contains(preserved), "missing {preserved}: {xml}");
+    }
+
+    let diagnostics = r#"
+        <w:p><w:fldSimple w:instr="TOC"><w:r><w:t>simple cache</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \x</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>complex cache</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(diagnostics), None, None);
+    let before = document.to_bytes().unwrap();
+    let report = document.rebuild_toc().unwrap();
+    assert_eq!(
+        report.diagnostics,
+        [
+            "simple table of contents fields are not rebuilt, stored display retained",
+            "field TOC uses unsupported switch \\x, stored display retained",
+        ]
+    );
+    assert_eq!(report.diagnostic_count(), 2);
+    assert_eq!(document.to_bytes().unwrap(), before);
 }
 
 #[test]
@@ -7982,7 +9093,10 @@ fn toc_rebuild_diagnoses_simple_tocs_in_accepted_revisions() {
             TocRebuildReport {
                 entry_count: 0,
                 bookmark_count: 0,
-                diagnostic_count: 1,
+                diagnostics: vec![
+                    "simple table of contents fields are not rebuilt, stored display retained"
+                        .to_owned(),
+                ],
             },
             "{wrapper}",
         );
@@ -8074,7 +9188,7 @@ fn toc_rebuild_projects_accepted_revisions_inside_content_controls() {
             r#"<w:p><w:sdt><w:sdtContent><w:{wrapper} w:id="74" w:author="Ada"><w:fldSimple w:instr="TOC"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:{wrapper}></w:sdtContent></w:sdt></w:p>"#
         );
         let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
-        assert_eq!(document.rebuild_toc().unwrap().diagnostic_count, 1);
+        assert_eq!(document.rebuild_toc().unwrap().diagnostic_count(), 1);
     }
 }
 
@@ -9215,7 +10329,7 @@ fn malformed_control_fields_and_bookmarks_do_not_shift_later_toc_coordinates() {
         .expect("opaque prefixes do not shift coordinates");
     assert_eq!(report.entry_count, 1);
     assert_eq!(report.bookmark_count, 1);
-    assert_eq!(report.diagnostic_count, 0);
+    assert_eq!(report.diagnostic_count(), 0);
     let target = document
         .bookmarks()
         .into_iter()
@@ -10741,7 +11855,7 @@ fn ordered_reader_items_keep_every_direct_child_and_preserved_boundary() {
     assert_eq!(
         body,
         [
-            "paragraph:firstcontrollink beforelink afterlast",
+            "paragraph:firstcontrollink beforelinked revisionlink afterinsertedlast",
             "raw:<x:body-raw xmlns:x=\"urn:foreign\"><x:child/></x:body-raw>",
             "table",
             "control:body control",
@@ -10878,7 +11992,7 @@ fn ordered_reader_items_resolve_aliases_without_flattening_containers() {
             "run:direct",
         ]
     );
-    assert_eq!(document.paragraph(0).unwrap().run_count(), 1);
+    assert_eq!(document.paragraph(0).unwrap().run_count(), 2);
 }
 
 #[test]
@@ -12135,6 +13249,218 @@ fn paragraph_markers_report_whether_their_source_elements_contain_children() {
         .collect::<Vec<_>>();
 
     assert_eq!(markers, [true, false, true, false]);
+}
+
+#[test]
+fn mixed_run_content_reopens_and_renders_in_source_order() {
+    const PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60,
+        0xf8, 0xcf, 0xf0, 0x00, 0x00, 0x04, 0x01, 0x01, 0x08, 0x9d, 0x1d, 0xe1, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    let mut document = Document::new();
+    let relationship_id = document.embed_image(PNG, "pixel.png");
+    {
+        let mut paragraph = document.add_paragraph("");
+        let mut run = paragraph.add_run("first");
+        run.add_tab();
+        run.add_break(BreakKind::Line);
+        run.add_break(BreakKind::Page);
+        run.add_break(BreakKind::Column);
+        run.add_picture(&relationship_id, Length::pt(1.0), Length::pt(1.0));
+        run.add_field("PAGE", "2").unwrap();
+        run.add_symbol('§');
+        run.add_text("last");
+        run.set_bold(true);
+        run.set_italic(true);
+        run.set_underline_style(UnderlineStyle::Double);
+        run.set_size(11.0);
+        run.set_font("Carlito");
+        run.set_language("en-GB");
+        run.set_color("123456");
+        run.set_highlight("yellow");
+        run.set_strike(true);
+        run.set_double_strike(false);
+        run.set_all_caps(false);
+        run.set_small_caps(false);
+        run.set_superscript();
+        run.set_subscript();
+        run.set_character_spacing(Length::pt(0.5));
+        run.set_width_scale(100);
+        run.set_position(0);
+        run.set_hidden(false);
+        run.set_style("Emphasis");
+    }
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let mut raw_subtrees = Vec::new();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let snapshot = (0..paragraph.run_count())
+        .map(|index| run_snapshot(paragraph.run(index).unwrap(), &mut raw_subtrees))
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(
+        snapshot,
+        "text:first,tab,break:line,break:page,break:column,drawing:true:false:Some(\"rId1\"):Some(\"Picture\"):None:Some(12700):Some(12700),field:PAGE:PAGE:2:None,text:§,text:last"
+    );
+    assert!(paragraph.run(0).unwrap().is_bold());
+    assert!(paragraph.run(0).unwrap().is_italic());
+    let field_run = paragraph.run(1).unwrap();
+    let RunItemRef::Field(field) = field_run.items().next().unwrap() else {
+        panic!("middle run must contain the authored field");
+    };
+    let field_segments = field.cached_display_segments();
+    let field_properties = field_segments[0].properties().unwrap();
+    assert_eq!(field_properties.bold, Some(true));
+    assert_eq!(field_properties.italic, Some(true));
+    assert!(paragraph.run(2).unwrap().is_bold());
+    assert!(paragraph.run(2).unwrap().is_italic());
+    assert!(
+        reopened
+            .to_pdf_deterministic()
+            .unwrap()
+            .starts_with(b"%PDF-")
+    );
+}
+
+#[test]
+fn run_level_page_breaks_match_word_pagination() {
+    assert_eq!(
+        WORD_FX101_ORACLE,
+        "Microsoft Word 16.104 build 16.104.25121423"
+    );
+    assert_eq!(
+        WORD_FX101_ENVIRONMENT,
+        "macOS; locale=en-GB; normalization=fx101-run-page-break-pages-v1"
+    );
+
+    let page_texts = |document: &mut Document| {
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        reopened
+            .layout_deterministic()
+            .unwrap()
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<Vec<_>>()
+    };
+
+    let mut inline = Document::new();
+    {
+        let mut paragraph = inline.add_paragraph("");
+        let mut run = paragraph.add_run("Alpha");
+        run.add_break(BreakKind::Page);
+        run.add_text("Bravo");
+    }
+    assert_eq!(page_texts(&mut inline), ["Alpha", "Bravo"]);
+
+    let mut own_paragraph = Document::new();
+    own_paragraph.add_paragraph("Alpha");
+    {
+        let mut paragraph = own_paragraph.add_paragraph("");
+        paragraph.add_run("").add_break(BreakKind::Page);
+    }
+    own_paragraph.add_paragraph("Bravo");
+    assert_eq!(page_texts(&mut own_paragraph), ["Alpha", "Bravo"]);
+}
+
+#[test]
+fn run_page_break_pagination_reaches_fragments_fields_pdf_and_png() {
+    let source = wrap_word_body(
+        r#"<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:t>TOC</w:t></w:r><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>stored TOC target</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t>Alpha</w:t><w:br w:type="page"/></w:r><w:bookmarkStart w:id="7" w:name="destination"/><w:r><w:t>Bravo</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>stored page</w:t></w:r></w:fldSimple><w:r><w:t>/</w:t></w:r><w:fldSimple w:instr="NUMPAGES"><w:r><w:t>stored count</w:t></w:r></w:fldSimple><w:r><w:t>/</w:t></w:r><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>stored reference</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="7"/></w:p>"#,
+    );
+    let document = document_with_content_controls(&source);
+    let layout = document.layout_deterministic().unwrap();
+    let page_text = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| f252_page_text(page))
+        .collect::<Vec<_>>();
+    assert_eq!(page_text, ["TOC2Alpha", "Bravo2/2/2"]);
+    assert_eq!(
+        layout
+            .body_layout_fragments(1)
+            .unwrap()
+            .iter()
+            .map(|fragment| fragment.physical_page)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+
+    for page_index in 0..2 {
+        assert!(
+            document
+                .render_page_to_png_deterministic(page_index, 24.0)
+                .unwrap()
+                .unwrap()
+                .starts_with(b"\x89PNG\r\n\x1a\n")
+        );
+    }
+    assert!(
+        document
+            .render_page_to_png_deterministic(2, 24.0)
+            .unwrap()
+            .is_none()
+    );
+
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory =
+        std::env::temp_dir().join(format!("rdocx-fx101-pdf-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("run-page-break.pdf");
+    std::fs::write(&path, pdf).unwrap();
+    let info = std::process::Command::new("pdfinfo")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(info.status.success());
+    let info = String::from_utf8(info.stdout).unwrap();
+    let pages = info
+        .lines()
+        .find_map(|line| line.strip_prefix("Pages:").map(str::trim))
+        .unwrap();
+    assert_eq!(pages, "2");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn mixed_run_field_append_preserves_raw_boundaries_and_rejects_invalid_fields() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>before</w:t><x:custom xmlns:x="urn:custom"/></w:r></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    {
+        let mut paragraph = document.paragraph_mut(0).unwrap();
+        let mut run = paragraph.run_mut(0).unwrap();
+        assert!(run.add_field("", "ignored").is_err());
+        assert_eq!(run.text(), "before");
+        run.add_field("DATE", "today").unwrap();
+        run.add_text("after");
+        run.set_bold(true);
+    }
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let mut raw_subtrees = Vec::new();
+    let snapshot = (0..paragraph.run_count())
+        .map(|index| run_snapshot(paragraph.run(index).unwrap(), &mut raw_subtrees))
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(
+        snapshot,
+        "text:before,raw:<x:custom xmlns:x=\"urn:custom\"/>,field:DATE:DATE:today:None,text:after"
+    );
+    assert!(paragraph.run(0).unwrap().is_bold());
+    assert!(paragraph.run(2).unwrap().is_bold());
 }
 
 #[test]
@@ -13508,6 +14834,110 @@ fn a_ranged_comment_reply_and_resolution_keep_one_intact_thread() {
     assert_eq!(comments[1].id(), reply_id);
     assert_eq!(comments[1].text(), "Looks good");
     assert_eq!(comments[1].parent_id(), Some(comment_id));
+}
+
+#[test]
+fn comments_keep_standard_content_type_ids_dates_and_threads() {
+    let mut document = Document::new();
+    document.add_paragraph("First paragraph");
+    document.add_paragraph("Second paragraph");
+    let range = |body_index| RunRange {
+        start: RunPosition {
+            body_index,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index,
+            run_index: 1,
+        },
+    };
+    let second = document
+        .add_comment_with_date(
+            range(1),
+            "Ada",
+            Some("AL"),
+            "Second",
+            Some("2026-09-16T10:15:30Z"),
+        )
+        .unwrap();
+    let first = document
+        .add_comment_with_date(range(0), "Ben", None, "First", None)
+        .unwrap();
+    let reply = document
+        .reply_to_with_date(second, "Grace", "Reply", Some("2026-09-16T11:00:00+01:00"))
+        .unwrap();
+    assert!(document.resolve_comment(second, true).unwrap());
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let comments = reopened.comments();
+    assert_eq!(
+        comments
+            .iter()
+            .map(|comment| (comment.id(), comment.parent_id(), comment.date()))
+            .collect::<Vec<_>>(),
+        vec![
+            (second, None, Some("2026-09-16T10:15:30Z")),
+            (first, None, None),
+            (reply, Some(second), Some("2026-09-16T11:00:00+01:00")),
+        ]
+    );
+    assert!(comments[0].resolved());
+
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    assert_eq!(
+        package
+            .content_types
+            .overrides
+            .get("/word/commentsExtended.xml")
+            .map(String::as_str),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml")
+    );
+
+    let before_invalid = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_comment_with_date(range(0), "Invalid", None, "No write", Some("2026-02-30"))
+            .unwrap_err()
+            .to_string()
+            .contains("invalid RFC 3339 comment timestamp")
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_invalid);
+
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let extended = String::from_utf8(
+        package
+            .get_part("/word/commentsExtended.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+    .replace(
+        "<w15:commentsEx ",
+        "<w15:commentsEx xmlns:ext=\"urn:producer\" ",
+    )
+    .replace(
+        "</w15:commentsEx>",
+        "<ext:kept token=\"same\"/></w15:commentsEx>",
+    );
+    package.set_part("/word/commentsExtended.xml", extended.into_bytes());
+    let mut seeded = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut seeded).unwrap();
+    let mut no_op = Document::from_bytes(seeded.get_ref()).unwrap();
+    let saved = no_op.to_bytes().unwrap();
+    let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    assert_eq!(
+        saved
+            .content_types
+            .overrides
+            .get("/word/commentsExtended.xml")
+            .map(String::as_str),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml")
+    );
+    assert!(
+        String::from_utf8_lossy(saved.get_part("/word/commentsExtended.xml").unwrap())
+            .contains("<ext:kept token=\"same\"/>")
+    );
 }
 
 #[test]
@@ -15265,6 +16695,102 @@ fn rejecting_a_comparison_reproduces_the_original_body_exactly() {
 }
 
 #[test]
+fn comparison_appends_multiple_terminal_paragraphs_without_residue() {
+    let reconstruct = |mut original: Document, edited: Document| {
+        let original_bytes = original.to_bytes().unwrap();
+        let mut compared = Document::from_bytes(&original_bytes).unwrap();
+        let diagnostics = compared
+            .compare(&edited, "Ada", "2026-09-16T09:30:00Z")
+            .unwrap();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let tracked = compared.to_bytes().unwrap();
+
+        let mut accepted = Document::from_bytes(&tracked).unwrap();
+        accepted.accept_all().unwrap();
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-09-16T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        let accepted = accepted.to_bytes().unwrap();
+
+        let mut rejected = Document::from_bytes(&tracked).unwrap();
+        rejected.reject_all().unwrap();
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-09-16T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        let rejected = rejected.to_bytes().unwrap();
+        (tracked, accepted, rejected)
+    };
+
+    let mut original = Document::new();
+    original.add_paragraph("anchor");
+    let mut edited = Document::new();
+    edited.add_paragraph("inserted at start");
+    edited.add_paragraph("anchor");
+    reconstruct(original, edited);
+
+    let mut original = Document::new();
+    original.add_paragraph("first");
+    original.add_paragraph("last");
+    let mut edited = Document::new();
+    edited.add_paragraph("first");
+    edited.add_paragraph("inserted in middle");
+    edited.add_paragraph("last");
+    reconstruct(original, edited);
+
+    for appended in 1..=3 {
+        let mut original = Document::new();
+        original.add_paragraph("anchor");
+        let original_bytes = original.to_bytes().unwrap();
+        let mut edited = Document::from_bytes(&original_bytes).unwrap();
+        for index in 0..appended {
+            edited.add_paragraph(&format!("appended {index}"));
+        }
+        reconstruct(original, edited);
+    }
+
+    let mut original = Document::new();
+    let relationship_id = original.embed_image(b"stable image", "stable.png");
+    {
+        let mut paragraph = original.add_paragraph("");
+        let mut run = paragraph.add_run("anchor");
+        run.add_field("AUTHOR", "Ada").unwrap();
+        run.add_picture(&relationship_id, Length::pt(1.0), Length::pt(1.0));
+    }
+    original.add_paragraph("");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(original.to_bytes().unwrap()))
+            .unwrap();
+    package.set_part("/custom/keep.bin", b"unrelated bytes".to_vec());
+    package
+        .content_types
+        .add_override("/custom/keep.bin", "application/octet-stream");
+    let mut original_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut original_bytes).unwrap();
+    let original_bytes = original_bytes.into_inner();
+    let original = Document::from_bytes(&original_bytes).unwrap();
+    let mut edited = Document::from_bytes(&original_bytes).unwrap();
+    edited.add_paragraph("first appended");
+    edited.add_paragraph("second appended");
+    let (tracked, accepted, rejected) = reconstruct(original, edited);
+    for bytes in [&tracked, &accepted, &rejected] {
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(
+            package.get_part("/custom/keep.bin").unwrap(),
+            b"unrelated bytes"
+        );
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains("AUTHOR"), "{xml}");
+        assert!(xml.contains("<w:drawing"), "{xml}");
+    }
+}
+
+#[test]
 fn modeled_formatting_changes_are_tracked_without_diagnostics() {
     let original_xml =
         wrap_word_body(r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>same</w:t></w:r></w:p>"#);
@@ -16359,14 +17885,14 @@ fn f_x093_comparison_document_with_drawings(
     package.set_part(
         "/word/document.xml",
         format!(
-            r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>{value} body</w:t></w:r><w:r><w:t>stable body words</w:t></w:r><w:r>{body_drawing}</w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
+            r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body><w:p><w:r><w:t>{value} body</w:t></w:r><w:r><w:t>stable body words</w:t></w:r><w:r>{body_drawing}</w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
         )
         .into_bytes(),
     );
     package.set_part(
         "/word/header1.xml",
         format!(
-            r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:r><w:t>{value} header</w:t></w:r><w:r><w:t>stable header words</w:t></w:r><w:r>{header_drawing}</w:r></w:p></w:hdr>"#,
+            r#"<w:hdr xmlns:w="{W_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:p><w:r><w:t>{value} header</w:t></w:r><w:r><w:t>stable header words</w:t></w:r><w:r>{header_drawing}</w:r></w:p></w:hdr>"#,
         )
         .into_bytes(),
     );
@@ -16394,6 +17920,12 @@ fn f_x093_comparison_document(value: &str) -> Document {
         value,
         &f_x093_inline_drawing("bodyImage", "body-exact"),
         &f_x093_inline_drawing("headerImage", "header-exact"),
+    )
+}
+
+fn f_x097_inherited_drawing(relationship_id: &str) -> String {
+    format!(
+        r#"<w:drawing xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:inline><wp:extent cx="1" cy="1"/><wp:docPr id="31" name="Inherited picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{relationship_id}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#,
     )
 }
 
@@ -16476,6 +18008,194 @@ fn document_compare_preserves_inline_drawings_through_staging() {
         Some(&b"header image"[..])
     );
     Document::from_bytes(&bytes).expect("reopen tracked comparison document");
+}
+
+#[test]
+fn comparison_preserves_inherited_drawing_namespaces_and_complex_fields() {
+    let mut original = f_x093_comparison_document_with_drawings(
+        "original",
+        &f_x097_inherited_drawing("bodyImage"),
+        &f_x097_inherited_drawing("headerImage"),
+    );
+    let mut edited = f_x093_comparison_document_with_drawings(
+        "edited",
+        &f_x097_inherited_drawing("bodyImage"),
+        &f_x097_inherited_drawing("headerImage"),
+    );
+    original.add_paragraph("typed before comparison");
+    edited.add_paragraph("typed before comparison");
+    original
+        .compare(&edited, "Ada", "2026-09-15T09:00:00Z")
+        .expect("ancestor-scoped drawings compare");
+    let bytes = original.to_bytes().expect("comparison writes");
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    for (part, relationship_id) in [
+        ("/word/document.xml", "bodyImage"),
+        ("/word/header1.xml", "headerImage"),
+    ] {
+        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+        assert!(xml.contains(r#"<wp:docPr id="31""#), "{xml}");
+        assert!(
+            xml.contains(&format!(r#"r:embed="{relationship_id}""#)),
+            "{xml}"
+        );
+        assert!(xml.contains("xmlns:wp="), "{xml}");
+        assert!(xml.contains("xmlns:a="), "{xml}");
+        assert!(xml.contains("xmlns:pic="), "{xml}");
+    }
+    Document::from_bytes(&bytes).expect("comparison with inherited drawings reopens");
+    for (accept, expected, unexpected) in [
+        (true, "edited body", "original body"),
+        (false, "original body", "edited body"),
+    ] {
+        let mut finalized =
+            Document::from_bytes(&bytes).expect("reopen inherited drawing comparison");
+        if accept {
+            assert!(finalized.accept_all().unwrap() > 0);
+        } else {
+            assert!(finalized.reject_all().unwrap() > 0);
+        }
+        let finalized_bytes = finalized.to_bytes().expect("write finalized comparison");
+        let finalized =
+            Document::from_bytes(&finalized_bytes).expect("reopen finalized comparison");
+        assert!(finalized.text().contains(expected));
+        assert!(!finalized.text().contains(unexpected));
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(finalized_bytes)).unwrap();
+        for (part, relationship_id) in [
+            ("/word/document.xml", "bodyImage"),
+            ("/word/header1.xml", "headerImage"),
+        ] {
+            let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+            assert!(xml.contains(&format!(r#"r:embed="{relationship_id}""#)));
+            assert!(xml.contains("xmlns:wp="), "{xml}");
+            assert!(xml.contains("xmlns:a="), "{xml}");
+            assert!(xml.contains("xmlns:pic="), "{xml}");
+        }
+    }
+
+    let complex = |tail: &str| {
+        format!(
+            r#"<w:p><w:r><w:t>before </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> DATE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>2026-09-15</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>{tail}</w:t></w:r></w:p>"#,
+        )
+    };
+    let mut field_original = document_with_content_controls(&wrap_word_body(&complex("old")));
+    let field_edited = document_with_content_controls(&wrap_word_body(&complex("new")));
+    field_original
+        .compare(&field_edited, "Ada", "2026-09-15T09:01:00Z")
+        .expect("complex field paragraph compares");
+    let field_bytes = field_original.to_bytes().expect("field comparison writes");
+    let reopened = Document::from_bytes(&field_bytes).expect("field comparison reopens");
+    assert!(reopened.text().contains("2026-09-15"));
+    let field_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&field_bytes)).unwrap();
+    let field_xml = std::str::from_utf8(
+        field_package
+            .get_part("/word/document.xml")
+            .expect("field document part"),
+    )
+    .unwrap();
+    assert!(field_xml.contains("<w:ins"), "{field_xml}");
+    assert!(field_xml.contains(">new</w:t>"), "{field_xml}");
+    for (accept, expected, unexpected) in [(true, "new", "old"), (false, "old", "new")] {
+        let mut finalized =
+            Document::from_bytes(&field_bytes).expect("reopen complex field comparison");
+        if accept {
+            assert!(finalized.accept_all().unwrap() > 0);
+        } else {
+            assert!(finalized.reject_all().unwrap() > 0);
+        }
+        let finalized_bytes = finalized
+            .to_bytes()
+            .expect("write finalized field comparison");
+        let finalized =
+            Document::from_bytes(&finalized_bytes).expect("reopen finalized field comparison");
+        assert!(finalized.text().contains("2026-09-15"));
+        assert!(finalized.text().contains(expected));
+        assert!(!finalized.text().contains(unexpected));
+    }
+
+    let sibling_fields = |tail: &str| {
+        format!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText>DATE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>first</w:t><w:fldChar w:fldCharType="end"/><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>second</w:t><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>{tail}</w:t></w:r></w:p>"#,
+        )
+    };
+    let mut sibling_original =
+        document_with_content_controls(&wrap_word_body(&sibling_fields("old sibling tail")));
+    let sibling_edited =
+        document_with_content_controls(&wrap_word_body(&sibling_fields("new sibling tail")));
+    sibling_original
+        .compare(&sibling_edited, "Ada", "2026-09-15T09:02:00Z")
+        .expect("same-run sibling fields compare");
+    let sibling_bytes = sibling_original
+        .to_bytes()
+        .expect("write sibling field comparison");
+    for (accept, expected, unexpected) in [
+        (true, "new sibling tail", "old sibling tail"),
+        (false, "old sibling tail", "new sibling tail"),
+    ] {
+        let mut finalized =
+            Document::from_bytes(&sibling_bytes).expect("reopen sibling field comparison");
+        if accept {
+            assert!(finalized.accept_all().unwrap() > 0);
+        } else {
+            assert!(finalized.reject_all().unwrap() > 0);
+        }
+        let finalized_bytes = finalized
+            .to_bytes()
+            .expect("write finalized sibling fields");
+        let finalized =
+            Document::from_bytes(&finalized_bytes).expect("reopen finalized sibling fields");
+        assert!(finalized.text().contains("firstsecond"));
+        assert!(finalized.text().contains(expected));
+        assert!(!finalized.text().contains(unexpected));
+    }
+}
+
+#[test]
+fn story_items_expose_safe_direct_body_owners() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>first</w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple><w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:inline><wp:docPr id="41" name="item"/></wp:inline></w:drawing></w:r><w:sdt><w:sdtContent><w:r><w:t>nested control</w:t></w:r></w:sdtContent></w:sdt></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtContent><w:p><w:r><w:t>body control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>second</w:t></w:r></w:p>"#,
+    );
+    let document = document_with_content_controls(&xml);
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Body)
+        .unwrap();
+    let items = document.story_items(&body).unwrap();
+    let owners = items
+        .iter()
+        .map(|item| item.direct_body_index().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        owners,
+        [
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+        ]
+    );
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.location().index_path().to_vec())
+            .collect::<Vec<_>>(),
+        [
+            vec![0],
+            vec![1],
+            vec![2],
+            vec![3],
+            vec![4],
+            vec![5],
+            vec![6],
+        ]
+    );
 }
 
 #[test]
@@ -26319,22 +28039,18 @@ fn f249_equivalent_document(reverse: bool) -> Document {
     if reverse {
         document.add_bookmark("Second", range(1)).unwrap();
         document.add_bookmark("First", range(0)).unwrap();
-        document
-            .add_comment(range(3), "Author", Some("A"), "Second comment")
-            .unwrap();
-        document
-            .add_comment(range(2), "Author", Some("A"), "First comment")
-            .unwrap();
     } else {
         document.add_bookmark("First", range(0)).unwrap();
         document.add_bookmark("Second", range(1)).unwrap();
-        document
-            .add_comment(range(2), "Author", Some("A"), "First comment")
-            .unwrap();
-        document
-            .add_comment(range(3), "Author", Some("A"), "Second comment")
-            .unwrap();
     }
+    // Comment IDs are caller-visible stable identities, so equivalent-package
+    // construction keeps their allocation order fixed.
+    document
+        .add_comment(range(2), "Author", Some("A"), "First comment")
+        .unwrap();
+    document
+        .add_comment(range(3), "Author", Some("A"), "Second comment")
+        .unwrap();
     document.add_paragraph("bullet").set_numbering(bullet, 0);
     document.add_paragraph("decimal").set_numbering(decimal, 0);
     let mut table = document.add_table(1, 2);

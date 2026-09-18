@@ -11,7 +11,7 @@ use crate::numbering::{
     local_namespace_overrides, merged_owner_bindings, namespace_bindings, word_prefixes_at,
 };
 use crate::properties::{
-    CT_Shd, get_val_attr, get_word_val_attr, is_word_attribute, is_word_element,
+    CT_Shd, get_word_val_attr, is_word_attribute, is_word_element, parse_word_toggle, write_toggle,
 };
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::{CT_Revision, RevisionKind};
@@ -972,21 +972,21 @@ impl CT_TrPr {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     let (at, next) = tr_pr_raw_boundary(name.as_ref(), boundary, &prefixes);
-                    if matches_local_name(name.as_ref(), b"trHeight") {
+                    if is_word_element(name.as_ref(), b"trHeight", &prefixes) {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"val") {
+                            if is_word_attribute(key, b"val", &prefixes) {
                                 pr.height = Some(Twips(val.parse()?));
-                            } else if matches_local_name(key, b"hRule") {
+                            } else if is_word_attribute(key, b"hRule", &prefixes) {
                                 pr.height_rule = Some(val.to_string());
                             }
                         }
-                    } else if matches_local_name(name.as_ref(), b"tblHeader") {
-                        pr.header = Some(true);
-                    } else if matches_local_name(name.as_ref(), b"jc") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"tblHeader", &prefixes) {
+                        pr.header = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"jc", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             pr.jc = ST_Jc::from_str(&val).ok();
                         }
                     } else if is_word_element(name.as_ref(), b"gridBefore", &prefixes) {
@@ -997,10 +997,10 @@ impl CT_TrPr {
                         pr.grid_after = get_word_val_attr(e, &prefixes)?
                             .map(|value| value.parse())
                             .transpose()?;
-                    } else if matches_local_name(name.as_ref(), b"cnfStyle") {
-                        pr.cnf_style = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"cantSplit") {
-                        pr.cant_split = Some(true);
+                    } else if is_word_element(name.as_ref(), b"cnfStyle", &prefixes) {
+                        pr.cnf_style = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"cantSplit", &prefixes) {
+                        pr.cant_split = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes)
                         || is_word_element(name.as_ref(), b"del", &prefixes)
                     {
@@ -1028,7 +1028,13 @@ impl CT_TrPr {
                 Ok(Event::Start(ref e)) => {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     let (at, next) = tr_pr_raw_boundary(e.name().as_ref(), boundary, &prefixes);
-                    if is_word_element(e.name().as_ref(), b"ins", &prefixes)
+                    if is_word_element(e.name().as_ref(), b"tblHeader", &prefixes) {
+                        pr.header = Some(parse_word_toggle(e, &prefixes)?);
+                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                    } else if is_word_element(e.name().as_ref(), b"cantSplit", &prefixes) {
+                        pr.cant_split = Some(parse_word_toggle(e, &prefixes)?);
+                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                    } else if is_word_element(e.name().as_ref(), b"ins", &prefixes)
                         || is_word_element(e.name().as_ref(), b"del", &prefixes)
                     {
                         let raw = crate::text::raw_with_external_bindings(
@@ -1100,10 +1106,8 @@ impl CT_TrPr {
         write_extras_at(writer, &self.extra_xml, 4)?;
         write_extras_at(writer, &self.extra_xml, 5)?;
         write_extras_at(writer, &self.extra_xml, 6)?;
-        if let Some(ref cant_split) = self.cant_split
-            && *cant_split
-        {
-            writer.write_event(Event::Empty(BytesStart::new("w:cantSplit")))?;
+        if let Some(cant_split) = self.cant_split {
+            write_toggle(writer, "w:cantSplit", cant_split)?;
         }
 
         write_extras_at(writer, &self.extra_xml, 7)?;
@@ -1118,8 +1122,8 @@ impl CT_TrPr {
         }
 
         write_extras_at(writer, &self.extra_xml, 8)?;
-        if let Some(true) = self.header {
-            writer.write_event(Event::Empty(BytesStart::new("w:tblHeader")))?;
+        if let Some(header) = self.header {
+            write_toggle(writer, "w:tblHeader", header)?;
         }
 
         write_extras_at(writer, &self.extra_xml, 9)?;
@@ -1410,7 +1414,7 @@ impl CT_TcPr {
         } else if is_word_element(name.as_ref(), b"cnfStyle", word_prefixes) {
             pr.cnf_style = get_word_val_attr(e, word_prefixes)?;
         } else if is_word_element(name.as_ref(), b"noWrap", word_prefixes) {
-            pr.no_wrap = Some(true);
+            pr.no_wrap = Some(parse_word_toggle(e, word_prefixes)?);
         } else if is_word_element(name.as_ref(), b"textDirection", word_prefixes)
             && let Some(val) = get_word_val_attr(e, word_prefixes)?
         {
@@ -1482,8 +1486,8 @@ impl CT_TcPr {
         }
 
         write_extras_at(writer, &self.extra_xml, 7)?;
-        if let Some(true) = self.no_wrap {
-            writer.write_event(Event::Empty(BytesStart::new("w:noWrap")))?;
+        if let Some(no_wrap) = self.no_wrap {
+            write_toggle(writer, "w:noWrap", no_wrap)?;
         }
 
         write_extras_at(writer, &self.extra_xml, 8)?;
@@ -2806,6 +2810,58 @@ mod tests {
         assert_eq!(properties.v_align, Some(ST_VerticalJc::Center));
         assert_eq!(properties.text_direction.as_deref(), Some("btLr"));
         assert_eq!(properties.cnf_style.as_deref(), Some("100000000000"));
+    }
+
+    #[test]
+    fn explicit_false_table_toggles_remain_false() {
+        for false_value in ["0", "false", "off"] {
+            let table = parse_table(&format!(
+                r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:trPr><w:cantSplit w:val="{false_value}"/><w:tblHeader w:val="{false_value}"/></w:trPr><w:tc><w:tcPr><w:noWrap w:val="{false_value}"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+            ));
+            let row_properties = table.rows[0]
+                .properties
+                .as_ref()
+                .expect("row properties parse");
+            assert_eq!(row_properties.cant_split, Some(false));
+            assert_eq!(row_properties.header, Some(false));
+            let cell_properties = table.rows[0].cells[0]
+                .properties
+                .as_ref()
+                .expect("cell properties parse");
+            assert_eq!(cell_properties.no_wrap, Some(false));
+
+            let mut output = Vec::new();
+            table
+                .to_xml(&mut Writer::new(&mut output))
+                .expect("table writes");
+            let output = String::from_utf8(output).expect("XML is UTF-8");
+            assert!(output.contains(r#"<w:cantSplit w:val="false"/>"#));
+            assert!(output.contains(r#"<w:tblHeader w:val="false"/>"#));
+            assert!(output.contains(r#"<w:noWrap w:val="false"/>"#));
+
+            let reopened = parse_table(
+                output
+                    .strip_prefix("<w:tbl>")
+                    .and_then(|xml| xml.strip_suffix("</w:tbl>"))
+                    .expect("serialized table wrapper"),
+            );
+            assert_eq!(
+                reopened.rows[0].properties.as_ref().unwrap().cant_split,
+                Some(false)
+            );
+            assert_eq!(
+                reopened.rows[0].properties.as_ref().unwrap().header,
+                Some(false)
+            );
+            assert_eq!(
+                reopened.rows[0].cells[0]
+                    .properties
+                    .as_ref()
+                    .unwrap()
+                    .no_wrap,
+                Some(false)
+            );
+        }
     }
 
     #[test]

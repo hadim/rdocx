@@ -884,6 +884,15 @@ fn lower_picture(
             resolved_image.rotate_with_shape,
         )?,
     };
+    if resolved_image.opacity < 1.0 {
+        return Ok(vec![PositionedElement::Group(GroupElement {
+            transform: Transform::IDENTITY,
+            clip: None,
+            opacity: resolved_image.opacity,
+            effects: Vec::new(),
+            children: elements,
+        })]);
+    }
     Ok(elements)
 }
 
@@ -2767,6 +2776,107 @@ mod tests {
     }
 
     #[test]
+    fn picture_opacity_fades_the_complete_image_layer() {
+        let png = horizontal_png(&[[255, 0, 0, 255]; 4]);
+        let media_id = MediaId::from_bytes(&png);
+        let mut picture = picture_shape(
+            Rect {
+                x: 2.0,
+                y: 2.0,
+                width: 8.0,
+                height: 4.0,
+            },
+            media_id,
+            None,
+            ResolvedImagePlacement::default(),
+            None,
+        );
+        let ResolvedContent::Image(image) = &mut picture.content else {
+            panic!("picture content");
+        };
+        image.opacity = 0.3;
+        let input = render_input_with_media(
+            vec![slide((12.0, 8.0), vec![picture])],
+            HashMap::from([(media_id, media(&png))]),
+        );
+
+        let layout = layout_presentation(&input).expect("lower faded picture");
+        let rendered =
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise faded picture");
+        let pixmap = tiny_skia::Pixmap::decode_png(&rendered).expect("decode faded picture");
+
+        let (red, green, blue) = rgb_at(&pixmap, 6, 4);
+        assert_eq!(red, 255);
+        assert!(
+            (i32::from(green) - 178).abs() <= 1 && green == blue,
+            "({red}, {green}, {blue})"
+        );
+        assert_eq!(rgb_at(&pixmap, 1, 4), (255, 255, 255));
+    }
+
+    #[test]
+    fn picture_and_animation_opacity_multiply() {
+        fn image_opacities(elements: &[PositionedElement], opacity: f64, output: &mut Vec<f64>) {
+            for element in elements {
+                match element {
+                    PositionedElement::Group(group) => {
+                        image_opacities(&group.children, opacity * group.opacity, output);
+                    }
+                    PositionedElement::MarkedContent { children, .. } => {
+                        image_opacities(children, opacity, output);
+                    }
+                    PositionedElement::Image { .. } => output.push(opacity),
+                    _ => {}
+                }
+            }
+        }
+
+        let png = horizontal_png(&[[255, 0, 0, 255]; 4]);
+        let media_id = MediaId::from_bytes(&png);
+        let mut picture = picture_shape(
+            Rect {
+                x: 2.0,
+                y: 2.0,
+                width: 8.0,
+                height: 4.0,
+            },
+            media_id,
+            None,
+            ResolvedImagePlacement::default(),
+            None,
+        );
+        let ResolvedContent::Image(image) = &mut picture.content else {
+            panic!("picture content");
+        };
+        image.opacity = 0.3;
+        let input = render_input_with_media(
+            vec![slide((12.0, 8.0), vec![picture])],
+            HashMap::from([(media_id, media(&png))]),
+        );
+        let mut state = rpptx_layout::timeline::EvaluatedShapeState::default();
+        state.opacity = 0.5;
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let page = layout_slide_with_fonts_text_directions_and_states(
+            &input,
+            0,
+            &mut fonts,
+            None,
+            Some(&[state]),
+        )
+        .unwrap();
+
+        let mut opacities = Vec::new();
+        image_opacities(&page.elements, 1.0, &mut opacities);
+        assert_eq!(opacities, vec![0.15]);
+        let layout = LayoutResult::new(vec![Arc::new(page)], Vec::new(), None, Vec::new());
+        let rendered = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&rendered).unwrap();
+        let (red, green, blue) = rgb_at(&pixmap, 6, 4);
+        assert_eq!(red, 255);
+        assert!((i32::from(green) - 217).abs() <= 1 && green == blue);
+    }
+
+    #[test]
     fn crop_lowers_to_clipped_source_image_geometry() {
         let media_id = MediaId(21);
         let mut picture = picture_shape(
@@ -2858,6 +2968,7 @@ mod tests {
             placement: ResolvedImagePlacement::default(),
             dpi: None,
             rotate_with_shape: true,
+            opacity: 1.0,
         });
         filled.content = ResolvedContent::Text(table_text("caption"));
 
@@ -3262,6 +3373,7 @@ mod tests {
             placement,
             dpi,
             rotate_with_shape: true,
+            opacity: 1.0,
         });
         picture
     }
@@ -3557,13 +3669,16 @@ mod tests {
             placement: ResolvedImagePlacement::default(),
             dpi: None,
             rotate_with_shape: true,
+            opacity: 0.3,
         }));
         let input =
             render_input_with_media(vec![resolved], HashMap::from([(media_id, media(&png))]));
 
         let page = layout_slide(&input, 0).unwrap();
+        let background = only_group(page.elements.first().unwrap());
+        assert_eq!(background.opacity, 0.3);
         assert!(matches!(
-            page.elements.first(),
+            background.children.first(),
             Some(PositionedElement::Image { media_id: id, .. }) if *id == media_id
         ));
         assert!(matches!(
@@ -3577,7 +3692,9 @@ mod tests {
         )
         .expect("rasterise background image ordering");
         let pixmap = tiny_skia::Pixmap::decode_png(&rendered).unwrap();
-        assert_eq!(rgb_at(&pixmap, 0, 0), (0, 0, 255));
+        let (red, green, blue) = rgb_at(&pixmap, 0, 0);
+        assert!((i32::from(red) - 178).abs() <= 1 && red == green);
+        assert_eq!(blue, 255);
         assert_eq!(rgb_at(&pixmap, 5, 5), (255, 0, 0));
     }
 
@@ -3837,7 +3954,7 @@ mod tests {
         ] {
             assert!(!oxml_manifest.contains("rpptx-render"));
         }
-        assert!(manifest.contains("version = \"0.11.0\""));
+        assert!(manifest.contains("version = \"0.12.1\""));
         assert!(manifest.contains("publish = true"));
     }
 }

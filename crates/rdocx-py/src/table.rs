@@ -6,7 +6,7 @@ use smallvec::smallvec;
 
 use crate::document::PyDocument;
 use crate::paragraph::PyParagraph;
-use crate::{enum_object, length_object, normalize_index, stale_to_pyerr};
+use crate::{enum_object, length_object, normalize_index, rdocx_to_pyerr, stale_to_pyerr};
 
 fn path_index(
     path: &ContentPath,
@@ -182,7 +182,7 @@ impl PyTable {
         Self { document, path }
     }
 
-    fn validate(&self, py: Python<'_>) -> PyResult<usize> {
+    pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<usize> {
         let document = self.document.borrow(py);
         self.path
             .validate_revision(
@@ -192,6 +192,10 @@ impl PyTable {
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
         table_index(&self.path)
+    }
+
+    pub(crate) fn belongs_to(&self, py: Python<'_>, document: &Py<PyDocument>) -> bool {
+        self.document.bind(py).is(document.bind(py))
     }
 }
 
@@ -297,6 +301,50 @@ impl PyTable {
             .table_mut(index)
             .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
             .set_width(rdocx::Length::emu(value));
+        Ok(())
+    }
+
+    #[pyo3(signature = (index, at = None))]
+    fn clone_row(&self, py: Python<'_>, index: isize, at: Option<usize>) -> PyResult<Py<PyRow>> {
+        let table_index = self.validate(py)?;
+        let path = {
+            let mut document = self.document.borrow_mut(py);
+            let row_count = document
+                .inner
+                .table(table_index)
+                .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
+                .row_count();
+            let source = normalize_index(index, row_count, "row")?;
+            let insert_at = at.unwrap_or(source + 1);
+            if insert_at > row_count {
+                return Err(PyIndexError::new_err("row insertion index out of range"));
+            }
+            let inserted = document
+                .inner
+                .clone_table_row(table_index, source, insert_at)
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            document.revisions.bump();
+            let mut segments = self.path.segs.clone();
+            segments.push(PathSeg::Row(inserted));
+            document.revisions.capture(segments)
+        };
+        Py::new(py, PyRow::new(self.document.clone_ref(py), path))
+    }
+
+    fn remove_row(&self, py: Python<'_>, index: isize) -> PyResult<()> {
+        let table_index = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let row_count = document
+            .inner
+            .table(table_index)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
+            .row_count();
+        let row_index = normalize_index(index, row_count, "row")?;
+        document
+            .inner
+            .remove_table_row(table_index, row_index)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        document.revisions.bump();
         Ok(())
     }
 }

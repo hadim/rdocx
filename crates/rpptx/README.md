@@ -38,12 +38,12 @@ let bytes = deck.to_bytes()?;
 
 ```toml
 [dependencies]
-rpptx = "0.11.0"
+rpptx = "0.12.1"
 ```
 
 Enable native encryption and signing explicitly:
 
 ```toml
 [dependencies]
-rpptx = { version = "0.11.0", features = ["agile-encryption", "digital-signatures"] }
+rpptx = { version = "0.12.1", features = ["agile-encryption", "digital-signatures"] }
 ```

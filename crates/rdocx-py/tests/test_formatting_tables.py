@@ -279,3 +279,128 @@ def test_automatic_font_color_reads_as_none_after_reopen():
     reopened = Document.from_bytes(automatic)
 
     assert reopened.paragraphs[0].runs[0].font.color is None
+
+
+def test_table_rows_are_cloned_with_their_formatting_and_removed():
+    from rdocx import (
+        Document,
+        Inches,
+        RdocxError,
+        StaleElementError,
+        WD_CELL_VERTICAL_ALIGNMENT,
+    )
+
+    document = Document()
+    document.add_table(rows=2, cols=2)
+    document.tables[0].rows[0].cells[0].text = "header"
+    document.tables[0].rows[1].cells[0].text = "entry"
+    document.tables[0].rows[1].cells[0].paragraphs[0].runs[0].font.bold = True
+    template = document.tables[0].rows[1].cells[1]
+    template.width = Inches(2)
+    template.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.BOTTOM
+
+    table = document.tables[0]
+    held = table.rows[0]
+    copied = table.clone_row(-1)
+    with pytest.raises(StaleElementError):
+        _ = held.cells
+    copied.cells[1].text = "new entry"
+
+    reopened = Document.from_bytes(document.to_bytes())
+    rows = reopened.tables[0].rows
+    assert [row.cells[0].text for row in rows] == ["header", "entry", "entry"]
+    assert rows[2].cells[0].paragraphs[0].runs[0].font.bold is True
+    assert rows[2].cells[1].text == "new entry"
+    assert rows[2].cells[1].width == Inches(2)
+    assert rows[2].cells[1].vertical_alignment == WD_CELL_VERTICAL_ALIGNMENT.BOTTOM
+
+    reopened.tables[0].clone_row(0, at=0)
+    reopened.tables[0].remove_row(1)
+    reopened.tables[0].remove_row(-1)
+    assert [row.cells[0].text for row in reopened.tables[0].rows] == [
+        "header",
+        "entry",
+    ]
+    with pytest.raises(IndexError):
+        reopened.tables[0].remove_row(2)
+    with pytest.raises(IndexError):
+        reopened.tables[0].clone_row(0, at=3)
+    reopened.tables[0].remove_row(0)
+    with pytest.raises(RdocxError, match="at least one row"):
+        reopened.tables[0].remove_row(0)
+    assert [row.cells[0].text for row in reopened.tables[0].rows] == ["entry"]
+
+
+def test_python_paragraph_and_run_formatting_matches_native_facades():
+    from rdocx import Document
+
+    document = Document()
+    paragraph = document.add_paragraph("Title")
+    assert paragraph.style is None
+    assert paragraph.numbering is None
+    paragraph.style = "Heading1"
+    paragraph.numbering = (1, 2)
+    assert paragraph.text == "Title"
+
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.paragraphs[0].style == "Heading1"
+    assert reopened.paragraphs[0].numbering == (1, 2)
+
+    with pytest.raises(ValueError, match="numbering level"):
+        paragraph.numbering = (1, 9)
+    paragraph.style = None
+    paragraph.numbering = None
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.paragraphs[0].style is None
+    assert reopened.paragraphs[0].numbering is None
+
+    document = Document()
+    run = document.add_paragraph("").add_run("marked")
+    assert run.style_id is None
+    assert run.font.highlight is None
+    assert run.font.shading is None
+    run.style_id = "Strong"
+    run.font.highlight = "yellow"
+    run.font.shading = "FFFF00"
+
+    reopened = Document.from_bytes(document.to_bytes()).paragraphs[0].runs[0]
+    assert reopened.style_id == "Strong"
+    assert reopened.font.highlight == "yellow"
+    assert reopened.font.shading == "FFFF00"
+
+    run.font.shading = "AUTO"
+    reopened = Document.from_bytes(document.to_bytes()).paragraphs[0].runs[0]
+    assert reopened.font.shading == "auto"
+
+    with pytest.raises(ValueError, match="highlight"):
+        run.font.highlight = "FFFF00"
+    with pytest.raises(ValueError, match="hexadecimal"):
+        run.font.shading = "yellow"
+    run.style_id = None
+    run.font.highlight = None
+    run.font.shading = None
+    reopened = Document.from_bytes(document.to_bytes()).paragraphs[0].runs[0]
+    assert reopened.style_id is None
+    assert reopened.font.highlight is None
+    assert reopened.font.shading is None
+
+
+def test_word_highlight_keywords_round_trip_and_clear():
+    from rdocx import Document, RGBColor
+
+    document = Document()
+    document.add_paragraph("").add_run("marked").font.color = RGBColor(0x12, 0x34, 0x56)
+    keyword = _replace_document_xml(
+        document.to_bytes(),
+        b'<w:color w:val="123456"/>',
+        b'<w:color w:val="123456"/><w:highlight w:val="darkBlue"/>',
+    )
+    reopened = Document.from_bytes(keyword)
+    font = reopened.paragraphs[0].runs[0].font
+    assert font.highlight == "darkBlue"
+
+    font.highlight = "yellow"
+    reopened = Document.from_bytes(reopened.to_bytes())
+    assert reopened.paragraphs[0].runs[0].font.highlight == "yellow"
+    reopened.paragraphs[0].runs[0].font.highlight = None
+    assert Document.from_bytes(reopened.to_bytes()).paragraphs[0].runs[0].font.highlight is None

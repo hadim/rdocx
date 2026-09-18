@@ -120,8 +120,17 @@ pub enum WrapType {
     Through,
 }
 
+/// Picture source rectangle in DrawingML thousandths of one percent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SourceRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
 impl WrapType {
-    /// The wrapping element's local name, or `None` when there is no wrap.
+    /// The wrapping element's qualified name.
     fn element_name(self) -> &'static str {
         match self {
             WrapType::None => "wp:wrapNone",
@@ -131,6 +140,42 @@ impl WrapType {
             WrapType::Through => "wp:wrapThrough",
         }
     }
+}
+
+fn write_wrap_element<W: std::io::Write>(writer: &mut Writer<W>, wrap: WrapType) -> Result<()> {
+    match wrap {
+        WrapType::None | WrapType::TopAndBottom => {
+            writer.write_event(Event::Empty(BytesStart::new(wrap.element_name())))?;
+        }
+        WrapType::Square => {
+            let mut element = BytesStart::new(wrap.element_name());
+            element.push_attribute(("wrapText", "bothSides"));
+            writer.write_event(Event::Empty(element))?;
+        }
+        WrapType::Tight | WrapType::Through => {
+            let mut element = BytesStart::new(wrap.element_name());
+            element.push_attribute(("wrapText", "bothSides"));
+            writer.write_event(Event::Start(element))?;
+            let mut polygon = BytesStart::new("wp:wrapPolygon");
+            polygon.push_attribute(("edited", "0"));
+            writer.write_event(Event::Start(polygon))?;
+            for (name, x, y) in [
+                ("wp:start", "0", "0"),
+                ("wp:lineTo", "0", "21600"),
+                ("wp:lineTo", "21600", "21600"),
+                ("wp:lineTo", "21600", "0"),
+                ("wp:lineTo", "0", "0"),
+            ] {
+                let mut point = BytesStart::new(name);
+                point.push_attribute(("x", x));
+                point.push_attribute(("y", y));
+                writer.write_event(Event::Empty(point))?;
+            }
+            writer.write_event(Event::End(BytesEnd::new("wp:wrapPolygon")))?;
+            writer.write_event(Event::End(BytesEnd::new(wrap.element_name())))?;
+        }
+    }
+    Ok(())
 }
 
 /// The wrap mode a wrapping element names, or `None` if it is not one.
@@ -264,6 +309,8 @@ pub struct CT_Anchor {
     pub description: Option<String>,
     /// Optional name.
     pub name: Option<String>,
+    /// Optional crop rectangle applied before scaling the picture.
+    pub source_rect: Option<SourceRect>,
     /// Raw XML bytes for the entire wp:anchor element (used for round-trip preservation).
     /// When present, to_xml uses this instead of structured serialization.
     pub raw_xml: Option<Vec<u8>>,
@@ -300,18 +347,21 @@ pub fn parse_alternate_content(raw: &[u8], inherited_prefixes: &[String]) -> Opt
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     let mut in_choice = false;
+    let mut prefixes = inherited_prefixes.to_vec();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 let name = e.name();
                 let local = name.as_ref();
-                if matches_local_name(local, b"Choice") {
+                if matches_local_name(local, b"AlternateContent") {
+                    prefixes = crate::numbering::word_prefixes_at(e, &prefixes).ok()?;
+                } else if matches_local_name(local, b"Choice") {
+                    prefixes = crate::numbering::word_prefixes_at(e, &prefixes).ok()?;
                     in_choice = true;
                 } else if in_choice && matches_local_name(local, b"drawing") {
-                    let prefixes =
-                        crate::numbering::word_prefixes_at(e, inherited_prefixes).ok()?;
-                    return CT_Drawing::from_xml_with_prefixes(&mut reader, &prefixes).ok();
+                    let drawing_prefixes = crate::numbering::word_prefixes_at(e, &prefixes).ok()?;
+                    return CT_Drawing::from_xml_with_prefixes(&mut reader, &drawing_prefixes).ok();
                 }
             }
             Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"Choice") => {
@@ -437,6 +487,7 @@ impl CT_Anchor {
             relative_height: 0,
             description: Some("Background".to_string()),
             name: Some("Background".to_string()),
+            source_rect: None,
             raw_xml: None,
             shape: None,
         }
@@ -492,6 +543,7 @@ impl CT_Anchor {
         let mut shape: Option<CT_Shape> = None;
         let mut description = None;
         let mut name = None;
+        let mut source_rect = None;
         let mut doc_pr_id = None;
         let mut buf = Vec::new();
 
@@ -529,6 +581,8 @@ impl CT_Anchor {
                                 doc_pr_id = Some(val.parse()?);
                             }
                         }
+                    } else if matches_local_name(ename.as_ref(), b"srcRect") {
+                        source_rect = Some(parse_source_rect(e)?);
                     } else if matches_local_name(ename.as_ref(), b"simplePos") {
                         // Ignore simplePos
                     } else if let Some(parsed) = wrap_type_of(ename.as_ref()) {
@@ -537,7 +591,10 @@ impl CT_Anchor {
                 }
                 Ok(Event::Start(ref e)) => {
                     let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"positionH") {
+                    if matches_local_name(ename.as_ref(), b"srcRect") {
+                        source_rect = Some(parse_source_rect(e)?);
+                        reader.read_to_end_into(ename, &mut Vec::new())?;
+                    } else if matches_local_name(ename.as_ref(), b"positionH") {
                         for attr in e.attributes() {
                             let attr = attr?;
                             if attr.key.as_ref() == b"relativeFrom" {
@@ -733,6 +790,7 @@ impl CT_Anchor {
             relative_height,
             description,
             name,
+            source_rect,
             raw_xml: None, // Will be set by CT_Drawing::from_xml
             shape,
         })
@@ -825,7 +883,7 @@ impl CT_Anchor {
         writer.write_event(Event::Empty(extent))?;
 
         // The wrapping element, in the sequence position wp:wrapNone held.
-        writer.write_event(Event::Empty(BytesStart::new(self.wrap.element_name())))?;
+        write_wrap_element(writer, self.wrap)?;
 
         // wp:docPr
         let mut doc_pr = BytesStart::new("wp:docPr");
@@ -842,6 +900,7 @@ impl CT_Anchor {
             self.extent_cx,
             self.extent_cy,
             self.name.as_deref(),
+            self.source_rect,
         )?;
 
         writer.write_event(Event::End(BytesEnd::new("wp:anchor")))?;
@@ -868,6 +927,8 @@ pub struct CT_Inline {
     pub description: Option<String>,
     /// Optional name
     pub name: Option<String>,
+    /// Optional crop rectangle applied before scaling the picture.
+    pub source_rect: Option<SourceRect>,
     /// Raw XML bytes for the entire wp:inline element (used for round-trip preservation).
     /// When present, to_xml uses this instead of structured serialization.
     pub raw_xml: Option<Vec<u8>>,
@@ -884,6 +945,7 @@ impl CT_Inline {
             chart_rel_id: None,
             description: None,
             name: None,
+            source_rect: None,
             raw_xml: None,
         }
     }
@@ -899,6 +961,7 @@ impl CT_Inline {
             chart_rel_id: Some(chart_rel_id.to_owned()),
             description: None,
             name: Some("Chart".to_owned()),
+            source_rect: None,
             raw_xml: None,
         }
     }
@@ -908,6 +971,7 @@ impl CT_Inline {
         let mut cy = Emu(0);
         let mut description = None;
         let mut name = None;
+        let mut source_rect = None;
         let mut doc_pr_id = None;
         let mut buf = Vec::new();
 
@@ -945,11 +1009,16 @@ impl CT_Inline {
                                 doc_pr_id = Some(val.parse()?);
                             }
                         }
+                    } else if matches_local_name(ename.as_ref(), b"srcRect") {
+                        source_rect = Some(parse_source_rect(e)?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"blip") {
+                    if matches_local_name(ename.as_ref(), b"srcRect") {
+                        source_rect = Some(parse_source_rect(e)?);
+                        reader.read_to_end_into(ename, &mut Vec::new())?;
+                    } else if matches_local_name(ename.as_ref(), b"blip") {
                         reader.read_to_end_into(ename, &mut Vec::new())?;
                     } else if canonical_wp_element(reader, e, b"docPr") {
                         for attr in e.attributes() {
@@ -992,6 +1061,7 @@ impl CT_Inline {
             chart_rel_id: None,
             description,
             name,
+            source_rect,
             raw_xml: None, // Will be set by CT_Drawing::from_xml
         })
     }
@@ -1037,6 +1107,7 @@ impl CT_Inline {
             self.extent_cx,
             self.extent_cy,
             self.name.as_deref(),
+            self.source_rect,
         )?;
 
         writer.write_event(Event::End(BytesEnd::new("wp:inline")))?;
@@ -1375,6 +1446,7 @@ fn write_graphic_element<W: std::io::Write>(
     cx: Emu,
     cy: Emu,
     name: Option<&str>,
+    source_rect: Option<SourceRect>,
 ) -> Result<()> {
     let mut buf = itoa::Buffer::new();
     let mut graphic = BytesStart::new("a:graphic");
@@ -1424,6 +1496,18 @@ fn write_graphic_element<W: std::io::Write>(
     let mut blip = BytesStart::new("a:blip");
     blip.push_attribute(("r:embed", embed_id));
     writer.write_event(Event::Empty(blip))?;
+    if let Some(source_rect) = source_rect {
+        let mut rect = BytesStart::new("a:srcRect");
+        let left = source_rect.left.to_string();
+        let top = source_rect.top.to_string();
+        let right = source_rect.right.to_string();
+        let bottom = source_rect.bottom.to_string();
+        rect.push_attribute(("l", left.as_str()));
+        rect.push_attribute(("t", top.as_str()));
+        rect.push_attribute(("r", right.as_str()));
+        rect.push_attribute(("b", bottom.as_str()));
+        writer.write_event(Event::Empty(rect))?;
+    }
     writer.write_event(Event::Start(BytesStart::new("a:stretch")))?;
     writer.write_event(Event::Empty(BytesStart::new("a:fillRect")))?;
     writer.write_event(Event::End(BytesEnd::new("a:stretch")))?;
@@ -1453,6 +1537,22 @@ fn write_graphic_element<W: std::io::Write>(
     writer.write_event(Event::End(BytesEnd::new("a:graphic")))?;
 
     Ok(())
+}
+
+fn parse_source_rect(element: &BytesStart<'_>) -> Result<SourceRect> {
+    let mut rect = SourceRect::default();
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let value = std::str::from_utf8(&attribute.value)?.parse()?;
+        match attribute.key.as_ref() {
+            b"l" => rect.left = value,
+            b"t" => rect.top = value,
+            b"r" => rect.right = value,
+            b"b" => rect.bottom = value,
+            _ => {}
+        }
+    }
+    Ok(rect)
 }
 
 /// `CT_Drawing` — A drawing element that wraps inline or anchor images.
@@ -1700,6 +1800,12 @@ mod tests {
             chart_rel_id: None,
             description: Some("A test image".to_string()),
             name: Some("TestPic".to_string()),
+            source_rect: Some(SourceRect {
+                left: 10_000,
+                top: 5_000,
+                right: 20_000,
+                bottom: 0,
+            }),
             raw_xml: None,
         };
 
@@ -1723,6 +1829,45 @@ mod tests {
         assert_eq!(inl.extent_cx, Emu(914400));
         assert_eq!(inl.extent_cy, Emu(457200));
         assert_eq!(inl.embed_id, "rId5");
+        assert_eq!(
+            inl.source_rect,
+            Some(SourceRect {
+                left: 10_000,
+                top: 5_000,
+                right: 20_000,
+                bottom: 0,
+            })
+        );
+
+        let expanded = xml.replace(
+            r#"<a:srcRect l="10000" t="5000" r="20000" b="0"/>"#,
+            r#"<a:srcRect l="10000" t="5000" r="20000" b="0"></a:srcRect>"#,
+        );
+        assert_eq!(
+            parse_drawing(&expanded).inline.unwrap().source_rect,
+            inl.source_rect
+        );
+    }
+
+    #[test]
+    fn alternate_content_uses_namespaces_declared_on_its_own_root() {
+        let drawing = parse_alternate_content(
+            concat!(
+                r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" "#,
+                r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+                r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">"#,
+                r#"<mc:Choice Requires="wps"><w:drawing><wp:anchor><wp:extent cx="10" cy="20"/>"#,
+                r#"<wp:docPr id="7"/></wp:anchor></w:drawing></mc:Choice><mc:Fallback/></mc:AlternateContent>"#,
+            )
+            .as_bytes(),
+            &[],
+        )
+        .expect("DrawingML choice");
+
+        let anchor = drawing.anchor.expect("anchored drawing");
+        assert_eq!(anchor.doc_pr_id, 7);
+        assert_eq!(anchor.extent_cx, Emu(10));
+        assert_eq!(anchor.extent_cy, Emu(20));
     }
 
     #[test]
@@ -2107,9 +2252,30 @@ mod tests {
             let mut writer = Writer::new(Vec::new());
             built.to_xml(&mut writer).expect("serialises");
             let bytes = writer.into_inner();
+            let emitted = String::from_utf8(bytes.clone()).expect("utf8");
+            match wrap {
+                WrapType::Square => assert!(
+                    emitted.contains(r#"<wp:wrapSquare wrapText="bothSides"/>"#),
+                    "{emitted}"
+                ),
+                WrapType::Tight | WrapType::Through => {
+                    let wrap_start = format!(
+                        r#"<{} wrapText="bothSides"><wp:wrapPolygon edited="0">"#,
+                        wrap.element_name()
+                    );
+                    assert!(emitted.contains(&wrap_start), "{emitted}");
+                    assert_eq!(emitted.matches("<wp:lineTo ").count(), 4, "{emitted}");
+                    assert!(
+                        emitted.find(wrap.element_name()).unwrap()
+                            < emitted.find("<wp:docPr").unwrap(),
+                        "{emitted}"
+                    );
+                }
+                WrapType::None | WrapType::TopAndBottom => {}
+            }
             let xml = format!(
                 r#"<w:drawing xmlns:w="{W_NS_URI}" xmlns:wp="{WP_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{}</w:drawing>"#,
-                String::from_utf8(bytes).expect("utf8")
+                emitted
             );
 
             let parsed = parse_drawing(&xml).anchor.expect("an anchor");

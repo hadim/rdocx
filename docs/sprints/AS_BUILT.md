@@ -13665,3 +13665,1615 @@ and comments.
 exact PyPI project name before pushing a first-release tag. Keep distribution
 versions aligned with their own native facade and treat release tags and PyPI
 files as immutable after the first external mutation.
+
+### F-X097, Preserve namespace-scoped drawings and complex fields in comparison
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Document comparison now closes only the inherited namespace
+bindings required by detached inline and anchored drawing wrappers. It also
+projects physical complex-field runs onto their modeled comparison owners, so
+nested and sibling fields remain independently editable through comparison,
+save, reopen, accept, and reject.
+
+**Non-obvious choices.** Ordinary open and save retain their exact producer
+bytes. Namespace closure occurs only on isolated comparison candidates. Dirty
+typed inputs recover matching drawing wrapper context from package bytes, while
+fresh documents prepare their package before any main-story lookup.
+
+**Deviations from the design plan.** The completed implementation added an
+explicit fresh-document staging branch after full verification exposed that a
+new document has no serialized main part before preparation. Contributor PR 106
+was reviewed, but its field correlation and namespace closure were narrower
+than the approved story contract, so the broader reviewed implementation was
+retained.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, "Document
+comparison uses the same package boundary", `docs/hld/10-bindings-spec.md`,
+"Native callers generate tracked changes", `docs/hld/12-testing-strategy.md`,
+"Drawing preservation coverage", and the F-X097 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `comparison_preserves_inherited_drawing_namespaces_and_complex_fields`
+is the story gate. Existing comparison, field, namespace, accept, reject, and
+fresh-document mutation-history regressions also pass in the full workspace
+suite.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not read a fresh document's main package part
+before staged preparation. A package-backed document may still supply producer
+namespace context needed by a dirty typed comparison candidate.
+
+### F-X098, Preserve content-control type payloads
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The first supported content-control type child now retains
+its producer attributes, local namespace declarations, and ordered child
+payload while continuing to expose the existing typed discriminator. An
+unchanged type writes that payload under the fixed output prefix. An explicit
+type change writes one canonical empty replacement in the original property
+slot.
+
+**Non-obvious choices.** Duplicate supported type children remain raw ordered
+properties under the existing first-modeled rule. The retained payload is not
+promoted into a public model because the product does not edit those extension
+children.
+
+**Deviations from the design plan.** The accepted implementation preserves the
+payload under the canonical fixed type prefix rather than promising whole-type
+element byte identity. This matches the repository's fixed-prefix writer
+contract. Contributor PR 103 supplied the core preservation direction and was
+reviewed and hardened to this boundary.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Low-level
+content-control traversal is recursive and ordered",
+`docs/hld/04-opc-and-packaging.md`, "Story items are projections over the
+existing typed and retained package sources", `docs/hld/12-testing-strategy.md`,
+the content-control preservation coverage, and the F-X098 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `content_control_type_payload_round_trips_until_type_changes` is the
+story gate. The complete 488-test `rdocx-oxml` suite and full workspace gate
+also pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve opaque type payload content only while
+the discriminator matches the parsed type. A caller-selected replacement must
+not accidentally reuse producer-specific children from the prior type.
+
+### F-X099, Expose direct body ownership for story items
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native `StoryItemRef` and frozen Python `StoryItem`
+snapshots now expose an optional checked direct main-body owner index. Direct
+and nested body items identify the paragraph, table, or body-level control that
+can safely seed direct-body APIs. Related-story items and final section
+properties expose no owner. Existing recursive item paths remain unchanged.
+
+**Non-obvious choices.** The native accessor resolves source spans through the
+existing checked story scanner rather than deriving an index from the flat
+ordinal. Python materializes the value in each immutable snapshot so it cannot
+become stale through a borrowed native handle.
+
+**Deviations from the design plan.** The direct `cargo publish --dry-run` found
+the expected unpublished internal `rdocx-html 0.13.2` dependency. The complete
+package inventory and README archive gate passed with the workspace patch
+configuration, and coordinated publication remains owned by F-X112.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Container-neutral
+Word story editing also belongs to the `rdocx` facade",
+`docs/hld/10-bindings-spec.md`, the native story and Python snapshot contracts,
+`docs/hld/12-testing-strategy.md`, the story traversal matrix, and the F-X099
+entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `story_items_expose_safe_direct_body_owners` is the native gate. The
+installed Python runtime matrix, strict mypy, stubtest, full workspace suite,
+and both WASM target checks pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** A story scan ordinal is not a direct body index.
+Always resolve the containing checked span, especially for fields, drawings,
+and controls nested inside a paragraph.
+
+### F-X100, Preserve explicit false table toggles
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Word table row-header, row-split, and cell no-wrap
+properties now parse the complete shared on-off vocabulary. Explicit `0`,
+`false`, and `off` values remain false and write canonically. Bare elements
+remain true and absent properties remain inherited.
+
+**Non-obvious choices.** The three properties reuse one namespace-aware parser
+and the existing canonical toggle writer. Their schema slots and surrounding
+raw property children do not move.
+
+**Deviations from the design plan.** None. The table-toggle commit from
+contributor PR 101 was adopted and verified. The PR's separate TOC `\z`
+contribution remains assigned to F-X103, so the PR stays open until both
+outcomes are integrated.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, the Word table
+serialization rules, `docs/hld/10-bindings-spec.md`, the tri-state property
+contract, `docs/hld/12-testing-strategy.md`, Word table round-trip coverage,
+and the F-X100 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `explicit_false_table_toggles_remain_false` is the story gate.
+Existing bare, absent, ordered raw property, low-level table, and full workspace
+tests also pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not model an OOXML on-off element by presence
+alone. Explicit false and inherited absence are distinct states required by
+later authoring setters.
+
+### F-X102, Resolve header and footer pictures in their story scope
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Word layout now resolves inline and anchored pictures
+against the physical body, header, or footer relationship scope that owns the
+drawing. Footer images join header images in the prepared layout media, and a
+missing scoped target produces one stable diagnostic without falling back to a
+same-named body relationship.
+
+**Non-obvious choices.** Scoped registries share one immutable media map and
+carry only the owning story relationship identifier. Media identity continues
+to depend on bytes rather than relationship names, so caches retain the
+existing deduplication boundary while relationship collisions remain isolated.
+
+**Deviations from the design plan.** The focused oracle comparison used exact
+image dimensions and DPI rather than a whole-page pixel tolerance because
+LibreOffice paginated the feature showcase to 12 pages while native layout used
+11. Both outputs contain the same 400 by 40 header image at 200 DPI. Contributor
+PR 102 supplied the core scoped lookup and footer-loading implementation, which
+was hardened with shared storage, anchored-picture coverage, and deduplicated
+diagnostics.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the physical story
+ownership boundary, `docs/hld/08-rendering-spec.md`, header and footer drawing
+resolution, `docs/hld/12-testing-strategy.md`, story-scoped render coverage,
+and the F-X102 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `header_and_footer_pictures_render_from_story_relationships` is the
+story gate. Scoped inline and anchored collision tests, the complete workspace
+suite, deterministic LibreOffice comparison, and every regular verification
+gate also pass.
+
+**Hash harness.** The feature-showcase PDF byte, page-stream, and resource
+fingerprints changed because its existing header logo now renders on page 11.
+The page-one PNG and all other fingerprints are unchanged, 49 of 49 match.
+
+**Notes for future sessions.** Resolve a related-story drawing with both its
+story relationship identifier and its local image relationship identifier.
+Never insert a duplicate unscoped key for convenience because local identifiers
+may collide across physical parts.
+
+### F-X103, Accept standard TOC switches and report rebuild diagnostics
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** TOC evaluation accepts Word's argument-free `\\z` web
+layout switch as a retained no-op for paginated output. Native rebuild reports
+own exact diagnostic messages in physical source order and derive the
+compatibility count from that collection. Python exposes the same messages as
+an immutable tuple with a derived count property.
+
+**Non-obvious choices.** Simple and complex TOC diagnostics retain their source
+byte offsets until both scans finish, then sort once before the public report is
+created. This preserves document order without combining the two established
+ownership scanners or changing which fields are eligible for rebuilding.
+
+**Deviations from the design plan.** None. Contributor PR 101 supplied the
+focused `\\z` parser direction and regression. The approved story extended it
+with exact ordered native diagnostics, the Python and typing surface, content
+control payload coverage, and save and reopen proof. Clippy required one
+private return-shape alias to keep the parser signature readable.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the TOC atomic update
+and diagnostic boundary, `docs/hld/10-bindings-spec.md`, native and Python
+report contracts, `docs/hld/12-testing-strategy.md`, TOC binding coverage, and
+the F-X103 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `word_default_toc_switch_rebuilds_and_reports_ordered_diagnostics`
+is the native and Python story gate. All 43 Python binding tests, strict mypy,
+stubtest, the full workspace suite, clippy, docs, package inventories,
+no-default layout, both WASM checks, and workflow tests pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep report diagnostics as the sole source for
+their count. If another TOC form gains a retained-display outcome, attach its
+physical source offset before merging it into the public ordered collection.
+
+### F-X104, Render DrawingML picture transparency
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** DrawingML blips now model one namespace-aware
+`a:alphaModFix` amount with strict bounds and ordered raw sibling preservation.
+Presentation layout carries the effective value as image opacity, and rendering
+applies it to the complete picture layer across slide, layout, master,
+background, preview, PDF, SVG, and raster paths.
+
+**Non-obvious choices.** Picture opacity lowers through the existing shared
+group primitive. This keeps backend behavior identical and multiplies cleanly
+with enclosing group and animation opacity. Unsupported effects and duplicate
+`alphaModFix` children remain byte-preserved rather than acquiring ambiguous
+typed ownership.
+
+**Deviations from the design plan.** None. Contributor PR 105 supplied the
+resolved-image and backend-group direction. The integrated implementation
+hardened its parser with namespace resolution, amount validation, duplicate
+ownership, canonical child ordering, background and preview coverage, and an
+exact pinned LibreOffice and Poppler differential gate.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md`, DrawingML blip
+effect ownership, `docs/hld/08-rendering-spec.md`, backend-neutral picture
+opacity, `docs/hld/12-testing-strategy.md`, pinned presentation transparency
+coverage, and the F-X104 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `picture_alpha_mod_fix_matches_presentation_renderers` is the story
+gate and passed with LibreOffice 26.2.5.2 and Poppler 26.01.0. Parser, layout,
+animation composition, background, preview, PDF, raster, full workspace,
+WASM, docs, package, and supply-chain gates also pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep picture transparency on the complete image
+layer after crop and tile lowering. Applying opacity to pixels or only one
+placement would break transparent backgrounds and nested opacity composition.
+
+### F-X105, Separate slide-owned placeholders from master header flags
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Presentation flattening now treats occupied slide-owned
+date, footer, and slide-number placeholders as direct slide content. Inherited
+layout and master latent placeholders each obey the `p:hf` policy owned by
+their own source.
+
+**Non-obvious choices.** An occupied deeper layout placeholder still claims
+its latent type before visibility is decided. This prevents a hidden layout
+date from exposing stale master content. Direct slide content retains source
+order and suppresses matching inherited placeholders once.
+
+**Deviations from the design plan.** PowerPoint was unavailable, so the
+approved secondary oracle was LibreOffice 26.2.5.2 with Poppler 26.01.0. Its
+exact extracted text and bounded raster regions confirmed the three Issue 92
+master-header cases. No baseline was recorded from system fonts.
+
+**Spec sections touched.** `docs/hld/07-inheritance-and-resolution.md`, the
+source-owned latent placeholder rule, `docs/hld/12-testing-strategy.md`, the
+placeholder oracle matrix, `docs/hld/13-risks-and-open-questions.md`, the
+approved application decision, and the F-X105 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `slide_owned_latent_placeholders_ignore_master_header_flags` is the
+exact differential gate. The occupied and empty source matrix, ordering and
+deduplication regressions, all 131 rpptx-layout tests, all 219 rpptx integration
+tests, the full workspace, WASM, docs, package, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Decide latent visibility in the source that owns
+the placeholder. Keep direct slide placeholders outside template `p:hf`
+policy, and do not let an ineligible deeper source reveal stale shallower
+content.
+
+### F-X110, Control field updates on document open
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Word settings now expose the optional
+`w:updateFields` policy through staged Rust accessors and a matching Python
+property. The model reads namespace aliases and all valid on-off forms, writes
+the fixed Word prefix in schema order, and removes an unambiguous modeled
+setting without disturbing neighboring XML.
+
+**Non-obvious choices.** Duplicate or malformed producer occurrences remain
+raw and cannot be rewritten through the typed setter. Removing an already
+absent setting is byte-identical and does not allocate a settings relationship,
+which keeps no-op calls safe even when relationship IDs are exhausted.
+
+**Deviations from the design plan.** None. Contributor PR 104 supplied the
+native and Python API direction. The integrated implementation hardened it
+with duplicate and malformed ownership checks, absent-setting no-op behavior,
+relationship-exhaustion rollback, namespace aliases, typing, and complete save
+and reopen coverage.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, field update policy,
+`docs/hld/04-opc-and-packaging.md`, settings ordering and preservation,
+`docs/hld/10-bindings-spec.md`, native and Python optional accessors,
+`docs/hld/12-testing-strategy.md`, settings binding coverage, and the F-X110
+entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `update_fields_on_open_is_typed_optional_and_schema_ordered` is the
+story gate. All 44 Python tests, strict mypy, stubtest, the full workspace,
+WASM, docs, package, and supply-chain gates pass. The package dry run used
+`--allow-dirty` because `/complete-feature` verifies before creating the story
+commit. All 22 archives verified and remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve ambiguous settings as raw producer
+XML. Keep absent optional-setting removals allocation-free and byte-identical.
+
+### F-X111, Attach portable CLI binaries to Rust releases
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Rust release tags now build only their selected `rdocx` or
+`rpptx` CLI family on six native Linux, macOS, and Windows targets. Each archive
+contains one executable, the selected crate README, and the workspace licence.
+A separate aggregate job validates the exact inventory and executable mode,
+writes `SHA256SUMS`, and must finish before crates.io publication can begin.
+GitHub release creation waits for publication and the complete asset set.
+
+**Non-obvious choices.** The Linux musl binary disables system font discovery
+through a CLI-local feature while keeping bundled fonts. All other targets keep
+the existing system font default. Registry authentication is scoped only to the
+publish job. Both CLI manifests disable cargo-binstall quick-install and source
+fallbacks so installation resolves the reviewed target archive.
+
+**Deviations from the design plan.** None. Release publication is ordered after
+asset validation as additional protection against an irreversible partial
+release. The local macOS arm64 release binaries passed version, help, inspect,
+archive inventory, executable-mode, and checksum checks. The complete hosted
+matrix remains the tag workflow execution proof.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, CLI binary
+distribution, `docs/hld/12-testing-strategy.md`, release asset mutation tests,
+the F-X111 entry in `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`, archive construction and publication DAG.
+
+**Tests.**
+`rust_release_assets_are_complete_family_scoped_and_installable` first failed
+without the asset job and passes with the implementation. It rejects missing
+targets, wrong family routing, missing checksums, early publication, and early
+release creation. The complete 120-test workflow module, both CLI suites and
+feature graphs, full workspace, WASM, docs, all 22 package dry runs, and
+supply-chain gates pass. The package dry run used `--allow-dirty` because
+`/complete-feature` verifies before creating the story commit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep selected-family assets free of Python
+artifacts and registry credentials. Add any future target to the matrix,
+archive validator, checksum inventory, cargo-binstall contract, and mutation
+gate together.
+
+### F-X106a, Expose indexed content mutation and counted replacement in Python
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Python `Document` now maps live direct-body Paragraph and
+Table handles to interleaved content indices, inserts paragraphs, pops opaque
+owned fragments, reinserts reusable fragments, and clones or moves existing
+content. Counted literal and regular-expression replacements expose their exact
+native results. Successful structural mutations stale handles once, while
+zero-count and rejected operations leave live handles and package bytes intact.
+
+**Non-obvious choices.** Contributor PR 111 supplied the insertion, fragment,
+clone, move, native mapping, and binding tests. Its stacked Story snapshot API
+was reconciled to the approved direct-handle contract with same-document and
+direct-child checks. The counted replacement slice of contributor PR 109 was
+integrated without pulling its revision and field work ahead of F-X106c.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, staged Python
+mutation ownership, `docs/hld/10-bindings-spec.md`, direct-handle APIs and
+revision rules, `docs/hld/12-testing-strategy.md`, installed wheel and
+atomicity coverage, and the F-X106a entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_indexed_content_mutation_is_counted_and_atomic` first failed
+because the binding had no indexed lookup and passes against the implementation.
+The native nested-control mapping test, all 45 installed wheel tests, strict
+mypy, stubtest, both WASM checks, the full workspace, docs, all package dry
+runs, archive ceilings, and supply-chain gates pass. The cp39-abi3 wheel was
+archive-validated and imported from an isolated Python 3.12 site-packages
+environment.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep direct body coordinates distinct from
+recursive story paths. Resolve and validate every handle before borrowing the
+document mutably, and bump the shared revision only after the native operation
+publishes successfully.
+
+### F-260, Ordered run content authoring
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Native Word runs can now append tabs, typed line, page, and
+column breaks, pre-embedded pictures, fields, Unicode symbols, and text in one
+stable logical order. Save and reopen retain that order, while authored fields
+are emitted through schema-valid physical run segments that keep the logical
+run formatting.
+
+**Non-obvious choices.** Fields remain paragraph-level OOXML even when callers
+author them through one logical run. Serialization therefore closes and reopens
+physical runs around each field without exposing those storage boundaries in
+the public model. Parsed fields that share one producer run reject ambiguous
+mixed-content mutation instead of risking partial or reordered XML.
+
+**Deviations from the design plan.** None. The deterministic render gate proves
+the complete ordered sequence reaches layout. Run-level page pagination remains
+the separate dependent F-X101 story.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, ordered logical and
+physical run ownership, `docs/hld/04-opc-and-packaging.md`, field segmentation
+and raw preservation, `docs/hld/05-drawingml-model.md`, pre-embedded picture
+ownership, `docs/hld/08-rendering-spec.md`, mixed run lowering,
+`docs/hld/10-bindings-spec.md`, additive native methods,
+`docs/hld/12-testing-strategy.md`, ordered round-trip and render coverage, and
+the F-260 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `mixed_run_content_reopens_and_renders_in_source_order` first failed
+because the append methods did not exist and passes with the implementation.
+The raw-boundary and invalid-field regression, complete `rdocx-oxml` and
+`rdocx` suites, full workspace, no-default-font, WASM, docs, README, package,
+archive-size, and supply-chain gates pass. Microscope pass 1 found field display
+formatting was not copied to the authored result segment. That was corrected,
+and pass 2 reports zero defects and zero smells. The package dry run used
+`--allow-dirty` because `/complete-feature` verifies before creating the story
+commit. All 22 archives verified and remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the logical ordered run model independent
+from the physical OOXML run boundaries required by fields. Reject ambiguous
+producer ownership before mutation, and keep F-X101 responsible for page-break
+pagination behavior.
+
+### F-X101, Honor run-level page breaks during pagination
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Run-level Word page breaks now retain their identity through
+shared line breaking and end the current physical page at the exact run
+boundary. The corrected pagination is shared by layout fragments, PDF, PNG,
+PAGE, NUMPAGES, PAGEREF, and TOC page targets.
+
+**Non-obvious choices.** Contributor PR 102 supplied the recursive pagination
+algorithm and initial regressions. The integrated implementation replaces its
+boolean marker with a non-exhaustive `ForcedBreakKind`, so line, page, and
+column boundaries remain distinguishable. The required public `LayoutLine`
+field is a pre-1.0 struct-literal source break and was covered by rustdoc and
+package verification.
+
+**Deviations from the design plan.** None. Microscope pass 1 requested direct
+TOC-target coverage, which was added before the clean pass.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, modern DOCX
+pagination capability, `docs/hld/08-rendering-spec.md`, forced-break line and
+page behavior, `docs/hld/12-testing-strategy.md`, deterministic Word comparison,
+and the F-X101 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `run_level_page_breaks_match_word_pagination` first failed with one
+physical page and passes with the implementation. Unit coverage distinguishes
+line, page, and column breaks, paginator coverage exercises inline page splits,
+and the consumer regression proves fragments, fields, TOC targets, PDF, and PNG
+share the result. The full workspace, no-default-font, WASM, docs, README,
+package, archive-size, and supply-chain gates pass. The package dry run used
+`--allow-dirty` because `/complete-feature` verifies before creating the story
+commit. All package archives remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the typed boundary in shared layout.
+Only Word pagination interprets a page marker as a physical page split, while
+the single-column limitation continues to retain column identity without
+inventing page behavior.
+
+### F-X106b, Expose paragraph and run formatting mutations in Python
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Python paragraphs now expose nullable style and numbering
+properties, runs expose nullable character `style_id`, and fonts expose named
+Word highlight independently from hexadecimal or automatic shading. Every
+setter delegates to the native facade, preserves mixed ordered run content,
+and leaves structural handle revisions unchanged.
+
+**Non-obvious choices.** Contributor PR 108 supplied the initial properties
+and tests. The integrated implementation corrects its hexadecimal highlight
+setter to use Word's named `ST_HighlightColor` vocabulary, retains hexadecimal
+fills as a separate shading property, canonicalizes `AUTO` to `auto`, and
+rejects invalid highlight names without changing the run.
+
+**Deviations from the design plan.** None. Microscope pass 1 found five
+contract and gate gaps covering the property name, exact regression name,
+complete mixed content, typing coverage, and automatic shading normalization.
+All five were corrected, and pass 2 reports zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, Python formatting
+properties and semantics, `docs/hld/12-testing-strategy.md`, the mixed-content
+installed-wheel gate, and the F-X106b entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_paragraph_and_run_formatting_matches_native_facades` would
+fail against the story baseline because none of its paragraph, run, or font
+properties existed there, and passes against the implementation. The complete
+47-test binding suite, native formatting regressions, strict mypy, stubtest,
+both WASM checks, the full workspace, docs, README doctests, package dry runs,
+archive ceilings, and supply-chain gates pass. A fresh `cp39-abi3` wheel
+installed on Python 3.14 and passed the exact runtime, typing, and stub gates.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep Word highlight names and arbitrary shading
+fills as separate properties. Formatting mutation must preserve unmodelled run
+children in place and must not stale handles whose structural coordinates do
+not change.
+
+### F-X106c, Expose story mutation, hyperlinks, revisions, fields, and XML in Python
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Python now exposes frozen revision records, accept and
+reject filters, field cache updates, default header and footer text, story and
+paragraph hyperlinks, checked story text replacement, exact StoryItem XML, and
+ordered body text lookup. Contributor PRs 109 and 110 supplied the initial
+story, revision, field, and hyperlink surfaces.
+
+**Non-obvious choices.** StoryItem snapshots carry the binding revision and
+fail loudly after structural mutation. Clones omit Word comment anchors, while
+story replacement removes a hyperlink only when the replacement changed it
+from visible to empty. Direct paragraph text matches precede enclosing content
+controls, and callers can request every matching coordinate.
+
+**Deviations from the design plan.** None. Microscope pass 2 reviewed the final
+runtime and stub contract and reports zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, checked Python story
+ownership, `docs/hld/10-bindings-spec.md`, the typed binding surface,
+`docs/hld/12-testing-strategy.md`, runtime, GIL, typing, and clean-wheel gates,
+and the F-X106c entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_story_revision_field_and_xml_operations_are_typed_and_atomic`
+first failed at the story baseline because `Document.revisions` and the new
+mutation surface did not exist. It passes with the implementation. The complete
+57-test Python suite, strict mypy, stubtest, GIL regression, native crate and
+workspace suites, both WASM checks, docs, README doctests, package dry run,
+archive ceiling, and supply-chain gates pass. A fresh cp39-abi3 wheel installed
+and ran on Python 3.9, then passed strict typing and stub checks on Python 3.12.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep StoryItem XML immutable and keep every
+mutation behind the native staged facade. Do not broaden empty-hyperlink
+cleanup to links that were already empty before a replacement.
+
+### F-X108, Replace an existing picture atomically
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native Rust and Python callers can now replace the bytes
+referenced by an existing body, header, or footer picture without changing its
+drawing XML or relationship identifier. Replacement validates the image
+signature, stages the complete package change, and reopens the candidate before
+publishing it.
+
+**Non-obvious choices.** Contributor PR 107 supplied the initial native and
+Python surface. The integrated implementation uses relationship-local
+copy-on-write for shared targets, reuses only compatible unshared targets,
+allocates deterministic format-correct media names, and removes an old part or
+facade-authored content-type default only after its final reference disappears.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that the
+last facade-authored default content type survived orphan cleanup. The cleanup
+and regression were added, and pass 2 reports zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, staged mutation and
+story ownership, `docs/hld/04-opc-and-packaging.md`, relationship-local media
+and content types, `docs/hld/10-bindings-spec.md`, native and Python media
+replacement, `docs/hld/12-testing-strategy.md`, package and clean-wheel gates,
+and the F-X108 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `replace_image_preserves_drawings_and_story_relationship_ownership`
+first failed at the story baseline because the replacement API did not exist.
+It now covers body, header, and footer ownership, shared and unshared targets,
+PNG and JPEG changes, unchanged drawing XML, orphan cleanup, and atomic failure
+for invalid relationships and bytes. The full workspace, no-default-font,
+WASM, docs, README, package, archive-size, supply-chain, and 58-test Python
+gates pass. A fresh cp39-abi3 wheel passed on Python 3.9, with strict mypy and
+stubtest passing on Python 3.12.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep replacement scoped to the relationship
+owner. Do not mutate a shared media target in place, and do not remove producer
+content-type defaults merely because the facade no longer needs them.
+
+### F-X109, Split text runs at Unicode character offsets
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native Rust and Python callers can now split a direct body
+run at a checked Unicode scalar offset and receive the existing or newly
+created run boundary. The operation preserves formatting, hyperlink spans,
+comment coordinates, fields, drawings, and unmodelled ordered content.
+
+**Non-obvious choices.** Contributor PR 112 supplied the initial ordered split
+and coordinate repair. Zero and end offsets are stable no-op boundaries.
+Tabs, breaks, fields, drawings, references, symbols, and raw XML have zero
+width for the offset calculation. Alternate-content drawings keep their raw
+serialization and layout projection together on the owning side of a split.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that
+alternate-content drawings were rejected and that mixed-content coverage was
+incomplete. Both were corrected, and pass 2 reports zero defects and zero
+smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, staged split
+mutation, `docs/hld/04-opc-and-packaging.md`, raw and projected child order,
+`docs/hld/10-bindings-spec.md`, native and Python split contracts,
+`docs/hld/12-testing-strategy.md`, split and clean-wheel gates, and the F-X109
+entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `split_run_enables_exact_comment_ranges_without_losing_content`
+first failed at the story baseline because `Document::split_run` did not
+exist. It now covers ASCII and multibyte text, hyperlinks, exact comment
+ranges, endpoint no-ops, invalid offsets, and atomic rollback. The ordered
+mixed-content regression covers text, tabs, breaks, fields,
+alternate-content drawings, symbols, raw XML, and trailing text. The full
+workspace, no-default-font, WASM, docs, README, package, archive-size,
+supply-chain, and 60-test Python gates pass. A fresh cp39-abi3 wheel passed on
+Python 3.9, with strict mypy and stubtest passing on Python 3.12.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep offsets scoped to direct literal text and
+keep raw alternate-content XML coupled to its parseable drawing projection.
+Do not count zero-width ordered children as characters or serialize the raw
+and projected forms independently.
+
+### F-257, Complete M23 table authoring
+
+**Sprint.** S73
+**Completed.** 2026-09-15
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native table facade now provides typed width and layout
+modes, checked indentation, shading, aggregate and individual borders, default
+cell margins, conditional table-look flags, complete active-grid replacement,
+and matching borrowed readers. Complete-grid mutation validates every row and
+publishes the grid, fixed table width, and covering cell widths together.
+
+**Non-obvious choices.** Percentage widths retain the repository's truncating
+fiftieth-percent conversion. Invisible borders are explicit `none` edges.
+Checked operations validate all input and derived geometry before mutation,
+while changed modeled children use the canonical `w` prefix and unrelated raw
+property slots, border extensions, and namespace aliases remain exact.
+
+**Deviations from the design plan.** The private five-document comparison stays
+with F-263 because its corpus cannot be committed. F-257 instead provides the
+named sanitized public gate, deterministic geometry and pagination evidence,
+and exact structural preservation checks required before that boundary.
+Microscope pass 1 found missing legacy table-look mask decoding and incomplete
+autofit, span, coverage, and overflow coverage. Both were corrected. Passes 2
+and 3 report zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, modern DOCX
+table authoring, `docs/hld/04-opc-and-packaging.md`, checked table serialization
+and preservation, `docs/hld/08-rendering-spec.md`, direct table layout inputs,
+`docs/hld/10-bindings-spec.md`, additive native APIs,
+`docs/hld/12-testing-strategy.md`, the sanitized M23 gate, and the F-257 entry
+in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `m23_layout_and_data_tables_match_word` first failed at the story
+baseline because the complete checked table API did not exist. It now proves
+public-only construction, typed reopen, canonical property order, explicit
+invisible borders, deterministic geometry, three-page pagination, and stable
+raster bytes. Companion tests cover every width mode, atomic invalid-input
+rejection, spanning grids, legacy look masks, aliased Word prefixes, and exact
+raw XML retention. Full workspace, no-default-font, WASM, rustdoc, README,
+workflow, package, archive-size, and supply-chain gates pass with pinned
+external tools.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep complete-grid validation ahead of all
+mutation. Treat an absent border differently from an explicit invisible edge,
+and preserve raw table-property and border-extension slots when changing one
+modeled value.
+
+### F-258, Complete M23 row and cell authoring
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native row and cell facade now provides checked exact
+and minimum heights, repeating headers, split policy, alignment, grid
+omissions, horizontal and vertical merges, cell widths, individual borders and
+margins, shading, vertical alignment, all six text directions, conditional
+formatting, wrapping, and nested tables. Candidate mutations validate complete
+grid coverage and merge topology before publication.
+
+**Non-obvious choices.** Horizontal span changes recompute the selected cell
+width from the covered grid columns, while shrinking restores width-synchronized
+empty cells. Existing convenience methods still set toggles true, and companion
+setters write false or remove the direct value without breaking callers. The
+Word oracle is normalized only where Word 16.112.4 drops explicit defaults or
+infers a vertical row height, while local assertions retain those distinctions.
+
+**Deviations from the design plan.** None. Microscope pass 1 found missing
+external oracle evidence, incomplete text-direction coverage, and a weak
+pagination assertion. All three were corrected. The remediation also exposed
+and fixed stale cell widths when a span grows or shrinks. Pass 2 reports zero
+defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, modern row and
+cell authoring, `docs/hld/04-opc-and-packaging.md`, checked table topology and
+schema order, `docs/hld/08-rendering-spec.md`, pagination and nested tables,
+`docs/hld/10-bindings-spec.md`, additive native APIs,
+`docs/hld/12-testing-strategy.md`, authenticated Word and deterministic layout
+gates, and the F-258 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `m23_nested_rows_and_cells_match_word` first failed at the story
+baseline because the checked row and cell API did not exist. It now proves
+public-only construction, all six text directions, typed reopen, exact schema
+order, intentional Word normalizations, and an authenticated Word 16.112.4
+structural oracle. Focused tests cover explicit false and absent toggles,
+malformed pre-existing topology, atomic invalid-input rejection, span width
+recalculation, nested tables, four-page pagination, repeated headers, and
+deterministic raster bytes. Full workspace, no-default-font, WASM, rustdoc,
+README, workflow, package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Validate the complete candidate topology before
+publishing any row or cell edit. Keep stored cell widths synchronized with the
+active grid when changing spans, and preserve foreign same-local-name property
+elements as raw XML.
+
+### F-X120, Accept fractional DOCX line spacing values
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** DOCX paragraph parsing now accepts producer-written plain
+decimal line-spacing values and normalizes them to the nearest signed integer
+twip. Integer inputs retain their existing path, and saved modeled values use
+the canonical integer spelling.
+
+**Non-obvious choices.** Pedro Assumpcao's PR 122 supplied the observed
+producer values and initial bounded parser. The integrated implementation uses
+the source decimal digits instead of binary floating point, so arbitrarily
+long fractions cannot cross a half-twip boundary. Exact halves round away from
+zero, while numeric values outside the signed 32-bit range remain errors even
+when rounding could bring them back inside.
+
+**Deviations from the design plan.** None. The contributor patch was hardened
+as planned with exact decimal arithmetic, alias and sibling coverage,
+canonical reopen, and deterministic layout parity. Microscope pass 1 reports
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, bounded decimal
+parsing and canonical serialization, `docs/hld/08-rendering-spec.md`, integer
+layout equivalence, `docs/hld/12-testing-strategy.md`, parser and deterministic
+rendering gates, and the F-X120 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `word_fractional_line_spacing_opens_with_nearest_twip_values` first
+failed at the story baseline because the OXML parser required a direct `i32`.
+It now opens the reported values through the public facade, saves and reopens
+canonical integers, and compares deterministic raster bytes with equivalent
+integer input. Unit tests cover positive and negative halves, long fractions,
+signs, signed limits, malformed forms, exponent notation, namespace aliases,
+and sibling spacing attributes. The full workspace, corpus, no-default-font,
+WASM, rustdoc, README, workflow, package, archive-size, and supply-chain gates
+pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep this compatibility exception limited to
+paragraph `w:line`. Do not route it through floating point or widen decimal
+acceptance to unrelated OOXML measures without a separate producer case and
+story.
+
+### F-X107, Clone and remove existing table rows
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native `Document` and Python `Table` operations now clone
+complete formatted direct rows at a requested boundary and remove direct rows
+by index. Successful mutations publish a serialized and reopened candidate,
+while invalid indexes, malformed topology, serialization failures, and the
+one-row guard leave the live document unchanged.
+
+**Non-obvious choices.** PR 113 supplied the initial operation shape and the
+reported root-default-namespace failure. The integrated path freshens drawing,
+bookmark, and content-control identities, omits copied comment anchors, keeps
+relationships in their existing story scope, and converts namespace
+declaration names to fragment prefixes before reparsing. Table-level raw XML
+and content controls move with their logical row boundaries. Removing a merge
+restart promotes an exactly matching continuation in the next direct row.
+
+**Deviations from the design plan.** None. The zero-finding microscope pass
+confirmed the direct-row contract, package identity handling, OOXML order,
+atomicity, binding lifecycle, and test strength.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, staged row
+mutation and identity preservation, `docs/hld/08-rendering-spec.md`, validated
+row geometry, `docs/hld/10-bindings-spec.md`, native and Python row operations,
+`docs/hld/12-testing-strategy.md`, the row mutation gates, and the F-X107 entry
+in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `table_rows_clone_remove_and_clear_through_native_and_python` first
+failed at the story baseline because neither native row operation existed. It
+now proves formatted nested-row cloning, toggle clearing, removal, reopen, and
+deterministic rendering. Companion native tests cover identity freshening,
+shared relationships, removed comment anchors, default namespaces, merge
+promotion, raw and content-control boundaries, invalid topology, and byte
+atomicity. Python tests cover negative indexes, formatting, stale handles, the
+one-row guard, strict mypy, and stubtest. Full workspace, Python binding,
+no-default-font, WASM, rustdoc, README, workflow, package, archive-size, and
+supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Row coordinates deliberately address direct
+rows, matching the existing `Table` facade. Keep package-wide identity work at
+the staged `Document` boundary, and preserve table boundary metadata whenever
+direct row indexes shift.
+
+### F-X113, Preserve appended paragraphs in document comparison
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Main-story comparison now preserves every paragraph when
+one, two, or three paragraphs are appended after the original final paragraph.
+Acceptance reproduces the edited story, while rejection reconstructs the
+original without a synthetic empty terminal paragraph.
+
+**Non-obvious choices.** The original final paragraph boundary is marked once,
+each intermediate appended paragraph owns its inserted paragraph mark, and the
+last appended paragraph remains the story terminator. A shared marker helper
+expands a self-closing original paragraph around its paragraph properties
+instead of emitting those properties as raw body content.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, terminal comparison
+ownership, `docs/hld/12-testing-strategy.md`, accept, reject, and preservation
+coverage, and the F-X113 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `comparison_appends_multiple_terminal_paragraphs_without_residue`
+first failed at the story baseline with an extra empty paragraph after
+rejection. It covers start and middle insertion, one through three appended
+paragraphs, a self-closing original terminator, fields, drawings, media
+relationships, and an unrelated opaque package part. Full changed-crate,
+workspace, no-default-font, WASM, rustdoc, README, workflow, and hash gates
+pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep paragraph-mark ownership explicit when a
+body alignment ends in inserted paragraphs. Do not remove an empty terminal
+paragraph after resolution because it may have existed in the original.
+
+### F-259, Container measurement and equal-height layout
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native `Document` facade now measures a checked
+paragraph or table at a caller-supplied positive width and returns an owned
+height in points with production layout diagnostics. The M23 equal-height gate
+measures two independent nested tables, rounds the greater fractional height
+up to an exact twip, and proves final whole-document layout gives both rows the
+same requested geometry.
+
+**Non-obvious choices.** Measurement builds the normal deterministic layout
+input, resolves the selected subtree through the existing checked content
+location, and calls the production paragraph or table path without pagination
+or cache mutation. Header and footer media resolve in their related story
+scope. Unsupported content diagnostics retain production order, and the
+public result owns them so it does not borrow document state.
+
+**Deviations from the design plan.** None. Microscope pass 2 reports zero
+defects, zero smells, and zero nitpicks after pass 1 requested explicit ordered
+diagnostic coverage.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, pure facade and
+layout ownership, `docs/hld/08-rendering-spec.md`, production measurement and
+equal-height geometry, `docs/hld/10-bindings-spec.md`, the additive native
+result and method, `docs/hld/12-testing-strategy.md`, deterministic purity and
+geometry gates, and the F-259 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `independent_nested_tables_measure_to_one_final_height` first
+failed at the story baseline because the public measurement operation did not
+exist. It now proves caller-width table measurement, spans, margins, borders,
+nested tables, upward twip rounding, and final row-height parity. Companion
+tests prove paragraph wrapping, invalid widths and locations, byte and cache
+purity, and exact ordered production diagnostics. Full format, clippy,
+changed-crate, workspace, hash, prose, workflow, no-default-font, WASM,
+rustdoc, README, package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep this API a pure production-layout query.
+Do not add a second approximate measurer or measurement cache, and preserve
+related-story relationship scope when new measurable content kinds are added.
+
+### F-261, Rich HTML fragments in arbitrary containers
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native `Document` facade now inserts a rich HTML
+fragment at a checked body, table-cell, header, or footer location. The
+operation supports styled paragraphs, lists, tables, links, data-URI images,
+and caller-supplied image resources, then returns the inserted direct range
+and ordered diagnostics.
+
+**Non-obvious choices.** Fragment insertion reuses the existing HTML5 repair
+and CSS projection rather than introducing a second importer. The projected
+content is staged before publication, while relationships, media names,
+numbering, and drawing identifiers are allocated in the destination story.
+External resource fetching remains absent, and unsupported story locations
+fail without changing the live document.
+
+**Deviations from the design plan.** The HLD impact list was expanded to
+include the capability matrix after the workflow invariant exposed its stale
+completion owner. The implementation contract did not change. Microscope pass
+3 reports zero defects and zero smells, with one non-blocking diagnostic-wording
+nitpick.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, the completed
+DOCX-026 capability row, `docs/hld/03-architecture.md`, staged fragment
+projection, `docs/hld/04-opc-and-packaging.md`, story-scoped reconciliation,
+`docs/hld/10-bindings-spec.md`, the native-only boundary,
+`docs/hld/12-testing-strategy.md`, fragment and oracle gates, and the F-261
+entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `rich_html_fragments_match_word_in_every_supported_container` first
+failed at the story baseline because `Document::insert_html_fragment` did not
+exist. It now covers body, table-cell, header, and footer insertion, rich
+content, explicit and data-URI images, package reconciliation, direct cell
+routing, unsupported stories, atomic failure, reopen, and deterministic
+rendering. The external Word 16.112.4, LibreOffice 26.2.5.2, and Poppler
+26.09.0 oracle matched token and page counts with SSIM at or above 0.75. The
+full workspace, no-default-font, WASM, rustdoc, README, workflow, package,
+archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep fragment resources explicit and preserve
+story-local relationship ownership. Extend the shared HTML projection when the
+supported subset grows instead of adding a parallel fragment parser.
+
+### F-262, Corpus drawings, text boxes, and watermarks
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native `Document` facade now authors cropped inline
+and floating pictures with full position and wrapping options, rotated or
+vertical story text boxes, and text watermarks for a selected section header
+variant. Authored text boxes contain a WPS DrawingML primary branch and a
+self-contained VML fallback.
+
+**Non-obvious choices.** Every operation stages relationship, media, drawing
+identity, and story XML changes, then serializes and reopens the complete
+package before publication. Tight and through wraps include their required
+polygon. Selecting an even watermark header does not silently enable the
+document-wide even-and-odd setting, which remains caller-owned.
+
+**Deviations from the design plan.** The completion follow-up added the
+capability matrix to the HLD impact list after the first completion commit left
+DOCX-027 marked partial with F-262 as its owner. Microscope pass 2 reports zero
+defects, zero smells, and zero nitpicks after retiring that stale owner.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, the completed
+DOCX-027 capability row, `docs/hld/03-architecture.md`, story and identity
+ownership, `docs/hld/04-opc-and-packaging.md`, package staging and compatibility
+branches, `docs/hld/05-drawingml-model.md`, crop, anchors, wraps, and text-box
+serialization, `docs/hld/08-rendering-spec.md`, selected text-box and watermark
+layout, `docs/hld/10-bindings-spec.md`, the additive native API,
+`docs/hld/12-testing-strategy.md`, drawing conformance and oracle gates, and the
+F-262 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `m23_drawings_text_boxes_and_watermarks_match_word` first failed at
+the story baseline because the typed option and text-box APIs did not exist. It
+now proves reviewed geometry and compatibility structure. Companion tests cover
+the exact option matrix, owner-scoped relationships, section header selection,
+whitespace, save and reopen, schema-complete wraps, and atomic invalid-input
+rollback. The full workspace, Clippy, no-default-font, WASM, rustdoc, README,
+workflow, package, archive-size, and deterministic render gates pass. Portable
+visual inspection used LibreOffice 26.2.5.2 and Poppler 26.01.0. Word 16.112.4
+GUI automation was unavailable, so the Word gate used its reviewed static
+structure record and did not claim a successful GUI render.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep text-box compatibility branches complete
+and self-contained. Preserve caller ownership of even-header policy and add new
+wrap variants only with their required schema children and exact round-trip
+coverage.
+
+### F-X115, Preserve modern comment metadata and identity
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Modern Word comments now use the standard
+commentsExtended content type, retain their numeric ids and parent links across
+save and reopen, and allocate new ids without colliding with accepted source
+identities. Native and Python comment and reply creation also accept an
+optional validated RFC 3339 date while preserving deterministic no-date
+authoring by default.
+
+**Non-obvious choices.** Comment identity is preserved rather than rebuilt
+from document order, so mutation results continue to address the same thread.
+The allocator uses the unused nonnegative id space, and date validation occurs
+before staged package publication. Existing producer sidecars and unrelated
+XML remain preservation boundaries.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, comment identity and
+staged mutation, `docs/hld/04-opc-and-packaging.md`, content types and package
+preservation, `docs/hld/10-bindings-spec.md`, native and Python comment inputs,
+`docs/hld/12-testing-strategy.md`, collaboration gates, and the F-X115 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `comments_keep_standard_content_type_ids_dates_and_threads` first
+failed at the story baseline because ids were renumbered and the modern part
+used the wrong content type. It now proves standard package metadata, stable
+ids, replies, resolved state, optional dates, save and reopen, and preservation
+of unrelated sidecar XML. Installed Python tests cover valid and invalid dates,
+stable ids, runtime signatures, strict typing, and stub parity. The dedicated
+Word comment candidate changed only by its declared content-type correction.
+The full workspace, Python, no-default-font, WASM, rustdoc, README, workflow,
+package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep wall-clock time out of default comment
+authoring. A third-party editor may renumber comments independently, but an
+rdocx no-op save must not do so.
+
+### F-X116, Make Python story reads linear and complete
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Python story snapshots now construct one native source and
+owner inventory per public call, then project story items, hyperlinks,
+paragraphs, and runs from that immutable inventory. Visible runs nested inside
+accepted revisions and inline content controls carry recursive source paths so
+formatting, splitting, and comment operations address the same text callers
+read.
+
+**Non-obvious choices.** One accepted-view walker defines visible text across
+all projections and excludes deleted and move-source content consistently.
+Live nested handles retain checked owner paths instead of flattened copied
+strings, and structural mutation invalidates stale handles through the existing
+document lifecycle contract.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 found
+recursive mutation atomicity and accepted-view inconsistencies, which were
+corrected with composed owner-path and move-source coverage. Passes 3 and 4
+report zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, story inventory and
+accepted text ownership, `docs/hld/10-bindings-spec.md`, paragraph and run
+handle semantics, `docs/hld/12-testing-strategy.md`, counted complexity and
+binding gates, and the F-X116 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_story_inventory_scales_linearly` first failed at the story
+baseline because the binding rebuilt and rescanned the complete inventory for
+each result. It now proves one counted native traversal and a bounded
+installed-wheel scaling ratio. Companion tests cover accepted insertions,
+inline controls, nested revisions, deletion and move-source exclusion,
+formatting, splitting, comment anchoring, atomic failed refresh, stale handles,
+strict mypy, and stubtest. The full workspace, Python oracle,
+no-default-font, WASM, rustdoc, README, workflow, package, archive-size, and
+supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep snapshots bounded to one inventory per
+call. Extend the shared accepted-view walker when new recursive inline owners
+appear instead of adding a second text projection.
+
+### F-X117, Render transparent and large raster pictures safely
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Raster output now premultiplies decoded straight-alpha
+RGBA channels exactly once before tiny-skia consumes them. Presentation image
+previewing accepts checked decoded buffers up to 64 MiB, covering the reported
+large assets, and returns a stable diagnostic with a visible fallback when an
+image exceeds that ceiling.
+
+**Non-obvious choices.** The decoded-size ceiling remains finite and every
+dimension, multiplication, and expected buffer length is checked before
+allocation. Render failures remain ordered diagnostics on the existing public
+result shape, preserving source compatibility while preventing silent picture
+loss.
+
+**Deviations from the design plan.** None. Microscope pass 1 identified a
+public struct-literal compatibility break in the first diagnostic design. The
+result was remediated without weakening the visible failure contract, and pass
+2 reports zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`, alpha composition,
+decoded image limits, and fallback output, `docs/hld/12-testing-strategy.md`,
+pixel and resource-bound gates, `docs/hld/13-risks-and-open-questions.md`, the
+reviewed allocation ceiling, and the F-X117 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `straight_alpha_images_composite_with_premultiplied_pixels` proves
+transparent white and black storage produce identical navy output across PNG,
+JPEG, and TIFF. `large_pictures_render_or_report_the_decode_limit` proves the
+reported 22.9 MiB and 16.8 MiB pictures render in PDF and raster output, while
+an over-limit image produces one stable diagnostic and visible placeholder.
+Malformed and overflowing image cases fail before allocation. The full
+workspace, pinned Poppler and LibreOffice riders, no-default-font, WASM,
+rustdoc, README, workflow, package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep straight-alpha conversion at the
+tiny-skia ownership boundary. Any future limit change needs a named producer
+case, checked arithmetic, and an explicit failure rendering.
+
+### F-X118, Make notes rendering and replacement safe
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Notes rendering now uses the presentation graph's known
+owning slide when a producer-valid notes slide omits its reverse relationship,
+while conflicting or multiple owners still fail closed. Native and Python APIs
+can replace notes text while preserving placeholder identity and effective run
+formatting. Presentation replacement counts both slide and notes matches, and
+the CLI adds guarded destinations, expected-count validation, and atomic
+publication.
+
+**Non-obvious choices.** Rendering does not rewrite a valid Google-style
+relationship graph just to synthesize a reverse link. Notes mutation and
+replacement stage the full operation before publication. Zero matches fail by
+default, while an explicit expected count of zero remains a caller-controlled
+success.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, graph ownership and
+staged presentation mutation, `docs/hld/10-bindings-spec.md`, notes mutation
+and guarded CLI replacement, `docs/hld/12-testing-strategy.md`, producer,
+binding, and command gates, and the F-X118 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `rpptx_replace_is_guarded_counted_and_includes_notes` first failed
+at the story baseline because the command could overwrite output, publish after
+zero matches, and ignore notes. It now covers input equality, existing output,
+zero and mismatched counts, exact stdout, slide and notes replacement, staged
+cleanup, and package preservation. Companion tests prove Google-style and
+control notes graphs render equivalently, conflicting owners fail closed, and
+native plus installed Python edits preserve formatting through reopen. The
+full workspace, clean abi3 Python rider, no-default-font, WASM, rustdoc, README,
+workflow, package, archive-size, and supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the presentation graph as the source
+of ownership truth. Keep CLI publication behind complete count validation, and
+route future searchable notes content through the same atomic native operation.
+
+### F-X121, Adopt PR 123 authored line-chart portability
+
+**Sprint.** S73
+**Completed.** 2026-09-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Kevin Brown's PR 123 was integrated and hardened so newly
+authored chart axis titles emit explicit layout and false overlay children,
+and authored line plots emit explicit false marker and smoothing values. The
+children occupy their required ChartML schema positions and survive parse and
+rewrite.
+
+**Non-obvious choices.** The correction seeds the existing ordered raw title
+boundary and typed line-plot lexical state. It does not add public options,
+change workbook references or palette output, or affect bar, pie, doughnut,
+area, scatter, or radar charts.
+
+**Deviations from the design plan.** None. The contributor implementation at
+exact PR head `1375b6342548e79ec17faa99ac76a57e4a1c5e9b` was retained, then its
+regression was strengthened for direct-child order, false values, exclusion,
+parse and rewrite, workbook references, and palette stability. Microscope pass
+1 reports zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`, portable authored
+ChartML defaults, `docs/hld/12-testing-strategy.md`, authored chart and viewer
+gates, and the F-X121 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `authored_charts_emit_portable_viewer_defaults` first failed at the
+story baseline because title layout, overlay, marker, and smoothing children
+were absent. It now proves exact schema order, line-only false values,
+non-line exclusion, stable workbook formulas and caches, palette preservation,
+and parse and rewrite stability. The repository-pinned Pages Creator Studio
+15.1.1 export matched the reviewed output, all 50 pinned presentation corpus
+decks passed, and the focused oxml-chart plus full workspace, LibreOffice,
+no-default-font, WASM, rustdoc, README, workflow, package, archive-size, and
+supply-chain gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the explicit false defaults limited to
+newly authored line plots. Preserve Kevin Brown and PR 123 in release notes and
+the final human result comment.
+
+### F-X119, Complete round-three Python authoring and inspection
+
+**Sprint.** S73
+**Completed.** 2026-09-17
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Python can now insert Word pictures from bytes at checked
+story positions and target comment ranges inside table-cell paragraphs.
+Presentation bindings expose notes mutation, shape geometry and identity, run
+font details, autofit mode, and formatting-preserving run text replacement.
+
+**Non-obvious choices.** The existing direct-body `RunPosition` call shape
+remains source compatible, while a separate path-aware range carries nested
+table ownership. Picture insertion resolves relationships in the owning story
+part, and presentation text mutation updates the selected run without
+reconstructing its paragraph or discarding producer formatting.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and zero nitpicks. Integration with F-263 retained both
+binding surfaces, and the reconciliation review reports no interaction defect.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, staged package
+mutation and ownership, `docs/hld/05-drawingml-model.md`, presentation geometry
+and text properties, `docs/hld/10-bindings-spec.md`, the Python document and
+presentation surfaces, `docs/hld/12-testing-strategy.md`, installed binding and
+typing gates, and the F-X119 entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `python_round_three_authoring_and_inspection_is_typed_and_lossless`
+passes in both distributions. Clean `cp39-abi3` wheels built from the reviewed
+SHA installed together and passed all 80 binding tests on Python 3.9 and 3.12.
+Strict mypy passed seven rdocx and six rpptx sources, and live stubtest passed
+all eleven installed modules. Both wheels carry the exact ABI tag, typed marker,
+stubs, extension, README metadata, and no development cache files. The full
+workspace, no-default-font, WASM, rustdoc, README, package, archive-size,
+workflow, supply-chain, and private corpus gates pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep nested Word positions owner checked rather
+than flattening them to body indices. Build release wheels from a clean checkout
+so ignored interpreter caches cannot enter the archive.
+
+### F-263, Layout-backed fields and M23 corpus gate
+
+**Sprint.** S73
+**Completed.** 2026-09-17
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** A pagination-aware field update now materializes PAGE,
+NUMPAGES, PAGEREF, and supported TOC caches from one deterministic layout
+snapshot, returns an owned native and Python report, and publishes the staged
+document only after every cache update succeeds. The M23 required-private gate
+now generates all five business-document examples from blank packages through
+pure Rust public facade programs and validates the complete reviewed evidence
+set without committed private artifacts.
+
+**Non-obvious choices.** Ordinary field evaluation remains layout independent.
+A shared header or footer field stores the first physical page on which that
+story variant appears because one OOXML part has only one cache. Layout exposes
+stable field provenance without making the format-neutral output depend on the
+Word model, and required-private evidence remains ignored local state.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 found
+field identity, report, and corpus-boundary defects that were remediated. Pass
+3 and integration pass 4 report zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, the completed
+DOCX-028 capability row, `docs/hld/03-architecture.md`, field staging and layout
+ownership, `docs/hld/04-opc-and-packaging.md`, typed field caches and bookmark
+ownership, `docs/hld/08-rendering-spec.md`, physical page and target resolution,
+`docs/hld/10-bindings-spec.md`, native and Python field reports,
+`docs/hld/12-testing-strategy.md`, the required-private conformance gate,
+`docs/hld/13-risks-and-open-questions.md`, private corpus controls, and the F-263
+entry in `docs/hld/14-development-backlog.md`.
+
+**Tests.** `layout_backed_page_fields_update_cached_results` proves body,
+header, footer, table-cell, PAGEREF, and TOC publication, deterministic reopen,
+and atomic rejection. Python tests prove the same owned report and GIL-safe
+operation. `m23_private_from_scratch_corpus_passes_required_mode` generated all
+five examples with pure Rust, then passed package, semantic, schema, render,
+determinism, repair, and no-fallback validation under LibreOffice 26.2.5.2 and
+Poppler 26.01.0. The consolidated full workspace, binding, no-default-font,
+WASM, rustdoc, README, package, archive-size, workflow, and supply-chain gates
+pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep every corpus generator on the public Rust
+facade. Do not use HTML conversion, commit private names or evidence, or let
+ordinary field evaluation acquire a pagination dependency.
+
+### F-X114, Rebuild TOC entries with document styles and geometry
+
+**Sprint.** S73
+**Completed.** 2026-09-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rebuild_toc()` now resolves each entry level by the
+built-in style name `toc N` and keeps the producer's localized style id. It
+creates a canonical style only when no matching style exists. A right tab owned
+by the effective entry style stays authoritative. Otherwise the page-number stop
+comes from the text width of the section that owns the field. A numbered
+heading's suffix tab is emitted as ordered `w:tab` run content instead of a
+literal control character inside `w:t`. This resolves Issue 116 reported by
+hadim.
+
+**Non-obvious choices.** An existing canonical `TOCN` id is the collision-safe
+fallback when no style carries the built-in name. Section width uses checked
+arithmetic, and missing, nonpositive, or overflowing geometry falls back to the
+standard 9360 twip text width. Style resolution and styles-part serialization
+run inside the staged candidate, so unrelated styles and unmodelled style
+children keep their source bytes.
+
+**Deviations from the design plan.** None. Microscope pass 1 found an unchecked
+margin subtraction and a missing style-preservation assertion. Both were
+remediated, and pass 2 reports zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, TOC entry style
+resolution and staged styles serialization, `docs/hld/08-rendering-spec.md`,
+section-derived TOC tab stops and structural suffixes,
+`docs/hld/12-testing-strategy.md`, the entry-style and geometry regression and
+pinned Word records, and the F-X114 entry in
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `rebuilt_toc_uses_localized_styles_section_tabs_and_structural_suffixes`
+failed at the story baseline on fixed style ids, the 9350 twip stop, and the
+literal tab. It now proves localized id reuse, canonical creation only for the
+missing level, a style-owned 7777 twip tab, a 9072 twip A4 section fallback,
+safe default geometry under extreme parsed values, structural suffix tabs, and
+byte preservation of an unrelated unmodelled style child through save, reopen,
+and layout. Normalized entry records match Microsoft Word 16.113 build
+16.113.26091433 on macOS. The integrated full workspace, clippy, no-default-font,
+WASM, rustdoc, README, workflow, 22-crate package, archive-size, and
+supply-chain gates pass at `e82dac08`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Select TOC styles by built-in name, never by a
+fixed id list. Keep generated tab stops tied to the owning section, and keep
+numbering suffixes structural so no renderer sees a raw control character.
+
+### F-X122, Recover the immutable rpptx 0.12.0 release attempt
+
+**Sprint.** S73
+**Completed.** 2026-09-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Rust release asset validation now treats CRLF and LF as
+equivalent only for packaged README and licence text. The complete shared and
+PowerPoint family, its Python and WASM carriers, stable shared dependency pins,
+release notes, and release mappings are prepared coherently at 0.12.1.
+
+**Non-obvious choices.** The failed immutable `rpptx-v0.12.0` tag remains at
+reviewed SHA `54f4567b54b4028cd5126bcf66054f3e0588a4a9`. Workflow run
+`35268763196` stopped during aggregate CLI asset validation before any crate or
+GitHub release was published. Archive names, exact member sets, executable
+mode, nonempty binaries, checksums, and reviewed text content remain enforced.
+Only newline representation is normalized for the two prose members.
+
+**Deviations from the design plan.** None. Microscope pass 1 reports zero
+defects, zero smells, and one harmless naming nitpick in an unused historical
+release-note helper.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, package-family
+versioning, `docs/hld/10-bindings-spec.md`, aligned Python and WASM carriers,
+`docs/hld/12-testing-strategy.md`, newline-safe asset validation and recovery
+contracts, the F-X122 entry in `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`, release ordering and publication state.
+
+**Tests.** `rpptx_0_12_1_recovery_is_version_aligned_and_line_ending_safe`
+failed before implementation on the missing normalization contract. It now
+proves exact 0.12.1 carriers, CRLF equivalence, changed-text rejection, and both
+reviewed text comparisons. The 122-test workflow suite, full workspace gate,
+no-default-font path, WASM graphs, warning-free docs, 27 README inventories,
+22-package publish dry run, archive-size gate, cargo-deny, and clean-source
+Python 3.9 and 3.12 binding rider all pass. Both abi3 wheels pass their complete
+test suites, strict mypy 2.3.0, stubtest, and exact ABI tag checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Publish `rpptx-v0.12.1` before `v0.14.0` because
+the stable archives require shared 0.12.1 from the registry. Never move or
+delete the failed 0.12.0 tag, and retain exact validation for every archive
+property other than the reviewed prose newline representation.
+
+### F-X112, Publish the complete S73 package families
+
+**Sprint.** S73
+**Completed.** 2026-09-18
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** Four separately approved immutable releases publish the
+complete S73 package families from reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`. `rpptx-v0.12.1` publishes all 15
+shared and presentation crates, `v0.14.0` publishes all seven stable document
+crates, `py-rdocx-v0.14.0` publishes `rdocx 0.14.0`, and
+`py-rpptx-v0.12.1` publishes `rpptx 0.12.1`. Both Rust releases include six
+checksummed CLI archives. Both Python releases include six `cp39-abi3` wheels
+and one source distribution with their reviewed README descriptions and
+metadata.
+
+**Non-obvious choices.** The incubating Rust family published first because
+the packaged stable family requires shared 0.12.1 from crates.io. The failed
+immutable `rpptx-v0.12.0` tag remains unchanged. Each successful tag received
+fresh approval immediately before its first mutation, so the user's earlier
+advance approval was recorded but not used as a substitute for the required
+release boundary. The user separately authorized closing included open issues
+and pull requests after every comment was posted and verified.
+
+**Deviations from the design plan.** The original 0.12.0 incubating target was
+recovered as 0.12.1 by F-X122 after the immutable failed workflow. The approved
+F-X112 plan already carried that recovery version. The post-release checklist
+was extended to record the user's explicit state-cleanup authorization. No
+package, version, or release-order scope changed after review.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, current package-family
+versions, `docs/hld/10-bindings-spec.md`, native and Python release alignment,
+`docs/hld/12-testing-strategy.md`, complete release evidence,
+`docs/hld/14-development-backlog.md`, the F-X112 publication and cleanup gate,
+and `docs/hld/15-build-and-toolchain.md`, current registry and workflow state.
+
+**Tests.** `s73_release_contract_requires_four_version_aligned_families`
+passes and pins every version, allowlist, tag, contribution inventory, and
+credit set. Workflow runs
+[35285117271](https://github.com/tensorbee/rdocx/actions/runs/35285117271),
+[35311114834](https://github.com/tensorbee/rdocx/actions/runs/35311114834),
+[35314444102](https://github.com/tensorbee/rdocx/actions/runs/35314444102), and
+[35317913616](https://github.com/tensorbee/rdocx/actions/runs/35317913616)
+completed successfully. Every Rust package reports its selected version and
+sole `mantissaman` owner. Every CLI checksum and release asset is verified.
+Both PyPI projects report the same owner and exact seven-file inventory. Clean
+Python 3.9 and 3.12 installs passed 66 rdocx tests and 14 rpptx tests per
+interpreter. Exact mypy 2.3.0 strict checks and stubtest passed under Python
+3.12. Each GitHub release body matches a fresh reviewed render byte for byte.
+All 51 notification URLs resolve to the exact prepared body from authenticated
+author `mantissaman`, and all 51 included records are closed with completed
+issue state reasons.
+
+**Release evidence.** The verified releases are
+[rpptx-v0.12.1](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.12.1),
+[v0.14.0](https://github.com/tensorbee/rdocx/releases/tag/v0.14.0),
+[py-rdocx-v0.14.0](https://github.com/tensorbee/rdocx/releases/tag/py-rdocx-v0.14.0),
+and
+[py-rpptx-v0.12.1](https://github.com/tensorbee/rdocx/releases/tag/py-rpptx-v0.12.1).
+The authenticated contributor handles are `@emptinessform`, `@hadim`,
+`@pedroassumpcao`, and `@chevinbrown`. The complete inventory and notification
+evidence is:
+
+- [Issue 69](https://github.com/tensorbee/rdocx/issues/69), `@emptinessform`, hardened, [comment](https://github.com/tensorbee/rdocx/issues/69#issuecomment-5726610019)
+- [Issue 72](https://github.com/tensorbee/rdocx/issues/72), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/72#issuecomment-5726610157)
+- [Issue 73](https://github.com/tensorbee/rdocx/issues/73), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/73#issuecomment-5726610288)
+- [Issue 74](https://github.com/tensorbee/rdocx/issues/74), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/74#issuecomment-5726610413)
+- [Issue 75](https://github.com/tensorbee/rdocx/issues/75), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/75#issuecomment-5726610533)
+- [Issue 76](https://github.com/tensorbee/rdocx/issues/76), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/76#issuecomment-5726610648)
+- [Issue 83](https://github.com/tensorbee/rdocx/issues/83), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/83#issuecomment-5726610777)
+- [Issue 84](https://github.com/tensorbee/rdocx/issues/84), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/84#issuecomment-5726610879)
+- [Issue 85](https://github.com/tensorbee/rdocx/issues/85), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/issues/85#issuecomment-5726610997)
+- [Issue 86](https://github.com/tensorbee/rdocx/issues/86), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/86#issuecomment-5726611133)
+- [Issue 88](https://github.com/tensorbee/rdocx/issues/88), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/88#issuecomment-5726611275)
+- [Issue 89](https://github.com/tensorbee/rdocx/issues/89), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/89#issuecomment-5726611381)
+- [Issue 90](https://github.com/tensorbee/rdocx/issues/90), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/90#issuecomment-5726611483)
+- [Issue 91](https://github.com/tensorbee/rdocx/issues/91), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/91#issuecomment-5726611595)
+- [Issue 92](https://github.com/tensorbee/rdocx/issues/92), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/92#issuecomment-5726611710)
+- [Issue 93](https://github.com/tensorbee/rdocx/issues/93), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/issues/93#issuecomment-5726611844)
+- [Issue 94](https://github.com/tensorbee/rdocx/issues/94), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/94#issuecomment-5726611983)
+- [Issue 95](https://github.com/tensorbee/rdocx/issues/95), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/issues/95#issuecomment-5726612120)
+- [Issue 96](https://github.com/tensorbee/rdocx/issues/96), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/96#issuecomment-5726612243)
+- [Issue 97](https://github.com/tensorbee/rdocx/issues/97), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/97#issuecomment-5726612380)
+- [Issue 98](https://github.com/tensorbee/rdocx/issues/98), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/98#issuecomment-5726612497)
+- [Issue 99](https://github.com/tensorbee/rdocx/issues/99), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/99#issuecomment-5726612587)
+- [Issue 100](https://github.com/tensorbee/rdocx/issues/100), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/100#issuecomment-5726612716)
+- [Issue 115](https://github.com/tensorbee/rdocx/issues/115), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/115#issuecomment-5726612853)
+- [Issue 116](https://github.com/tensorbee/rdocx/issues/116), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/116#issuecomment-5726612952)
+- [Issue 117](https://github.com/tensorbee/rdocx/issues/117), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/117#issuecomment-5726613080)
+- [Issue 118](https://github.com/tensorbee/rdocx/issues/118), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/118#issuecomment-5726613181)
+- [Issue 119](https://github.com/tensorbee/rdocx/issues/119), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/119#issuecomment-5726613317)
+- [Issue 120](https://github.com/tensorbee/rdocx/issues/120), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/120#issuecomment-5726613453)
+- [Issue 121](https://github.com/tensorbee/rdocx/issues/121), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/issues/121#issuecomment-5726613599)
+- [Pull request 71](https://github.com/tensorbee/rdocx/pull/71), `@chevinbrown`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/71#issuecomment-5726613766)
+- [Pull request 77](https://github.com/tensorbee/rdocx/pull/77), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/77#issuecomment-5726613892)
+- [Pull request 78](https://github.com/tensorbee/rdocx/pull/78), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/78#issuecomment-5726614015)
+- [Pull request 79](https://github.com/tensorbee/rdocx/pull/79), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/79#issuecomment-5726614142)
+- [Pull request 80](https://github.com/tensorbee/rdocx/pull/80), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/80#issuecomment-5726614274)
+- [Pull request 101](https://github.com/tensorbee/rdocx/pull/101), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/101#issuecomment-5726614402)
+- [Pull request 102](https://github.com/tensorbee/rdocx/pull/102), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/102#issuecomment-5726614578)
+- [Pull request 103](https://github.com/tensorbee/rdocx/pull/103), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/103#issuecomment-5726614732)
+- [Pull request 104](https://github.com/tensorbee/rdocx/pull/104), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/104#issuecomment-5726614870)
+- [Pull request 105](https://github.com/tensorbee/rdocx/pull/105), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/105#issuecomment-5726615009)
+- [Pull request 106](https://github.com/tensorbee/rdocx/pull/106), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/106#issuecomment-5726615103)
+- [Pull request 107](https://github.com/tensorbee/rdocx/pull/107), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/107#issuecomment-5726615229)
+- [Pull request 108](https://github.com/tensorbee/rdocx/pull/108), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/108#issuecomment-5726615368)
+- [Pull request 109](https://github.com/tensorbee/rdocx/pull/109), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/109#issuecomment-5726615473)
+- [Pull request 110](https://github.com/tensorbee/rdocx/pull/110), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/110#issuecomment-5726615553)
+- [Pull request 111](https://github.com/tensorbee/rdocx/pull/111), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/111#issuecomment-5726615655)
+- [Pull request 112](https://github.com/tensorbee/rdocx/pull/112), `@hadim`, direct, [comment](https://github.com/tensorbee/rdocx/pull/112#issuecomment-5726615794)
+- [Pull request 113](https://github.com/tensorbee/rdocx/pull/113), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/113#issuecomment-5726615929)
+- [Pull request 114](https://github.com/tensorbee/rdocx/pull/114), `@hadim`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/114#issuecomment-5726616038)
+- [Pull request 122](https://github.com/tensorbee/rdocx/pull/122), `@pedroassumpcao`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/122#issuecomment-5726616170)
+- [Pull request 123](https://github.com/tensorbee/rdocx/pull/123), `@chevinbrown`, hardened, [comment](https://github.com/tensorbee/rdocx/pull/123#issuecomment-5726616293)
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep release families disjoint and preserve the
+incubating-before-stable order whenever stable package archives depend on the
+new shared registry version. A Python release is incomplete until canonical
+PyPI installs, typing, stubs, ownership, and byte-identical GitHub notes all
+verify. Contributor comments are part of the release gate, not optional
+follow-up work.

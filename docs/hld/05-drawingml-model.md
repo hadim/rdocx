@@ -27,6 +27,20 @@ Standalone footnote and endnote roots declare the standard relationship
 namespace. The `rdocx` facade may replay a producer root binding, but it keeps
 each authored picture namespace-complete and rewrites only the exact expanded
 name attributes it owns.
+The native run facade can append an inline picture from a relationship created
+by `Document::embed_image`. The drawing stays in the caller-selected mixed run
+position and carries the supplied point or EMU dimensions through the existing
+WordprocessingDrawing wrapper. Relationship creation remains package-owned.
+
+The document facade also authors pictures through `PictureOptions`.
+`CT_Inline` and `CT_Anchor` own a typed `SourceRect`, and anchored pictures emit
+schema-ordered relative positioning plus none, square, tight, through, top and
+bottom wrapping. Tight and through output includes the required wrap polygon.
+Text boxes use a WPS DrawingML primary branch with exact rotation and vertical
+direction, plus a self-contained VML fallback whose shape type, text spacing,
+and vertical flow agree with the selected option. Unsupported producer
+`AlternateContent` remains opaque unless the facade authors that complete
+fragment itself.
 
 Cross-document body-fragment import treats each selected picture or chart
 drawing as the root of a part-local relationship closure. It assigns fresh
@@ -220,6 +234,13 @@ are absent, inserting them moves preserved boundary-0 content to the slot after
 keeps a preserved `mc:AlternateContent` run substitution after the newly
 inserted properties without changing its bytes.
 
+The presentation facade projects direct shape offset and extent, non-visual id
+and name, and the text body's explicit autofit choice through borrowed handles.
+Regular-run handles project the direct Latin typeface, centipoint size, and
+sRGB fill without reparsing XML. Run text replacement changes only `a:t`, so
+typed character properties and retained foreign children remain attached to
+the same run.
+
 `a:pPr/@rtl` is a typed optional boolean direction input. Parsing accepts the
 DrawingML attribute only in its unqualified schema form, while a foreign
 same-local-name attribute remains opaque. Writing places the canonical typed
@@ -296,6 +317,15 @@ the corpus omit `a:fmtScheme/@name`. Reading and writing preserve that absence
 rather than inventing an attribute. A canonical `a:blip` with `r:embed` or
 `r:link` declares the fixed relationship namespace locally, so a modelled fill
 remains namespace-valid when its parent did not declare `r`.
+
+`Blip` models the first DrawingML `a:alphaModFix` child as a bounded
+`Percent1000` amount from zero through 100000. Reads resolve a conventional
+`a` prefix or an alternate prefix declared on the effect, blip, or enclosing
+picture fill. The writer emits one canonical `a:alphaModFix` in the raw-child
+slot where the modelled effect occurred. Duplicate effects, foreign-namespace
+lookalikes, unsupported siblings, and unmodelled attributes remain opaque and
+ordered. A missing `amt` uses the schema default of 100000. Malformed or
+out-of-range unqualified values reject the fill.
 
 `office_default()` constructs the standard Office theme. It is the correctness
 floor for a template whose master lacks a theme relationship. It is *not* how

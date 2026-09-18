@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 17 | 0 | 7 |
+| M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 104 | 100 | 0 | 0 |
-| **Total** | **422** | **343** | **0** | **75** |
+| X, Cross-cutting (opportunistic)            | 132 | 128 | 0 | 0  |
+| **Total** | **450** | **378** | **0** | **68** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -469,13 +469,13 @@ regenerated, never hand-edited.
 | F-254 | Generic insert, move, clone, and remove operations | S72 | L | done |
 | F-255 | Part-scoped assets, links, and relationships | S72 | M | done |
 | F-256 | Transactional cross-document fragment import | S72 | L | done |
-| F-257 | Complete M23 table authoring | S73 | L | pending |
-| F-258 | Complete M23 row and cell authoring | S73 | L | pending |
-| F-259 | Container measurement and equal-height layout | S73 | M | pending |
-| F-260 | Ordered run content authoring | S73 | L | pending |
-| F-261 | Rich HTML fragments in arbitrary containers | S73 | L | pending |
-| F-262 | Corpus drawings, text boxes, and watermarks | S73 | L | pending |
-| F-263 | Layout-backed fields and M23 corpus gate | S73 | L | pending |
+| F-257 | Complete M23 table authoring | S73 | L | done |
+| F-258 | Complete M23 row and cell authoring | S73 | L | done |
+| F-259 | Container measurement and equal-height layout | S73 | M | done |
+| F-260 | Ordered run content authoring | S73 | L | done |
+| F-261 | Rich HTML fragments in arbitrary containers | S73 | L | done |
+| F-262 | Corpus drawings, text boxes, and watermarks | S73 | L | done |
+| F-263 | Layout-backed fields and M23 corpus gate | S73 | L | done |
 <!-- AUTOGEN:backlog-M23 END -->
 
 ### M24, Modern DOCX authoring completeness
@@ -641,4 +641,32 @@ regenerated, never hand-edited.
 | F-X094f | Prepare the version-aligned Python release paths | S72 | M | done |
 | F-X095 | Integrate PRs 77 through 80 and restore deterministic CI | S72 | L | done |
 | F-X096 | Align Python distribution versions and release tags | S72 | M | done |
+| F-X097 | Preserve namespace-scoped drawings and complex fields in comparison | S73 | M | done |
+| F-X098 | Preserve content-control type payloads | S73 | M | done |
+| F-X099 | Expose direct body ownership for story items | S73 | M | done |
+| F-X100 | Preserve explicit false table toggles | S73 | S | done |
+| F-X101 | Honor run-level page breaks during pagination | S73 | M | done |
+| F-X102 | Resolve header and footer pictures in their story scope | S73 | M | done |
+| F-X103 | Accept standard TOC switches and report rebuild diagnostics | S73 | M | done |
+| F-X104 | Render DrawingML picture transparency | S73 | M | done |
+| F-X105 | Separate slide-owned placeholders from master header flags | S73 | M | done |
+| F-X106a | Expose indexed content mutation and counted replacement in Python | S73 | L | done |
+| F-X106b | Expose paragraph and run formatting mutations in Python | S73 | M | done |
+| F-X106c | Expose story mutation, hyperlinks, revisions, fields, and XML in Python | S73 | L | done |
+| F-X107 | Clone and remove existing table rows | S73 | M | done |
+| F-X108 | Replace an existing picture atomically | S73 | M | done |
+| F-X109 | Split text runs at Unicode character offsets | S73 | M | done |
+| F-X110 | Control field updates on document open | S73 | S | done |
+| F-X111 | Attach portable CLI binaries to Rust releases | S73 | L | done |
+| F-X112 | Publish the complete S73 package families | S73 | L | done |
+| F-X113 | Preserve appended paragraphs in document comparison | S73 | M | done |
+| F-X114 | Rebuild TOC entries with document styles and geometry | S73 | M | done |
+| F-X115 | Preserve modern comment metadata and identity | S73 | M | done |
+| F-X116 | Make Python story reads linear and complete | S73 | L | done |
+| F-X117 | Render transparent and large raster pictures safely | S73 | M | done |
+| F-X118 | Make notes rendering and replacement safe | S73 | L | done |
+| F-X119 | Complete round-three Python authoring and inspection | S73 | L | done |
+| F-X120 | Accept fractional DOCX line spacing values | S73 | S | done |
+| F-X121 | Adopt PR 123 authored line-chart portability | S73 | S | done |
+| F-X122 | Recover the immutable rpptx 0.12.0 release attempt | S73 | M | done |
 <!-- AUTOGEN:backlog-MX END -->

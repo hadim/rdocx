@@ -3,10 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-use quick_xml::events::Event;
+use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
 use rdocx_oxml::namespace::W_NS;
@@ -241,10 +241,8 @@ impl Document {
     ) -> Result<Vec<ComparisonDiagnostic>> {
         validate_revision_timestamp(timestamp)?;
         validate_comparison_options(options)?;
-        let mut original = self.clone_for_staging();
-        original.prepare_staged_package()?;
-        let mut edited = edited.clone_for_staging();
-        edited.prepare_staged_package()?;
+        let original = comparison_input(self)?;
+        let edited = comparison_input(edited)?;
         let original_stories = story_parts_with_options(&original, options)?;
         let edited_stories = story_parts_with_options(&edited, options)?;
         if original_stories != edited_stories {
@@ -311,11 +309,17 @@ impl Document {
         let tracked_body = if story_ignored(options, ComparisonStoryKind::Main) {
             extract_body_inner(original_xml)?.to_owned()
         } else if story_ignored(options, ComparisonStoryKind::TextBox) {
+            let original_source = std::str::from_utf8(original_xml).map_err(utf8_error)?;
+            let edited_source = std::str::from_utf8(edited_xml).map_err(utf8_error)?;
+            let original_bindings = root_namespace_bindings(original_source, "document", &[])?;
+            let edited_bindings = root_namespace_bindings(edited_source, "document", &[])?;
             compare_story_inner(
                 extract_body_inner(original_xml)?,
                 extract_body_inner(edited_xml)?,
                 "body",
                 "w",
+                &original_bindings,
+                &edited_bindings,
                 &mut metadata,
                 &mut diagnostics,
             )?
@@ -324,16 +328,22 @@ impl Document {
             let edited_body = extract_body_inner(edited_xml)?;
             let original_spans = story_content_spans(original_body, "w")?;
             let edited_spans = story_content_spans(edited_body, "w")?;
-            if original_spans.len() != original.document.body.content.len()
-                || edited_spans.len() != edited.document.body.content.len()
+            let original_source = std::str::from_utf8(original_xml).map_err(utf8_error)?;
+            let edited_source = std::str::from_utf8(edited_xml).map_err(utf8_error)?;
+            let original_bindings = root_namespace_bindings(original_source, "document", &[])?;
+            let edited_bindings = root_namespace_bindings(edited_source, "document", &[])?;
+            let original_document = story_document(original_body, &original_bindings)?;
+            let edited_document = story_document(edited_body, &edited_bindings)?;
+            if original_spans.len() != original_document.body.content.len()
+                || edited_spans.len() != edited_document.body.content.len()
             {
                 return Err(Error::Other(
                     "comparison could not correlate main-story owners".to_owned(),
                 ));
             }
             compare_body(
-                &original.document,
-                &edited.document,
+                &original_document,
+                &edited_document,
                 "body",
                 Some((original_body, &original_spans)),
                 &mut metadata,
@@ -341,13 +351,14 @@ impl Document {
             )?
         };
         let tracked_xml = replace_body_inner(original_xml, &tracked_body)?;
-        let tracked = CT_Document::from_xml(tracked_xml.as_bytes())?;
+        let tracked_model_xml = retain_scoped_drawing_namespaces(tracked_xml.as_bytes().to_vec())?;
+        let tracked = CT_Document::from_xml(&tracked_model_xml)?;
         tracked.to_xml()?;
         let mut candidate = original.clone_for_staging();
         candidate.document = tracked;
         candidate
             .package
-            .set_part(&candidate.doc_part_name, tracked_xml.into_bytes());
+            .set_part(&candidate.doc_part_name, tracked_model_xml);
         for story in &original_stories {
             let tracked_story = compare_story_part(
                 story_xml(&original, story)?,
@@ -675,6 +686,8 @@ fn compare_story_part(
     let original_root = root_inner_range(original, story.kind.root_local())?;
     let edited_root = root_inner_range(edited, story.kind.root_local())?;
     let word_prefix = root_prefix(original, story.kind.root_local())?;
+    let original_bindings = root_namespace_bindings(original, story.kind.root_local(), &[])?;
+    let edited_bindings = root_namespace_bindings(edited, story.kind.root_local(), &[])?;
     let tracked = if let Some(owner_local) = story.kind.owner_local() {
         compare_owned_story(
             original,
@@ -684,6 +697,8 @@ fn compare_story_part(
             owner_local,
             story,
             &word_prefix,
+            &original_bindings,
+            &edited_bindings,
             metadata,
             diagnostics,
         )?
@@ -693,6 +708,8 @@ fn compare_story_part(
             &edited[edited_root],
             &format!("{}:{}", story.kind.label(), story.part_name),
             &word_prefix,
+            &original_bindings,
+            &edited_bindings,
             metadata,
             diagnostics,
         )?;
@@ -713,6 +730,8 @@ fn compare_owned_story(
     owner_local: &str,
     story: &StoryPart,
     word_prefix: &str,
+    original_bindings: &[(String, String)],
+    edited_bindings: &[(String, String)],
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
@@ -762,6 +781,8 @@ fn compare_owned_story(
         }
         let left_inner = element_inner_range_any_prefix(left_xml, owner_local)?;
         let right_inner = element_inner_range_any_prefix(right_xml, owner_local)?;
+        let left_bindings = root_namespace_bindings(left_xml, owner_local, original_bindings)?;
+        let right_bindings = root_namespace_bindings(right_xml, owner_local, edited_bindings)?;
         let tracked_inner = compare_story_inner(
             &left_xml[left_inner.clone()],
             &right_xml[right_inner],
@@ -772,6 +793,8 @@ fn compare_owned_story(
                 owner_local
             ),
             word_prefix,
+            &left_bindings,
+            &right_bindings,
             metadata,
             diagnostics,
         )?;
@@ -798,6 +821,8 @@ fn compare_story_inner(
     edited: &str,
     location: &str,
     word_prefix: &str,
+    original_bindings: &[(String, String)],
+    edited_bindings: &[(String, String)],
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
@@ -806,6 +831,8 @@ fn compare_story_inner(
         edited,
         location,
         word_prefix,
+        original_bindings,
+        edited_bindings,
         metadata,
         diagnostics,
         true,
@@ -818,6 +845,8 @@ fn compare_story_inner_impl(
     edited: &str,
     location: &str,
     word_prefix: &str,
+    original_bindings: &[(String, String)],
+    edited_bindings: &[(String, String)],
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
     scan_text_boxes: bool,
@@ -850,6 +879,8 @@ fn compare_story_inner_impl(
                 &masked_edited,
                 location,
                 word_prefix,
+                original_bindings,
+                edited_bindings,
                 metadata,
                 diagnostics,
                 false,
@@ -872,11 +903,17 @@ fn compare_story_inner_impl(
             let right_box = &edited[right.clone()];
             let left_inner = element_inner_range_any_prefix(left_box, "txbxContent")?;
             let right_inner = element_inner_range_any_prefix(right_box, "txbxContent")?;
+            let left_bindings =
+                root_namespace_bindings(left_box, "txbxContent", original_bindings)?;
+            let right_bindings =
+                root_namespace_bindings(right_box, "txbxContent", edited_bindings)?;
             let tracked_inner = compare_story_inner(
                 &left_box[left_inner.clone()],
                 &right_box[right_inner],
                 &format!("{location}/text-box[{run_ordinal}:{box_ordinal}]"),
                 word_prefix,
+                &left_bindings,
+                &right_bindings,
                 metadata,
                 diagnostics,
             )?;
@@ -898,6 +935,8 @@ fn compare_story_inner_impl(
             &masked_edited,
             location,
             word_prefix,
+            original_bindings,
+            edited_bindings,
             metadata,
             diagnostics,
             false,
@@ -907,8 +946,8 @@ fn compare_story_inner_impl(
     }
     let original_spans = story_content_spans(original, word_prefix)?;
     let edited_spans = story_content_spans(edited, word_prefix)?;
-    let original_document = story_document(original)?;
-    let edited_document = story_document(edited)?;
+    let original_document = story_document(original, original_bindings)?;
+    let edited_document = story_document(edited, edited_bindings)?;
     if original_spans.len() != original_document.body.content.len()
         || edited_spans.len() != edited_document.body.content.len()
     {
@@ -1323,11 +1362,323 @@ fn element_inner_range_any_prefix(xml: &str, local: &str) -> Result<Range<usize>
     Ok(open_end..close_start)
 }
 
-fn story_document(inner: &str) -> Result<CT_Document> {
-    let xml = format!(
-        r#"<rdocxcmp:document xmlns:rdocxcmp="{W_NS}" xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><rdocxcmp:body>{inner}</rdocxcmp:body></rdocxcmp:document>"#
+fn story_document(inner: &str, namespace_bindings: &[(String, String)]) -> Result<CT_Document> {
+    let mut writer = Writer::new(Vec::with_capacity(inner.len() + 256));
+    let mut suffix = 0usize;
+    let wrapper_prefix = loop {
+        let candidate = if suffix == 0 {
+            "rdocxcmp".to_owned()
+        } else {
+            format!("rdocxcmp{suffix}")
+        };
+        let binding_name = format!("xmlns:{candidate}");
+        if namespace_bindings
+            .iter()
+            .all(|(name, _)| name != &binding_name)
+        {
+            break candidate;
+        }
+        suffix += 1;
+    };
+    let document_name = format!("{wrapper_prefix}:document");
+    let body_name = format!("{wrapper_prefix}:body");
+    let binding_name = format!("xmlns:{wrapper_prefix}");
+    let mut document = BytesStart::new(document_name.as_str());
+    document.push_attribute((binding_name.as_str(), W_NS));
+    for (name, value) in namespace_bindings {
+        document.push_attribute((name.as_str(), value.as_str()));
+    }
+    writer.write_event(Event::Start(document))?;
+    writer.write_event(Event::Start(BytesStart::new(body_name.as_str())))?;
+    writer.get_mut().extend_from_slice(inner.as_bytes());
+    writer.write_event(Event::End(BytesEnd::new(body_name.as_str())))?;
+    writer.write_event(Event::End(BytesEnd::new(document_name.as_str())))?;
+    let xml = retain_scoped_drawing_namespaces(writer.into_inner())?;
+    CT_Document::from_xml(&xml).map_err(Into::into)
+}
+
+fn comparison_input(document: &Document) -> Result<Document> {
+    let mut candidate = document.clone_for_staging();
+    if let Some(source) = candidate
+        .package
+        .get_part(&candidate.doc_part_name)
+        .map(<[u8]>::to_vec)
+    {
+        let parsed_source = CT_Document::from_xml(&source)?;
+        let scoped_source = retain_scoped_drawing_namespaces(source)?;
+        let scoped_document = CT_Document::from_xml(&scoped_source)?;
+        if parsed_source == candidate.document {
+            candidate.document = scoped_document;
+            candidate
+                .package
+                .set_part(&candidate.doc_part_name, scoped_source);
+        } else {
+            retain_matching_drawing_namespaces(&mut candidate.document, &scoped_document);
+        }
+    }
+    candidate.prepare_staged_package()?;
+    let source = candidate
+        .package
+        .get_part(&candidate.doc_part_name)
+        .ok_or_else(|| Error::Other(format!("missing main story {}", candidate.doc_part_name)))?;
+    let source = retain_scoped_drawing_namespaces(source.to_vec())?;
+    candidate.document = CT_Document::from_xml(&source)?;
+    candidate.package.set_part(&candidate.doc_part_name, source);
+    Ok(candidate)
+}
+
+fn retain_matching_drawing_namespaces(target: &mut CT_Document, scoped_source: &CT_Document) {
+    let mut source_drawings = Vec::new();
+    crate::document::visit_all_drawings(&scoped_source.body.content, &mut |drawing| {
+        source_drawings.push((drawing_signature(drawing), drawing.clone()));
+    });
+    crate::document::visit_all_drawings_mut(&mut target.body.content, &mut |drawing| {
+        let signature = drawing_signature(drawing);
+        let Some(index) = source_drawings
+            .iter()
+            .position(|(candidate, _)| candidate == &signature)
+        else {
+            return;
+        };
+        let (_, source) = source_drawings.remove(index);
+        if let (Some(target), Some(source)) = (&mut drawing.inline, source.inline) {
+            target.raw_xml = source.raw_xml;
+        } else if let (Some(target), Some(source)) = (&mut drawing.anchor, source.anchor) {
+            target.raw_xml = source.raw_xml;
+        }
+    });
+}
+
+fn drawing_signature(drawing: &rdocx_oxml::drawing::CT_Drawing) -> rdocx_oxml::drawing::CT_Drawing {
+    let mut signature = drawing.clone();
+    if let Some(inline) = &mut signature.inline {
+        inline.raw_xml = None;
+    }
+    if let Some(anchor) = &mut signature.anchor {
+        anchor.raw_xml = None;
+    }
+    signature
+}
+
+fn retain_scoped_drawing_namespaces(xml: Vec<u8>) -> Result<Vec<u8>> {
+    let root_scope = comparison_root_namespace_scope(&xml)?;
+    let mut reader = NsReader::from_reader(xml.as_slice());
+    reader.config_mut().trim_text(false);
+    let mut edits = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comparison drawing scan failed: {error}")))?
+        {
+            Event::Start(element) => {
+                let namespace = reader.resolver().resolve_element(element.name()).0;
+                if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == b"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing")
+                    && matches!(element.local_name().as_ref(), b"inline" | b"anchor")
+                {
+                    let name = element.name().as_ref().to_vec();
+                    reader
+                        .read_to_end_into(quick_xml::name::QName(&name), &mut Vec::new())
+                        .map_err(|error| {
+                            Error::Other(format!("comparison drawing capture failed: {error}"))
+                        })?;
+                    let end = reader.buffer_position() as usize;
+                    let mut scope = crate::document::story_namespace_scope_at(&xml, start)?;
+                    scope.retain(|prefix, namespace| root_scope.get(prefix) != Some(namespace));
+                    let scope = required_external_bindings(&xml[start..end], &scope)?;
+                    let replacement = crate::document::close_content_fragment_namespaces(
+                        &xml[start..end],
+                        &scope,
+                    )?;
+                    if replacement != xml[start..end] {
+                        edits.push((start, end, replacement));
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut output = xml;
+    for (start, end, replacement) in edits.into_iter().rev() {
+        output.splice(start..end, replacement);
+    }
+    Ok(output)
+}
+
+fn comparison_root_namespace_scope(
+    xml: &[u8],
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("comparison root namespace scan failed: {error}"))
+        })? {
+            Event::Start(_) | Event::Empty(_) => {
+                return crate::document::story_namespace_scope_at(xml, start);
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "comparison namespace source has no root element".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn required_external_bindings(
+    xml: &[u8],
+    external: &std::collections::BTreeMap<String, String>,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut scopes = Vec::<HashSet<String>>::new();
+    let mut required = std::collections::BTreeMap::new();
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("comparison drawing binding scan failed: {error}"))
+        })? {
+            Event::Start(element) => {
+                let declarations = declared_prefixes(&element)?;
+                record_required_bindings(&element, &scopes, &declarations, external, &mut required);
+                scopes.push(declarations);
+            }
+            Event::Empty(element) => {
+                let declarations = declared_prefixes(&element)?;
+                record_required_bindings(&element, &scopes, &declarations, external, &mut required);
+            }
+            Event::End(_) => {
+                scopes.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(required)
+}
+
+fn declared_prefixes(element: &BytesStart<'_>) -> Result<HashSet<String>> {
+    let mut declarations = HashSet::new();
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("comparison drawing namespace failed: {error}"))
+        })?;
+        let name = attribute.key.as_ref();
+        if name == b"xmlns" {
+            declarations.insert(String::new());
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            declarations.insert(std::str::from_utf8(prefix).map_err(utf8_error)?.to_owned());
+        }
+    }
+    Ok(declarations)
+}
+
+fn record_required_bindings(
+    element: &BytesStart<'_>,
+    scopes: &[HashSet<String>],
+    declarations: &HashSet<String>,
+    external: &std::collections::BTreeMap<String, String>,
+    required: &mut std::collections::BTreeMap<String, String>,
+) {
+    record_required_prefix(
+        qualified_prefix(element.name().as_ref()).unwrap_or(""),
+        scopes,
+        declarations,
+        external,
+        required,
     );
-    CT_Document::from_xml(xml.as_bytes()).map_err(Into::into)
+    for attribute in element.attributes().filter_map(|attribute| attribute.ok()) {
+        let name = attribute.key.as_ref();
+        if name == b"xmlns" || name.starts_with(b"xmlns:") {
+            continue;
+        }
+        if let Some(prefix) = qualified_prefix(name) {
+            record_required_prefix(prefix, scopes, declarations, external, required);
+        }
+    }
+}
+
+fn record_required_prefix(
+    prefix: &str,
+    scopes: &[HashSet<String>],
+    declarations: &HashSet<String>,
+    external: &std::collections::BTreeMap<String, String>,
+    required: &mut std::collections::BTreeMap<String, String>,
+) {
+    let internally_bound =
+        declarations.contains(prefix) || scopes.iter().rev().any(|scope| scope.contains(prefix));
+    if !internally_bound && let Some(namespace) = external.get(prefix) {
+        required
+            .entry(prefix.to_owned())
+            .or_insert_with(|| namespace.clone());
+    }
+}
+
+fn qualified_prefix(name: &[u8]) -> Option<&str> {
+    let separator = name.iter().position(|byte| *byte == b':')?;
+    std::str::from_utf8(&name[..separator]).ok()
+}
+
+fn root_namespace_bindings(
+    xml: &str,
+    expected_local: &str,
+    inherited: &[(String, String)],
+) -> Result<Vec<(String, String)>> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comparison namespace parse failed: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                if element.local_name().as_ref() != expected_local.as_bytes() {
+                    return Err(Error::Other(format!(
+                        "comparison namespace scope expected {expected_local} root"
+                    )));
+                }
+                let mut bindings = inherited.to_vec();
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!("comparison namespace attribute failed: {error}"))
+                    })?;
+                    let key = attribute.key.as_ref();
+                    if key != b"xmlns" && !key.starts_with(b"xmlns:") {
+                        continue;
+                    }
+                    let name = std::str::from_utf8(key).map_err(utf8_error)?.to_owned();
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                        .map_err(|error| {
+                            Error::Other(format!(
+                                "comparison namespace value decode failed: {error}"
+                            ))
+                        })?
+                        .into_owned();
+                    bindings.retain(|(existing, _)| existing != &name);
+                    bindings.push((name, value));
+                }
+                return Ok(bindings);
+            }
+            Event::Eof => {
+                return Err(Error::Other(format!(
+                    "comparison {expected_local} namespace scope is missing"
+                )));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn root_inner_range(xml: &str, expected_local: &str) -> Result<Range<usize>> {
@@ -1524,19 +1875,22 @@ fn normalized_package(
             )?,
         ));
     }
-    let main = if story_ignored(options, ComparisonStoryKind::TextBox) {
-        let source = document
-            .package
-            .get_part(&document.doc_part_name)
-            .ok_or_else(|| {
-                Error::Other(format!("missing main story {}", document.doc_part_name))
-            })?;
-        let source = std::str::from_utf8(source).map_err(utf8_error)?;
+    let source = document
+        .package
+        .get_part(&document.doc_part_name)
+        .ok_or_else(|| Error::Other(format!("missing main story {}", document.doc_part_name)))?;
+    let source = std::str::from_utf8(source).map_err(utf8_error)?;
+    let main_source;
+    let source = if story_ignored(options, ComparisonStoryKind::TextBox) {
         let (masked, _) = mask_text_box_subtrees(source, "w", &text_box_markers.main)?;
-        normalized_body_with_options(&CT_Document::from_xml(masked.as_bytes())?, options)
+        main_source = masked;
+        main_source.as_str()
     } else {
-        normalized_body_with_options(&document.document, options)
+        source
     };
+    let bindings = root_namespace_bindings(source, "document", &[])?;
+    let main_document = story_document(extract_body_inner(source.as_bytes())?, &bindings)?;
+    let main = normalized_body_with_options(&main_document, options);
     Ok((main, related))
 }
 
@@ -1570,13 +1924,16 @@ fn normalized_story_part(
                 continue;
             }
             let inner = element_inner_range_any_prefix(owner_xml, owner_local)?;
-            let document = story_document(&owner_xml[inner])?;
+            let root_bindings = root_namespace_bindings(xml, kind.root_local(), &[])?;
+            let owner_bindings = root_namespace_bindings(owner_xml, owner_local, &root_bindings)?;
+            let document = story_document(&owner_xml[inner], &owner_bindings)?;
             normalized.extend(normalized_body_with_options(&document, options));
         }
         Ok(normalized)
     } else {
+        let bindings = root_namespace_bindings(xml, kind.root_local(), &[])?;
         Ok(normalized_body_with_options(
-            &story_document(&xml[root])?,
+            &story_document(&xml[root], &bindings)?,
             options,
         ))
     }
@@ -1613,6 +1970,18 @@ fn compare_body(
         &edited_signatures,
         &mut metadata.ids,
     )?;
+    let trailing_paragraph_insert_start = aligned
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, (left, right))| {
+            left.is_none()
+                && right
+                    .and_then(|index| edited.body.content.get(index))
+                    .is_some_and(|content| matches!(content, BodyContent::Paragraph(_)))
+        })
+        .map(|(position, _)| position)
+        .last();
     let mut output: Vec<(bool, String)> = Vec::new();
     for (position, (original_index, edited_index)) in aligned.iter().copied().enumerate() {
         let next_is_paragraph = aligned.get(position + 1).is_some_and(|(left, right)| {
@@ -1695,6 +2064,18 @@ fn compare_body(
                             moved_body_content(content, "moveTo", id, metadata)?,
                         ));
                     }
+                } else if matches!(content, BodyContent::Paragraph(_))
+                    && trailing_paragraph_insert_start.is_some_and(|start| position >= start)
+                {
+                    if trailing_paragraph_insert_start == Some(position) {
+                        mark_previous_paragraph(&mut output, "ins", metadata)?;
+                    }
+                    let inserted = if next_is_paragraph {
+                        inserted_body_content(content, metadata)?
+                    } else {
+                        inserted_paragraph_content(content, metadata)?
+                    };
+                    output.push((true, inserted));
                 } else if matches!(content, BodyContent::Paragraph(_)) && !next_is_paragraph {
                     mark_previous_paragraph(&mut output, "ins", metadata)?;
                     output.push((true, inserted_paragraph_content(content, metadata)?));
@@ -1935,32 +2316,48 @@ fn mark_previous_paragraph(
     let marker = metadata
         .ids
         .marker(kind, metadata.author, metadata.timestamp)?;
+    *paragraph = marked_paragraph_xml(paragraph, &marker)?;
+    Ok(())
+}
+
+fn marked_paragraph_xml(paragraph: &str, marker: &str) -> Result<String> {
     let paragraph_properties = direct_word_element_spans(paragraph, "pPr")?;
     if let Some(properties_span) = paragraph_properties.first() {
         let properties = &paragraph[properties_span.clone()];
         let run_properties = direct_word_element_spans(properties, "rPr")?;
         let updated = if let Some(run_span) = run_properties.first() {
             let run_properties = &properties[run_span.clone()];
-            let updated_run = append_word_child(run_properties, "rPr", &marker)?;
+            let updated_run = append_word_child(run_properties, "rPr", marker)?;
             let mut updated = properties.to_owned();
             updated.replace_range(run_span.clone(), &updated_run);
             updated
         } else {
             append_word_child(properties, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))?
         };
-        paragraph.replace_range(properties_span.clone(), &updated);
-    } else {
-        let open = paragraph
-            .find('>')
-            .ok_or_else(|| Error::Other("paragraph XML has no start".to_owned()))?
-            + 1;
-        *paragraph = format!(
-            "{}<w:pPr><w:rPr>{marker}</w:rPr></w:pPr>{}",
-            &paragraph[..open],
-            &paragraph[open..]
-        );
+        let mut marked = paragraph.to_owned();
+        marked.replace_range(properties_span.clone(), &updated);
+        return Ok(marked);
     }
-    Ok(())
+    let open = paragraph
+        .find('>')
+        .ok_or_else(|| Error::Other("paragraph XML has no start".to_owned()))?
+        + 1;
+    let properties = format!("<w:pPr><w:rPr>{marker}</w:rPr></w:pPr>");
+    if paragraph.as_bytes().get(open.saturating_sub(2)..open) == Some(b"/>") {
+        let name_end = paragraph[1..]
+            .find(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '/' | '>')
+            })
+            .map(|offset| offset + 1)
+            .ok_or_else(|| Error::Other("paragraph XML has no qualified name".to_owned()))?;
+        let name = &paragraph[1..name_end];
+        return Ok(format!("{}>{properties}</{name}>", &paragraph[..open - 2]));
+    }
+    Ok(format!(
+        "{}{properties}{}",
+        &paragraph[..open],
+        &paragraph[open..]
+    ))
 }
 
 fn mark_previous_paragraph_with_id(
@@ -1975,30 +2372,7 @@ fn mark_previous_paragraph_with_id(
         ));
     };
     let marker = IdAllocator::marker_with_id(kind, metadata.author, metadata.timestamp, id);
-    let paragraph_properties = direct_word_element_spans(paragraph, "pPr")?;
-    if let Some(properties_span) = paragraph_properties.first() {
-        let properties = &paragraph[properties_span.clone()];
-        let run_properties = direct_word_element_spans(properties, "rPr")?;
-        let updated = if let Some(run_span) = run_properties.first() {
-            let updated_run = append_word_child(&properties[run_span.clone()], "rPr", &marker)?;
-            let mut updated = properties.to_owned();
-            updated.replace_range(run_span.clone(), &updated_run);
-            updated
-        } else {
-            append_word_child(properties, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))?
-        };
-        paragraph.replace_range(properties_span.clone(), &updated);
-    } else {
-        let open = paragraph
-            .find('>')
-            .ok_or_else(|| Error::Other("paragraph XML has no start".to_owned()))?
-            + 1;
-        *paragraph = format!(
-            "{}<w:pPr><w:rPr>{marker}</w:rPr></w:pPr>{}",
-            &paragraph[..open],
-            &paragraph[open..]
-        );
-    }
+    *paragraph = marked_paragraph_xml(paragraph, &marker)?;
     Ok(())
 }
 
@@ -2175,7 +2549,7 @@ fn compare_paragraph(
         )?;
     }
     let original_run_spans = original_source
-        .map(paragraph_run_spans)
+        .map(|source| modeled_paragraph_run_spans(original, source))
         .transpose()?
         .unwrap_or_default();
     if original_source.is_some() && original_run_spans.len() != original.runs.len() {
@@ -2309,7 +2683,7 @@ fn compare_granular_paragraph(
         let properties =
             paragraph_properties_xml(original, edited, location, metadata, diagnostics)?;
         let spans = original_source
-            .map(paragraph_run_spans)
+            .map(|source| modeled_paragraph_run_spans(original, source))
             .transpose()?
             .unwrap_or_default();
         if original_source.is_some() && spans.len() != original.runs.len() {
@@ -2641,7 +3015,7 @@ fn replace_paragraph_properties_and_runs(
         }
         (None, true) => {}
     }
-    replace_paragraph_run_elements(&source, runs)
+    replace_paragraph_run_elements(paragraph, &source, runs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2674,7 +3048,7 @@ fn interleave_granular_paragraph(
         }
         (None, true) => {}
     }
-    let spans = paragraph_run_spans(&source)?;
+    let spans = modeled_paragraph_run_spans(original, &source)?;
     if spans.len() != original.runs.len() || aligned.len() != replacements.len() {
         return Err(Error::Other(format!(
             "comparison could not correlate granular run owners at {location}"
@@ -3020,7 +3394,7 @@ fn compare_complex_paragraph(
     let source = original_source
         .map(str::to_owned)
         .map_or_else(|| paragraph_xml(original), Ok)?;
-    let run_spans = paragraph_run_spans(&source)?;
+    let run_spans = modeled_paragraph_run_spans(original, &source)?;
     if run_spans.len() != original.runs.len() {
         return Err(Error::Other(format!(
             "comparison could not correlate complex paragraph runs at {location}"
@@ -5325,8 +5699,12 @@ fn paragraph_run_spans(xml: &str) -> Result<Vec<Range<usize>>> {
     Ok(spans)
 }
 
-fn replace_paragraph_run_elements(xml: &str, replacements: &[String]) -> Result<String> {
-    let spans = paragraph_run_spans(xml)?;
+fn replace_paragraph_run_elements(
+    paragraph: &CT_P,
+    xml: &str,
+    replacements: &[String],
+) -> Result<String> {
+    let spans = modeled_paragraph_run_spans(paragraph, xml)?;
     if spans.len() != replacements.len() {
         return Err(Error::Other(format!(
             "comparison expected {} paragraph run owners, found {}",
@@ -5339,6 +5717,54 @@ fn replace_paragraph_run_elements(xml: &str, replacements: &[String]) -> Result<
         output.replace_range(span, replacement);
     }
     Ok(output)
+}
+
+fn modeled_paragraph_run_spans(paragraph: &CT_P, xml: &str) -> Result<Vec<Range<usize>>> {
+    let physical = paragraph_run_spans(xml)?;
+    let mut projected = Vec::with_capacity(paragraph.runs.len());
+    let mut cursor = 0usize;
+    let mut previous_field_owner = None;
+    for (modeled_index, run) in paragraph.runs.iter().enumerate() {
+        let (physical_count, field_owner) = match run.content.as_slice() {
+            [RunContent::Field(field)] if field.is_complex() => {
+                let field_owner = field.source_owner_id().ok_or_else(|| {
+                    Error::Other("parsed complex field has no source owner".to_owned())
+                })?;
+                if previous_field_owner == Some(field_owner) {
+                    projected.push(cursor..cursor);
+                    continue;
+                }
+                let (source, _) = field.source_replacement()?.ok_or_else(|| {
+                    Error::Other("parsed complex field has no source ownership".to_owned())
+                })?;
+                let source = std::str::from_utf8(source).map_err(|error| {
+                    Error::Other(format!("complex field source is not UTF-8: {error}"))
+                })?;
+                (
+                    paragraph_run_spans(&format!("<w:p>{source}</w:p>"))?.len(),
+                    Some(field_owner),
+                )
+            }
+            _ => (1, None),
+        };
+        if physical_count == 0 || cursor + physical_count > physical.len() {
+            return Err(Error::Other(format!(
+                "comparison could not correlate paragraph run owner {modeled_index}: \
+                 {physical_count} physical runs from cursor {cursor}, {} available",
+                physical.len()
+            )));
+        }
+        projected.push(physical[cursor].start..physical[cursor + physical_count - 1].end);
+        cursor += physical_count;
+        previous_field_owner = field_owner;
+    }
+    if cursor != physical.len() {
+        return Err(Error::Other(format!(
+            "comparison correlated {cursor} of {} physical paragraph runs",
+            physical.len()
+        )));
+    }
+    Ok(projected)
 }
 
 fn replace_direct_word_elements(xml: &str, local: &str, replacements: &[String]) -> Result<String> {
@@ -5496,9 +5922,11 @@ fn utf8_error(error: impl std::fmt::Display) -> Error {
 mod tests {
     use super::{
         ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING,
-        attributed_run_units, word_fragments,
+        attributed_run_units, story_document, word_fragments,
     };
     use crate::Document;
+    use rdocx_oxml::document::BodyContent;
+    use rdocx_oxml::namespace::W_NS;
     use rdocx_oxml::text::{BreakType, CT_R, CT_Text, RunContent};
 
     #[test]
@@ -5525,6 +5953,24 @@ mod tests {
             ComparisonOptions::default().granularity,
             ComparisonGranularity::Run
         );
+    }
+
+    #[test]
+    fn synthetic_story_document_preserves_colliding_producer_prefix() {
+        let document = story_document(
+            r#"<rdocxcmp:p><rdocxcmp:r><rdocxcmp:t>foreign</rdocxcmp:t></rdocxcmp:r></rdocxcmp:p><w:p><w:r><w:t>word</w:t></w:r></w:p>"#,
+            &[
+                ("xmlns:rdocxcmp".to_owned(), "urn:producer".to_owned()),
+                ("xmlns:w".to_owned(), W_NS.to_owned()),
+            ],
+        )
+        .unwrap();
+
+        assert!(matches!(document.body.content[0], BodyContent::RawXml(_)));
+        assert!(matches!(
+            document.body.content[1],
+            BodyContent::Paragraph(_)
+        ));
     }
 
     #[test]

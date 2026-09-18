@@ -8,7 +8,8 @@ use rdocx_oxml::shared::{
     ST_Border, ST_Jc, ST_PageOrientation, ST_SectionType, ST_TabJc, ST_TabLeader,
 };
 use rdocx_oxml::text::{
-    BreakType, CT_P, CT_R, CommentRangeMarker, HyperlinkSpan, RunContent, hyperlink_revision_index,
+    AcceptedRunPath, AcceptedRunPathSegment, BreakType, CT_P, CT_R, CommentRangeMarker,
+    HyperlinkSpan, RunContent, hyperlink_revision_index,
 };
 use rdocx_oxml::units::Twips;
 
@@ -297,7 +298,11 @@ pub struct Paragraph<'a> {
 impl<'a> Paragraph<'a> {
     /// Get the combined text of all runs.
     pub fn text(&self) -> String {
-        self.inner.text()
+        self.inner
+            .accepted_bookmark_runs()
+            .iter()
+            .map(|run| run.text())
+            .collect()
     }
 
     /// Iterate over typed equations in paragraph source order.
@@ -383,7 +388,7 @@ impl<'a> Paragraph<'a> {
     }
 
     /// Append an inline picture run using an existing document relationship.
-    pub(crate) fn add_picture(&mut self, rel_id: &str, width: Length, height: Length) {
+    pub(crate) fn add_picture(&mut self, rel_id: &str, width: Length, height: Length) -> &mut CT_R {
         use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
 
         let inline = CT_Inline::new(rel_id, width.to_emu(), height.to_emu());
@@ -391,6 +396,10 @@ impl<'a> Paragraph<'a> {
         let mut run = CT_R::new("");
         run.content = vec![RunContent::Drawing(drawing)];
         self.inner.runs.push(run);
+        self.inner
+            .runs
+            .last_mut()
+            .expect("picture run was appended")
     }
 
     /// Add a run wrapped in an external hyperlink relationship.
@@ -430,22 +439,85 @@ impl<'a> Paragraph<'a> {
 
     /// Get the number of runs in this paragraph.
     pub fn run_count(&self) -> usize {
-        self.inner.runs.len()
+        self.inner.accepted_run_paths().len()
     }
 
-    /// Get an immutable run by index.
+    /// Get an immutable accepted-view run by index.
     pub fn run(&self, index: usize) -> Option<RunRef<'_>> {
-        self.inner.runs.get(index).map(|inner| RunRef { inner })
+        let path = self.inner.accepted_run_paths().get(index)?.clone();
+        self.inner.accepted_run(&path).map(|inner| RunRef { inner })
     }
 
-    /// Get a mutable run by index.
+    /// Get a direct mutable run when the accepted index is not nested.
+    ///
+    /// Use [`Self::edit_run`] for a run inside a tracked insertion or inline
+    /// content control.
     pub fn run_mut(&mut self, index: usize) -> Option<Run<'_>> {
-        self.inner.runs.get_mut(index).map(|inner| Run { inner })
+        let path = self.inner.accepted_run_paths().get(index)?.clone();
+        let [AcceptedRunPathSegment::Run(direct)] = path.segments() else {
+            return None;
+        };
+        self.inner.runs.get_mut(*direct).map(|inner| Run { inner })
+    }
+
+    /// Return the recursive source path for one accepted-view run.
+    #[doc(hidden)]
+    pub fn run_path(&self, index: usize) -> Option<AcceptedRunPath> {
+        self.inner.accepted_run_paths().get(index).cloned()
+    }
+
+    /// Apply one checked edit to an accepted-view run at its recursive owner.
+    #[doc(hidden)]
+    pub fn edit_run(
+        &mut self,
+        path: &AcceptedRunPath,
+        edit: impl FnOnce(&mut Run<'_>),
+    ) -> crate::Result<()> {
+        let mut replacement = self
+            .inner
+            .accepted_run(path)
+            .cloned()
+            .ok_or_else(|| crate::Error::Other("accepted run path is stale".to_owned()))?;
+        edit(&mut Run {
+            inner: &mut replacement,
+        });
+        if self.inner.replace_accepted_run(path, replacement)? {
+            Ok(())
+        } else {
+            Err(crate::Error::Other("accepted run path is stale".to_owned()))
+        }
+    }
+
+    /// Split the run at `run_index` at a Unicode scalar offset of its literal
+    /// text.
+    ///
+    /// The run keeps the text before `offset`, and a new run at
+    /// `run_index + 1` receives the rest with the same properties, inside the
+    /// same hyperlink. Zero returns the boundary before the run and the literal
+    /// text length returns the boundary after it without changing the paragraph.
+    /// Non-text children have zero width. A comment or bookmark range can then
+    /// start or end at the returned boundary. On error the paragraph is
+    /// unchanged.
+    pub fn split_run(&mut self, run_index: usize, offset: usize) -> crate::Result<usize> {
+        let mut paragraph = self.inner.clone();
+        let path = paragraph
+            .accepted_run_paths()
+            .get(run_index)
+            .cloned()
+            .ok_or_else(|| crate::Error::Other("run index out of range".to_owned()))?;
+        let boundary = paragraph
+            .split_accepted_run(&path, run_index, offset)
+            .map_err(|error| crate::Error::Other(error.to_string()))?;
+        *self.inner = paragraph;
+        Ok(boundary)
     }
 
     /// Get an iterator over immutable run references.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
-        self.inner.runs.iter().map(|r| RunRef { inner: r })
+        self.inner
+            .accepted_bookmark_runs()
+            .into_iter()
+            .map(|inner| RunRef { inner })
     }
 
     /// Set the paragraph alignment.
@@ -476,6 +548,14 @@ impl<'a> Paragraph<'a> {
     /// Set the paragraph style by ID in place.
     pub fn set_style(&mut self, style_id: &str) {
         self.ensure_ppr().style_id = Some(style_id.to_string());
+    }
+
+    /// Set or clear the paragraph style ID in place.
+    pub fn set_style_value(&mut self, style_id: Option<&str>) {
+        if style_id.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().style_id = style_id.map(str::to_owned);
     }
 
     /// Attach this paragraph to a list definition as a list item.
@@ -796,12 +876,35 @@ impl<'a> Paragraph<'a> {
         self
     }
 
+    /// Add a bottom border with an explicit content gap in points.
+    pub fn border_bottom_with_space(
+        mut self,
+        style: BorderStyle,
+        size_eighths_pt: u32,
+        space_points: u32,
+        color: &str,
+    ) -> Self {
+        self.set_border_bottom_with_space(style, size_eighths_pt, space_points, color);
+        self
+    }
+
     /// Add a bottom border in place.
     pub fn set_border_bottom(&mut self, style: BorderStyle, size_eighths_pt: u32, color: &str) {
+        self.set_border_bottom_with_space(style, size_eighths_pt, 1, color);
+    }
+
+    /// Add a bottom border with an explicit content gap in points in place.
+    pub fn set_border_bottom_with_space(
+        &mut self,
+        style: BorderStyle,
+        size_eighths_pt: u32,
+        space_points: u32,
+        color: &str,
+    ) {
         let edge = CT_BorderEdge {
             val: style.to_st(),
             sz: Some(size_eighths_pt),
-            space: Some(1),
+            space: Some(space_points),
             color: Some(color.to_string()),
         };
         let borders = self
@@ -976,7 +1079,11 @@ pub struct ParagraphRef<'a> {
 impl<'a> ParagraphRef<'a> {
     /// Get the combined text of all runs.
     pub fn text(&self) -> String {
-        self.inner.text()
+        self.inner
+            .accepted_bookmark_runs()
+            .iter()
+            .map(|run| run.text())
+            .collect()
     }
 
     /// Iterate over typed equations in paragraph source order.
@@ -1146,12 +1253,19 @@ impl<'a> ParagraphRef<'a> {
 
     /// Get the number of runs in this paragraph.
     pub fn run_count(&self) -> usize {
-        self.inner.runs.len()
+        self.inner.accepted_run_paths().len()
     }
 
-    /// Get an immutable run by index.
+    /// Get an immutable accepted-view run by index.
     pub fn run(&self, index: usize) -> Option<RunRef<'_>> {
-        self.inner.runs.get(index).map(|inner| RunRef { inner })
+        let path = self.inner.accepted_run_paths().get(index)?.clone();
+        self.inner.accepted_run(&path).map(|inner| RunRef { inner })
+    }
+
+    /// Return the recursive source path for one accepted-view run.
+    #[doc(hidden)]
+    pub fn run_path(&self, index: usize) -> Option<AcceptedRunPath> {
+        self.inner.accepted_run_paths().get(index).cloned()
     }
 
     /// Get the paragraph style ID, if set.
@@ -1389,5 +1503,19 @@ mod tests {
         assert_eq!(hyperlink.tooltip(), Some("Open link"));
         assert_eq!(hyperlink.doc_location(), Some("section-two"));
         assert!(hyperlink.has_unmodeled_semantic_attributes());
+    }
+
+    #[test]
+    fn bottom_border_accepts_an_explicit_content_gap() {
+        let mut inner = CT_P::new();
+        let mut paragraph = Paragraph { inner: &mut inner };
+        paragraph.set_border_bottom_with_space(BorderStyle::Single, 14, 6, "auto");
+
+        let paragraph = ParagraphRef { inner: &inner };
+        let border = paragraph.bottom_border().expect("bottom border");
+        assert_eq!(border.style(), "single");
+        assert_eq!(border.size_eighths_pt(), Some(14));
+        assert_eq!(border.space_points(), Some(6));
+        assert_eq!(border.color(), Some("auto"));
     }
 }

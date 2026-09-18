@@ -13,14 +13,14 @@ use rdocx_oxml::text::{CT_P, CT_R, CommentRangeMarker, RunContent};
 #[cfg(test)]
 use rdocx_oxml::text::HyperlinkSpan;
 
-use crate::{Document, Error, Result};
+use crate::{ContentLocation, Document, Error, Result};
 
 pub(crate) const COMMENTS_EXTENDED_REL_TYPE: &str =
     "http://schemas.microsoft.com/office/2011/relationships/commentsExtended";
 pub(crate) const COMMENTS_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml";
 pub(crate) const COMMENTS_EXTENDED_CONTENT_TYPE: &str =
-    "application/vnd.ms-word.commentsExtended+xml";
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml";
 const DEFAULT_COMMENTS_PART: &str = "/word/comments.xml";
 const DEFAULT_COMMENTS_EXTENDED_PART: &str = "/word/commentsExtended.xml";
 
@@ -38,6 +38,20 @@ pub struct RunPosition {
 pub struct RunRange {
     pub start: RunPosition,
     pub end: RunPosition,
+}
+
+/// A stable insertion point between runs in a checked story paragraph.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StoryRunPosition {
+    pub location: ContentLocation,
+    pub run_index: usize,
+}
+
+/// A half-open run range within one checked story owner.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StoryRunRange {
+    pub start: StoryRunPosition,
+    pub end: StoryRunPosition,
 }
 
 /// Immutable summary of one correlated bookmark or one reported marker issue.
@@ -474,10 +488,162 @@ impl Document {
         initials: Option<&str>,
         text: &str,
     ) -> Result<i32> {
+        self.add_comment_with_date(range, author, initials, text, None)
+    }
+
+    /// Add a dated comment over a half-open range of body paragraph runs.
+    ///
+    /// `date`, when present, must be an RFC 3339 timestamp. No date is the
+    /// deterministic default used by [`Document::add_comment`].
+    pub fn add_comment_with_date(
+        &mut self,
+        range: RunRange,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
         let mut candidate = self.clone_for_staging();
-        let id = candidate.add_comment_staged(range, author, initials, text)?;
+        let id = candidate.add_comment_staged(range, author, initials, text, date)?;
         candidate.flush_dirty_related_story_models()?;
         self.commit_staged_mutation(candidate);
+        Ok(id)
+    }
+
+    /// Add a dated comment over a checked body or table-cell run range.
+    pub fn add_story_comment_with_date(
+        &mut self,
+        range: StoryRunRange,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
+        let mut candidate = self.clone_for_staging();
+        let id = candidate.add_story_comment_staged(range, author, initials, text, date)?;
+        candidate.flush_dirty_related_story_models()?;
+        self.commit_staged_mutation(candidate);
+        Ok(id)
+    }
+
+    /// Add a comment over a checked body or table-cell run range.
+    pub fn add_story_comment(
+        &mut self,
+        range: StoryRunRange,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+    ) -> Result<i32> {
+        self.add_story_comment_with_date(range, author, initials, text, None)
+    }
+
+    fn add_story_comment_staged(
+        &mut self,
+        range: StoryRunRange,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
+        validate_comment_date(date)?;
+        if range.start.location.story() != range.end.location.story()
+            || range.start.location.index_path() > range.end.location.index_path()
+        {
+            return Err(Error::Other(
+                "comment story range start must not follow its end".to_owned(),
+            ));
+        }
+        let start_original = self.story_paragraph_mut(&range.start.location)?.clone();
+        let end_original = self.story_paragraph_mut(&range.end.location)?.clone();
+        for (label, position, paragraph) in [
+            ("start", &range.start, &start_original),
+            ("end", &range.end, &end_original),
+        ] {
+            if position.run_index > paragraph.runs.len() {
+                return Err(Error::Other(format!(
+                    "comment range {label} run index {} exceeds paragraph run count {}",
+                    position.run_index,
+                    paragraph.runs.len()
+                )));
+            }
+        }
+        if range.start.location == range.end.location && range.start.run_index > range.end.run_index
+        {
+            return Err(Error::Other(
+                "comment story range start must not follow its end".to_owned(),
+            ));
+        }
+
+        let mut identifiers = self.identifiers.clone();
+        let id = identifiers.reserve_comment_id()?;
+        if range.start.location == range.end.location {
+            let mut paragraph = start_original;
+            insert_comment_reference(&mut paragraph, range.end.run_index, id);
+            paragraph.comment_ranges.push(CommentRangeMarker::Start {
+                id,
+                run_index: range.start.run_index,
+                raw_before: raw_count_at(&paragraph, range.start.run_index),
+                has_child_content: false,
+            });
+            paragraph.comment_ranges.push(CommentRangeMarker::End {
+                id,
+                run_index: range.end.run_index,
+                raw_before: raw_count_at(&paragraph, range.end.run_index),
+                has_child_content: false,
+            });
+            *self.story_paragraph_mut(&range.start.location)? = paragraph;
+        } else {
+            let mut start = start_original;
+            let mut end = end_original;
+            insert_comment_reference(&mut end, range.end.run_index, id);
+            start.comment_ranges.push(CommentRangeMarker::Start {
+                id,
+                run_index: range.start.run_index,
+                raw_before: raw_count_at(&start, range.start.run_index),
+                has_child_content: false,
+            });
+            end.comment_ranges.push(CommentRangeMarker::End {
+                id,
+                run_index: range.end.run_index,
+                raw_before: raw_count_at(&end, range.end.run_index),
+                has_child_content: false,
+            });
+            *self.story_paragraph_mut(&range.start.location)? = start;
+            *self.story_paragraph_mut(&range.end.location)? = end;
+        }
+
+        self.ensure_comment_models()?;
+        self.ensure_comment_relationships()?;
+        let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
+        let mut comment_paragraph = CT_P::new();
+        comment_paragraph.add_run(text);
+        self.comments
+            .as_mut()
+            .expect("comment model was initialized")
+            .comments
+            .push(CT_Comment {
+                id,
+                author: Some(author.to_owned()),
+                date: date.map(str::to_owned),
+                initials: initials.map(str::to_owned),
+                paragraphs: vec![comment_paragraph],
+                paragraph_ids: vec![Some(para_id.clone())],
+                extra_attributes: Vec::new(),
+                extra_xml: Vec::new(),
+            });
+        self.comments_extended
+            .as_mut()
+            .expect("comments-extended model was initialized")
+            .comments
+            .push(CT_CommentEx {
+                para_id,
+                para_id_parent: None,
+                done: None,
+                extra_attributes: Vec::new(),
+            });
+        self.identifiers = identifiers;
+        self.comments_dirty = true;
+        self.invalidate_layout();
         Ok(id)
     }
 
@@ -487,7 +653,9 @@ impl Document {
         author: &str,
         initials: Option<&str>,
         text: &str,
+        date: Option<&str>,
     ) -> Result<i32> {
+        validate_comment_date(date)?;
         self.validate_run_range(range)?;
         self.ensure_comment_models()?;
         self.ensure_comment_relationships()?;
@@ -504,7 +672,7 @@ impl Document {
             .push(CT_Comment {
                 id,
                 author: Some(author.to_owned()),
-                date: None,
+                date: date.map(str::to_owned),
                 initials: initials.map(str::to_owned),
                 paragraphs: vec![paragraph],
                 paragraph_ids: vec![Some(para_id.clone())],
@@ -549,14 +717,34 @@ impl Document {
 
     /// Add a reply linked to the selected comment paragraph.
     pub fn reply_to(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
+        self.reply_to_with_date(parent_id, author, text, None)
+    }
+
+    /// Add a dated reply linked to the selected comment paragraph.
+    ///
+    /// `date`, when present, must be an RFC 3339 timestamp.
+    pub fn reply_to_with_date(
+        &mut self,
+        parent_id: i32,
+        author: &str,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
         let mut candidate = self.clone_for_staging();
-        let id = candidate.reply_to_staged(parent_id, author, text)?;
+        let id = candidate.reply_to_staged(parent_id, author, text, date)?;
         candidate.flush_dirty_related_story_models()?;
         self.commit_staged_mutation(candidate);
         Ok(id)
     }
 
-    fn reply_to_staged(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
+    fn reply_to_staged(
+        &mut self,
+        parent_id: i32,
+        author: &str,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
+        validate_comment_date(date)?;
         let parent_index = self
             .comments
             .as_ref()
@@ -602,7 +790,7 @@ impl Document {
         comments.comments.push(CT_Comment {
             id,
             author: Some(author.to_owned()),
-            date: None,
+            date: date.map(str::to_owned),
             initials: None,
             paragraphs: vec![paragraph],
             paragraph_ids: vec![Some(para_id.clone())],
@@ -904,6 +1092,17 @@ impl Document {
             self.comments_extended_owned = false;
         }
     }
+}
+
+fn validate_comment_date(date: Option<&str>) -> Result<()> {
+    if let Some(value) = date
+        && crate::revision::parse_rfc3339(value).is_none()
+    {
+        return Err(Error::Other(format!(
+            "invalid RFC 3339 comment timestamp: {value}"
+        )));
+    }
+    Ok(())
 }
 
 fn selected_fragment_comment_ids(
@@ -1482,7 +1681,7 @@ mod tests {
     const WORD_VERSION: &str = "16.104";
     const WORD_BUILD: &str = "16.104.25121423";
     const WORD_COMMENT_CANDIDATE_SHA256: &str =
-        "a5ad0e8eb2d1a676daa07431deb2a0f11ee32e8bb92d099d14d5d16d43708adb";
+        "d5b38f5ebbf3279cb3b77215ba667aaa149f0ddd4d29e66e13518201acf483cf";
 
     fn word_comment_candidate() -> Document {
         let mut document =

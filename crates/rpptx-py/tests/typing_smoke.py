@@ -40,6 +40,13 @@ def exercise_rpptx_types(path: Path) -> None:
         Inches(1), Inches(1), Inches(4), Inches(2)
     )
     shape.text = "typed"
+    shape_left: Length | None = shape.left
+    shape_top: Length | None = shape.top
+    shape_width: Length | None = shape.width
+    shape_height: Length | None = shape.height
+    shape_id: int | None = shape.shape_id
+    shape_name: str | None = shape.name
+    autofit: str | None = shape.text_frame.autofit
     paragraph: Paragraph = presentation.slides[0].shapes[-1].text_frame.paragraphs[0]
     paragraph.level = 1
     paragraph.font.bold = True
@@ -47,6 +54,11 @@ def exercise_rpptx_types(path: Path) -> None:
     returned_size: Length | None = (
         presentation.slides[0].shapes[-1].text_frame.paragraphs[0].font.size
     )
+    run: Run = paragraph.runs[0]
+    run.text = "updated"
+    run_font_name: str | None = run.font.name
+    run_font_size: Length | None = run.font.size
+    run_font_color: str | None = run.font.color
     broad_shape_factory: Callable[[int, int, int, int, int], Shape] = (
         presentation.slides[0].shapes.add_shape  # type: ignore[assignment]
     )
@@ -75,6 +87,7 @@ def exercise_rpptx_types(path: Path) -> None:
     notes_pdf: bytes = presentation.to_notes_pdf()
     notes_pngs: list[bytes] = presentation.render_all_notes()
     notes_text: str | None = presentation.slides[0].notes_text
+    presentation.slides[0].notes_text = "Updated speaker note"
     presentation.add_comment_author(
         id="{11111111-1111-1111-1111-111111111111}",
         name="Ada",
@@ -108,6 +121,16 @@ def exercise_rpptx_types(path: Path) -> None:
         points,
         emu,
         broad_shape_factory,
+        shape_left,
+        shape_top,
+        shape_width,
+        shape_height,
+        shape_id,
+        shape_name,
+        autofit,
+        run_font_name,
+        run_font_size,
+        run_font_color,
     )
 
 
