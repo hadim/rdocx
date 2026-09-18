@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 139 | 134 | 0 | 1  |
-| **Total** | **457** | **384** | **0** | **69** |
+| X, Cross-cutting (opportunistic)            | 139 | 135 | 0 | 0  |
+| **Total** | **457** | **385** | **0** | **68** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -672,7 +672,7 @@ regenerated, never hand-edited.
 | F-X123 | Accept producer TOC style variants | S74 | S | done |
 | F-X124 | Make content cloning linear and explicit | S74 | M | done |
 | F-X125 | Compare table grid changes | S74 | M | done |
-| F-X126 | Preserve drawings through comparison acceptance | S74 | M | pending |
+| F-X126 | Preserve drawings through comparison acceptance | S74 | M | done |
 | F-X127 | Collapse adjacent page break requests | S74 | S | done |
 | F-X128 | Preserve Word paragraph and revision identities | S74 | M | done |
 | F-X129 | Tolerate unmatched notes placeholders | S74 | S | done |

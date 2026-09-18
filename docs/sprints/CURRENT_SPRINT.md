@@ -41,7 +41,7 @@ differential evidence where the contract requires it.
 | F-X123 | Accept producer TOC style variants | S | done | - |
 | F-X124 | Make content cloning linear and explicit | M | done | - |
 | F-X125 | Compare table grid changes | M | done | - |
-| F-X126 | Preserve drawings through comparison acceptance | M | pending | - |
+| F-X126 | Preserve drawings through comparison acceptance | M | done | - |
 | F-X127 | Collapse adjacent page break requests | S | done | - |
 | F-X128 | Preserve Word paragraph and revision identities | M | done | - |
 | F-X129 | Tolerate unmatched notes placeholders | S | done | - |

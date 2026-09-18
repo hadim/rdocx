@@ -351,7 +351,7 @@ impl Document {
             )?
         };
         let tracked_xml = replace_body_inner(original_xml, &tracked_body)?;
-        let tracked_model_xml = retain_scoped_drawing_namespaces(tracked_xml.as_bytes().to_vec())?;
+        let tracked_model_xml = close_drawing_namespaces(tracked_xml.as_bytes().to_vec(), true)?;
         let tracked = CT_Document::from_xml(&tracked_model_xml)?;
         tracked.to_xml()?;
         let mut candidate = original.clone_for_staging();
@@ -1393,7 +1393,7 @@ fn story_document(inner: &str, namespace_bindings: &[(String, String)]) -> Resul
     writer.get_mut().extend_from_slice(inner.as_bytes());
     writer.write_event(Event::End(BytesEnd::new(body_name.as_str())))?;
     writer.write_event(Event::End(BytesEnd::new(document_name.as_str())))?;
-    let xml = retain_scoped_drawing_namespaces(writer.into_inner())?;
+    let xml = close_drawing_namespaces(writer.into_inner(), false)?;
     CT_Document::from_xml(&xml).map_err(Into::into)
 }
 
@@ -1405,7 +1405,7 @@ fn comparison_input(document: &Document) -> Result<Document> {
         .map(<[u8]>::to_vec)
     {
         let parsed_source = CT_Document::from_xml(&source)?;
-        let scoped_source = retain_scoped_drawing_namespaces(source)?;
+        let scoped_source = close_drawing_namespaces(source, true)?;
         let scoped_document = CT_Document::from_xml(&scoped_source)?;
         if parsed_source == candidate.document {
             candidate.document = scoped_document;
@@ -1421,7 +1421,7 @@ fn comparison_input(document: &Document) -> Result<Document> {
         .package
         .get_part(&candidate.doc_part_name)
         .ok_or_else(|| Error::Other(format!("missing main story {}", candidate.doc_part_name)))?;
-    let source = retain_scoped_drawing_namespaces(source.to_vec())?;
+    let source = close_drawing_namespaces(source.to_vec(), true)?;
     candidate.document = CT_Document::from_xml(&source)?;
     candidate.package.set_part(&candidate.doc_part_name, source);
     Ok(candidate)
@@ -1460,8 +1460,13 @@ fn drawing_signature(drawing: &rdocx_oxml::drawing::CT_Drawing) -> rdocx_oxml::d
     signature
 }
 
-fn retain_scoped_drawing_namespaces(xml: Vec<u8>) -> Result<Vec<u8>> {
-    let root_scope = comparison_root_namespace_scope(&xml)?;
+fn close_drawing_namespaces(
+    xml: Vec<u8>,
+    preserve_root_namespace_ownership: bool,
+) -> Result<Vec<u8>> {
+    let root_scope = preserve_root_namespace_ownership
+        .then(|| comparison_root_namespace_scope(&xml))
+        .transpose()?;
     let mut reader = NsReader::from_reader(xml.as_slice());
     reader.config_mut().trim_text(false);
     let mut edits = Vec::new();
@@ -1485,7 +1490,9 @@ fn retain_scoped_drawing_namespaces(xml: Vec<u8>) -> Result<Vec<u8>> {
                         })?;
                     let end = reader.buffer_position() as usize;
                     let mut scope = crate::document::story_namespace_scope_at(&xml, start)?;
-                    scope.retain(|prefix, namespace| root_scope.get(prefix) != Some(namespace));
+                    if let Some(root_scope) = &root_scope {
+                        scope.retain(|prefix, namespace| root_scope.get(prefix) != Some(namespace));
+                    }
                     let scope = required_external_bindings(&xml[start..end], &scope)?;
                     let replacement = crate::document::close_content_fragment_namespaces(
                         &xml[start..end],

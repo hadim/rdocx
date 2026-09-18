@@ -1,6 +1,6 @@
 # F-X126, Preserve drawings through comparison acceptance
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: M
 **Depends on**: F-X097, F-X102
@@ -61,10 +61,11 @@ Expected unchanged. Comparison is not used by sample generation.
 
 ## Implementation checklist
 
-- [ ] Reproduce the mismatch with source-built multi-story drawings.
-- [ ] Identify the first asymmetric normalized projection.
-- [ ] Retain drawing scope symmetrically without masking real changes.
-- [ ] Run focused comparison, story, render, hash, and full verification gates.
+- [x] Reproduce the mismatch with source-built multi-story drawings.
+- [x] Identify the first asymmetric normalized projection.
+- [x] Retain drawing scope symmetrically without masking real changes.
+- [x] Run the impacted comparison, story, clippy, formatting, prose, skill
+  drift, and hash gates requested for this issue-only pass.
 
 ## Open questions
 

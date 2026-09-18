@@ -18195,11 +18195,125 @@ fn f_x097_inherited_drawing(relationship_id: &str) -> String {
     )
 }
 
+fn f_x126_comparison_document(
+    body_version: &str,
+    footer_version: &str,
+    drawing_id: u32,
+) -> Document {
+    let wp_binding =
+        r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing""#;
+    let (root_wp_binding, run_wp_binding) = if body_version == "original" {
+        (wp_binding, "")
+    } else {
+        ("", wp_binding)
+    };
+    let drawing = |relationship_id: &str| {
+        f_x097_inherited_drawing(relationship_id).replace(
+            r#"id="31" name="Inherited picture""#,
+            &format!(r#"id="{drawing_id}" name="Inherited picture""#),
+        )
+    };
+    let mut seed = Document::new();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        seed.to_bytes().expect("serialize comparison story seed"),
+    ))
+    .expect("open comparison story seed");
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    let header_id = relationships.add(oxml_opc::relationship::rel_types::HEADER, "header1.xml");
+    let footer_id = relationships.add(oxml_opc::relationship::rel_types::FOOTER, "footer1.xml");
+    relationships.add_with_id(
+        "bodyImage",
+        oxml_opc::relationship::rel_types::IMAGE,
+        "media/body.png",
+    );
+    package
+        .get_or_create_part_rels("/word/header1.xml")
+        .add_with_id(
+            "storyImage",
+            oxml_opc::relationship::rel_types::IMAGE,
+            "media/header.png",
+        );
+    package
+        .get_or_create_part_rels("/word/footer1.xml")
+        .add_with_id(
+            "storyImage",
+            oxml_opc::relationship::rel_types::IMAGE,
+            "media/footer.png",
+        );
+
+    let edited_paragraphs = (0..6)
+        .map(|index| {
+            format!(r#"<w:p><w:r><w:t>{body_version} body edit {index}</w:t></w:r></w:p>"#)
+        })
+        .collect::<String>();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" {root_wp_binding}><w:body>{edited_paragraphs}<w:p><w:r {run_wp_binding}>{}</w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/><w:footerReference w:type="default" r:id="{footer_id}"/></w:sectPr></w:body></w:document>"#,
+            drawing("bodyImage"),
+        )
+        .into_bytes(),
+    );
+    package.set_part(
+        "/word/header1.xml",
+        format!(
+            r#"<w:hdr xmlns:w="{W_NS}" {root_wp_binding}><w:p><w:r><w:t>unchanged header</w:t></w:r><w:r {run_wp_binding}>{}</w:r></w:p></w:hdr>"#,
+            drawing("storyImage"),
+        )
+        .into_bytes(),
+    );
+    package.set_part(
+        "/word/footer1.xml",
+        format!(
+            r#"<w:ftr xmlns:w="{W_NS}" {root_wp_binding}><w:p><w:r><w:t>{footer_version} footer edit</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:p><w:r {run_wp_binding}>{}</w:r></w:p></w:ftr>"#,
+            drawing("storyImage"),
+        )
+        .into_bytes(),
+    );
+    for (part, content_type) in [
+        (
+            "/word/header1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        ),
+        (
+            "/word/footer1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        ),
+    ] {
+        package.content_types.add_override(part, content_type);
+    }
+    for (part, payload) in [
+        ("/word/media/body.png", b"body image".as_slice()),
+        ("/word/media/header.png", b"header image".as_slice()),
+        ("/word/media/footer.png", b"footer image".as_slice()),
+    ] {
+        package.set_part(part, payload.to_vec());
+        package.content_types.add_override(part, "image/png");
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package
+        .write_to(&mut bytes)
+        .expect("serialize multi-story comparison fixture");
+    Document::from_bytes(bytes.get_ref()).expect("open multi-story comparison fixture")
+}
+
 fn f_x093_drawing_fragment(xml: &str) -> &str {
     let start = xml.find("<w:drawing").expect("drawing start");
     let end =
         xml[start..].find("</w:drawing>").expect("drawing end") + start + "</w:drawing>".len();
     &xml[start..end]
+}
+
+fn f_x126_drawing_markup(xml: &str) -> String {
+    [
+        r#" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing""#,
+        r#" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#,
+        r#" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture""#,
+    ]
+    .into_iter()
+    .fold(f_x093_drawing_fragment(xml).to_owned(), |xml, binding| {
+        xml.replace(binding, "")
+    })
 }
 
 fn f_x093_visible_text(xml: &str) -> String {
@@ -18415,6 +18529,163 @@ fn comparison_preserves_inherited_drawing_namespaces_and_complex_fields() {
         assert!(finalized.text().contains("firstsecond"));
         assert!(finalized.text().contains(expected));
         assert!(!finalized.text().contains(unexpected));
+    }
+}
+
+#[test]
+fn text_only_comparison_with_body_header_and_footer_drawings_accepts_exactly() {
+    for granularity in [
+        rdocx::ComparisonGranularity::Run,
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Character,
+    ] {
+        let mut original = f_x126_comparison_document("original", "original", 31);
+        let edited = f_x126_comparison_document("edited", "edited", 31);
+        original
+            .compare_with_options(
+                &edited,
+                "Ada",
+                "2026-09-18T18:00:00Z",
+                &rdocx::ComparisonOptions {
+                    granularity,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|error| panic!("{granularity:?}: {error}"));
+        let tracked = original.to_bytes().expect("serialize tracked comparison");
+
+        for (accept, expected, unexpected) in
+            [(true, "edited", "original"), (false, "original", "edited")]
+        {
+            let mut resolved = Document::from_bytes(&tracked).expect("reopen tracked comparison");
+            if accept {
+                resolved.accept_all().expect("accept comparison");
+            } else {
+                resolved.reject_all().expect("reject comparison");
+            }
+            let bytes = resolved.to_bytes().expect("serialize resolved comparison");
+            let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+            let expected_bytes = f_x126_comparison_document(expected, expected, 31)
+                .to_bytes()
+                .unwrap();
+            let expected_package =
+                oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(expected_bytes)).unwrap();
+            for part in [
+                "/word/document.xml",
+                "/word/header1.xml",
+                "/word/footer1.xml",
+            ] {
+                let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+                let expected_xml =
+                    std::str::from_utf8(expected_package.get_part(part).unwrap()).unwrap();
+                assert_eq!(
+                    f_x126_drawing_markup(xml),
+                    f_x126_drawing_markup(expected_xml),
+                    "{granularity:?} {part}"
+                );
+                assert!(
+                    xml.contains(r#"r:embed=""#),
+                    "{granularity:?} {part}: {xml}"
+                );
+                assert!(xml.contains("xmlns:wp="), "{granularity:?} {part}: {xml}");
+                assert!(xml.contains("xmlns:a="), "{granularity:?} {part}: {xml}");
+                assert!(xml.contains("xmlns:pic="), "{granularity:?} {part}: {xml}");
+            }
+            for (owner, relationship_id, target, payload) in [
+                (
+                    "/word/document.xml",
+                    "bodyImage",
+                    "/word/media/body.png",
+                    b"body image".as_slice(),
+                ),
+                (
+                    "/word/header1.xml",
+                    "storyImage",
+                    "/word/media/header.png",
+                    b"header image".as_slice(),
+                ),
+                (
+                    "/word/footer1.xml",
+                    "storyImage",
+                    "/word/media/footer.png",
+                    b"footer image".as_slice(),
+                ),
+            ] {
+                let relationship = package
+                    .get_part_rels(owner)
+                    .unwrap()
+                    .get_by_id(relationship_id)
+                    .unwrap();
+                assert_eq!(
+                    oxml_opc::OpcPackage::resolve_rel_target(owner, &relationship.target),
+                    target
+                );
+                assert_eq!(package.get_part(target), Some(payload));
+            }
+            let main =
+                std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+            let footer =
+                std::str::from_utf8(package.get_part("/word/footer1.xml").unwrap()).unwrap();
+            let main_text = f_x093_visible_text(main);
+            let footer_text = f_x093_visible_text(footer);
+            assert_eq!(
+                main_text.matches(&format!("{expected} body edit")).count(),
+                6,
+                "{granularity:?}"
+            );
+            assert!(!main_text.contains(&format!("{unexpected} body edit")));
+            assert!(footer_text.contains(&format!("{expected} footer edit")));
+            assert!(!footer_text.contains(&format!("{unexpected} footer edit")));
+            assert_eq!(footer.matches(r#"w:fldCharType="begin""#).count(), 1);
+        }
+    }
+
+    let before = f_x126_comparison_document("original", "original", 31)
+        .to_bytes()
+        .unwrap();
+    let mut self_comparison = Document::from_bytes(&before).unwrap();
+    let same = Document::from_bytes(&before).unwrap();
+    assert!(
+        self_comparison
+            .compare(&same, "Ada", "2026-09-18T18:01:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(self_comparison.to_bytes().unwrap(), before);
+
+    let mut changed = f_x126_comparison_document("original", "original", 31);
+    changed
+        .compare(
+            &f_x126_comparison_document("original", "original", 32),
+            "Ada",
+            "2026-09-18T18:02:00Z",
+        )
+        .expect("real drawing changes remain comparable");
+    let tracked = changed.to_bytes().unwrap();
+    for (accept, expected, unexpected) in [(true, 32, 31), (false, 31, 32)] {
+        let mut resolved = Document::from_bytes(&tracked).unwrap();
+        if accept {
+            resolved.accept_all().unwrap();
+        } else {
+            resolved.reject_all().unwrap();
+        }
+        let bytes = resolved.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        for part in [
+            "/word/document.xml",
+            "/word/header1.xml",
+            "/word/footer1.xml",
+        ] {
+            let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+            assert!(
+                xml.contains(&format!(r#"wp:docPr id="{expected}""#)),
+                "{part}: {xml}"
+            );
+            assert!(
+                !xml.contains(&format!(r#"wp:docPr id="{unexpected}""#)),
+                "{part}: {xml}"
+            );
+        }
     }
 }
 

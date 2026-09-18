@@ -1164,6 +1164,12 @@ while bindings declared on an outer drawing owner travel with the detached
 wrapper. Dirty typed inputs recover matching package drawing payloads before
 their staged flush. Physical complex-field runs project onto one modeled owner,
 including several sibling fields that share one physical run.
+Comparison-only story projections instead close every required drawing binding
+on the inline or anchor root before equality. Story-root, paragraph, run, and
+drawing-owner declaration placement is therefore equivalent in the comparison
+model without changing package serialization. Retained drawing payload remains
+significant after declaration placement normalization, so a real drawing
+change is still tracked.
 
 Literal redaction also uses the complete package boundary. The Word facade
 flushes a staged clone, removes one non-empty exact literal from relationship-

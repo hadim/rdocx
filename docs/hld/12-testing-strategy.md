@@ -816,6 +816,14 @@ package changes.
 Inherited-binding coverage adds story-root and outer-drawing declarations plus
 an unrelated typed edit before comparison. It checks dirty staging, complex
 fields, sibling fields sharing one physical run, and both revision outcomes.
+`text_only_comparison_with_body_header_and_footer_drawings_accepts_exactly`
+moves the `wp` binding from each story root to its drawing run while making six
+body edits and one footer edit beside a complex PAGE field. Run, word, and
+character comparison must accept and reject to exact visible text, retain the
+body, header, and footer relationship targets and media bytes, and preserve raw
+drawing payload after declaration placement normalization. Self-comparison is
+a byte-exact no-op, while a changed `docPr` identity remains visible to both
+revision outcomes.
 
 Terminal paragraph comparison coverage inserts at the start, middle, and end
 of the main story, including one, two, and three appended paragraphs. It proves

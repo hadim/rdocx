@@ -1147,6 +1147,11 @@ sentinel. It never falls back to a body image with an equal local identifier.
 The complete relationship identity and resolved part bytes remain part of the
 header and footer cache key.
 
+Comparison-only namespace closure does not change layout relationship scope or
+drawing geometry. Accepted and rejected packages retain body, header, and
+footer image ownership, so layout receives the same relationship-resolved
+drawing after namespace declaration placement is normalized for comparison.
+
 Every public document mutation and mutable-accessor entry point clears both
 completed result caches before changing or exposing content. It preserves the
 normal engine so safe paragraph and shaping work can be reused after an edit.

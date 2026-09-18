@@ -15514,3 +15514,47 @@ table-comparison behavior.
 **Notes for future sessions.** Keep producer identity retention separate from
 identity generation. Compare and replace typed ownership by expanded name, not
 by lexical prefix.
+
+### F-X126, Preserve drawings through comparison acceptance
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Comparison-only story projections now close every required
+drawing namespace binding on the inline or anchor root before equality. Moving
+a binding between the story root and a drawing run no longer makes an unchanged
+body, header, or footer drawing appear different. Actual package staging keeps
+the source declaration ownership and story-local relationship scope.
+
+**Non-obvious choices.** Namespace ownership is normalized only in the
+comparison model. Drawing payload remains significant after declaration
+placement normalization, so a changed `docPr` identity is still tracked and
+resolved correctly.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx` comparison and story code at the user's direction. The named gate, 30
+comparison regressions, focused inherited-drawing and revision-resolution
+controls, scoped clippy, formatting, prose, generated-skill drift, and the hash
+harness passed. A workspace-wide test suite and a separate render run were not
+performed because no renderer changed.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for the
+comparison-only ownership normalization, `docs/hld/08-rendering-spec.md`, for
+unchanged story relationship scope, `docs/hld/12-testing-strategy.md`, for the
+multi-story regression, and `docs/hld/14-development-backlog.md`, for the
+F-X126 acceptance contract.
+
+**Tests.**
+`text_only_comparison_with_body_header_and_footer_drawings_accepts_exactly`
+proves exact run, word, and character acceptance and rejection across six body
+edits, one footer edit, a complex PAGE field, and body, header, and footer
+drawings. It checks scoped relationship targets and media bytes, retained raw
+drawing payload after namespace declaration normalization, byte-exact
+self-comparison, and a changed drawing identity control.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep package-preserving namespace ownership and
+comparison-model namespace closure as separate policies. Do not remove drawings
+from equality to work around declaration placement differences.

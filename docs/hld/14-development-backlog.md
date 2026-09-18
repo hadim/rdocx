@@ -5582,18 +5582,20 @@ schema order, save and reopen, and unchanged row and cell comparison.
 
 ### F-X126, Preserve drawings through comparison acceptance (M)
 
-Normalize drawing namespace ownership and retained raw markup consistently on
-the compared candidate, accepted result, edited target, rejected result, and
-original target. Text-only edits around unchanged body, header, and footer
-drawings must pass the acceptance and rejection postconditions without hiding
-a real drawing change.
+Close required drawing bindings on the inline or anchor root in comparison-only
+story projections while preserving the source ownership used by package
+serialization. Text-only edits around unchanged body, header, and footer
+drawings pass the acceptance and rejection postconditions without hiding a
+real drawing change or changing story-local relationship ownership.
 
 **Depends on**: F-X097, F-X102.
 **GitHub issue**: <https://github.com/tensorbee/rdocx/issues/128>.
 **Test gate**: regression.
 `text_only_comparison_with_body_header_and_footer_drawings_accepts_exactly`
-uses source-built scoped drawing variants and proves acceptance, rejection,
-self-comparison, relationship ownership, and changed-drawing sensitivity.
+uses source-built root-owned and run-owned namespace variants across run, word,
+and character comparison. It proves exact acceptance and rejection, byte-exact
+self-comparison, scoped relationships and media, normalized raw drawing
+payload, complex-field survival, and changed-drawing sensitivity.
 
 ### F-X127, Collapse adjacent page break requests (S)
 
