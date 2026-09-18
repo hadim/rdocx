@@ -457,7 +457,10 @@ Successful structural mutations stale handles once, successful replacements
 stale them only when their count is nonzero, and every rejected operation
 leaves package bytes and handle revisions unchanged. The native and Python
 changes are additive pre-1.0 surfaces scheduled for `rdocx` 0.14.0. WASM and
-CLI gain no corresponding surface.
+CLI gain no corresponding surface. Python resolves clone and move source and
+destination locations from one owned story inventory. A rejected clone names
+`source` when it is not a Paragraph or Table handle and names `destination` as
+a direct body index when it is not an integer.
 
 Native Rust also exposes owned `DocumentFragment` and non-exhaustive
 `FragmentConflictPolicy` values. `DocumentFragment::from_range` captures a

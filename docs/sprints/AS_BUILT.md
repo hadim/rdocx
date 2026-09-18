@@ -15314,3 +15314,46 @@ with the pinned Poppler and LibreOffice oracles.
 **Notes for future sessions.** Keep producer tolerance at the consuming read
 surface. Do not weaken mutation validation or remove duplicate producer XML to
 make a derived feature succeed.
+
+### F-X124, Make content cloning linear and explicit
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Python clone and move operations now resolve source and
+destination from one owned story inventory. Direct-content scans inspect
+section properties only for preserved nodes. Clone type errors name `source`
+and describe `destination` as a direct body index integer.
+
+**Non-obvious choices.** The mutation still performs complete identity
+freshening and one staged package reopen. No cache was added to live handles,
+and the accepted `(source, destination: int)` Python signature remains
+unchanged.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx` and `rdocx-py` crates and code at the user's direction. The complete
+`rdocx` crate suite passed before the final preserved-node end-boundary guard,
+then the focused native clone regressions and both Python 3.9 and 3.12 clone
+suites passed against the final implementation. Scoped clippy, strict mypy
+2.3.0, stubtest, formatting, prose, generated-skill drift, and the hash harness
+also passed.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for linear
+direct-item discovery, `docs/hld/10-bindings-spec.md`, for one-inventory
+binding resolution and named errors, `docs/hld/12-testing-strategy.md`, for the
+scaling regression, and `docs/hld/14-development-backlog.md`, for the F-X124
+acceptance contract.
+
+**Tests.** `clone_content_scales_linearly_and_names_invalid_arguments` proves
+middle and end insertion scaling, exact cloned text, and both error messages.
+Measured final debug-build clone times were 0.048 seconds at 100 paragraphs,
+0.077 seconds at 200, and 0.146 seconds at 400 for the reported middle
+destination. Six focused native regressions retain fresh identities,
+relationship scope, namespace replay, and atomic rejection.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Use the owned story inventory when more than one
+binding location must be resolved. Keep section-property checks behind the
+preserved-node kind test so ordinary direct children remain linear.

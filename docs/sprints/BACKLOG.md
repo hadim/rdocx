@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 139 | 129 | 0 | 6  |
-| **Total** | **457** | **379** | **0** | **74** |
+| X, Cross-cutting (opportunistic)            | 139 | 130 | 0 | 5  |
+| **Total** | **457** | **380** | **0** | **73** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -670,7 +670,7 @@ regenerated, never hand-edited.
 | F-X121 | Adopt PR 123 authored line-chart portability | S73 | S | done |
 | F-X122 | Recover the immutable rpptx 0.12.0 release attempt | S73 | M | done |
 | F-X123 | Accept producer TOC style variants | S74 | S | done |
-| F-X124 | Make content cloning linear and explicit | S74 | M | pending |
+| F-X124 | Make content cloning linear and explicit | S74 | M | done |
 | F-X125 | Compare table grid changes | S74 | M | pending |
 | F-X126 | Preserve drawings through comparison acceptance | S74 | M | pending |
 | F-X127 | Collapse adjacent page break requests | S74 | S | pending |

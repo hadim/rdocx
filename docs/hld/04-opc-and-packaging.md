@@ -126,7 +126,10 @@ is unchanged and complete. Content-control fragments validate the complete
 serialized block grammar by expanded name, including retained root slots and
 raw direct Word children. Foreign raw subtrees stay opaque. Invalid locations,
 relationships, identities, XML, and reopen results discard the staged
-candidate without changing the live document.
+candidate without changing the live document. Direct body inventory recognizes
+section properties only among preserved nodes, so ordinary paragraphs and
+tables do not repeat namespace-prefix scans. One clone still performs one
+identity-freshening pass and one complete staged reopen.
 
 HTML fragment insertion uses the same transaction. `HtmlImageResource` maps an
 exact source string to caller-owned bytes and a filename. Data-URI images are

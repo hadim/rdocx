@@ -863,32 +863,51 @@ impl PyDocument {
     }
 
     fn body_location(&self, py: Python<'_>, index: usize) -> PyResult<rdocx::ContentLocation> {
+        self.body_locations(py, &[index])?
+            .pop()
+            .ok_or_else(|| PyIndexError::new_err("content index out of range"))
+    }
+
+    fn body_locations(
+        &self,
+        py: Python<'_>,
+        indices: &[usize],
+    ) -> PyResult<Vec<rdocx::ContentLocation>> {
         let content_count = self.inner.content_count();
-        if index > content_count {
+        if indices.iter().any(|index| *index > content_count) {
             return Err(PyIndexError::new_err("content index out of range"));
         }
         let story = self.body_story(py)?;
-        if index == content_count {
-            return Ok(rdocx::ContentLocation::end(story));
-        }
-        for item in self
-            .inner
-            .story_items(&story)
-            .map_err(|error| rdocx_to_pyerr(py, error))?
-        {
-            let direct_body_index = item
-                .direct_body_index()
-                .map_err(|error| rdocx_to_pyerr(py, error))?;
-            if direct_body_index == Some(index) && item.location().index_path().len() == 1 {
-                return Ok(item.location().clone());
+        let snapshots = if indices.iter().all(|index| *index == content_count) {
+            Vec::new()
+        } else {
+            self.inner
+                .story_item_snapshots()
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+        };
+        let mut locations = Vec::with_capacity(indices.len());
+        for index in indices {
+            if *index == content_count {
+                locations.push(rdocx::ContentLocation::end(story.clone()));
+                continue;
             }
+            let location = snapshots
+                .iter()
+                .find(|item| {
+                    item.location().story() == &story && item.direct_body_index() == Some(*index)
+                })
+                .map(|item| item.location().clone())
+                .ok_or_else(|| {
+                    rdocx_to_pyerr(
+                        py,
+                        rdocx::Error::Other(format!(
+                            "direct body content at index {index} has no checked location"
+                        )),
+                    )
+                })?;
+            locations.push(location);
         }
-        Err(rdocx_to_pyerr(
-            py,
-            rdocx::Error::Other(format!(
-                "direct body content at index {index} has no checked location"
-            )),
-        ))
+        Ok(locations)
     }
 
     fn story_item_snapshot(
@@ -918,6 +937,7 @@ impl PyDocument {
         slf: &Py<Self>,
         py: Python<'_>,
         content: &Bound<'_, PyAny>,
+        argument: &str,
     ) -> PyResult<usize> {
         if let Ok(paragraph) = content.cast::<PyParagraph>() {
             let paragraph = paragraph.borrow();
@@ -954,9 +974,9 @@ impl PyDocument {
                 .content_index_of_table(table_index)
                 .ok_or_else(|| PyValueError::new_err("content handle is not a direct body child"));
         }
-        Err(PyTypeError::new_err(
-            "content must be a Paragraph or Table handle",
-        ))
+        Err(PyTypeError::new_err(format!(
+            "{argument} must be a Paragraph or Table handle"
+        )))
     }
 
     /// Run a native mutation that reports how many things it changed.
@@ -1826,7 +1846,7 @@ impl PyDocument {
                 .find_content_index(&text)
                 .ok_or_else(|| PyValueError::new_err("text was not found in body content"));
         }
-        Self::direct_content_index(&slf, py, content)
+        Self::direct_content_index(&slf, py, content, "content")
     }
 
     fn find_content_indices<'py>(
@@ -1895,15 +1915,18 @@ impl PyDocument {
         slf: Py<Self>,
         py: Python<'_>,
         source: &Bound<'_, PyAny>,
-        destination: usize,
+        destination: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let source_index = Self::direct_content_index(&slf, py, source)?;
+        let source_index = Self::direct_content_index(&slf, py, source, "source")?;
+        let destination = destination
+            .extract::<usize>()
+            .map_err(|_| PyTypeError::new_err("destination must be a direct body index integer"))?;
         let (source, destination) = {
             let document = slf.borrow(py);
-            (
-                document.body_location(py, source_index)?,
-                document.body_location(py, destination)?,
-            )
+            let mut locations = document.body_locations(py, &[source_index, destination])?;
+            let destination = locations.pop().expect("two requested body locations");
+            let source = locations.pop().expect("two requested body locations");
+            (source, destination)
         };
         slf.borrow_mut(py)
             .inner
@@ -1917,15 +1940,18 @@ impl PyDocument {
         slf: Py<Self>,
         py: Python<'_>,
         source: &Bound<'_, PyAny>,
-        destination: usize,
+        destination: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let source_index = Self::direct_content_index(&slf, py, source)?;
+        let source_index = Self::direct_content_index(&slf, py, source, "source")?;
+        let destination = destination
+            .extract::<usize>()
+            .map_err(|_| PyTypeError::new_err("destination must be a direct body index integer"))?;
         let (source, destination) = {
             let document = slf.borrow(py);
-            (
-                document.body_location(py, source_index)?,
-                document.body_location(py, destination)?,
-            )
+            let mut locations = document.body_locations(py, &[source_index, destination])?;
+            let destination = locations.pop().expect("two requested body locations");
+            let source = locations.pop().expect("two requested body locations");
+            (source, destination)
         };
         slf.borrow_mut(py)
             .inner

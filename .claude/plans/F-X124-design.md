@@ -1,6 +1,6 @@
 # F-X124, Make content cloning linear and explicit
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: M
 **Depends on**: F-X106a, F-X116
@@ -61,10 +61,10 @@ Expected unchanged. Clone performance and binding errors do not alter samples.
 
 ## Implementation checklist
 
-- [ ] Pin native and Python scaling before changing the path.
-- [ ] Remove repeated story discovery from one clone call.
-- [ ] Name both invalid arguments in stable Python errors.
-- [ ] Run focused Rust, binding, package, hash, and full verification gates.
+- [x] Pin native and Python scaling before changing the path.
+- [x] Remove repeated story discovery from one clone call.
+- [x] Name both invalid arguments in stable Python errors.
+- [x] Run focused Rust, binding, package, and hash verification gates.
 
 ## Open questions
 

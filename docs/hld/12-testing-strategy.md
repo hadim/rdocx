@@ -1601,6 +1601,12 @@ matrix covers expanded-name aliases, schema order, retained private slots,
 direct nested block controls, opaque foreign subtrees, and exact XML 1.0
 whitespace and character-reference handling without panics.
 
+`clone_content_scales_linearly_and_names_invalid_arguments` builds 50- and
+100-paragraph packages without an external producer. It bounds the doubled
+clone workload, verifies the cloned text, and pins the source-handle and
+destination-index type errors. The surrounding clone regressions retain fresh
+identities, relationship scope, stale handles, and byte-identical rollback.
+
 The ordered section round-trip gate is
 `ordered_section_mutations_preserve_independent_story_references`. It creates
 four ordered owners, removes one boundary, and reopens three portrait,

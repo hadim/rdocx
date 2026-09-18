@@ -5408,7 +5408,9 @@ fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<
         if !item.direct_owner_child {
             continue;
         }
-        if owner.kind == StoryKind::Body && content_fragment_root_is_section_properties(xml, &item)?
+        if owner.kind == StoryKind::Body
+            && item.kind == StoryItemKind::PreservedNode
+            && content_fragment_root_is_section_properties(xml, &item)?
         {
             continue;
         }
@@ -5420,7 +5422,10 @@ fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<
 fn story_owner_content_end(xml: &[u8], owner: &StoryOwnerSpan) -> Result<usize> {
     if owner.kind == StoryKind::Body {
         for item in scan_story_items(xml, owner)? {
-            if item.direct_owner_child && content_fragment_root_is_section_properties(xml, &item)? {
+            if item.direct_owner_child
+                && item.kind == StoryItemKind::PreservedNode
+                && content_fragment_root_is_section_properties(xml, &item)?
+            {
                 return Ok(item.full.start);
             }
         }
@@ -5486,7 +5491,10 @@ pub(crate) fn package_authoritative_body_fragment(
     if include_final_section_properties {
         let mut section = None;
         for item in scan_story_items(xml, &owner)? {
-            if item.direct_owner_child && content_fragment_root_is_section_properties(xml, &item)? {
+            if item.direct_owner_child
+                && item.kind == StoryItemKind::PreservedNode
+                && content_fragment_root_is_section_properties(xml, &item)?
+            {
                 section = Some(item);
                 break;
             }

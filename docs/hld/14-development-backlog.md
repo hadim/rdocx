@@ -5552,7 +5552,9 @@ Clone one direct body child with bounded linear package work rather than
 repeated whole-story discovery and reopen cycles. Preserve transactional
 identity freshening, relationship scope, and stale-handle behavior. Python
 type errors name `source` and `destination` and state that the latter is a
-direct body index.
+direct body index. Source and destination resolve from one owned story
+inventory, and direct-content scans reserve section-property inspection for
+preserved nodes.
 
 **Depends on**: F-X106a, F-X116.
 **GitHub issues**: <https://github.com/tensorbee/rdocx/issues/126> and
