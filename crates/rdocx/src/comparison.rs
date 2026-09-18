@@ -2884,12 +2884,12 @@ fn policy_run_boundary(
 }
 
 fn unit_is_ignorable(unit: &AttributedRunUnit) -> bool {
-    unit.ignored && unit.run.extra_xml.is_empty() && unit.run.alt_drawings.is_empty()
+    unit.ignored && semantic_run_raw(&unit.run).is_empty() && unit.run.alt_drawings.is_empty()
 }
 
 fn unit_is_empty(unit: &AttributedRunUnit) -> bool {
     unit.run.content.is_empty()
-        && unit.run.extra_xml.is_empty()
+        && semantic_run_raw(&unit.run).is_empty()
         && unit.run.alt_drawings.is_empty()
         && unit.run.properties.is_none()
 }
@@ -2980,6 +2980,9 @@ fn merge_unit_runs(units: &[AttributedRunUnit], indices: &[usize]) -> Option<CT_
             .alt_drawings
             .extend(next.alt_drawings.iter().cloned());
         for (raw, &encoded) in next.extra_xml.iter().zip(&next.extra_xml_positions) {
+            if CT_R::raw_child_is_root_attributes(encoded) {
+                continue;
+            }
             let boundary = CT_R::raw_child_position(encoded);
             let mut rebased = encoded;
             CT_R::set_raw_child_position(&mut rebased, boundary + content_offset);
@@ -3313,7 +3316,7 @@ fn run_is_ignored(run: &CT_R, options: &ComparisonOptions) -> bool {
             .content
             .iter()
             .all(|content| ignored_run_content(content, options))
-        && run.extra_xml.is_empty()
+        && semantic_run_raw(run).is_empty()
 }
 
 fn attributed_unit_signature(unit: &AttributedRunUnit) -> String {
@@ -3323,16 +3326,15 @@ fn attributed_unit_signature(unit: &AttributedRunUnit) -> String {
             Some(RunContent::CommentReference { .. }) => "ignored:comment".to_owned(),
             _ => "ignored:whitespace".to_owned(),
         };
-        format!(
-            "{kind}:{:?}:{:?}:{:?}",
-            unit.run.extra_xml, unit.run.extra_xml_positions, unit.run.alt_drawings
-        )
+        let raw = semantic_run_raw(&unit.run);
+        format!("{kind}:{raw:?}:{:?}", unit.run.alt_drawings)
     } else {
         match unit.run.content.first() {
             Some(RunContent::CommentReference { id, .. }) if unit.run.content.len() == 1 => {
+                let raw = semantic_run_raw(&unit.run);
                 format!(
-                    "comment:{id}:{:?}:{:?}:{:?}",
-                    unit.run.properties, unit.run.extra_xml, unit.run.alt_drawings
+                    "comment:{id}:{:?}:{raw:?}:{:?}",
+                    unit.run.properties, unit.run.alt_drawings
                 )
             }
             _ => run_signature(&unit.run),
@@ -5007,13 +5009,18 @@ fn body_signature(content: &BodyContent) -> String {
 
 fn paragraph_signature(paragraph: &CT_P) -> String {
     let numbering = paragraph_numbering(paragraph);
+    let extra_xml = paragraph
+        .extra_xml
+        .iter()
+        .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
+        .collect::<Vec<_>>();
     format!(
         "{numbering:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
         paragraph.runs.iter().map(run_signature).collect::<Vec<_>>(),
         paragraph.hyperlinks,
         paragraph.comment_ranges,
         paragraph.bookmark_markers,
-        paragraph.extra_xml,
+        extra_xml,
         paragraph
             .content_controls
             .iter()
@@ -5035,15 +5042,32 @@ fn paragraph_numbering(paragraph: &CT_P) -> Option<(Option<u32>, Option<u32>)> {
 }
 
 fn run_signature(run: &CT_R) -> String {
+    let raw = semantic_run_raw(run);
     format!(
-        "{:?}:{:?}:{:?}",
+        "{:?}:{raw:?}",
         run.content
             .iter()
             .map(run_content_signature)
-            .collect::<Vec<_>>(),
-        run.extra_xml,
-        run.extra_xml_positions
+            .collect::<Vec<_>>()
     )
+}
+
+fn semantic_run_raw(run: &CT_R) -> Vec<(&[u8], usize)> {
+    if run.extra_xml.len() != run.extra_xml_positions.len() {
+        return run
+            .extra_xml
+            .iter()
+            .enumerate()
+            .filter(|(_, raw)| !rdocx_oxml::text::is_root_attribute_record(raw))
+            .map(|(position, raw)| (raw.as_slice(), position))
+            .collect();
+    }
+    run.extra_xml
+        .iter()
+        .zip(&run.extra_xml_positions)
+        .filter(|(_, position)| !CT_R::raw_child_is_root_attributes(**position))
+        .map(|(raw, position)| (raw.as_slice(), *position))
+        .collect()
 }
 
 fn run_content_signature(content: &RunContent) -> String {
@@ -5223,11 +5247,16 @@ fn paragraph_signature_with_options(paragraph: &CT_P, options: &ComparisonOption
             )
         })
         .collect::<Vec<_>>();
+    let extra_xml = paragraph
+        .extra_xml
+        .iter()
+        .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
+        .collect::<Vec<_>>();
     format!(
         "{numbering:?}:{runs:?}:{:?}:{comment_ranges:?}:{:?}:{:?}:{:?}",
         hyperlinks,
         paragraph.bookmark_markers,
-        paragraph.extra_xml,
+        extra_xml,
         paragraph
             .content_controls
             .iter()
@@ -5270,13 +5299,11 @@ fn run_signature_with_options(run: &CT_R, options: &ComparisonOptions) -> String
             }
         })
         .collect::<Vec<_>>();
-    if content.is_empty() && run.extra_xml.is_empty() {
+    let raw = semantic_run_raw(run);
+    if content.is_empty() && raw.is_empty() {
         String::new()
     } else {
-        format!(
-            "{content:?}:{:?}:{:?}",
-            run.extra_xml, run.extra_xml_positions
-        )
+        format!("{content:?}:{raw:?}")
     }
 }
 

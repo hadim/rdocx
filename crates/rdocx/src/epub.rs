@@ -1013,6 +1013,10 @@ impl<'a> EpubWriter<'a> {
         let mut consumed_raw = vec![false; paragraph.extra_xml.len()];
         let mut raw_ordinals = HashMap::<usize, usize>::new();
         for (index, (run_index, raw)) in paragraph.extra_xml.iter().enumerate() {
+            if CT_P::raw_is_root_attributes(*run_index, raw) {
+                consumed_raw[index] = true;
+                continue;
+            }
             let raw_ordinal = raw_ordinals.entry(*run_index).or_default();
             let ordinal = *raw_ordinal;
             *raw_ordinal += 1;
@@ -1085,7 +1089,14 @@ impl<'a> EpubWriter<'a> {
             if let Some(properties) = &run.properties {
                 self.scan_run_properties(properties, &format!("{path}/run[{run_index}]"))?;
             }
-            for (raw_index, _) in run.extra_xml.iter().enumerate() {
+            for raw_index in 0..run.extra_xml.len() {
+                if run
+                    .extra_xml_positions
+                    .get(raw_index)
+                    .is_some_and(|position| CT_R::raw_child_is_root_attributes(*position))
+                {
+                    continue;
+                }
                 self.diagnose(
                     format!("{path}/run[{run_index}]/xml[{raw_index}]"),
                     "unmodelled run XML was dropped during EPUB export".to_owned(),

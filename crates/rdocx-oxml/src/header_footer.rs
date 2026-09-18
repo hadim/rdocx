@@ -243,7 +243,11 @@ impl CT_HdrFtr {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, &word_prefixes)?;
                     if is_word_element(name.as_ref(), b"p", &prefixes) {
-                        paragraphs.push(CT_P::from_xml_with_prefixes(&mut reader, &prefixes)?);
+                        paragraphs.push(CT_P::from_xml_with_prefixes_and_root(
+                            &mut reader,
+                            &prefixes,
+                            Some(e),
+                        )?);
                     } else if is_word_element(name.as_ref(), b"hdr", &prefixes)
                         || is_word_element(name.as_ref(), b"ftr", &prefixes)
                     {
@@ -267,7 +271,10 @@ impl CT_HdrFtr {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"hdr")
+                    let prefixes = word_prefixes_at(e, &word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"p", &prefixes) {
+                        paragraphs.push(CT_P::from_empty_root(e, &prefixes)?);
+                    } else if !matches_local_name(name.as_ref(), b"hdr")
                         && !matches_local_name(name.as_ref(), b"ftr")
                     {
                         extra_xml.push(capture_empty_element(e)?);

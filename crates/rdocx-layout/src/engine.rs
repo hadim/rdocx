@@ -3526,7 +3526,13 @@ fn raw_xml_start_attribute<'a>(mut input: &'a [u8], expected: &[u8]) -> Option<&
 }
 
 fn header_footer_section_is_cache_safe(section: &CT_SectPr) -> bool {
-    section.change.is_none() && section.extra_xml.is_empty()
+    section.change.is_none()
+        && section.extra_xml.len() == section.extra_xml_positions.len()
+        && section
+            .extra_xml
+            .iter()
+            .zip(&section.extra_xml_positions)
+            .all(|(raw, position)| CT_SectPr::raw_position_is_root_attributes(position, raw))
 }
 
 fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {

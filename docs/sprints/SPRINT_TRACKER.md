@@ -476,6 +476,7 @@ defended.
 | F-X125 | S74 | M | 2 | 1 | 2026-09-18 | Compared gained, lost, and resized table grids as exact tracked table replacements with clean accept and reject outcomes |
 | F-X127 | S74 | S | 1 | 1 | 2026-09-18 | Collapsed adjacent trailing run and paragraph page-break requests while preserving visible and structural boundaries |
 | F-X129 | S74 | S | 1 | 1 | 2026-09-18 | Skipped unmatched notes-slide placeholder overlays with ordered diagnostics while preserving strict ownership failures |
+| F-X128 | S74 | M | 2 | 1 | 2026-09-18 | Preserved ordered paragraph, run, and section root identities across save, reopen, and typed mutation |
 
 ## Velocity
 

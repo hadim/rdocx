@@ -1,5 +1,6 @@
 //! Text content elements: `CT_P` (paragraph), `CT_R` (run), `CT_Text`.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
@@ -18,6 +19,156 @@ use crate::revision::{CT_Revision, RevisionKind};
 use crate::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 
 static NEXT_FIELD_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
+
+const ROOT_ATTRIBUTES_ELEMENT: &[u8] = b"rdocxRootAttributes";
+const ROOT_ATTRIBUTES_POSITION: usize = usize::MAX;
+const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
+
+fn namespace_declaration(name: &[u8]) -> bool {
+    name == b"xmlns" || name.starts_with(b"xmlns:")
+}
+
+fn root_attribute_namespace(name: &[u8], bindings: &[(String, String)]) -> Result<Option<String>> {
+    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+        return Ok(None);
+    };
+    let prefix = &name[..separator];
+    if prefix == b"xml" {
+        return Ok(Some("http://www.w3.org/XML/1998/namespace".to_owned()));
+    }
+    bindings
+        .iter()
+        .find(|(candidate, _)| candidate.as_bytes() == prefix)
+        .map(|(_, namespace)| Some(namespace.clone()))
+        .ok_or_else(|| {
+            OxmlError::InvalidValue(format!(
+                "root attribute prefix `{}` is unbound",
+                String::from_utf8_lossy(prefix)
+            ))
+        })
+}
+
+pub(crate) fn capture_root_attribute_record(
+    start: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<Option<Vec<u8>>> {
+    let bindings = namespace_bindings(prefixes);
+    let mut attributes = Vec::new();
+    let mut expanded = HashSet::new();
+    let mut used_prefixes = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
+            .into_owned();
+        if !namespace_declaration(name) {
+            let namespace = root_attribute_namespace(name, &bindings)?;
+            let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
+            if !expanded.insert((namespace, local.to_vec())) {
+                return Err(OxmlError::InvalidValue(format!(
+                    "duplicate expanded root attribute `{}`",
+                    String::from_utf8_lossy(local)
+                )));
+            }
+            if let Some(separator) = name.iter().position(|byte| *byte == b':')
+                && let prefix = &name[..separator]
+                && prefix != b"xml"
+                && !used_prefixes.iter().any(|candidate| candidate == prefix)
+            {
+                used_prefixes.push(prefix.to_vec());
+            }
+        }
+        attributes.push((
+            std::str::from_utf8(name)?.to_owned(),
+            value,
+            namespace_declaration(name),
+        ));
+    }
+    if attributes.is_empty() {
+        return Ok(None);
+    }
+
+    let mut record = BytesStart::new(std::str::from_utf8(ROOT_ATTRIBUTES_ELEMENT)?);
+    for (name, value, _) in &attributes {
+        record.push_attribute((name.as_str(), value.as_str()));
+    }
+    for prefix in used_prefixes {
+        let declaration = format!("xmlns:{}", String::from_utf8_lossy(&prefix));
+        if attributes.iter().any(|(name, _, _)| name == &declaration) {
+            continue;
+        }
+        let namespace = bindings
+            .iter()
+            .find(|(candidate, _)| candidate.as_bytes() == prefix)
+            .map(|(_, namespace)| namespace.as_str())
+            .ok_or_else(|| {
+                OxmlError::InvalidValue(format!(
+                    "root attribute prefix `{}` is unbound",
+                    String::from_utf8_lossy(&prefix)
+                ))
+            })?;
+        record.push_attribute((declaration.as_str(), namespace));
+    }
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(Event::Empty(record))?;
+    Ok(Some(writer.into_inner()))
+}
+
+#[doc(hidden)]
+pub fn is_root_attribute_record(raw: &[u8]) -> bool {
+    raw.starts_with(b"<rdocxRootAttributes")
+}
+
+pub(crate) fn push_root_attribute_record(
+    target: &mut BytesStart<'_>,
+    raw: &[u8],
+    replaced: Option<(&str, &str)>,
+) -> Result<()> {
+    let mut reader = NsReader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let element = loop {
+        match reader.read_resolved_event_into(&mut buffer)? {
+            (_, Event::Empty(element)) if element.name().as_ref() == ROOT_ATTRIBUTES_ELEMENT => {
+                break element.into_owned();
+            }
+            (_, Event::Eof) => {
+                return Err(OxmlError::InvalidValue(
+                    "invalid retained root-attribute record".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    };
+    let existing = target
+        .attributes()
+        .filter_map(|attribute| attribute.ok())
+        .map(|attribute| attribute.key.as_ref().to_vec())
+        .collect::<HashSet<_>>();
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        if existing.contains(name) {
+            continue;
+        }
+        if !namespace_declaration(name)
+            && let Some((namespace, local)) = replaced
+        {
+            let (resolved, resolved_local) = reader.resolver().resolve_attribute(attribute.key);
+            if resolved_local.as_ref() == local.as_bytes()
+                && matches!(resolved, ResolveResult::Bound(Namespace(uri)) if uri == namespace.as_bytes())
+            {
+                continue;
+            }
+        }
+        let name = std::str::from_utf8(name)?;
+        let value =
+            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?;
+        target.push_attribute((name, value.as_ref()));
+    }
+    Ok(())
+}
 
 /// `CT_Text` — The text content of a run, with optional xml:space="preserve".
 #[derive(Debug, Clone, PartialEq)]
@@ -701,7 +852,9 @@ pub struct CT_R {
 
 const RAW_LEGACY_HORIZONTAL_RULE_FLAG: usize = 1usize << (usize::BITS - 1);
 const RAW_ALTERNATE_CONTENT_DRAWING_FLAG: usize = 1usize << (usize::BITS - 2);
-const RAW_CHILD_FLAGS: usize = RAW_LEGACY_HORIZONTAL_RULE_FLAG | RAW_ALTERNATE_CONTENT_DRAWING_FLAG;
+const RAW_ROOT_ATTRIBUTES_FLAG: usize = 1usize << (usize::BITS - 3);
+const RAW_CHILD_FLAGS: usize =
+    RAW_LEGACY_HORIZONTAL_RULE_FLAG | RAW_ALTERNATE_CONTENT_DRAWING_FLAG | RAW_ROOT_ATTRIBUTES_FLAG;
 const RAW_CHILD_POSITION_MASK: usize = !RAW_CHILD_FLAGS;
 const VML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:vml";
 const OFFICE_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:office";
@@ -875,6 +1028,21 @@ impl CT_R {
         }
     }
 
+    pub(crate) fn from_empty_root(root: &BytesStart<'_>, word_prefixes: &[String]) -> Result<Self> {
+        let mut run = Self {
+            properties: None,
+            content: Vec::new(),
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        };
+        if let Some(record) = capture_root_attribute_record(root, word_prefixes)? {
+            run.extra_xml.push(record);
+            run.extra_xml_positions.push(RAW_ROOT_ATTRIBUTES_FLAG);
+        }
+        Ok(run)
+    }
+
     /// Decode a raw-child boundary stored in `extra_xml_positions`.
     #[doc(hidden)]
     pub fn raw_child_position(encoded: usize) -> usize {
@@ -885,6 +1053,12 @@ impl CT_R {
     #[doc(hidden)]
     pub fn raw_child_is_legacy_horizontal_rule(encoded: usize) -> bool {
         encoded & RAW_LEGACY_HORIZONTAL_RULE_FLAG != 0
+    }
+
+    /// Report whether a raw carrier retains attributes from the run root.
+    #[doc(hidden)]
+    pub fn raw_child_is_root_attributes(encoded: usize) -> bool {
+        encoded & RAW_ROOT_ATTRIBUTES_FLAG != 0
     }
 
     fn raw_child_has_alternate_content_drawing(encoded: usize) -> bool {
@@ -1122,6 +1296,14 @@ impl CT_R {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_root(reader, word_prefixes, None)
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_root(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        root: Option<&BytesStart<'_>>,
+    ) -> Result<Self> {
         let mut properties = None;
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1284,6 +1466,15 @@ impl CT_R {
             buf.clear();
         }
 
+        if let Some(record) = root
+            .map(|root| capture_root_attribute_record(root, word_prefixes))
+            .transpose()?
+            .flatten()
+        {
+            extra_xml.push(record);
+            extra_xml_positions.push(RAW_ROOT_ATTRIBUTES_FLAG);
+        }
+
         Ok(CT_R {
             properties,
             content,
@@ -1305,6 +1496,11 @@ impl CT_R {
         let mut run = BytesStart::new("w:r");
         if foreign_word_namespace.is_some() {
             run.push_attribute(("xmlns:w", crate::namespace::W_NS));
+        }
+        for (position, raw) in self.extra_xml_positions.iter().zip(&self.extra_xml) {
+            if Self::raw_child_is_root_attributes(*position) {
+                push_root_attribute_record(&mut run, raw, None)?;
+            }
         }
         writer.write_event(Event::Start(run))?;
 
@@ -1399,6 +1595,9 @@ impl CT_R {
         // Write captured unknown child elements
         if !ordered_raw {
             for raw in self.extra_xml.iter().skip(raw_written) {
+                if is_root_attribute_record(raw) {
+                    continue;
+                }
                 write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
             }
         }
@@ -1415,7 +1614,9 @@ fn write_run_raw_boundary<W: std::io::Write>(
     foreign_word_namespace: Option<&str>,
 ) -> Result<()> {
     for (position, raw) in run.extra_xml_positions.iter().zip(&run.extra_xml) {
-        if CT_R::raw_child_position(*position) == boundary {
+        if !CT_R::raw_child_is_root_attributes(*position)
+            && CT_R::raw_child_position(*position) == boundary
+        {
             write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
         }
     }
@@ -1510,7 +1711,7 @@ fn parse_run_raw(raw: &[u8], word_prefixes: &[String]) -> Result<CT_R> {
         match reader.read_event_into(&mut buffer)? {
             Event::Start(start) if matches_local_name(start.name().as_ref(), b"r") => {
                 let prefixes = word_prefixes_at(&start, word_prefixes)?;
-                return CT_R::from_xml_with_prefixes(&mut reader, &prefixes);
+                return CT_R::from_xml_with_prefixes_and_root(&mut reader, &prefixes, Some(&start));
             }
             Event::Eof => {
                 return Err(OxmlError::MissingElement("w:r".to_owned()));
@@ -2923,7 +3124,9 @@ fn remap_complex_field_boundaries(
         }
     };
     for (at, _) in extra_xml {
-        remap(at);
+        if *at != ROOT_ATTRIBUTES_POSITION {
+            remap(at);
+        }
     }
     for marker in comment_ranges {
         match marker {
@@ -3400,6 +3603,20 @@ impl CT_P {
         }
     }
 
+    /// Report whether one raw paragraph carrier retains root attributes.
+    #[doc(hidden)]
+    pub fn raw_is_root_attributes(position: usize, raw: &[u8]) -> bool {
+        position == ROOT_ATTRIBUTES_POSITION && is_root_attribute_record(raw)
+    }
+
+    pub(crate) fn from_empty_root(root: &BytesStart<'_>, word_prefixes: &[String]) -> Result<Self> {
+        let mut paragraph = Self::new();
+        if let Some(record) = capture_root_attribute_record(root, word_prefixes)? {
+            paragraph.extra_xml.push((ROOT_ATTRIBUTES_POSITION, record));
+        }
+        Ok(paragraph)
+    }
+
     /// Get the combined text of all runs in this paragraph.
     pub fn text(&self) -> String {
         self.runs().iter().map(|run| run.text()).collect()
@@ -3748,7 +3965,7 @@ impl CT_P {
             }
         }
         for (position, _) in &mut self.extra_xml {
-            if *position >= run_index {
+            if *position != ROOT_ATTRIBUTES_POSITION && *position >= run_index {
                 *position += 1;
             }
         }
@@ -3824,7 +4041,10 @@ impl CT_P {
             })
             .collect::<Vec<_>>();
         let mut raw_counts = vec![0usize; old_run_count + 1];
-        for (position, _) in &self.extra_xml {
+        for (position, raw) in &self.extra_xml {
+            if Self::raw_is_root_attributes(*position, raw) {
+                continue;
+            }
             raw_counts[(*position).min(old_run_count)] += 1;
         }
         let mut raw_prefixes = vec![0usize; old_run_count + 1];
@@ -3932,7 +4152,10 @@ impl CT_P {
                     raw_prefixes[old_boundary] + (*raw_before).min(raw_counts[old_boundary]);
             }
         }
-        for (position, _) in &mut self.extra_xml {
+        for (position, raw) in &mut self.extra_xml {
+            if Self::raw_is_root_attributes(*position, raw) {
+                continue;
+            }
             *position = boundary_map[(*position).min(old_run_count)];
         }
         for (position, raw_before, _) in &mut self.equations {
@@ -4138,12 +4361,16 @@ impl CT_P {
                     if !is_word_element(element.name().as_ref(), b"p", &prefixes) {
                         return Err(OxmlError::MissingElement("w:p root".to_owned()));
                     }
-                    return Self::from_xml_with_prefixes(&mut reader, &prefixes);
+                    return Self::from_xml_with_prefixes_and_root(
+                        &mut reader,
+                        &prefixes,
+                        Some(&element),
+                    );
                 }
                 Event::Empty(element) => {
                     let prefixes = word_prefixes_at(&element, &[])?;
                     if is_word_element(element.name().as_ref(), b"p", &prefixes) {
-                        return Ok(Self::new());
+                        return Self::from_empty_root(&element, &prefixes);
                     }
                     return Err(OxmlError::MissingElement("w:p root".to_owned()));
                 }
@@ -4170,12 +4397,16 @@ impl CT_P {
                     if !is_word_element(element.name().as_ref(), b"p", &prefixes) {
                         return Err(OxmlError::MissingElement("w:p root".to_owned()));
                     }
-                    break Self::from_xml_with_prefixes(&mut reader, &prefixes)?;
+                    break Self::from_xml_with_prefixes_and_root(
+                        &mut reader,
+                        &prefixes,
+                        Some(&element),
+                    )?;
                 }
                 Event::Empty(element) => {
                     let prefixes = word_prefixes_at(&element, inherited_word_prefixes)?;
                     if is_word_element(element.name().as_ref(), b"p", &prefixes) {
-                        break Self::new();
+                        break Self::from_empty_root(&element, &prefixes)?;
                     }
                     return Err(OxmlError::MissingElement("w:p root".to_owned()));
                 }
@@ -4192,6 +4423,14 @@ impl CT_P {
     pub(crate) fn from_xml_with_prefixes(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
+    ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_root(reader, word_prefixes, None)
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_root(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        root: Option<&BytesStart<'_>>,
     ) -> Result<Self> {
         reader.config_mut().trim_text(false);
         let mut properties = None;
@@ -4517,6 +4756,14 @@ impl CT_P {
             }
         }
 
+        if let Some(record) = root
+            .map(|root| capture_root_attribute_record(root, word_prefixes))
+            .transpose()?
+            .flatten()
+        {
+            extra_xml.push((ROOT_ATTRIBUTES_POSITION, record));
+        }
+
         Ok(CT_P {
             properties,
             runs,
@@ -4555,6 +4802,11 @@ impl CT_P {
         }
 
         let mut start = BytesStart::new("w:p");
+        for (position, raw) in &self.extra_xml {
+            if Self::raw_is_root_attributes(*position, raw) {
+                push_root_attribute_record(&mut start, raw, para_id.map(|_| (W14_NS, "paraId")))?;
+            }
+        }
         if let Some(para_id) = para_id {
             start.push_attribute(("w14:paraId", para_id));
         }
@@ -8050,6 +8302,29 @@ mod tests {
         let p = parse_paragraph(r#"<w:r><w:t>Hello World</w:t></w:r>"#);
         assert_eq!(p.text(), "Hello World");
         assert_eq!(p.runs.len(), 1);
+    }
+
+    #[test]
+    fn paragraph_root_attributes_reject_alias_duplicates_and_authored_id_wins() {
+        let duplicate = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:b="http://schemas.microsoft.com/office/word/2010/wordml" a:paraId="11111111" b:paraId="22222222"/>"#;
+        let error = CT_P::from_xml_fragment(duplicate).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate expanded root attribute")
+        );
+
+        let source = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:i="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:x="urn:producer" i:paraId="11111111" i:textId="22222222" x:keep="yes"/>"#;
+        let paragraph = CT_P::from_xml_fragment(source).unwrap();
+        let mut output = Vec::new();
+        paragraph
+            .to_xml_with_para_id(&mut Writer::new(&mut output), Some("AAAAAAAA"))
+            .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches(":paraId=").count(), 1, "{output}");
+        assert!(output.contains(r#"w14:paraId="AAAAAAAA""#), "{output}");
+        assert!(output.contains(r#"i:textId="22222222""#), "{output}");
+        assert!(output.contains(r#"x:keep="yes""#), "{output}");
     }
 
     #[test]

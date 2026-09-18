@@ -13828,6 +13828,93 @@ fn document_xml(document: &mut Document) -> String {
     String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
 }
 
+#[test]
+fn paragraph_run_and_section_identity_attributes_survive_noop_save() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:i="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:x="urn:producer"><w:body><w:p i:paraId="12345670" i:textId="76543210" w:rsidR="00AB12CD" w:rsidRDefault="00AB12CE" w:rsidP="00AB12CF" x:paragraph="kept" plain="also-kept"><w:r w:rsidRPr="00AB12D0" x:run="kept"><w:t>before</w:t></w:r></w:p><w:sectPr w:rsidR="00AB12D1" w:rsidRPr="00AB12D2" w:rsidSect="00AB12D3" x:section="kept"><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let paragraph = document.paragraph(0).unwrap();
+    assert!(
+        !paragraph
+            .items()
+            .any(|item| matches!(item, ParagraphItemRef::UnsupportedXml(_)))
+    );
+    assert!(
+        !paragraph
+            .runs()
+            .next()
+            .unwrap()
+            .items()
+            .any(|item| matches!(item, RunItemRef::UnsupportedXml(_)))
+    );
+
+    let saved = document_xml(&mut document);
+    for attribute in [
+        r#"i:paraId="12345670""#,
+        r#"i:textId="76543210""#,
+        r#"w:rsidR="00AB12CD""#,
+        r#"w:rsidRDefault="00AB12CE""#,
+        r#"w:rsidP="00AB12CF""#,
+        r#"w:rsidRPr="00AB12D0""#,
+        r#"w:rsidR="00AB12D1""#,
+        r#"w:rsidRPr="00AB12D2""#,
+        r#"w:rsidSect="00AB12D3""#,
+        r#"x:paragraph="kept""#,
+        r#"plain="also-kept""#,
+        r#"x:run="kept""#,
+        r#"x:section="kept""#,
+    ] {
+        assert!(saved.contains(attribute), "missing {attribute}: {saved}");
+    }
+    let paragraph = saved.find("<w:p ").unwrap();
+    let run = saved.find("<w:r ").unwrap();
+    let section = saved.find("<w:sectPr ").unwrap();
+    assert!(
+        paragraph < run && run < section,
+        "schema order changed: {saved}"
+    );
+    let paragraph_tag = &saved[paragraph..saved[paragraph..].find('>').unwrap() + paragraph + 1];
+    let paragraph_order = [
+        "i:paraId=",
+        "i:textId=",
+        "w:rsidR=",
+        "w:rsidRDefault=",
+        "w:rsidP=",
+        "x:paragraph=",
+        "plain=",
+    ]
+    .map(|attribute| paragraph_tag.find(attribute).unwrap());
+    assert!(
+        paragraph_order.windows(2).all(|pair| pair[0] < pair[1]),
+        "paragraph attribute order changed: {paragraph_tag}"
+    );
+
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    reopened
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .set_text("after");
+    let edited = document_xml(&mut reopened);
+    assert!(edited.contains("<w:t>after</w:t>"));
+    for attribute in [
+        r#"i:paraId="12345670""#,
+        r#"i:textId="76543210""#,
+        r#"w:rsidRDefault="00AB12CE""#,
+        r#"w:rsidSect="00AB12D3""#,
+        r#"x:paragraph="kept""#,
+        r#"x:run="kept""#,
+        r#"x:section="kept""#,
+    ] {
+        assert!(
+            edited.contains(attribute),
+            "edit dropped {attribute}: {edited}"
+        );
+    }
+    let mut stable = Document::from_bytes(&reopened.to_bytes().unwrap()).unwrap();
+    assert_eq!(stable.to_bytes().unwrap(), reopened.to_bytes().unwrap());
+}
+
 fn document_with_comment_paragraphs(paragraphs: &str) -> (Document, i32) {
     let mut document = Document::new();
     document.add_paragraph("seed");

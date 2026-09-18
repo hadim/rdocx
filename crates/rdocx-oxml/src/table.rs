@@ -1681,9 +1681,9 @@ impl CT_Tc {
                             &property_bindings,
                         )?);
                     } else if is_word_element(name.as_ref(), b"p", &prefixes) {
-                        content.push(CellContent::Paragraph(CT_P::from_xml_with_prefixes(
-                            reader, &prefixes,
-                        )?));
+                        content.push(CellContent::Paragraph(
+                            CT_P::from_xml_with_prefixes_and_root(reader, &prefixes, Some(e))?,
+                        ));
                     } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
                         let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                         let table_bindings = merged_owner_bindings(owner_bindings, &local_bindings);
@@ -1723,7 +1723,7 @@ impl CT_Tc {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"p", &prefixes) {
-                        content.push(CellContent::Paragraph(CT_P::new()));
+                        content.push(CellContent::Paragraph(CT_P::from_empty_root(e, &prefixes)?));
                     } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
                         content.push(CellContent::Table(CT_Tbl::new()));
                     } else if !is_word_element(name.as_ref(), b"tcPr", &prefixes) {

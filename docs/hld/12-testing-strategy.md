@@ -1579,6 +1579,17 @@ positioned foreign run child, proves the raw bytes stay on their original side
 of the field boundary, and proves an invalid field instruction is atomic. The
 reopened document must render through deterministic bundled fonts.
 
+The Word owner-attribute round-trip gate is
+`paragraph_run_and_section_identity_attributes_survive_noop_save`. It
+source-builds paragraph, run, and section-property roots with aliased modern
+identities, revision-session values, foreign attributes, and an unqualified
+attribute. Save, reopen, typed text mutation, and another save retain the exact
+values, source attribute order, child schema order, and deterministic package
+bytes. Focused unit coverage rejects duplicate expanded names and proves that
+authored `paraId` replaces only its expanded-name match. The public run-shape
+regression prevents the internal retention record from changing the existing
+`CT_R` struct literal surface.
+
 The run-level page-break differential gate authors both the break-only
 paragraph written by python-docx and a break between two pieces of text. Its
 source-built record pins Microsoft Word 16.104 build 16.104.25121423, the

@@ -689,7 +689,10 @@ impl<'a> OdtWriter<'a> {
                 "distributed paragraph alignment was simplified to justify during ODT export",
             )?;
         }
-        for (index, _) in &paragraph.extra_xml {
+        for (index, raw) in &paragraph.extra_xml {
+            if CT_P::raw_is_root_attributes(*index, raw) {
+                continue;
+            }
             self.diagnose(
                 &format!("{path}/raw[{index}]"),
                 "unmodelled paragraph XML was dropped during ODT export",
@@ -750,7 +753,13 @@ impl<'a> OdtWriter<'a> {
                 "run style identity was materialized and dropped during ODT export",
             )?;
         }
-        if !run.extra_xml.is_empty() || !run.alt_drawings.is_empty() {
+        if run.extra_xml.len() != run.extra_xml_positions.len()
+            || run
+                .extra_xml_positions
+                .iter()
+                .any(|position| !CT_R::raw_child_is_root_attributes(*position))
+            || !run.alt_drawings.is_empty()
+        {
             self.diagnose(
                 &format!("{path}/raw"),
                 "unmodelled run XML was dropped during ODT export",

@@ -15,7 +15,9 @@ use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
 use crate::shared::{ST_PageOrientation, ST_SectionType};
 use crate::table::CT_Tbl;
-use crate::text::CT_P;
+use crate::text::{
+    CT_P, capture_root_attribute_record, is_root_attribute_record, push_root_attribute_record,
+};
 use crate::units::Twips;
 
 /// Content that can appear in a document body (paragraphs and tables).
@@ -225,6 +227,32 @@ impl CT_SectPr {
         }
     }
 
+    /// Report whether one raw section carrier retains root attributes.
+    #[doc(hidden)]
+    pub fn raw_position_is_root_attributes(position: &CT_SectPrRawPosition, raw: &[u8]) -> bool {
+        matches!(
+            position,
+            CT_SectPrRawPosition::Schema {
+                slot: usize::MAX,
+                occurrence: usize::MAX
+            }
+        ) && is_root_attribute_record(raw)
+    }
+
+    fn from_empty_root(root: &BytesStart<'_>, word_prefixes: &[String]) -> Result<Self> {
+        let mut section = Self::empty();
+        if let Some(record) = capture_root_attribute_record(root, word_prefixes)? {
+            section.extra_xml.push(record);
+            section
+                .extra_xml_positions
+                .push(CT_SectPrRawPosition::Schema {
+                    slot: usize::MAX,
+                    occurrence: usize::MAX,
+                });
+        }
+        Ok(section)
+    }
+
     /// Default US Letter page with 1-inch margins.
     pub fn default_letter() -> Self {
         CT_SectPr {
@@ -290,6 +318,20 @@ impl CT_SectPr {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
+    ) -> Result<Self> {
+        Self::from_xml_with_prefixes_owner_bindings_and_root(
+            reader,
+            word_prefixes,
+            owner_bindings,
+            None,
+        )
+    }
+
+    pub(crate) fn from_xml_with_prefixes_owner_bindings_and_root(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+        root: Option<&BytesStart<'_>>,
     ) -> Result<Self> {
         let mut sect = Self::empty();
         let mut change_raw_index = 0usize;
@@ -577,6 +619,17 @@ impl CT_SectPr {
             buf.clear();
         }
 
+        if let Some(record) = root
+            .map(|root| capture_root_attribute_record(root, word_prefixes))
+            .transpose()?
+            .flatten()
+        {
+            sect.extra_xml.push(record);
+            sect.extra_xml_positions.push(CT_SectPrRawPosition::Schema {
+                slot: usize::MAX,
+                occurrence: usize::MAX,
+            });
+        }
         sect.bind_story_reference_positions();
         Ok(sect)
     }
@@ -841,7 +894,13 @@ impl CT_SectPr {
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         let mut buf = itoa::Buffer::new();
-        writer.write_event(Event::Start(BytesStart::new("w:sectPr")))?;
+        let mut root = BytesStart::new("w:sectPr");
+        for (raw, position) in self.extra_xml.iter().zip(&self.extra_xml_positions) {
+            if Self::raw_position_is_root_attributes(position, raw) {
+                push_root_attribute_record(&mut root, raw, None)?;
+            }
+        }
+        writer.write_event(Event::Start(root))?;
         let ordered_raw = self.extra_xml_positions.len() == self.extra_xml.len();
         if ordered_raw {
             self.write_story_reference_boundary(writer, &self.header_refs, true, 0)?;
@@ -1020,6 +1079,9 @@ impl CT_SectPr {
         } else {
             // Legacy callers that populate only `extra_xml` retain the previous position.
             for raw in &self.extra_xml {
+                if is_root_attribute_record(raw) {
+                    continue;
+                }
                 writer.get_mut().write_all(raw)?;
             }
         }
@@ -1622,9 +1684,9 @@ impl CT_Body {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"p", &prefixes) {
-                        content.push(BodyContent::Paragraph(CT_P::from_xml_with_prefixes(
-                            reader, &prefixes,
-                        )?));
+                        content.push(BodyContent::Paragraph(
+                            CT_P::from_xml_with_prefixes_and_root(reader, &prefixes, Some(e))?,
+                        ));
                     } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
                         let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                         let table_bindings = merged_owner_bindings(owner_bindings, &local_bindings);
@@ -1650,11 +1712,13 @@ impl CT_Body {
                             let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                             let section_bindings =
                                 merged_owner_bindings(owner_bindings, &local_bindings);
-                            sect_pr = Some(CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
-                                reader,
-                                &prefixes,
-                                &section_bindings,
-                            )?);
+                            sect_pr =
+                                Some(CT_SectPr::from_xml_with_prefixes_owner_bindings_and_root(
+                                    reader,
+                                    &prefixes,
+                                    &section_bindings,
+                                    Some(e),
+                                )?);
                         } else {
                             content.push(BodyContent::RawXml(
                                 crate::text::raw_with_external_bindings(
@@ -1677,12 +1741,12 @@ impl CT_Body {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"p", &prefixes) {
-                        content.push(BodyContent::Paragraph(CT_P::new()));
+                        content.push(BodyContent::Paragraph(CT_P::from_empty_root(e, &prefixes)?));
                     } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
                         content.push(BodyContent::Table(CT_Tbl::new()));
                     } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
                         if sect_pr.is_none() {
-                            sect_pr = Some(CT_SectPr::empty());
+                            sect_pr = Some(CT_SectPr::from_empty_root(e, &prefixes)?);
                         } else {
                             content.push(BodyContent::RawXml(
                                 crate::text::raw_with_external_bindings(

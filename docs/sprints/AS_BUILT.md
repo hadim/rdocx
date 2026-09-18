@@ -15473,3 +15473,44 @@ failure.
 **Notes for future sessions.** Do not generalize this tolerance to relationship
 errors or ambiguous placeholder ownership. Only a complete-key miss is safe to
 skip.
+
+### F-X128, Preserve Word paragraph and revision identities
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Modeled paragraphs, runs, and section properties now retain
+their ordered root attributes across save and reopen. This includes modern
+paragraph identities, revision-session values, foreign attributes, unqualified
+attributes, and the namespace bindings each retained qualified name needs.
+
+**Non-obvious choices.** The implementation stores a private root-attribute
+record in each type's existing raw-preservation carrier. Public paragraph and
+run item views, conversion diagnostics, layout cache decisions, and semantic
+comparison ignore that record. Authored `paraId` replaces only the retained
+attribute with the same expanded name.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx-oxml`, `rdocx-layout`, and `rdocx` crates and changed code at the user's
+direction. The named round-trip and focused unit regressions, public run-shape
+and comparison controls, scoped clippy, formatting, prose, generated-skill
+drift, and hash harness passed. A workspace-wide test suite was not run.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for expanded-name
+root-attribute retention, `docs/hld/12-testing-strategy.md`, for the source-built
+round-trip gate and focused controls, and
+`docs/hld/14-development-backlog.md`, for the F-X128 acceptance contract.
+
+**Tests.** `paragraph_run_and_section_identity_attributes_survive_noop_save`
+proves exact values, source attribute order, child schema order, public item
+filtering, typed text mutation, save and reopen, and deterministic bytes. The
+focused oxml unit rejects alias duplicates and proves authored identity
+precedence. Existing regressions retain the public `CT_R` struct shape and
+table-comparison behavior.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep producer identity retention separate from
+identity generation. Compare and replace typed ownership by expanded name, not
+by lexical prefix.

@@ -420,6 +420,15 @@ namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
 
+Modeled paragraph, run, and section-property owners retain every ordered root
+attribute, including producer identity, revision-session, foreign, and
+unqualified attributes. Retention uses the existing raw-preservation carriers
+without exposing the attribute record as child XML. Expanded names govern
+duplicate rejection and authored paragraph identity precedence, so an authored
+`paraId` replaces only the retained attribute with the same namespace and
+local name. Typed child mutation leaves all other retained root attributes in
+source order.
+
 An unknown default namespace declared on the document root is classified by
 its effective lexical scope before canonical serialization. An unused root
 default may be omitted without blocking a typed mutation. An unprefixed element

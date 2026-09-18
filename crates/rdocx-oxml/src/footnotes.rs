@@ -236,9 +236,19 @@ fn parse_footnote_content(
                 let name = e.name();
                 let prefixes = word_prefixes_at(e, word_prefixes)?;
                 if is_word_element(name.as_ref(), b"p", &prefixes) {
-                    paragraphs.push(CT_P::from_xml_with_prefixes(reader, &prefixes)?);
+                    paragraphs.push(CT_P::from_xml_with_prefixes_and_root(
+                        reader,
+                        &prefixes,
+                        Some(e),
+                    )?);
                 } else {
                     reader.read_to_end_into(name, &mut Vec::new())?;
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let prefixes = word_prefixes_at(e, word_prefixes)?;
+                if is_word_element(e.name().as_ref(), b"p", &prefixes) {
+                    paragraphs.push(CT_P::from_empty_root(e, &prefixes)?);
                 }
             }
             Ok(Event::End(ref e)) => {

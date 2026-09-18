@@ -5622,7 +5622,8 @@ lossless reader correction.
 **Test gate**: round-trip.
 `paragraph_run_and_section_identity_attributes_survive_noop_save` proves exact
 modeled and foreign root attributes across save and reopen, aliases, edits,
-comments metadata, schema order, and deterministic bytes.
+public item filtering, schema order, and deterministic bytes. Focused unit
+coverage rejects alias duplicates and pins authored `paraId` precedence.
 
 ### F-X129, Tolerate unmatched notes placeholders (S)
 

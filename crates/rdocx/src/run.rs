@@ -817,7 +817,10 @@ impl<'a> RunRef<'a> {
                     .extra_xml_positions
                     .iter()
                     .zip(&self.inner.extra_xml)
-                    .filter(|(position, _)| CT_R::raw_child_position(**position) == 0)
+                    .filter(|(position, _)| {
+                        !CT_R::raw_child_is_root_attributes(**position)
+                            && CT_R::raw_child_position(**position) == 0
+                    })
                     .map(|(position, raw)| classify_raw_run_item(raw, Some(*position))),
             );
         }
@@ -829,7 +832,10 @@ impl<'a> RunRef<'a> {
                         .extra_xml_positions
                         .iter()
                         .zip(&self.inner.extra_xml)
-                        .filter(|(position, _)| CT_R::raw_child_position(**position) == boundary)
+                        .filter(|(position, _)| {
+                            !CT_R::raw_child_is_root_attributes(**position)
+                                && CT_R::raw_child_position(**position) == boundary
+                        })
                         .map(|(position, raw)| classify_raw_run_item(raw, Some(*position))),
                 );
             }
@@ -858,6 +864,7 @@ impl<'a> RunRef<'a> {
                 self.inner
                     .extra_xml
                     .iter()
+                    .filter(|raw| !rdocx_oxml::text::is_root_attribute_record(raw))
                     .map(|raw| classify_raw_run_item(raw, None)),
             );
         }

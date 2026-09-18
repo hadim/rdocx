@@ -545,7 +545,10 @@ impl<'a> RtfWriter<'a> {
             self.scan_paragraph_properties(properties, &location);
         }
         let marker_raw_positions = paragraph_marker_raw_positions(paragraph);
-        for (index, _) in &paragraph.extra_xml {
+        for (index, raw) in &paragraph.extra_xml {
+            if CT_P::raw_is_root_attributes(*index, raw) {
+                continue;
+            }
             if marker_raw_positions.contains(index) {
                 continue;
             }
@@ -719,6 +722,9 @@ impl<'a> RtfWriter<'a> {
             self.scan_run_properties(properties, &location);
         }
         for index in &run.extra_xml_positions {
+            if CT_R::raw_child_is_root_attributes(*index) {
+                continue;
+            }
             let index = CT_R::raw_child_position(*index);
             self.diagnose(
                 &format!("{location}/raw[{index}]"),

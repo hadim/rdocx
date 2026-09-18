@@ -661,11 +661,13 @@ impl CT_PPr {
                         let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                         let sect_pr_bindings =
                             merged_owner_bindings(owner_bindings, &local_bindings);
-                        ppr.sect_pr = Some(CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
-                            reader,
-                            &prefixes,
-                            &sect_pr_bindings,
-                        )?);
+                        ppr.sect_pr =
+                            Some(CT_SectPr::from_xml_with_prefixes_owner_bindings_and_root(
+                                reader,
+                                &prefixes,
+                                &sect_pr_bindings,
+                                Some(e),
+                            )?);
                     } else if is_word_element(name.as_ref(), b"pPrChange", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,

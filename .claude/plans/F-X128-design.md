@@ -1,6 +1,6 @@
 # F-X128, Preserve Word paragraph and revision identities
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: M
 **Depends on**: F-X115
@@ -58,10 +58,10 @@ Expected unchanged. Existing generated samples do not carry producer identities.
 
 ## Implementation checklist
 
-- [ ] Add paragraph, run, and section root-attribute round trips.
-- [ ] Retain expanded-name-safe ordered root attributes.
-- [ ] Define authored `paraId` precedence without duplicates.
-- [ ] Run oxml, facade, round-trip, hash, and full verification gates.
+- [x] Add paragraph, run, and section root-attribute round trips.
+- [x] Retain expanded-name-safe ordered root attributes.
+- [x] Define authored `paraId` precedence without duplicates.
+- [x] Run the impacted oxml, facade, round-trip, clippy, and hash gates.
 
 ## Open questions
 

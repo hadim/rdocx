@@ -598,7 +598,11 @@ fn parse_accepted_revision_content(
     let mut paragraph_reader = Reader::from_reader(paragraph_xml.as_slice());
     let mut paragraph_buffer = Vec::new();
     match paragraph_reader.read_event_into(&mut paragraph_buffer)? {
-        Event::Start(_) => CT_P::from_xml_with_prefixes(&mut paragraph_reader, word_prefixes),
+        Event::Start(start) => CT_P::from_xml_with_prefixes_and_root(
+            &mut paragraph_reader,
+            word_prefixes,
+            Some(&start),
+        ),
         _ => Err(crate::OxmlError::MissingElement(
             "insertion content".to_owned(),
         )),
@@ -692,7 +696,11 @@ fn parse_content(
                 let prefixes = word_prefixes_at(&start, word_prefixes)?;
                 let name = start.name();
                 if is_word_element(name.as_ref(), b"r", &prefixes) {
-                    runs.push(CT_R::from_xml_with_prefixes(reader, &prefixes)?);
+                    runs.push(CT_R::from_xml_with_prefixes_and_root(
+                        reader,
+                        &prefixes,
+                        Some(&start),
+                    )?);
                 } else if revision_kind(name.as_ref(), &prefixes).is_some() {
                     let raw = crate::raw_xml::capture_element(reader, &start)?;
                     if let Some(revision) = CT_Revision::from_raw(raw, &prefixes) {
@@ -750,10 +758,11 @@ fn parse_content(
                         crate::numbering::local_namespace_overrides(&start, word_prefixes)?;
                     return Ok((
                         RevisionContent::PriorSectionProperties(Box::new(
-                            CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
+                            CT_SectPr::from_xml_with_prefixes_owner_bindings_and_root(
                                 reader,
                                 &prefixes,
                                 &owner_bindings,
+                                Some(&start),
                             )?,
                         )),
                         nested_revisions,
@@ -797,7 +806,11 @@ fn parse_run_content_container(
                 let prefixes = word_prefixes_at(&start, word_prefixes)?;
                 let name = start.name();
                 if is_word_element(name.as_ref(), b"r", &prefixes) {
-                    runs.push(CT_R::from_xml_with_prefixes(reader, &prefixes)?);
+                    runs.push(CT_R::from_xml_with_prefixes_and_root(
+                        reader,
+                        &prefixes,
+                        Some(&start),
+                    )?);
                 } else if revision_kind(name.as_ref(), &prefixes).is_some() {
                     let raw = crate::raw_xml::capture_element(reader, &start)?;
                     if let Some(revision) = CT_Revision::from_raw(raw, &prefixes) {
