@@ -36,9 +36,9 @@ evidence.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-264 | Complete paragraph property authoring | L | in-progress | claude |
-| F-265 | Complete run property and inline authoring | L | pending | - |
+| F-265 | Complete run property and inline authoring | L | in-progress | claude |
 | F-267 | Complete table style and conditional formatting authoring | L | pending | - |
-| F-269 | Complete section page semantics | L | pending | - |
+| F-269 | Complete section page semantics | L | in-progress | claude |
 | F-270 | Complete settings and web settings authoring | L | in-progress | claude |
 | F-266 | International and vertical typography | L | split | - |
 | F-266a | Script identity and font slot resolution | L | pending | - |
