@@ -2681,6 +2681,14 @@ and web settings with typed removal and diagnostics.
 **Depends on**: F-244.
 **Test gate**: round-trip. A public-authored settings package reports no
 unmodeled supported children and preserves unknown extensions byte for byte.
+**Delivered**: `SUPPORTED_SETTINGS` closes the thirty-one top-level names over
+one `SETTINGS_ORDER` table, `CompatibilityOption` covers the complete closed
+`CT_Compat` on-off set, `MailMerge` authors thirteen members at their own schema
+positions, `SettingsDiagnostic` separates duplicated from malformed occurrences,
+and `crates/rdocx-oxml/src/web_settings.rs` owns `w:webSettings` with a
+read-only `div_ids` projection. `w:defaultTabStop` now reaches
+`oxml-layout::LineBreakParams::default_tab_interval_pt`. DOCX-007 and DOCX-037
+are `complete`.
 
 ### F-271, Uniform rich header and footer editing (L)
 Complete all valid header and footer content, fields, controls, annotations,

@@ -1896,6 +1896,28 @@ foreign subtree bytes after mutation and assert the schema order of default tab
 stop, character spacing control, compatibility settings, document variables,
 and theme font language.
 
+`public_authored_settings_package_reports_no_unmodeled_supported_children` is
+the closed-set gate. It authors every supported settings and web settings member
+through the public `Document` surface, saves, reopens, and asserts that both
+diagnostic lists are empty and that foreign subtrees placed before, inside
+`w:compat`, inside `w:mailMerge`, after the last child, and inside
+`w:webSettings` are byte identical.
+`settings_children_serialize_in_schema_sequence_order` authors members in
+reverse schema order and proves the `xsd:sequence` result at the settings,
+`w:compat`, `w:mailMerge` and `w:webSettings` levels.
+`supported_settings_is_a_strict_subsequence_of_the_order_table`,
+`every_supported_name_is_projected_by_from_xml`,
+`duplicate_and_malformed_supported_children_report_diagnostics`,
+`unsupported_settings_children_are_never_diagnostics` and
+`compatibility_option_covers_the_complete_compat_on_off_set` keep the constant,
+the parser and the diagnostics from drifting apart.
+`web_settings_part_is_created_on_demand_and_pruned_when_empty` and
+`fresh_package_profiles_gain_no_web_settings_part` hold the packaging rule that
+an ordinary save adds nothing.
+`document_default_tab_stop_drives_implicit_tab_positions` runs in deterministic
+font mode and pins both the document interval and the exact `36.0` point
+fallback.
+
 `update_fields_on_open_is_typed_optional_and_schema_ordered` adds absent, bare
 true, explicit false, namespace alias, foreign lookalike, set, clear, remove,
 and save-reopen coverage for `w:updateFields`. Companion low-level cases keep

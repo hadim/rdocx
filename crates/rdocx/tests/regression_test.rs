@@ -21159,6 +21159,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
 
     rdocx_layout::LayoutInput {
         automatic_hyphenation: false,
+        default_tab_stop: None,
         math_properties: None,
         document,
         styles: rdocx_oxml::styles::CT_Styles::new_default(),
@@ -29612,4 +29613,188 @@ fn clearing_the_last_paragraph_property_removes_the_empty_ppr() {
             .contextual_spacing_value(),
         None
     );
+}
+
+/// A settings remover once rewrote the whole part, which reflowed producer
+/// bytes that had nothing to do with the removed child.
+#[test]
+fn removing_a_setting_does_not_disturb_neighbouring_producer_bytes() {
+    let producer = format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+            r#"<w:settings xmlns:w="{word}" xmlns:p="urn:producer" p:root="kept">"#,
+            r#"<p:before p:v="1"/>"#,
+            r#"<w:view w:val="print"/>"#,
+            r#"<w:zoom w:val="fullPage" w:percent="120"/>"#,
+            r#"<w:mirrorMargins/>"#,
+            r#"<w:proofState w:spelling="clean" w:grammar="dirty"/>"#,
+            r#"<w:defaultTabStop w:val="720"/>"#,
+            r#"<w:consecutiveHyphenLimit w:val="2"/>"#,
+            r#"<w:hyphenationZone w:val="360"/>"#,
+            r#"<w:defaultTableStyle w:val="TableNormal"/>"#,
+            r#"<w:bookFoldPrintingSheets w:val="4"/>"#,
+            r#"<w:compat><w:noTabHangInd/><p:inside p:v="2"/></w:compat>"#,
+            r#"<w:rsids><w:rsid w:val="00AA00AA"/></w:rsids>"#,
+            r#"<w:decimalSymbol w:val="."/>"#,
+            r#"<w:listSeparator w:val=","/>"#,
+            r#"<p:after>keep me</p:after>"#,
+            r#"</w:settings>"#,
+        ),
+        word = W_NS,
+    );
+    let mut document = settings_document(&producer);
+
+    assert_eq!(
+        document.remove_view().unwrap(),
+        Some(rdocx::DocumentView::Print)
+    );
+    assert!(document.remove_zoom().unwrap().is_some());
+    assert_eq!(document.remove_mirror_margins().unwrap(), Some(true));
+    assert!(document.remove_proof_state().unwrap().is_some());
+    assert_eq!(
+        document.remove_default_tab_stop().unwrap(),
+        Some(rdocx::Twips(720))
+    );
+    assert_eq!(document.remove_consecutive_hyphen_limit().unwrap(), Some(2));
+    assert_eq!(
+        document.remove_hyphenation_zone().unwrap(),
+        Some(rdocx::Twips(360))
+    );
+    assert_eq!(
+        document.remove_default_table_style().unwrap().as_deref(),
+        Some("TableNormal")
+    );
+    assert_eq!(
+        document.remove_book_fold_printing_sheets().unwrap(),
+        Some(4)
+    );
+    assert_eq!(
+        document
+            .remove_compatibility_option(rdocx::CompatibilityOption::NoTabHangInd)
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        document.remove_decimal_symbol().unwrap().as_deref(),
+        Some(".")
+    );
+    assert_eq!(
+        document.remove_list_separator().unwrap().as_deref(),
+        Some(",")
+    );
+
+    let settings = settings_part_text(&document.to_bytes().unwrap());
+    let expected = format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+            r#"<w:settings xmlns:w="{word}" xmlns:p="urn:producer" p:root="kept">"#,
+            r#"<p:before p:v="1"/>"#,
+            r#"<w:compat><p:inside p:v="2"/></w:compat>"#,
+            r#"<w:rsids><w:rsid w:val="00AA00AA"/></w:rsids>"#,
+            r#"<p:after>keep me</p:after>"#,
+            r#"</w:settings>"#,
+        ),
+        word = W_NS,
+    );
+    assert_eq!(settings, expected);
+}
+
+/// Removal once reinterpreted a duplicated or malformed occurrence, which
+/// silently picked one of several conflicting producer values.
+#[test]
+fn removing_an_ambiguous_setting_fails_without_changing_the_document() {
+    for (producer_child, remove) in [
+        (
+            r#"<w:mirrorMargins/><w:mirrorMargins w:val="false"/>"#,
+            0usize,
+        ),
+        (r#"<w:mirrorMargins w:val="perhaps"/>"#, 0),
+        (
+            r#"<w:compat><w:noTabHangInd/><w:noTabHangInd w:val="false"/></w:compat>"#,
+            1,
+        ),
+    ] {
+        let producer = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="{W_NS}">{producer_child}</w:settings>"#,
+        );
+        let mut document = settings_document(&producer);
+        let before = document.to_bytes().unwrap();
+        assert!(!document.settings_diagnostics().is_empty(), "{producer}");
+
+        let outcome = match remove {
+            0 => document
+                .remove_mirror_margins()
+                .map(|value| value.is_some()),
+            _ => document
+                .remove_compatibility_option(rdocx::CompatibilityOption::NoTabHangInd)
+                .map(|value| value.is_some()),
+        };
+        assert!(outcome.is_err(), "{producer}");
+        assert_eq!(
+            settings_part_text(&document.to_bytes().unwrap()),
+            settings_part_text(&before),
+            "{producer}"
+        );
+    }
+}
+
+/// A settings read once matched on the local name alone, so a foreign
+/// namespace lookalike shadowed the modeled child, and a write emitted the
+/// producer's prefix instead of the fixed one.
+#[test]
+fn prefix_aliases_and_foreign_lookalikes_do_not_shadow_a_settings_child() {
+    let producer = format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+            r#"<q:settings xmlns:q="{word}" xmlns:x="urn:foreign">"#,
+            r#"<x:view x:val="web"/>"#,
+            r#"<q:view q:val="outline"/>"#,
+            r#"<x:mirrorMargins/>"#,
+            r#"</q:settings>"#,
+        ),
+        word = W_NS,
+    );
+    let mut document = settings_document(&producer);
+
+    // The in-scope Word alias is read, the foreign lookalike is not.
+    assert_eq!(document.view(), Some(rdocx::DocumentView::Outline));
+    assert_eq!(document.mirror_margins(), None);
+    assert_eq!(document.settings_diagnostics(), &[]);
+
+    document.set_view(rdocx::DocumentView::Normal).unwrap();
+    document.set_mirror_margins(true).unwrap();
+    let settings = settings_part_text(&document.to_bytes().unwrap());
+    assert!(
+        settings.contains(r#"<w:view w:val="normal"/>"#),
+        "{settings}"
+    );
+    assert!(!settings.contains("<q:view"), "{settings}");
+    assert!(settings.contains(r#"<x:view x:val="web"/>"#), "{settings}");
+    assert!(settings.contains("<w:mirrorMargins/>"), "{settings}");
+    assert!(settings.contains("<x:mirrorMargins/>"), "{settings}");
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.view(), Some(rdocx::DocumentView::Normal));
+    assert_eq!(reopened.mirror_margins(), Some(true));
+    assert_eq!(reopened.settings_diagnostics(), &[]);
+}
+
+/// Build a Word-compatible package whose settings part carries producer bytes.
+fn settings_document(settings_xml: &str) -> Document {
+    let mut seeded = Document::new_with_profile(WordCreationProfile::WordCompatible(
+        WordPackageClass::Document,
+    ));
+    seeded.add_paragraph("Settings regression");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seeded.to_bytes().unwrap()))
+            .unwrap();
+    package.set_part("/word/settings.xml", settings_xml.as_bytes().to_vec());
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut buffer).unwrap();
+    Document::from_bytes(buffer.get_ref()).unwrap()
+}
+
+fn settings_part_text(bytes: &[u8]) -> String {
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap()
 }

@@ -526,6 +526,39 @@ children, and unsupported or malformed protection and variable elements
 survive unchanged. Invalid elements are preserved but are not reported through
 the typed projections.
 
+`SUPPORTED_SETTINGS` closes that model. It names, in `xsd:sequence` order, the
+thirty-one top-level `w:settings` children the typed model owns, and the nested
+supported names are `compat/compatSetting`, every `CompatibilityOption` local
+name under `compat`, `docVars/docVar` and the bounded `mailMerge` members. One
+`SETTINGS_ORDER` table drives both schema-position insertion and that closed
+set, so a new member is added in one place rather than three. Every other
+child, including `attachedTemplate`, `rsids`, the drawing-grid family and every
+`w14:` or `w15:` extension, stays preservation-only and is never a diagnostic.
+`CT_Settings::diagnostics` reports each supported child the model could not own,
+as `Duplicated` when more than one occurrence exists and as `Malformed` when a
+single occurrence did not parse. A package authored entirely through the public
+surface reports nothing, which is what makes "no unmodeled supported children"
+decidable rather than open-ended. Removal refuses a duplicated or malformed
+member instead of reinterpreting one of several conflicting occurrences.
+
+Document-protection authoring records caller-supplied metadata verbatim.
+Deriving a hash from a password, choosing a salt and picking a spin count are
+explicit non-goals, so nothing in this path introduces fresh cryptographic
+randomness.
+
+The web settings model owns the separate `w:webSettings` root with the same
+source-preserving architecture. `w:frameset` and `w:divs` stay
+preservation-only, because the first carries relationship targets and the
+second is a nested tree no story asked for. `CT_WebSettings::div_ids` projects
+the retained `w:divs` subtree read-only, so a caller can tell whether a
+`w:divId` resolves to a division the part declares without opening HTML
+division authoring.
+
+The document `w:defaultTabStop` reaches layout. `LayoutInput::default_tab_stop`
+carries it into `oxml-layout::LineBreakParams::default_tab_interval_pt`, whose
+`36.0` default is the exact literal it replaced, so a document that says
+nothing keeps Word's half-inch implicit tab grid.
+
 The comments model owns typed comment entries and the three body anchor forms.
 Comment bodies retain ordered paragraphs, producer attributes, and unmodelled
 children. Paragraph and run models retain each anchor at its insertion boundary
@@ -1133,7 +1166,10 @@ property removal, and whole-part removal all run on a staged document clone so
 the part, package relationship, content type, and typed model publish together.
 An empty custom-properties part is pruned only when the current facade created
 it. Settings mutations use the same staged boundary and keep the existing
-relationship-resolved target.
+relationship-resolved target. Web settings mutations reuse that boundary and
+allocate a collision-safe part only on the first authored value, and the part,
+its relationship and its content-type override are pruned together when the
+last value is removed from a part this facade created.
 
 Container-neutral Word story editing also belongs to the `rdocx` facade.
 Concrete `StoryKind`, `StoryId`, `ContentLocation`, `StoryItemKind`, and

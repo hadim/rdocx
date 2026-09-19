@@ -114,8 +114,10 @@ pub use rdocx_oxml::math::{
     MathSubSuperscript, MatrixBaseJustification, OfficeMath,
 };
 pub use rdocx_oxml::settings::{
-    CharacterSpacingControl, CompatibilitySetting, CryptAlgorithmClass, CryptAlgorithmType,
-    CryptProviderType, DocumentProtection, ProtectionMode, ThemeFontLanguage,
+    CharacterSpacingControl, CompatibilityOption, CompatibilitySetting, CryptAlgorithmClass,
+    CryptAlgorithmType, CryptProviderType, DocumentProofState, DocumentProtection, DocumentView,
+    DocumentZoom, MailMerge, MailMergeDestination, MailMergeDocumentType, ProofState,
+    ProtectionMode, SettingsDiagnostic, SettingsDiagnosticReason, ThemeFontLanguage, ZoomKind,
 };
 pub use rdocx_oxml::styles::StyleType;
 pub use rdocx_oxml::text::{AcceptedRunPath, AcceptedRunPathSegment};

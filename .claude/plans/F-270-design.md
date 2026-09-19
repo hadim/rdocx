@@ -1,6 +1,6 @@
 # F-270, Complete settings and web settings authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-244
@@ -491,40 +491,45 @@ If any of the 49 entries moves, that is an unexplained delta and the work stops.
 
 ## Implementation checklist
 
-- [ ] Collapse `setting_follows`, `setting_follows_auto_hyphenation` and
+- [x] Collapse `setting_follows`, `setting_follows_auto_hyphenation` and
       `setting_follows_math_properties` into one `SETTINGS_ORDER` table and one
       predicate, with no behaviour change and the existing tests green.
-- [ ] Add `SUPPORTED_SETTINGS` and the subsequence unit test.
-- [ ] Add `SettingsDiagnostic`, `SettingsDiagnosticReason` and diagnostic
+- [x] Add `SUPPORTED_SETTINGS` and the subsequence unit test.
+- [x] Add `SettingsDiagnostic`, `SettingsDiagnosticReason` and diagnostic
       capture during `from_xml`, covering the ten members that exist today.
-- [ ] Add `w:proofState`, its enums, setter and remover.
-- [ ] Add `CompatibilityOption`, its ordered projection, setter and remover
+- [x] Add `w:proofState`, its enums, setter and remover.
+- [x] Add `CompatibilityOption`, its ordered projection, setter and remover
       inside `w:compat`, preserving `w:compatSetting` and unmodelled siblings.
-- [ ] Add `MailMerge` with in-group schema ordering, preserving `w:dataSource`,
+- [x] Add `MailMerge` with in-group schema ordering, preserving `w:dataSource`,
       `w:headerSource` and `w:odso`.
-- [ ] Add the remaining top-level scalar members in `SUPPORTED_SETTINGS`.
-- [ ] Deliver the `w:mirrorMargins`, `w:gutterAtTop`, `w:bookFoldRevPrinting`,
+- [x] Add the remaining top-level scalar members in `SUPPORTED_SETTINGS`.
+- [x] Deliver the `w:mirrorMargins`, `w:gutterAtTop`, `w:bookFoldRevPrinting`,
       `w:bookFoldPrinting` and `w:bookFoldPrintingSheets` accessors that F-269
       consumes. These are contract deliverables, not incidentals.
-- [ ] Add `CT_WebSettings::div_ids()` over the retained `w:divs` subtree, so a
+- [x] Add `CT_WebSettings::div_ids()` over the retained `w:divs` subtree, so a
       caller can tell whether a `w:divId` resolves. F-264 types the `CT_PPr`
       field and its facade accessor, because it owns `CT_PPr` in wave 1.
-- [ ] Add the missing removers and `set_document_protection`, and extend
+- [x] Add the missing removers and `set_document_protection`, and extend
       `CT_Settings::is_empty` to every new member.
-- [ ] Add `crates/rdocx-oxml/src/web_settings.rs`, register it in
+- [x] Add `crates/rdocx-oxml/src/web_settings.rs`, register it in
       `crates/rdocx-oxml/src/lib.rs`, and add `rel_types::WEB_SETTINGS`.
-- [ ] Wire web settings through the facade: fields, resolution, save, clone,
+- [x] Wire web settings through the facade: fields, resolution, save, clone,
       reopen, mutation candidate, prune. Leave fresh profiles unchanged.
-- [ ] Add the facade getters, setters, removers and the two diagnostic
+- [x] Add the facade getters, setters, removers and the two diagnostic
       accessors.
-- [ ] Thread `default_tab_interval_pt` through `oxml-layout` and
+- [x] Thread `default_tab_interval_pt` through `oxml-layout` and
       `LayoutInput::default_tab_stop` through `rdocx-layout` and the facade.
-- [ ] Add every test in the test plan to the existing integration and
+- [x] Add every test in the test plan to the existing integration and
       regression entrypoints.
-- [ ] Update the five HLD files, including flipping DOCX-007 and DOCX-037 to
+- [x] Update the five HLD files, including flipping DOCX-007 and DOCX-037 to
       `complete` with implementation and test evidence.
-- [ ] Run `/verify`, then the golden-PNG and SVG page golden gates, then
-      `cargo publish --dry-run` for the five affected crates.
+- [x] Run `/verify`, then the golden-PNG and SVG page golden gates, then
+      `cargo publish --dry-run` for the five affected crates. `oxml-opc`,
+      `oxml-layout` and `rdocx-oxml` package and verify clean. `rdocx-layout`
+      and `rdocx` cannot verify their tarballs until the 0.14.0 family is
+      published, because the dry run resolves their workspace dependencies from
+      crates.io. That condition predates this feature and is a release-time
+      item.
 
 ## Open questions
 

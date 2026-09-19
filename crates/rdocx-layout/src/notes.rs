@@ -305,6 +305,7 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document::new(),
             styles: CT_Styles::new_default(),

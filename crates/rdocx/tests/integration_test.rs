@@ -15577,3 +15577,619 @@ mod f264_paragraph_property_tests {
         assert_eq!(document.paragraph(0).unwrap().outline_level(), None);
     }
 }
+
+mod settings_and_web_settings_authoring_tests {
+    use super::*;
+    use rdocx::{
+        CharacterSpacingControl, CompatibilityOption, CompatibilitySetting, CryptAlgorithmClass,
+        CryptAlgorithmType, CryptProviderType, DocumentProofState, DocumentProtection,
+        DocumentView, DocumentZoom, MailMerge, MailMergeDestination, MailMergeDocumentType,
+        ProofState, ProtectionMode, ThemeFontLanguage, Twips, ZoomKind,
+    };
+
+    const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    const WEB_SETTINGS_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml";
+
+    fn mail_merge() -> MailMerge {
+        MailMerge {
+            main_document_type: Some(MailMergeDocumentType::FormLetters),
+            link_to_query: Some(true),
+            data_type: Some("native".to_owned()),
+            connect_string: Some("DSN=Contacts".to_owned()),
+            query: Some("SELECT * FROM People".to_owned()),
+            do_not_suppress_blank_lines: Some(true),
+            destination: Some(MailMergeDestination::Printer),
+            address_field_name: Some("Address".to_owned()),
+            mail_subject: Some("Invitation".to_owned()),
+            mail_as_attachment: Some(false),
+            view_merged_data: Some(true),
+            active_record: Some(3),
+            check_errors: Some(2),
+        }
+    }
+
+    /// Author every supported settings and web settings member.
+    fn author_every_supported_member(document: &mut Document) {
+        document.set_view(DocumentView::Print).unwrap();
+        document
+            .set_zoom(DocumentZoom {
+                kind: Some(ZoomKind::FullPage),
+                percent: Some(120),
+            })
+            .unwrap();
+        document.set_remove_personal_information(true).unwrap();
+        document.set_remove_date_and_time(false).unwrap();
+        document.set_mirror_margins(true).unwrap();
+        document.set_gutter_at_top(true).unwrap();
+        document
+            .set_proof_state(DocumentProofState {
+                spelling: Some(ProofState::Clean),
+                grammar: Some(ProofState::Dirty),
+            })
+            .unwrap();
+        document.set_link_styles(true).unwrap();
+        document.set_mail_merge_settings(mail_merge()).unwrap();
+        document.set_track_revisions(true).unwrap();
+        document.set_do_not_track_moves(true).unwrap();
+        document.set_do_not_track_formatting(false).unwrap();
+        document
+            .set_document_protection(DocumentProtection {
+                mode: ProtectionMode::Forms,
+                enforcement: Some(true),
+                formatting: Some(false),
+                provider_type: Some(CryptProviderType::RsaAes),
+                algorithm_class: Some(CryptAlgorithmClass::Hash),
+                algorithm_type: Some(CryptAlgorithmType::Any),
+                algorithm_sid: Some(4),
+                spin_count: Some(100_000),
+                hash: Some("CALLER-HASH".to_owned()),
+                salt: Some("CALLER-SALT".to_owned()),
+            })
+            .unwrap();
+        document.set_default_tab_stop(Twips(720)).unwrap();
+        document.set_auto_hyphenation(true).unwrap();
+        document.set_consecutive_hyphen_limit(2).unwrap();
+        document.set_hyphenation_zone(Twips(360)).unwrap();
+        document.set_do_not_hyphenate_caps(true).unwrap();
+        document.set_default_table_style("TableNormal").unwrap();
+        document.set_even_and_odd_headers(true).unwrap();
+        document.set_book_fold_rev_printing(true).unwrap();
+        document.set_book_fold_printing(true).unwrap();
+        document.set_book_fold_printing_sheets(4).unwrap();
+        document
+            .set_character_spacing_control(CharacterSpacingControl::DoNotCompress)
+            .unwrap();
+        document.set_update_fields_on_open(Some(true)).unwrap();
+        document
+            .set_compatibility_option(CompatibilityOption::NoTabHangInd, true)
+            .unwrap();
+        document
+            .set_compatibility_option(CompatibilityOption::CachedColBalance, false)
+            .unwrap();
+        document
+            .set_compatibility_setting(
+                "compatibilityMode",
+                "http://schemas.microsoft.com/office/word",
+                "15",
+            )
+            .unwrap();
+        document.set_document_variable("Customer", "Ada").unwrap();
+        document
+            .set_theme_font_language(ThemeFontLanguage {
+                latin: Some("en-US".to_owned()),
+                east_asia: None,
+                bidi: None,
+            })
+            .unwrap();
+        document.set_decimal_symbol(".").unwrap();
+        document.set_list_separator(",").unwrap();
+
+        document.set_web_encoding("utf-8").unwrap();
+        document.set_web_optimize_for_browser(true).unwrap();
+        document.set_web_rely_on_vml(false).unwrap();
+        document.set_web_allow_png(true).unwrap();
+        document.set_web_do_not_rely_on_css(true).unwrap();
+        document.set_web_do_not_save_as_single_file(true).unwrap();
+        document.set_web_do_not_organize_in_folder(true).unwrap();
+        document.set_web_do_not_use_long_file_names(true).unwrap();
+        document.set_web_pixels_per_inch(96).unwrap();
+        document.set_web_target_screen_size("800x600").unwrap();
+        document.set_web_save_smart_tags_as_xml(true).unwrap();
+    }
+
+    fn assert_every_supported_member(document: &Document) {
+        assert_eq!(document.view(), Some(DocumentView::Print));
+        assert_eq!(
+            document.zoom(),
+            Some(DocumentZoom {
+                kind: Some(ZoomKind::FullPage),
+                percent: Some(120),
+            })
+        );
+        assert_eq!(document.remove_personal_information(), Some(true));
+        assert_eq!(document.remove_date_and_time(), Some(false));
+        assert_eq!(document.mirror_margins(), Some(true));
+        assert_eq!(document.gutter_at_top(), Some(true));
+        assert_eq!(
+            document.proof_state(),
+            Some(DocumentProofState {
+                spelling: Some(ProofState::Clean),
+                grammar: Some(ProofState::Dirty),
+            })
+        );
+        assert_eq!(document.link_styles(), Some(true));
+        assert_eq!(document.mail_merge_settings(), Some(&mail_merge()));
+        assert_eq!(document.track_revisions(), Some(true));
+        assert_eq!(document.do_not_track_moves(), Some(true));
+        assert_eq!(document.do_not_track_formatting(), Some(false));
+        let protection = document.document_protection().unwrap();
+        assert_eq!(protection.mode, ProtectionMode::Forms);
+        assert_eq!(protection.hash.as_deref(), Some("CALLER-HASH"));
+        assert_eq!(protection.salt.as_deref(), Some("CALLER-SALT"));
+        assert_eq!(protection.spin_count, Some(100_000));
+        assert_eq!(document.default_tab_stop(), Some(Twips(720)));
+        assert_eq!(document.consecutive_hyphen_limit(), Some(2));
+        assert_eq!(document.hyphenation_zone(), Some(Twips(360)));
+        assert_eq!(document.do_not_hyphenate_caps(), Some(true));
+        assert_eq!(document.default_table_style(), Some("TableNormal"));
+        assert!(document.even_and_odd_headers());
+        assert_eq!(document.book_fold_rev_printing(), Some(true));
+        assert_eq!(document.book_fold_printing(), Some(true));
+        assert_eq!(document.book_fold_printing_sheets(), Some(4));
+        assert_eq!(
+            document.character_spacing_control(),
+            Some(CharacterSpacingControl::DoNotCompress)
+        );
+        assert_eq!(document.update_fields_on_open(), Some(true));
+        assert_eq!(
+            document.compatibility_options(),
+            [
+                (CompatibilityOption::NoTabHangInd, true),
+                (CompatibilityOption::CachedColBalance, false),
+            ]
+        );
+        assert_eq!(
+            document.compatibility_settings(),
+            [CompatibilitySetting {
+                name: "compatibilityMode".to_owned(),
+                uri: "http://schemas.microsoft.com/office/word".to_owned(),
+                value: "15".to_owned(),
+            }]
+        );
+        assert_eq!(document.document_variable("Customer"), Some("Ada"));
+        assert_eq!(
+            document.theme_font_language().unwrap().latin.as_deref(),
+            Some("en-US")
+        );
+        assert_eq!(document.decimal_symbol(), Some("."));
+        assert_eq!(document.list_separator(), Some(","));
+
+        assert_eq!(document.web_encoding(), Some("utf-8"));
+        assert_eq!(document.web_optimize_for_browser(), Some(true));
+        assert_eq!(document.web_rely_on_vml(), Some(false));
+        assert_eq!(document.web_allow_png(), Some(true));
+        assert_eq!(document.web_do_not_rely_on_css(), Some(true));
+        assert_eq!(document.web_do_not_save_as_single_file(), Some(true));
+        assert_eq!(document.web_do_not_organize_in_folder(), Some(true));
+        assert_eq!(document.web_do_not_use_long_file_names(), Some(true));
+        assert_eq!(document.web_pixels_per_inch(), Some(96));
+        assert_eq!(document.web_target_screen_size(), Some("800x600"));
+        assert_eq!(document.web_save_smart_tags_as_xml(), Some(true));
+    }
+
+    fn part_text(bytes: &[u8], part: &str) -> Option<String> {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        package
+            .get_part(part)
+            .map(|xml| String::from_utf8(xml.to_vec()).unwrap())
+    }
+
+    #[test]
+    fn public_authored_settings_package_reports_no_unmodeled_supported_children() {
+        let producer_settings = format!(
+            concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<w:settings xmlns:w="{word}" xmlns:x="urn:producer">"#,
+                r#"<x:ext x:before="1"/>"#,
+                r#"<w:compat><x:ext x:inside-compat="1"/></w:compat>"#,
+                r#"<w:mailMerge><x:ext x:inside-mail-merge="1"/></w:mailMerge>"#,
+                r#"<x:ext x:after="1"/>"#,
+                r#"</w:settings>"#,
+            ),
+            word = WORD_NS,
+        );
+        let producer_web_settings = format!(
+            concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<w:webSettings xmlns:w="{word}" xmlns:x="urn:producer">"#,
+                r#"<x:ext x:inside-web-settings="1"/>"#,
+                r#"</w:webSettings>"#,
+            ),
+            word = WORD_NS,
+        );
+
+        let mut seeded = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        seeded.add_paragraph("Settings corpus");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seeded.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/settings.xml", producer_settings.clone().into_bytes());
+        package.set_part(
+            "/word/webSettings.xml",
+            producer_web_settings.clone().into_bytes(),
+        );
+        package
+            .content_types
+            .add_override("/word/webSettings.xml", WEB_SETTINGS_CONTENT_TYPE);
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::WEB_SETTINGS, "webSettings.xml");
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut buffer).unwrap();
+
+        let mut document = Document::from_bytes(buffer.get_ref()).unwrap();
+        author_every_supported_member(&mut document);
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+
+        assert_every_supported_member(&reopened);
+        assert_eq!(reopened.settings_diagnostics(), &[]);
+        assert_eq!(reopened.web_settings_diagnostics(), &[]);
+
+        let settings = part_text(&bytes, "/word/settings.xml").unwrap();
+        for retained in [
+            r#"<x:ext x:before="1"/>"#,
+            r#"<x:ext x:inside-compat="1"/>"#,
+            r#"<x:ext x:inside-mail-merge="1"/>"#,
+            r#"<x:ext x:after="1"/>"#,
+        ] {
+            assert!(settings.contains(retained), "{settings}");
+        }
+        let web_settings = part_text(&bytes, "/word/webSettings.xml").unwrap();
+        assert!(
+            web_settings.contains(r#"<x:ext x:inside-web-settings="1"/>"#),
+            "{web_settings}"
+        );
+    }
+
+    #[test]
+    fn settings_children_serialize_in_schema_sequence_order() {
+        let mut document = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        // Reverse schema order: the last member is authored first.
+        document.set_list_separator(",").unwrap();
+        document.set_decimal_symbol(".").unwrap();
+        document.set_book_fold_printing_sheets(4).unwrap();
+        document.set_even_and_odd_headers(true).unwrap();
+        document.set_default_tab_stop(Twips(720)).unwrap();
+        document.set_mail_merge_settings(mail_merge()).unwrap();
+        document.set_link_styles(true).unwrap();
+        document.set_mirror_margins(true).unwrap();
+        document.set_view(DocumentView::Print).unwrap();
+        document
+            .set_compatibility_option(CompatibilityOption::CachedColBalance, true)
+            .unwrap();
+        document
+            .set_compatibility_option(CompatibilityOption::NoTabHangInd, true)
+            .unwrap();
+        document.set_web_save_smart_tags_as_xml(true).unwrap();
+        document.set_web_encoding("utf-8").unwrap();
+
+        let bytes = document.to_bytes().unwrap();
+        let settings = part_text(&bytes, "/word/settings.xml").unwrap();
+        let top_level = [
+            "<w:view",
+            "<w:mirrorMargins",
+            "<w:linkStyles",
+            "<w:mailMerge",
+            "<w:defaultTabStop",
+            "<w:evenAndOddHeaders",
+            "<w:bookFoldPrintingSheets",
+            "<w:compat",
+            "<w:decimalSymbol",
+            "<w:listSeparator",
+        ];
+        assert_ordered(&settings, &top_level);
+        assert_ordered(&settings, &["<w:noTabHangInd", "<w:cachedColBalance"]);
+        assert_ordered(
+            &settings,
+            &[
+                "<w:mainDocumentType",
+                "<w:linkToQuery",
+                "<w:dataType",
+                "<w:connectString",
+                "<w:query",
+                "<w:doNotSuppressBlankLines",
+                "<w:destination",
+                "<w:addressFieldName",
+                "<w:mailSubject",
+                "<w:mailAsAttachment",
+                "<w:viewMergedData",
+                "<w:activeRecord",
+                "<w:checkErrors",
+            ],
+        );
+
+        let web_settings = part_text(&bytes, "/word/webSettings.xml").unwrap();
+        assert_ordered(&web_settings, &["<w:encoding", "<w:saveSmartTagsAsXml"]);
+    }
+
+    fn assert_ordered(xml: &str, names: &[&str]) {
+        let mut previous = 0usize;
+        for name in names {
+            let position = xml
+                .find(name)
+                .unwrap_or_else(|| panic!("{name} is missing from {xml}"));
+            assert!(
+                position >= previous,
+                "{name} is out of schema order in {xml}"
+            );
+            previous = position;
+        }
+    }
+
+    #[test]
+    fn web_settings_part_is_created_on_demand_and_pruned_when_empty() {
+        let mut document = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        document.add_paragraph("Web settings on demand");
+
+        let untouched = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(untouched.clone())).unwrap();
+        assert!(package.get_part("/word/webSettings.xml").is_none());
+        assert!(
+            !package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type == rel_types::WEB_SETTINGS)
+        );
+
+        document.set_web_allow_png(true).unwrap();
+        let authored = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(authored)).unwrap();
+        let part_name = package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::WEB_SETTINGS)
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target)
+            })
+            .expect("authored web settings relationship");
+        assert!(package.get_part(&part_name).is_some());
+        assert_eq!(
+            package.content_types.override_for(&part_name),
+            Some(WEB_SETTINGS_CONTENT_TYPE)
+        );
+
+        assert_eq!(document.remove_web_allow_png().unwrap(), Some(true));
+        let pruned = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(pruned)).unwrap();
+        assert!(package.get_part(&part_name).is_none());
+        assert_eq!(package.content_types.override_for(&part_name), None);
+        assert!(
+            !package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type == rel_types::WEB_SETTINGS)
+        );
+    }
+
+    #[test]
+    fn fresh_package_profiles_gain_no_web_settings_part() {
+        for profile in [
+            WordCreationProfile::WordCompatible(WordPackageClass::Document),
+            WordCreationProfile::WordCompatible(WordPackageClass::Template),
+            WordCreationProfile::Minimal(WordPackageClass::Document),
+            WordCreationProfile::Minimal(WordPackageClass::Template),
+        ] {
+            let mut document = Document::new_with_profile(profile);
+            let bytes = document.to_bytes().unwrap();
+            let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+            assert!(
+                package
+                    .parts
+                    .keys()
+                    .all(|name| !name.to_ascii_lowercase().contains("websettings")),
+                "{profile:?} gained a web settings part"
+            );
+            assert!(document.web_settings_diagnostics().is_empty());
+            assert!(document.web_division_ids().is_empty());
+        }
+    }
+
+    #[test]
+    fn web_settings_divisions_are_reported_for_reference_checking() {
+        let producer = format!(
+            concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<w:webSettings xmlns:w="{word}">"#,
+                r#"<w:divs><w:div w:id="11"><w:divsChild><w:div w:id="12"/></w:divsChild></w:div>"#,
+                r#"<w:div w:id="13"/></w:divs>"#,
+                r#"<w:allowPNG/>"#,
+                r#"</w:webSettings>"#,
+            ),
+            word = WORD_NS,
+        );
+        let mut seeded = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        seeded.add_paragraph("Divisions");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seeded.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/webSettings.xml", producer.clone().into_bytes());
+        package
+            .content_types
+            .add_override("/word/webSettings.xml", WEB_SETTINGS_CONTENT_TYPE);
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::WEB_SETTINGS, "webSettings.xml");
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut buffer).unwrap();
+
+        let mut document = Document::from_bytes(buffer.get_ref()).unwrap();
+        assert_eq!(document.web_division_ids(), vec![11, 12, 13]);
+        document.set_web_encoding("utf-8").unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.web_division_ids(), vec![11, 12, 13]);
+        let stored = part_text(&bytes, "/word/webSettings.xml").unwrap();
+        assert!(
+            stored.contains(r#"<w:divs><w:div w:id="11"><w:divsChild><w:div w:id="12"/></w:divsChild></w:div><w:div w:id="13"/></w:divs>"#),
+            "{stored}"
+        );
+
+        let empty = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        assert!(empty.web_division_ids().is_empty());
+    }
+
+    #[test]
+    fn mirror_margins_gutter_at_top_and_book_fold_round_trip() {
+        let producer = format!(
+            concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<w:settings xmlns:w="{word}">"#,
+                r#"<w:saveFormsData/><w:hideSpellingErrors/>"#,
+                r#"<w:evenAndOddHeaders/><w:characterSpacingControl w:val="doNotCompress"/>"#,
+                r#"</w:settings>"#,
+            ),
+            word = WORD_NS,
+        );
+        let mut seeded = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        seeded.add_paragraph("Book fold");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seeded.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/settings.xml", producer.into_bytes());
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut buffer).unwrap();
+
+        let mut document = Document::from_bytes(buffer.get_ref()).unwrap();
+        document.set_mirror_margins(true).unwrap();
+        document.set_gutter_at_top(false).unwrap();
+        document.set_book_fold_rev_printing(true).unwrap();
+        document.set_book_fold_printing(true).unwrap();
+        document.set_book_fold_printing_sheets(8).unwrap();
+
+        let bytes = document.to_bytes().unwrap();
+        let settings = part_text(&bytes, "/word/settings.xml").unwrap();
+        assert_ordered(
+            &settings,
+            &[
+                "<w:saveFormsData",
+                "<w:mirrorMargins",
+                "<w:gutterAtTop",
+                "<w:hideSpellingErrors",
+            ],
+        );
+        assert_ordered(
+            &settings,
+            &[
+                "<w:evenAndOddHeaders",
+                "<w:bookFoldRevPrinting",
+                "<w:bookFoldPrinting",
+                "<w:bookFoldPrintingSheets",
+                "<w:characterSpacingControl",
+            ],
+        );
+
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.mirror_margins(), Some(true));
+        assert_eq!(reopened.gutter_at_top(), Some(false));
+        assert_eq!(reopened.book_fold_rev_printing(), Some(true));
+        assert_eq!(reopened.book_fold_printing(), Some(true));
+        assert_eq!(reopened.book_fold_printing_sheets(), Some(8));
+        assert_eq!(reopened.settings_diagnostics(), &[]);
+
+        assert_eq!(reopened.remove_mirror_margins().unwrap(), Some(true));
+        assert_eq!(reopened.remove_gutter_at_top().unwrap(), Some(false));
+        assert_eq!(
+            reopened.remove_book_fold_rev_printing().unwrap(),
+            Some(true)
+        );
+        assert_eq!(reopened.remove_book_fold_printing().unwrap(), Some(true));
+        assert_eq!(
+            reopened.remove_book_fold_printing_sheets().unwrap(),
+            Some(8)
+        );
+        let cleared = reopened.to_bytes().unwrap();
+        let settings = part_text(&cleared, "/word/settings.xml").unwrap();
+        for absent in [
+            "mirrorMargins",
+            "gutterAtTop",
+            "bookFoldRevPrinting",
+            "bookFoldPrinting",
+        ] {
+            assert!(!settings.contains(absent), "{settings}");
+        }
+        assert!(settings.contains("<w:saveFormsData/>"), "{settings}");
+        assert!(settings.contains("<w:hideSpellingErrors/>"), "{settings}");
+    }
+
+    /// First glyph origin of each text run on page one, in layout order.
+    fn run_origins(document: &Document) -> Vec<(String, f64)> {
+        let layout = document.layout_deterministic().unwrap();
+        let mut origins = Vec::new();
+        oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                origins.push((run.text.clone(), run.origin.x));
+            }
+        });
+        origins
+    }
+
+    #[test]
+    fn document_default_tab_stop_drives_implicit_tab_positions() {
+        let run_start = |default_tab_stop: Option<Twips>, text: &str| -> f64 {
+            let mut document = Document::new_with_profile(WordCreationProfile::WordCompatible(
+                WordPackageClass::Document,
+            ));
+            {
+                let mut paragraph = document.add_paragraph("A");
+                let mut run = paragraph.add_run("");
+                run.add_tab();
+                run.add_text("B");
+            }
+            if let Some(value) = default_tab_stop {
+                document.set_default_tab_stop(value).unwrap();
+            }
+            run_origins(&document)
+                .into_iter()
+                .find(|(run_text, _)| run_text == text)
+                .unwrap_or_else(|| panic!("{text} must be laid out"))
+                .1
+        };
+
+        // Deterministic bundled fonts, so the positions below are exact. The
+        // paragraph declares no tab stop of its own, so the tab resolves
+        // against the document interval alone.
+        assert!((run_start(None, "A") - 72.0).abs() < 0.01);
+
+        // An absent setting reproduces the 36.0 point fallback exactly, and
+        // Word's own half-inch value lands in the same place.
+        let fallback = run_start(None, "B");
+        assert!((fallback - 108.0).abs() < 0.01, "{fallback}");
+        let word_default = run_start(Some(Twips(720)), "B");
+        assert!(
+            (word_default - fallback).abs() < f64::EPSILON,
+            "{word_default}"
+        );
+
+        // A two-inch interval moves the implicit stop onto the wider grid.
+        let two_inch = run_start(Some(Twips(2880)), "B");
+        assert!((two_inch - 180.0).abs() < 0.01, "{two_inch}");
+    }
+}

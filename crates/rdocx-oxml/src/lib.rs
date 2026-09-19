@@ -27,6 +27,7 @@ pub mod styles;
 pub mod table;
 pub mod text;
 pub mod theme;
+pub mod web_settings;
 
 pub use error::{OxmlError, Result};
 pub(crate) use oxml_core::xml_text;

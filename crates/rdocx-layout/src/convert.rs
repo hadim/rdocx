@@ -7,6 +7,7 @@ use oxml_layout::{
 use rdocx_oxml::borders::CT_TabStop;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::shared::{ST_Jc, ST_TabJc, ST_TabLeader, ST_Underline};
+use rdocx_oxml::units::Twips;
 
 pub(crate) fn alignment(value: Option<ST_Jc>) -> Option<Align> {
     value.map(|value| match value {
@@ -86,7 +87,20 @@ pub(crate) fn line_spacing(properties: &CT_PPr) -> LineSpacing {
     }
 }
 
-pub(crate) fn line_break_params(properties: &CT_PPr, available_width: f64) -> LineBreakParams {
+/// Points between implicit tab stops, from the document `w:defaultTabStop`.
+///
+/// An absent or zero setting reproduces Word's half-inch default exactly.
+pub(crate) fn default_tab_interval_pt(default_tab_stop: Option<Twips>) -> f64 {
+    default_tab_stop
+        .filter(|value| value.0 > 0)
+        .map_or(36.0, |value| value.to_pt())
+}
+
+pub(crate) fn line_break_params(
+    properties: &CT_PPr,
+    available_width: f64,
+    default_tab_stop: Option<Twips>,
+) -> LineBreakParams {
     LineBreakParams {
         line_prefix_widths: Vec::new(),
         line_suffix_widths: Vec::new(),
@@ -102,6 +116,7 @@ pub(crate) fn line_break_params(properties: &CT_PPr, available_width: f64) -> Li
         line_spacing: line_spacing(properties),
         jc: alignment(properties.jc),
         wrap: true,
+        default_tab_interval_pt: default_tab_interval_pt(default_tab_stop),
     }
 }
 
@@ -123,7 +138,6 @@ pub(crate) fn restore_word_line_heights(lines: &mut [LayoutLine], properties: &C
 mod tests {
     use super::*;
     use oxml_layout::{Align, LineSpacing, TabAlign, TabLeader, Underline};
-    use rdocx_oxml::units::Twips;
 
     #[test]
     fn every_word_alignment_maps_to_the_shared_alignment() {
@@ -244,7 +258,7 @@ mod tests {
 
     #[test]
     fn word_line_parameters_keep_wrap_enabled() {
-        let params = line_break_params(&CT_PPr::default(), 321.0);
+        let params = line_break_params(&CT_PPr::default(), 321.0, None);
         assert_eq!(params.available_width, 321.0);
         assert!(params.wrap);
     }

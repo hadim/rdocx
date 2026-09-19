@@ -319,6 +319,7 @@ CORE_PROPERTIES, THUMBNAIL, DIGITAL_SIGNATURE_ORIGIN, DIGITAL_SIGNATURE
 EXTENDED_PROPERTIES   // docProps/app.xml
 CUSTOM_PROPERTIES     // docProps/custom.xml
 COMMENTS              // Word comments part
+WEB_SETTINGS          // Word web settings part
 GLOSSARY_DOCUMENT     // Word glossary document part
 DIAGRAM_DATA, DIAGRAM_LAYOUT, DIAGRAM_QUICK_STYLE, DIAGRAM_COLORS
 DIAGRAM_DRAWING       // Microsoft 2007 cached diagram drawing
@@ -563,6 +564,28 @@ does not allocate a settings graph. Duplicate or malformed producer forms remain
 unmodelled and byte-identical, and their mutation returns an error rather than
 collapsing ownership. Every facade change uses the staged settings candidate,
 including collision-safe part and relationship allocation, before commit.
+
+The bounded surface closes over the thirty-one top-level names in
+`SUPPORTED_SETTINGS`, the complete `CT_Compat` on-off family, and the thirteen
+authored `w:mailMerge` members. Mail-merge members are written one at a time at
+their own schema positions, because `w:dataSource`, `w:headerSource` and
+`w:odso` sit among them and stay preservation-only. Every typed member has a
+paired remover that deletes only its own occurrence, and removal of a
+duplicated or malformed member returns an error and changes no byte. Reads
+accept in-scope Word aliases, and a same-local-name element in a foreign
+namespace is never taken as the modeled child.
+
+The Word facade resolves an existing web settings part through the main
+document's `WEB_SETTINGS` relationship and retains the normalized target
+instead of assuming `/word/webSettings.xml`. A document without that
+relationship gains no web settings part, relationship, or content-type override
+during an ordinary save, and the fresh Word-compatible profiles keep their exact
+existing part inventory. The first authored value allocates a collision-safe
+part through the same staged boundary, and removing the last value prunes the
+part, its relationship, and its override when this facade created them.
+`w:frameset` and `w:divs` are preservation-only. A read-only division-identifier
+projection over the retained `w:divs` subtree reports whether a paragraph
+`w:divId` resolves.
 
 The font-table reader accepts any in-scope Word and relationship namespace
 prefixes. It models font names, alternate names, family, pitch, and the four

@@ -295,6 +295,11 @@ pub struct LineBreakParams {
     pub line_prefix_widths: Vec<f64>,
     /// Extra width kept clear at the end of individual lines, by line index.
     pub line_suffix_widths: Vec<f64>,
+    /// Interval between implicit tab stops, in points.
+    ///
+    /// Word calls this the default tab stop. `36.0`, half an inch, is the
+    /// value used when a document says nothing.
+    pub default_tab_interval_pt: f64,
 }
 
 impl Default for LineBreakParams {
@@ -311,6 +316,7 @@ impl Default for LineBreakParams {
             line_spacing: LineSpacing::Single,
             jc: None,
             wrap: true,
+            default_tab_interval_pt: 36.0,
         }
     }
 }
@@ -436,6 +442,7 @@ pub fn break_into_lines(
                         item,
                         current_width,
                         &params.tab_stops,
+                        params.default_tab_interval_pt,
                         fm,
                         font_ctx,
                     ));
@@ -460,6 +467,7 @@ pub fn break_into_lines(
                         &item,
                         current_width,
                         &params.tab_stops,
+                        params.default_tab_interval_pt,
                         fm,
                         font_ctx,
                     ));
@@ -486,6 +494,7 @@ pub fn break_into_lines(
                             &item,
                             current_width,
                             &params.tab_stops,
+                            params.default_tab_interval_pt,
                             fm,
                             font_ctx,
                         ));
@@ -575,6 +584,7 @@ pub fn break_into_lines(
                         &item,
                         current_width,
                         &params.tab_stops,
+                        params.default_tab_interval_pt,
                         fm,
                         font_ctx,
                     ));
@@ -1289,6 +1299,7 @@ fn inline_to_line_item(
     item: &InlineItem,
     current_x: f64,
     tab_stops: &[TabStop],
+    default_tab_interval_pt: f64,
     fm: &FontManager,
     font_ctx: Option<(FontId, f64)>,
 ) -> LineItem {
@@ -1299,7 +1310,8 @@ fn inline_to_line_item(
         InlineItem::MultilingualText(seg) => LineItem::MultilingualText(seg.clone()),
         InlineItem::Marker(seg) => LineItem::Marker(seg.clone()),
         InlineItem::Tab => {
-            let (tab_width, leader_char) = resolve_tab_width(current_x, tab_stops);
+            let (tab_width, leader_char) =
+                resolve_tab_width(current_x, tab_stops, default_tab_interval_pt);
             let leader = leader_char.and_then(|ch| shape_leader(fm, font_ctx, ch, tab_width));
             LineItem::Tab {
                 width: tab_width,
@@ -1332,7 +1344,12 @@ fn inline_to_line_item(
             structure_id,
         } => LineItem::Figure {
             item: Box::new(inline_to_line_item(
-                item, current_x, tab_stops, fm, font_ctx,
+                item,
+                current_x,
+                tab_stops,
+                default_tab_interval_pt,
+                fm,
+                font_ctx,
             )),
             alternate_text: alternate_text.clone(),
             structure_id: *structure_id,
@@ -1421,7 +1438,11 @@ fn shape_leader(
 }
 
 /// Resolve tab stop width and leader character based on current x position and defined stops.
-fn resolve_tab_width(current_x: f64, tab_stops: &[TabStop]) -> (f64, Option<char>) {
+fn resolve_tab_width(
+    current_x: f64,
+    tab_stops: &[TabStop],
+    default_interval: f64,
+) -> (f64, Option<char>) {
     // Find the next tab stop after the current position
     for stop in tab_stops {
         let stop_pos = stop.pos_pt;
@@ -1443,8 +1464,7 @@ fn resolve_tab_width(current_x: f64, tab_stops: &[TabStop]) -> (f64, Option<char
             return (width, leader);
         }
     }
-    // Default tab stops every 0.5 inches (36pt)
-    let default_interval = 36.0;
+    // Implicit tab stops at the document interval, half an inch by default.
     let next_stop = ((current_x / default_interval).floor() + 1.0) * default_interval;
     (next_stop - current_x, None)
 }
@@ -2109,6 +2129,7 @@ mod tests {
             wrap: true,
             line_prefix_widths: Vec::new(),
             line_suffix_widths: Vec::new(),
+            default_tab_interval_pt: 36.0,
         };
         let _shaped = crate::ShapedText {
             glyph_ids: segment.glyph_ids.clone(),
@@ -2332,15 +2353,19 @@ mod tests {
             align: TabAlign::Left,
             leader: None,
         }];
-        let (w, leader) = resolve_tab_width(36.0, &stops);
+        let (w, leader) = resolve_tab_width(36.0, &stops, 36.0);
         assert!((w - 36.0).abs() < 0.01);
         assert!(leader.is_none());
     }
 
     #[test]
     fn default_tab_stops() {
-        let (w, _) = resolve_tab_width(10.0, &[]);
+        let (w, _) = resolve_tab_width(10.0, &[], 36.0);
         assert!((w - 26.0).abs() < 0.01); // next stop at 36pt
+
+        // A document default tab stop moves every implicit stop with it.
+        let (w, _) = resolve_tab_width(10.0, &[], 72.0);
+        assert!((w - 62.0).abs() < 0.01);
     }
 
     #[test]
@@ -2350,7 +2375,7 @@ mod tests {
             align: TabAlign::Right,
             leader: Some(TabLeader::Dot),
         }];
-        let (w, leader) = resolve_tab_width(100.0, &stops);
+        let (w, leader) = resolve_tab_width(100.0, &stops, 36.0);
         assert!((w - 300.0).abs() < 0.01);
         assert_eq!(leader, Some('.'));
     }
@@ -2530,7 +2555,14 @@ mod tests {
             leader: Some(TabLeader::Dot),
         };
 
-        let item = inline_to_line_item(&InlineItem::Tab, 12.0, &[stop], &fm, Some((font_id, 12.0)));
+        let item = inline_to_line_item(
+            &InlineItem::Tab,
+            12.0,
+            &[stop],
+            36.0,
+            &fm,
+            Some((font_id, 12.0)),
+        );
 
         let LineItem::Tab {
             width,
@@ -2556,6 +2588,7 @@ mod tests {
             },
             0.0,
             &[],
+            36.0,
             &deterministic_font_manager(),
             None,
         );
@@ -2690,7 +2723,7 @@ mod tests {
                 },
             };
             let LineItem::Group { baseline, .. } =
-                inline_to_line_item(&item, 0.0, &[], &deterministic_font_manager(), None)
+                inline_to_line_item(&item, 0.0, &[], 36.0, &deterministic_font_manager(), None)
             else {
                 panic!("inline group should remain a group line item");
             };

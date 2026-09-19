@@ -904,6 +904,7 @@ pub struct Engine {
 struct ReusableEngineContext {
     revision_view: RevisionView,
     automatic_hyphenation: bool,
+    default_tab_stop: Option<rdocx_oxml::units::Twips>,
     math_properties: Option<rdocx_oxml::math::MathProperties>,
     has_wrapping_drawing: bool,
     styles: CT_Styles,
@@ -996,6 +997,7 @@ impl ReusableEngineContext {
         Self {
             revision_view: input.revision_view,
             automatic_hyphenation: input.automatic_hyphenation,
+            default_tab_stop: input.default_tab_stop,
             math_properties: input.math_properties.clone(),
             has_wrapping_drawing,
             styles: input.styles.clone(),
@@ -1068,6 +1070,7 @@ impl ReusableEngineContext {
             .chain(input.document.body.sect_pr.iter()));
         self.revision_view == input.revision_view
             && self.automatic_hyphenation == input.automatic_hyphenation
+            && self.default_tab_stop == input.default_tab_stop
             && self.math_properties == input.math_properties
             && self.has_wrapping_drawing == has_wrapping_drawing
             && self.styles == input.styles
@@ -6486,7 +6489,8 @@ fn layout_paragraph_with_source_and_table(
     let jc = convert::alignment_for_direction(effective_ppr.jc, layout_direction);
 
     // Line breaking
-    let mut line_params = convert::line_break_params(&effective_ppr, available_width);
+    let mut line_params =
+        convert::line_break_params(&effective_ppr, available_width, input.default_tab_stop);
     line_params.ind_left = ind_left;
     line_params.ind_right = ind_right;
     line_params.jc = jc;
@@ -9165,6 +9169,7 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -15436,6 +15441,7 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -15950,6 +15956,7 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16013,6 +16020,7 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16094,6 +16102,7 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16271,6 +16280,7 @@ mod tests {
             LayoutInput {
                 revision_view: crate::input::RevisionView::Accepted,
                 automatic_hyphenation: false,
+                default_tab_stop: None,
                 math_properties: None,
                 document: doc,
                 styles: CT_Styles::new_default(),
@@ -16400,6 +16410,7 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16693,6 +16704,7 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16837,6 +16849,7 @@ mod tests {
             LayoutInput {
                 revision_view: crate::input::RevisionView::Accepted,
                 automatic_hyphenation: false,
+                default_tab_stop: None,
                 math_properties: None,
                 document: doc,
                 styles: CT_Styles::new_default(),
@@ -16965,6 +16978,7 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17295,6 +17309,7 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17379,6 +17394,7 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17483,6 +17499,7 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17679,6 +17696,7 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),

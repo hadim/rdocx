@@ -211,7 +211,7 @@ bytes remain in the ZIP package.
 | DOCX-004 | package | DOCM, DOTX, and DOTM identity and output selection | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:2064` | - |
 | DOCX-005 | properties | core document properties | Y | Y | Y | Y | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-006 | properties | application and custom properties | Y | Y | Y | Y | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
-| DOCX-007 | properties | document variables, compatibility facts, and defaults | Y | Y | Y | Y | Y | package | P | P | Y | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs` | F-270 |
+| DOCX-007 | properties | document variables, compatibility facts, and defaults | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx-oxml/src/settings.rs`,test:`crates/rdocx/tests/integration_test.rs` | - |
 | DOCX-008 | conformance | public and private authoring conformance gate | Y | Y | NA | NA | Y | all | Y | Y | Y | Y | B | B | Y | complete | implementation:`scripts/docx_authoring_conformance.py:388` | - |
 | DOCX-009 | theme-font | themes and theme selection | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-010 | theme-font | font table and licensed embedded fonts | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
@@ -241,7 +241,7 @@ bytes remain in the ZIP package.
 | DOCX-034 | tables | table styles and conditional formatting | P | P | P | N | P | all | P | P | P | P | B | B | B | partial | boundary:F-267 | F-267 |
 | DOCX-035 | tables | floating, bidirectional, autofit, and advanced table layout | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-268 | F-268 |
 | DOCX-036 | sections | borders, columns, line numbers, book fold, and note policy | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | boundary:F-269 | F-269 |
-| DOCX-037 | properties | complete settings and web settings authoring | P | P | P | P | P | package | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4318` | F-270 |
+| DOCX-037 | properties | complete settings and web settings authoring | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx-oxml/src/web_settings.rs`,test:`crates/rdocx/tests/integration_test.rs` | - |
 | DOCX-038 | stories | uniform rich header and footer editing | P | P | P | P | P | related | P | P | P | P | B | B | B | partial | boundary:F-271 | F-271 |
 | DOCX-039 | stories | rich footnotes | P | P | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:2738` | F-272 |
 | DOCX-040 | stories | rich endnotes | N | P | N | N | PV | related | P | P | N | P | B | B | B | unsupported | boundary:F-273 | F-273 |
