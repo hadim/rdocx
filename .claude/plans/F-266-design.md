@@ -1,6 +1,6 @@
 # F-266, International and vertical typography
 
-**Status**: split
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-264, F-265
@@ -91,12 +91,12 @@ explicit containment rule.
 
 ## Implementation checklist
 
-- [ ] F-266a complete.
-- [ ] F-266b complete.
-- [ ] F-266c complete.
-- [ ] DOCX-033 in `docs/hld/02-scope-and-non-goals.md` reaches its earned
+- [x] F-266a complete.
+- [x] F-266b complete.
+- [x] F-266c complete.
+- [x] DOCX-033 in `docs/hld/02-scope-and-non-goals.md` reaches its earned
       classification, which F-266c records.
-- [ ] `docs/hld/14-development-backlog.md` and `docs/sprints/BACKLOG.md` both
+- [x] `docs/hld/14-development-backlog.md` and `docs/sprints/BACKLOG.md` both
       carry the three children, per `.claude/WORKFLOW.md`.
 
 **The parent closes only when every child closes.** This file is never started

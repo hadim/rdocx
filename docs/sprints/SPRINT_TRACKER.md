@@ -489,6 +489,9 @@ defended.
 | F-X129 | S74 | S | 1 | 1 | 2026-09-18 | Skipped unmatched notes-slide placeholder overlays with ordered diagnostics while preserving strict ownership failures |
 | F-X128 | S74 | M | 2 | 1 | 2026-09-18 | Preserved ordered paragraph, run, and section root identities across save, reopen, and typed mutation |
 | F-X126 | S74 | M | 2 | 1 | 2026-09-18 | Normalized drawing namespace ownership in comparison-only story projections while preserving exact story-scoped package payloads |
+| F-266c | S74 | L | 5 | 1 | 2026-09-19 | Modeled character grids and East Asian run layout, then rendered vertical table and section text with deterministic geometry |
+| F-266 | S74 | L | 0 | 0 | 2026-09-19 | Closed the split typography parent after all three reviewed child gates passed and DOCX-033 reached its final classification |
+| F-268 | S74 | L | 0 | 0 | 2026-09-19 | Closed the split advanced-table parent after both reviewed child gates passed and DOCX-035 reached its final classification |
 
 ## Velocity
 

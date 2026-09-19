@@ -1,6 +1,6 @@
 # F-268, Floating and advanced table layout
 
-**Status**: split
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-257, F-258, F-259

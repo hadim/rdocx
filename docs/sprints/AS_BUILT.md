@@ -16107,3 +16107,111 @@ self-comparison, and a changed drawing identity control.
 **Notes for future sessions.** Keep package-preserving namespace ownership and
 comparison-model namespace closure as separate policies. Do not remove drawings
 from equality to work around declaration placement differences.
+
+### F-266c, Character grid and vertical text
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** `w:docGrid` and `w:eastAsianLayout` are typed, publicly
+authorable state. Character and line pitches now affect Word layout, combined
+East Asian runs use one base-character advance, and vertical table-cell and
+section text renders through transposed boxes and rotated layout groups.
+
+**Non-obvious choices.** The `default` grid type stays on the previous geometry
+path. Rotated text preserves logical extraction order, and upright stacked CJK
+uses the already documented visible rotated fallback with a diagnostic. The
+DOCX-033 row is complete because the requested public and rendering surface is
+implemented, while its exact repertoire and default-behaviour limits remain
+stated in that row.
+
+**Deviations from the design plan.** Run-level East Asian state landed on the
+paragraph facade because the internal paragraph model owns effective runs.
+Character-grid pitch also had to survive float-driven paragraph reflow, which
+added the cached reflow projection and its focused regression. The modeled
+`w:overflowPunct`, `w:autoSpaceDE`, and `w:autoSpaceDN` defaults remain explicit
+capability boundaries rather than being claimed as applied layout behavior.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order`
+is the deterministic gate. Round-trip, schema-order, vertical-direction,
+logical-extraction, row-measurement, section-direction, and float-reflow
+regressions cover the parser, facade, layout, and pagination paths. The full
+workspace gate, package dry run, documentation gate, WASM targets, and
+supply-chain check also passed.
+
+**Hash harness.** Unchanged, 49 of 49. The earlier F-266a and F-266b golden
+digests also remained unchanged.
+
+**Notes for future sessions.** Cache-size accounting does not include the small
+retained foreign-attribute strings on a grid key. Upright stacking and the
+three unapplied East Asian defaults are documented boundaries, not hidden
+claims of parity.
+
+### F-266, International and vertical typography
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 0 days after split, actual 0 days
+
+**What was built.** The split parent closed after F-266a, F-266b, and F-266c
+delivered script-aware font selection, deterministic fixture faces, ruby,
+emphasis marks, character grids, and vertical text. DOCX-033 now carries its
+final complete classification and its explicit fidelity boundaries.
+
+**Non-obvious choices.** The parent has no implementation diff or separate
+estimate after the split. Its original scope and delivery effort are recorded
+on the three child F-IDs, whose named golden gates form the parent gate.
+
+**Deviations from the design plan.** None. The approved split and every parent
+checklist item were completed.
+
+**Spec sections touched.** None directly. Each child updated exactly its own
+declared HLD set.
+
+**Tests.** The union of
+`mixed_script_page_matches_the_pinned_geometry_and_reading_order`,
+`ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order`, and
+`grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order` passed
+inside the full workspace gate.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Read the three child records for implementation
+detail. This entry is the durable closure record for the split parent only.
+
+### F-268, Floating and advanced table layout
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 0 days after split, actual 0 days
+
+**What was built.** The split parent closed after F-268a delivered advanced
+table authoring and geometry and F-268b delivered floating-table placement and
+wrap interaction. DOCX-035 now carries its final complete classification and
+its explicit out-of-scope layout boundaries.
+
+**Non-obvious choices.** The parent has no implementation diff or separate
+estimate after the split. Its original scope and delivery effort are recorded
+on the two child F-IDs, whose named golden gates form the parent gate.
+
+**Deviations from the design plan.** None. Both children closed in dependency
+order and the final capability row was ratified only after the floating path
+landed.
+
+**Spec sections touched.** None directly. Each child updated exactly its own
+declared HLD set.
+
+**Tests.** `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`
+and `floating_tables_match_reviewed_word_page_geometry_and_pagination` passed
+inside the full workspace gate.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Read the two child records for implementation
+detail. This entry is the durable closure record for the split parent only.
