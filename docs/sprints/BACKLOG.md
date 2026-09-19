@@ -487,12 +487,12 @@ regenerated, never hand-edited.
 | F-265 | Complete run property and inline authoring | S74 | L | done |
 | F-266 | International and vertical typography | S74 | L | pending |
 | F-266a | Script identity and font slot resolution | S74 | L | done |
-| F-266b | Ruby and emphasis marks | S74 | L | pending |
+| F-266b | Ruby and emphasis marks | S74 | L | in-progress |
 | F-266c | Character grid and vertical text | S74 | L | pending |
 | F-267 | Complete table style and conditional formatting authoring | S74 | L | done |
 | F-268 | Floating and advanced table layout | S74 | L | pending |
 | F-268a | Advanced table authoring and geometry | S74 | L | done |
-| F-268b | Floating table placement and wrap | S74 | M | pending |
+| F-268b | Floating table placement and wrap | S74 | M | in-progress |
 | F-269 | Complete section page semantics | S74 | L | done |
 | F-270 | Complete settings and web settings authoring | S74 | L | done |
 | F-271 | Uniform rich header and footer editing | S75 | L | pending |
