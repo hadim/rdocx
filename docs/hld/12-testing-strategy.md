@@ -14,6 +14,20 @@ exactly one as its test gate.
 | `golden` | Byte or pixel comparison against a recorded baseline | the hash harness |
 | `differential` | Compared against an external oracle | LibreOffice for renders, python-docx and python-pptx for the bindings |
 
+The complete run-property and inline story compares against the recorded
+WordprocessingML for `EG_RPrBase` rather than a fresh Word save, because Word
+GUI capture is not available on the development machine. The no-repair
+confirmation is a tracked human action under the Milestone 24 end-of-milestone
+gate, and no automated test skips without it. One disagreement is recorded as
+deliberate under rule 5 of `.claude/skills/differential-testing.md`. Word
+resolves the theme attribute when a producer `w:rFonts` presents both an
+explicit and a theme font for one slot, and rdocx resolves the explicit name.
+The facade clears one form when the other is set, so the divergence is
+reachable only on a producer document the caller never edited, where leaving
+the bytes as written is what the no-op save contract requires.
+`explicit_font_priority_divergence_from_word_is_deliberate` asserts our side so
+a later change cannot drop the decision silently.
+
 The existing repository convention is preserved: **no binary fixture files.**
 Fixtures are constructed in code, including hand-assembled PNG and JPEG headers
 with precomputed CRCs. It keeps the `.crate` payload small and the diffs

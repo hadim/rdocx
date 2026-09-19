@@ -2564,6 +2564,11 @@ strict and transitional validation, public authoring, mutation, save-reopen,
 deterministic layout and rendering, accessibility, package preservation, and
 binding-parity checks without Word repair.
 
+**Tracked human action**: Word GUI capture is not available on the development
+machine, so the "without Word repair" confirmation is performed by hand at this
+gate and recorded as performed or not performed. No automated story test
+depends on it, and no gate skips in its absence.
+
 ### F-264, Complete paragraph property authoring (L)
 Expose the full supported paragraph-property model through public setters and
 readers, including logical indentation, automatic spacing, borders, shading,
@@ -2583,6 +2588,11 @@ preserves unrelated producer XML.
 Expose full run fonts, theme references, colors, complex-script formatting,
 shading, effects, language, symbols, special characters, and ordered inline
 content. Explicit-font replacement has a documented theme-clearing policy.
+The story also owns the `w:rFonts`, `w:color`, and `w:shd` theme-attribute
+sweep, and it gives `rdocx_oxml::theme::apply_tint_shade` its first production
+caller without changing its arithmetic. Stroke, relief, character-border,
+kerning, and fitted-text rendering is layout work this story does not build, so
+the `DOCX-032` layout and render columns stay partial.
 **Depends on**: F-260.
 **Test gate**: differential. Effective run formatting and inline ordering match
 the pinned Word reference across save, reopen, and render.

@@ -11,7 +11,7 @@ use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
 use rdocx_oxml::numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::styles::{CT_Style, CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
-use rdocx_oxml::text::{CT_P, CT_R, Field, HyperlinkSpan, RunContent};
+use rdocx_oxml::text::{CT_P, CT_R, Field, HyperlinkSpan, RunContent, SpecialCharacter};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -793,7 +793,7 @@ impl<'a> EpubWriter<'a> {
             if properties
                 .shading
                 .as_ref()
-                .is_some_and(shading_is_simplified)
+                .is_some_and(|shading| shading_is_simplified(shading))
             {
                 self.diagnose(
                     format!("{path}/properties/shading"),
@@ -1322,7 +1322,7 @@ impl<'a> EpubWriter<'a> {
         if properties
             .shading
             .as_ref()
-            .is_some_and(shading_is_simplified)
+            .is_some_and(|shading| shading_is_simplified(shading))
         {
             self.diagnose(
                 format!("{path}/properties/shading"),
@@ -1724,7 +1724,12 @@ fn projected_paragraph_text(paragraph: &CT_P) -> String {
                         text.push_str(value);
                     }
                 }
-                RunContent::Drawing(_)
+                // The same projection `CT_R::text` uses, so a heading label
+                // never disagrees with the run text it labels.
+                RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn) => text.push('\n'),
+                RunContent::SpecialCharacter(_)
+                | RunContent::Symbol { .. }
+                | RunContent::Drawing(_)
                 | RunContent::FootnoteRef { .. }
                 | RunContent::EndnoteRef { .. }
                 | RunContent::CommentReference { .. } => {}
@@ -2399,7 +2404,10 @@ fn render_paragraph_properties(
         ind_right: source.ind_right,
         ind_first_line: source.ind_first_line,
         outline_lvl: source.outline_lvl,
-        shading: source.shading.as_ref().map(render_shading_projection),
+        shading: source
+            .shading
+            .as_ref()
+            .map(|shading| Box::new(render_shading_projection(shading))),
         num_ilvl: source.num_ilvl,
         num_id: source.num_id,
         ..Default::default()
@@ -2435,7 +2443,10 @@ fn render_run_properties(
         small_caps: source.small_caps,
         vert_align: source.vert_align.clone(),
         spacing: source.spacing,
-        shading: source.shading.as_ref().map(render_shading_projection),
+        shading: source
+            .shading
+            .as_ref()
+            .map(|shading| Box::new(render_shading_projection(shading))),
         ..Default::default()
     }
 }
@@ -2445,8 +2456,8 @@ fn render_shading_projection(
 ) -> rdocx_oxml::properties::CT_Shd {
     rdocx_oxml::properties::CT_Shd {
         val: "clear".to_owned(),
-        color: None,
         fill: source.fill.clone(),
+        ..Default::default()
     }
 }
 
@@ -2468,6 +2479,11 @@ fn render_run_content(content: &RunContent) -> RunContent {
             id: *id,
             raw_before: 0,
         },
+        RunContent::Symbol { font, char_code } => RunContent::Symbol {
+            font: font.clone(),
+            char_code: *char_code,
+        },
+        RunContent::SpecialCharacter(character) => RunContent::SpecialCharacter(*character),
     }
 }
 
@@ -3373,7 +3389,12 @@ fn measure_paragraph(
                 RunContent::Text(text) | RunContent::DeletedText(text) => {
                     add_source_bytes(text_bytes, text.text.len())?;
                 }
-                RunContent::Tab | RunContent::Break(_) => add_source_bytes(text_bytes, 1)?,
+                RunContent::Tab | RunContent::Break(_) | RunContent::SpecialCharacter(_) => {
+                    add_source_bytes(text_bytes, 1)?
+                }
+                RunContent::Symbol { font, .. } => {
+                    add_source_bytes(text_bytes, font.len().saturating_add(1))?
+                }
                 RunContent::Field(field) => measure_field(field, text_bytes, 0)?,
                 RunContent::Drawing(drawing) => {
                     *image_occurrences = image_occurrences.checked_add(1).ok_or_else(|| {
@@ -3445,6 +3466,15 @@ fn shading_is_simplified(shading: &rdocx_oxml::properties::CT_Shd) -> bool {
             .fill
             .as_deref()
             .is_some_and(|fill| !is_word_hex_color(fill))
+        // The projection keeps only the literal fill, so any theme reference
+        // on the source shading is information the EPUB does not carry.
+        || shading.theme_color.is_some()
+        || shading.theme_tint.is_some()
+        || shading.theme_shade.is_some()
+        || shading.theme_fill.is_some()
+        || shading.theme_fill_tint.is_some()
+        || shading.theme_fill_shade.is_some()
+        || !shading.extra_attributes.is_empty()
 }
 
 fn is_word_hex_color(value: &str) -> bool {
@@ -5113,16 +5143,19 @@ mod tests {
                 val: "horzStripe".to_owned(),
                 color: None,
                 fill: Some("FFFFFF".to_owned()),
+                ..Default::default()
             },
             CT_Shd {
                 val: "clear".to_owned(),
                 color: Some("00FF00".to_owned()),
                 fill: None,
+                ..Default::default()
             },
             CT_Shd {
                 val: "clear".to_owned(),
                 color: None,
                 fill: Some("invalid".to_owned()),
+                ..Default::default()
             },
         ] {
             let mut cell = CT_Tc::new();
@@ -5433,11 +5466,12 @@ mod tests {
         let mut document = Document::new();
         let mut paragraph = CT_P::new();
         paragraph.properties = Some(CT_PPr {
-            shading: Some(CT_Shd {
+            shading: Some(Box::new(CT_Shd {
                 val: "horzStripe".to_owned(),
                 color: Some("00FF00".to_owned()),
                 fill: Some("FFFFFF".to_owned()),
-            }),
+                ..Default::default()
+            })),
             ..Default::default()
         });
         for underline in [
@@ -5461,21 +5495,23 @@ mod tests {
         }
         let mut foreground = CT_R::new("foreground");
         foreground.properties = Some(CT_RPr {
-            shading: Some(CT_Shd {
+            shading: Some(Box::new(CT_Shd {
                 val: "clear".to_owned(),
                 color: Some("FF0000".to_owned()),
                 fill: None,
-            }),
+                ..Default::default()
+            })),
             ..Default::default()
         });
         paragraph.runs.push(foreground);
         let mut invalid = CT_R::new("invalid");
         invalid.properties = Some(CT_RPr {
-            shading: Some(CT_Shd {
+            shading: Some(Box::new(CT_Shd {
                 val: "clear".to_owned(),
                 color: None,
                 fill: Some("not-a-colour".to_owned()),
-            }),
+                ..Default::default()
+            })),
             ..Default::default()
         });
         paragraph.runs.push(invalid);
@@ -5753,6 +5789,7 @@ mod tests {
                 val: "diagStripe".to_owned(),
                 color: Some("00FF00".to_owned()),
                 fill: Some("FFFFFF".to_owned()),
+                ..Default::default()
             }),
             ..Default::default()
         });
@@ -5813,11 +5850,12 @@ mod tests {
         let mut lossy = CT_P::new();
         unsafe_run.properties = Some(CT_RPr {
             underline: Some(ST_Underline::Double),
-            shading: Some(CT_Shd {
+            shading: Some(Box::new(CT_Shd {
                 val: "diagStripe".to_owned(),
                 color: Some("FF0000".to_owned()),
                 fill: Some("FFFF00".to_owned()),
-            }),
+                ..Default::default()
+            })),
             ..Default::default()
         });
         unsafe_run

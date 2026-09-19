@@ -22,7 +22,7 @@ use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{
     BookmarkMarker, BreakType, CT_P, CT_R, FieldArgument, FieldInstruction, RunContent,
-    hyperlink_revision_index,
+    SpecialCharacter, hyperlink_revision_index,
 };
 
 use crate::block::{
@@ -708,10 +708,13 @@ fn projected_content_char_starts(run: &CT_R) -> Vec<usize> {
             RunContent::Field(field) => field
                 .projected_text()
                 .map_or(0, |text| text.chars().count()),
+            RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn) => 1,
             RunContent::Drawing(_)
             | RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
-            | RunContent::CommentReference { .. } => 0,
+            | RunContent::CommentReference { .. }
+            | RunContent::Symbol { .. }
+            | RunContent::SpecialCharacter(_) => 0,
         };
     }
     debug_assert_eq!(char_offset, run.text().chars().count());
@@ -760,7 +763,9 @@ fn run_has_visible_content(run: &CT_R) -> bool {
         | RunContent::Drawing(_)
         | RunContent::Field(_)
         | RunContent::FootnoteRef { .. }
-        | RunContent::EndnoteRef { .. } => true,
+        | RunContent::EndnoteRef { .. }
+        | RunContent::Symbol { .. }
+        | RunContent::SpecialCharacter(_) => true,
     })
 }
 
@@ -3703,6 +3708,19 @@ fn table_semantics_retained_bytes(semantics: &TableSemantics) -> usize {
     bytes
 }
 
+/// Heap bytes held by a retained ordered attribute vector.
+fn attribute_pairs_bytes(values: &[(String, String)]) -> usize {
+    values
+        .len()
+        .saturating_mul(std::mem::size_of::<(String, String)>())
+        .saturating_add(
+            values
+                .iter()
+                .map(|(name, value)| name.capacity().saturating_add(value.capacity()))
+                .fold(0usize, usize::saturating_add),
+        )
+}
+
 fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
     fn option_string_bytes(value: &Option<String>) -> usize {
         value.as_ref().map_or(0, String::capacity)
@@ -3727,6 +3745,9 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
             &properties.font_cs,
             &properties.font_ascii_theme,
             &properties.font_hansi_theme,
+            &properties.font_east_asia_theme,
+            &properties.font_cs_theme,
+            &properties.font_hint,
             &properties.color,
             &properties.color_theme,
             &properties.vert_align,
@@ -3734,7 +3755,14 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
         .into_iter()
         .map(option_string_bytes)
         .fold(0usize, usize::saturating_add)
-        .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+        .saturating_add(attribute_pairs_bytes(&properties.font_extra_attributes))
+        .saturating_add(attribute_pairs_bytes(&properties.color_extra_attributes))
+        .saturating_add(
+            properties
+                .shading
+                .as_ref()
+                .map_or(0, |shading| shading_bytes(shading)),
+        )
         .saturating_add(
             properties
                 .revision_markers
@@ -3755,6 +3783,9 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
             .capacity()
             .saturating_add(option_string_bytes(&shading.color))
             .saturating_add(option_string_bytes(&shading.fill))
+            .saturating_add(option_string_bytes(&shading.theme_color))
+            .saturating_add(option_string_bytes(&shading.theme_fill))
+            .saturating_add(attribute_pairs_bytes(&shading.extra_attributes))
     }
     fn paragraph_border_bytes(borders: &CT_PBdr) -> usize {
         [
@@ -3784,7 +3815,12 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CT_TabStop>())
             }))
-            .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+            .saturating_add(
+                properties
+                    .shading
+                    .as_ref()
+                    .map_or(0, |shading| shading_bytes(shading)),
+            )
             .saturating_add(properties.rpr.as_ref().map_or(0, run_properties_bytes))
             .saturating_add(raw_vectors_bytes(&properties.numbering_revision_xml))
             .saturating_add(raw_vectors_bytes(&properties.revision_xml))
@@ -3809,13 +3845,15 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
                                     RunContent::Text(text) | RunContent::DeletedText(text) => {
                                         text.text.capacity()
                                     }
+                                    RunContent::Symbol { font, .. } => font.capacity(),
                                     RunContent::Tab
                                     | RunContent::Break(_)
                                     | RunContent::Drawing(_)
                                     | RunContent::Field(_)
                                     | RunContent::FootnoteRef { .. }
                                     | RunContent::EndnoteRef { .. }
-                                    | RunContent::CommentReference { .. } => 0,
+                                    | RunContent::CommentReference { .. }
+                                    | RunContent::SpecialCharacter(_) => 0,
                                 })
                                 .fold(0usize, usize::saturating_add),
                         )
@@ -3891,6 +3929,9 @@ fn table_key_retained_bytes(table: &CT_Tbl) -> usize {
             .capacity()
             .saturating_add(option_string_bytes(&shading.color))
             .saturating_add(option_string_bytes(&shading.fill))
+            .saturating_add(option_string_bytes(&shading.theme_color))
+            .saturating_add(option_string_bytes(&shading.theme_fill))
+            .saturating_add(attribute_pairs_bytes(&shading.extra_attributes))
     }
     fn table_border_bytes(borders: &rdocx_oxml::table::CT_TblBorders) -> usize {
         [
@@ -4742,6 +4783,9 @@ fn paragraph_cache_entry_bytes(
             .capacity()
             .saturating_add(option_string_bytes(&shading.color))
             .saturating_add(option_string_bytes(&shading.fill))
+            .saturating_add(option_string_bytes(&shading.theme_color))
+            .saturating_add(option_string_bytes(&shading.theme_fill))
+            .saturating_add(attribute_pairs_bytes(&shading.extra_attributes))
     }
     fn run_properties_bytes(properties: &CT_RPr) -> usize {
         [
@@ -4752,6 +4796,9 @@ fn paragraph_cache_entry_bytes(
             &properties.font_cs,
             &properties.font_ascii_theme,
             &properties.font_hansi_theme,
+            &properties.font_east_asia_theme,
+            &properties.font_cs_theme,
+            &properties.font_hint,
             &properties.color,
             &properties.color_theme,
             &properties.vert_align,
@@ -4759,7 +4806,14 @@ fn paragraph_cache_entry_bytes(
         .into_iter()
         .map(option_string_bytes)
         .fold(0usize, usize::saturating_add)
-        .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+        .saturating_add(attribute_pairs_bytes(&properties.font_extra_attributes))
+        .saturating_add(attribute_pairs_bytes(&properties.color_extra_attributes))
+        .saturating_add(
+            properties
+                .shading
+                .as_ref()
+                .map_or(0, |shading| shading_bytes(shading)),
+        )
     }
     fn border_bytes(borders: &CT_PBdr) -> usize {
         [
@@ -4792,7 +4846,12 @@ fn paragraph_cache_entry_bytes(
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CT_TabStop>())
             }))
-            .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+            .saturating_add(
+                properties
+                    .shading
+                    .as_ref()
+                    .map_or(0, |shading| shading_bytes(shading)),
+            )
             .saturating_add(properties.rpr.as_ref().map_or(0, run_properties_bytes))
     }
     fn paragraph_key_bytes(paragraph: &CT_P) -> usize {
@@ -4985,6 +5044,20 @@ fn paragraph_fingerprint(paragraph: &CT_P) -> u64 {
                         BreakType::Line => 0,
                         BreakType::Page => 1,
                         BreakType::Column => 2,
+                    });
+                }
+                RunContent::Symbol { font, char_code } => {
+                    fingerprint.write_tag(5);
+                    fingerprint.write_bytes(font.as_bytes());
+                    fingerprint.write_usize(usize::from(*char_code));
+                }
+                RunContent::SpecialCharacter(character) => {
+                    fingerprint.write_tag(6);
+                    fingerprint.write_tag(match character {
+                        SpecialCharacter::CarriageReturn => 0,
+                        SpecialCharacter::NoBreakHyphen => 1,
+                        SpecialCharacter::SoftHyphen => 2,
+                        SpecialCharacter::PositionalTab { .. } => 3,
                     });
                 }
                 RunContent::Drawing(_)
@@ -6393,6 +6466,91 @@ fn layout_paragraph_with_source_and_table(
                         note: Some(NoteRef { stream, id: *id }),
                     }));
                 }
+                RunContent::Symbol { font, char_code } => {
+                    // The code point is the symbol font's own, typically in
+                    // the F020 to F0FF private-use block Word writes. Font
+                    // resolution runs against that text so a family without
+                    // the glyph is replaced by one that has it.
+                    let Some(symbol) = char::from_u32(u32::from(*char_code)) else {
+                        continue;
+                    };
+                    let text = symbol.to_string();
+                    let symbol_font_id =
+                        fm.resolve_font_for_text(Some(font.as_str()), bold, italic, &text)?;
+                    let symbol_metrics = fm.metrics(symbol_font_id, font_size)?;
+                    let shaped = fm.shape_text(symbol_font_id, &text, font_size)?;
+                    inline_items.push(InlineItem::Text(TextSegment {
+                        text,
+                        direction: TextDirection::Auto,
+                        source: None,
+                        font_id: symbol_font_id,
+                        font_size,
+                        glyph_ids: shaped.glyph_ids,
+                        advances: shaped.advances,
+                        width: shaped.width,
+                        ascent: symbol_metrics.ascent,
+                        descent: symbol_metrics.descent,
+                        line_gap: 0.0,
+                        color,
+                        bold,
+                        italic,
+                        underline,
+                        strike,
+                        dstrike,
+                        highlight,
+                        baseline_offset,
+                        hyperlink_url: current_hyperlink_url.clone(),
+                        field_kind: None,
+                        field_source: None,
+                        note: None,
+                    }));
+                }
+                RunContent::SpecialCharacter(character) => match character {
+                    SpecialCharacter::CarriageReturn => {
+                        inline_items.push(InlineItem::LineBreak);
+                    }
+                    SpecialCharacter::NoBreakHyphen => {
+                        // U+2011 carries Unicode line-break class GL, so the
+                        // hyphen is drawn without becoming a break
+                        // opportunity. A plain U+002D would become one.
+                        let text = "\u{2011}".to_owned();
+                        let shaped = fm.shape_text(font_id, &text, font_size)?;
+                        inline_items.push(InlineItem::Text(TextSegment {
+                            text,
+                            direction: TextDirection::Auto,
+                            source: None,
+                            font_id,
+                            font_size,
+                            glyph_ids: shaped.glyph_ids,
+                            advances: shaped.advances,
+                            width: shaped.width,
+                            ascent: metrics.ascent,
+                            descent: metrics.descent,
+                            line_gap: 0.0,
+                            color,
+                            bold,
+                            italic,
+                            underline,
+                            strike,
+                            dstrike,
+                            highlight,
+                            baseline_offset,
+                            hyperlink_url: current_hyperlink_url.clone(),
+                            field_kind: None,
+                            field_source: None,
+                            note: None,
+                        }));
+                    }
+                    // A soft hyphen is drawn only on the line it breaks, and
+                    // the line breaker has no discretionary-break input, so it
+                    // is round-tripped without a render projection.
+                    SpecialCharacter::SoftHyphen => {}
+                    // The absolute position is a paragraph-relative tab stop
+                    // the tab resolver already places.
+                    SpecialCharacter::PositionalTab { .. } => {
+                        inline_items.push(InlineItem::Tab);
+                    }
+                },
                 RunContent::CommentReference { .. } => {}
             }
         }
@@ -7845,7 +8003,15 @@ fn resolve_font_family(
     rpr: &rdocx_oxml::properties::CT_RPr,
     theme: Option<&rdocx_oxml::theme::Theme>,
 ) -> Option<String> {
-    // Explicit font name takes priority
+    // Explicit font name takes priority.
+    //
+    // Word prefers the theme attribute when a producer presents both for one
+    // slot, so this is a deliberate divergence, pre-declared under rule 5 of
+    // .claude/skills/differential-testing.md. A document authored through this
+    // facade never presents both, because setting either slot clears the
+    // other, so the divergence is reachable only on a producer document the
+    // caller never edited. Leaving those bytes as written is what the no-op
+    // save contract requires.
     if rpr.font_ascii.is_some() {
         return rpr.font_ascii.clone();
     }
@@ -7881,6 +8047,18 @@ fn resolve_run_color(
         && let Some(theme) = theme
         && let Some(hex) = theme.colors.get(theme_name)
     {
+        // `w:themeTint` and `w:themeShade` are Word's 0-255 byte convention,
+        // which is exactly what `rdocx_oxml::theme::apply_tint_shade` takes.
+        // Its arithmetic is Word's, deliberately not the spec-correct
+        // DrawingML one, and it is called unchanged. See
+        // docs/hld/05-drawingml-model.md, "Do not touch the Word path".
+        if rpr.color_theme_tint.is_some() || rpr.color_theme_shade.is_some() {
+            return Color::from_hex(&rdocx_oxml::theme::apply_tint_shade(
+                hex,
+                rpr.color_theme_tint,
+                rpr.color_theme_shade,
+            ));
+        }
         return Color::from_hex(hex);
     }
 

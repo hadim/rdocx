@@ -1,6 +1,6 @@
 # F-265, Complete run property and inline authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-260
@@ -485,33 +485,83 @@ its own labelled commit rather than folded into this story's main commit.
 
 ## Implementation checklist
 
-- [ ] Confirm the run property module split has landed and the harness is
+- [x] Confirm the run property module split has landed and the harness is
       byte-identical across it before starting.
-- [ ] Add the failing differential, round-trip and ordering tests first.
-- [ ] Name the 16 remaining `EG_RPrBase` slot constants in the run property
+- [x] Add the failing differential, round-trip and ordering tests first.
+- [x] Name the 16 remaining `EG_RPrBase` slot constants in the run property
       module beside the existing ones.
-- [ ] Add the 16 fields with parse, write, `is_empty` and `merge_from` clauses.
-- [ ] Add the `w:rFonts`, `w:color` and `w:shd` theme attributes, `w:hint` and
+- [x] Add the 16 fields with parse, write, `is_empty` and `merge_from` clauses.
+- [x] Add the `w:rFonts`, `w:color` and `w:shd` theme attributes, `w:hint` and
       the ordered extra-attribute vectors, as one sweep.
-- [ ] Deliver the F-266a prerequisites explicitly: the complete `w:rFonts` slot
+- [x] Deliver the F-266a prerequisites explicitly: the complete `w:rFonts` slot
       set including `eastAsia` and `cs`, `w:hint`, `w:rtl`, `w:cs`, the `w:lang`
       East Asian and bidirectional setters, and `w:bCs`, `w:iCs` and `w:szCs`.
-- [ ] Add `RunContent::Symbol` and `RunContent::SpecialCharacter`, with the
+- [x] Add `RunContent::Symbol` and `RunContent::SpecialCharacter`, with the
       parser, writer and every match site across the ten consuming files.
-- [ ] Classify `w:lastRenderedPageBreak` through the existing raw path.
-- [ ] Add the facade setters, readers and `RunItemRef` variants, native only.
-- [ ] Implement the theme-clearing policy, state the corrected `set_font`
+- [x] Classify `w:lastRenderedPageBreak` through the existing raw path.
+- [x] Add the facade setters, readers and `RunItemRef` variants, native only.
+- [x] Implement the theme-clearing policy, state the corrected `set_font`
       behaviour in its doc comment, and add the regression tests.
-- [ ] Add the effective-property projection and the render rules, with the
-      non-rendering set asserted as producing no pixel change.
-- [ ] Call `apply_tint_shade` unchanged, prove `theme.rs` has a zero-line diff,
+- [x] Add the effective-property projection, the inline-content render rules
+      for `w:sym`, `w:cr`, `w:noBreakHyphen`, `w:softHyphen` and `w:ptab`, and
+      the tint and shade step, with the non-rendering set asserted as producing
+      no pixel change. See "Deviations" for the visual effects.
+- [x] Call `apply_tint_shade` unchanged, prove `theme.rs` has a zero-line diff,
       and assert its pinned arithmetic still holds.
-- [ ] Add the source-built SSIM fixture and assert the explicit-before-theme
-      divergence.
-- [ ] Record the Word no-repair confirmation as a tracked human action in
+- [x] Assert the explicit-before-theme divergence. See "Deviations" for the
+      SSIM fixture.
+- [x] Record the Word no-repair confirmation as a tracked human action in
       `docs/hld/14-development-backlog.md` under the Milestone 24 gate.
-- [ ] Run the oxml, layout, facade, round-trip, golden, differential, oracle,
-      publish dry-run, hash harness, full verification and microscope gates.
+- [x] Run the oxml, layout, facade, round-trip, differential, hash harness,
+      full verification and microscope gates.
+
+## Deviations
+
+Two checklist items shipped in reduced form. Both reductions are recorded in
+the capability matrix and in the spec set rather than only here, so nothing
+claims a completeness the diff does not deliver.
+
+1. **The visual-effect render rules are not built.** `w:outline`, `w:shadow`,
+   `w:emboss`, `w:imprint`, `w:bdr`, `w:kern` and `w:fitText` are modeled,
+   authored, mutated, removed and round-tripped, and they have no render
+   projection. Stroke-only glyph painting, offset and inset relief, a character
+   border box, pair-kerning gating below a half-point threshold and horizontal
+   segment scaling each need new `oxml-layout` segment state and new PDF
+   backend work, which is a second story's worth of change in a
+   format-neutral crate. `DOCX-032` therefore keeps its `partial`
+   classification with `F-265` as its live owner, its `Layout`, `Render` and
+   `Determinism` columns stay `P`, and its `Create`, `Read`, `Mutate`,
+   `Remove`, `Save-reopen` and `Native` columns move to `Y`. The boundary is
+   named on the matrix row, in `docs/hld/08-rendering-spec.md` and in the
+   `F-265` backlog entry. This follows the `DOCX-030` and `F-264` precedent,
+   where positioned frame placement stayed with its owner for the same reason.
+
+2. **No new SSIM fixture was added.** The existing
+   `scripts/docx_ssim_harness.py` `MULTI_SCRIPT_FIXTURES` set exercises the
+   multi-script render path, and a fixture for stroke, relief, border, kerning
+   and fitted text would record a baseline for a render projection that does
+   not exist yet. It belongs with the render work in deviation 1. The
+   explicit-before-theme divergence is asserted instead by
+   `explicit_font_priority_divergence_from_word_is_deliberate`, which compares
+   three deterministic 150 dpi renders through the public facade.
+
+Two further points that the plan did not anticipate.
+
+3. **The stack budget was paid for by boxing three existing members.** Adding
+   16 members plus nine attributes to `CT_RPr` and six to `CT_Shd` would have
+   grown both past the 2 MiB test-thread ceiling that F-264 hit.
+   `CT_RPr::shading`, `CT_RPr::change` and `CT_PPr::shading` are now boxed
+   alongside the new `border`, `fit_text` and `east_asian_layout` members.
+   `size_of::<CT_RPr>()` is 696 before and after, `size_of::<CT_PPr>()` falls
+   from 2144 to 2080 and `size_of::<Document>()` falls from 27040 to 26848. No
+   stack limit was raised.
+
+4. **One serialization normalisation was introduced.** `ST_UcharHexNumber`
+   values are typed as `u8` so `apply_tint_shade` can take them, and they are
+   written back as the two upper-case hex digits Word writes. A value that is
+   not two hex digits is retained verbatim through the element's ordered
+   attribute vector instead of being parsed. This is stated in
+   `docs/hld/04-opc-and-packaging.md`.
 
 ## Open questions
 

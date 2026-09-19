@@ -706,6 +706,253 @@ pub enum RunContent {
         /// Number of raw run children that precede this reference.
         raw_before: usize,
     },
+    /// A symbol character from a specific font (`<w:sym w:font="..." w:char="..."/>`).
+    Symbol {
+        /// The font the code point is looked up in.
+        font: String,
+        /// The code point, written back as four upper-case hex digits.
+        char_code: u16,
+    },
+    /// One of the Word special characters that carries no text of its own.
+    SpecialCharacter(SpecialCharacter),
+}
+
+/// A Word special character run child.
+///
+/// The four share one placement contract, so they share one `RunContent`
+/// variant rather than taking one each across the ten files that match on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecialCharacter {
+    /// `<w:cr/>`, a carriage return that breaks the line.
+    CarriageReturn,
+    /// `<w:noBreakHyphen/>`, a hyphen that is not a break opportunity.
+    NoBreakHyphen,
+    /// `<w:softHyphen/>`, a hyphen that renders only at a line break.
+    SoftHyphen,
+    /// `<w:ptab/>`, an absolutely positioned tab.
+    PositionalTab {
+        alignment: ST_PTabAlignment,
+        relative_to: ST_PTabRelativeTo,
+        leader: ST_PTabLeader,
+    },
+}
+
+/// `ST_PTabAlignment` — how content aligns against a positional tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ST_PTabAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+/// `ST_PTabRelativeTo` — what a positional tab position is measured from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ST_PTabRelativeTo {
+    Margin,
+    Indent,
+}
+
+/// `ST_PTabLeader` — the leader drawn across a positional tab gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ST_PTabLeader {
+    None,
+    Dot,
+    Hyphen,
+    Underscore,
+    MiddleDot,
+}
+
+impl ST_PTabAlignment {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "left" => Some(ST_PTabAlignment::Left),
+            "center" => Some(ST_PTabAlignment::Center),
+            "right" => Some(ST_PTabAlignment::Right),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ST_PTabAlignment::Left => "left",
+            ST_PTabAlignment::Center => "center",
+            ST_PTabAlignment::Right => "right",
+        }
+    }
+}
+
+impl ST_PTabRelativeTo {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "margin" => Some(ST_PTabRelativeTo::Margin),
+            "indent" => Some(ST_PTabRelativeTo::Indent),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ST_PTabRelativeTo::Margin => "margin",
+            ST_PTabRelativeTo::Indent => "indent",
+        }
+    }
+}
+
+impl ST_PTabLeader {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(ST_PTabLeader::None),
+            "dot" => Some(ST_PTabLeader::Dot),
+            "hyphen" => Some(ST_PTabLeader::Hyphen),
+            "underscore" => Some(ST_PTabLeader::Underscore),
+            "middleDot" => Some(ST_PTabLeader::MiddleDot),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ST_PTabLeader::None => "none",
+            ST_PTabLeader::Dot => "dot",
+            ST_PTabLeader::Hyphen => "hyphen",
+            ST_PTabLeader::Underscore => "underscore",
+            ST_PTabLeader::MiddleDot => "middleDot",
+        }
+    }
+}
+
+/// Read `<w:sym/>` as typed content.
+///
+/// A symbol whose `w:char` is not four hex digits, or that carries an
+/// attribute outside the modeled pair, stays raw so nothing is lost.
+fn parse_symbol(e: &BytesStart<'_>, prefixes: &[String]) -> Result<Option<RunContent>> {
+    let mut font = None;
+    let mut char_code = None;
+    for attribute in e.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        let value = std::str::from_utf8(&attribute.value)?;
+        if is_word_attribute(key, b"font", prefixes) {
+            font = Some(value.to_owned());
+        } else if is_word_attribute(key, b"char", prefixes) {
+            if value.len() != 4 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Ok(None);
+            }
+            char_code = u16::from_str_radix(value, 16).ok();
+        } else if !key.starts_with(b"xmlns") {
+            return Ok(None);
+        }
+    }
+    Ok(match (font, char_code) {
+        (Some(font), Some(char_code)) => Some(RunContent::Symbol { font, char_code }),
+        _ => None,
+    })
+}
+
+/// Read `<w:ptab/>` as typed content.
+///
+/// All three attributes are required by the schema, so a positional tab
+/// missing one, or carrying a token outside the inventory, stays raw.
+fn parse_positional_tab(e: &BytesStart<'_>, prefixes: &[String]) -> Result<Option<RunContent>> {
+    let mut alignment = None;
+    let mut relative_to = None;
+    let mut leader = None;
+    for attribute in e.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        let value = std::str::from_utf8(&attribute.value)?;
+        if is_word_attribute(key, b"alignment", prefixes) {
+            alignment = ST_PTabAlignment::from_str(value);
+        } else if is_word_attribute(key, b"relativeTo", prefixes) {
+            relative_to = ST_PTabRelativeTo::from_str(value);
+        } else if is_word_attribute(key, b"leader", prefixes) {
+            leader = ST_PTabLeader::from_str(value);
+        } else if !key.starts_with(b"xmlns") {
+            return Ok(None);
+        }
+    }
+    Ok(match (alignment, relative_to, leader) {
+        (Some(alignment), Some(relative_to), Some(leader)) => Some(RunContent::SpecialCharacter(
+            SpecialCharacter::PositionalTab {
+                alignment,
+                relative_to,
+                leader,
+            },
+        )),
+        _ => None,
+    })
+}
+
+/// Read `<w:cr/>`, `<w:noBreakHyphen/>` and `<w:softHyphen/>` as typed content.
+///
+/// These are `CT_Empty`, so an element carrying any attribute other than a
+/// namespace declaration stays raw.
+fn parse_empty_special_character(
+    e: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<Option<RunContent>> {
+    let name = e.name();
+    let character = if is_word_element(name.as_ref(), b"cr", prefixes) {
+        SpecialCharacter::CarriageReturn
+    } else if is_word_element(name.as_ref(), b"noBreakHyphen", prefixes) {
+        SpecialCharacter::NoBreakHyphen
+    } else if is_word_element(name.as_ref(), b"softHyphen", prefixes) {
+        SpecialCharacter::SoftHyphen
+    } else {
+        return Ok(None);
+    };
+    for attribute in e.attributes() {
+        if !attribute?.key.as_ref().starts_with(b"xmlns") {
+            return Ok(None);
+        }
+    }
+    Ok(Some(RunContent::SpecialCharacter(character)))
+}
+
+/// Read the run children F-265 typed, or `None` to keep the element raw.
+fn parse_typed_special_run_child(
+    e: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<Option<RunContent>> {
+    if is_word_element(e.name().as_ref(), b"sym", prefixes) {
+        parse_symbol(e, prefixes)
+    } else if is_word_element(e.name().as_ref(), b"ptab", prefixes) {
+        parse_positional_tab(e, prefixes)
+    } else {
+        parse_empty_special_character(e, prefixes)
+    }
+}
+
+fn write_special_character<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    character: SpecialCharacter,
+) -> Result<()> {
+    match character {
+        SpecialCharacter::CarriageReturn => {
+            writer.write_event(Event::Empty(BytesStart::new("w:cr")))?;
+        }
+        SpecialCharacter::NoBreakHyphen => {
+            writer.write_event(Event::Empty(BytesStart::new("w:noBreakHyphen")))?;
+        }
+        SpecialCharacter::SoftHyphen => {
+            writer.write_event(Event::Empty(BytesStart::new("w:softHyphen")))?;
+        }
+        SpecialCharacter::PositionalTab {
+            alignment,
+            relative_to,
+            leader,
+        } => {
+            let mut e = BytesStart::new("w:ptab");
+            e.push_attribute(("w:alignment", alignment.as_str()));
+            e.push_attribute(("w:relativeTo", relative_to.as_str()));
+            e.push_attribute(("w:leader", leader.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+    }
+    Ok(())
 }
 
 /// A typed comment range boundary at a run insertion point.
@@ -1112,6 +1359,11 @@ impl CT_R {
             RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
             | RunContent::CommentReference { .. } => "",
+            // A symbol is font-encoded rather than Unicode, and the special
+            // characters carry no text, so neither contributes to extraction.
+            RunContent::Symbol { .. } => "",
+            RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn) => "\n",
+            RunContent::SpecialCharacter(_) => "",
         }
     }
 
@@ -1125,7 +1377,9 @@ impl CT_R {
             | RunContent::Field(_)
             | RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
-            | RunContent::CommentReference { .. } => "",
+            | RunContent::CommentReference { .. }
+            | RunContent::Symbol { .. }
+            | RunContent::SpecialCharacter(_) => "",
         }
     }
 
@@ -1446,6 +1700,9 @@ impl CT_R {
                             raw_before: extra_xml.len(),
                         });
                         modeled_children += 1;
+                    } else if let Some(typed) = parse_typed_special_run_child(e, &prefixes)? {
+                        content.push(typed);
+                        modeled_children += 1;
                     } else if !is_word_element(name.as_ref(), b"rPr", &prefixes) {
                         // Capture unknown empty child elements (e.g.
                         // w:commentReference) as raw XML, mirroring the
@@ -1572,6 +1829,15 @@ impl CT_R {
                     let mut e = BytesStart::new("w:endnoteReference");
                     e.push_attribute(("w:id", buf.format(*id)));
                     writer.write_event(Event::Empty(e))?;
+                }
+                RunContent::Symbol { font, char_code } => {
+                    let mut e = BytesStart::new("w:sym");
+                    e.push_attribute(("w:font", font.as_str()));
+                    e.push_attribute(("w:char", format!("{char_code:04X}").as_str()));
+                    writer.write_event(Event::Empty(e))?;
+                }
+                RunContent::SpecialCharacter(character) => {
+                    write_special_character(writer, *character)?;
                 }
                 RunContent::CommentReference { id, raw_before } => {
                     if !ordered_raw {
@@ -11729,6 +11995,90 @@ mod tests {
             })
         );
         assert_eq!(serialized_paragraph(&paragraph), before);
+    }
+
+    #[test]
+    fn symbols_and_special_characters_reopen_in_source_order() {
+        let paragraph = parse_paragraph(concat!(
+            r#"<w:r><w:t>a</w:t><w:sym w:font="Wingdings" w:char="F0FC"/><w:cr/>"#,
+            r#"<w:noBreakHyphen/><w:tab/><w:softHyphen/>"#,
+            r#"<w:ptab w:alignment="right" w:relativeTo="margin" w:leader="dot"/>"#,
+            r#"<w:lastRenderedPageBreak/><w:br/><w:t>b</w:t></w:r>"#,
+        ));
+        let content = &paragraph.runs[0].content;
+        assert_eq!(
+            content[1],
+            RunContent::Symbol {
+                font: "Wingdings".to_owned(),
+                char_code: 0xF0FC,
+            }
+        );
+        assert_eq!(
+            content[2],
+            RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn)
+        );
+        assert_eq!(
+            content[3],
+            RunContent::SpecialCharacter(SpecialCharacter::NoBreakHyphen)
+        );
+        assert_eq!(content[4], RunContent::Tab);
+        assert_eq!(
+            content[5],
+            RunContent::SpecialCharacter(SpecialCharacter::SoftHyphen)
+        );
+        assert_eq!(
+            content[6],
+            RunContent::SpecialCharacter(SpecialCharacter::PositionalTab {
+                alignment: ST_PTabAlignment::Right,
+                relative_to: ST_PTabRelativeTo::Margin,
+                leader: ST_PTabLeader::Dot,
+            })
+        );
+
+        let output = serialized_paragraph(&paragraph);
+        let ordered = [
+            "<w:t>a</w:t>",
+            r#"<w:sym w:font="Wingdings" w:char="F0FC"/>"#,
+            "<w:cr/>",
+            "<w:noBreakHyphen/>",
+            "<w:tab/>",
+            "<w:softHyphen/>",
+            r#"<w:ptab w:alignment="right" w:relativeTo="margin" w:leader="dot"/>"#,
+            "<w:lastRenderedPageBreak/>",
+            "<w:br/>",
+            "<w:t>b</w:t>",
+        ]
+        .map(|needle| {
+            output
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {output}"))
+        });
+        assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]), "{output}");
+    }
+
+    #[test]
+    fn a_special_character_outside_the_modeled_shape_stays_raw() {
+        let paragraph = parse_paragraph(concat!(
+            r#"<w:r><w:sym w:font="Wingdings" w:char="zzzz"/>"#,
+            r#"<w:sym w:font="Wingdings"/>"#,
+            r#"<w:ptab w:alignment="right" w:leader="dot"/>"#,
+            r#"<w:cr w:producerFlag="1"/></w:r>"#,
+        ));
+        assert!(paragraph.runs[0].content.is_empty());
+        assert_eq!(paragraph.runs[0].extra_xml.len(), 4);
+
+        let output = serialized_paragraph(&paragraph);
+        for retained in [
+            r#"w:char="zzzz""#,
+            r#"<w:sym w:font="Wingdings"/>"#,
+            r#"<w:ptab w:alignment="right" w:leader="dot"/>"#,
+            r#"<w:cr w:producerFlag="1"/>"#,
+        ] {
+            assert!(
+                output.contains(retained),
+                "{retained} missing from {output}"
+            );
+        }
     }
 
     #[test]

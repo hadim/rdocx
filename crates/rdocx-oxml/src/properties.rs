@@ -1,6 +1,10 @@
 //! Paragraph properties (`CT_PPr`) and run properties (`CT_RPr`).
 
+use std::borrow::Cow;
+
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
+use quick_xml::name::QName;
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::Result;
@@ -9,9 +13,14 @@ use crate::run_properties::language_element_is_explicitly_empty;
 use crate::shared::ST_OnOff;
 
 pub use crate::paragraph_properties::{CT_FramePr, CT_PPr};
-pub use crate::run_properties::CT_RPr;
+pub use crate::run_properties::{CT_EastAsianLayout, CT_FitText, CT_RPr, ST_Em, ST_TextEffect};
 
 /// `CT_Shd` — Shading/background fill.
+///
+/// The six theme attributes are modeled rather than dropped. `w:themeTint`,
+/// `w:themeShade`, `w:themeFillTint` and `w:themeFillShade` are
+/// `ST_UcharHexNumber`, a single byte written as two hex digits, and they are
+/// re-serialized in the canonical upper-case spelling Word itself writes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Shd {
     /// Shading pattern (e.g. "clear", "solid", "horzStripe")
@@ -20,62 +29,198 @@ pub struct CT_Shd {
     pub color: Option<String>,
     /// Background fill color hex
     pub fill: Option<String>,
+    /// Foreground theme colour reference (`w:themeColor`).
+    pub theme_color: Option<String>,
+    /// Foreground theme tint, 0 to 255 (`w:themeTint`).
+    pub theme_tint: Option<u8>,
+    /// Foreground theme shade, 0 to 255 (`w:themeShade`).
+    pub theme_shade: Option<u8>,
+    /// Background theme colour reference (`w:themeFill`).
+    pub theme_fill: Option<String>,
+    /// Background theme tint, 0 to 255 (`w:themeFillTint`).
+    pub theme_fill_tint: Option<u8>,
+    /// Background theme shade, 0 to 255 (`w:themeFillShade`).
+    pub theme_fill_shade: Option<u8>,
+    /// Attributes this type does not model, in source order.
+    ///
+    /// A theme tint or shade whose value is not two hex digits reaches a
+    /// serialized element through here rather than being discarded. Names and
+    /// values keep their stored spelling and are written ahead of the modeled
+    /// attributes, so a caller storing one itself owns the escaping.
+    pub extra_attributes: Vec<(String, String)>,
+}
+
+impl Default for CT_Shd {
+    /// The pattern Word omits, matching what the parser assumes for a
+    /// `w:shd` that carries no `w:val`.
+    fn default() -> Self {
+        CT_Shd {
+            val: "clear".to_owned(),
+            color: None,
+            fill: None,
+            theme_color: None,
+            theme_tint: None,
+            theme_shade: None,
+            theme_fill: None,
+            theme_fill_tint: None,
+            theme_fill_shade: None,
+            extra_attributes: Vec::new(),
+        }
+    }
+}
+
+/// Parse an `ST_UcharHexNumber` attribute value.
+pub(crate) fn parse_uchar_hex(value: &str) -> Option<u8> {
+    (value.len() == 2 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| u8::from_str_radix(value, 16).ok())
+        .flatten()
+}
+
+pub(crate) fn push_uchar_hex(e: &mut BytesStart<'_>, name: &str, value: u8) {
+    const DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+    let encoded = [
+        DIGITS[usize::from(value >> 4)],
+        DIGITS[usize::from(value & 0x0f)],
+    ];
+    e.push_attribute((name.as_bytes(), encoded.as_slice()));
 }
 
 impl CT_Shd {
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
-        let mut val = "clear".to_string();
-        let mut color = None;
-        let mut fill = None;
+        let mut shd = CT_Shd::default();
 
         for attr in e.attributes() {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
             if matches_local_name(key, b"val") {
-                val = v.to_string();
+                shd.val = v.to_string();
             } else if matches_local_name(key, b"color") {
-                color = Some(v.to_string());
+                shd.color = Some(v.to_string());
             } else if matches_local_name(key, b"fill") {
-                fill = Some(v.to_string());
+                shd.fill = Some(v.to_string());
+            } else if matches_local_name(key, b"themeColor") {
+                shd.theme_color = Some(v.to_string());
+            } else if matches_local_name(key, b"themeFill") {
+                shd.theme_fill = Some(v.to_string());
+            } else if let Some(slot) = shd.theme_byte_slot(key) {
+                match parse_uchar_hex(v) {
+                    Some(parsed) => *slot = Some(parsed),
+                    None => shd
+                        .extra_attributes
+                        .push((std::str::from_utf8(key)?.to_owned(), v.to_owned())),
+                }
+            } else {
+                shd.extra_attributes
+                    .push((std::str::from_utf8(key)?.to_owned(), v.to_owned()));
             }
         }
 
-        Ok(CT_Shd { val, color, fill })
+        Ok(shd)
     }
 
     pub(crate) fn from_xml_attrs_with_prefixes(
         e: &BytesStart,
         word_prefixes: &[String],
     ) -> Result<Self> {
-        let mut val = "clear".to_string();
-        let mut color = None;
-        let mut fill = None;
+        let mut shd = CT_Shd::default();
 
         for attr in e.attributes() {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
             if is_word_attribute(key, b"val", word_prefixes) {
-                val = v.to_string();
+                shd.val = v.to_string();
             } else if is_word_attribute(key, b"color", word_prefixes) {
-                color = Some(v.to_string());
+                shd.color = Some(v.to_string());
             } else if is_word_attribute(key, b"fill", word_prefixes) {
-                fill = Some(v.to_string());
+                shd.fill = Some(v.to_string());
+            } else if is_word_attribute(key, b"themeColor", word_prefixes) {
+                shd.theme_color = Some(v.to_string());
+            } else if is_word_attribute(key, b"themeFill", word_prefixes) {
+                shd.theme_fill = Some(v.to_string());
+            } else if let Some(slot) = shd.word_theme_byte_slot(key, word_prefixes) {
+                match parse_uchar_hex(v) {
+                    Some(parsed) => *slot = Some(parsed),
+                    None => shd
+                        .extra_attributes
+                        .push((std::str::from_utf8(key)?.to_owned(), v.to_owned())),
+                }
+            } else {
+                shd.extra_attributes
+                    .push((std::str::from_utf8(key)?.to_owned(), v.to_owned()));
             }
         }
 
-        Ok(CT_Shd { val, color, fill })
+        Ok(shd)
+    }
+
+    /// The typed slot a prefix-agnostic theme byte attribute writes into.
+    fn theme_byte_slot(&mut self, key: &[u8]) -> Option<&mut Option<u8>> {
+        if matches_local_name(key, b"themeTint") {
+            Some(&mut self.theme_tint)
+        } else if matches_local_name(key, b"themeShade") {
+            Some(&mut self.theme_shade)
+        } else if matches_local_name(key, b"themeFillTint") {
+            Some(&mut self.theme_fill_tint)
+        } else if matches_local_name(key, b"themeFillShade") {
+            Some(&mut self.theme_fill_shade)
+        } else {
+            None
+        }
+    }
+
+    /// The typed slot a Word-prefixed theme byte attribute writes into.
+    fn word_theme_byte_slot(
+        &mut self,
+        key: &[u8],
+        word_prefixes: &[String],
+    ) -> Option<&mut Option<u8>> {
+        if is_word_attribute(key, b"themeTint", word_prefixes) {
+            Some(&mut self.theme_tint)
+        } else if is_word_attribute(key, b"themeShade", word_prefixes) {
+            Some(&mut self.theme_shade)
+        } else if is_word_attribute(key, b"themeFillTint", word_prefixes) {
+            Some(&mut self.theme_fill_tint)
+        } else if is_word_attribute(key, b"themeFillShade", word_prefixes) {
+            Some(&mut self.theme_fill_shade)
+        } else {
+            None
+        }
     }
 
     pub fn write_xml<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
         let mut e = BytesStart::new(tag);
+        for (name, value) in &self.extra_attributes {
+            e.push_attribute(Attribute {
+                key: QName(name.as_bytes()),
+                value: Cow::Borrowed(value.as_bytes()),
+            });
+        }
         e.push_attribute(("w:val", self.val.as_str()));
         if let Some(ref c) = self.color {
             e.push_attribute(("w:color", c.as_str()));
         }
+        if let Some(ref c) = self.theme_color {
+            e.push_attribute(("w:themeColor", c.as_str()));
+        }
+        if let Some(tint) = self.theme_tint {
+            push_uchar_hex(&mut e, "w:themeTint", tint);
+        }
+        if let Some(shade) = self.theme_shade {
+            push_uchar_hex(&mut e, "w:themeShade", shade);
+        }
         if let Some(ref f) = self.fill {
             e.push_attribute(("w:fill", f.as_str()));
+        }
+        if let Some(ref f) = self.theme_fill {
+            e.push_attribute(("w:themeFill", f.as_str()));
+        }
+        if let Some(tint) = self.theme_fill_tint {
+            push_uchar_hex(&mut e, "w:themeFillTint", tint);
+        }
+        if let Some(shade) = self.theme_fill_shade {
+            push_uchar_hex(&mut e, "w:themeFillShade", shade);
         }
         writer.write_event(Event::Empty(e))?;
         Ok(())
@@ -341,6 +486,80 @@ mod tests {
             buf.clear();
         }
         CT_RPr::from_xml(&mut reader).unwrap()
+    }
+
+    #[test]
+    fn shading_keeps_every_theme_attribute_through_a_round_trip() {
+        let rpr = parse_rpr(concat!(
+            r#"<w:shd xmlns:x="urn:producer" w:val="pct20" w:color="4472C4" w:themeColor="accent1""#,
+            r#" w:themeTint="66" w:themeShade="BF" w:fill="ED7D31" w:themeFill="accent2""#,
+            r#" w:themeFillTint="33" w:themeFillShade="80" x:kept="shd"/>"#,
+        ));
+        let shading = rpr.shading.as_deref().unwrap();
+        assert_eq!(shading.val, "pct20");
+        assert_eq!(shading.color.as_deref(), Some("4472C4"));
+        assert_eq!(shading.theme_color.as_deref(), Some("accent1"));
+        assert_eq!(shading.theme_tint, Some(0x66));
+        assert_eq!(shading.theme_shade, Some(0xBF));
+        assert_eq!(shading.fill.as_deref(), Some("ED7D31"));
+        assert_eq!(shading.theme_fill.as_deref(), Some("accent2"));
+        assert_eq!(shading.theme_fill_tint, Some(0x33));
+        assert_eq!(shading.theme_fill_shade, Some(0x80));
+        // The namespace declaration is retained alongside the foreign
+        // attribute, so the prefix stays bound on the way out.
+        assert_eq!(
+            shading.extra_attributes,
+            vec![
+                ("xmlns:x".to_owned(), "urn:producer".to_owned()),
+                ("x:kept".to_owned(), "shd".to_owned()),
+            ]
+        );
+
+        let mut output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        for retained in [
+            r#"w:themeColor="accent1""#,
+            r#"w:themeTint="66""#,
+            r#"w:themeShade="BF""#,
+            r#"w:themeFill="accent2""#,
+            r#"w:themeFillTint="33""#,
+            r#"w:themeFillShade="80""#,
+            r#"x:kept="shd""#,
+        ] {
+            assert!(
+                output.contains(retained),
+                "{retained} missing from {output}"
+            );
+        }
+
+        let reparsed = parse_rpr(
+            output
+                .strip_prefix("<w:rPr>")
+                .unwrap()
+                .strip_suffix("</w:rPr>")
+                .unwrap(),
+        );
+        assert_eq!(reparsed.shading, rpr.shading);
+    }
+
+    #[test]
+    fn a_shading_theme_byte_outside_the_hex_convention_is_retained_verbatim() {
+        let rpr = parse_rpr(r#"<w:shd w:val="clear" w:themeTint="not-hex"/>"#);
+        let shading = rpr.shading.as_deref().unwrap();
+        assert_eq!(shading.theme_tint, None);
+        assert_eq!(
+            shading.extra_attributes,
+            vec![("w:themeTint".to_owned(), "not-hex".to_owned())]
+        );
+
+        let mut output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains(r#"w:themeTint="not-hex""#)
+        );
     }
 
     #[test]

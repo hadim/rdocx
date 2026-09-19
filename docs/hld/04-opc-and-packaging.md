@@ -1072,6 +1072,22 @@ source order. A modeled toggle whose source element carried an attribute the
 model does not own replays that element in place of the canonical form, which
 keeps a parse and save of an untouched paragraph byte identical.
 
+Run property readers follow the same contract over the complete `EG_RPrBase`
+sequence. `w:rFonts`, `w:color`, `w:bdr`, `w:fitText`, `w:eastAsianLayout`, and
+`w:shd` write their retained attributes before the modeled ones, so typing
+those elements drops no producer attribute. The one normalisation is
+`ST_UcharHexNumber`. `w:themeTint`, `w:themeShade`, `w:themeFillTint`, and
+`w:themeFillShade` hold a byte, so they are re-serialized as the two upper-case
+hex digits Word writes, and a value that is not two hex digits is retained
+verbatim through the element's ordered attribute vector instead.
+
+Run content readers type `w:sym` and the four special characters in their
+source positions among text, tabs, breaks, drawings, and fields. A `w:sym`
+whose `w:char` is not four hex digits, a `w:ptab` missing one of its three
+required attributes, and a `w:cr`, `w:noBreakHyphen`, or `w:softHyphen`
+carrying any attribute stay in positioned raw capture, because a partial
+projection would drop bytes a no-op save must return.
+
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
 with every inherited namespace binding they use. Typed table, cell, border,

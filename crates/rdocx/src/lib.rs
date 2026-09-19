@@ -113,6 +113,7 @@ pub use rdocx_oxml::math::{
     MathRadical, MathRun, MathRunProperties, MathScript, MathScriptStyle, MathStyle,
     MathSubSuperscript, MatrixBaseJustification, OfficeMath,
 };
+pub use rdocx_oxml::properties::{CT_EastAsianLayout, CT_FitText, ST_Em, ST_TextEffect};
 pub use rdocx_oxml::settings::{
     CharacterSpacingControl, CompatibilityOption, CompatibilitySetting, CryptAlgorithmClass,
     CryptAlgorithmType, CryptProviderType, DocumentProofState, DocumentProtection, DocumentView,
@@ -120,13 +121,17 @@ pub use rdocx_oxml::settings::{
     ProtectionMode, SettingsDiagnostic, SettingsDiagnosticReason, ThemeFontLanguage, ZoomKind,
 };
 pub use rdocx_oxml::styles::StyleType;
-pub use rdocx_oxml::text::{AcceptedRunPath, AcceptedRunPathSegment};
+pub use rdocx_oxml::text::{
+    AcceptedRunPath, AcceptedRunPathSegment, ST_PTabAlignment, ST_PTabLeader, ST_PTabRelativeTo,
+    SpecialCharacter,
+};
 pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
 pub use run::{
     BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind, FieldDisplaySegmentRef, FieldKind,
-    FieldRef, LegacyHorizontalRuleRef, Run, RunItemRef, RunProperties, RunRef, UnderlineStyle,
+    FieldRef, LegacyHorizontalRuleRef, Run, RunFontSlot, RunItemRef, RunProperties, RunRef,
+    UnderlineStyle,
 };
 pub use style::{Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};

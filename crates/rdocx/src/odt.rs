@@ -17,7 +17,7 @@ use rdocx_oxml::table::{
     CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, CT_TcPr, CellContent,
     VMerge,
 };
-use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
 use rdocx_oxml::units::Twips;
 use zip::CompressionMethod;
 use zip::ZipWriter;
@@ -482,10 +482,15 @@ impl<'a> OdtWriter<'a> {
                         &run_style,
                         &mut trailing_text_style,
                     ),
-                    RunContent::Tab | RunContent::Break(BreakType::Line) => {
+                    RunContent::Tab
+                    | RunContent::Break(BreakType::Line)
+                    | RunContent::SpecialCharacter(_) => {
                         trailing_text_style = None;
                         1
                     }
+                    // A symbol is font-encoded rather than Unicode, so it
+                    // reaches the ODF body as nothing at all.
+                    RunContent::Symbol { .. } => 0,
                     RunContent::Drawing(_) => {
                         if self
                             .media_at
@@ -886,7 +891,14 @@ impl<'a> OdtWriter<'a> {
                     &content_path,
                     "comment reference was dropped during ODT export",
                 )?,
-                RunContent::Tab | RunContent::Break(BreakType::Line) | RunContent::Drawing(_) => {}
+                RunContent::Symbol { .. } => self.diagnose(
+                    &content_path,
+                    "symbol character was dropped during ODT export",
+                )?,
+                RunContent::Tab
+                | RunContent::Break(BreakType::Line)
+                | RunContent::Drawing(_)
+                | RunContent::SpecialCharacter(_) => {}
             }
         }
         Ok(())
@@ -1548,6 +1560,15 @@ impl<'a> OdtWriter<'a> {
                     RunContent::Tab => output.push_str("<text:tab/>"),
                     RunContent::Break(BreakType::Line) => output.push_str("<text:line-break/>"),
                     RunContent::Break(_) => {}
+                    RunContent::SpecialCharacter(character) => match character {
+                        SpecialCharacter::CarriageReturn => output.push_str("<text:line-break/>"),
+                        SpecialCharacter::NoBreakHyphen => write_odf_text(output, "\u{2011}"),
+                        SpecialCharacter::SoftHyphen => write_odf_text(output, "\u{00ad}"),
+                        SpecialCharacter::PositionalTab { .. } => output.push_str("<text:tab/>"),
+                    },
+                    // A symbol is font-encoded rather than Unicode, so there
+                    // is no portable ODF spelling for it.
+                    RunContent::Symbol { .. } => {}
                     RunContent::Drawing(drawing) => {
                         if let Some(inline) = &drawing.inline
                             && let Some(media_index) = self.media_at.get(&content_path)
@@ -6100,21 +6121,23 @@ mod tests {
         paragraph.runs[0].properties = Some(CT_RPr {
             color: Some("auto".to_string()),
             highlight: Some(ST_HighlightColor::Yellow),
-            shading: Some(rdocx_oxml::properties::CT_Shd {
+            shading: Some(Box::new(rdocx_oxml::properties::CT_Shd {
                 val: "horzStripe".to_string(),
                 color: Some("ABCDEF".to_string()),
                 fill: Some("123456".to_string()),
-            }),
+                ..Default::default()
+            })),
             ..Default::default()
         });
         paragraph.runs.push({
             let mut run = CT_R::new("invalid fill");
             run.properties = Some(CT_RPr {
-                shading: Some(rdocx_oxml::properties::CT_Shd {
+                shading: Some(Box::new(rdocx_oxml::properties::CT_Shd {
                     val: "clear".to_string(),
                     color: None,
                     fill: Some("auto".to_string()),
-                }),
+                    ..Default::default()
+                })),
                 ..Default::default()
             });
             run
@@ -6874,11 +6897,12 @@ mod tests {
             caps: Some(true),
             color: Some("auto".to_owned()),
             highlight: Some(ST_HighlightColor::Yellow),
-            shading: Some(rdocx_oxml::properties::CT_Shd {
+            shading: Some(Box::new(rdocx_oxml::properties::CT_Shd {
                 val: "horzStripe".to_owned(),
                 color: Some("ABCDEF".to_owned()),
                 fill: Some("123456".to_owned()),
-            }),
+                ..Default::default()
+            })),
             ..Default::default()
         });
         paragraph.runs.push({

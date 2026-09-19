@@ -1050,6 +1050,25 @@ while formatting setters retain the complete ordered content sequence. These
 methods are additive on the pre-1.0 native Rust facade. Python, WASM, and CLI
 gain no implicit surface.
 
+`add_symbol` keeps that meaning. `add_symbol_char(font, char_code)` is the
+separate method that produces `w:sym`, and `add_special_character` produces
+`w:cr`, `w:noBreakHyphen`, `w:softHyphen`, and `w:ptab`. `RunItemRef` gains
+`Symbol`, `SpecialCharacter`, and the read-only `LastRenderedPageBreak`, which
+has no authoring counterpart because the element is a producer hint.
+
+The same handle authors every `EG_RPrBase` member. `set_slot_font` and
+`set_slot_theme_font` take a `RunFontSlot`, and each sets one form and clears
+the other for that slot alone. `set_font_hint` is independent and no font
+operation clears it. `set_color_theme` authors the theme colour with its tint
+and shade and leaves `w:val` as the literal Word caches beside it. Two shipped
+setters change behaviour as a correction rather than a deprecation.
+`set_font` and `set_font_value` write all four script slots and now clear all
+four theme attributes, and `set_color_value` clears the theme colour, tint, and
+shade. Before this, Word resolved the theme attribute the caller had left in
+place and the authored value silently did nothing. `rdocx::RunProperties` is a
+re-export of `CT_RPr`, so its added public members are a pre-1.0 minor source
+break on the native facade. Python, WASM, and CLI gain no method.
+
 The low-level `rdocx-layout::TableCell` payload is source-ordered
 `Vec<CellBlock>`, with the present paragraph and recursive table variants. The
 additional merge-span and cell-margin fields expose renderer input rather than

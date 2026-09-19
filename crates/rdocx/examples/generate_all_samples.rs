@@ -616,11 +616,12 @@ fn generate_feature_showcase(_samples_dir: &Path) -> Document {
         StyleBuilder::paragraph("CustomHighlight", "Custom Highlight")
             .based_on("Normal")
             .paragraph_properties(rdocx_oxml::properties::CT_PPr {
-                shading: Some(rdocx_oxml::properties::CT_Shd {
+                shading: Some(Box::new(rdocx_oxml::properties::CT_Shd {
                     val: "clear".to_string(),
                     color: None,
                     fill: Some("FFF2CC".to_string()),
-                }),
+                    ..Default::default()
+                })),
                 ..Default::default()
             })
             .run_properties(rdocx_oxml::properties::CT_RPr {

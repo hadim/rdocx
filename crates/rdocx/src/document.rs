@@ -15863,11 +15863,12 @@ impl Document {
         p.runs.push(run);
         if let Some(color) = bg_color {
             p.properties = Some(CT_PPr {
-                shading: Some(CT_Shd {
+                shading: Some(Box::new(CT_Shd {
                     val: "clear".to_string(),
                     color: Some("auto".to_string()),
                     fill: Some(color.to_string()),
-                }),
+                    ..Default::default()
+                })),
                 ..Default::default()
             });
         }

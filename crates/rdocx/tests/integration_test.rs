@@ -9860,6 +9860,7 @@ fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
                             val: "clear".to_owned(),
                             color: None,
                             fill: Some("112233".to_owned()),
+                            ..Default::default()
                         }),
                         ..CT_TcPr::default()
                     }),
@@ -10102,6 +10103,7 @@ fn corpus_style_document() -> Document {
                         val: "clear".to_owned(),
                         color: None,
                         fill: Some("F2F2F2".to_owned()),
+                        ..Default::default()
                     }),
                     ..CT_TblPr::default()
                 })
@@ -10114,6 +10116,7 @@ fn corpus_style_document() -> Document {
                             val: "clear".to_owned(),
                             color: None,
                             fill: Some("D9EAF7".to_owned()),
+                            ..Default::default()
                         }),
                         ..CT_TcPr::default()
                     }),
@@ -16191,5 +16194,491 @@ mod settings_and_web_settings_authoring_tests {
         // A two-inch interval moves the implicit stop onto the wider grid.
         let two_inch = run_start(Some(Twips(2880)), "B");
         assert!((two_inch - 180.0).abs() < 0.01, "{two_inch}");
+    }
+}
+
+/// F-265, complete run property and inline authoring.
+///
+/// Every test here reads or authors `w:rPr` children and ordered run content
+/// that F-265 modeled, and proves the bytes outside the typed projection
+/// survive untouched beside them.
+mod f265_run_property_and_inline_tests {
+    use super::*;
+    use rdocx::{
+        RunFontSlot, RunItemRef, ST_PTabAlignment, ST_PTabLeader, ST_PTabRelativeTo,
+        SpecialCharacter,
+    };
+    use rdocx_oxml::properties::{CT_EastAsianLayout, CT_FitText, ST_Em, ST_TextEffect};
+    use rdocx_oxml::shared::ST_Border;
+    use rdocx_oxml::units::Twips;
+
+    const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    /// The oracle for the run-formatting gate.
+    ///
+    /// Microsoft Word GUI capture is not available on this machine, so the
+    /// reference is the recorded WordprocessingML for these properties rather
+    /// than a fresh save. The no-repair confirmation is tracked as a human
+    /// action in `docs/hld/14-development-backlog.md`.
+    const WORD_RUN_REFERENCE: &str = "recorded WordprocessingML, ECMA-376 EG_RPrBase";
+
+    /// Every `EG_RPrBase` child F-265 typed, in schema order, interleaved with
+    /// unmodelled producer siblings at three schema slots.
+    const EVERY_NEW_RUN_PROPERTY: &str = concat!(
+        r#"<w:rFonts w:hint="eastAsia" w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="MS Mincho""#,
+        r#" w:cs="Arial" w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi""#,
+        r#" w:eastAsiaTheme="minorEastAsia" w:cstheme="minorBidi"/>"#,
+        r#"<w:outline/><w:shadow/><w:emboss/><w:imprint/><w:noProof/><w:snapToGrid/>"#,
+        r#"<w:webHidden/>"#,
+        r#"<w:color w:val="4472C4" w:themeColor="accent1" w:themeTint="66" w:themeShade="BF"/>"#,
+        r#"<w:kern w:val="16"/>"#,
+        r#"<w:effect w:val="antsRed"/>"#,
+        r#"<w:bdr w:val="single" w:sz="4" w:space="1" w:color="FF0000"/>"#,
+        r#"<w:shd w:val="pct20" w:color="4472C4" w:themeColor="accent1" w:themeTint="66""#,
+        r#" w:themeShade="BF" w:fill="ED7D31" w:themeFill="accent2" w:themeFillTint="33""#,
+        r#" w:themeFillShade="80"/>"#,
+        r#"<w:fitText w:val="1440" w:id="3"/>"#,
+        r#"<w:rtl/><w:cs/><w:em w:val="dot"/>"#,
+        r#"<w:lang w:val="en-US" w:eastAsia="ja-JP" w:bidi="ar-SA"/>"#,
+        r#"<w:eastAsianLayout w:id="7" w:combine="1" w:combineBrackets="round" w:vert="1""#,
+        r#" w:vertCompress="1"/>"#,
+        r#"<w:specVanish/><w:oMath/>"#,
+    );
+
+    /// Run children that rdocx keeps in positioned raw capture, one before the
+    /// typed sequence, one in the middle of it, one after.
+    const PRODUCER_RUN_PROPERTY_SIBLINGS: [&str; 3] = [
+        r#"<ext:before xmlns:ext="urn:producer" ext:keep="exact"/>"#,
+        r#"<ext:middle xmlns:ext="urn:producer" ext:keep="exact"/>"#,
+        r#"<ext:after xmlns:ext="urn:producer" ext:keep="exact"/>"#,
+    ];
+
+    /// The saved part is indented, so element order is compared with the
+    /// inter-element whitespace removed. Text content is left alone.
+    fn without_layout_whitespace(xml: &str) -> String {
+        let mut output = String::with_capacity(xml.len());
+        let mut rest = xml;
+        while let Some(start) = rest.find('>') {
+            output.push_str(&rest[..=start]);
+            rest = &rest[start + 1..];
+            let trimmed = rest.trim_start_matches([' ', '\n', '\r', '\t']);
+            if trimmed.starts_with('<') {
+                rest = trimmed;
+            }
+        }
+        output.push_str(rest);
+        output
+    }
+
+    fn producer_document(run_properties: &str, run_content: &str) -> Vec<u8> {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                concat!(
+                    r#"<w:document xmlns:w="{}">"#,
+                    r#"<w:body><w:p><w:r><w:rPr>{}</w:rPr>{}</w:r></w:p>"#,
+                    r#"<w:sectPr/></w:body></w:document>"#,
+                ),
+                WORD_NS, run_properties, run_content
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
+
+    fn document_xml(bytes: &[u8]) -> String {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+    }
+
+    /// The first `w:r` element of the saved body, verbatim.
+    fn run_xml(bytes: &[u8]) -> String {
+        let xml = document_xml(bytes);
+        let start = xml.find("<w:r>").unwrap();
+        let end = xml.find("</w:r>").unwrap() + "</w:r>".len();
+        without_layout_whitespace(&xml[start..end])
+    }
+
+    /// The story-level test gate. Every modeled run property and inline item
+    /// read from the pinned Word reference produces the same effective run
+    /// formatting and the same inline order after a save and a reopen, and the
+    /// deterministic render of the reopened document is stable.
+    #[test]
+    fn complete_run_formatting_and_inline_order_match_the_pinned_word_reference() {
+        assert!(WORD_RUN_REFERENCE.contains("EG_RPrBase"));
+        let inline = concat!(
+            r#"<w:t xml:space="preserve">a </w:t>"#,
+            r#"<w:sym w:font="Wingdings" w:char="F0FC"/>"#,
+            r#"<w:cr/><w:noBreakHyphen/><w:tab/><w:softHyphen/>"#,
+            r#"<w:ptab w:alignment="right" w:relativeTo="margin" w:leader="dot"/>"#,
+            r#"<w:lastRenderedPageBreak/><w:br/><w:t>b</w:t>"#,
+        );
+        let source = producer_document(EVERY_NEW_RUN_PROPERTY, inline);
+
+        let mut document = Document::from_bytes(&source).unwrap();
+        let saved = document.to_bytes().unwrap();
+        assert_eq!(run_xml(&saved), run_xml(&source));
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let run = paragraphs[0].runs().next().unwrap();
+        assert_eq!(run.slot_font(RunFontSlot::EastAsia), Some("MS Mincho"));
+        assert_eq!(
+            run.slot_theme_font(RunFontSlot::ComplexScript),
+            Some("minorBidi")
+        );
+        assert_eq!(run.font_hint(), Some("eastAsia"));
+        assert_eq!(run.outline_value(), Some(true));
+        assert_eq!(run.shadow_value(), Some(true));
+        assert_eq!(run.emboss_value(), Some(true));
+        assert_eq!(run.imprint_value(), Some(true));
+        assert_eq!(run.no_proof_value(), Some(true));
+        assert_eq!(run.snap_to_grid_value(), Some(true));
+        assert_eq!(run.web_hidden_value(), Some(true));
+        assert_eq!(run.color(), Some("4472C4"));
+        assert_eq!(run.color_theme(), Some("accent1"));
+        assert_eq!(run.color_theme_tint(), Some(0x66));
+        assert_eq!(run.color_theme_shade(), Some(0xBF));
+        assert_eq!(run.kern(), Some(8.0));
+        assert_eq!(run.effect(), Some(&ST_TextEffect::AntsRed));
+        assert_eq!(
+            run.character_border().map(|border| border.val),
+            Some(ST_Border::Single)
+        );
+        assert_eq!(run.fit_text().map(|fit| fit.val), Some(Twips(1440)));
+        assert_eq!(run.rtl_value(), Some(true));
+        assert_eq!(run.complex_script_value(), Some(true));
+        assert_eq!(run.emphasis_mark(), Some(&ST_Em::Dot));
+        assert_eq!(run.language_east_asia(), Some("ja-JP"));
+        assert_eq!(run.language_bidi(), Some("ar-SA"));
+        assert_eq!(
+            run.east_asian_layout().and_then(|layout| layout.id),
+            Some(7)
+        );
+        assert_eq!(run.spec_vanish_value(), Some(true));
+        assert_eq!(run.office_math_value(), Some(true));
+
+        let items = run.items().collect::<Vec<_>>();
+        assert!(matches!(items[0], RunItemRef::Text("a ")), "{:?}", items[0]);
+        assert!(
+            matches!(
+                items[1],
+                RunItemRef::Symbol {
+                    font: "Wingdings",
+                    char_code: 0xF0FC
+                }
+            ),
+            "{:?}",
+            items[1]
+        );
+        assert!(matches!(
+            items[2],
+            RunItemRef::SpecialCharacter(SpecialCharacter::CarriageReturn)
+        ));
+        assert!(matches!(
+            items[3],
+            RunItemRef::SpecialCharacter(SpecialCharacter::NoBreakHyphen)
+        ));
+        assert!(matches!(items[4], RunItemRef::Tab));
+        assert!(matches!(
+            items[5],
+            RunItemRef::SpecialCharacter(SpecialCharacter::SoftHyphen)
+        ));
+        assert!(matches!(
+            items[6],
+            RunItemRef::SpecialCharacter(SpecialCharacter::PositionalTab {
+                alignment: ST_PTabAlignment::Right,
+                relative_to: ST_PTabRelativeTo::Margin,
+                leader: ST_PTabLeader::Dot,
+            })
+        ));
+        assert!(
+            matches!(items[7], RunItemRef::LastRenderedPageBreak(_)),
+            "{:?}",
+            items[7]
+        );
+        assert!(matches!(
+            items[8],
+            RunItemRef::Break(rdocx::BreakKind::Line)
+        ));
+        assert!(matches!(items[9], RunItemRef::Text("b")));
+        assert_eq!(items.len(), 10);
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let rendered = reopened.to_pdf_deterministic().unwrap();
+        assert_eq!(rendered, reopened.to_pdf_deterministic().unwrap());
+    }
+
+    #[test]
+    fn every_new_run_property_survives_a_no_op_save_beside_untouched_raw_siblings() {
+        let interleaved = format!(
+            "{}{}{}{}{}",
+            PRODUCER_RUN_PROPERTY_SIBLINGS[0],
+            &EVERY_NEW_RUN_PROPERTY[..EVERY_NEW_RUN_PROPERTY.find("<w:kern").unwrap()],
+            PRODUCER_RUN_PROPERTY_SIBLINGS[1],
+            &EVERY_NEW_RUN_PROPERTY[EVERY_NEW_RUN_PROPERTY.find("<w:kern").unwrap()..],
+            PRODUCER_RUN_PROPERTY_SIBLINGS[2],
+        );
+        let source = producer_document(&interleaved, "<w:t>x</w:t>");
+        let mut document = Document::from_bytes(&source).unwrap();
+        let saved = document.to_bytes().unwrap();
+        assert_eq!(run_xml(&saved), run_xml(&source));
+
+        // A run whose only property is one newly modeled child keeps it.
+        for single in [
+            "<w:outline/>",
+            "<w:webHidden/>",
+            r#"<w:kern w:val="18"/>"#,
+            r#"<w:effect w:val="shimmer"/>"#,
+            r#"<w:bdr w:val="double"/>"#,
+            r#"<w:fitText w:val="720"/>"#,
+            "<w:cs/>",
+            r#"<w:em w:val="circle"/>"#,
+            r#"<w:eastAsianLayout w:id="1"/>"#,
+            "<w:specVanish/>",
+            "<w:oMath/>",
+        ] {
+            let source = producer_document(single, "<w:t>x</w:t>");
+            let saved = Document::from_bytes(&source).unwrap().to_bytes().unwrap();
+            assert_eq!(run_xml(&saved), run_xml(&source), "{single}");
+        }
+    }
+
+    #[test]
+    fn symbols_and_special_characters_are_publicly_authored_and_reopen_in_order() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("start");
+            run.add_symbol_char("Wingdings", 0xF0FC);
+            run.add_special_character(SpecialCharacter::CarriageReturn);
+            run.add_special_character(SpecialCharacter::NoBreakHyphen);
+            run.add_special_character(SpecialCharacter::SoftHyphen);
+            run.add_special_character(SpecialCharacter::PositionalTab {
+                alignment: ST_PTabAlignment::Center,
+                relative_to: ST_PTabRelativeTo::Indent,
+                leader: ST_PTabLeader::Underscore,
+            });
+            // The shipped F-260 meaning is unchanged: one Unicode scalar as
+            // ordinary text, not a `w:sym`.
+            run.add_symbol('\u{2713}');
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let xml = document_xml(&saved);
+        let ordered = [
+            "<w:t>start</w:t>",
+            r#"<w:sym w:font="Wingdings" w:char="F0FC"/>"#,
+            "<w:cr/>",
+            "<w:noBreakHyphen/>",
+            "<w:softHyphen/>",
+            r#"<w:ptab w:alignment="center" w:relativeTo="indent" w:leader="underscore"/>"#,
+            "<w:t>\u{2713}</w:t>",
+        ]
+        .map(|needle| {
+            xml.find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {xml}"))
+        });
+        assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]), "{xml}");
+
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(run_xml(&reopened.to_bytes().unwrap()), run_xml(&saved));
+    }
+
+    /// The F-266a contract. Every run property F-266a builds its golden
+    /// fixture from is publicly authored, read back and reopened, with no raw
+    /// XML left in the run.
+    #[test]
+    fn f266a_prerequisite_run_properties_author_and_reopen() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("multiscript");
+            run.set_slot_font(RunFontSlot::Ascii, Some("Arial"));
+            run.set_slot_font(RunFontSlot::HighAnsi, Some("Arial"));
+            run.set_slot_font(RunFontSlot::EastAsia, Some("MS Mincho"));
+            run.set_slot_font(RunFontSlot::ComplexScript, Some("Arial"));
+            run.set_font_hint(Some("eastAsia"));
+            run.set_rtl_value(Some(true));
+            run.set_complex_script_value(Some(true));
+            run.set_language_value(Some("en-US"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+            run.set_language_bidi_value(Some("ar-SA"));
+            run.set_bold_cs_value(Some(true));
+            run.set_italic_cs_value(Some(true));
+            run.set_size_cs_value(Some(14.0));
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let run = paragraphs[0].runs().next().unwrap();
+        assert_eq!(run.slot_font(RunFontSlot::Ascii), Some("Arial"));
+        assert_eq!(run.slot_font(RunFontSlot::HighAnsi), Some("Arial"));
+        assert_eq!(run.slot_font(RunFontSlot::EastAsia), Some("MS Mincho"));
+        assert_eq!(run.slot_font(RunFontSlot::ComplexScript), Some("Arial"));
+        assert_eq!(run.font_hint(), Some("eastAsia"));
+        assert_eq!(run.rtl_value(), Some(true));
+        assert_eq!(run.complex_script_value(), Some(true));
+        assert_eq!(run.language(), Some("en-US"));
+        assert_eq!(run.language_east_asia(), Some("ja-JP"));
+        assert_eq!(run.language_bidi(), Some("ar-SA"));
+        assert_eq!(run.bold_cs_value(), Some(true));
+        assert_eq!(run.italic_cs_value(), Some(true));
+        assert_eq!(run.size_cs(), Some(14.0));
+        assert!(
+            run.items()
+                .all(|item| !matches!(item, RunItemRef::UnsupportedXml(_))),
+            "the F-266a prerequisites must not need raw XML"
+        );
+    }
+
+    #[test]
+    fn every_new_run_property_is_publicly_authored_and_reopens() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("authored");
+            run.set_outline_value(Some(true));
+            run.set_shadow_value(Some(true));
+            run.set_emboss_value(Some(false));
+            run.set_imprint_value(Some(true));
+            run.set_no_proof_value(Some(true));
+            run.set_snap_to_grid_value(Some(false));
+            run.set_web_hidden_value(Some(true));
+            run.set_kern_value(Some(9.0));
+            run.set_effect_value(Some(ST_TextEffect::Shimmer));
+            run.set_character_border_value(Some(CT_BorderEdge::new(ST_Border::Double)));
+            run.set_fit_text_value(Some(CT_FitText {
+                val: Twips(1200),
+                id: Some(5),
+                extra_attributes: Vec::new(),
+            }));
+            run.set_emphasis_mark_value(Some(ST_Em::UnderDot));
+            run.set_east_asian_layout_value(Some(CT_EastAsianLayout {
+                combine: Some(true),
+                ..Default::default()
+            }));
+            run.set_spec_vanish_value(Some(true));
+            run.set_office_math_value(Some(true));
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let run = paragraphs[0].runs().next().unwrap();
+        assert_eq!(run.outline_value(), Some(true));
+        assert_eq!(run.shadow_value(), Some(true));
+        assert_eq!(run.emboss_value(), Some(false));
+        assert_eq!(run.imprint_value(), Some(true));
+        assert_eq!(run.no_proof_value(), Some(true));
+        assert_eq!(run.snap_to_grid_value(), Some(false));
+        assert_eq!(run.web_hidden_value(), Some(true));
+        assert_eq!(run.kern(), Some(9.0));
+        assert_eq!(run.effect(), Some(&ST_TextEffect::Shimmer));
+        assert_eq!(
+            run.character_border().map(|border| border.val),
+            Some(ST_Border::Double)
+        );
+        assert_eq!(run.fit_text().map(|fit| fit.id), Some(Some(5)));
+        assert_eq!(run.emphasis_mark(), Some(&ST_Em::UnderDot));
+        assert_eq!(
+            run.east_asian_layout().and_then(|layout| layout.combine),
+            Some(true)
+        );
+        assert_eq!(run.spec_vanish_value(), Some(true));
+        assert_eq!(run.office_math_value(), Some(true));
+    }
+
+    /// A symbol is font-encoded rather than Unicode, so the ODT, EPUB, RTF,
+    /// HTML and Markdown projections carry no portable spelling for it. Each
+    /// exporter that drops one says so, and the special characters that do
+    /// have a spelling reach the output instead.
+    #[test]
+    fn a_dropped_symbol_is_diagnosed_and_the_special_characters_are_exported() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("before");
+            run.add_symbol_char("Wingdings", 0xF0FC);
+            run.add_special_character(SpecialCharacter::NoBreakHyphen);
+            run.add_special_character(SpecialCharacter::CarriageReturn);
+        }
+
+        let odt = document.to_odt_bytes().unwrap();
+        assert!(
+            odt.diagnostics.iter().any(|diagnostic| diagnostic
+                .message
+                .contains("symbol character was dropped during ODT export")),
+            "{:?}",
+            odt.diagnostics
+        );
+
+        let rtf = document.to_rtf_bytes().unwrap();
+        assert!(
+            rtf.diagnostics.iter().any(|diagnostic| diagnostic
+                .message
+                .contains("symbol character was dropped during RTF export")),
+            "{:?}",
+            rtf.diagnostics
+        );
+        let rtf_text = String::from_utf8_lossy(&rtf.bytes).into_owned();
+        assert!(rtf_text.contains("\\_"), "{rtf_text}");
+        assert!(rtf_text.contains("\\line "), "{rtf_text}");
+    }
+
+    /// `w:themeTint` and `w:themeShade` were dropped on save before F-265, so
+    /// `rdocx_oxml::theme::apply_tint_shade` had no production caller. This
+    /// proves the call is live on the Word render path, with its own Word
+    /// 0-255 arithmetic rather than the spec-correct DrawingML functions.
+    #[test]
+    fn a_theme_colour_tint_and_shade_reach_the_rendered_colour() {
+        fn rendered(colour: &str) -> Vec<u8> {
+            let source = producer_document(colour, "<w:t>tinted</w:t>");
+            let document = Document::from_bytes(&source).unwrap();
+            document
+                .render_page_to_png_deterministic(0, 150.0)
+                .unwrap()
+                .unwrap()
+        }
+
+        let plain = rendered(r#"<w:color w:val="000000" w:themeColor="accent1"/>"#);
+        let tinted =
+            rendered(r#"<w:color w:val="000000" w:themeColor="accent1" w:themeTint="66"/>"#);
+        let shaded =
+            rendered(r#"<w:color w:val="000000" w:themeColor="accent1" w:themeShade="BF"/>"#);
+        assert_ne!(plain, tinted);
+        assert_ne!(plain, shaded);
+        assert_ne!(tinted, shaded);
+    }
+
+    /// `w:effect`, `w:noProof`, `w:webHidden`, `w:specVanish` and `w:oMath`
+    /// are modeled and round-tripped with no visible render projection, which
+    /// is what Word prints. The classification cannot rot into an oversight
+    /// while this holds.
+    #[test]
+    fn non_rendering_run_properties_change_no_pixels() {
+        fn rendered(apply: bool) -> Vec<u8> {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("");
+                let mut run = paragraph.add_run("unchanged pixels");
+                if apply {
+                    run.set_effect_value(Some(ST_TextEffect::Shimmer));
+                    run.set_no_proof_value(Some(true));
+                    run.set_web_hidden_value(Some(true));
+                    run.set_spec_vanish_value(Some(true));
+                    run.set_office_math_value(Some(true));
+                }
+            }
+            document.to_pdf_deterministic().unwrap()
+        }
+
+        assert_eq!(rendered(true), rendered(false));
     }
 }

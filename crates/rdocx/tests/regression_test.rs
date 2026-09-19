@@ -29798,3 +29798,301 @@ fn settings_part_text(bytes: &[u8]) -> String {
     let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes.to_vec())).unwrap();
     String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap()
 }
+
+/// F-265, complete run property and inline authoring.
+mod f265_run_property_regressions {
+    use super::*;
+    use rdocx::RunFontSlot;
+
+    const WORD_NS_TEXT: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    fn producer_run_document(run_properties: &str) -> Document {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                concat!(
+                    r#"<w:document xmlns:w="{}">"#,
+                    r#"<w:body><w:p><w:r><w:rPr>{}</w:rPr><w:t>slots</w:t></w:r></w:p>"#,
+                    r#"<w:sectPr/></w:body></w:document>"#,
+                ),
+                WORD_NS_TEXT, run_properties
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn run_properties_xml(document: &mut Document) -> String {
+        let bytes = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let start = xml.find("<w:rFonts").unwrap();
+        let end = xml[start..].find("/>").unwrap() + start + 2;
+        xml[start..end].to_owned()
+    }
+
+    /// Before F-265, setting an explicit font left every theme attribute in
+    /// place, so a caller replacing one script slot silently changed nothing
+    /// and could clobber the other three.
+    #[test]
+    fn explicit_font_replacement_clears_only_its_own_theme_slot() {
+        let mut document = producer_run_document(concat!(
+            r#"<w:rFonts w:hint="eastAsia" w:ascii="Arial" w:hAnsi="Arial""#,
+            r#" w:eastAsia="MS Mincho" w:cs="Arial" w:asciiTheme="minorHAnsi""#,
+            r#" w:hAnsiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia""#,
+            r#" w:cstheme="minorBidi"/>"#,
+        ));
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            run.set_slot_font(RunFontSlot::Ascii, Some("Courier New"));
+        }
+
+        let xml = run_properties_xml(&mut document);
+        assert!(xml.contains(r#"w:ascii="Courier New""#), "{xml}");
+        assert!(!xml.contains("w:asciiTheme"), "{xml}");
+        assert!(xml.contains(r#"w:hAnsiTheme="minorHAnsi""#), "{xml}");
+        assert!(xml.contains(r#"w:eastAsiaTheme="minorEastAsia""#), "{xml}");
+        assert!(xml.contains(r#"w:cstheme="minorBidi""#), "{xml}");
+        assert!(xml.contains(r#"w:hint="eastAsia""#), "{xml}");
+
+        // Setting the theme font for a slot clears that slot's explicit name.
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            run.set_slot_theme_font(RunFontSlot::EastAsia, Some("majorEastAsia"));
+        }
+        let xml = run_properties_xml(&mut document);
+        assert!(!xml.contains(r#"w:eastAsia="MS Mincho""#), "{xml}");
+        assert!(xml.contains(r#"w:eastAsiaTheme="majorEastAsia""#), "{xml}");
+
+        // Clearing a slot clears both attributes for that slot, and only that
+        // slot.
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            run.set_slot_font(RunFontSlot::EastAsia, None);
+        }
+        let xml = run_properties_xml(&mut document);
+        assert!(!xml.contains("w:eastAsiaTheme"), "{xml}");
+        assert!(!xml.contains(r#"w:eastAsia="#), "{xml}");
+        assert!(xml.contains(r#"w:hint="eastAsia""#), "{xml}");
+        assert!(xml.contains(r#"w:hAnsiTheme="minorHAnsi""#), "{xml}");
+    }
+
+    /// `set_font` documents that it writes all four slots, so it now clears
+    /// all four theme attributes. Leaving them meant Word resolved the theme
+    /// font and the caller's family did nothing.
+    #[test]
+    fn set_font_clears_every_theme_font_so_the_explicit_family_is_not_ignored() {
+        let mut document = producer_run_document(concat!(
+            r#"<w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi""#,
+            r#" w:eastAsiaTheme="minorEastAsia" w:cstheme="minorBidi" w:hint="eastAsia"/>"#,
+        ));
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            run.set_font("Courier New");
+        }
+
+        let xml = run_properties_xml(&mut document);
+        assert!(!xml.contains("Theme"), "{xml}");
+        assert!(!xml.contains("cstheme"), "{xml}");
+        assert!(xml.contains(r#"w:ascii="Courier New""#), "{xml}");
+        // `w:hint` is independent, so no font operation clears it.
+        assert!(xml.contains(r#"w:hint="eastAsia""#), "{xml}");
+    }
+
+    /// Before F-265, `w:themeTint` and `w:themeShade` were dropped on save and
+    /// an explicit colour left `w:themeColor` in place, so the authored colour
+    /// was ignored by Word.
+    #[test]
+    fn explicit_colour_replacement_clears_theme_colour_tint_and_shade() {
+        let mut document = producer_run_document(
+            r#"<w:color w:val="4472C4" w:themeColor="accent1" w:themeTint="66" w:themeShade="BF"/>"#,
+        );
+        {
+            let paragraphs = document.paragraphs();
+            let run = paragraphs[0].runs().next().unwrap();
+            assert_eq!(run.color_theme(), Some("accent1"));
+            assert_eq!(run.color_theme_tint(), Some(0x66));
+            assert_eq!(run.color_theme_shade(), Some(0xBF));
+        }
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            run.set_color("FF0000");
+        }
+        {
+            let paragraphs = document.paragraphs();
+            let run = paragraphs[0].runs().next().unwrap();
+            assert_eq!(run.color(), Some("FF0000"));
+            assert_eq!(run.color_theme(), None);
+            assert_eq!(run.color_theme_tint(), None);
+            assert_eq!(run.color_theme_shade(), None);
+        }
+
+        // `set_color_theme` authors the reference and leaves `w:val` as the
+        // literal Word caches beside it.
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            run.set_color_theme(Some("accent2"), Some(0x33), None);
+        }
+        {
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            let paragraphs = reopened.paragraphs();
+            let run = paragraphs[0].runs().next().unwrap();
+            assert_eq!(run.color(), Some("FF0000"));
+            assert_eq!(run.color_theme(), Some("accent2"));
+            assert_eq!(run.color_theme_tint(), Some(0x33));
+            assert_eq!(run.color_theme_shade(), None);
+        }
+
+        // Clearing the reference clears its tint and shade, because Word has
+        // nothing to apply them to without one.
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            run.set_color_theme(None, Some(0x33), Some(0x44));
+        }
+        let paragraphs = document.paragraphs();
+        let run = paragraphs[0].runs().next().unwrap();
+        assert_eq!(run.color_theme(), None);
+        assert_eq!(run.color_theme_tint(), None);
+        assert_eq!(run.color_theme_shade(), None);
+    }
+
+    /// A parsed `w:rFonts` carrying both an explicit and a theme attribute for
+    /// one slot is retained exactly until a caller sets that slot. Normalising
+    /// it on read would discard producer intent and break the no-op save.
+    #[test]
+    fn a_producer_font_slot_carrying_both_forms_is_not_normalised_on_read() {
+        let mut document =
+            producer_run_document(r#"<w:rFonts w:ascii="Courier New" w:asciiTheme="minorHAnsi"/>"#);
+        let xml = run_properties_xml(&mut document);
+        assert_eq!(
+            xml,
+            r#"<w:rFonts w:ascii="Courier New" w:asciiTheme="minorHAnsi"/>"#
+        );
+
+        let paragraphs = document.paragraphs();
+        let run = paragraphs[0].runs().next().unwrap();
+        assert_eq!(run.slot_font(RunFontSlot::Ascii), Some("Courier New"));
+        assert_eq!(run.slot_theme_font(RunFontSlot::Ascii), Some("minorHAnsi"));
+    }
+
+    /// `rdocx_oxml::theme::apply_tint_shade` uses Word's 0-255 convention and
+    /// a naive sRGB interpolation, and F-265 gave it its first production
+    /// caller. Making it live must not change what it computes, so correcting
+    /// it here would move every theme-derived colour in a rendered PDF.
+    #[test]
+    fn apply_tint_shade_arithmetic_is_unchanged() {
+        use rdocx_oxml::theme::apply_tint_shade;
+
+        assert_eq!(apply_tint_shade("FF0000", Some(128), None), "FF8080");
+        assert_eq!(apply_tint_shade("FF0000", None, None), "FF0000");
+        assert_eq!(apply_tint_shade("FF0000", None, Some(128)), "800000");
+        assert_eq!(apply_tint_shade("4472C4", Some(0x66), None), "8EAADB");
+        assert_eq!(apply_tint_shade("4472C4", None, Some(0xBF)), "325592");
+        // A tint wins over a shade, and a short value is returned unchanged.
+        assert_eq!(apply_tint_shade("FF0000", Some(0), Some(255)), "FF0000");
+        assert_eq!(apply_tint_shade("FFF", Some(128), None), "FFF");
+    }
+
+    /// Word prefers the theme attribute when a producer presents both for one
+    /// slot. rdocx prefers the explicit name. This is a pre-declared
+    /// deliberate divergence, recorded under rule 5 of
+    /// `.claude/skills/differential-testing.md`, and asserting it here stops a
+    /// later change dropping the decision silently.
+    #[test]
+    fn explicit_font_priority_divergence_from_word_is_deliberate() {
+        const WORD_WOULD_RESOLVE: &str = "the theme attribute";
+        assert!(WORD_WOULD_RESOLVE.contains("theme"));
+
+        let both =
+            producer_run_document(r#"<w:rFonts w:ascii="Courier New" w:asciiTheme="minorHAnsi"/>"#)
+                .render_page_to_png_deterministic(0, 150.0)
+                .unwrap();
+        let explicit_only = producer_run_document(r#"<w:rFonts w:ascii="Courier New"/>"#)
+            .render_page_to_png_deterministic(0, 150.0)
+            .unwrap();
+        let theme_only = producer_run_document(r#"<w:rFonts w:asciiTheme="minorHAnsi"/>"#)
+            .render_page_to_png_deterministic(0, 150.0)
+            .unwrap();
+
+        assert_eq!(
+            both, explicit_only,
+            "rdocx resolves the explicit family when a producer presents both"
+        );
+        assert_ne!(
+            both, theme_only,
+            "the two families must differ for this assertion to mean anything"
+        );
+    }
+
+    /// `w:lastRenderedPageBreak` is a producer hint. It must stay in
+    /// positioned raw capture with a read-only classification, so a no-op save
+    /// writes back exactly what was read and no authoring surface can create
+    /// one.
+    #[test]
+    fn last_rendered_page_break_is_read_only_and_keeps_its_source_position() {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                concat!(
+                    r#"<w:document xmlns:w="{}">"#,
+                    r#"<w:body><w:p><w:r><w:t>a</w:t><w:lastRenderedPageBreak/>"#,
+                    r#"<w:t>b</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#,
+                ),
+                WORD_NS_TEXT
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        {
+            let paragraphs = document.paragraphs();
+            let run = paragraphs[0].runs().next().unwrap();
+            let items = run.items().collect::<Vec<_>>();
+            assert!(matches!(items[0], RunItemRef::Text("a")));
+            assert!(
+                matches!(items[1], RunItemRef::LastRenderedPageBreak(raw) if raw
+                    .windows(21)
+                    .any(|window| window == b"lastRenderedPageBreak")),
+                "{:?}",
+                items[1]
+            );
+            assert!(matches!(items[2], RunItemRef::Text("b")));
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let saved_xml = {
+            let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+        };
+        assert!(
+            saved_xml.find("<w:t>a</w:t>").unwrap()
+                < saved_xml.find("<w:lastRenderedPageBreak/>").unwrap(),
+            "{saved_xml}"
+        );
+        assert!(
+            saved_xml.find("<w:lastRenderedPageBreak/>").unwrap()
+                < saved_xml.find("<w:t>b</w:t>").unwrap(),
+            "{saved_xml}"
+        );
+    }
+}

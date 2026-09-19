@@ -443,6 +443,31 @@ source order and replay them ahead of the modeled ones. `CT_PPr` stores its
 frame and its borders behind a `Box`, which keeps the value small enough for
 recursive callers that carry paragraph properties on the stack.
 
+`CT_RPr` types the complete `EG_RPrBase` sequence. Outline, shadow, emboss,
+imprint, proofing suppression, grid snapping, web-only hiding, kerning, the
+animated text effect, the character border, fitted text, the complex-script
+toggle, the emphasis mark, East Asian run layout, numbered-paragraph vanish,
+and the Office Math flag all have typed members beside the fonts, sizes,
+colour, shading, language, and direction state that were already modeled.
+`w:rFonts` owns all four explicit script slots, all four theme slots, and
+`w:hint`, and `w:color` owns its theme colour, tint, and shade, so nothing on
+either element is dropped on save. `CT_Shd` owns the same six theme attributes
+for run, paragraph, and table shading. Like `CT_FramePr` and `CT_BorderEdge`,
+each of these retains its unmodelled attributes in source order and replays
+them ahead of the modeled ones. `CT_RPr` stores its character border, its
+fitted-text and East Asian layout members, its shading, and its property change
+behind a `Box`, and `CT_PPr` boxes its shading for the same reason, so the
+grown model still fits the stack budget the F-084 precedent set.
+
+Ordered run content types `w:sym` and, behind one `SpecialCharacter` value,
+`w:cr`, `w:noBreakHyphen`, `w:softHyphen`, and `w:ptab`. One variant for the
+four keeps the number of cases every consumer must match on flat.
+`w:lastRenderedPageBreak` is a producer hint, so it stays in positioned raw
+capture with a read-only classification and no authoring surface. A symbol
+whose code point is not four hex digits, a positional tab missing one of its
+three required attributes, and an empty special character carrying an attribute
+all stay raw rather than losing bytes to a partial projection.
+
 The low-level text reader decodes visible `w:t` and `w:delText` content
 fallibly and rejects malformed encoded values instead of publishing partial
 text. The numbering grammar types the complete standard `w:numFmt` token set

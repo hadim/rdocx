@@ -7,7 +7,7 @@ use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CellContent};
-use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
 
 /// Emit the full body content as Markdown.
 pub(crate) fn emit_markdown(
@@ -238,7 +238,16 @@ fn collect_run_text(run: &CT_R) -> String {
                     raw.push_str(&format_markdown_run(&display, properties));
                 }
             }
-            RunContent::Drawing(_)
+            RunContent::SpecialCharacter(character) => match character {
+                SpecialCharacter::CarriageReturn => raw.push_str("  \n"),
+                SpecialCharacter::NoBreakHyphen => raw.push('\u{2011}'),
+                SpecialCharacter::SoftHyphen => raw.push('\u{00ad}'),
+                SpecialCharacter::PositionalTab { .. } => raw.push('\t'),
+            },
+            // A symbol is font-encoded rather than Unicode, so there is no
+            // portable Markdown spelling for it.
+            RunContent::Symbol { .. }
+            | RunContent::Drawing(_)
             | RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
             | RunContent::CommentReference { .. } => {}

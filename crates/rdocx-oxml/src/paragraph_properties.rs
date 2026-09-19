@@ -256,7 +256,12 @@ pub struct CT_PPr {
     /// Tab stops (tabs)
     pub tabs: Option<CT_Tabs>,
     /// Paragraph shading (shd)
-    pub shading: Option<CT_Shd>,
+    /// Paragraph shading (shd).
+    ///
+    /// Boxed because `CT_Shd` now models its six theme attributes, and the
+    /// paragraph property struct has no stack budget to spare. Same reason as
+    /// `CT_PPr::borders`.
+    pub shading: Option<Box<CT_Shd>>,
     /// Run properties for the paragraph mark (rPr)
     pub rpr: Option<CT_RPr>,
     /// Numbering level (numPr/ilvl)
@@ -811,7 +816,7 @@ impl CT_PPr {
                             ppr.outline_lvl = Some(val.parse()?);
                         }
                     } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
-                        ppr.shading = Some(CT_Shd::from_xml_attrs(e)?);
+                        ppr.shading = Some(Box::new(CT_Shd::from_xml_attrs(e)?));
                     } else if is_word_element(name.as_ref(), b"numPr", &prefixes) {
                         ppr.num_pr_extra_attributes =
                             preserved_num_pr_root_attributes(e, &prefixes, owner_bindings)?.0;

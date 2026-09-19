@@ -585,6 +585,33 @@ The Wingdings trap is handled before font resolution. `a:buChar` U+F0B7 maps
 to the visible Unicode bullet U+2022 instead of passing through the Wingdings
 to Symbol alias as a private-use codepoint.
 
+A Word `w:sym` carries the symbol font's own code point, usually in the F020 to
+F0FF private-use block. The renderer resolves the font named on the element
+against that one character rather than against the run's family, so the
+existing script-aware fallback replaces a family without the glyph. `w:cr`
+emits a line break. `w:noBreakHyphen` emits U+2011, whose Unicode line-break
+class is GL, so the hyphen is drawn without becoming a break opportunity that
+U+002D would create. `w:ptab` places the following content at the next tab
+position the tab resolver computes. `w:softHyphen` is modeled and round-tripped
+with no render projection, because the line breaker takes no discretionary
+break input. `w:effect`, `w:noProof`, `w:webHidden`, `w:specVanish`, and
+`w:oMath` are modeled, authored, and round-tripped with no visible render
+projection, which matches what Word prints, and a test asserts the absence of a
+pixel change so the classification cannot rot into an oversight.
+
+Run colour resolution applies `w:themeTint` and `w:themeShade` over the
+resolved theme colour through `rdocx_oxml::theme::apply_tint_shade`, unchanged.
+Run font resolution prefers the explicit `w:rFonts` name over the theme
+attribute for the same slot. Word prefers the theme attribute, so this is a
+recorded deliberate divergence, reachable only on a producer document the
+caller never edited, since setting either form through the facade clears the
+other.
+
+`w:outline`, `w:shadow`, `w:emboss`, `w:imprint`, `w:bdr`, `w:kern`, and
+`w:fitText` are modeled, authored, and round-tripped, and their render
+projection is the remaining work on DOCX-032. `w:em`, `w:eastAsianLayout`,
+`w:snapToGrid`, and `w:cs` rendering belongs to DOCX-033.
+
 Slide-number fields substitute the one-based `PageFrame` number before text
 shaping and carry `FieldKind::Page` into the emitted glyph run. An untyped field
 that the resolver normalized from an effective `sldNum` placeholder follows the

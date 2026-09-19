@@ -1376,11 +1376,12 @@ impl<'a> Paragraph<'a> {
 
     /// Set a background/shading fill color in place.
     pub fn set_shading(&mut self, fill_color: &str) {
-        self.ensure_ppr().shading = Some(CT_Shd {
+        self.ensure_ppr().shading = Some(Box::new(CT_Shd {
             val: "clear".to_string(),
             color: Some("auto".to_string()),
             fill: Some(fill_color.to_string()),
-        });
+            ..Default::default()
+        }));
     }
 
     /// Add a border to all sides.
@@ -1811,10 +1812,13 @@ impl<'a> Paragraph<'a> {
         if shading.is_none() && self.inner.properties.is_none() {
             return;
         }
-        self.ensure_ppr().shading = shading.map(|(pattern, fill_color, color)| CT_Shd {
-            val: pattern.to_owned(),
-            color: Some(color.to_owned()),
-            fill: Some(fill_color.to_owned()),
+        self.ensure_ppr().shading = shading.map(|(pattern, fill_color, color)| {
+            Box::new(CT_Shd {
+                val: pattern.to_owned(),
+                color: Some(color.to_owned()),
+                fill: Some(fill_color.to_owned()),
+                ..Default::default()
+            })
         });
     }
 

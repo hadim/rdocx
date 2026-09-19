@@ -673,6 +673,7 @@ impl<'a> Table<'a> {
             val: "clear".to_owned(),
             color: Some("auto".to_owned()),
             fill: Some(fill),
+            ..Default::default()
         });
         Ok(())
     }
@@ -1393,6 +1394,7 @@ impl<'a> Cell<'a> {
             val: "clear".to_string(),
             color: Some("auto".to_string()),
             fill: Some(fill_color.to_string()),
+            ..Default::default()
         });
     }
 
@@ -1403,6 +1405,7 @@ impl<'a> Cell<'a> {
             val: "clear".to_owned(),
             color: Some("auto".to_owned()),
             fill: Some(fill),
+            ..Default::default()
         });
         Ok(())
     }
@@ -2266,6 +2269,7 @@ mod tests {
                 val: "clear".to_owned(),
                 color: None,
                 fill: Some("FFFFFF".to_owned()),
+                ..Default::default()
             }),
             layout: Some("fixed".to_owned()),
             cell_margin: Some(CT_TblCellMar::default()),
@@ -2299,6 +2303,7 @@ mod tests {
                 val: "clear".to_owned(),
                 color: None,
                 fill: Some("FFFFFF".to_owned()),
+                ..Default::default()
             }),
             no_wrap: Some(true),
             cell_margin: Some(CT_TblCellMar::default()),
