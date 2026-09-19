@@ -18,8 +18,9 @@ use rdocx_oxml::document::{
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::{HdrFtrType, VmlWatermark};
 use rdocx_oxml::numbering::ST_LvlSuffix;
-use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
+use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd, ST_Em};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
+use rdocx_oxml::ruby::{CT_Ruby, ST_RubyAlign};
 use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc};
@@ -5049,6 +5050,18 @@ fn paragraph_fingerprint(paragraph: &CT_P) -> u64 {
     let mut fingerprint = StableFingerprint::new();
     fingerprint.write_usize(paragraph.runs.len());
     fingerprint.write_tag(u8::from(paragraph.properties.is_some()));
+    // A ruby annotation changes the painted page without changing any run,
+    // so a paragraph that carries one must not collide with the same runs
+    // unannotated. Nothing is written when there is none, which keeps every
+    // existing fingerprint where it was.
+    for ruby in &paragraph.rubies {
+        fingerprint.write_tag(7);
+        fingerprint.write_usize(ruby.base_start);
+        fingerprint.write_usize(ruby.base_end);
+        for run in &ruby.ruby_text {
+            fingerprint.write_bytes(run.text().as_bytes());
+        }
+    }
     for run in &paragraph.runs {
         fingerprint.write_tag(u8::from(run.properties.is_some()));
         fingerprint.write_usize(run.content.len());
@@ -6027,6 +6040,7 @@ fn layout_paragraph_with_source_and_table(
         let projected_run_start = projection_char_offset;
         projection_char_offset += run.text().chars().count();
         push_targeted_bookmark_markers(&mut inline_items, para, projected_index, input, fm)?;
+
         let current_hyperlink_url = projected
             .ordinary_run_index
             .and_then(|run_index| run_hyperlink_url.get(&run_index).cloned())
@@ -6066,6 +6080,34 @@ fn layout_paragraph_with_source_and_table(
             input.math_properties.as_ref(),
             diagnostics,
         )?;
+
+        // A ruby annotation owns its base runs, so the span is laid out once
+        // at its first run and the rest of the span is skipped rather than
+        // painted a second time on the ordinary run path.
+        if let Some(run_index) = projected.ordinary_run_index
+            && let Some(ruby) = para
+                .rubies
+                .iter()
+                .find(|ruby| ruby.base_range().contains(&run_index))
+        {
+            if ruby.base_start == run_index
+                && let Some(base_runs) = para.runs.get(ruby.base_range())
+                && let Some(item) = ruby_inline_item(
+                    ruby,
+                    base_runs,
+                    &AnnotationContext {
+                        styles,
+                        input,
+                        para_style_id,
+                        table_run_properties,
+                    },
+                    fm,
+                )?
+            {
+                inline_items.push(item);
+            }
+            continue;
+        }
 
         // Skip hidden text
         if effective_rpr.vanish == Some(true) {
@@ -6139,6 +6181,34 @@ fn layout_paragraph_with_source_and_table(
                     };
 
                     if text.is_empty() {
+                        continue;
+                    }
+
+                    if let Some(ref mark) = effective_rpr.emphasis_mark
+                        && push_emphasis_marked_text(
+                            &mut inline_items,
+                            fm,
+                            diagnostics,
+                            mark,
+                            &text,
+                            &AnnotationBase {
+                                font_id,
+                                font_size,
+                                color,
+                                bold,
+                                italic,
+                                baseline_offset,
+                                spacing: effective_rpr
+                                    .spacing
+                                    .map_or(0.0, |spacing| spacing.to_pt()),
+                                underline,
+                                strike,
+                                dstrike,
+                                highlight,
+                                font_family: font_family.as_deref(),
+                            },
+                        )?
+                    {
                         continue;
                     }
 
@@ -8553,6 +8623,478 @@ fn resolve_font_family(
         _ => None,
     }
     .map(str::to_owned)
+}
+
+/// East Asian annotation, the shared geometry behind `w:em` and `w:ruby`.
+///
+/// Both place a second, smaller line against a base line without changing
+/// the base advance, so both are measured as one `InlineItem::Group` whose
+/// width is the base width and whose ascent already includes the annotation.
+/// `item_metrics` turns that ascent into line height, which is how a marked
+/// or annotated line becomes taller and reaches the paginator.
+///
+/// The mark and phonetic glyphs are painted inside the group rather than
+/// carried on the text segment, because a segment field would have to be
+/// sliced in step with glyph clusters at every line break and under bidi
+/// reordering, which is exactly the case count the structural rules reject.
+/// The cost is that the annotated text is one unbreakable item, so an
+/// emphasis-marked run is split at whitespace first to keep its break
+/// opportunities.
+const EMPHASIS_MARK_SCALE: f64 = 0.5;
+
+/// The glyph Word draws for one `w:em` value, and whether it sits above the
+/// base characters rather than below them.
+fn emphasis_mark_glyph(mark: &ST_Em) -> Option<(char, bool)> {
+    match mark {
+        // U+2022 BULLET for the solid dot Word draws above the character,
+        // U+FE45 SESAME DOT for the comma mark, U+25CB WHITE CIRCLE for the
+        // open circle. `underDot` is the same solid dot below the base line.
+        ST_Em::Dot => Some(('\u{2022}', true)),
+        ST_Em::Comma => Some(('\u{FE45}', true)),
+        ST_Em::Circle => Some(('\u{25CB}', true)),
+        ST_Em::UnderDot => Some(('\u{2022}', false)),
+        // `none` draws nothing, and a producer token outside the inventory
+        // names a mark this renderer has no glyph for.
+        ST_Em::None | ST_Em::Other(_) => None,
+    }
+}
+
+/// Split text into maximal whitespace and non-whitespace chunks.
+fn emphasis_chunks(text: &str) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let mut current = None;
+    for (index, character) in text.char_indices() {
+        let is_space = character.is_whitespace();
+        match current {
+            Some(previous) if previous == is_space => {}
+            Some(_) => {
+                chunks.push(&text[start..index]);
+                start = index;
+            }
+            None => start = index,
+        }
+        current = Some(is_space);
+    }
+    if start < text.len() {
+        chunks.push(&text[start..]);
+    }
+    chunks
+}
+
+/// The base run style an annotation draws against.
+struct AnnotationBase<'a> {
+    font_id: FontId,
+    font_size: f64,
+    color: Color,
+    bold: bool,
+    italic: bool,
+    baseline_offset: f64,
+    spacing: f64,
+    underline: Option<Underline>,
+    strike: bool,
+    dstrike: bool,
+    highlight: Option<Color>,
+    font_family: Option<&'a str>,
+}
+
+/// Record a diagnostic once, matching the media registry's dedupe by message.
+fn push_unique_diagnostic(diagnostics: &mut Vec<Diagnostic>, message: String) {
+    if !diagnostics.iter().any(|entry| entry.message == message) {
+        diagnostics.push(Diagnostic { message });
+    }
+}
+
+/// Draw the decorations a `TextSegment` would have carried, in group-local
+/// coordinates against a baseline at `baseline`.
+fn push_annotation_decorations(
+    children: &mut Vec<PositionedElement>,
+    base: &AnnotationBase<'_>,
+    baseline: f64,
+    width: f64,
+    ascent: f64,
+    descent: f64,
+) {
+    let line_at = |y: f64, thickness: f64, children: &mut Vec<PositionedElement>| {
+        children.push(PositionedElement::Line {
+            start: Point { x: 0.0, y },
+            end: Point { x: width, y },
+            width: thickness,
+            color: base.color,
+            dash_pattern: None,
+        });
+    };
+    if let Some(style) = base.underline {
+        let underline_y = baseline + descent * 0.3;
+        let thickness = match style {
+            Underline::Thick => base.font_size / 12.0,
+            Underline::Double => base.font_size / 24.0,
+            _ => base.font_size / 18.0,
+        };
+        line_at(underline_y, thickness, children);
+        if style == Underline::Double {
+            line_at(underline_y + thickness * 2.5, thickness, children);
+        }
+    }
+    let thickness = base.font_size / 24.0;
+    let strike_y = baseline - ascent * 0.3;
+    if base.strike {
+        line_at(strike_y, thickness, children);
+    }
+    if base.dstrike {
+        let gap = thickness * 2.0;
+        line_at(strike_y - gap / 2.0, thickness, children);
+        line_at(strike_y + gap / 2.0, thickness, children);
+    }
+}
+
+/// Project one emphasis-marked text run into inline items.
+///
+/// Reports `false` when the mark cannot be drawn, which leaves the caller on
+/// the ordinary text path so the base text is painted unchanged. An
+/// undrawable mark codepoint records a diagnostic and paints nothing, which
+/// is the policy the uncovered-character path already follows.
+fn push_emphasis_marked_text(
+    inline_items: &mut Vec<InlineItem>,
+    fm: &mut FontManager,
+    diagnostics: &mut Vec<Diagnostic>,
+    mark: &ST_Em,
+    text: &str,
+    base: &AnnotationBase<'_>,
+) -> Result<bool> {
+    let Some((glyph, above)) = emphasis_mark_glyph(mark) else {
+        return Ok(false);
+    };
+    let mark_text = glyph.to_string();
+    let mark_size = base.font_size * EMPHASIS_MARK_SCALE;
+    let mark_font =
+        fm.resolve_font_for_text(base.font_family, base.bold, base.italic, &mark_text)?;
+    let mark_shaped = fm.shape_text(mark_font, &mark_text, mark_size)?;
+    if mark_shaped.glyph_ids.is_empty() || mark_shaped.glyph_ids.contains(&0) {
+        push_unique_diagnostic(
+            diagnostics,
+            format!(
+                "emphasis mark {} has no glyph in the resolved font and is not painted",
+                mark.as_str()
+            ),
+        );
+        return Ok(false);
+    }
+    let mark_metrics = fm.metrics(mark_font, mark_size)?;
+    let metrics = fm.metrics(base.font_id, base.font_size)?;
+    let ascent = metrics.ascent.max(0.0);
+    let descent = metrics.descent.max(0.0);
+    let mark_ascent = mark_metrics.ascent.max(0.0);
+    let mark_descent = mark_metrics.descent.max(0.0);
+    let mark_height = mark_ascent + mark_descent;
+
+    let raise = base.baseline_offset;
+    let group_ascent = if above { ascent + mark_height } else { ascent } + raise.max(0.0);
+    let group_descent = if above {
+        descent
+    } else {
+        descent + mark_height
+    } + (-raise).max(0.0);
+    let baseline = group_ascent - raise;
+    let mark_baseline = if above {
+        baseline - ascent - mark_descent
+    } else {
+        baseline + descent + mark_ascent
+    };
+
+    for chunk in emphasis_chunks(text) {
+        let mut shaped = fm.shape_text(base.font_id, chunk, base.font_size)?;
+        if base.spacing != 0.0 {
+            for advance in &mut shaped.advances {
+                *advance += base.spacing;
+            }
+            shaped.width += base.spacing * shaped.advances.len() as f64;
+        }
+        let characters = chunk.chars().collect::<Vec<_>>();
+        let mut children = Vec::new();
+        if let Some(highlight) = base.highlight {
+            children.push(PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: shaped.width,
+                    height: group_ascent + group_descent,
+                },
+                color: highlight,
+            });
+        }
+        children.push(PositionedElement::Text(GlyphRun {
+            origin: Point {
+                x: 0.0,
+                y: baseline,
+            },
+            font_id: base.font_id,
+            font_size: base.font_size,
+            glyph_ids: shaped.glyph_ids.clone(),
+            advances: shaped.advances.clone(),
+            text: chunk.to_owned(),
+            source: None,
+            color: base.color,
+            bold: base.bold,
+            italic: base.italic,
+            field_kind: None,
+            field_source: None,
+            note: None,
+        }));
+        push_annotation_decorations(&mut children, base, baseline, shaped.width, ascent, descent);
+
+        // One mark per base character. Glyphs and characters correspond one
+        // to one for the scripts `w:em` applies to, and when shaping has
+        // merged them the marks fall back to an even share of the chunk so
+        // the count still matches the characters.
+        let advances = if shaped.advances.len() == characters.len() {
+            shaped.advances.clone()
+        } else if characters.is_empty() {
+            Vec::new()
+        } else {
+            vec![shaped.width / characters.len() as f64; characters.len()]
+        };
+        let mut x = 0.0;
+        for (character, advance) in characters.iter().zip(&advances) {
+            if !character.is_whitespace() {
+                children.push(PositionedElement::Text(GlyphRun {
+                    origin: Point {
+                        x: x + (advance - mark_shaped.width) / 2.0,
+                        y: mark_baseline,
+                    },
+                    font_id: mark_font,
+                    font_size: mark_size,
+                    glyph_ids: mark_shaped.glyph_ids.clone(),
+                    advances: mark_shaped.advances.clone(),
+                    text: mark_text.clone(),
+                    source: None,
+                    color: base.color,
+                    bold: false,
+                    italic: false,
+                    field_kind: None,
+                    field_source: None,
+                    note: None,
+                }));
+            }
+            x += advance;
+        }
+
+        inline_items.push(InlineItem::Group {
+            width: shaped.width,
+            height: group_ascent + group_descent,
+            baseline: Some(group_ascent),
+            group: GroupElement {
+                transform: Transform::IDENTITY,
+                clip: None,
+                opacity: 1.0,
+                effects: Vec::new(),
+                children,
+            },
+        });
+    }
+    Ok(true)
+}
+
+/// One measured annotation line, with its glyph runs laid out from x = 0 on
+/// a baseline at y = 0.
+struct AnnotationLine {
+    width: f64,
+    ascent: f64,
+    descent: f64,
+    /// The size the first painted run resolved to, which is what a ruby
+    /// annotation halves when `w:hps` is absent.
+    primary_font_size: f64,
+    runs: Vec<GlyphRun>,
+}
+
+/// The paragraph context an annotation resolves its runs against.
+struct AnnotationContext<'a> {
+    styles: &'a CT_Styles,
+    input: &'a LayoutInput,
+    para_style_id: Option<&'a str>,
+    table_run_properties: Option<&'a CT_RPr>,
+}
+
+/// Shape a sequence of runs onto one baseline.
+///
+/// `size_override` is the size `w:hps` and `w:hpsBaseText` fix for the whole
+/// line, which is why it wins over the run's own `w:sz`.
+fn measure_annotation_line(
+    runs: &[CT_R],
+    context: &AnnotationContext<'_>,
+    fm: &mut FontManager,
+    size_override: Option<f64>,
+) -> Result<AnnotationLine> {
+    let mut line = AnnotationLine {
+        width: 0.0,
+        ascent: 0.0,
+        descent: 0.0,
+        primary_font_size: size_override.unwrap_or(0.0),
+        runs: Vec::new(),
+    };
+    for run in runs {
+        let run_style_id = run.properties.as_ref().and_then(|p| p.style_id.as_deref());
+        let mut effective_rpr = style_resolver::resolve_run_properties(
+            context.para_style_id,
+            run_style_id,
+            context.styles,
+            context.table_run_properties,
+        );
+        if let Some(ref direct_rpr) = run.properties {
+            effective_rpr.merge_from(direct_rpr);
+        }
+        if effective_rpr.vanish == Some(true) {
+            continue;
+        }
+        let text = run.text();
+        if text.is_empty() {
+            continue;
+        }
+        let font_size =
+            size_override.unwrap_or_else(|| effective_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0));
+        let bold = effective_rpr.bold.unwrap_or(false);
+        let italic = effective_rpr.italic.unwrap_or(false);
+        let family = resolve_font_family(
+            &effective_rpr,
+            context.input.theme.as_ref(),
+            word_font_slot_for_text(&text, effective_rpr.font_hint.as_deref()),
+        );
+        let font_id = fm.resolve_font_for_text(family.as_deref(), bold, italic, &text)?;
+        let shaped = fm.shape_text(font_id, &text, font_size)?;
+        let metrics = fm.metrics(font_id, font_size)?;
+        if line.runs.is_empty() {
+            line.primary_font_size = font_size;
+        }
+        line.ascent = line.ascent.max(metrics.ascent.max(0.0));
+        line.descent = line.descent.max(metrics.descent.max(0.0));
+        line.runs.push(GlyphRun {
+            origin: Point {
+                x: line.width,
+                y: 0.0,
+            },
+            font_id,
+            font_size,
+            glyph_ids: shaped.glyph_ids,
+            advances: shaped.advances,
+            text,
+            source: None,
+            color: resolve_run_color(&effective_rpr, context.input.theme.as_ref()),
+            bold,
+            italic,
+            field_kind: None,
+            field_source: None,
+            note: None,
+        });
+        line.width += shaped.width;
+    }
+    Ok(line)
+}
+
+/// Distribute a phonetic line over the base width per `w:rubyAlign`.
+///
+/// The two distribute modes widen the gaps between phonetic glyphs, which is
+/// what the mode names describe, so they act on the glyph advances rather
+/// than on the line origin the other modes move.
+fn distribute_ruby_line(line: &mut AnnotationLine, align: Option<&ST_RubyAlign>, width: f64) {
+    let slack = width - line.width;
+    if slack <= 0.0 {
+        return;
+    }
+    let glyphs = line
+        .runs
+        .iter()
+        .map(|run| run.advances.len())
+        .sum::<usize>();
+    let (start, gap) = match align.unwrap_or(&ST_RubyAlign::Center) {
+        ST_RubyAlign::Left => (0.0, 0.0),
+        ST_RubyAlign::Right | ST_RubyAlign::RightVertical => (slack, 0.0),
+        ST_RubyAlign::DistributeLetter if glyphs > 1 => (0.0, slack / (glyphs - 1) as f64),
+        ST_RubyAlign::DistributeSpace if glyphs > 0 => {
+            let gap = slack / (glyphs + 1) as f64;
+            (gap, gap)
+        }
+        // Centre is the fallback for the remaining tokens, including a
+        // producer value this renderer has no distribution rule for.
+        _ => (slack / 2.0, 0.0),
+    };
+    let mut x = start;
+    let mut remaining = glyphs;
+    for run in &mut line.runs {
+        run.origin.x = x;
+        for advance in &mut run.advances {
+            remaining -= 1;
+            if remaining > 0 {
+                *advance += gap;
+            }
+            x += *advance;
+        }
+    }
+    line.width = width;
+}
+
+/// Project one ruby annotation into an inline item.
+///
+/// The base line and the phonetic line are measured independently, the
+/// phonetic line is placed above the base at `w:hpsRaise` in the `w:hps`
+/// size, and the annotation's ascent carries both, which is what makes a
+/// ruby-bearing line taller for the paginator.
+fn ruby_inline_item(
+    ruby: &CT_Ruby,
+    base_runs: &[CT_R],
+    context: &AnnotationContext<'_>,
+    fm: &mut FontManager,
+) -> Result<Option<InlineItem>> {
+    let properties = ruby.properties.as_ref();
+    let base_override = properties
+        .and_then(|properties| properties.hps_base_text)
+        .map(|size| size.to_pt());
+    let mut base = measure_annotation_line(base_runs, context, fm, base_override)?;
+    if base.runs.is_empty() {
+        return Ok(None);
+    }
+    let phonetic_size = properties
+        .and_then(|properties| properties.hps)
+        .map(|size| size.to_pt())
+        .unwrap_or(base.primary_font_size / 2.0);
+    let mut phonetic = measure_annotation_line(&ruby.ruby_text, context, fm, Some(phonetic_size))?;
+
+    let width = base.width.max(phonetic.width);
+    let raise = properties
+        .and_then(|properties| properties.hps_raise)
+        .map(|size| size.to_pt())
+        .unwrap_or(base.ascent + phonetic.descent);
+    let group_ascent = base.ascent.max(raise + phonetic.ascent);
+    let group_descent = base.descent;
+
+    distribute_ruby_line(&mut base, Some(&ST_RubyAlign::Center), width);
+    distribute_ruby_line(
+        &mut phonetic,
+        properties.and_then(|properties| properties.align.as_ref()),
+        width,
+    );
+
+    let mut children = Vec::new();
+    for mut run in base.runs {
+        run.origin.y = group_ascent;
+        children.push(PositionedElement::Text(run));
+    }
+    for mut run in phonetic.runs {
+        run.origin.y = group_ascent - raise;
+        children.push(PositionedElement::Text(run));
+    }
+
+    Ok(Some(InlineItem::Group {
+        width,
+        height: group_ascent + group_descent,
+        baseline: Some(group_ascent),
+        group: GroupElement {
+            transform: Transform::IDENTITY,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children,
+        },
+    }))
 }
 
 /// Resolve the effective color for a run, considering theme colors.

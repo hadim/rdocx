@@ -1,6 +1,6 @@
 # F-266b, Ruby and emphasis marks
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-266a
@@ -286,28 +286,28 @@ asserts F-266a's golden digest unmoved rather than re-recording it.
 
 ## Implementation checklist
 
-- [ ] Confirm F-266a is `done` and that the shared golden fixture module and
+- [x] Confirm F-266a is `done` and that the shared golden fixture module and
       its recorded digest exist.
-- [ ] Confirm the run-property module split has landed and add
+- [x] Confirm the run-property module split has landed and add
       `CT_RPr::emphasis_mark` there.
-- [ ] Add `ST_Em`, its parser at the `w:em` schema slot, its serialiser at the
+- [x] Add `ST_Em`, its parser at the `w:em` schema slot, its serialiser at the
       same position, and the raw-carrier path for unsupported attributes.
-- [ ] Add the `Run` emphasis setter and reader in `crates/rdocx/src/run.rs`.
-- [ ] Project emphasis marks into layout, above the glyph box, with the
+- [x] Add the `Run` emphasis setter and reader in `crates/rdocx/src/run.rs`.
+- [x] Project emphasis marks into layout, above the glyph box, with the
       diagnostic for an undrawable mark and no change to the base advance.
-- [ ] Create `crates/rdocx-oxml/src/ruby.rs` with `CT_Ruby`, `CT_RubyPr` and
+- [x] Create `crates/rdocx-oxml/src/ruby.rs` with `CT_Ruby`, `CT_RubyPr` and
       `ST_RubyAlign`, reusing `CT_R`, and declare it in `lib.rs`.
-- [ ] Add the `Ruby` paragraph-content variant in
+- [x] Add the `Ruby` paragraph-content variant in
       `crates/rdocx-oxml/src/text.rs` and the facade authoring surface in
       `crates/rdocx/src/paragraph.rs`.
-- [ ] Project ruby into layout, base plus phonetic line, with `w:rubyAlign`
+- [x] Project ruby into layout, base plus phonetic line, with `w:rubyAlign`
       distribution and the corrected line height.
-- [ ] Make text extraction return the base only, and confirm redaction still
+- [x] Make text extraction return the base only, and confirm redaction still
       steps over ruby.
-- [ ] Add every test in `## Test plan` to the existing entrypoints.
-- [ ] Record this story's golden digest, with its reason, in the test and in
+- [x] Add every test in `## Test plan` to the existing entrypoints.
+- [x] Record this story's golden digest, with its reason, in the test and in
       `docs/hld/12-testing-strategy.md`, and assert F-266a's digest unmoved.
-- [ ] Run `/verify`, plus `cargo test -p oxml-layout --no-default-features`,
+- [x] Run `/verify`, plus `cargo test -p oxml-layout --no-default-features`,
       `cargo check --target wasm32-unknown-unknown -p rdocx-wasm -p rpptx-wasm`,
       and `cargo publish --dry-run` with the archive-size assertion.
 

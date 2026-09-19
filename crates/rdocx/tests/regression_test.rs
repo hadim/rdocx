@@ -31499,3 +31499,155 @@ mod f266a_script_and_font_slot_regressions {
         }
     }
 }
+
+/// F-266b, ruby phonetic guides and East Asian emphasis marks.
+mod f266b_ruby_and_emphasis_regressions {
+    use super::*;
+    use rdocx::ST_Em;
+    use rdocx_oxml::units::HalfPoint;
+
+    const RUBY_BASE: &str = "漢字";
+    const RUBY_TEXT: &str = "かんじ";
+
+    fn ruby_document() -> Document {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            paragraph.add_run("Zephyrine ");
+            let index = paragraph.add_ruby(RUBY_BASE, RUBY_TEXT);
+            paragraph.ruby_mut(index).unwrap().properties = Some(rdocx::CT_RubyPr {
+                hps: Some(HalfPoint(10)),
+                hps_raise: Some(HalfPoint(22)),
+                ..Default::default()
+            });
+            paragraph.add_run(" Quarkite");
+        }
+        document
+    }
+
+    /// The phonetic line is an annotation, not content. Returning it from
+    /// text extraction would double count every annotated word for search,
+    /// redaction, `ActualText` and the differential corpus.
+    #[test]
+    fn ruby_phonetic_text_is_not_returned_by_paragraph_text_extraction() {
+        let mut document = ruby_document();
+        let expected = format!("Zephyrine {RUBY_BASE} Quarkite");
+
+        let paragraphs = document.paragraphs();
+        assert_eq!(paragraphs[0].text(), expected);
+        assert!(!paragraphs[0].text().contains(RUBY_TEXT));
+        drop(paragraphs);
+
+        // The same holds after a save and a reopen, which is the path a
+        // producer file takes.
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let paragraphs = reopened.paragraphs();
+        assert_eq!(paragraphs[0].text(), expected);
+        assert!(!paragraphs[0].text().contains(RUBY_TEXT));
+        assert_eq!(
+            paragraphs[0].ruby(0).map(|ruby| ruby.ruby_text[0].text()),
+            Some(RUBY_TEXT.to_owned()),
+            "the phonetic line is still reachable through the typed model"
+        );
+    }
+
+    /// Redaction steps over `w:ruby` so a base and a phonetic line are never
+    /// rewritten into each other. Modelling the element must not change that.
+    #[test]
+    fn redaction_still_steps_over_ruby_after_it_is_modeled() {
+        let mut document = ruby_document();
+        let report = document.redact_text("Zephyrine").unwrap();
+        assert!(report.word_text > 0, "the ordinary run text is redacted");
+
+        let paragraphs = document.paragraphs();
+        assert!(
+            !paragraphs[0].text().contains("Zephyrine"),
+            "the selector is gone from the ordinary runs"
+        );
+        assert!(
+            paragraphs[0].text().contains(RUBY_BASE),
+            "the ruby base line is untouched"
+        );
+        assert_eq!(
+            paragraphs[0].ruby(0).map(|ruby| ruby.ruby_text[0].text()),
+            Some(RUBY_TEXT.to_owned()),
+            "the phonetic line is untouched"
+        );
+    }
+
+    /// A run split before a ruby shifts every later run by one. A span that
+    /// did not move with it would wrap the wrong runs, so the annotation
+    /// would jump onto its neighbour's text on the next save.
+    #[test]
+    fn splitting_a_run_before_a_ruby_keeps_the_annotation_on_its_own_base() {
+        let mut document = ruby_document();
+        {
+            let mut paragraph = document.paragraph_mut(0).expect("the paragraph exists");
+            assert_eq!(paragraph.ruby(0).unwrap().base_range(), 1..2);
+            paragraph.split_run(0, 4).expect("the leading run splits");
+            assert_eq!(
+                paragraph.ruby(0).unwrap().base_range(),
+                2..3,
+                "the span moved with its base run"
+            );
+        }
+
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let ruby = xml
+            .split_once("<w:rubyBase>")
+            .expect("the ruby base is written")
+            .1;
+        assert!(
+            ruby.contains(RUBY_BASE) && !ruby.split("</w:rubyBase>").next().unwrap().contains("yr"),
+            "the annotation still wraps its own base run: {xml}"
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.paragraphs()[0].text(),
+            format!("Zephyrine {RUBY_BASE} Quarkite")
+        );
+    }
+
+    /// Word places an emphasis mark without changing the base metrics, so a
+    /// marked run must advance exactly as far as an unmarked one. A mark that
+    /// consumed advance would move every line containing one.
+    #[test]
+    fn an_emphasis_mark_does_not_change_the_base_advance() {
+        fn advances(mark: Option<ST_Em>) -> Vec<f64> {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("");
+                let mut run = paragraph.add_run("marked words");
+                run.set_font("Carlito");
+                run.set_emphasis_mark_value(mark);
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic layout");
+            let mut widths = Vec::new();
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let oxml_layout::PositionedElement::Text(run) = element
+                        && !run.text.is_empty()
+                        && run.text != "\u{2022}"
+                    {
+                        widths.extend(run.advances.iter().copied());
+                    }
+                });
+            }
+            widths
+        }
+
+        let plain = advances(None);
+        assert!(!plain.is_empty(), "the control run is painted");
+        assert_eq!(
+            advances(Some(ST_Em::UnderDot)),
+            plain,
+            "a marked run keeps the unmarked run's advances"
+        );
+    }
+}

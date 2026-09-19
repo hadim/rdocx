@@ -4,6 +4,7 @@ use rdocx_oxml::borders::{CT_BorderEdge, CT_PBdr, CT_TabStop, CT_Tabs};
 use rdocx_oxml::document::CT_SectPr;
 use rdocx_oxml::math::OfficeMath;
 use rdocx_oxml::properties::{CT_FramePr, CT_PPr, CT_RPr, CT_Shd};
+use rdocx_oxml::ruby::CT_Ruby;
 use rdocx_oxml::shared::{
     ST_Border, ST_Jc, ST_PageOrientation, ST_SectionType, ST_TabJc, ST_TabLeader, ST_Underline,
 };
@@ -894,6 +895,40 @@ impl<'a> Paragraph<'a> {
         Run {
             inner: self.inner.runs.last_mut().unwrap(),
         }
+    }
+
+    /// Add a ruby phonetic guide and return its index in this paragraph.
+    ///
+    /// The base text becomes an ordinary paragraph run, so [`Self::text`]
+    /// returns it. The phonetic text stays inside the annotation and no text
+    /// extraction returns it. Use [`Self::ruby_mut`] to set the geometry in
+    /// `w:rubyPr`.
+    pub fn add_ruby(&mut self, base: &str, phonetic: &str) -> usize {
+        let base_start = self.inner.runs.len();
+        self.inner.runs.push(CT_R::new(base));
+        self.inner.rubies.push(CT_Ruby {
+            properties: None,
+            ruby_text: vec![CT_R::new(phonetic)],
+            base_start,
+            base_end: base_start + 1,
+            raw_xml: Vec::new(),
+        });
+        self.inner.rubies.len() - 1
+    }
+
+    /// Iterate over the paragraph's ruby annotations in source order.
+    pub fn rubies(&self) -> impl Iterator<Item = &CT_Ruby> {
+        self.inner.rubies.iter()
+    }
+
+    /// Get one ruby annotation by index.
+    pub fn ruby(&self, index: usize) -> Option<&CT_Ruby> {
+        self.inner.rubies.get(index)
+    }
+
+    /// Get one ruby annotation mutably by index.
+    pub fn ruby_mut(&mut self, index: usize) -> Option<&mut CT_Ruby> {
+        self.inner.rubies.get_mut(index)
     }
 
     /// Add a run that clones the paragraph mark's direct run properties.
@@ -2469,6 +2504,16 @@ impl<'a> ParagraphRef<'a> {
     /// Get an iterator over immutable run references.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
         self.inner.runs.iter().map(|r| RunRef { inner: r })
+    }
+
+    /// Iterate over the paragraph's ruby annotations in source order.
+    pub fn rubies(&self) -> impl Iterator<Item = &CT_Ruby> {
+        self.inner.rubies.iter()
+    }
+
+    /// Get one ruby annotation by index.
+    pub fn ruby(&self, index: usize) -> Option<&CT_Ruby> {
+        self.inner.rubies.get(index)
     }
 
     /// Check if paragraph has borders.

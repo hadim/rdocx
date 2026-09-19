@@ -9613,6 +9613,7 @@ Pedro Assumpcao and the rdocx maintainers.
             "placeholder": "fields",
             "properties": "properties",
             "revision": "collaboration",
+            "ruby": "paragraph",
             "run_properties": "run",
             "settings": "properties",
             "web_settings": "properties",

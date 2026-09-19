@@ -1629,6 +1629,36 @@ height as descent. Pagination positions that group against the resolved text
 baseline. `None` preserves the original top-aligned group position, including
 existing chart and drawing behavior.
 
+## Word East Asian annotation layout
+
+`w:ruby` and `w:em` both place a second, smaller line against a base line
+without changing the base advance, so both lower to one `InlineItem::Group`
+whose width is the base width and whose normalized baseline already carries the
+annotation. The line breaker turns that baseline into ascent, which is how an
+annotated line becomes taller and reaches the paginator through the existing
+natural-advance path.
+
+A ruby annotation owns a half-open span of its paragraph's runs. Layout
+measures the base line and the phonetic line independently, places the phonetic
+line at the `w:rubyPr/w:hpsRaise` offset above the base baseline in the
+`w:hps` size, and distributes it across the base width per `w:rubyAlign`. The
+two distribute values widen the gaps between phonetic glyphs, while the others
+move the phonetic line's origin. `w:hpsBaseText` fixes the base line size. The
+base line is centred when the phonetic line is the wider of the two. Text
+extraction returns the base line alone, because the phonetic line is an
+annotation rather than content, which is what keeps `ActualText`, SVG text,
+search, redaction, and round-trip XML in logical order.
+
+An emphasis-marked run paints one mark glyph per non-space base character,
+above the glyph box for every value but `underDot`, which paints below it. The
+mark resolves through the same family the base character resolved through. A
+mark codepoint that shapes to `.notdef` records one deduplicated diagnostic and
+paints nothing, leaving the base text exactly as an unmarked run paints it,
+which is the policy the uncovered-character path already follows. Marks never
+change the base advance and never take part in line breaking. The marked text
+is split at whitespace before it is grouped, so a marked run keeps the break
+opportunities it had before the marks were added.
+
 ## The renderer's input
 
 ```rust

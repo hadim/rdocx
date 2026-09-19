@@ -1103,6 +1103,26 @@ required attributes, and a `w:cr`, `w:noBreakHyphen`, or `w:softHyphen`
 carrying any attribute stay in positioned raw capture, because a partial
 projection would drop bytes a no-op save must return.
 
+`w:ruby` is a paragraph-content sibling of `w:r` rather than a run child. The
+paragraph reader accepts any prefix bound to the WordprocessingML namespace on
+`w:ruby`, `w:rubyPr`, `w:rt` and `w:rubyBase`, including a binding declared on
+the `w:ruby` element itself, and the writer emits the fixed `w` prefix at each
+child's `xsd:sequence` position. The base runs are spliced into the paragraph's
+own run list and the annotation records the half-open span they occupy, which
+is what `w:hyperlink` already does, so every run index the paragraph maintains
+across a split, an insertion, or a complex-field collapse moves the span with
+it. The phonetic runs stay inside the annotation.
+
+The typed ruby model admits only what it can write back exactly. A `w:ruby`
+carrying an attribute, a `w:rt` or `w:rubyBase` child that is not a run,
+non-whitespace character data between children, or an empty base line stays in
+positioned raw capture instead, for the same reason a partial `w:sym`
+projection does. Whitespace between children is this crate's own indentation
+and is read and dropped. Inside `w:rubyPr`, a child outside the six modeled
+ones is retained and written after them, and a modeled child missing its
+required `w:val` is retained rather than normalized into an empty slot, which
+is the rule `w:kern` already follows.
+
 Section property readers select every modeled `w:sectPr` child by its bound
 WordprocessingML namespace and replay each retained raw child at its recorded
 schema slot and sub-slot. The sub-slot is what keeps `xsd:sequence` intact now

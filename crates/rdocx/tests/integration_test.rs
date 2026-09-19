@@ -19269,7 +19269,7 @@ mod f266a_mixed_script_typography {
     /// representation difference away from the printed digits, and it is
     /// applied to a value whose sign of zero has been normalised, because
     /// `format!("{:.4}", -0.0)` renders `-0.0000`.
-    const MIXED_SCRIPT_GEOMETRY_DIGEST: &str =
+    pub(super) const MIXED_SCRIPT_GEOMETRY_DIGEST: &str =
         "516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402";
 
     /// One page holding all five scripts, authored through the public facade.
@@ -19281,7 +19281,7 @@ mod f266a_mixed_script_typography {
     /// between them and only the slot can. Every other paragraph has exactly
     /// one bundled face that covers it, so those prove script identity,
     /// reading order and geometry rather than slot resolution.
-    fn mixed_script_document() -> Document {
+    pub(super) fn mixed_script_document() -> Document {
         let mut document = Document::new();
 
         let mut latin = document.add_paragraph("");
@@ -19396,7 +19396,7 @@ mod f266a_mixed_script_typography {
     }
 
     /// The canonical serialisation the digest is taken over.
-    fn canonical_geometry(result: &rdocx_layout::WordLayoutResult) -> String {
+    pub(super) fn canonical_geometry(result: &rdocx_layout::WordLayoutResult) -> String {
         let mut lines = Vec::new();
         for (page_index, page) in result.layout.pages.iter().enumerate() {
             let mut paint_index = 0usize;
@@ -19452,7 +19452,7 @@ mod f266a_mixed_script_typography {
         lines.join("\n")
     }
 
-    fn digest(text: &str) -> String {
+    pub(super) fn digest(text: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(text.as_bytes());
         hasher
@@ -19599,6 +19599,499 @@ mod f266a_mixed_script_typography {
             digest(&geometry),
             MIXED_SCRIPT_GEOMETRY_DIGEST,
             "mixed-script page geometry moved:\n{geometry}"
+        );
+    }
+}
+
+/// F-266b, ruby phonetic guides and East Asian emphasis marks.
+///
+/// The gate is a recorded geometry digest over a deterministic page carrying
+/// both, taken with the same canonical serialisation F-266a records. It uses
+/// no rasteriser and no external oracle, because what is under test is glyph
+/// identity, placement and painted order, all of which the layout result
+/// already states exactly.
+///
+/// F-266a's digest is asserted unmoved in the same module, so this story
+/// cannot quietly move its sibling's baseline while recording its own.
+mod f266b_ruby_and_emphasis_typography {
+    use super::f266a_mixed_script_typography::{
+        MIXED_SCRIPT_GEOMETRY_DIGEST, canonical_geometry, digest, mixed_script_document,
+    };
+    use super::*;
+    use rdocx::{RunFontSlot, ST_Em, ST_RubyAlign};
+    use rdocx_oxml::units::HalfPoint;
+
+    const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    const RUBY_BASE: &str = "漢字";
+    const RUBY_TEXT: &str = "かんじ";
+    const EMPHASIS_JAPANESE: &str = "強調";
+    const EMPHASIS_KOREAN: &str = "강조";
+    const EMPHASIS_LATIN: &str = "marked words";
+    const LATIN_CONTROL: &str = "Ruby and emphasis page";
+
+    /// The recorded geometry of the ruby and emphasis page.
+    ///
+    /// Re-record only with a stated reason. It covers every painted run on
+    /// the page in paint order, including the runs inside the annotation
+    /// groups, because the canonical serialisation walks the element tree
+    /// rather than the top level. The serialisation is the one F-266a
+    /// documents, and it is host-stable for the same reasons.
+    const RUBY_AND_EMPHASIS_GEOMETRY_DIGEST: &str =
+        "b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6";
+
+    /// Wrap producer body XML in a package a `Document` can open.
+    fn producer_document(body: &str) -> Vec<u8> {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body>{body}<w:sectPr/></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
+
+    /// The saved `document.xml` with the writer's layout indentation removed,
+    /// so an assertion states element order rather than pretty printing.
+    fn saved_document_xml(bytes: &[u8]) -> String {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let mut compact = String::with_capacity(xml.len());
+        let mut in_tag = false;
+        let mut pending = String::new();
+        for character in xml.chars() {
+            match character {
+                '<' => {
+                    if !pending.trim().is_empty() {
+                        compact.push_str(&pending);
+                    }
+                    pending.clear();
+                    in_tag = true;
+                    compact.push('<');
+                }
+                '>' => {
+                    in_tag = false;
+                    compact.push('>');
+                }
+                _ if in_tag => compact.push(character),
+                _ => pending.push(character),
+            }
+        }
+        compact.push_str(&pending);
+        compact
+    }
+
+    /// Give one run the East Asian font slot a bundled subset face covers.
+    fn east_asian_run(properties: &mut Option<CT_RPr>, family: &str, language: &str) {
+        let rpr = properties.get_or_insert_with(CT_RPr::default);
+        rpr.font_east_asia = Some(family.to_owned());
+        rpr.language_east_asia = Some(language.to_owned());
+    }
+
+    /// One page carrying ruby-annotated Japanese, emphasis-marked Japanese
+    /// and Korean, and a Latin control, all authored through the facade.
+    fn ruby_and_emphasis_document() -> Document {
+        let mut document = Document::new();
+
+        let mut latin = document.add_paragraph("");
+        latin
+            .add_run(LATIN_CONTROL)
+            .font("Carlito")
+            .language("en-US");
+
+        let mut annotated = document.add_paragraph("");
+        {
+            let index = annotated.add_ruby(RUBY_BASE, RUBY_TEXT);
+            {
+                let mut base = annotated
+                    .run_mut(0)
+                    .expect("the base run is a paragraph run");
+                base.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+                base.set_language_east_asia_value(Some("ja-JP"));
+            }
+            let ruby = annotated.ruby_mut(index).expect("the ruby was just added");
+            east_asian_run(&mut ruby.ruby_text[0].properties, "Noto Sans JP", "ja-JP");
+            ruby.properties = Some(rdocx::CT_RubyPr {
+                align: Some(ST_RubyAlign::DistributeSpace),
+                hps: Some(HalfPoint(10)),
+                hps_raise: Some(HalfPoint(24)),
+                hps_base_text: Some(HalfPoint(22)),
+                language: Some("ja-JP".to_owned()),
+                dirty: None,
+                raw_xml: Vec::new(),
+            });
+        }
+
+        for (text, family, language, mark) in [
+            (EMPHASIS_JAPANESE, "Noto Sans JP", "ja-JP", ST_Em::Dot),
+            (EMPHASIS_KOREAN, "Noto Sans KR", "ko-KR", ST_Em::Circle),
+        ] {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run(text);
+            run.set_slot_font(RunFontSlot::EastAsia, Some(family));
+            run.set_language_east_asia_value(Some(language));
+            run.set_emphasis_mark_value(Some(mark));
+        }
+
+        let mut latin_marked = document.add_paragraph("");
+        {
+            let mut run = latin_marked.add_run(EMPHASIS_LATIN);
+            run.set_font("Carlito");
+            run.set_emphasis_mark_value(Some(ST_Em::UnderDot));
+        }
+
+        document
+    }
+
+    /// **The test gate.** The ruby and emphasis page keeps its recorded
+    /// geometry and its reading order, and F-266a's page is unmoved.
+    #[test]
+    fn ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order() {
+        let mut document = ruby_and_emphasis_document();
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic ruby and emphasis layout");
+        assert_eq!(result.layout.pages.len(), 1, "the fixture is one page");
+
+        // Every painted string on the page, in paint order.
+        let mut painted = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                oxml_layout::PositionedElement::Text(run) if !run.text.trim().is_empty() => {
+                    painted.push(run.text.clone());
+                }
+                oxml_layout::PositionedElement::MultilingualText(run)
+                    if !run.logical_text.trim().is_empty() =>
+                {
+                    painted.push(run.logical_text.clone());
+                }
+                _ => {}
+            });
+        }
+
+        // The base line and the phonetic line both reach the page, and the
+        // base comes first because it is the content and the annotation is
+        // painted over it.
+        let base_at = painted
+            .iter()
+            .position(|text| text == RUBY_BASE)
+            .expect("the ruby base line is painted");
+        let phonetic_at = painted
+            .iter()
+            .position(|text| text == RUBY_TEXT)
+            .expect("the ruby phonetic line is painted");
+        assert!(
+            base_at < phonetic_at,
+            "the base line is painted before its annotation: {painted:?}"
+        );
+
+        // Both emphasis-marked strings reach the page with their marks.
+        for text in [EMPHASIS_JAPANESE, EMPHASIS_KOREAN] {
+            assert!(
+                painted.iter().any(|painted| painted == text),
+                "{text} reaches the page: {painted:?}"
+            );
+        }
+        let marks = painted.iter().filter(|text| *text == "\u{2022}").count();
+        assert_eq!(
+            marks,
+            EMPHASIS_JAPANESE.chars().count()
+                + EMPHASIS_LATIN
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .count(),
+            "one solid dot per non-space base character of the two dot-marked runs"
+        );
+        assert_eq!(
+            painted.iter().filter(|text| *text == "\u{25CB}").count(),
+            EMPHASIS_KOREAN.chars().count(),
+            "one open circle per Korean base character"
+        );
+
+        // The phonetic line is an annotation, so the saved bytes and every
+        // text projection carry the base text and nothing else.
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let saved = reopened
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            saved,
+            vec![
+                LATIN_CONTROL,
+                RUBY_BASE,
+                EMPHASIS_JAPANESE,
+                EMPHASIS_KOREAN,
+                EMPHASIS_LATIN,
+            ]
+        );
+
+        let geometry = canonical_geometry(&result);
+        assert_eq!(
+            digest(&geometry),
+            RUBY_AND_EMPHASIS_GEOMETRY_DIGEST,
+            "ruby and emphasis page geometry moved:\n{geometry}"
+        );
+
+        // F-266a's page is measured again here so this story cannot move its
+        // sibling's recorded baseline without failing.
+        let sibling = mixed_script_document()
+            .layout_deterministic()
+            .expect("deterministic mixed-script layout");
+        assert_eq!(
+            digest(&canonical_geometry(&sibling)),
+            MIXED_SCRIPT_GEOMETRY_DIGEST,
+            "F-266a's recorded geometry moved"
+        );
+    }
+
+    /// Every `ST_Em` value authors, saves and reopens typed, and `w:em` lands
+    /// in its `EG_RPrBase` sequence slot between `w:cs` and
+    /// `w:eastAsianLayout`.
+    #[test]
+    fn emphasis_marks_reopen_as_modeled_state() {
+        let marks = [
+            ST_Em::None,
+            ST_Em::Dot,
+            ST_Em::Comma,
+            ST_Em::Circle,
+            ST_Em::UnderDot,
+        ];
+        let mut document = Document::new();
+        for mark in &marks {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("marked");
+            run.set_complex_script_value(Some(true));
+            run.set_emphasis_mark_value(Some(mark.clone()));
+            run.set_east_asian_layout_value(Some(rdocx::CT_EastAsianLayout {
+                vert: Some(true),
+                ..Default::default()
+            }));
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let xml = saved_document_xml(&saved);
+        let cs = xml.find("<w:cs/>").expect("w:cs is written");
+        let em = xml
+            .find(r#"<w:em w:val="none"/>"#)
+            .expect("w:em is written");
+        let layout = xml
+            .find("<w:eastAsianLayout")
+            .expect("w:eastAsianLayout is written");
+        assert!(
+            cs < em && em < layout,
+            "w:em sits between w:cs and w:eastAsianLayout: {xml}"
+        );
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let reopened_marks = paragraphs
+            .iter()
+            .map(|paragraph| {
+                paragraph
+                    .runs()
+                    .next()
+                    .unwrap()
+                    .emphasis_mark()
+                    .unwrap()
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reopened_marks, marks);
+    }
+
+    /// A producer `w:em` naming a token outside the ECMA-376 inventory is
+    /// kept rather than normalised away.
+    #[test]
+    fn a_producer_emphasis_mark_with_unknown_attributes_is_retained_verbatim() {
+        let source = producer_document(concat!(
+            r#"<w:p><w:r><w:rPr><w:em w:val="producerMark"/></w:rPr>"#,
+            r#"<w:t>marked</w:t></w:r></w:p>"#,
+        ));
+        let mut document = Document::from_bytes(&source).unwrap();
+        let saved = document.to_bytes().unwrap();
+        assert!(
+            saved_document_xml(&saved).contains(r#"<w:em w:val="producerMark"/>"#),
+            "the producer token survives the round trip"
+        );
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        assert_eq!(
+            paragraphs[0].runs().next().unwrap().emphasis_mark(),
+            Some(&ST_Em::Other("producerMark".to_owned()))
+        );
+    }
+
+    /// `w:ruby` round-trips typed, in `xsd:sequence` order, and a prefix
+    /// aliased producer ruby writes back with the fixed `w:` prefix.
+    #[test]
+    fn ruby_authors_saves_and_reopens_with_base_and_phonetic_runs() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            paragraph.add_run("before ");
+            let index = paragraph.add_ruby(RUBY_BASE, RUBY_TEXT);
+            paragraph.ruby_mut(index).unwrap().properties = Some(rdocx::CT_RubyPr {
+                align: Some(ST_RubyAlign::Center),
+                hps: Some(HalfPoint(10)),
+                hps_raise: Some(HalfPoint(22)),
+                hps_base_text: Some(HalfPoint(21)),
+                language: Some("ja-JP".to_owned()),
+                dirty: Some(false),
+                raw_xml: Vec::new(),
+            });
+            paragraph.add_run(" after");
+        }
+        let saved = document.to_bytes().unwrap();
+        let xml = saved_document_xml(&saved);
+        assert!(
+            xml.contains(concat!(
+                r#"<w:ruby><w:rubyPr><w:rubyAlign w:val="center"/><w:hps w:val="10"/>"#,
+                r#"<w:hpsRaise w:val="22"/><w:hpsBaseText w:val="21"/><w:lid w:val="ja-JP"/>"#,
+                r#"<w:dirty w:val="false"/></w:rubyPr><w:rt><w:r><w:t>かんじ</w:t></w:r></w:rt>"#,
+                r#"<w:rubyBase><w:r><w:t>漢字</w:t></w:r></w:rubyBase></w:ruby>"#,
+            )),
+            "the ruby writes in schema order with the fixed prefix: {xml}"
+        );
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let ruby = paragraphs[0].ruby(0).expect("the ruby reopens typed");
+        assert_eq!(ruby.ruby_text.len(), 1);
+        assert_eq!(ruby.ruby_text[0].text(), RUBY_TEXT);
+        assert_eq!(ruby.base_range(), 1..2);
+        assert_eq!(
+            ruby.properties.as_ref().and_then(|p| p.hps_raise),
+            Some(HalfPoint(22))
+        );
+        assert_eq!(paragraphs[0].text(), format!("before {RUBY_BASE} after"));
+
+        // The same ruby behind a producer alias reads through that alias and
+        // writes back with the fixed `w:` prefix.
+        let aliased = producer_document(concat!(
+            r#"<w:p><q:ruby xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+            r#"<q:rt><q:r><q:t>かんじ</q:t></q:r></q:rt>"#,
+            r#"<q:rubyBase><q:r><q:t>漢字</q:t></q:r></q:rubyBase></q:ruby></w:p>"#,
+        ));
+        let mut document = Document::from_bytes(&aliased).unwrap();
+        let xml = saved_document_xml(&document.to_bytes().unwrap());
+        assert!(
+            xml.contains(
+                r#"<w:ruby><w:rt><w:r><w:t>かんじ</w:t></w:r></w:rt><w:rubyBase><w:r><w:t>漢字</w:t></w:r></w:rubyBase></w:ruby>"#
+            ),
+            "an aliased producer ruby writes back with the fixed prefix: {xml}"
+        );
+    }
+
+    /// An unmodelled `w:rubyPr` child is preserved rather than dropped.
+    #[test]
+    fn unmodelled_ruby_properties_survive_a_noop_save() {
+        let source = producer_document(concat!(
+            r#"<w:p><w:ruby><w:rubyPr><w:hps w:val="10"/>"#,
+            r#"<w:producerOnly w:val="1"/></w:rubyPr>"#,
+            r#"<w:rt><w:r><w:t>かんじ</w:t></w:r></w:rt>"#,
+            r#"<w:rubyBase><w:r><w:t>漢字</w:t></w:r></w:rubyBase></w:ruby></w:p>"#,
+        ));
+        let mut document = Document::from_bytes(&source).unwrap();
+        let xml = saved_document_xml(&document.to_bytes().unwrap());
+        assert!(
+            xml.contains(r#"<w:producerOnly w:val="1"/>"#),
+            "the unmodelled property child is preserved: {xml}"
+        );
+    }
+
+    /// A ruby line claims the raise and the phonetic size as real height, so
+    /// the paginator sees the taller line and breaks the page on it.
+    #[test]
+    fn a_ruby_line_is_taller_and_paginates_on_its_real_height() {
+        fn page_count(with_ruby: bool, paragraphs: usize) -> usize {
+            let mut document = Document::new();
+            for _ in 0..paragraphs {
+                let mut paragraph = document.add_paragraph("");
+                if with_ruby {
+                    let index = paragraph.add_ruby(RUBY_BASE, RUBY_TEXT);
+                    paragraph.ruby_mut(index).unwrap().properties = Some(rdocx::CT_RubyPr {
+                        hps: Some(HalfPoint(22)),
+                        hps_raise: Some(HalfPoint(120)),
+                        ..Default::default()
+                    });
+                } else {
+                    paragraph.add_run(RUBY_BASE);
+                }
+            }
+            document
+                .layout_deterministic()
+                .expect("deterministic layout")
+                .layout
+                .pages
+                .len()
+        }
+
+        // The plain paragraphs fit one page. The same count with a 60 point
+        // raise does not, which is only true if the raise reached the line.
+        assert_eq!(page_count(false, 30), 1);
+        assert!(
+            page_count(true, 30) > 1,
+            "the raise and the phonetic size reach the line height"
+        );
+    }
+
+    /// A mark codepoint the resolved font cannot draw records a diagnostic
+    /// and paints nothing, leaving the base text untouched.
+    #[test]
+    fn an_undrawable_emphasis_mark_records_a_diagnostic_and_paints_nothing() {
+        fn painted(mark: Option<ST_Em>) -> (Vec<String>, Vec<String>) {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("");
+                let mut run = paragraph.add_run(EMPHASIS_LATIN);
+                run.set_font("Carlito");
+                run.set_emphasis_mark_value(mark);
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic layout");
+            let mut text = Vec::new();
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let oxml_layout::PositionedElement::Text(run) = element
+                        && !run.text.trim().is_empty()
+                    {
+                        text.push(run.text.clone());
+                    }
+                });
+            }
+            (
+                text,
+                result
+                    .layout
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.message.clone())
+                    .collect(),
+            )
+        }
+
+        let (plain, plain_diagnostics) = painted(None);
+        assert!(plain_diagnostics.is_empty(), "{plain_diagnostics:?}");
+        let (marked, diagnostics) = painted(Some(ST_Em::Comma));
+        assert_eq!(
+            marked, plain,
+            "an undrawable mark paints nothing and leaves the base text alone"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|message| message.contains("emphasis mark comma")),
+            "the undrawable mark is diagnosed: {diagnostics:?}"
         );
     }
 }

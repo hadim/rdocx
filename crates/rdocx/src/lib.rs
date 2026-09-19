@@ -114,6 +114,7 @@ pub use rdocx_oxml::math::{
     MathSubSuperscript, MatrixBaseJustification, OfficeMath,
 };
 pub use rdocx_oxml::properties::{CT_EastAsianLayout, CT_FitText, ST_Em, ST_TextEffect};
+pub use rdocx_oxml::ruby::{CT_Ruby, CT_RubyPr, ST_RubyAlign};
 pub use rdocx_oxml::settings::{
     CharacterSpacingControl, CompatibilityOption, CompatibilitySetting, CryptAlgorithmClass,
     CryptAlgorithmType, CryptProviderType, DocumentProofState, DocumentProtection, DocumentView,

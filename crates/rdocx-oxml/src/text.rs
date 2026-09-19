@@ -16,6 +16,7 @@ use crate::numbering::{namespace_bindings, parse_scoped_ppr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::{CT_Revision, RevisionKind};
+use crate::ruby::CT_Ruby;
 use crate::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 
 static NEXT_FIELD_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
@@ -1974,7 +1975,7 @@ fn field_run(field: Field, properties: Option<CT_RPr>) -> CT_R {
     }
 }
 
-fn parse_run_raw(raw: &[u8], word_prefixes: &[String]) -> Result<CT_R> {
+pub(crate) fn parse_run_raw(raw: &[u8], word_prefixes: &[String]) -> Result<CT_R> {
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -3061,6 +3062,7 @@ struct ComplexFieldProjection<'a> {
     content_controls: &'a mut [(usize, usize, usize, CT_Sdt)],
     revisions: &'a mut [(usize, usize, CT_Revision)],
     hyperlinks: &'a mut [HyperlinkSpan],
+    rubies: &'a mut [CT_Ruby],
     word_prefixes: &'a [String],
 }
 
@@ -3074,6 +3076,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
         content_controls,
         revisions,
         hyperlinks,
+        rubies,
         word_prefixes,
     } = projection;
     if runs.len() != run_sources.len() {
@@ -3269,6 +3272,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                 content_controls,
                 revisions,
                 hyperlinks,
+                rubies,
             },
         );
     }
@@ -3366,6 +3370,7 @@ struct ComplexFieldBoundariesMut<'a> {
     content_controls: &'a mut [(usize, usize, usize, CT_Sdt)],
     revisions: &'a mut [(usize, usize, CT_Revision)],
     hyperlinks: &'a mut [HyperlinkSpan],
+    rubies: &'a mut [CT_Ruby],
 }
 
 fn remap_complex_field_boundaries(
@@ -3381,6 +3386,7 @@ fn remap_complex_field_boundaries(
         content_controls,
         revisions,
         hyperlinks,
+        rubies,
     } = boundaries;
     let source_count = end - start + 1;
     let remap = |at: &mut usize| {
@@ -3424,6 +3430,10 @@ fn remap_complex_field_boundaries(
     }
     for (at, _, _) in revisions {
         remap(at);
+    }
+    for ruby in rubies {
+        remap(&mut ruby.base_start);
+        remap(&mut ruby.base_end);
     }
     for hyperlink in hyperlinks {
         let old_start = hyperlink.run_start;
@@ -3473,6 +3483,13 @@ pub struct CT_P {
     pub revisions: Vec<(usize, usize, CT_Revision)>,
     /// Typed OfficeMath projections keyed by `(run boundary, raw child slot)`.
     pub equations: Vec<(usize, usize, OfficeMath)>,
+    /// Ruby phonetic guides over half-open spans of [`Self::runs`].
+    ///
+    /// The base runs are ordinary paragraph runs, so text extraction, search
+    /// and redaction see them without knowing about ruby. The phonetic runs
+    /// stay inside the annotation, which is what keeps them out of every
+    /// text projection.
+    pub rubies: Vec<CT_Ruby>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -3871,6 +3888,7 @@ impl CT_P {
             content_controls: Vec::new(),
             revisions: Vec::new(),
             equations: Vec::new(),
+            rubies: Vec::new(),
         }
     }
 
@@ -4136,6 +4154,7 @@ impl CT_P {
             let new_index = suffix.filter(|_| *at > run_index).unwrap_or(*prefix);
             *slot = hyperlink_revision_slot(new_index);
         }
+        self.shift_ruby_spans_for_insert(run_index);
         self.runs.insert(run_index, run);
         self.refresh_bookmark_projection()
     }
@@ -4196,6 +4215,7 @@ impl CT_P {
                 hyperlink.run_end += 1;
             }
         }
+        self.shift_ruby_spans_for_insert(inserted);
         self.runs.insert(inserted, tail);
         if self.refresh_bookmark_projection() {
             Ok(inserted)
@@ -4208,6 +4228,22 @@ impl CT_P {
     ///
     /// Hyperlink spans are left to the caller, which decides whether the new
     /// run joins or splits them.
+    /// Move every ruby span across one run inserted at `inserted`.
+    ///
+    /// A span that starts at or after the insertion point moves whole, and a
+    /// span that already contains the point grows by one run, which is the
+    /// rule `w:hyperlink` spans follow beside this call.
+    fn shift_ruby_spans_for_insert(&mut self, inserted: usize) {
+        for ruby in &mut self.rubies {
+            if ruby.base_start >= inserted {
+                ruby.base_start += 1;
+                ruby.base_end += 1;
+            } else if ruby.base_end >= inserted {
+                ruby.base_end += 1;
+            }
+        }
+    }
+
     fn shift_run_boundaries_from(&mut self, run_index: usize) {
         for marker in &mut self.comment_ranges {
             match marker {
@@ -4713,6 +4749,7 @@ impl CT_P {
         let mut extra_xml = Vec::new();
         let mut content_controls = Vec::new();
         let mut revisions = Vec::new();
+        let mut rubies = Vec::new();
         let mut projected_run_count = 0usize;
         let mut tracked_run_count = 0usize;
         let mut buf = Vec::new();
@@ -4814,6 +4851,19 @@ impl CT_P {
                             if preserved_raw_before.is_some() {
                                 extra_xml.push((run_start, raw));
                             }
+                        }
+                    } else if is_word_element(name.as_ref(), b"ruby", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some((mut ruby, base_runs)) = CT_Ruby::from_raw(&raw, &prefixes)? {
+                            ruby.base_start = runs.len();
+                            ruby.base_end = runs.len() + base_runs.len();
+                            projected_run_count += base_runs.len();
+                            tracked_run_count += base_runs.len();
+                            run_sources.extend(base_runs.iter().map(|_| None));
+                            runs.extend(base_runs);
+                            rubies.push(ruby);
+                        } else {
+                            extra_xml.push((runs.len(), raw));
                         }
                     } else if is_word_element(name.as_ref(), b"fldSimple", &prefixes) {
                         let raw = capture_element(reader, e)?;
@@ -5003,6 +5053,7 @@ impl CT_P {
             content_controls: &mut content_controls,
             revisions: &mut revisions,
             hyperlinks: &mut hyperlinks,
+            rubies: &mut rubies,
             word_prefixes,
         })?;
         extra_xml.retain(|(_, raw)| !is_xml_whitespace(raw));
@@ -5045,6 +5096,7 @@ impl CT_P {
             content_controls,
             revisions,
             equations,
+            rubies,
         })
     }
 
@@ -5097,9 +5149,19 @@ impl CT_P {
         }
 
         let mut current_hyperlink: Option<usize> = None;
+        let mut current_ruby: Option<usize> = None;
         let mut written_field_owner = None;
         for (run_idx, run) in self.runs.iter().enumerate() {
             let in_hl = hyperlink_runs.get(&run_idx).copied();
+
+            // A ruby annotation wraps its base runs, so it closes before any
+            // paragraph boundary content that sits between two runs.
+            if let Some(ruby_index) = current_ruby
+                && self.rubies[ruby_index].base_end == run_idx
+            {
+                self.rubies[ruby_index].write_end(writer)?;
+                current_ruby = None;
+            }
 
             // Paragraph boundary content is a sibling of the hyperlink.
             if current_hyperlink.is_some() && current_hyperlink != in_hl {
@@ -5232,6 +5294,16 @@ impl CT_P {
 
             written_field_owner = None;
 
+            if current_ruby.is_none()
+                && let Some(ruby_index) = self
+                    .rubies
+                    .iter()
+                    .position(|ruby| ruby.base_start == run_idx && ruby.base_end > run_idx)
+            {
+                self.rubies[ruby_index].write_start(writer)?;
+                current_ruby = Some(ruby_index);
+            }
+
             if let Some(hyperlink_index) = current_hyperlink {
                 run.to_xml_with_word_override(
                     writer,
@@ -5240,6 +5312,10 @@ impl CT_P {
             } else {
                 run.to_xml(writer)?;
             }
+        }
+
+        if let Some(ruby_index) = current_ruby {
+            self.rubies[ruby_index].write_end(writer)?;
         }
 
         // Close any remaining open hyperlink

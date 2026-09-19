@@ -2635,6 +2635,19 @@ emphasis marks projected into layout.
 `ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order` pins the
 ruby and emphasis page and asserts the F-266a digest is unmoved.
 
+`w:ruby` models `w:rubyPr`, `w:rt` and `w:rubyBase` in
+`crates/rdocx-oxml/src/ruby.rs`, reusing `CT_R` for both lines rather than
+introducing a second run grammar. The base runs live in the paragraph's own run
+list behind a recorded span, so text extraction, search and redaction see the
+base and never the phonetic line. `w:em` was already modeled by F-265, so this
+story adds its render projection alone.
+
+Two limits are recorded rather than closed here. An annotated span is one
+unbreakable inline item, so a ruby never breaks inside its base and an
+emphasis-marked run breaks only at the whitespace it was split on. A marked run
+also leaves the rich shaping path, which costs nothing for the scripts `w:em`
+applies to and would cost a slice of every glyph cluster to avoid.
+
 ### F-266c, Character grid and vertical text (L)
 `w:eastAsianLayout`, `w:docGrid`, the East Asian paragraph toggles, and the
 `w:textDirection` render projection for vertical cell and section text.

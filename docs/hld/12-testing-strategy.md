@@ -1419,6 +1419,40 @@ and CJK. `a_complex_script_paragraph_is_never_admitted_to_the_paragraph_block_ca
 asserts it for all five rather than leaving it to be rediscovered, and the
 incremental relayout tests use Latin fixtures so they still measure reuse.
 
+## The ruby and emphasis geometry golden gate
+
+`ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order` builds
+one page through the public facade carrying a ruby-annotated Japanese word, an
+emphasis-marked Japanese run, an emphasis-marked Korean run, an
+emphasis-marked Latin run, and a Latin control, and lays it out with
+`FontManager::new_deterministic`. It reuses the canonical serialisation the
+mixed-script gate records, which walks the element tree rather than the top
+level, so the runs inside an annotation group reach the digest with everything
+else.
+
+The recorded digest is
+`b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6`.
+
+The same test lays out the mixed-script page again and asserts
+`516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402` is unmoved,
+so a change that quietly moved the sibling story's baseline fails here rather
+than at the next re-record.
+
+Before the digest the test asserts the properties one at a time, so a failure
+names what broke. The base line is painted before its phonetic line, both
+emphasis glyph inventories appear once per non-space base character, and the
+saved document's paragraph text carries the ruby base and never the phonetic
+line.
+
+The gate is a geometry digest and not a pinned-oracle raster, for the reasons
+the mixed-script section gives. Nothing here needs a rasteriser.
+
+Adjacent regressions prove that paragraph text extraction returns the ruby base
+alone, that redaction still steps over `w:ruby` now that it is modelled, that a
+run split before an annotation carries the span with it rather than leaving it
+on the neighbouring run, and that a marked run advances exactly as far as an
+unmarked one.
+
 ## The deck corpus
 
 Fifty real `.pptx` files are stored outside the published crates and fetched by

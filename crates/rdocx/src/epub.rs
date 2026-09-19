@@ -2389,6 +2389,10 @@ fn render_paragraph_projection(paragraph: &CT_P) -> CT_P {
         content_controls: Vec::new(),
         revisions: Vec::new(),
         equations: Vec::new(),
+        // The base runs are already projected above. The phonetic line is an
+        // annotation with no EPUB spelling, so it is dropped rather than
+        // doubling the base text.
+        rubies: Vec::new(),
     }
 }
 
