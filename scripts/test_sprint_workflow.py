@@ -9378,6 +9378,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 261,
                 262,
                 263,
+                # F-270 closed DOCX-007 and DOCX-037 to complete in S74, so it
+                # no longer owns an incomplete row.
+                270,
             }
         }
         self.assertEqual(
@@ -9595,6 +9598,7 @@ Pedro Assumpcao and the rdocx maintainers.
             "revision": "collaboration",
             "run_properties": "run",
             "settings": "properties",
+            "web_settings": "properties",
             "styles": "styles",
             "table": "tables",
             "text": "run",
