@@ -2687,6 +2687,21 @@ with it the remaining DOCX-034 layout and render columns.
 `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages` pins the
 page count, per-row origins, and column widths for a fixed-grid, an autofit,
 and a nested table in deterministic font mode.
+**Delivered**: `CT_TblPr` gains `w:tblpPr` as a typed `CT_TblPPr`, plus
+`w:tblOverlap`, `w:bidiVisual`, `w:tblCellSpacing`, `w:tblCaption`, and
+`w:tblDescription`, and `CT_TrPr` gains `w:wBefore`, `w:wAfter`, a row
+`w:tblCellSpacing`, and `w:hidden`, all at their existing schema slots. The
+three new enums are `ST_TblAnchor`, `ST_YAlign`, and `ST_TblOverlap`, and
+`w:tblpXSpec` reuses `AnchorAlignH`. The facade gains ten checked setters and
+their readers, and `has_unmodeled_properties` narrows by exactly those names.
+Layout gains `TableBlock::bidi_visual`, `TableRow::offset_left`, and
+`autofit_column_widths`, which engages only for an autofit or absent layout
+mode with an auto or absent width. `w:gridBefore`, `w:gridAfter`, `w:wBefore`,
+`w:wAfter`, and `w:tblCellSpacing` now change geometry, and a conditional
+region's `w:trPr` resolves into row height, header repetition, and row grid
+offsets, which closes the DOCX-034 layout and render columns. Floating
+placement stays with F-268b, so `w:tblpPr` round-trips and a floating table
+still renders in the flow.
 
 ### F-268b, Floating table placement and wrap (M)
 Floating table lowering, `place_floating_table`, the wrap and `ResolvedWraps`

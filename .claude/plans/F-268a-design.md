@@ -1,6 +1,6 @@
 # F-268a, Advanced table authoring and geometry
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-267
@@ -374,27 +374,27 @@ not a re-record.
 
 ## Implementation checklist
 
-- [ ] Add failing round-trip coverage for `w:tblpPr`, `w:tblOverlap`,
+- [x] Add failing round-trip coverage for `w:tblpPr`, `w:tblOverlap`,
       `w:bidiVisual`, `w:tblCellSpacing`, `w:tblCaption`, `w:tblDescription`,
       `w:wBefore`, `w:wAfter`, row `w:tblCellSpacing` and row `w:hidden`.
-- [ ] Model those children on `CT_TblPr` and `CT_TrPr` at their existing raw
+- [x] Model those children on `CT_TblPr` and `CT_TrPr` at their existing raw
       slots, prefix tolerant on read and a fixed `w:` prefix on write.
-- [ ] Prove `capture_element` still preserves every unmodeled sibling.
-- [ ] Add the checked `Table` and `Row` setters and the matching `TableRef` and
+- [x] Prove `capture_element` still preserves every unmodeled sibling.
+- [x] Add the checked `Table` and `Row` setters and the matching `TableRef` and
       `RowRef` readers, and narrow `has_unmodeled_properties` at
       `crates/rdocx/src/table.rs:1652` and `:2019`.
-- [ ] Add `TableBlock::bidi_visual` and `TableRow::offset_left`, and lower
+- [x] Add `TableBlock::bidi_visual` and `TableRow::offset_left`, and lower
       `w:bidiVisual`, `w:gridBefore`, `w:wBefore`, `w:gridAfter`, `w:wAfter`
       and `w:tblCellSpacing` into them.
-- [ ] Extend `resolve_base_table_properties` to inherit layout mode, width
+- [x] Extend `resolve_base_table_properties` to inherit layout mode, width
       type, bidirectional order and float position base-first.
-- [ ] Add `autofit_column_widths` with the two-condition engagement predicate
+- [x] Add `autofit_column_widths` with the two-condition engagement predicate
       and the minimum-plus-proportional-slack distribution.
-- [ ] Record the golden geometry in deterministic font mode and pin it.
-- [ ] Run the impacted oxml, layout, facade, golden, clippy, prose, hash and
+- [x] Record the golden geometry in deterministic font mode and pin it.
+- [x] Run the impacted oxml, layout, facade, golden, clippy, prose, hash and
       golden-PNG gates and confirm the 49 entries and the pixel manifest are
       unmoved.
-- [ ] Confirm the private Word corpus gate is unmoved, and stop rather than
+- [x] Confirm the private Word corpus gate is unmoved, and stop rather than
       re-record if it is not.
 
 ## Open questions

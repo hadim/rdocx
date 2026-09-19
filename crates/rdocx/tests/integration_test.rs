@@ -18671,3 +18671,555 @@ for image in (first, second):
         assert_eq!(cleared.table(0).unwrap().column_band_size(), None);
     }
 }
+
+/// F-268a, advanced table authoring, content-driven autofit and row geometry.
+mod advanced_table_authoring_and_geometry {
+    use rdocx::table::{
+        TableAnchor, TableFloatPosition, TableFloatX, TableFloatY, TableLayout, TableOverlap,
+        TableTextDistance, TableWidth,
+    };
+    use rdocx::{Document, Length};
+    use rdocx_oxml::table::{
+        CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc,
+    };
+    use rdocx_oxml::units::Twips;
+
+    /// Parse one table out of a minimal document, which is the only public
+    /// entry point that drives `CT_Tbl` from bytes.
+    fn parse_single_table(table_xml: &str) -> CT_Tbl {
+        let source = format!(
+            r#"<w:document xmlns:w="{ns}"><w:body>{table_xml}</w:body></w:document>"#,
+            ns = rdocx_oxml::namespace::W_NS
+        );
+        let document = rdocx_oxml::document::CT_Document::from_xml(source.as_bytes())
+            .expect("document parses");
+        document
+            .body
+            .content
+            .into_iter()
+            .find_map(|item| match item {
+                rdocx_oxml::document::BodyContent::Table(table) => Some(table),
+                _ => None,
+            })
+            .expect("document holds one table")
+    }
+
+    /// Collect every painted cell rectangle, rounded to two decimal places.
+    ///
+    /// Cell shading is what marks a painted cell, so a table whose cells are
+    /// shaded reports one rectangle per cell in paint order.
+    fn collect_cell_rectangles(
+        elements: &[oxml_layout::PositionedElement],
+        output: &mut Vec<(f64, f64, f64, f64)>,
+    ) {
+        let round = |value: f64| (value * 100.0).round() / 100.0;
+        for element in elements {
+            match element {
+                oxml_layout::PositionedElement::FilledRect { rect, .. } => output.push((
+                    round(rect.x),
+                    round(rect.y),
+                    round(rect.width),
+                    round(rect.height),
+                )),
+                oxml_layout::PositionedElement::Group(group) => {
+                    collect_cell_rectangles(&group.children, output)
+                }
+                oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                    collect_cell_rectangles(children, output)
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn sample_float_position() -> TableFloatPosition {
+        TableFloatPosition {
+            horizontal_anchor: TableAnchor::Margin,
+            vertical_anchor: TableAnchor::Page,
+            horizontal: TableFloatX::Offset(Length::twips(720)),
+            vertical: TableFloatY::Offset(Length::twips(-360)),
+            distance_from_text: TableTextDistance {
+                top: Length::twips(80),
+                right: Length::twips(160),
+                bottom: Length::twips(80),
+                left: Length::twips(160),
+            },
+        }
+    }
+
+    fn layout_input(document: rdocx_oxml::document::CT_Document) -> rdocx_layout::LayoutInput {
+        rdocx_layout::LayoutInput {
+            automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
+            math_properties: None,
+            document,
+            styles: rdocx_oxml::styles::CT_Styles::new_default(),
+            numbering: None,
+            headers: std::collections::HashMap::new(),
+            footers: std::collections::HashMap::new(),
+            images: std::collections::HashMap::new(),
+            charts: std::collections::HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
+            core_properties: None,
+            hyperlink_urls: std::collections::HashMap::new(),
+            footnotes: None,
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+            revision_view: rdocx_layout::RevisionView::Accepted,
+        }
+    }
+
+    /// Lay one table out in deterministic font mode at `available_width`.
+    fn lay_out(table: &CT_Tbl, available_width: f64) -> rdocx_layout::table::TableBlock {
+        let input = layout_input(rdocx_oxml::document::CT_Document {
+            body: rdocx_oxml::document::CT_Body {
+                content: Vec::new(),
+                sect_pr: None,
+            },
+            extra_namespaces: Vec::new(),
+            background_xml: None,
+            background_extra_xml: Vec::new(),
+        });
+        let media = rdocx_layout::MediaRegistry::new(&input.images);
+        let mut fonts =
+            oxml_layout::FontManager::new_deterministic().expect("deterministic fonts load");
+        let mut numbering = rdocx_layout::style_resolver::NumberingState::new();
+        let mut diagnostics = Vec::new();
+        rdocx_layout::table::layout_table(
+            table,
+            available_width,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("table lays out")
+    }
+
+    /// A two-column table whose cells carry the given text.
+    fn table_with_text(columns: &[i32], rows: &[&[&str]]) -> CT_Tbl {
+        let mut table = CT_Tbl::new();
+        table.grid = Some(CT_TblGrid {
+            columns: columns
+                .iter()
+                .map(|width| CT_TblGridCol {
+                    width: Twips(*width),
+                })
+                .collect(),
+            ..CT_TblGrid::default()
+        });
+        for cells in rows {
+            let mut row = CT_Row::new();
+            for text in cells.iter() {
+                let mut cell = CT_Tc::new();
+                cell.paragraphs_mut()[0].add_run(text);
+                row.cells.push(cell);
+            }
+            table.rows.push(row);
+        }
+        table
+    }
+
+    #[test]
+    fn table_and_row_advanced_properties_survive_reopen() {
+        let mut document = Document::new();
+        {
+            let mut table = document.add_table(2, 2);
+            table
+                .set_float_position(Some(sample_float_position()))
+                .expect("float position is valid");
+            table.set_overlap(Some(TableOverlap::Never));
+            table.set_bidi_visual(Some(true));
+            table
+                .set_cell_spacing(Some(Length::twips(24)))
+                .expect("cell spacing is valid");
+            table
+                // The caption carries a character the attribute writer must
+                // escape rather than emit raw.
+                .set_caption(Some("Totals & targets"))
+                .expect("caption");
+            table
+                .set_description(Some("Region < quarter, by \"total\""))
+                .expect("description");
+            let mut row = table.row(0).expect("first row");
+            row.set_width_before(Some(TableWidth::Fixed(Length::twips(360))))
+                .expect("leading width is valid");
+            row.set_width_after(Some(TableWidth::Percentage(10.0)))
+                .expect("trailing width is valid");
+            row.set_cell_spacing(Some(Length::twips(12)))
+                .expect("row cell spacing is valid");
+            row.set_hidden(Some(true));
+        }
+
+        let bytes = document.to_bytes().expect("document saves");
+        let reopened = Document::from_bytes(&bytes).expect("document reopens");
+        let table = reopened.table(0).expect("table reopens");
+        assert_eq!(table.float_position(), Some(sample_float_position()));
+        assert_eq!(table.overlap(), Some(TableOverlap::Never));
+        assert_eq!(table.bidi_visual(), Some(true));
+        assert_eq!(
+            table.cell_spacing(),
+            Some(TableWidth::Fixed(Length::twips(24)))
+        );
+        assert_eq!(table.caption(), Some("Totals & targets"));
+        assert_eq!(table.description(), Some("Region < quarter, by \"total\""));
+        let row = table.row(0).expect("row reopens");
+        assert_eq!(
+            row.width_before(),
+            Some(TableWidth::Fixed(Length::twips(360)))
+        );
+        assert_eq!(row.width_after(), Some(TableWidth::Percentage(10.0)));
+        assert_eq!(
+            row.cell_spacing(),
+            Some(TableWidth::Fixed(Length::twips(12)))
+        );
+        assert_eq!(row.hidden(), Some(true));
+        assert!(!table.has_unmodeled_properties());
+        assert!(!row.has_unmodeled_properties());
+
+        // The ten new children land in their schema-sequence slots.
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).expect("package opens");
+        let xml = String::from_utf8(
+            package
+                .get_part("/word/document.xml")
+                .expect("document part")
+                .to_vec(),
+        )
+        .expect("document xml is utf8");
+        let at = |needle: &str| {
+            xml.find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {xml}"))
+        };
+        assert!(at("<w:tblpPr") < at("<w:tblOverlap"));
+        assert!(at("<w:tblOverlap") < at("<w:bidiVisual"));
+        assert!(at("<w:bidiVisual") < at("<w:tblW"));
+        assert!(at("<w:tblW") < at("<w:tblCellSpacing"));
+        assert!(at("<w:tblCellSpacing") < at("<w:tblCaption"));
+        assert!(at("<w:tblCaption") < at("<w:tblDescription"));
+        // Free-text values are escaped on the way out and unescaped on the
+        // way back in, unlike the token-valued `w:val` attributes beside them.
+        assert!(
+            xml.contains(r#"<w:tblCaption w:val="Totals &amp; targets"/>"#),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(
+                r#"<w:tblDescription w:val="Region &lt; quarter, by &quot;total&quot;"/>"#
+            ),
+            "{xml}"
+        );
+        assert!(at("<w:wBefore") < at("<w:wAfter"));
+        assert!(at("<w:wAfter") < at("<w:hidden"));
+    }
+
+    #[test]
+    fn tbl_ppr_attribute_matrix_is_prefix_tolerant_and_writes_a_fixed_prefix() {
+        let source = format!(
+            concat!(
+                r#"<x:tbl xmlns:x="{ns}"><x:tblPr><x:tblpPr x:leftFromText="10""#,
+                r#" x:rightFromText="20" x:topFromText="30" x:bottomFromText="40""#,
+                r#" x:horzAnchor="page" x:vertAnchor="text" x:tblpX="120""#,
+                r#" x:tblpXSpec="outside" x:tblpY="240" x:tblpYSpec="inside"/>"#,
+                r#"<x:tblOverlap x:val="overlap"/></x:tblPr>"#,
+                r#"<x:tblGrid><x:gridCol x:w="1000"/></x:tblGrid>"#,
+                r#"<x:tr><x:tc><x:p/></x:tc></x:tr></x:tbl>"#
+            ),
+            ns = rdocx_oxml::namespace::W_NS
+        );
+        let table = parse_single_table(&source);
+        let position = table
+            .properties
+            .as_ref()
+            .expect("table properties")
+            .float_position
+            .as_deref()
+            .expect("float position parses");
+        assert_eq!(position.left_from_text, Some(Twips(10)));
+        assert_eq!(position.right_from_text, Some(Twips(20)));
+        assert_eq!(position.top_from_text, Some(Twips(30)));
+        assert_eq!(position.bottom_from_text, Some(Twips(40)));
+        assert_eq!(
+            position.horz_anchor,
+            Some(rdocx_oxml::table::ST_TblAnchor::Page)
+        );
+        assert_eq!(
+            position.vert_anchor,
+            Some(rdocx_oxml::table::ST_TblAnchor::Text)
+        );
+        assert_eq!(position.tbl_p_x, Some(Twips(120)));
+        assert_eq!(
+            position.tbl_p_x_spec,
+            Some(rdocx_oxml::drawing::AnchorAlignH::Outside)
+        );
+        assert_eq!(position.tbl_p_y, Some(Twips(240)));
+        assert_eq!(
+            position.tbl_p_y_spec,
+            Some(rdocx_oxml::table::ST_YAlign::Inside)
+        );
+
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        table.to_xml(&mut writer).expect("table serialises");
+        let written = String::from_utf8(writer.into_inner()).expect("serialised table is utf8");
+        for attribute in [
+            r#"w:leftFromText="10""#,
+            r#"w:rightFromText="20""#,
+            r#"w:topFromText="30""#,
+            r#"w:bottomFromText="40""#,
+            r#"w:horzAnchor="page""#,
+            r#"w:vertAnchor="text""#,
+            r#"w:tblpXSpec="outside""#,
+            r#"w:tblpX="120""#,
+            r#"w:tblpYSpec="inside""#,
+            r#"w:tblpY="240""#,
+        ] {
+            assert!(written.contains(attribute), "{attribute}: {written}");
+        }
+        assert!(
+            written.contains(r#"<w:tblOverlap w:val="overlap"/>"#),
+            "{written}"
+        );
+
+        // An unrecognised value falls back rather than inventing a position.
+        let unknown = format!(
+            concat!(
+                r#"<w:tbl xmlns:w="{ns}"><w:tblPr>"#,
+                r#"<w:tblpPr w:horzAnchor="elsewhere" w:tblpXSpec="sideways"/>"#,
+                r#"<w:tblOverlap w:val="sometimes"/></w:tblPr>"#,
+                r#"<w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid>"#,
+                r#"<w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#
+            ),
+            ns = rdocx_oxml::namespace::W_NS
+        );
+        let table = parse_single_table(&unknown);
+        let properties = table.properties.as_ref().expect("table properties");
+        let position = properties
+            .float_position
+            .as_deref()
+            .expect("float position");
+        assert_eq!(position.horz_anchor, None);
+        assert_eq!(position.tbl_p_x_spec, None);
+        assert_eq!(properties.overlap, None);
+    }
+
+    #[test]
+    fn autofit_engages_only_for_an_auto_width_autofit_table() {
+        let declared = [Twips(1440), Twips(4320)];
+        let grid_points = |table: &CT_Tbl| -> Vec<f64> {
+            lay_out(table, 360.0)
+                .col_widths
+                .iter()
+                .map(|width| (width * 100.0).round() / 100.0)
+                .collect()
+        };
+        let declared_points = declared
+            .iter()
+            .map(|width| width.to_pt())
+            .collect::<Vec<_>>();
+
+        let mut table = table_with_text(
+            &[declared[0].0, declared[1].0],
+            &[&["Region", "Quarterly revenue for the northern region"]],
+        );
+
+        // Absent width and absent layout mode: autofit engages.
+        assert_ne!(grid_points(&table), declared_points);
+
+        // An explicit fixed layout keeps the declared grid.
+        table.properties = Some(CT_TblPr {
+            layout: Some("fixed".to_owned()),
+            ..CT_TblPr::default()
+        });
+        assert_eq!(grid_points(&table), declared_points);
+
+        // An authored dxa width keeps the declared grid even with autofit.
+        table.properties = Some(CT_TblPr {
+            layout: Some("autofit".to_owned()),
+            width: Some(CT_TblWidth::dxa(5760)),
+            ..CT_TblPr::default()
+        });
+        assert_eq!(grid_points(&table), declared_points);
+
+        // An authored percentage width keeps the declared grid.
+        table.properties = Some(CT_TblPr {
+            width: Some(CT_TblWidth::pct(5000)),
+            ..CT_TblPr::default()
+        });
+        assert_eq!(grid_points(&table), declared_points);
+
+        // An auto width with an autofit layout engages.
+        table.properties = Some(CT_TblPr {
+            layout: Some("autofit".to_owned()),
+            width: Some(CT_TblWidth::auto()),
+            ..CT_TblPr::default()
+        });
+        assert_ne!(grid_points(&table), declared_points);
+    }
+
+    #[test]
+    fn autofit_distributes_available_width_between_measured_minima_and_maxima() {
+        let table = table_with_text(
+            &[2880, 2880],
+            &[&[
+                "ID",
+                "A considerably longer heading that cannot fit on one line at this width",
+            ]],
+        );
+
+        // Wide enough for every cell's natural width: columns stop at content.
+        let roomy = lay_out(&table, 600.0);
+        assert!(roomy.col_widths[0] < roomy.col_widths[1]);
+        assert!(roomy.table_width < 600.0);
+
+        // Narrow enough to force distribution: the columns fill the caller's
+        // width and the narrow column keeps at least its measured minimum.
+        let tight = lay_out(&table, 200.0);
+        let total: f64 = tight.col_widths.iter().sum();
+        assert!((total - 200.0).abs() < 0.01, "{:?}", tight.col_widths);
+        assert!(tight.col_widths[0] > 0.0);
+        assert!(tight.col_widths[0] < roomy.col_widths[0] + 0.01);
+        assert!(tight.col_widths[1] > tight.col_widths[0]);
+    }
+
+    #[test]
+    fn checked_table_and_row_setters_reject_invalid_values() {
+        let mut document = Document::new();
+        document.add_table(1, 1);
+        let before = document.to_bytes().expect("document saves");
+
+        {
+            let mut table = document.table_mut(0).expect("table");
+            assert!(table.set_cell_spacing(Some(Length::twips(-1))).is_err());
+            assert!(table.set_caption(Some("   ")).is_err());
+            assert!(table.set_description(Some("")).is_err());
+            let mut invalid = sample_float_position();
+            invalid.distance_from_text.top = Length::twips(-1);
+            assert!(table.set_float_position(Some(invalid)).is_err());
+        }
+        {
+            let mut table = document.table_mut(0).expect("table");
+            let mut row = table.row(0).expect("row");
+            assert!(
+                row.set_width_before(Some(TableWidth::Percentage(140.0)))
+                    .is_err()
+            );
+            assert!(
+                row.set_width_after(Some(TableWidth::Fixed(Length::twips(-5))))
+                    .is_err()
+            );
+            assert!(row.set_cell_spacing(Some(Length::twips(-3))).is_err());
+        }
+
+        assert_eq!(document.to_bytes().expect("document saves"), before);
+        let table = document.table(0).expect("table");
+        assert_eq!(table.cell_spacing(), None);
+        assert_eq!(table.caption(), None);
+        assert_eq!(table.description(), None);
+        assert_eq!(table.float_position(), None);
+        let row = table.row(0).expect("row");
+        assert_eq!(row.width_before(), None);
+        assert_eq!(row.width_after(), None);
+        assert_eq!(row.cell_spacing(), None);
+    }
+
+    #[test]
+    fn fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages() {
+        let mut document = Document::new();
+        {
+            let mut fixed = document.add_table(2, 3);
+            fixed.set_layout(TableLayout::Fixed);
+            fixed
+                .set_grid_widths(&[
+                    Length::twips(2880),
+                    Length::twips(2880),
+                    Length::twips(3600),
+                ])
+                .expect("fixed grid widths");
+            for row_index in 0..2 {
+                let mut row = fixed.row(row_index).expect("fixed row");
+                for cell_index in 0..3 {
+                    let mut cell = row.cell(cell_index).expect("fixed cell");
+                    cell.set_text("Fixed");
+                    cell.set_shading("EEEEEE");
+                }
+            }
+        }
+        {
+            let mut autofit = document.add_table(2, 2);
+            autofit
+                .set_width_mode(TableWidth::Auto)
+                .expect("auto width");
+            autofit.set_layout(TableLayout::AutoFit);
+            let texts = [
+                ["ID", "A much longer autofit heading than the first column"],
+                ["7", "Short"],
+            ];
+            for (row_index, row_texts) in texts.iter().enumerate() {
+                let mut row = autofit.row(row_index).expect("autofit row");
+                for (cell_index, text) in row_texts.iter().enumerate() {
+                    let mut cell = row.cell(cell_index).expect("autofit cell");
+                    cell.set_text(text);
+                    cell.set_shading("DDDDDD");
+                }
+            }
+        }
+        {
+            let mut outer = document.add_table(1, 2);
+            outer.set_layout(TableLayout::Fixed);
+            let mut row = outer.row(0).expect("outer row");
+            row.cell(0).expect("outer cell").set_text("Outer");
+            let mut host = row.cell(1).expect("nested host");
+            let mut nested = host.add_table(2, 2);
+            nested.set_layout(TableLayout::Fixed);
+            for nested_row in 0..2 {
+                let mut nested_row = nested.row(nested_row).expect("nested row");
+                for nested_cell in 0..2 {
+                    let mut cell = nested_row.cell(nested_cell).expect("nested cell");
+                    cell.set_text("N");
+                    cell.set_shading("CCCCCC");
+                }
+            }
+        }
+
+        let layout = document.layout_deterministic().expect("document lays out");
+        let mut origins = Vec::new();
+        for page in &layout.layout.pages {
+            collect_cell_rectangles(&page.elements, &mut origins);
+        }
+        assert_eq!(layout.layout.pages.len(), 1);
+        assert_eq!(origins, GOLDEN_TABLE_GEOMETRY);
+    }
+
+    /// Reviewed page geometry for
+    /// `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`,
+    /// as `(x, y, width, height)` in points for every painted cell.
+    ///
+    /// Rows 1 to 6 are the fixed-grid table, which keeps its declared 144,
+    /// 144 and 180 point columns. Rows 7 to 10 are the auto-width autofit
+    /// table, whose narrow `ID` column measures 20.34 points against a 242.28
+    /// point heading column and whose total stops short of the 468 point text
+    /// column because the content fits. Rows 11 to 14 are the nested table,
+    /// which resolves its own grid inside the owning cell content box.
+    const GOLDEN_TABLE_GEOMETRY: &[(f64, f64, f64, f64)] = &[
+        (72.0, 72.0, 144.0, 19.87),
+        (216.0, 72.0, 144.0, 19.87),
+        (360.0, 72.0, 180.0, 19.87),
+        (72.0, 91.87, 144.0, 19.87),
+        (216.0, 91.87, 144.0, 19.87),
+        (360.0, 91.87, 180.0, 19.87),
+        (72.0, 111.74, 20.34, 19.87),
+        (92.34, 111.74, 242.28, 19.87),
+        (72.0, 131.61, 20.34, 19.87),
+        (92.34, 131.61, 242.28, 19.87),
+        (311.4, 172.43, 111.6, 19.87),
+        (423.0, 172.43, 111.6, 19.87),
+        (311.4, 192.3, 111.6, 19.87),
+        (423.0, 192.3, 111.6, 19.87),
+    ];
+}

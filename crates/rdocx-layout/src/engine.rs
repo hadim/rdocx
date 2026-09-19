@@ -16022,18 +16022,21 @@ mod tests {
                     cells: vec![cell(true)],
                     height: 12.0,
                     is_header: true,
+                    offset_left: 0.0,
                 },
                 table::TableRow {
                     structure_id: None,
                     cells: vec![cell(false)],
                     height: 12.0,
                     is_header: false,
+                    offset_left: 0.0,
                 },
             ],
             header_row_indices: vec![0],
             table_width: 100.0,
             table_indent: 0.0,
             borders: None,
+            bidi_visual: false,
         };
         let mut sections = [paginator::Section {
             blocks: vec![

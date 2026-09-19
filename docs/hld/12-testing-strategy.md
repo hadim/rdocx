@@ -927,6 +927,20 @@ entity-decoded settings, unsupported colour and media diagnostics, atomic
 rejection, and margin-relative centering. No sample authors a watermark, so the
 49-entry hash harness remains unchanged.
 
+The advanced table geometry golden gate is
+`fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`. It
+builds one document in code holding a fixed-grid table, an auto-width autofit
+table, and a nested table, lays it out in deterministic font mode, and pins the
+page count together with the origin, width, and height of every painted cell,
+which is where the per-row origins and the resolved column widths are visible.
+Focused tests cover the `w:tblpPr` attribute matrix under an alias prefix, the
+autofit engagement predicate, minimum-plus-slack distribution, bidirectional
+column reversal against logical cell order, row grid offsets, a conditional
+region's row height reaching layout, and checked-setter rejection. No standard
+sample authors a floating, bidirectional, spaced, or auto-width table, and the
+engagement predicate keeps every authored `dxa` and `pct` table on the declared
+grid, so all 49 hash entries remain unchanged.
+
 The M23 drawing gate is `m23_drawings_text_boxes_and_watermarks_match_word`.
 It authors cropped inline and floating pictures, every wrap family, rotated and
 vertical text boxes, compatibility fallbacks, and section-selected watermarks

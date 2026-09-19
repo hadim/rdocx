@@ -627,9 +627,8 @@ an annotation, but their visible text remains in the line.
 
 Table lowering derives cumulative row and column offsets from the resolved
 active grid columns. A preserved historical table-grid change is inspection and
-round-trip metadata and never participates in width calculation. Right-to-left
-tables reverse visual column placement without changing logical cell ownership.
-Cell payloads retain paragraphs and nested tables in source order. A nested
+round-trip metadata and never participates in width calculation. Cell payloads
+retain paragraphs and nested tables in source order. A nested
 table resolves its own active grid, fills, borders, text, provenance, anchors,
 and logical structure inside the owning cell content box.
 
@@ -651,6 +650,31 @@ direction.
 Each table origin draws its fill before its text. The table's unique border
 segments draw after all cell fills and text so a neighbouring fill cannot cover
 them. Table cells do not use the shape autofit algorithm.
+
+Right-to-left tables reverse visual column placement without changing logical
+cell ownership. Both grammars satisfy that sentence. The DrawingML `a:tbl`
+reverses inside the slide renderer. A WordprocessingML `w:bidiVisual` table
+carries the fact on the lowered table block, and the row painter places the
+logically last cell first. The lowered column widths, every cell's grid column,
+the retained semantics and the structure tree stay in reading order, so cell
+ownership, the body fragments and the accessibility contract are unchanged. A
+left-to-right table takes the same placement arithmetic it always did.
+
+A row's omitted leading grid columns move that row alone. The resolved offset
+is `w:wBefore` when present and otherwise the width of the `w:gridBefore`
+columns, measured on the row's own leading side, which is the trailing side of
+the logical grid for a bidirectional table. The table origin, the table width
+and every other row are unchanged, and the row's remaining cells occupy the
+grid columns they actually cover. A resolved `w:tblCellSpacing` adds half its
+width to every cell margin, so adjacent content boxes are one whole gap apart
+and the table edge carries half. A row-level value wins over the table's.
+
+A conditional table-style region's `w:trPr` resolves base first, exactly like
+its cell layers. The style's base row properties apply first, then every region
+that scopes a whole row, which is the whole table, the two horizontal bands,
+the first row and the last row, in the same ascending priority, then the row's
+own direct properties. A column or corner region formats part of a row, so its
+row properties cannot decide that row's height or grid offsets.
 
 Word table styles resolve base-first through `basedOn`, then apply table-region
 properties in deterministic whole-table, band, edge, and corner priority. The
@@ -732,6 +756,35 @@ uses a fresh deterministic engine and does not publish pagination state or
 touch facade layout caches.
 
 ### Autofit
+
+Word and PowerPoint autofit are separate algorithms. The Word table-layout
+counterpart comes first.
+
+A Word table takes content-driven column widths only when the effective
+`w:tblLayout` is autofit or absent **and** the effective `w:tblW` type is
+`auto` or absent. That is narrower than the literal ECMA default, which applies
+autofit whenever `w:tblLayout` is absent. The narrowing is deliberate. An
+authored `dxa` or `pct` width keeps the declared grid, so widening the
+predicate stays a separate reviewed change rather than a side effect of
+introducing measurement. The effective width is the authored one, direct or
+inherited, read before the ordinary path drops a direct width in favour of the
+declared grid.
+
+When it engages, each cell is measured twice through the production cell
+content path, once at a wide trial width for its maximum content width and once
+at a one-point trial width for the minimum, which is its longest unbreakable
+run. Measurement consumes a clone of the numbering state and discards its
+diagnostics, because the production pass that follows emits both for real. A
+cell's own `w:tcW` narrows its maximum but never below its measured minimum. A
+spanning cell contributes an equal share to each column it covers. A cell that
+holds a nested table contributes that table's declared grid instead of a
+measured width, because measuring it at two trial widths would make it autofit
+twice as well and a table nested `n` deep would cost three to the `n`. The
+production pass that follows still lays the nested table out for real. If every
+maximum fits, the columns stop at their content. If every minimum already
+exceeds the caller's width, the minima scale down to it. Otherwise each column
+takes its minimum plus its proportional share of the remaining slack. A table
+with nothing measurable keeps its declared grid.
 
 **PowerPoint stores its own computed answer in the file.** Trust it.
 

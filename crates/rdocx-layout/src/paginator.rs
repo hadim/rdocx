@@ -700,6 +700,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                                 &pager.geometry,
                                 pager.page_number,
                                 tbl_borders,
+                                table.bidi_visual,
                                 &mut pager.elements,
                                 &mut pager.behind_elements,
                                 pager.media,
@@ -728,6 +729,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                     &pager.geometry,
                     pager.page_number,
                     tbl_borders,
+                    table.bidi_visual,
                     &mut pager.elements,
                     &mut pager.behind_elements,
                     pager.media,
@@ -3923,14 +3925,25 @@ fn render_table_row(
     geometry: &PageGeometry,
     page_number: usize,
     table_borders: Option<&rdocx_oxml::table::CT_TblBorders>,
+    bidi: bool,
     elements: &mut Vec<PositionedElement>,
     behind_elements: &mut Vec<PositionedElement>,
     media: &HashMap<MediaId, ImageData>,
 ) {
-    let mut cell_x = table_x;
+    let mut cell_x = table_x + row.offset_left;
     let num_cells = row.cells.len();
 
-    for (cell_idx, cell) in row.cells.iter().enumerate() {
+    for visual_idx in 0..num_cells {
+        // A bidirectional row places its logically last cell first. The row's
+        // own vector, the retained semantics and the structure tree stay in
+        // reading order, and a left-to-right row keeps the index and the
+        // arithmetic it always had.
+        let cell_idx = if bidi {
+            num_cells - 1 - visual_idx
+        } else {
+            visual_idx
+        };
+        let cell = &row.cells[cell_idx];
         let cell_semantics = row_semantics.and_then(|row| row.cells.get(cell_idx));
         if cell.is_vmerge_continue {
             cell_x += cell.width;
@@ -3958,7 +3971,7 @@ fn render_table_row(
             paint_height,
             &cell.borders,
             table_borders,
-            cell_idx,
+            visual_idx,
             num_cells,
             cell.is_first_row,
             cell.is_last_row,
@@ -4049,6 +4062,7 @@ fn render_table_row(
                             geometry,
                             page_number,
                             table.borders.as_ref(),
+                            table.bidi_visual,
                             elements,
                             behind_elements,
                             media,
@@ -6419,6 +6433,7 @@ mod tests {
             }],
             height: 10.0,
             is_header: false,
+            offset_left: 0.0,
         };
         let mut elements = Vec::new();
         render_table_row(
@@ -6430,6 +6445,7 @@ mod tests {
             &PageGeometry::default(),
             0,
             None,
+            false,
             &mut elements,
             &mut Vec::new(),
             &HashMap::new(),

@@ -5,6 +5,7 @@ use quick_xml::{Reader, Writer};
 
 use crate::borders::CT_BorderEdge;
 use crate::content_control::{CT_Sdt, SdtOwner};
+use crate::drawing::AnchorAlignH;
 use crate::error::{OxmlError, Result};
 use crate::namespace::matches_local_name;
 use crate::numbering::{
@@ -396,6 +397,210 @@ pub struct CT_TblGridCol {
     pub width: Twips,
 }
 
+/// Read a `w:val` attribute that carries free text rather than a token.
+///
+/// `get_word_val_attr` returns the attribute exactly as written, which is
+/// right for an enumeration or an identifier and wrong for prose. A caption
+/// or a description can contain `&` or `<`, so the writer escapes it and the
+/// reader has to put it back. A malformed entity is kept verbatim rather than
+/// failing the parse.
+fn unescaped_word_val_attr(e: &BytesStart, word_prefixes: &[String]) -> Result<Option<String>> {
+    Ok(get_word_val_attr(e, word_prefixes)?.map(|value| {
+        quick_xml::escape::unescape(&value)
+            .map(|unescaped| unescaped.into_owned())
+            .unwrap_or(value)
+    }))
+}
+
+// ---- Floating table position ----
+
+/// `ST_TblAnchor` — what a floating table's offset is measured from.
+///
+/// Three values, not the eight of `ST_RelativeFromH`. A parse type that
+/// admitted the other five would admit states `w:tblpPr` cannot write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ST_TblAnchor {
+    Margin,
+    Page,
+    Text,
+}
+
+impl ST_TblAnchor {
+    /// Parse an anchor. An unrecognised value reads as no anchor, which falls
+    /// back to Word's default rather than inventing a position.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "margin" => Some(Self::Margin),
+            "page" => Some(Self::Page),
+            "text" => Some(Self::Text),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Margin => "margin",
+            Self::Page => "page",
+            Self::Text => "text",
+        }
+    }
+}
+
+/// `ST_YAlign` — the vertical alignment spelling `w:tblpYSpec` accepts.
+///
+/// A separate type from `AnchorAlignV` because `tblpYSpec` adds `inline`.
+/// Folding that into an optional alignment plus a flag would make an inline
+/// spec that also carries an alignment representable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ST_YAlign {
+    Inline,
+    Top,
+    Center,
+    Bottom,
+    Inside,
+    Outside,
+}
+
+impl ST_YAlign {
+    /// Parse an alignment. An unrecognised value reads as no alignment.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "inline" => Some(Self::Inline),
+            "top" => Some(Self::Top),
+            "center" => Some(Self::Center),
+            "bottom" => Some(Self::Bottom),
+            "inside" => Some(Self::Inside),
+            "outside" => Some(Self::Outside),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::Top => "top",
+            Self::Center => "center",
+            Self::Bottom => "bottom",
+            Self::Inside => "inside",
+            Self::Outside => "outside",
+        }
+    }
+}
+
+/// `ST_TblOverlap` — whether a floating table may overlap another float.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ST_TblOverlap {
+    Never,
+    Overlap,
+}
+
+impl ST_TblOverlap {
+    /// Parse an overlap policy. An unrecognised value reads as absent.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "never" => Some(Self::Never),
+            "overlap" => Some(Self::Overlap),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::Overlap => "overlap",
+        }
+    }
+}
+
+/// `CT_TblPPr` — the floating table position.
+///
+/// Modeled and authored here. Layout reads it in F-268b, so a floating table
+/// round-trips exactly and renders in the flow until then.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CT_TblPPr {
+    pub left_from_text: Option<Twips>,
+    pub right_from_text: Option<Twips>,
+    pub top_from_text: Option<Twips>,
+    pub bottom_from_text: Option<Twips>,
+    pub horz_anchor: Option<ST_TblAnchor>,
+    pub vert_anchor: Option<ST_TblAnchor>,
+    pub tbl_p_x: Option<Twips>,
+    /// `w:tblpXSpec`, which reuses the drawing anchor's five horizontal
+    /// alignments because the two vocabularies are identical.
+    pub tbl_p_x_spec: Option<AnchorAlignH>,
+    pub tbl_p_y: Option<Twips>,
+    pub tbl_p_y_spec: Option<ST_YAlign>,
+}
+
+#[allow(non_snake_case)]
+impl CT_TblPPr {
+    fn from_xml_attrs_with_prefixes(e: &BytesStart, word_prefixes: &[String]) -> Result<Self> {
+        let mut position = CT_TblPPr::default();
+        for attr in e.attributes() {
+            let attr = attr?;
+            let key = attr.key.as_ref();
+            let value = std::str::from_utf8(&attr.value)?;
+            if is_word_attribute(key, b"leftFromText", word_prefixes) {
+                position.left_from_text = Some(Twips(parse_table_measurement(value)?));
+            } else if is_word_attribute(key, b"rightFromText", word_prefixes) {
+                position.right_from_text = Some(Twips(parse_table_measurement(value)?));
+            } else if is_word_attribute(key, b"topFromText", word_prefixes) {
+                position.top_from_text = Some(Twips(parse_table_measurement(value)?));
+            } else if is_word_attribute(key, b"bottomFromText", word_prefixes) {
+                position.bottom_from_text = Some(Twips(parse_table_measurement(value)?));
+            } else if is_word_attribute(key, b"horzAnchor", word_prefixes) {
+                position.horz_anchor = ST_TblAnchor::parse(value);
+            } else if is_word_attribute(key, b"vertAnchor", word_prefixes) {
+                position.vert_anchor = ST_TblAnchor::parse(value);
+            } else if is_word_attribute(key, b"tblpX", word_prefixes) {
+                position.tbl_p_x = Some(Twips(parse_table_measurement(value)?));
+            } else if is_word_attribute(key, b"tblpXSpec", word_prefixes) {
+                position.tbl_p_x_spec = AnchorAlignH::parse(value);
+            } else if is_word_attribute(key, b"tblpY", word_prefixes) {
+                position.tbl_p_y = Some(Twips(parse_table_measurement(value)?));
+            } else if is_word_attribute(key, b"tblpYSpec", word_prefixes) {
+                position.tbl_p_y_spec = ST_YAlign::parse(value);
+            }
+        }
+        Ok(position)
+    }
+
+    pub fn write_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut buf = itoa::Buffer::new();
+        let mut e = BytesStart::new("w:tblpPr");
+        for (name, value) in [
+            ("w:leftFromText", self.left_from_text),
+            ("w:rightFromText", self.right_from_text),
+            ("w:topFromText", self.top_from_text),
+            ("w:bottomFromText", self.bottom_from_text),
+        ] {
+            if let Some(value) = value {
+                e.push_attribute((name, buf.format(value.0)));
+            }
+        }
+        if let Some(anchor) = self.horz_anchor {
+            e.push_attribute(("w:horzAnchor", anchor.to_str()));
+        }
+        if let Some(anchor) = self.vert_anchor {
+            e.push_attribute(("w:vertAnchor", anchor.to_str()));
+        }
+        if let Some(spec) = self.tbl_p_x_spec {
+            e.push_attribute(("w:tblpXSpec", spec.to_str()));
+        }
+        if let Some(value) = self.tbl_p_x {
+            e.push_attribute(("w:tblpX", buf.format(value.0)));
+        }
+        if let Some(spec) = self.tbl_p_y_spec {
+            e.push_attribute(("w:tblpYSpec", spec.to_str()));
+        }
+        if let Some(value) = self.tbl_p_y {
+            e.push_attribute(("w:tblpY", buf.format(value.0)));
+        }
+        writer.write_event(Event::Empty(e))?;
+        Ok(())
+    }
+}
+
 // ---- Table properties ----
 
 /// `CT_TblPr` — Table properties.
@@ -403,6 +608,16 @@ pub struct CT_TblGridCol {
 pub struct CT_TblPr {
     /// Table style ID
     pub style_id: Option<String>,
+    /// `w:tblpPr` — the floating table position.
+    ///
+    /// Boxed, like the other composite members of this family, so a table
+    /// stays cheap on the stack. Test threads build whole documents by value
+    /// against a 2 MiB ceiling.
+    pub float_position: Option<Box<CT_TblPPr>>,
+    /// `w:tblOverlap` — whether this float may overlap another.
+    pub overlap: Option<ST_TblOverlap>,
+    /// `w:bidiVisual` — reverse visual column placement.
+    pub bidi_visual: Option<bool>,
     /// `w:tblStyleRowBandSize` — rows per horizontal conditional band.
     ///
     /// A count, not a length, so no unit constructor applies. Absent means one
@@ -414,6 +629,8 @@ pub struct CT_TblPr {
     pub width: Option<CT_TblWidth>,
     /// Table alignment
     pub jc: Option<ST_Jc>,
+    /// `w:tblCellSpacing` — the gap between adjacent cell content boxes.
+    pub cell_spacing: Option<CT_TblWidth>,
     /// Table borders
     pub borders: Option<CT_TblBorders>,
     /// Default cell margins
@@ -426,6 +643,10 @@ pub struct CT_TblPr {
     pub shading: Option<CT_Shd>,
     /// Which parts of the table style's conditional formatting apply.
     pub look: Option<CT_TblLook>,
+    /// `w:tblCaption` — the accessible table caption.
+    pub caption: Option<String>,
+    /// `w:tblDescription` — the accessible table description.
+    pub description: Option<String>,
     /// Prior table properties from the schema-final `w:tblPrChange`.
     pub change: Option<CT_Revision>,
     /// Malformed table property changes retained verbatim.
@@ -575,6 +796,23 @@ impl CT_TblPr {
                     let (at, next) = tbl_pr_raw_boundary(name.as_ref(), boundary, &prefixes);
                     if is_word_element(name.as_ref(), b"tblStyle", &prefixes) {
                         pr.style_id = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"tblpPr", &prefixes) {
+                        pr.float_position = Some(Box::new(
+                            CT_TblPPr::from_xml_attrs_with_prefixes(e, &prefixes)?,
+                        ));
+                    } else if is_word_element(name.as_ref(), b"tblOverlap", &prefixes) {
+                        pr.overlap = get_word_val_attr(e, &prefixes)?
+                            .as_deref()
+                            .and_then(ST_TblOverlap::parse);
+                    } else if is_word_element(name.as_ref(), b"bidiVisual", &prefixes) {
+                        pr.bidi_visual = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"tblCellSpacing", &prefixes) {
+                        pr.cell_spacing =
+                            Some(CT_TblWidth::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"tblCaption", &prefixes) {
+                        pr.caption = unescaped_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"tblDescription", &prefixes) {
+                        pr.description = unescaped_word_val_attr(e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"tblStyleRowBandSize", &prefixes) {
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             pr.row_band_size = Some(val.parse()?);
@@ -639,7 +877,11 @@ impl CT_TblPr {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     let (at, next) = tbl_pr_raw_boundary(name.as_ref(), boundary, &prefixes);
-                    if is_word_element(name.as_ref(), b"tblBorders", &prefixes) {
+                    if is_word_element(name.as_ref(), b"bidiVisual", &prefixes) {
+                        // A toggle a producer wrote with an explicit end tag.
+                        pr.bidi_visual = Some(parse_word_toggle(e, &prefixes)?);
+                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                    } else if is_word_element(name.as_ref(), b"tblBorders", &prefixes) {
                         let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                         let border_bindings =
                             merged_owner_bindings(owner_bindings, &local_bindings);
@@ -706,9 +948,24 @@ impl CT_TblPr {
             writer.write_event(Event::Empty(e))?;
         }
 
-        for boundary in 1..=4 {
-            write_extras_at(writer, &self.extra_xml, boundary)?;
+        write_extras_at(writer, &self.extra_xml, 1)?;
+        if let Some(position) = &self.float_position {
+            position.write_xml(writer)?;
         }
+
+        write_extras_at(writer, &self.extra_xml, 2)?;
+        if let Some(overlap) = self.overlap {
+            let mut e = BytesStart::new("w:tblOverlap");
+            e.push_attribute(("w:val", overlap.to_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        write_extras_at(writer, &self.extra_xml, 3)?;
+        if let Some(bidi) = self.bidi_visual {
+            write_toggle(writer, "w:bidiVisual", bidi)?;
+        }
+
+        write_extras_at(writer, &self.extra_xml, 4)?;
         if let Some(size) = self.row_band_size {
             let mut buffer = itoa::Buffer::new();
             let mut e = BytesStart::new("w:tblStyleRowBandSize");
@@ -737,6 +994,10 @@ impl CT_TblPr {
         }
 
         write_extras_at(writer, &self.extra_xml, 8)?;
+        if let Some(ref spacing) = self.cell_spacing {
+            spacing.write_xml(writer, "w:tblCellSpacing")?;
+        }
+
         write_extras_at(writer, &self.extra_xml, 9)?;
         if let Some(ref indent) = self.indent {
             indent.write_xml(writer, "w:tblInd")?;
@@ -771,9 +1032,22 @@ impl CT_TblPr {
             look.to_xml(writer)?;
         }
 
-        for boundary in 15..=18 {
-            write_extras_at(writer, &self.extra_xml, boundary)?;
+        write_extras_at(writer, &self.extra_xml, 15)?;
+        if let Some(ref caption) = self.caption {
+            let mut e = BytesStart::new("w:tblCaption");
+            e.push_attribute(("w:val", caption.as_str()));
+            writer.write_event(Event::Empty(e))?;
         }
+
+        write_extras_at(writer, &self.extra_xml, 16)?;
+        if let Some(ref description) = self.description {
+            let mut e = BytesStart::new("w:tblDescription");
+            e.push_attribute(("w:val", description.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        write_extras_at(writer, &self.extra_xml, 17)?;
+        write_extras_at(writer, &self.extra_xml, 18)?;
         for raw in &self.revision_xml {
             writer.get_mut().write_all(raw)?;
         }
@@ -964,6 +1238,14 @@ pub struct CT_TrPr {
     pub grid_before: Option<u32>,
     /// Number of grid columns omitted after the final cell.
     pub grid_after: Option<u32>,
+    /// `w:wBefore` — the width of the omitted leading grid columns.
+    pub width_before: Option<CT_TblWidth>,
+    /// `w:wAfter` — the width of the omitted trailing grid columns.
+    pub width_after: Option<CT_TblWidth>,
+    /// `w:tblCellSpacing` — this row's gap between cell content boxes.
+    pub cell_spacing: Option<CT_TblWidth>,
+    /// `w:hidden` — the row is authored but not displayed.
+    pub hidden: Option<bool>,
     /// Allow row to break across pages
     pub cant_split: Option<bool>,
     /// `w:cnfStyle` — which conditional parts of the table style this row is.
@@ -1035,6 +1317,17 @@ impl CT_TrPr {
                         pr.grid_after = get_word_val_attr(e, &prefixes)?
                             .map(|value| value.parse())
                             .transpose()?;
+                    } else if is_word_element(name.as_ref(), b"wBefore", &prefixes) {
+                        pr.width_before =
+                            Some(CT_TblWidth::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"wAfter", &prefixes) {
+                        pr.width_after =
+                            Some(CT_TblWidth::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"tblCellSpacing", &prefixes) {
+                        pr.cell_spacing =
+                            Some(CT_TblWidth::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"hidden", &prefixes) {
+                        pr.hidden = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"cnfStyle", &prefixes) {
                         pr.cnf_style = get_word_val_attr(e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"cantSplit", &prefixes) {
@@ -1071,6 +1364,9 @@ impl CT_TrPr {
                         reader.read_to_end_into(e.name(), &mut Vec::new())?;
                     } else if is_word_element(e.name().as_ref(), b"cantSplit", &prefixes) {
                         pr.cant_split = Some(parse_word_toggle(e, &prefixes)?);
+                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                    } else if is_word_element(e.name().as_ref(), b"hidden", &prefixes) {
+                        pr.hidden = Some(parse_word_toggle(e, &prefixes)?);
                         reader.read_to_end_into(e.name(), &mut Vec::new())?;
                     } else if is_word_element(e.name().as_ref(), b"ins", &prefixes)
                         || is_word_element(e.name().as_ref(), b"del", &prefixes)
@@ -1142,7 +1438,15 @@ impl CT_TrPr {
         }
 
         write_extras_at(writer, &self.extra_xml, 4)?;
+        if let Some(ref width) = self.width_before {
+            width.write_xml(writer, "w:wBefore")?;
+        }
+
         write_extras_at(writer, &self.extra_xml, 5)?;
+        if let Some(ref width) = self.width_after {
+            width.write_xml(writer, "w:wAfter")?;
+        }
+
         write_extras_at(writer, &self.extra_xml, 6)?;
         if let Some(cant_split) = self.cant_split {
             write_toggle(writer, "w:cantSplit", cant_split)?;
@@ -1165,6 +1469,10 @@ impl CT_TrPr {
         }
 
         write_extras_at(writer, &self.extra_xml, 9)?;
+        if let Some(ref spacing) = self.cell_spacing {
+            spacing.write_xml(writer, "w:tblCellSpacing")?;
+        }
+
         write_extras_at(writer, &self.extra_xml, 10)?;
         if let Some(jc) = self.jc {
             let mut e = BytesStart::new("w:jc");
@@ -1173,6 +1481,10 @@ impl CT_TrPr {
         }
 
         write_extras_at(writer, &self.extra_xml, 11)?;
+        if let Some(hidden) = self.hidden {
+            write_toggle(writer, "w:hidden", hidden)?;
+        }
+
         write_extras_at(writer, &self.extra_xml, 12)?;
         self.write_revision_xml_at(writer, 12)?;
         for revision in self
@@ -1219,6 +1531,10 @@ impl CT_TrPr {
             && self.cnf_style.is_none()
             && self.grid_before.is_none()
             && self.grid_after.is_none()
+            && self.width_before.is_none()
+            && self.width_after.is_none()
+            && self.cell_spacing.is_none()
+            && self.hidden.is_none()
             && self.revision_markers.is_empty()
             && self.revision_xml.is_empty()
             && self.revision_xml_positions.is_empty()
@@ -3266,7 +3582,7 @@ mod tests {
             r#"<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
                <w:tr>
                  <w:trPr>
-                   <w:tblCellSpacing w:w="24" w:type="dxa"/>
+                   <w:divId w:val="7"/>
                    <w:ins w:id="1" w:author="Author"/>
                    <w:del w:id="2" w:author="Author"/>
                    <w:trPrChange w:id="3" w:author="Author"/>
@@ -3282,7 +3598,7 @@ mod tests {
         assert_eq!(
             properties.extra_xml,
             vec![
-                (9, br#"<w:tblCellSpacing w:w="24" w:type="dxa"/>"#.to_vec()),
+                (1, br#"<w:divId w:val="7"/>"#.to_vec()),
                 (
                     14,
                     br#"<w:trPrChange w:id="3" w:author="Author"/>"#.to_vec(),
@@ -3291,12 +3607,12 @@ mod tests {
         );
 
         let xml = table_to_xml(&table);
-        let spacing = xml.find("<w:tblCellSpacing").expect("cell spacing writes");
+        let division = xml.find("<w:divId").expect("division writes");
         let insertion = xml.find("<w:ins").expect("insertion writes");
         let deletion = xml.find("<w:del").expect("deletion writes");
         let change = xml.find("<w:trPrChange").expect("change writes");
         assert!(
-            spacing < insertion && insertion < deletion && deletion < change,
+            division < insertion && insertion < deletion && deletion < change,
             "row properties retain schema order: {xml}"
         );
     }
@@ -3712,7 +4028,7 @@ mod tests {
     #[test]
     fn unmodelled_table_property_groups_are_retained() {
         let table = parse_table(
-            r#"<w:tblPr><w:bidiVisual/><w:tblBorders><w:diagonalDown/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:trPr><w:tblCellSpacing/></w:trPr><w:tc><w:tcPr><w:fitText/></w:tcPr><w:p/></w:tc></w:tr>"#,
+            r#"<w:tblPr><ext:span xmlns:ext="urn:producer"/><w:tblBorders><w:diagonalDown/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:trPr><w:divId w:val="1"/></w:trPr><w:tc><w:tcPr><w:fitText/></w:tcPr><w:p/></w:tc></w:tr>"#,
         );
 
         let table_properties = table.properties.as_ref().expect("table properties parse");
@@ -3750,6 +4066,7 @@ mod tests {
     fn unmodelled_table_properties_keep_schema_slots_before_change() {
         let table = parse_table(
             r#"<w:tblPr>
+                 <ext:before xmlns:ext="urn:producer"/>
                  <w:tblOverlap w:val="never"/>
                  <w:tblW w:w="5000" w:type="dxa"/>
                  <ext:between xmlns:ext="urn:producer"/>
@@ -3761,16 +4078,18 @@ mod tests {
         );
 
         let properties = table.properties.as_ref().expect("table properties parse");
+        assert_eq!(properties.overlap, Some(ST_TblOverlap::Never));
+        assert_eq!(properties.caption.as_deref(), Some("caption"));
         assert_eq!(
             properties.extra_xml,
             vec![
-                (2, br#"<w:tblOverlap w:val="never"/>"#.to_vec()),
+                (0, br#"<ext:before xmlns:ext="urn:producer"/>"#.to_vec()),
                 (7, br#"<ext:between xmlns:ext="urn:producer"/>"#.to_vec(),),
-                (15, br#"<w:tblCaption w:val="caption"/>"#.to_vec()),
             ]
         );
 
         let xml = table_to_xml(&table);
+        let leading = xml.find("<ext:before").expect("leading extension writes");
         let overlap = xml.find("<w:tblOverlap").expect("overlap writes");
         let width = xml.find("<w:tblW").expect("width writes");
         let extension = xml.find("<ext:between").expect("extension writes");
@@ -3779,7 +4098,8 @@ mod tests {
         let change = xml.find("<w:tblPrChange").expect("change writes");
 
         assert!(
-            overlap < width
+            leading < overlap
+                && overlap < width
                 && width < extension
                 && extension < alignment
                 && alignment < caption

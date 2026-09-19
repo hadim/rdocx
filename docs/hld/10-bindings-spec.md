@@ -1329,6 +1329,20 @@ table-cell, header, footer, footnote, and endnote readers, so `CT_PPr` does not
 expose a partially contextual parser. Established aliased and default
 WordprocessingML inputs remain accepted outside numbering.
 
+The Word table facade gains an additive advanced-geometry surface. `Table`
+gains checked `set_float_position`, `set_overlap`, `set_bidi_visual`,
+`set_cell_spacing`, `set_caption`, and `set_description`. `Row` gains checked
+`set_width_before`, `set_width_after`, `set_cell_spacing`, and `set_hidden`.
+`TableRef` and `RowRef` gain the matching readers. Each checked setter
+validates before publication, so an invalid value leaves the document bytes
+unchanged. The public types are `TableFloatPosition`, `TableAnchor`,
+`TableFloatX`, `TableFloatY`, `TableTextDistance`, and `TableOverlap`, and the
+two alignment payloads reuse the existing `DrawingHorizontalAlignment` and
+`DrawingVerticalAlignment` because the vocabularies are identical. The lowered
+`TableBlock` gains `bidi_visual` and `TableRow` gains `offset_left`, which are
+additive fields on pre-1.0 native Rust projections rather than new binding
+surface. Python, WASM, and CLI consumers gain no advanced table surface here.
+
 ## Native PowerPoint collaboration and navigation
 
 The native pre-1.0 `rpptx::Presentation` facade exposes ordered modern comment

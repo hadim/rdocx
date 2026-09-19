@@ -1,16 +1,18 @@
 //! Table — a block-level container for rows and cells of content.
 
 use rdocx_oxml::borders::CT_BorderEdge;
+use rdocx_oxml::drawing::AnchorAlignH;
 use rdocx_oxml::properties::CT_Shd;
 use rdocx_oxml::shared::ST_Jc;
 pub use rdocx_oxml::table::VMerge;
 use rdocx_oxml::table::{
-    CT_Row, CT_Tbl, CT_TblBorders, CT_TblCellMar, CT_TblLook, CT_TblPr, CT_TblWidth, CT_Tc,
-    CT_TcPr, CT_TrPr, CellContent, ST_VerticalJc,
+    CT_Row, CT_Tbl, CT_TblBorders, CT_TblCellMar, CT_TblLook, CT_TblPPr, CT_TblPr, CT_TblWidth,
+    CT_Tc, CT_TcPr, CT_TrPr, CellContent, ST_TblAnchor, ST_TblOverlap, ST_VerticalJc, ST_YAlign,
 };
 use rdocx_oxml::text::CT_P;
 
 use crate::content_control::ContentControlRef;
+use crate::document::{DrawingHorizontalAlignment, DrawingVerticalAlignment};
 use crate::paragraph::{Paragraph, ParagraphRef};
 use crate::{Error, Length, Result};
 
@@ -62,6 +64,99 @@ pub enum TableLayout {
     AutoFit,
     /// Keep the authored grid widths fixed.
     Fixed,
+}
+
+/// What a floating table's position is measured from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableAnchor {
+    /// The surrounding text margin.
+    Margin,
+    /// The page edge.
+    Page,
+    /// The surrounding text.
+    Text,
+}
+
+impl TableAnchor {
+    fn to_st(self) -> ST_TblAnchor {
+        match self {
+            Self::Margin => ST_TblAnchor::Margin,
+            Self::Page => ST_TblAnchor::Page,
+            Self::Text => ST_TblAnchor::Text,
+        }
+    }
+
+    fn from_st(value: ST_TblAnchor) -> Self {
+        match value {
+            ST_TblAnchor::Margin => Self::Margin,
+            ST_TblAnchor::Page => Self::Page,
+            ST_TblAnchor::Text => Self::Text,
+        }
+    }
+}
+
+/// The horizontal placement of a floating table.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TableFloatX {
+    /// Align against the horizontal anchor.
+    Align(DrawingHorizontalAlignment),
+    /// Offset from the horizontal anchor.
+    Offset(Length),
+}
+
+/// The vertical placement of a floating table.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TableFloatY {
+    /// Keep the table in the vertical flow rather than floating it.
+    Inline,
+    /// Align against the vertical anchor.
+    Align(DrawingVerticalAlignment),
+    /// Offset from the vertical anchor.
+    Offset(Length),
+}
+
+/// The clearance a floating table keeps from the text that flows around it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableTextDistance {
+    pub top: Length,
+    pub right: Length,
+    pub bottom: Length,
+    pub left: Length,
+}
+
+/// A complete floating table position, written to `w:tblpPr`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableFloatPosition {
+    pub horizontal_anchor: TableAnchor,
+    pub vertical_anchor: TableAnchor,
+    pub horizontal: TableFloatX,
+    pub vertical: TableFloatY,
+    pub distance_from_text: TableTextDistance,
+}
+
+/// Whether a floating table may overlap another float.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableOverlap {
+    /// Word moves this table rather than letting it overlap.
+    Never,
+    /// Word allows the overlap.
+    Allow,
+}
+
+impl TableOverlap {
+    fn to_st(self) -> ST_TblOverlap {
+        match self {
+            Self::Never => ST_TblOverlap::Never,
+            Self::Allow => ST_TblOverlap::Overlap,
+        }
+    }
+
+    fn from_st(value: ST_TblOverlap) -> Self {
+        match value {
+            ST_TblOverlap::Never => Self::Never,
+            ST_TblOverlap::Overlap => Self::Allow,
+        }
+    }
 }
 
 /// One edge in the table border model.
@@ -308,6 +403,152 @@ fn checked_table_twips(name: &str, value: Length) -> Result<i32> {
         .map_err(|_| Error::Other(format!("table {name} exceeds the signed twip range")))
 }
 
+/// Check a twip measurement that Word allows to be negative.
+///
+/// `w:tblpX` and `w:tblpY` place a float on either side of their anchor, so
+/// the nonnegative rule in [`checked_table_twips`] does not apply to them.
+fn checked_table_offset_twips(name: &str, value: Length) -> Result<i32> {
+    i32::try_from(value.to_emu() / 635)
+        .map_err(|_| Error::Other(format!("table {name} exceeds the signed twip range")))
+}
+
+/// Validate a complete width mode before it reaches the document.
+fn checked_table_width(name: &str, width: TableWidth) -> Result<CT_TblWidth> {
+    Ok(match width {
+        TableWidth::Auto => CT_TblWidth::auto(),
+        TableWidth::Fixed(value) => CT_TblWidth::dxa(checked_table_twips(name, value)?),
+        TableWidth::Percentage(percent) => {
+            if !percent.is_finite() || !(0.0..=100.0).contains(&percent) {
+                return Err(Error::Other(format!(
+                    "table {name} percentage must be finite and between 0 and 100"
+                )));
+            }
+            CT_TblWidth::pct((percent * 50.0) as i32)
+        }
+    })
+}
+
+/// Project a stored width onto the public mode, or `None` for a spelling the
+/// facade does not author, such as `nil`.
+fn table_width_from_ct(width: &CT_TblWidth) -> Option<TableWidth> {
+    match width.width_type.as_str() {
+        "auto" => Some(TableWidth::Auto),
+        "dxa" => Some(TableWidth::Fixed(Length::twips(width.w))),
+        "pct" => Some(TableWidth::Percentage(width.w as f64 / 50.0)),
+        _ => None,
+    }
+}
+
+/// Reject an empty accessible string rather than writing a blank attribute.
+fn checked_table_text(name: &str, value: &str) -> Result<String> {
+    if value.trim().is_empty() {
+        return Err(Error::Other(format!("table {name} cannot be empty")));
+    }
+    Ok(value.to_owned())
+}
+
+fn float_position_to_ct(position: TableFloatPosition) -> Result<CT_TblPPr> {
+    let mut resolved = CT_TblPPr {
+        horz_anchor: Some(position.horizontal_anchor.to_st()),
+        vert_anchor: Some(position.vertical_anchor.to_st()),
+        left_from_text: Some(rdocx_oxml::Twips(checked_table_twips(
+            "left distance from text",
+            position.distance_from_text.left,
+        )?)),
+        right_from_text: Some(rdocx_oxml::Twips(checked_table_twips(
+            "right distance from text",
+            position.distance_from_text.right,
+        )?)),
+        top_from_text: Some(rdocx_oxml::Twips(checked_table_twips(
+            "top distance from text",
+            position.distance_from_text.top,
+        )?)),
+        bottom_from_text: Some(rdocx_oxml::Twips(checked_table_twips(
+            "bottom distance from text",
+            position.distance_from_text.bottom,
+        )?)),
+        ..CT_TblPPr::default()
+    };
+    match position.horizontal {
+        TableFloatX::Align(alignment) => {
+            resolved.tbl_p_x_spec = Some(AnchorAlignH::from(alignment));
+        }
+        TableFloatX::Offset(offset) => {
+            resolved.tbl_p_x = Some(rdocx_oxml::Twips(checked_table_offset_twips(
+                "horizontal float offset",
+                offset,
+            )?));
+        }
+    }
+    match position.vertical {
+        TableFloatY::Inline => resolved.tbl_p_y_spec = Some(ST_YAlign::Inline),
+        TableFloatY::Align(alignment) => {
+            resolved.tbl_p_y_spec = Some(match alignment {
+                DrawingVerticalAlignment::Top => ST_YAlign::Top,
+                DrawingVerticalAlignment::Center => ST_YAlign::Center,
+                DrawingVerticalAlignment::Bottom => ST_YAlign::Bottom,
+                DrawingVerticalAlignment::Inside => ST_YAlign::Inside,
+                DrawingVerticalAlignment::Outside => ST_YAlign::Outside,
+            });
+        }
+        TableFloatY::Offset(offset) => {
+            resolved.tbl_p_y = Some(rdocx_oxml::Twips(checked_table_offset_twips(
+                "vertical float offset",
+                offset,
+            )?));
+        }
+    }
+    Ok(resolved)
+}
+
+/// Project a parsed `w:tblpPr` onto the public position.
+///
+/// An alignment spec wins over an offset, which is Word's own rule. An absent
+/// anchor reads as `margin` and an absent offset reads as zero, which are
+/// Word's defaults, so a partial `w:tblpPr` still reads as a complete
+/// position.
+fn float_position_from_ct(position: &CT_TblPPr) -> TableFloatPosition {
+    let horizontal = match position.tbl_p_x_spec {
+        Some(AnchorAlignH::Left) => TableFloatX::Align(DrawingHorizontalAlignment::Left),
+        Some(AnchorAlignH::Center) => TableFloatX::Align(DrawingHorizontalAlignment::Center),
+        Some(AnchorAlignH::Right) => TableFloatX::Align(DrawingHorizontalAlignment::Right),
+        Some(AnchorAlignH::Inside) => TableFloatX::Align(DrawingHorizontalAlignment::Inside),
+        Some(AnchorAlignH::Outside) => TableFloatX::Align(DrawingHorizontalAlignment::Outside),
+        None => TableFloatX::Offset(Length::twips(
+            position.tbl_p_x.map(|value| value.0).unwrap_or(0),
+        )),
+    };
+    let vertical = match position.tbl_p_y_spec {
+        Some(ST_YAlign::Inline) => TableFloatY::Inline,
+        Some(ST_YAlign::Top) => TableFloatY::Align(DrawingVerticalAlignment::Top),
+        Some(ST_YAlign::Center) => TableFloatY::Align(DrawingVerticalAlignment::Center),
+        Some(ST_YAlign::Bottom) => TableFloatY::Align(DrawingVerticalAlignment::Bottom),
+        Some(ST_YAlign::Inside) => TableFloatY::Align(DrawingVerticalAlignment::Inside),
+        Some(ST_YAlign::Outside) => TableFloatY::Align(DrawingVerticalAlignment::Outside),
+        None => TableFloatY::Offset(Length::twips(
+            position.tbl_p_y.map(|value| value.0).unwrap_or(0),
+        )),
+    };
+    let distance =
+        |value: Option<rdocx_oxml::Twips>| Length::twips(value.map_or(0, |twips| twips.0));
+    TableFloatPosition {
+        horizontal_anchor: position
+            .horz_anchor
+            .map_or(TableAnchor::Margin, TableAnchor::from_st),
+        vertical_anchor: position
+            .vert_anchor
+            .map_or(TableAnchor::Margin, TableAnchor::from_st),
+        horizontal,
+        vertical,
+        distance_from_text: TableTextDistance {
+            top: distance(position.top_from_text),
+            right: distance(position.right_from_text),
+            bottom: distance(position.bottom_from_text),
+            left: distance(position.left_from_text),
+        },
+    }
+}
+
 fn checked_table_color(name: &str, value: &str) -> Result<String> {
     if value.eq_ignore_ascii_case("auto")
         || (value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -496,19 +737,55 @@ impl<'a> Table<'a> {
     ///
     /// Validation finishes before the table is changed.
     pub fn set_width_mode(&mut self, width: TableWidth) -> Result<()> {
-        let width = match width {
-            TableWidth::Auto => CT_TblWidth::auto(),
-            TableWidth::Fixed(value) => CT_TblWidth::dxa(checked_table_twips("width", value)?),
-            TableWidth::Percentage(percent) => {
-                if !percent.is_finite() || !(0.0..=100.0).contains(&percent) {
-                    return Err(Error::Other(
-                        "table width percentage must be finite and between 0 and 100".to_owned(),
-                    ));
-                }
-                CT_TblWidth::pct((percent * 50.0) as i32)
-            }
-        };
+        let width = checked_table_width("width", width)?;
         self.ensure_tbl_pr().width = Some(width);
+        Ok(())
+    }
+
+    /// Set or remove the floating table position written to `w:tblpPr`.
+    ///
+    /// The position is validated before the table is changed, so an invalid
+    /// value leaves the document bytes untouched.
+    pub fn set_float_position(&mut self, position: Option<TableFloatPosition>) -> Result<()> {
+        let resolved = position.map(float_position_to_ct).transpose()?;
+        self.ensure_tbl_pr().float_position = resolved.map(Box::new);
+        Ok(())
+    }
+
+    /// Set or remove the float overlap policy written to `w:tblOverlap`.
+    pub fn set_overlap(&mut self, overlap: Option<TableOverlap>) {
+        self.ensure_tbl_pr().overlap = overlap.map(TableOverlap::to_st);
+    }
+
+    /// Set or remove the bidirectional visual column order.
+    pub fn set_bidi_visual(&mut self, value: Option<bool>) {
+        self.ensure_tbl_pr().bidi_visual = value;
+    }
+
+    /// Set or remove the gap between adjacent cell content boxes.
+    pub fn set_cell_spacing(&mut self, spacing: Option<Length>) -> Result<()> {
+        let resolved = spacing
+            .map(|value| checked_table_twips("cell spacing", value))
+            .transpose()?;
+        self.ensure_tbl_pr().cell_spacing = resolved.map(CT_TblWidth::dxa);
+        Ok(())
+    }
+
+    /// Set or remove the accessible table caption.
+    pub fn set_caption(&mut self, caption: Option<&str>) -> Result<()> {
+        let resolved = caption
+            .map(|value| checked_table_text("caption", value))
+            .transpose()?;
+        self.ensure_tbl_pr().caption = resolved;
+        Ok(())
+    }
+
+    /// Set or remove the accessible table description.
+    pub fn set_description(&mut self, description: Option<&str>) -> Result<()> {
+        let resolved = description
+            .map(|value| checked_table_text("description", value))
+            .transpose()?;
+        self.ensure_tbl_pr().description = resolved;
         Ok(())
     }
 
@@ -1294,6 +1571,38 @@ impl<'a> Row<'a> {
         self.ensure_tr_pr().cnf_style = Some(regions.to_value());
     }
 
+    /// Set or remove the width of this row's omitted leading grid columns.
+    pub fn set_width_before(&mut self, width: Option<TableWidth>) -> Result<()> {
+        let resolved = width
+            .map(|value| checked_table_width("leading row width", value))
+            .transpose()?;
+        self.ensure_tr_pr().width_before = resolved;
+        Ok(())
+    }
+
+    /// Set or remove the width of this row's omitted trailing grid columns.
+    pub fn set_width_after(&mut self, width: Option<TableWidth>) -> Result<()> {
+        let resolved = width
+            .map(|value| checked_table_width("trailing row width", value))
+            .transpose()?;
+        self.ensure_tr_pr().width_after = resolved;
+        Ok(())
+    }
+
+    /// Set or remove this row's gap between adjacent cell content boxes.
+    pub fn set_cell_spacing(&mut self, spacing: Option<Length>) -> Result<()> {
+        let resolved = spacing
+            .map(|value| checked_table_twips("row cell spacing", value))
+            .transpose()?;
+        self.ensure_tr_pr().cell_spacing = resolved.map(CT_TblWidth::dxa);
+        Ok(())
+    }
+
+    /// Set or remove the hidden toggle written to `w:hidden`.
+    pub fn set_hidden(&mut self, value: Option<bool>) {
+        self.ensure_tr_pr().hidden = value;
+    }
+
     /// Get a mutable reference to a cell by index.
     pub fn cell(&mut self, index: usize) -> Option<Cell<'_>> {
         self.inner.cells.get_mut(index).map(|c| Cell { inner: c })
@@ -1797,13 +2106,46 @@ impl<'a> TableRef<'a> {
 
     /// Get the complete authored table width mode.
     pub fn width_mode(&self) -> Option<TableWidth> {
-        let width = self.inner.properties.as_ref()?.width.as_ref()?;
-        match width.width_type.as_str() {
-            "auto" => Some(TableWidth::Auto),
-            "dxa" => Some(TableWidth::Fixed(Length::twips(width.w))),
-            "pct" => Some(TableWidth::Percentage(width.w as f64 / 50.0)),
-            _ => None,
-        }
+        table_width_from_ct(self.inner.properties.as_ref()?.width.as_ref()?)
+    }
+
+    /// Get the authored floating table position.
+    pub fn float_position(&self) -> Option<TableFloatPosition> {
+        self.inner
+            .properties
+            .as_ref()?
+            .float_position
+            .as_deref()
+            .map(float_position_from_ct)
+    }
+
+    /// Get the authored float overlap policy.
+    pub fn overlap(&self) -> Option<TableOverlap> {
+        self.inner
+            .properties
+            .as_ref()?
+            .overlap
+            .map(TableOverlap::from_st)
+    }
+
+    /// Get the authored bidirectional visual column order.
+    pub fn bidi_visual(&self) -> Option<bool> {
+        self.inner.properties.as_ref()?.bidi_visual
+    }
+
+    /// Get the authored gap between adjacent cell content boxes.
+    pub fn cell_spacing(&self) -> Option<TableWidth> {
+        table_width_from_ct(self.inner.properties.as_ref()?.cell_spacing.as_ref()?)
+    }
+
+    /// Get the accessible table caption.
+    pub fn caption(&self) -> Option<&str> {
+        self.inner.properties.as_ref()?.caption.as_deref()
+    }
+
+    /// Get the accessible table description.
+    pub fn description(&self) -> Option<&str> {
+        self.inner.properties.as_ref()?.description.as_deref()
     }
 
     /// Get the authored table indentation when stored as twips.
@@ -2000,6 +2342,26 @@ impl<'a> RowRef<'a> {
             .and_then(|properties| properties.grid_after)
     }
 
+    /// Width of this row's omitted leading grid columns.
+    pub fn width_before(&self) -> Option<TableWidth> {
+        table_width_from_ct(self.inner.properties.as_ref()?.width_before.as_ref()?)
+    }
+
+    /// Width of this row's omitted trailing grid columns.
+    pub fn width_after(&self) -> Option<TableWidth> {
+        table_width_from_ct(self.inner.properties.as_ref()?.width_after.as_ref()?)
+    }
+
+    /// This row's gap between adjacent cell content boxes.
+    pub fn cell_spacing(&self) -> Option<TableWidth> {
+        table_width_from_ct(self.inner.properties.as_ref()?.cell_spacing.as_ref()?)
+    }
+
+    /// The authored hidden toggle, including an explicit false.
+    pub fn hidden(&self) -> Option<bool> {
+        self.inner.properties.as_ref()?.hidden
+    }
+
     /// Get a cell reference by index.
     pub fn cell(&self, index: usize) -> Option<CellRef<'_>> {
         self.inner.cells.get(index).map(|c| CellRef { inner: c })
@@ -2076,6 +2438,10 @@ impl<'a> RowRef<'a> {
                     || properties.jc.is_some()
                     || properties.grid_before.is_some()
                     || properties.grid_after.is_some()
+                    || properties.width_before.is_some()
+                    || properties.width_after.is_some()
+                    || properties.cell_spacing.is_some()
+                    || properties.hidden.is_some()
                     || properties.cant_split.is_some()
                     || properties.cnf_style.is_some()
             })
@@ -2356,7 +2722,7 @@ mod tests {
             cell_margin: Some(CT_TblCellMar::default()),
             indent: Some(CT_TblWidth::dxa(100)),
             look: Some(CT_TblLook::default()),
-            extra_xml: vec![(3, b"<w:bidiVisual/>".to_vec())],
+            extra_xml: vec![(3, br#"<ext:span xmlns:ext="urn:producer"/>"#.to_vec())],
             ..Default::default()
         });
 
@@ -2366,7 +2732,7 @@ mod tests {
             height: Some(Twips(240)),
             grid_before: Some(1),
             grid_after: Some(2),
-            extra_xml: vec![(9, b"<w:tblCellSpacing/>".to_vec())],
+            extra_xml: vec![(1, br#"<w:divId w:val="1"/>"#.to_vec())],
             ..Default::default()
         });
 

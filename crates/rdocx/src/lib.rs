@@ -137,8 +137,9 @@ pub use style::{ConditionalTableStyle, Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};
 pub use table::{
     Cell, CellBorderEdge, CellItemRef, CellRef, CellTextDirection, Row, RowHeight, RowRef, Table,
-    TableBorderEdge, TableBorderRef, TableCellMargins, TableConditionalFormatting, TableLayout,
-    TableLook, TableRef, TableWidth, VMerge, VerticalAlignment,
+    TableAnchor, TableBorderEdge, TableBorderRef, TableCellMargins, TableConditionalFormatting,
+    TableFloatPosition, TableFloatX, TableFloatY, TableLayout, TableLook, TableOverlap, TableRef,
+    TableTextDistance, TableWidth, VMerge, VerticalAlignment,
 };
 
 #[cfg(test)]
