@@ -162,6 +162,12 @@ pub struct LayoutInput {
     ///
     /// `None` reproduces Word's half-inch default.
     pub default_tab_stop: Option<Twips>,
+    /// Whether `w:mirrorMargins` makes even displayed pages swap their inside
+    /// and outside margins.
+    pub mirror_margins: bool,
+    /// Whether `w:gutterAtTop` puts the binding allowance on the top edge
+    /// rather than the inside edge. Read only when mirroring is on.
+    pub gutter_at_top: bool,
     /// Document-wide OfficeMath defaults from the settings part.
     pub math_properties: Option<MathProperties>,
     /// The tracked-revision projection to lay out.

@@ -21159,6 +21159,8 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
 
     rdocx_layout::LayoutInput {
         automatic_hyphenation: false,
+        mirror_margins: false,
+        gutter_at_top: false,
         default_tab_stop: None,
         math_properties: None,
         document,
@@ -30094,5 +30096,175 @@ mod f265_run_property_regressions {
                 < saved_xml.find("<w:t>b</w:t>").unwrap(),
             "{saved_xml}"
         );
+    }
+}
+
+/// F-269, section page semantics.
+///
+/// The defect this story closes is authored columns that never reached
+/// pagination, and the two guards around it are the untouched one-column path
+/// and the round-trip-only section children.
+mod f269_section_page_semantics {
+    use super::*;
+    use rdocx_oxml::document::CT_PaperSource;
+
+    /// Positioned elements of every page, as a comparable record.
+    fn page_records(document: &Document) -> Vec<String> {
+        document
+            .layout_deterministic()
+            .unwrap()
+            .layout
+            .pages
+            .iter()
+            .map(|page| format!("{}x{} {:?}", page.width, page.height, page.elements))
+            .collect()
+    }
+
+    /// Left edge of every shaped run on a page, in document order.
+    fn glyph_origins(page: &oxml_layout::PageFrame) -> Vec<f64> {
+        let mut origins = Vec::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && !run.text.trim().is_empty()
+            {
+                origins.push(run.origin.x);
+            }
+        });
+        origins
+    }
+
+    fn filled_document(paragraphs: usize) -> Document {
+        let mut document = Document::new();
+        for index in 0..paragraphs {
+            document.add_paragraph(&format!("Line {index:02}"));
+        }
+        document
+    }
+
+    #[test]
+    fn authored_columns_no_longer_lay_out_as_a_single_full_width_column() {
+        // `Section::set_columns` wrote valid `w:cols` that `sect_pr_to_geometry`
+        // never read, so every section laid out at the full text measure
+        // whatever it authored. This locks the authored value to the page.
+        let mut document = filled_document(80);
+        document
+            .section_mut(0)
+            .expect("final section")
+            .set_columns(2, Length::twips(720))
+            .unwrap();
+        let laid_out = document.layout_deterministic().unwrap();
+        let origins = glyph_origins(&laid_out.layout.pages[0]);
+
+        // Two equal tracks across 468 points of text measure, separated by 36
+        // points, put the second track's left edge at 72 + 216 + 36.
+        let track_one = 324.0;
+        assert!(
+            origins.iter().any(|x| (x - 72.0).abs() < 0.01),
+            "{origins:?}"
+        );
+        assert!(
+            origins.iter().any(|x| (x - track_one).abs() < 0.01),
+            "track one received no text: {origins:?}"
+        );
+
+        // Two columns hold twice the lines, so the same body needs fewer pages
+        // than the single-column layout it used to produce.
+        let single = filled_document(80);
+        let single = single.layout_deterministic().unwrap();
+        assert!(
+            laid_out.layout.pages.len() < single.layout.pages.len(),
+            "{} column pages against {} single-column pages",
+            laid_out.layout.pages.len(),
+            single.layout.pages.len()
+        );
+    }
+
+    #[test]
+    fn a_single_column_section_keeps_its_exact_content_width() {
+        // The column resolver must bypass the track arithmetic at one column
+        // rather than evaluate a neutral form of it. A reassociated f64 here
+        // moves every recorded PNG and PDF in the hash harness with no visible
+        // change, so the guard compares the placed elements bit for bit.
+        let plain = filled_document(40);
+        let expected = page_records(&plain);
+
+        let mut authored = filled_document(40);
+        authored
+            .section_mut(0)
+            .expect("final section")
+            .set_columns(1, Length::twips(720))
+            .unwrap();
+        assert_eq!(page_records(&authored), expected);
+
+        // An explicit single track takes the same bypass.
+        let mut single_track = filled_document(40);
+        single_track
+            .section_mut(0)
+            .expect("final section")
+            .set_column_widths(&[(Length::twips(9360), Length::twips(0))])
+            .unwrap();
+        assert_eq!(page_records(&single_track), expected);
+
+        // Two columns do move, so the comparisons above are not vacuous.
+        let mut two = filled_document(40);
+        two.section_mut(0)
+            .expect("final section")
+            .set_columns(2, Length::twips(720))
+            .unwrap();
+        assert_ne!(page_records(&two), expected);
+    }
+
+    #[test]
+    fn paper_source_and_book_fold_settings_do_not_change_page_geometry() {
+        // Tray selection and book fold are print-time choices. Word leaves the
+        // document's page count and page geometry alone for both, and so does
+        // this workspace.
+        let plain = filled_document(60);
+        let expected = page_records(&plain);
+        let expected_pages = plain.layout_deterministic().unwrap().layout.pages.len();
+
+        let mut configured = filled_document(60);
+        configured
+            .section_mut(0)
+            .expect("final section")
+            .set_paper_source(Some(15), Some(7));
+        configured.set_book_fold_printing(true).unwrap();
+        configured.set_book_fold_printing_sheets(4).unwrap();
+        configured.set_book_fold_rev_printing(true).unwrap();
+
+        assert_eq!(page_records(&configured), expected);
+        assert_eq!(
+            configured
+                .layout_deterministic()
+                .unwrap()
+                .layout
+                .pages
+                .len(),
+            expected_pages
+        );
+
+        // The values survive the save that the geometry ignored.
+        let reopened = Document::from_bytes(&configured.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.sections().next().unwrap().paper_source(),
+            Some((Some(15), Some(7)))
+        );
+        assert_eq!(reopened.book_fold_printing(), Some(true));
+        assert_eq!(reopened.book_fold_printing_sheets(), Some(4));
+        assert_eq!(reopened.book_fold_rev_printing(), Some(true));
+        assert_eq!(page_records(&reopened), expected);
+
+        // A tray authored through the oxml type reaches the same place.
+        let mut direct = filled_document(60);
+        direct
+            .section_mut(0)
+            .expect("final section")
+            .properties_mut()
+            .paper_source = Some(Box::new(CT_PaperSource {
+            first: Some(1),
+            other: Some(1),
+            extra_attributes: Vec::new(),
+        }));
+        assert_eq!(page_records(&direct), expected);
     }
 }

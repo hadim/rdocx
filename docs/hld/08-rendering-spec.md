@@ -1110,6 +1110,54 @@ page identity. `PageFrame::page_number` is physical and
 `PageFrame::displayed_page_number` drives PAGE substitution plus first, even,
 and default header or footer selection.
 
+Columns reach pagination. `sect_pr_to_geometry` resolves one track list per
+section, either equal-width tracks from `w:num` and `w:space` or explicit
+tracks from the `w:col` list when `w:equalWidth` is `0`. **A section that
+resolves to one column bypasses the track arithmetic entirely** and keeps the
+exact content-width expression it evaluated before columns existed, because a
+reassociated `f64` there moves every recorded baseline in the workspace without
+changing anything a reader could see. The body fills track `n` before track
+`n+1`, moves to the next page when the last track overflows, and draws a
+half-point rule at each inter-track midpoint when `w:sep` is set. An explicit
+page break leaves the remaining tracks empty, because a column break is a
+different element and is not modeled. Line breaking uses the first track's
+measure for the whole section, so a section with tracks of different widths
+breaks its later tracks to the first one's measure. Word's column balancing at
+a continuous section break is not implemented, and both are named follow-ups in
+`docs/hld/14-development-backlog.md`.
+
+`w:pgBorders` draws through the shared border-edge renderer. With
+`w:offsetFrom="text"` the rectangle is the margin box and each edge's
+`w:space` pushes it outward, which is what that renderer already does. With
+`w:offsetFrom="page"` the same distance is measured inward from the page edge,
+so the rectangle is inset here and the edges carry no further offset.
+`w:display` selects `allPages`, `firstPage` or `notFirstPage` against the
+section's own first page, and `w:zOrder="back"` draws the frame before every
+other element on the page while the default draws it after.
+
+`w:lnNumType` numbers body lines in the margin. The number is right-aligned
+`w:distance` clear of the track it labels, defaulting to Word's automatic
+quarter inch, shaped at nine points through the deterministic font manager and
+printed at each `w:countBy` multiple. **Line numbers are a page artifact and
+are excluded from the PDF reading order**, wrapped in marked content with no
+structure identity, because they are furniture rather than prose. `newPage`
+restarts on every page, and `newSection` and `continuous` both run on from the
+section's `w:start`.
+
+`w:vAlign` moves the body band after its blocks are placed. `center` and
+`bottom` translate it by half of the unused vertical measure or all of it.
+`top` is the existing behaviour and takes the untouched code path, and so does
+`both`, which preserves its source value, lays out as `top` and emits one
+diagnostic per section. True vertical distribution is a named follow-up.
+
+`w:mirrorMargins` swaps a page's left and right margins on an even **displayed**
+page rather than an even physical one, so a section that restarts its page
+numbering mirrors the sheets a reader sees. The gutter is folded into the
+inside margin, or into the top margin when `w:gutterAtTop` is set, before the
+swap, so one swap puts it on the binding edge of either page. Mirroring does not
+change the text measure, so nothing re-breaks. `w:paperSrc` and the book-fold
+settings reach the model and the package and change no page geometry at all.
+
 A section without a restart continues after the preceding section's displayed
 last page. Appended endnote pages continue after the final body page for fresh
 and restarted pagination, including a restarted final section. PAGE fields on

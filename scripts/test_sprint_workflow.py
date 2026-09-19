@@ -9378,6 +9378,10 @@ Pedro Assumpcao and the rdocx maintainers.
                 261,
                 262,
                 263,
+                # F-269 delivered the section page semantics of DOCX-036 in
+                # S74 and handed the row's remaining note policy to F-274, so
+                # it no longer owns an incomplete row.
+                269,
                 # F-270 closed DOCX-007 and DOCX-037 to complete in S74, so it
                 # no longer owns an incomplete row.
                 270,

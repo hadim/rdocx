@@ -24,7 +24,10 @@ use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
-use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
+use rdocx_oxml::document::{
+    BodyContent, CT_Column, CT_Columns, CT_Document, CT_LineNumber, CT_NoteProperties,
+    CT_PageBorders, CT_PaperSource, CT_SectPr,
+};
 use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, CT_Anchor, CT_Drawing, CT_Inline, ST_RelativeFromH,
     ST_RelativeFromV, SourceRect, WrapType, drawing_ns,
@@ -46,7 +49,7 @@ use rdocx_oxml::settings::{
 };
 use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::{CT_Styles, StyleType};
-use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, VMerge};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc, VMerge};
 use rdocx_oxml::text::{
     CT_P, CT_R, RunContent, story_field_instruction_has_name, story_simple_field_is_typed,
 };
@@ -2710,6 +2713,70 @@ impl<'a> SectionRef<'a> {
         ))
     }
 
+    /// Return the explicit column tracks, as `(width, trailing space)` pairs.
+    ///
+    /// `None` when the section has no columns or leaves them equal width, which
+    /// is what `columns` already reports.
+    pub fn column_widths(&self) -> Option<Vec<(Length, Length)>> {
+        let columns = self.inner.columns.as_ref()?;
+        if columns.columns.is_empty() {
+            return None;
+        }
+        Some(
+            columns
+                .columns
+                .iter()
+                .map(|column| {
+                    (
+                        Length::twips(column.width.map_or(0, |value| value.0)),
+                        Length::twips(column.space.map_or(0, |value| value.0)),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// Return whether a rule is drawn between this section's columns.
+    pub fn column_separator(&self) -> Option<bool> {
+        self.inner.columns.as_ref()?.sep
+    }
+
+    /// Borrow this section's footnote configuration.
+    pub fn footnote_properties(&self) -> Option<&'a CT_NoteProperties> {
+        self.inner.footnote_pr.as_deref()
+    }
+
+    /// Borrow this section's endnote configuration.
+    pub fn endnote_properties(&self) -> Option<&'a CT_NoteProperties> {
+        self.inner.endnote_pr.as_deref()
+    }
+
+    /// Return the printer trays feeding the first page and every later page.
+    pub fn paper_source(&self) -> Option<(Option<u32>, Option<u32>)> {
+        let source = self.inner.paper_source.as_deref()?;
+        Some((source.first, source.other))
+    }
+
+    /// Borrow this section's page border frame.
+    pub fn page_borders(&self) -> Option<&'a CT_PageBorders> {
+        self.inner.page_borders.as_deref()
+    }
+
+    /// Borrow this section's margin line numbering.
+    pub fn line_numbers(&self) -> Option<&'a CT_LineNumber> {
+        self.inner.line_numbers.as_deref()
+    }
+
+    /// Return the vertical alignment of the body band within the page.
+    pub fn vertical_alignment(&self) -> Option<ST_VerticalJc> {
+        self.inner.vertical_alignment
+    }
+
+    /// Return this section's `w:textDirection`, exactly as it was authored.
+    pub fn text_direction(&self) -> Option<&'a str> {
+        self.inner.text_direction.as_deref()
+    }
+
     /// Return the explicitly configured page-number restart.
     pub fn page_number_start(&self) -> Option<u32> {
         self.inner.page_number.as_ref()?.start
@@ -2866,6 +2933,163 @@ impl Section<'_> {
         Ok(())
     }
 
+    /// Return the explicit column tracks, as `(width, trailing space)` pairs.
+    pub fn column_widths(&self) -> Option<Vec<(Length, Length)>> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .column_widths()
+    }
+
+    /// Set explicit column tracks of positive width and nonnegative spacing.
+    ///
+    /// Authoring tracks marks the section unequal width, which is what makes
+    /// the resolver read the list rather than divide the text measure.
+    pub fn set_column_widths(&mut self, tracks: &[(Length, Length)]) -> Result<()> {
+        if tracks.is_empty() {
+            return Err(Error::Other(
+                "section column tracks must not be empty".to_owned(),
+            ));
+        }
+        let mut columns = Vec::with_capacity(tracks.len());
+        for (width, space) in tracks {
+            columns.push(CT_Column {
+                width: Some(checked_positive_section_twips(*width, "column width")?),
+                space: Some(checked_nonnegative_section_twips(*space, "column spacing")?),
+            });
+        }
+        let count = u32::try_from(tracks.len())
+            .map_err(|_| Error::Other("section column count exceeds the range".to_owned()))?;
+        let separator = self.inner.columns.as_ref().and_then(|columns| columns.sep);
+        self.inner.columns = Some(CT_Columns {
+            num: Some(count),
+            space: None,
+            equal_width: Some(false),
+            sep: separator,
+            columns,
+        });
+        Ok(())
+    }
+
+    /// Return whether a rule is drawn between this section's columns.
+    pub fn column_separator(&self) -> Option<bool> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .column_separator()
+    }
+
+    /// Configure the rule drawn between this section's columns.
+    pub fn set_column_separator(&mut self, enabled: bool) {
+        match &mut self.inner.columns {
+            Some(columns) => columns.sep = Some(enabled),
+            None => {
+                self.inner.columns = Some(CT_Columns {
+                    sep: Some(enabled),
+                    ..CT_Columns::default()
+                });
+            }
+        }
+    }
+
+    /// Borrow this section's footnote configuration.
+    pub fn footnote_properties(&self) -> Option<&CT_NoteProperties> {
+        self.inner.footnote_pr.as_deref()
+    }
+
+    /// Set this section's footnote configuration.
+    pub fn set_footnote_properties(&mut self, properties: CT_NoteProperties) {
+        self.inner.footnote_pr = Some(Box::new(properties));
+    }
+
+    /// Borrow this section's endnote configuration.
+    pub fn endnote_properties(&self) -> Option<&CT_NoteProperties> {
+        self.inner.endnote_pr.as_deref()
+    }
+
+    /// Set this section's endnote configuration.
+    pub fn set_endnote_properties(&mut self, properties: CT_NoteProperties) {
+        self.inner.endnote_pr = Some(Box::new(properties));
+    }
+
+    /// Return the printer trays feeding the first page and every later page.
+    pub fn paper_source(&self) -> Option<(Option<u32>, Option<u32>)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .paper_source()
+    }
+
+    /// Select the printer trays this section prints from.
+    ///
+    /// Tray selection is a print-time choice, so page geometry and page count
+    /// are identical with and without it.
+    pub fn set_paper_source(&mut self, first: Option<u32>, other: Option<u32>) {
+        let retained = self
+            .inner
+            .paper_source
+            .take()
+            .map(|source| source.extra_attributes)
+            .unwrap_or_default();
+        self.inner.paper_source = Some(Box::new(CT_PaperSource {
+            first,
+            other,
+            extra_attributes: retained,
+        }));
+    }
+
+    /// Borrow this section's page border frame.
+    pub fn page_borders(&self) -> Option<&CT_PageBorders> {
+        self.inner.page_borders.as_deref()
+    }
+
+    /// Set this section's page border frame.
+    pub fn set_page_borders(&mut self, borders: CT_PageBorders) {
+        self.inner.page_borders = Some(Box::new(borders));
+    }
+
+    /// Borrow this section's margin line numbering.
+    pub fn line_numbers(&self) -> Option<&CT_LineNumber> {
+        self.inner.line_numbers.as_deref()
+    }
+
+    /// Set this section's margin line numbering.
+    pub fn set_line_numbers(&mut self, numbering: CT_LineNumber) {
+        self.inner.line_numbers = Some(Box::new(numbering));
+    }
+
+    /// Return the vertical alignment of the body band within the page.
+    pub fn vertical_alignment(&self) -> Option<ST_VerticalJc> {
+        self.inner.vertical_alignment
+    }
+
+    /// Set the vertical alignment of the body band within the page.
+    ///
+    /// `ST_VerticalJc::Both` keeps its source value and lays out as `Top`.
+    /// True vertical distribution is a named follow-up.
+    pub fn set_vertical_alignment(&mut self, alignment: ST_VerticalJc) {
+        self.inner.vertical_alignment = Some(alignment);
+    }
+
+    /// Return this section's `w:textDirection`, exactly as it was authored.
+    pub fn text_direction(&self) -> Option<&str> {
+        self.inner.text_direction.as_deref()
+    }
+
+    /// Set this section's `w:textDirection`.
+    ///
+    /// F-269 authors and preserves the value. F-266c owns projecting it onto
+    /// the rendered page, so nothing here changes what is drawn.
+    pub fn set_text_direction(&mut self, direction: &str) {
+        self.inner.text_direction = Some(direction.to_owned());
+    }
+
     /// Return the explicitly configured page-number restart.
     pub fn page_number_start(&self) -> Option<u32> {
         self.inner.page_number.as_ref()?.start
@@ -2979,6 +3203,13 @@ fn empty_section_properties() -> CT_SectPr {
         section_type: None,
         columns: None,
         page_number: None,
+        footnote_pr: None,
+        endnote_pr: None,
+        paper_source: None,
+        page_borders: None,
+        line_numbers: None,
+        vertical_alignment: None,
+        text_direction: None,
         title_pg: None,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
@@ -22021,6 +22252,16 @@ impl Document {
                 .settings
                 .as_ref()
                 .and_then(CT_Settings::default_tab_stop),
+            mirror_margins: self
+                .settings
+                .as_ref()
+                .and_then(CT_Settings::mirror_margins)
+                .unwrap_or(false),
+            gutter_at_top: self
+                .settings
+                .as_ref()
+                .and_then(CT_Settings::gutter_at_top)
+                .unwrap_or(false),
             math_properties: self
                 .settings
                 .as_ref()
@@ -22755,6 +22996,9 @@ fn section_has_layout(properties: &CT_SectPr) -> bool {
         || properties.footer_distance.is_some()
         || properties.section_type.is_some()
         || properties.columns.is_some()
+        || properties.page_borders.is_some()
+        || properties.line_numbers.is_some()
+        || properties.vertical_alignment.is_some()
         || properties.title_pg.is_some()
 }
 

@@ -11,7 +11,10 @@ use rdocx_oxml::text::Field;
 
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
-use rdocx_oxml::document::{BodyContent, CT_Document, CT_SectPr};
+use rdocx_oxml::document::{
+    BodyContent, CT_Document, CT_SectPr, ST_LineNumberRestart, ST_PageBorderDisplay,
+    ST_PageBorderOffset, ST_PageBorderZOrder,
+};
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::{HdrFtrType, VmlWatermark};
 use rdocx_oxml::numbering::ST_LvlSuffix;
@@ -19,7 +22,7 @@ use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc};
 use rdocx_oxml::text::{
     BookmarkMarker, BreakType, CT_P, CT_R, FieldArgument, FieldInstruction, RunContent,
     SpecialCharacter, hyperlink_revision_index,
@@ -32,7 +35,10 @@ use crate::block::{
 use crate::convert;
 use crate::input::{LayoutInput, MediaRegistry, RevisionView};
 use crate::notes::NoteRegistry;
-use crate::paginator::{self, HeaderFooterContent, HeaderFooterSemantics, PageGeometry};
+use crate::paginator::{
+    self, ColumnTrack, HeaderFooterContent, HeaderFooterSemantics, LineNumbering, PageBorderFrame,
+    PageGeometry,
+};
 use crate::style_resolver::{self, NumberingState, ResolvedNumbering};
 use crate::table;
 use crate::{WordBodyLayoutFragment, WordSourcePath, WordStory};
@@ -909,6 +915,8 @@ pub struct Engine {
 struct ReusableEngineContext {
     revision_view: RevisionView,
     automatic_hyphenation: bool,
+    mirror_margins: bool,
+    gutter_at_top: bool,
     default_tab_stop: Option<rdocx_oxml::units::Twips>,
     math_properties: Option<rdocx_oxml::math::MathProperties>,
     has_wrapping_drawing: bool,
@@ -1002,6 +1010,8 @@ impl ReusableEngineContext {
         Self {
             revision_view: input.revision_view,
             automatic_hyphenation: input.automatic_hyphenation,
+            mirror_margins: input.mirror_margins,
+            gutter_at_top: input.gutter_at_top,
             default_tab_stop: input.default_tab_stop,
             math_properties: input.math_properties.clone(),
             has_wrapping_drawing,
@@ -1075,6 +1085,8 @@ impl ReusableEngineContext {
             .chain(input.document.body.sect_pr.iter()));
         self.revision_view == input.revision_view
             && self.automatic_hyphenation == input.automatic_hyphenation
+            && self.mirror_margins == input.mirror_margins
+            && self.gutter_at_top == input.gutter_at_top
             && self.default_tab_stop == input.default_tab_stop
             && self.math_properties == input.math_properties
             && self.has_wrapping_drawing == has_wrapping_drawing
@@ -2012,7 +2024,12 @@ impl Engine {
 
                     // If this paragraph has sect_pr, it ends a section
                     if let Some(sect_pr) = para_sect_pr {
-                        let geometry = sect_pr_to_geometry(&sect_pr);
+                        let geometry = section_page_geometry(
+                            &sect_pr,
+                            input,
+                            &mut self.font_manager,
+                            &mut diagnostics,
+                        );
                         let header_footer = layout_header_footer(
                             self,
                             &sect_pr,
@@ -2067,7 +2084,12 @@ impl Engine {
         }
 
         // Remaining blocks belong to the final section
-        let final_geometry = sect_pr_to_geometry(&final_sect_pr);
+        let final_geometry = section_page_geometry(
+            &final_sect_pr,
+            input,
+            &mut self.font_manager,
+            &mut diagnostics,
+        );
         let final_hf = layout_header_footer(
             self,
             &final_sect_pr,
@@ -2085,7 +2107,7 @@ impl Engine {
             });
         sections.push(paginator::SharedSection {
             blocks: current_blocks,
-            geometry: final_geometry,
+            geometry: final_geometry.clone(),
             header_footer: final_hf,
             header_footer_semantics: final_hf_semantics,
             title_pg: final_title_pg,
@@ -2289,12 +2311,16 @@ impl Engine {
                         &mut recorded.pages,
                         &references,
                         &notes,
-                        final_geometry,
+                        final_geometry.clone(),
                         checkpoint.page_count,
                         checkpoint.next_header_page_number,
                     );
                 } else {
-                    paginator::append_endnote_pages(&mut recorded.pages, &notes, final_geometry);
+                    paginator::append_endnote_pages(
+                        &mut recorded.pages,
+                        &notes,
+                        final_geometry.clone(),
+                    );
                 }
             }
             for page in &mut recorded.pages {
@@ -2404,7 +2430,7 @@ impl Engine {
             }
             // Endnotes read at the end of the document, so they follow the last
             // body page rather than sitting at the foot of their reference's page.
-            paginator::append_endnote_pages(&mut pagination.pages, &notes, final_geometry);
+            paginator::append_endnote_pages(&mut pagination.pages, &notes, final_geometry.clone());
             apply_page_background(&mut pagination.pages, input);
             for page in &mut pagination.pages {
                 mark_remaining_artifacts(&mut page.elements);
@@ -4649,7 +4675,8 @@ fn header_footer_cache_entry_bytes(
                 .iter()
                 .map(Vec::capacity)
                 .fold(0usize, usize::saturating_add),
-        );
+        )
+        .saturating_add(section_child_retained_bytes(&key.section));
     let paragraph_raw_capacity = key
         .part
         .paragraphs
@@ -7357,9 +7384,102 @@ fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
     }
 }
 
+/// Word's line-number gap when `w:lnNumType` leaves `w:distance` out.
+const AUTOMATIC_LINE_NUMBER_DISTANCE: f64 = 18.0;
+
+/// Bytes the modeled `w:sectPr` children own outside `CT_SectPr` itself.
+///
+/// The note, paper-source, page-border and line-number members are boxed, so
+/// the struct's own size does not account for them, and each of them owns
+/// retained attribute and raw-child storage of its own.
+fn section_child_retained_bytes(section: &CT_SectPr) -> usize {
+    let retained_attributes = |attributes: &Vec<(String, String)>| {
+        attributes
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(String, String)>())
+            .saturating_add(
+                attributes
+                    .iter()
+                    .map(|(name, value)| name.capacity().saturating_add(value.capacity()))
+                    .fold(0usize, usize::saturating_add),
+            )
+    };
+    let note_bytes = |notes: &rdocx_oxml::document::CT_NoteProperties| {
+        std::mem::size_of::<rdocx_oxml::document::CT_NoteProperties>()
+            .saturating_add(
+                [&notes.pos, &notes.num_fmt, &notes.num_restart]
+                    .into_iter()
+                    .map(|value| value.as_ref().map_or(0, String::capacity))
+                    .fold(0usize, usize::saturating_add),
+            )
+            .saturating_add(
+                notes
+                    .extra_xml
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<(usize, Vec<u8>)>()),
+            )
+            .saturating_add(
+                notes
+                    .extra_xml
+                    .iter()
+                    .map(|(_, raw)| raw.capacity())
+                    .fold(0usize, usize::saturating_add),
+            )
+    };
+    let edge_bytes = |edge: &Option<rdocx_oxml::borders::CT_BorderEdge>| {
+        edge.as_ref().map_or(0, |edge| {
+            edge.color
+                .as_ref()
+                .map_or(0, String::capacity)
+                .saturating_add(retained_attributes(&edge.extra_attributes))
+        })
+    };
+
+    let mut bytes = section.text_direction.as_ref().map_or(0, String::capacity);
+    if let Some(notes) = section.footnote_pr.as_deref() {
+        bytes = bytes.saturating_add(note_bytes(notes));
+    }
+    if let Some(notes) = section.endnote_pr.as_deref() {
+        bytes = bytes.saturating_add(note_bytes(notes));
+    }
+    if let Some(source) = section.paper_source.as_deref() {
+        bytes = bytes
+            .saturating_add(std::mem::size_of::<rdocx_oxml::document::CT_PaperSource>())
+            .saturating_add(retained_attributes(&source.extra_attributes));
+    }
+    if let Some(numbering) = section.line_numbers.as_deref() {
+        bytes = bytes
+            .saturating_add(std::mem::size_of::<rdocx_oxml::document::CT_LineNumber>())
+            .saturating_add(retained_attributes(&numbering.extra_attributes));
+    }
+    if let Some(borders) = section.page_borders.as_deref() {
+        bytes = bytes
+            .saturating_add(std::mem::size_of::<rdocx_oxml::document::CT_PageBorders>())
+            .saturating_add(retained_attributes(&borders.extra_attributes))
+            .saturating_add(
+                borders
+                    .extra_xml
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Vec<u8>>()),
+            )
+            .saturating_add(
+                borders
+                    .extra_xml
+                    .iter()
+                    .map(Vec::capacity)
+                    .fold(0usize, usize::saturating_add),
+            )
+            .saturating_add(edge_bytes(&borders.top))
+            .saturating_add(edge_bytes(&borders.left))
+            .saturating_add(edge_bytes(&borders.bottom))
+            .saturating_add(edge_bytes(&borders.right));
+    }
+    bytes
+}
+
 /// Convert section properties to page geometry.
 fn sect_pr_to_geometry(sect_pr: &CT_SectPr) -> PageGeometry {
-    PageGeometry {
+    let geometry = PageGeometry {
         page_width: sect_pr.page_width.map(|t| t.to_pt()).unwrap_or(612.0),
         page_height: sect_pr.page_height.map(|t| t.to_pt()).unwrap_or(792.0),
         margin_top: sect_pr.margin_top.map(|t| t.to_pt()).unwrap_or(72.0),
@@ -7368,7 +7488,148 @@ fn sect_pr_to_geometry(sect_pr: &CT_SectPr) -> PageGeometry {
         margin_left: sect_pr.margin_left.map(|t| t.to_pt()).unwrap_or(72.0),
         header_distance: sect_pr.header_distance.map(|t| t.to_pt()).unwrap_or(36.0),
         footer_distance: sect_pr.footer_distance.map(|t| t.to_pt()).unwrap_or(36.0),
+        columns: Vec::new(),
+        column_separator: false,
+        page_borders: sect_pr_page_borders(sect_pr),
+        line_numbers: sect_pr_line_numbers(sect_pr),
+        vertical_alignment: sect_pr.vertical_alignment,
+        mirror_margins: false,
+    };
+    resolve_column_tracks(sect_pr, geometry)
+}
+
+/// Resolve a section's column tracks onto its geometry.
+///
+/// A section that resolves to one column is returned untouched, so its content
+/// width stays the exact expression it evaluated before columns existed. A
+/// neutral one-track form would reassociate the arithmetic and move every
+/// recorded baseline in the workspace, which is why this bypasses rather than
+/// generalises.
+fn resolve_column_tracks(sect_pr: &CT_SectPr, geometry: PageGeometry) -> PageGeometry {
+    let Some(columns) = sect_pr.columns.as_ref() else {
+        return geometry;
+    };
+    let explicit = columns.equal_width == Some(false) || !columns.columns.is_empty();
+    let widths: Vec<(f64, f64)> = if explicit
+        && columns.columns.len() > 1
+        && columns.columns.iter().all(|column| column.width.is_some())
+    {
+        columns
+            .columns
+            .iter()
+            .map(|column| {
+                (
+                    column.width.map_or(0.0, |value| value.to_pt()),
+                    column.space.map_or(0.0, |value| value.to_pt()),
+                )
+            })
+            .collect()
+    } else {
+        let count = columns.num.unwrap_or(1);
+        if count < 2 {
+            return geometry;
+        }
+        let space = columns.space.map_or(0.0, |value| value.to_pt());
+        let measure = geometry.text_measure();
+        let width = (measure - space * f64::from(count - 1)) / f64::from(count);
+        (0..count).map(|_| (width, space)).collect()
+    };
+
+    if widths.iter().any(|(width, _)| *width <= 0.0) {
+        return geometry;
     }
+
+    let mut tracks = Vec::with_capacity(widths.len());
+    let mut x = geometry.margin_left;
+    for (width, space) in widths {
+        tracks.push(ColumnTrack { x, width });
+        x += width + space;
+    }
+    PageGeometry {
+        column_separator: columns.sep.unwrap_or(false),
+        columns: tracks,
+        ..geometry
+    }
+}
+
+/// Resolve `w:pgBorders` into the frame the paginator draws.
+fn sect_pr_page_borders(sect_pr: &CT_SectPr) -> Option<PageBorderFrame> {
+    let borders = sect_pr.page_borders.as_deref()?;
+    if borders.top.is_none()
+        && borders.left.is_none()
+        && borders.bottom.is_none()
+        && borders.right.is_none()
+    {
+        return None;
+    }
+    Some(PageBorderFrame {
+        display: borders.display.unwrap_or(ST_PageBorderDisplay::AllPages),
+        offset_from: borders.offset_from.unwrap_or(ST_PageBorderOffset::Text),
+        in_front: borders.z_order != Some(ST_PageBorderZOrder::Back),
+        edges: CT_PBdr {
+            top: borders.top.clone(),
+            left: borders.left.clone(),
+            bottom: borders.bottom.clone(),
+            right: borders.right.clone(),
+            between: None,
+            bar: None,
+        },
+    })
+}
+
+/// Resolve `w:lnNumType` into the numbering the paginator draws.
+fn sect_pr_line_numbers(sect_pr: &CT_SectPr) -> Option<LineNumbering> {
+    let numbering = sect_pr.line_numbers.as_deref()?;
+    Some(LineNumbering {
+        count_by: numbering.count_by.unwrap_or(1).max(1),
+        start: numbering.start.unwrap_or(1),
+        distance: numbering
+            .distance
+            .map_or(AUTOMATIC_LINE_NUMBER_DISTANCE, |value| value.to_pt()),
+        restart: numbering.restart.unwrap_or(ST_LineNumberRestart::NewPage),
+        font_id: None,
+    })
+}
+
+/// Page geometry for one whole section, with the state `sect_pr_to_geometry`
+/// cannot reach on its own.
+///
+/// The settings part owns mirrored margins, and the line-number font must be
+/// resolved before pagination because the paginator borrows the font manager
+/// immutably. Both are read only where a section is finished, so a document
+/// that uses neither takes exactly the path it took before.
+fn section_page_geometry(
+    sect_pr: &CT_SectPr,
+    input: &LayoutInput,
+    font_manager: &mut FontManager,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> PageGeometry {
+    let mut geometry = sect_pr_to_geometry(sect_pr);
+    if geometry.vertical_alignment == Some(ST_VerticalJc::Both) {
+        diagnostics.push(Diagnostic {
+            message: "section vertical alignment both is laid out as top, vertical distribution is not implemented"
+                .to_owned(),
+        });
+    }
+    if input.mirror_margins {
+        geometry.mirror_margins = true;
+        let gutter = sect_pr.gutter.map_or(0.0, |value| value.to_pt());
+        if input.gutter_at_top {
+            geometry.margin_top += gutter;
+        } else {
+            geometry.margin_left += gutter;
+        }
+        // The gutter moved the text measure, so the tracks resolved against
+        // the ungutttered page are stale. Clearing them first keeps a bypass
+        // in the second pass from leaving the first pass's answer behind.
+        geometry.columns = Vec::new();
+        geometry.column_separator = false;
+        geometry = resolve_column_tracks(sect_pr, geometry);
+    }
+    if let Some(line_numbers) = geometry.line_numbers.as_mut() {
+        line_numbers.font_id = font_manager.resolve_font(Some("serif"), false, false).ok();
+    }
+    geometry
 }
 
 fn section_page_number_start(sect_pr: &CT_SectPr) -> Option<usize> {
@@ -7562,7 +7823,8 @@ fn layout_header_footer(
         .any(|reference| reference.hdr_ftr_type == HdrFtrType::Even);
 
     let geometry = sect_pr_to_geometry(sect_pr);
-    let width = geometry.content_width();
+    // Headers and footers span the text measure whatever the body's columns do.
+    let width = geometry.text_measure();
 
     for href in &sect_pr.header_refs {
         let (target_blocks, target_directions, target_watermark) = match href.hdr_ftr_type {
@@ -7594,7 +7856,7 @@ fn layout_header_footer(
                 diagnostics,
                 sources,
                 width,
-                geometry,
+                geometry.clone(),
             )?;
             reference_state.merge_references(&story_num_state);
             engine
@@ -7631,7 +7893,7 @@ fn layout_header_footer(
                 diagnostics,
                 sources,
                 width,
-                geometry,
+                geometry.clone(),
             )?;
             reference_state.merge_references(&story_num_state);
             engine
@@ -9347,6 +9609,8 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -15619,6 +15883,8 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -16134,6 +16400,8 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -16198,6 +16466,8 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -16280,6 +16550,8 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -16458,6 +16730,8 @@ mod tests {
             LayoutInput {
                 revision_view: crate::input::RevisionView::Accepted,
                 automatic_hyphenation: false,
+                mirror_margins: false,
+                gutter_at_top: false,
                 default_tab_stop: None,
                 math_properties: None,
                 document: doc,
@@ -16588,6 +16862,8 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -16882,6 +17158,8 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -17027,6 +17305,8 @@ mod tests {
             LayoutInput {
                 revision_view: crate::input::RevisionView::Accepted,
                 automatic_hyphenation: false,
+                mirror_margins: false,
+                gutter_at_top: false,
                 default_tab_stop: None,
                 math_properties: None,
                 document: doc,
@@ -17156,6 +17436,8 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -17487,6 +17769,8 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -17572,6 +17856,8 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -17677,6 +17963,8 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,
@@ -17874,6 +18162,8 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: doc,

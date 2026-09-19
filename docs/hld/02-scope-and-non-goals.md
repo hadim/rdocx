@@ -240,7 +240,7 @@ bytes remain in the ZIP package.
 | DOCX-033 | paragraph | bidirectional, East Asian, vertical, ruby, and phonetic text | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-266 | F-266 |
 | DOCX-034 | tables | table styles and conditional formatting | P | P | P | N | P | all | P | P | P | P | B | B | B | partial | boundary:F-267 | F-267 |
 | DOCX-035 | tables | floating, bidirectional, autofit, and advanced table layout | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-268 | F-268 |
-| DOCX-036 | sections | borders, columns, line numbers, book fold, and note policy | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | boundary:F-269 | F-269 |
+| DOCX-036 | sections | borders, columns, line numbers, book fold, and note policy | Y | Y | Y | N | Y | body | Y | Y | Y | Y | B | B | B | partial | implementation:`crates/rdocx-oxml/src/document.rs`,implementation:`crates/rdocx-layout/src/paginator.rs`,test:`crates/rdocx/tests/integration_test.rs`,boundary:section note policy and typed removal stay with F-274 | F-274 |
 | DOCX-037 | properties | complete settings and web settings authoring | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx-oxml/src/web_settings.rs`,test:`crates/rdocx/tests/integration_test.rs` | - |
 | DOCX-038 | stories | uniform rich header and footer editing | P | P | P | P | P | related | P | P | P | P | B | B | B | partial | boundary:F-271 | F-271 |
 | DOCX-039 | stories | rich footnotes | P | P | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:2738` | F-272 |
@@ -383,6 +383,13 @@ crate provides that boundary by then, M19 is archived rather than implemented.
   not share the OOXML package, model, preservation, or rendering foundations,
   and adding them would create separate legacy engines rather than deepen the
   current product.
+- **Book-fold sheet imposition.** `w:bookFoldPrinting`,
+  `w:bookFoldPrintingSheets` and `w:bookFoldRevPrinting` are authored, read and
+  preserved, and they change nothing about the rendered document. Book fold
+  arranges finished pages onto printer sheets at print time, and Word leaves
+  the document's own page count and page geometry alone, so this workspace
+  re-imposes nothing either. Round trip plus this statement is the complete
+  answer, not a gap.
 - **Universal Excel service compatibility.** If M19 proceeds, it executes
   worksheet and table-backed pivots, a declared Power Query M and connector
   subset, and an explicitly versioned Office Scripts-compatible API. It

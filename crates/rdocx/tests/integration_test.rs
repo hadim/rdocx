@@ -16682,3 +16682,993 @@ mod f265_run_property_and_inline_tests {
         assert_eq!(rendered(true), rendered(false));
     }
 }
+
+/// F-269, section page semantics.
+///
+/// Columns, page borders, line numbering, vertical alignment, mirrored margins
+/// and the round-trip-only section children.
+mod f269_section_page_semantics {
+    use super::*;
+    use rdocx_oxml::document::{
+        CT_LineNumber, CT_NoteProperties, CT_PageBorders, ST_LineNumberRestart,
+        ST_PageBorderDisplay, ST_PageBorderOffset, ST_PageBorderZOrder,
+    };
+    use rdocx_oxml::table::ST_VerticalJc;
+    use rdocx_oxml::units::Twips;
+
+    /// The LibreOffice build this story compares its renders against.
+    const F269_LIBREOFFICE_ORACLE: &str =
+        "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+    /// The rasterizer this story compares its renders through.
+    const F269_PDFTOPPM_ORACLE: &str = "pdftoppm version 26.01.0";
+    /// Rasterization resolution, high enough to separate adjacent column
+    /// tracks and low enough to keep the comparison quick.
+    const F269_RASTER_DPI: f64 = 150.0;
+    /// Structural similarity floor for the page-semantics render.
+    ///
+    /// Global-window luminance SSIM over a page of 11 point prose measures
+    /// glyph rasterization far more than it measures layout, because two
+    /// independent shapers and rasterizers never put the same ink in the same
+    /// pixel. The measured agreement is 0.21 and the same page against a blank
+    /// sheet scores 0.02, so this floor is a collapse guard an order of
+    /// magnitude above a blank render. The layout claim is gated by the ink
+    /// block comparison below, which is what actually answers whether the
+    /// columns, the rule and the numbers landed where LibreOffice put them.
+    const F269_SSIM_FLOOR: f64 = 0.15;
+    /// Pixel tolerance for each ink block edge, at the raster resolution.
+    ///
+    /// Six pixels at 150 DPI is 2.9 points, which covers the glyph edge and
+    /// border stroke differences between two renderers without admitting a
+    /// misplaced column track, whose nearest error is a 36 point gutter.
+    const F269_BLOCK_TOLERANCE_PX: i64 = 6;
+
+    /// Open a document whose `/word/document.xml` is exactly `xml`.
+    fn document_from_xml(xml: &str) -> Document {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/document.xml", xml.as_bytes().to_vec());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    /// The saved `/word/document.xml` of a document.
+    fn saved_document_xml(document: &mut Document) -> String {
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+    }
+
+    /// The `w:sectPr` element of a saved document, without the indentation the
+    /// writer adds between elements.
+    ///
+    /// Indentation is a serialisation decision this workspace owns, so it is
+    /// removed before the comparison rather than baked into the expectation.
+    fn saved_sect_pr(document: &mut Document) -> String {
+        let xml = saved_document_xml(document);
+        let start = xml.find("<w:sectPr").expect("saved section properties");
+        let end = xml.find("</w:sectPr>").expect("saved section end") + "</w:sectPr>".len();
+        let mut out = String::with_capacity(end - start);
+        let mut pending = String::new();
+        for character in xml[start..end].chars() {
+            if character.is_whitespace() && !pending.is_empty() {
+                continue;
+            }
+            if character == '>' {
+                out.push(character);
+                pending.push('>');
+                continue;
+            }
+            if !pending.is_empty() {
+                pending.clear();
+            }
+            out.push(character);
+        }
+        out
+    }
+
+    /// A document whose only body child is a paragraph, followed by `sect_pr`.
+    fn document_with_sect_pr(sect_pr: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p>{sect_pr}</w:body></w:document>"#
+        )
+    }
+
+    /// Left edge of every shaped run on a page, in document order.
+    fn glyph_origins(page: &oxml_layout::PageFrame) -> Vec<f64> {
+        let mut origins = Vec::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && !run.text.trim().is_empty()
+            {
+                origins.push(run.origin.x);
+            }
+        });
+        origins
+    }
+
+    /// Every text run inside marked content that carries no structure.
+    fn artifact_texts(elements: &[oxml_layout::PositionedElement]) -> Vec<(String, f64, f64)> {
+        let mut found = Vec::new();
+        for element in elements {
+            match element {
+                oxml_layout::PositionedElement::MarkedContent {
+                    structure: None,
+                    children,
+                } => {
+                    for child in children {
+                        if let oxml_layout::PositionedElement::Text(run) = child {
+                            found.push((run.text.clone(), run.origin.x, run.origin.y));
+                        }
+                    }
+                }
+                oxml_layout::PositionedElement::MarkedContent {
+                    structure: Some(_),
+                    children,
+                } => found.extend(artifact_texts(children)),
+                oxml_layout::PositionedElement::Group(group) => {
+                    found.extend(artifact_texts(&group.children));
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// Every vertical rule drawn on a page.
+    fn vertical_rules(page: &oxml_layout::PageFrame) -> Vec<f64> {
+        let mut rules = Vec::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Line { start, end, .. } = element
+                && (start.x - end.x).abs() < f64::EPSILON
+                && (end.y - start.y).abs() > 1.0
+            {
+                rules.push(start.x);
+            }
+        });
+        rules
+    }
+
+    /// Fifty short paragraphs, which overflow one column of a Letter page.
+    fn fill_with_paragraphs(document: &mut Document, count: usize) {
+        for index in 0..count {
+            document.add_paragraph(&format!("Line {index:02}"));
+        }
+    }
+
+    /// Positioned elements of every page, as a comparable record.
+    fn page_records(document: &Document) -> Vec<String> {
+        document
+            .layout_deterministic()
+            .unwrap()
+            .layout
+            .pages
+            .iter()
+            .map(|page| format!("{}x{} {:?}", page.width, page.height, page.elements))
+            .collect()
+    }
+
+    #[test]
+    fn every_section_property_survives_noop_save() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:footnotePr><w:pos w:val=\"pageBottom\"/><w:numFmt w:val=\"lowerRoman\"/><w:numStart w:val=\"3\"/><w:numRestart w:val=\"eachPage\"/></w:footnotePr>",
+            "<w:endnotePr><w:pos w:val=\"docEnd\"/><w:numFmt w:val=\"upperLetter\"/><w:numStart w:val=\"2\"/><w:numRestart w:val=\"eachSect\"/></w:endnotePr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:gutter=\"0\" w:header=\"720\" w:footer=\"720\"/>",
+            "<w:paperSrc w:first=\"15\" w:other=\"7\"/>",
+            "<w:pgBorders w:zOrder=\"back\" w:display=\"notFirstPage\" w:offsetFrom=\"page\">",
+            "<w:top w:val=\"single\" w:sz=\"12\" w:space=\"24\" w:color=\"336699\"/>",
+            "<w:left w:val=\"single\" w:sz=\"12\" w:space=\"24\" w:color=\"336699\"/>",
+            "<w:bottom w:val=\"single\" w:sz=\"12\" w:space=\"24\" w:color=\"336699\"/>",
+            "<w:right w:val=\"single\" w:sz=\"12\" w:space=\"24\" w:color=\"336699\"/>",
+            "</w:pgBorders>",
+            "<w:lnNumType w:countBy=\"5\" w:start=\"2\" w:distance=\"360\" w:restart=\"continuous\"/>",
+            "<w:cols w:num=\"2\" w:equalWidth=\"0\" w:sep=\"1\"><w:col w:w=\"4000\" w:space=\"360\"/><w:col w:w=\"4880\"/></w:cols>",
+            "<w:vAlign w:val=\"center\"/>",
+            "<w:titlePg/>",
+            "<w:textDirection w:val=\"lrTb\"/>",
+            "</w:sectPr>",
+        );
+        let mut document = document_from_xml(&document_with_sect_pr(sect_pr));
+
+        let section = document.sections().next().expect("one section");
+        let footnotes = section.footnote_properties().expect("footnote properties");
+        assert_eq!(footnotes.pos.as_deref(), Some("pageBottom"));
+        assert_eq!(footnotes.num_fmt.as_deref(), Some("lowerRoman"));
+        assert_eq!(footnotes.num_start, Some(3));
+        assert_eq!(footnotes.num_restart.as_deref(), Some("eachPage"));
+        let endnotes = section.endnote_properties().expect("endnote properties");
+        assert_eq!(endnotes.pos.as_deref(), Some("docEnd"));
+        assert_eq!(endnotes.num_fmt.as_deref(), Some("upperLetter"));
+        assert_eq!(endnotes.num_start, Some(2));
+        assert_eq!(endnotes.num_restart.as_deref(), Some("eachSect"));
+        assert_eq!(section.paper_source(), Some((Some(15), Some(7))));
+        let borders = section.page_borders().expect("page borders");
+        assert_eq!(borders.z_order, Some(ST_PageBorderZOrder::Back));
+        assert_eq!(borders.display, Some(ST_PageBorderDisplay::NotFirstPage));
+        assert_eq!(borders.offset_from, Some(ST_PageBorderOffset::Page));
+        assert_eq!(borders.top.as_ref().unwrap().space, Some(24));
+        let numbering = section.line_numbers().expect("line numbering");
+        assert_eq!(numbering.count_by, Some(5));
+        assert_eq!(numbering.start, Some(2));
+        assert_eq!(numbering.distance, Some(Twips(360)));
+        assert_eq!(numbering.restart, Some(ST_LineNumberRestart::Continuous));
+        assert_eq!(section.vertical_alignment(), Some(ST_VerticalJc::Center));
+        assert_eq!(section.text_direction(), Some("lrTb"));
+        assert_eq!(
+            section.column_widths(),
+            Some(vec![
+                (Length::twips(4000), Length::twips(360)),
+                (Length::twips(4880), Length::twips(0)),
+            ])
+        );
+        assert_eq!(section.column_separator(), Some(true));
+
+        // The saved section is byte identical, including the xsd:sequence
+        // child order and every retained attribute.
+        assert_eq!(saved_sect_pr(&mut document), sect_pr);
+    }
+
+    #[test]
+    fn unmodeled_section_children_stay_byte_exact() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:footnotePr><w:pos w:val=\"sectEnd\"/></w:footnotePr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:gutter=\"0\" w:header=\"720\" w:footer=\"720\"/>",
+            "<w:paperSrc w:first=\"1\"/>",
+            "<w:lnNumType w:countBy=\"1\"/>",
+            "<w:cols w:num=\"1\" w:space=\"720\"/>",
+            "<w:formProt w:val=\"0\"/>",
+            "<w:vAlign w:val=\"bottom\"/>",
+            "<w:noEndnote w:val=\"1\"/>",
+            "<w:titlePg/>",
+            "<w:textDirection w:val=\"tbRl\"/>",
+            "<w:bidi w:val=\"0\"/>",
+            "<w:rtlGutter w:val=\"0\"/>",
+            "<w:docGrid w:type=\"lines\" w:linePitch=\"360\"/>",
+            "<w:printerSettings r:id=\"rIdPrinter\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/>",
+            "</w:sectPr>",
+        );
+        let mut document = document_from_xml(&document_with_sect_pr(sect_pr));
+        assert_eq!(saved_sect_pr(&mut document), sect_pr);
+    }
+
+    #[test]
+    fn variable_width_columns_parse_and_write_in_schema_order() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:gutter=\"0\" w:header=\"720\" w:footer=\"720\"/>",
+            "<w:cols w:num=\"3\" w:equalWidth=\"0\" w:sep=\"1\"><w:col w:w=\"2000\" w:space=\"180\"/><w:col w:w=\"3000\" w:space=\"180\"/><w:col w:w=\"4000\"/></w:cols>",
+            "</w:sectPr>",
+        );
+        let mut document = document_from_xml(&document_with_sect_pr(sect_pr));
+        assert_eq!(saved_sect_pr(&mut document), sect_pr);
+
+        // Prefix tolerant on read, fixed `w:` on write.
+        let aliased = sect_pr
+            .replace("<w:", "<x:")
+            .replace("</w:", "</x:")
+            .replace(" w:", " x:");
+        let aliased = aliased.replacen(
+            "<x:sectPr",
+            "<x:sectPr xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"",
+            1,
+        );
+        let mut reparsed = document_from_xml(&document_with_sect_pr(&aliased));
+        assert_eq!(saved_sect_pr(&mut reparsed), sect_pr);
+    }
+
+    #[test]
+    fn section_vertical_alignment_retains_its_source_value() {
+        for value in ["top", "center", "both", "bottom"] {
+            let sect_pr = format!(
+                "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:vAlign w:val=\"{value}\"/></w:sectPr>"
+            );
+            let mut document = document_from_xml(&document_with_sect_pr(&sect_pr));
+            assert_eq!(
+                document
+                    .sections()
+                    .next()
+                    .unwrap()
+                    .vertical_alignment()
+                    .map(ST_VerticalJc::to_str),
+                Some(value),
+                "{value} must not collapse"
+            );
+            assert_eq!(saved_sect_pr(&mut document), sect_pr);
+        }
+    }
+
+    #[test]
+    fn section_text_direction_round_trips_without_render_effect() {
+        let mut plain = Document::new();
+        plain.add_paragraph("body");
+        let before = page_records(&plain);
+
+        let mut document = Document::new();
+        document.add_paragraph("body");
+        document
+            .section_mut(0)
+            .expect("final section")
+            .set_text_direction("tbRl");
+        assert_eq!(
+            document.sections().next().unwrap().text_direction(),
+            Some("tbRl")
+        );
+        // F-266c owns the render projection, so nothing may move here.
+        assert_eq!(page_records(&document), before);
+
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.sections().next().unwrap().text_direction(),
+            Some("tbRl")
+        );
+        assert!(saved_sect_pr(&mut reopened).contains("<w:textDirection w:val=\"tbRl\"/>"));
+    }
+
+    #[test]
+    fn vertical_alignment_both_lays_out_as_top_with_a_diagnostic() {
+        let build = |alignment: Option<ST_VerticalJc>| {
+            let mut document = Document::new();
+            document.add_paragraph("body");
+            if let Some(alignment) = alignment {
+                document
+                    .section_mut(0)
+                    .expect("final section")
+                    .set_vertical_alignment(alignment);
+            }
+            document
+        };
+
+        let top = build(Some(ST_VerticalJc::Top));
+        let both = build(Some(ST_VerticalJc::Both));
+        assert_eq!(page_records(&both), page_records(&top));
+
+        let laid_out = both.layout_deterministic().unwrap();
+        let reported = laid_out
+            .layout
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("vertical alignment both"))
+            .count();
+        assert_eq!(reported, 1, "{:?}", laid_out.layout.diagnostics);
+
+        // The source value survives the diagnostic.
+        let mut both = both;
+        assert_eq!(
+            both.sections().next().unwrap().vertical_alignment(),
+            Some(ST_VerticalJc::Both)
+        );
+        assert!(saved_sect_pr(&mut both).contains("<w:vAlign w:val=\"both\"/>"));
+
+        // A centred section does move, so the comparison above is not vacuous.
+        let centred = build(Some(ST_VerticalJc::Center));
+        assert_ne!(page_records(&centred), page_records(&top));
+    }
+
+    #[test]
+    fn page_border_offset_and_display_attributes_round_trip() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgBorders w:zOrder=\"front\" w:display=\"firstPage\" w:offsetFrom=\"text\">",
+            "<w:top w:shadow=\"1\" w:themeColor=\"accent1\" w:val=\"double\" w:sz=\"18\" w:space=\"1\" w:color=\"auto\"/>",
+            "<w:left w:frame=\"1\" w:val=\"dashed\" w:sz=\"6\" w:space=\"4\"/>",
+            "</w:pgBorders>",
+            "</w:sectPr>",
+        );
+        let mut document = document_from_xml(&document_with_sect_pr(sect_pr));
+        let section = document.sections().next().unwrap();
+        let borders = section.page_borders().unwrap();
+        assert_eq!(borders.z_order, Some(ST_PageBorderZOrder::Front));
+        assert_eq!(borders.display, Some(ST_PageBorderDisplay::FirstPage));
+        assert_eq!(borders.offset_from, Some(ST_PageBorderOffset::Text));
+        assert_eq!(
+            borders.top.as_ref().unwrap().extra_attributes,
+            vec![
+                ("w:shadow".to_owned(), "1".to_owned()),
+                ("w:themeColor".to_owned(), "accent1".to_owned()),
+            ]
+        );
+        assert_eq!(
+            borders.left.as_ref().unwrap().extra_attributes,
+            vec![("w:frame".to_owned(), "1".to_owned())]
+        );
+        assert_eq!(saved_sect_pr(&mut document), sect_pr);
+    }
+
+    #[test]
+    fn variable_width_columns_place_text_in_resolved_tracks() {
+        let build = |separator: bool| {
+            let mut document = Document::new();
+            fill_with_paragraphs(&mut document, 60);
+            {
+                let mut section = document.section_mut(0).expect("final section");
+                section
+                    .set_column_widths(&[
+                        (Length::twips(3600), Length::twips(720)),
+                        (Length::twips(4320), Length::twips(0)),
+                    ])
+                    .unwrap();
+                section.set_column_separator(separator);
+            }
+            document
+        };
+
+        let document = build(true);
+        let laid_out = document.layout_deterministic().unwrap();
+        let page = &laid_out.layout.pages[0];
+        let origins = glyph_origins(page);
+
+        // Track zero starts at the left margin and track one 3600 twips plus
+        // 720 twips of gutter to its right, which is 288 points.
+        let track_zero = 72.0;
+        let track_one = 72.0 + 180.0 + 36.0;
+        assert!(
+            origins.iter().any(|x| (x - track_zero).abs() < 0.01),
+            "{origins:?}"
+        );
+        assert!(
+            origins.iter().any(|x| (x - track_one).abs() < 0.01),
+            "{origins:?}"
+        );
+
+        // Track zero fills before track one, so every run in track one follows
+        // every run in track zero.
+        let first_in_track_one = origins
+            .iter()
+            .position(|x| *x >= track_one)
+            .expect("track one receives text");
+        assert!(
+            origins[..first_in_track_one]
+                .iter()
+                .all(|x| *x >= track_zero && *x < track_one),
+            "{origins:?}"
+        );
+        assert!(
+            origins[first_in_track_one..]
+                .iter()
+                .all(|x| *x >= track_one),
+            "{origins:?}"
+        );
+
+        // The rule sits at the midpoint of the gutter.
+        let rules = vertical_rules(page);
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        assert!((rules[0] - (72.0 + 180.0 + 18.0)).abs() < 0.01, "{rules:?}");
+
+        // No rule without `w:sep`.
+        let plain = build(false);
+        let plain = plain.layout_deterministic().unwrap();
+        assert!(vertical_rules(&plain.layout.pages[0]).is_empty());
+    }
+
+    #[test]
+    fn line_numbering_count_by_and_restart_place_margin_numbers() {
+        let build = |restart: ST_LineNumberRestart| {
+            let mut document = Document::new();
+            fill_with_paragraphs(&mut document, 60);
+            document
+                .section_mut(0)
+                .expect("final section")
+                .set_line_numbers(CT_LineNumber {
+                    count_by: Some(2),
+                    start: Some(1),
+                    distance: Some(Twips(360)),
+                    restart: Some(restart),
+                    extra_attributes: Vec::new(),
+                });
+            document
+        };
+
+        let per_page = build(ST_LineNumberRestart::NewPage);
+        let per_page = per_page.layout_deterministic().unwrap();
+        assert!(per_page.layout.pages.len() >= 2);
+
+        let first = artifact_texts(&per_page.layout.pages[0].elements);
+        assert_eq!(
+            first
+                .iter()
+                .map(|(text, _, _)| text.as_str())
+                .take(3)
+                .collect::<Vec<_>>(),
+            ["2", "4", "6"]
+        );
+        // Right aligned, 360 twips clear of the left margin.
+        for (text, x, _) in &first {
+            assert!(*x < 72.0 - 18.0, "{text} at {x}");
+        }
+        // The numbers are artifacts, so they carry no structure id, which is
+        // what `artifact_texts` selected them by.
+        assert!(!first.is_empty());
+
+        // `newPage` restarts on every page, `continuous` does not.
+        let second_page_new = artifact_texts(&per_page.layout.pages[1].elements);
+        assert_eq!(
+            second_page_new.first().map(|(text, _, _)| text.as_str()),
+            Some("2")
+        );
+        let continuous = build(ST_LineNumberRestart::Continuous);
+        let continuous = continuous.layout_deterministic().unwrap();
+        let second_page_continuous = artifact_texts(&continuous.layout.pages[1].elements);
+        assert_ne!(
+            second_page_continuous
+                .first()
+                .map(|(text, _, _)| text.as_str()),
+            Some("2"),
+            "continuous numbering must not restart"
+        );
+
+        // Continuous numbering runs on without a gap or a repeat across every
+        // page boundary, which is what a body line that was placed but never
+        // counted would break.
+        let sequence = continuous
+            .layout
+            .pages
+            .iter()
+            .flat_map(|page| artifact_texts(&page.elements))
+            .map(|(text, _, _)| text.parse::<u32>().expect("a line number"))
+            .collect::<Vec<_>>();
+        assert!(sequence.len() > 3, "{sequence:?}");
+        assert_eq!(sequence[0], 2);
+        for pair in sequence.windows(2) {
+            assert_eq!(pair[1], pair[0] + 2, "{sequence:?}");
+        }
+    }
+
+    #[test]
+    fn page_border_display_and_z_order_select_where_the_frame_is_drawn() {
+        let build = |display: ST_PageBorderDisplay, z_order: ST_PageBorderZOrder| {
+            let mut document = Document::new();
+            fill_with_paragraphs(&mut document, 120);
+            let mut edge = CT_BorderEdge::new(ST_Border::Single);
+            edge.sz = Some(12);
+            edge.space = Some(24);
+            document
+                .section_mut(0)
+                .expect("final section")
+                .set_page_borders(CT_PageBorders {
+                    display: Some(display),
+                    offset_from: Some(ST_PageBorderOffset::Page),
+                    z_order: Some(z_order),
+                    top: Some(edge.clone()),
+                    left: Some(edge.clone()),
+                    bottom: Some(edge.clone()),
+                    right: Some(edge),
+                    ..CT_PageBorders::default()
+                });
+            document
+        };
+
+        // Pagination wraps loose page furniture in marked content, so the
+        // frame edges are counted through the element walk rather than at the
+        // top level.
+        let frame_lines = |page: &oxml_layout::PageFrame| {
+            let mut count = 0;
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if matches!(element, oxml_layout::PositionedElement::Line { .. }) {
+                    count += 1;
+                }
+            });
+            count
+        };
+
+        for (display, first, later) in [
+            (ST_PageBorderDisplay::AllPages, 4, 4),
+            (ST_PageBorderDisplay::FirstPage, 4, 0),
+            (ST_PageBorderDisplay::NotFirstPage, 0, 4),
+        ] {
+            let document = build(display, ST_PageBorderZOrder::Front);
+            let laid_out = document.layout_deterministic().unwrap();
+            assert!(laid_out.layout.pages.len() >= 2);
+            assert_eq!(
+                frame_lines(&laid_out.layout.pages[0]),
+                first,
+                "{display:?} on the first page"
+            );
+            assert_eq!(
+                frame_lines(&laid_out.layout.pages[1]),
+                later,
+                "{display:?} on a later page"
+            );
+        }
+
+        // `front` draws after the body and `back` draws before it.
+        let position = |z_order: ST_PageBorderZOrder| {
+            let document = build(ST_PageBorderDisplay::AllPages, z_order);
+            let laid_out = document.layout_deterministic().unwrap();
+            let mut first_line = None;
+            let mut first_text = None;
+            let mut index = 0usize;
+            oxml_layout::walk(&laid_out.layout.pages[0].elements, &mut |element, _| {
+                match element {
+                    oxml_layout::PositionedElement::Line { .. } if first_line.is_none() => {
+                        first_line = Some(index);
+                    }
+                    oxml_layout::PositionedElement::Text(_) if first_text.is_none() => {
+                        first_text = Some(index);
+                    }
+                    _ => {}
+                }
+                index += 1;
+            });
+            (
+                first_line.expect("a frame edge"),
+                first_text.expect("body content"),
+            )
+        };
+        let (front_line, front_text) = position(ST_PageBorderZOrder::Front);
+        assert!(front_line > front_text, "{front_line} against {front_text}");
+        let (back_line, back_text) = position(ST_PageBorderZOrder::Back);
+        assert!(back_line < back_text, "{back_line} against {back_text}");
+    }
+
+    #[test]
+    fn mirrored_margins_swap_inside_and_outside_on_even_pages() {
+        let build = |mirrored: bool| {
+            let mut document = Document::new();
+            fill_with_paragraphs(&mut document, 120);
+            document
+                .section_mut(0)
+                .expect("final section")
+                .set_margins(
+                    Length::twips(1440),
+                    Length::twips(1440),
+                    Length::twips(1440),
+                    Length::twips(2880),
+                )
+                .unwrap();
+            if mirrored {
+                document.set_mirror_margins(true).unwrap();
+            }
+            document
+        };
+
+        let mirrored = build(true);
+        let mirrored = mirrored.layout_deterministic().unwrap();
+        assert!(mirrored.layout.pages.len() >= 2);
+        let left_edge = |page: &oxml_layout::PageFrame| {
+            glyph_origins(page)
+                .into_iter()
+                .fold(f64::INFINITY, f64::min)
+        };
+        assert!(
+            (left_edge(&mirrored.layout.pages[0]) - 144.0).abs() < 0.01,
+            "odd page did not keep the inside margin"
+        );
+        assert!(
+            (left_edge(&mirrored.layout.pages[1]) - 72.0).abs() < 0.01,
+            "even page did not mirror"
+        );
+        assert_eq!(mirrored.layout.pages[1].displayed_page_number, 2);
+
+        // Without the setting nothing swaps, so the assertion above is not
+        // reporting a coincidence.
+        let plain = build(false);
+        let plain = plain.layout_deterministic().unwrap();
+        for page in &plain.layout.pages {
+            assert!(
+                (left_edge(page) - 144.0).abs() < 0.01,
+                "page {} moved",
+                page.page_number
+            );
+        }
+    }
+
+    /// The subject document for the render comparison.
+    ///
+    /// Columns with a rule, a page border, line numbering, a centred body band
+    /// and mirrored margins, all authored in code so no binary fixture is
+    /// needed.
+    fn f269_render_subject() -> Document {
+        let mut document = Document::new();
+        for index in 0..60 {
+            document.add_paragraph(&format!(
+                "Section page semantics sample line {index:02} of the column flow."
+            ));
+        }
+        {
+            let mut section = document.section_mut(0).expect("final section");
+            section.set_columns(2, Length::twips(720)).unwrap();
+            section.set_column_separator(true);
+            section.set_line_numbers(CT_LineNumber {
+                count_by: Some(5),
+                start: Some(1),
+                distance: Some(Twips(360)),
+                restart: Some(ST_LineNumberRestart::NewPage),
+                extra_attributes: Vec::new(),
+            });
+            let mut edge = CT_BorderEdge::new(ST_Border::Single);
+            edge.sz = Some(12);
+            edge.space = Some(24);
+            section.set_page_borders(CT_PageBorders {
+                display: Some(ST_PageBorderDisplay::AllPages),
+                offset_from: Some(ST_PageBorderOffset::Page),
+                top: Some(edge.clone()),
+                left: Some(edge.clone()),
+                bottom: Some(edge.clone()),
+                right: Some(edge),
+                ..CT_PageBorders::default()
+            });
+            section.set_vertical_alignment(ST_VerticalJc::Top);
+        }
+        document.set_mirror_margins(true).unwrap();
+        document
+    }
+
+    #[test]
+    fn section_page_semantics_match_pinned_libreoffice_render() {
+        let version = std::process::Command::new("soffice")
+            .arg("--version")
+            .output()
+            .expect("pinned LibreOffice is installed");
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            F269_LIBREOFFICE_ORACLE
+        );
+        let rasterizer = std::process::Command::new("pdftoppm")
+            .arg("-v")
+            .output()
+            .expect("pinned rasterizer is installed");
+        assert!(rasterizer.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&rasterizer.stderr).lines().next(),
+            Some(F269_PDFTOPPM_ORACLE)
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "rdocx-f269-render-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let output = root.join("output");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+
+        let mut document = f269_render_subject();
+        let source = root.join("source.docx");
+        std::fs::write(&source, document.to_bytes().unwrap()).unwrap();
+        let ours = root.join("ours.pdf");
+        std::fs::write(&ours, document.to_pdf_deterministic().unwrap()).unwrap();
+
+        let status = std::process::Command::new("soffice")
+            .arg("--headless")
+            .arg(format!(
+                "-env:UserInstallation=file://{}",
+                profile.display()
+            ))
+            .arg("--convert-to")
+            .arg("pdf:writer_pdf_Export")
+            .arg("--outdir")
+            .arg(&output)
+            .arg(&source)
+            .status()
+            .expect("LibreOffice conversion starts");
+        assert!(status.success());
+        let oracle = output.join("source.pdf");
+
+        let rasterize = |pdf: &std::path::Path, prefix: &str| {
+            let target = root.join(prefix);
+            let rendered = std::process::Command::new("pdftoppm")
+                .args(["-png", "-f", "1", "-l", "1", "-r"])
+                .arg(F269_RASTER_DPI.to_string())
+                .arg(pdf)
+                .arg(&target)
+                .output()
+                .expect("rasterize page one");
+            assert!(
+                rendered.status.success(),
+                "{}",
+                String::from_utf8_lossy(&rendered.stderr)
+            );
+            root.join(format!("{prefix}-1.png"))
+        };
+        let ours_png = rasterize(&ours, "ours");
+        let oracle_png = rasterize(&oracle, "oracle");
+
+        // Two records per raster: the global SSIM, then the horizontal ink
+        // blocks of the page interior. The blocks are the line-number band,
+        // each column track and the rule between them.
+        let script = r#"import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+from golden_png_harness import decode_png
+from pptx_ssim_harness import composite_luminance, structural_similarity
+
+BORDER_INSET = 60
+INK = 200
+MINIMUM_COLUMN_INK = 2
+BLOCK_GAP = 30
+
+first = decode_png(Path(sys.argv[1]))
+second = decode_png(Path(sys.argv[2]))
+width = min(first[0], second[0])
+height = min(first[1], second[1])
+
+def crop(image):
+    image_width, _, rgba = image
+    rows = []
+    for y in range(height):
+        start = (y * image_width) * 4
+        rows.append(rgba[start : start + width * 4])
+    return (width, height, b"".join(rows))
+
+def ink_blocks(image):
+    image_width, image_height, rgba = image
+    luminance = composite_luminance(rgba)
+    inked = []
+    for x in range(BORDER_INSET, image_width - BORDER_INSET):
+        count = sum(
+            1
+            for y in range(BORDER_INSET, image_height - BORDER_INSET)
+            if luminance[y * image_width + x] < INK
+        )
+        if count > MINIMUM_COLUMN_INK:
+            inked.append(x)
+    blocks = []
+    for x in inked:
+        if blocks and x - blocks[-1][1] <= BLOCK_GAP:
+            blocks[-1][1] = x
+        else:
+            blocks.append([x, x])
+    return blocks
+
+print(structural_similarity(crop(first), crop(second)))
+for image in (first, second):
+    print(" ".join(f"{start},{end}" for start, end in ink_blocks(image)))
+"#;
+        let scripts = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts")
+            .canonicalize()
+            .unwrap();
+        let measured = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg(&ours_png)
+            .arg(&oracle_png)
+            .arg(&scripts)
+            .output()
+            .expect("structural similarity runs");
+        assert!(
+            measured.status.success(),
+            "{}",
+            String::from_utf8_lossy(&measured.stderr)
+        );
+        let reported = String::from_utf8_lossy(&measured.stdout);
+        let mut lines = reported.lines();
+        let ssim: f64 = lines
+            .next()
+            .expect("structural similarity line")
+            .trim()
+            .parse()
+            .expect("structural similarity is a number");
+        let parse_blocks = |line: &str| {
+            line.split_whitespace()
+                .map(|block| {
+                    let (start, end) = block.split_once(',').expect("ink block bounds");
+                    (
+                        start.parse::<i64>().expect("ink block start"),
+                        end.parse::<i64>().expect("ink block end"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let ours_blocks = parse_blocks(lines.next().expect("subject ink blocks"));
+        let oracle_blocks = parse_blocks(lines.next().expect("oracle ink blocks"));
+        let _ = std::fs::remove_dir_all(&root);
+
+        println!(
+            "F-269 section page semantics SSIM {ssim}, subject {ours_blocks:?}, oracle {oracle_blocks:?}"
+        );
+        assert!(
+            ssim >= F269_SSIM_FLOOR,
+            "structural similarity {ssim} fell below {F269_SSIM_FLOOR}"
+        );
+
+        // The line-number band, both column tracks and the rule between them.
+        assert_eq!(
+            ours_blocks.len(),
+            4,
+            "expected a number band, two tracks and a rule: {ours_blocks:?}"
+        );
+        assert_eq!(
+            oracle_blocks.len(),
+            ours_blocks.len(),
+            "LibreOffice found different page structure: {oracle_blocks:?}"
+        );
+        for (index, (ours, oracle)) in ours_blocks.iter().zip(&oracle_blocks).enumerate() {
+            assert!(
+                (ours.0 - oracle.0).abs() <= F269_BLOCK_TOLERANCE_PX
+                    && (ours.1 - oracle.1).abs() <= F269_BLOCK_TOLERANCE_PX,
+                "ink block {index} disagrees: {ours:?} against {oracle:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires installed Microsoft Word GUI automation, which this machine does not have"]
+    fn capture_f269_word_section_evidence() {
+        // The mandatory human action recorded as a follow-up in
+        // `docs/hld/14-development-backlog.md`. It asserts the Word build
+        // before it records anything, and it is never part of the gate.
+        let build = std::process::Command::new("plutil")
+            .args([
+                "-extract",
+                "CFBundleShortVersionString",
+                "raw",
+                "/Applications/Microsoft Word.app/Contents/Info.plist",
+            ])
+            .output()
+            .expect("read the installed Word version");
+        assert!(build.status.success());
+        let version = String::from_utf8_lossy(&build.stdout).trim().to_owned();
+        assert!(!version.is_empty(), "Word reports no version");
+
+        let output = std::env::var("RDOCX_F269_WORD_DOCX")
+            .expect("set RDOCX_F269_WORD_DOCX to a temporary output path");
+        let mut document = f269_render_subject();
+        document.save(&output).unwrap();
+        println!("F-269 Word section evidence source: {output} against Word {version}");
+    }
+
+    #[test]
+    fn section_footnote_and_endnote_properties_are_authorable() {
+        let mut document = Document::new();
+        document.add_paragraph("body");
+        {
+            let mut section = document.section_mut(0).expect("final section");
+            section.set_footnote_properties(CT_NoteProperties {
+                pos: Some("beneathText".to_owned()),
+                num_fmt: Some("chicago".to_owned()),
+                num_start: Some(4),
+                num_restart: Some("eachSect".to_owned()),
+                extra_xml: Vec::new(),
+            });
+            section.set_endnote_properties(CT_NoteProperties {
+                pos: Some("sectEnd".to_owned()),
+                ..CT_NoteProperties::default()
+            });
+            section.set_paper_source(Some(4), None);
+            section.set_page_borders(CT_PageBorders {
+                display: Some(ST_PageBorderDisplay::AllPages),
+                top: Some(CT_BorderEdge::new(ST_Border::Single)),
+                ..CT_PageBorders::default()
+            });
+        }
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let section = reopened.sections().next().unwrap();
+        assert_eq!(
+            section
+                .footnote_properties()
+                .unwrap()
+                .num_restart
+                .as_deref(),
+            Some("eachSect")
+        );
+        assert_eq!(
+            section.endnote_properties().unwrap().pos.as_deref(),
+            Some("sectEnd")
+        );
+        assert_eq!(section.paper_source(), Some((Some(4), None)));
+        assert_eq!(
+            section.page_borders().unwrap().display,
+            Some(ST_PageBorderDisplay::AllPages)
+        );
+        let saved = saved_sect_pr(&mut reopened);
+        let footnote = saved.find("<w:footnotePr>").expect("footnotePr written");
+        let endnote = saved.find("<w:endnotePr>").expect("endnotePr written");
+        let paper = saved.find("<w:paperSrc").expect("paperSrc written");
+        let borders = saved.find("<w:pgBorders").expect("pgBorders written");
+        assert!(
+            footnote < endnote && endnote < paper && paper < borders,
+            "{saved}"
+        );
+    }
+}

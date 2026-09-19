@@ -3,6 +3,7 @@
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
+use crate::borders::CT_BorderEdge;
 use crate::content_control::{CT_Sdt, SdtOwner};
 use crate::error::{OxmlError, Result};
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
@@ -14,7 +15,7 @@ use crate::properties::{get_word_val_attr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
 use crate::shared::{ST_PageOrientation, ST_SectionType};
-use crate::table::CT_Tbl;
+use crate::table::{CT_Tbl, ST_VerticalJc};
 use crate::text::{
     CT_P, capture_root_attribute_record, is_root_attribute_record, push_root_attribute_record,
 };
@@ -102,6 +103,181 @@ impl Default for CT_Columns {
     }
 }
 
+/// `ST_PageBorderZOrder` -- whether a page border draws in front of content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ST_PageBorderZOrder {
+    Front,
+    Back,
+}
+
+impl ST_PageBorderZOrder {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "front" => Some(Self::Front),
+            "back" => Some(Self::Back),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Front => "front",
+            Self::Back => "back",
+        }
+    }
+}
+
+/// `ST_PageBorderDisplay` -- which pages of a section carry the page border.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ST_PageBorderDisplay {
+    AllPages,
+    FirstPage,
+    NotFirstPage,
+}
+
+impl ST_PageBorderDisplay {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "allPages" => Some(Self::AllPages),
+            "firstPage" => Some(Self::FirstPage),
+            "notFirstPage" => Some(Self::NotFirstPage),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::AllPages => "allPages",
+            Self::FirstPage => "firstPage",
+            Self::NotFirstPage => "notFirstPage",
+        }
+    }
+}
+
+/// `ST_PageBorderOffset` -- what the page-border edge offsets are measured from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ST_PageBorderOffset {
+    Page,
+    Text,
+}
+
+impl ST_PageBorderOffset {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "page" => Some(Self::Page),
+            "text" => Some(Self::Text),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Text => "text",
+        }
+    }
+}
+
+/// `CT_PageBorders` -- the `w:pgBorders` frame drawn around a section's pages.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CT_PageBorders {
+    /// `w:zOrder`, whether the frame draws in front of or behind page content.
+    pub z_order: Option<ST_PageBorderZOrder>,
+    /// `w:display`, which physical pages of the section receive the frame.
+    pub display: Option<ST_PageBorderDisplay>,
+    /// `w:offsetFrom`, the rectangle each edge offset is measured from.
+    pub offset_from: Option<ST_PageBorderOffset>,
+    pub top: Option<CT_BorderEdge>,
+    pub left: Option<CT_BorderEdge>,
+    pub bottom: Option<CT_BorderEdge>,
+    pub right: Option<CT_BorderEdge>,
+    /// Attributes this type does not model, in source order, written first.
+    ///
+    /// Values are serialized verbatim, so a caller storing one owns the
+    /// escaping, exactly as `CT_BorderEdge::extra_attributes` does.
+    pub extra_attributes: Vec<(String, String)>,
+    /// Child elements this type does not model, in source order.
+    pub extra_xml: Vec<Vec<u8>>,
+}
+
+/// `ST_LineNumberRestart` -- where a section's line numbering starts over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ST_LineNumberRestart {
+    NewPage,
+    NewSection,
+    Continuous,
+}
+
+impl ST_LineNumberRestart {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "newPage" => Some(Self::NewPage),
+            "newSection" => Some(Self::NewSection),
+            "continuous" => Some(Self::Continuous),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::NewPage => "newPage",
+            Self::NewSection => "newSection",
+            Self::Continuous => "continuous",
+        }
+    }
+}
+
+/// `CT_LineNumber` -- the `w:lnNumType` margin line numbering of a section.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CT_LineNumber {
+    /// `w:countBy`, the interval at which a number is printed.
+    pub count_by: Option<u32>,
+    /// `w:start`, the first line number of the section.
+    pub start: Option<u32>,
+    /// `w:distance`, the gap between the number and the text it labels.
+    pub distance: Option<Twips>,
+    /// `w:restart`, where numbering starts over.
+    pub restart: Option<ST_LineNumberRestart>,
+    /// Attributes this type does not model, in source order, written first.
+    pub extra_attributes: Vec<(String, String)>,
+}
+
+/// `CT_PaperSource` -- the `w:paperSrc` printer trays a section prints from.
+///
+/// Tray selection happens in the printer driver, so this has no on-page
+/// consequence and pagination is identical with and without it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CT_PaperSource {
+    /// `w:first`, the tray feeding the section's first page.
+    pub first: Option<u32>,
+    /// `w:other`, the tray feeding every later page.
+    pub other: Option<u32>,
+    /// Attributes this type does not model, in source order, written first.
+    pub extra_attributes: Vec<(String, String)>,
+}
+
+/// Section-level note configuration, shared by `w:footnotePr` and `w:endnotePr`.
+///
+/// F-269 models the values and the authoring surface. Their effect on marker
+/// text, placement and restart belongs to F-274.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CT_NoteProperties {
+    /// `w:pos/@w:val`, where the notes are placed.
+    pub pos: Option<String>,
+    /// `w:numFmt/@w:val`, the marker number format.
+    pub num_fmt: Option<String>,
+    /// `w:numStart/@w:val`, the first marker number.
+    pub num_start: Option<u32>,
+    /// `w:numRestart/@w:val`, where marker numbering starts over.
+    pub num_restart: Option<String>,
+    /// Unmodelled children retained at their schema insertion slots.
+    ///
+    /// A modelled child carrying an attribute this type does not read is kept
+    /// here whole rather than typed, which is the choice `w:pgSz` already makes.
+    #[doc(hidden)]
+    pub extra_xml: Vec<(usize, Vec<u8>)>,
+}
+
 /// Value and occurrence anchor for one repeated section reference.
 ///
 /// Distinguishable values follow their source predecessor or successor. Equal
@@ -186,6 +362,24 @@ pub struct CT_SectPr {
     pub columns: Option<CT_Columns>,
     /// Page-number restart. Unsupported format and chapter attributes remain raw.
     pub page_number: Option<CT_PageNumberType>,
+    /// Section footnote configuration. F-274 owns its effect on note rendering.
+    ///
+    /// Boxed, with the other large members, so a section stays cheap on the
+    /// stack. `CT_SectPr` sits inside `CT_PPr`, which test threads build by
+    /// value against a 2 MiB ceiling.
+    pub footnote_pr: Option<Box<CT_NoteProperties>>,
+    /// Section endnote configuration. F-274 owns its effect on note rendering.
+    pub endnote_pr: Option<Box<CT_NoteProperties>>,
+    /// Printer tray selection. Round-tripped, with no effect on page geometry.
+    pub paper_source: Option<Box<CT_PaperSource>>,
+    /// Page border frame.
+    pub page_borders: Option<Box<CT_PageBorders>>,
+    /// Margin line numbering.
+    pub line_numbers: Option<Box<CT_LineNumber>>,
+    /// Vertical alignment of the body band within the page.
+    pub vertical_alignment: Option<ST_VerticalJc>,
+    /// `w:textDirection`. Authored and preserved here, projected by F-266c.
+    pub text_direction: Option<String>,
     /// Title page (different first page header/footer)
     pub title_pg: Option<bool>,
     /// Header references
@@ -218,6 +412,13 @@ impl CT_SectPr {
             section_type: None,
             columns: None,
             page_number: None,
+            footnote_pr: None,
+            endnote_pr: None,
+            paper_source: None,
+            page_borders: None,
+            line_numbers: None,
+            vertical_alignment: None,
+            text_direction: None,
             title_pg: None,
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
@@ -269,6 +470,13 @@ impl CT_SectPr {
             section_type: None,
             columns: None,
             page_number: None,
+            footnote_pr: None,
+            endnote_pr: None,
+            paper_source: None,
+            page_borders: None,
+            line_numbers: None,
+            vertical_alignment: None,
+            text_direction: None,
             title_pg: None,
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
@@ -294,6 +502,13 @@ impl CT_SectPr {
             section_type: None,
             columns: None,
             page_number: None,
+            footnote_pr: None,
+            endnote_pr: None,
+            paper_source: None,
+            page_borders: None,
+            line_numbers: None,
+            vertical_alignment: None,
+            text_direction: None,
             title_pg: None,
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
@@ -411,6 +626,95 @@ impl CT_SectPr {
                     } else if is_word_element(name.as_ref(), b"cols", &prefixes) {
                         sect.columns = Some(Self::parse_cols_empty(e, &prefixes)?);
                         raw_position = (7, 0);
+                    } else if is_word_element(name.as_ref(), b"footnotePr", &prefixes) {
+                        if sect.footnote_pr.is_none() && e.attributes().next().is_none() {
+                            sect.footnote_pr = Some(Box::default());
+                        } else {
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?;
+                            sect.push_extra_xml(raw, 2, 0);
+                        }
+                        raw_position = (2, 0);
+                    } else if is_word_element(name.as_ref(), b"endnotePr", &prefixes) {
+                        if sect.endnote_pr.is_none() && e.attributes().next().is_none() {
+                            sect.endnote_pr = Some(Box::default());
+                        } else {
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?;
+                            sect.push_extra_xml(raw, 2, 1);
+                        }
+                        raw_position = (2, 1);
+                    } else if is_word_element(name.as_ref(), b"paperSrc", &prefixes) {
+                        if sect.paper_source.is_none() {
+                            sect.paper_source =
+                                Some(Box::new(Self::parse_paper_source(e, &prefixes)?));
+                        } else {
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?;
+                            sect.push_extra_xml(raw, 5, 1);
+                        }
+                        raw_position = (5, 1);
+                    } else if is_word_element(name.as_ref(), b"pgBorders", &prefixes) {
+                        if sect.page_borders.is_none() {
+                            sect.page_borders =
+                                Some(Box::new(Self::parse_page_border_attrs(e, &prefixes)?));
+                        } else {
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?;
+                            sect.push_extra_xml(raw, 5, 2);
+                        }
+                        raw_position = (5, 2);
+                    } else if is_word_element(name.as_ref(), b"lnNumType", &prefixes) {
+                        if sect.line_numbers.is_none() {
+                            sect.line_numbers =
+                                Some(Box::new(Self::parse_line_number(e, &prefixes)?));
+                        } else {
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?;
+                            sect.push_extra_xml(raw, 5, 3);
+                        }
+                        raw_position = (5, 3);
+                    } else if is_word_element(name.as_ref(), b"vAlign", &prefixes) {
+                        let typed = sole_val_attribute(e, &prefixes)?
+                            .filter(|value| ST_VerticalJc::from_str(value).to_str() == value)
+                            .map(|value| ST_VerticalJc::from_str(&value));
+                        match typed {
+                            Some(value) if sect.vertical_alignment.is_none() => {
+                                sect.vertical_alignment = Some(value);
+                            }
+                            _ => {
+                                let raw = crate::text::raw_with_external_bindings(
+                                    &capture_empty_element(e)?,
+                                    owner_bindings,
+                                )?;
+                                sect.push_extra_xml(raw, 7, 0);
+                            }
+                        }
+                        raw_position = (7, 1);
+                    } else if is_word_element(name.as_ref(), b"textDirection", &prefixes) {
+                        match sole_val_attribute(e, &prefixes)? {
+                            Some(value) if sect.text_direction.is_none() => {
+                                sect.text_direction = Some(value);
+                            }
+                            _ => {
+                                let raw = crate::text::raw_with_external_bindings(
+                                    &capture_empty_element(e)?,
+                                    owner_bindings,
+                                )?;
+                                sect.push_extra_xml(raw, 8, 0);
+                            }
+                        }
+                        raw_position = (8, 1);
                     } else if is_word_element(name.as_ref(), b"headerReference", &prefixes) {
                         let mut hdr_type = HdrFtrType::Default;
                         let mut rel_id = String::new();
@@ -494,7 +798,7 @@ impl CT_SectPr {
                     } else {
                         // Capture unknown empty elements
                         let position = Self::raw_child_schema_slot(name.as_ref(), &prefixes)
-                            .map_or(raw_position, |slot| (slot, 0));
+                            .unwrap_or(raw_position);
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_empty_element(e)?,
                             owner_bindings,
@@ -563,6 +867,82 @@ impl CT_SectPr {
                     } else if is_word_element(name.as_ref(), b"cols", &prefixes) {
                         sect.columns = Some(Self::parse_cols_start(reader, e, &prefixes)?);
                         raw_position = (7, 0);
+                    } else if is_word_element(name.as_ref(), b"footnotePr", &prefixes) {
+                        if sect.footnote_pr.is_none() && e.attributes().next().is_none() {
+                            sect.footnote_pr = Some(Box::new(Self::parse_note_properties(
+                                reader,
+                                &prefixes,
+                                owner_bindings,
+                                b"footnotePr",
+                            )?));
+                        } else {
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?;
+                            sect.push_extra_xml(raw, 2, 0);
+                        }
+                        raw_position = (2, 0);
+                    } else if is_word_element(name.as_ref(), b"endnotePr", &prefixes) {
+                        if sect.endnote_pr.is_none() && e.attributes().next().is_none() {
+                            sect.endnote_pr = Some(Box::new(Self::parse_note_properties(
+                                reader,
+                                &prefixes,
+                                owner_bindings,
+                                b"endnotePr",
+                            )?));
+                        } else {
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?;
+                            sect.push_extra_xml(raw, 2, 1);
+                        }
+                        raw_position = (2, 1);
+                    } else if is_word_element(name.as_ref(), b"pgBorders", &prefixes) {
+                        if sect.page_borders.is_none() {
+                            sect.page_borders = Some(Box::new(Self::parse_page_borders(
+                                reader,
+                                e,
+                                &prefixes,
+                                owner_bindings,
+                            )?));
+                        } else {
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?;
+                            sect.push_extra_xml(raw, 5, 2);
+                        }
+                        raw_position = (5, 2);
+                    } else if is_word_element(name.as_ref(), b"paperSrc", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        sect.push_extra_xml(raw, 5, 0);
+                        raw_position = (5, 1);
+                    } else if is_word_element(name.as_ref(), b"lnNumType", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        sect.push_extra_xml(raw, 5, 2);
+                        raw_position = (5, 3);
+                    } else if is_word_element(name.as_ref(), b"vAlign", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        sect.push_extra_xml(raw, 7, 0);
+                        raw_position = (7, 1);
+                    } else if is_word_element(name.as_ref(), b"textDirection", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        sect.push_extra_xml(raw, 8, 0);
+                        raw_position = (8, 1);
                     } else if is_word_element(name.as_ref(), b"pgNumType", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
@@ -600,7 +980,7 @@ impl CT_SectPr {
                     } else {
                         // Capture unknown start elements as raw XML
                         let position = Self::raw_child_schema_slot(name.as_ref(), &prefixes)
-                            .map_or(raw_position, |slot| (slot, 0));
+                            .unwrap_or(raw_position);
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
                             owner_bindings,
@@ -813,18 +1193,239 @@ impl CT_SectPr {
         }
     }
 
-    fn raw_child_schema_slot(name: &[u8], word_prefixes: &[String]) -> Option<usize> {
+    /// Schema slot and sub-slot for a `w:sectPr` child this type keeps raw.
+    ///
+    /// The sub-slot orders a retained child against the modeled siblings that
+    /// share its slot, which is what keeps `xsd:sequence` intact now that
+    /// `w:vAlign` and `w:textDirection` sit between them.
+    fn raw_child_schema_slot(name: &[u8], word_prefixes: &[String]) -> Option<(usize, usize)> {
         let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
         if !is_word_element(name, local, word_prefixes) {
             return None;
         }
         match local {
-            b"footnotePr" | b"endnotePr" => Some(2),
-            b"paperSrc" | b"pgBorders" | b"lnNumType" => Some(5),
-            b"formProt" | b"vAlign" | b"noEndnote" => Some(7),
-            b"textDirection" | b"bidi" | b"rtlGutter" | b"docGrid" | b"printerSettings" => Some(8),
+            b"formProt" => Some((7, 0)),
+            b"noEndnote" => Some((7, 1)),
+            b"bidi" | b"rtlGutter" | b"docGrid" | b"printerSettings" => Some((8, 1)),
             _ => None,
         }
+    }
+
+    fn parse_paper_source(e: &BytesStart, word_prefixes: &[String]) -> Result<CT_PaperSource> {
+        let mut source = CT_PaperSource::default();
+        for attribute in e.attributes() {
+            let attribute = attribute?;
+            let key = attribute.key.as_ref();
+            let value = std::str::from_utf8(&attribute.value)?;
+            if is_word_attribute(key, b"first", word_prefixes) {
+                store_unsigned_attribute(
+                    value,
+                    key,
+                    &mut source.first,
+                    &mut source.extra_attributes,
+                )?;
+            } else if is_word_attribute(key, b"other", word_prefixes) {
+                store_unsigned_attribute(
+                    value,
+                    key,
+                    &mut source.other,
+                    &mut source.extra_attributes,
+                )?;
+            } else {
+                source
+                    .extra_attributes
+                    .push((std::str::from_utf8(key)?.to_owned(), value.to_owned()));
+            }
+        }
+        Ok(source)
+    }
+
+    fn parse_line_number(e: &BytesStart, word_prefixes: &[String]) -> Result<CT_LineNumber> {
+        let mut numbering = CT_LineNumber::default();
+        for attribute in e.attributes() {
+            let attribute = attribute?;
+            let key = attribute.key.as_ref();
+            let value = std::str::from_utf8(&attribute.value)?;
+            if is_word_attribute(key, b"countBy", word_prefixes) {
+                store_unsigned_attribute(
+                    value,
+                    key,
+                    &mut numbering.count_by,
+                    &mut numbering.extra_attributes,
+                )?;
+            } else if is_word_attribute(key, b"start", word_prefixes) {
+                store_unsigned_attribute(
+                    value,
+                    key,
+                    &mut numbering.start,
+                    &mut numbering.extra_attributes,
+                )?;
+            } else if is_word_attribute(key, b"distance", word_prefixes) {
+                match value.parse() {
+                    Ok(parsed) => numbering.distance = Some(Twips(parsed)),
+                    Err(_) => numbering
+                        .extra_attributes
+                        .push((std::str::from_utf8(key)?.to_owned(), value.to_owned())),
+                }
+            } else if is_word_attribute(key, b"restart", word_prefixes) {
+                match ST_LineNumberRestart::from_str(value) {
+                    Some(parsed) => numbering.restart = Some(parsed),
+                    None => numbering
+                        .extra_attributes
+                        .push((std::str::from_utf8(key)?.to_owned(), value.to_owned())),
+                }
+            } else {
+                numbering
+                    .extra_attributes
+                    .push((std::str::from_utf8(key)?.to_owned(), value.to_owned()));
+            }
+        }
+        Ok(numbering)
+    }
+
+    fn parse_page_border_attrs(e: &BytesStart, word_prefixes: &[String]) -> Result<CT_PageBorders> {
+        let mut borders = CT_PageBorders::default();
+        for attribute in e.attributes() {
+            let attribute = attribute?;
+            let key = attribute.key.as_ref();
+            let value = std::str::from_utf8(&attribute.value)?;
+            let retained = if is_word_attribute(key, b"zOrder", word_prefixes) {
+                borders.z_order = ST_PageBorderZOrder::from_str(value);
+                borders.z_order.is_none()
+            } else if is_word_attribute(key, b"display", word_prefixes) {
+                borders.display = ST_PageBorderDisplay::from_str(value);
+                borders.display.is_none()
+            } else if is_word_attribute(key, b"offsetFrom", word_prefixes) {
+                borders.offset_from = ST_PageBorderOffset::from_str(value);
+                borders.offset_from.is_none()
+            } else {
+                true
+            };
+            if retained {
+                borders
+                    .extra_attributes
+                    .push((std::str::from_utf8(key)?.to_owned(), value.to_owned()));
+            }
+        }
+        Ok(borders)
+    }
+
+    fn parse_page_borders(
+        reader: &mut Reader<&[u8]>,
+        e: &BytesStart,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+    ) -> Result<CT_PageBorders> {
+        let mut borders = Self::parse_page_border_attrs(e, word_prefixes)?;
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Empty(ref child)) => {
+                    let name = child.name();
+                    let prefixes = word_prefixes_at(child, word_prefixes)?;
+                    let edge = |child: &BytesStart| {
+                        CT_BorderEdge::from_xml_attrs_with_prefixes(child, &prefixes)
+                    };
+                    if is_word_element(name.as_ref(), b"top", &prefixes) {
+                        borders.top = Some(edge(child)?);
+                    } else if is_word_element(name.as_ref(), b"left", &prefixes) {
+                        borders.left = Some(edge(child)?);
+                    } else if is_word_element(name.as_ref(), b"bottom", &prefixes) {
+                        borders.bottom = Some(edge(child)?);
+                    } else if is_word_element(name.as_ref(), b"right", &prefixes) {
+                        borders.right = Some(edge(child)?);
+                    } else {
+                        borders
+                            .extra_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &capture_empty_element(child)?,
+                                owner_bindings,
+                            )?);
+                    }
+                }
+                Ok(Event::Start(ref child)) => {
+                    borders
+                        .extra_xml
+                        .push(crate::text::raw_with_external_bindings(
+                            &capture_element(reader, child)?,
+                            owner_bindings,
+                        )?);
+                }
+                Ok(Event::End(ref end))
+                    if matches_local_name(end.name().as_ref(), b"pgBorders") =>
+                {
+                    break;
+                }
+                Ok(Event::Eof) => break,
+                Err(error) => return Err(error.into()),
+                _ => {}
+            }
+            buf.clear();
+        }
+        Ok(borders)
+    }
+
+    fn parse_note_properties(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+        tag: &[u8],
+    ) -> Result<CT_NoteProperties> {
+        let mut properties = CT_NoteProperties::default();
+        let mut slot = 0usize;
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Empty(ref child)) => {
+                    let name = child.name();
+                    let prefixes = word_prefixes_at(child, word_prefixes)?;
+                    let modeled = if is_word_element(name.as_ref(), b"pos", &prefixes) {
+                        slot = 1;
+                        sole_val_attribute(child, &prefixes)?
+                            .map(|value| properties.pos = Some(value))
+                    } else if is_word_element(name.as_ref(), b"numFmt", &prefixes) {
+                        slot = 2;
+                        sole_val_attribute(child, &prefixes)?
+                            .map(|value| properties.num_fmt = Some(value))
+                    } else if is_word_element(name.as_ref(), b"numStart", &prefixes) {
+                        slot = 3;
+                        sole_val_attribute(child, &prefixes)?
+                            .and_then(|value| value.parse().ok())
+                            .map(|value| properties.num_start = Some(value))
+                    } else if is_word_element(name.as_ref(), b"numRestart", &prefixes) {
+                        slot = 4;
+                        sole_val_attribute(child, &prefixes)?
+                            .map(|value| properties.num_restart = Some(value))
+                    } else {
+                        None
+                    };
+                    if modeled.is_none() {
+                        properties.extra_xml.push((
+                            slot,
+                            crate::text::raw_with_external_bindings(
+                                &capture_empty_element(child)?,
+                                owner_bindings,
+                            )?,
+                        ));
+                    }
+                }
+                Ok(Event::Start(ref child)) => {
+                    properties.extra_xml.push((
+                        slot,
+                        crate::text::raw_with_external_bindings(
+                            &capture_element(reader, child)?,
+                            owner_bindings,
+                        )?,
+                    ));
+                }
+                Ok(Event::End(ref end)) if matches_local_name(end.name().as_ref(), tag) => break,
+                Ok(Event::Eof) => break,
+                Err(error) => return Err(error.into()),
+                _ => {}
+            }
+            buf.clear();
+        }
+        Ok(properties)
     }
 
     fn parse_cols_attrs(e: &BytesStart, word_prefixes: &[String]) -> Result<CT_Columns> {
@@ -930,8 +1531,18 @@ impl CT_SectPr {
                 self.write_story_reference_boundary(writer, &self.footer_refs, false, index + 1)?;
             }
         }
+        // footnotePr and endnotePr. F-274 owns what the values do to notes.
+        if let Some(footnote_pr) = &self.footnote_pr {
+            footnote_pr.to_xml(writer, "w:footnotePr")?;
+        }
         if ordered_raw {
             self.write_raw_position(writer, 2, 0)?;
+        }
+        if let Some(endnote_pr) = &self.endnote_pr {
+            endnote_pr.to_xml(writer, "w:endnotePr")?;
+        }
+        if ordered_raw {
+            self.write_raw_position(writer, 2, 1)?;
         }
 
         // type (section break type)
@@ -1001,6 +1612,52 @@ impl CT_SectPr {
             self.write_raw_position(writer, 5, 0)?;
         }
 
+        // paperSrc. A printer tray, so pagination is identical with and without it.
+        if let Some(paper_source) = &self.paper_source {
+            let mut e = BytesStart::new("w:paperSrc");
+            push_retained_attributes(&mut e, &paper_source.extra_attributes);
+            if let Some(first) = paper_source.first {
+                e.push_attribute(("w:first", buf.format(first)));
+            }
+            if let Some(other) = paper_source.other {
+                e.push_attribute(("w:other", buf.format(other)));
+            }
+            writer.write_event(Event::Empty(e))?;
+        }
+        if ordered_raw {
+            self.write_raw_position(writer, 5, 1)?;
+        }
+
+        // pgBorders
+        if let Some(page_borders) = &self.page_borders {
+            page_borders.to_xml(writer)?;
+        }
+        if ordered_raw {
+            self.write_raw_position(writer, 5, 2)?;
+        }
+
+        // lnNumType
+        if let Some(line_numbers) = &self.line_numbers {
+            let mut e = BytesStart::new("w:lnNumType");
+            push_retained_attributes(&mut e, &line_numbers.extra_attributes);
+            if let Some(count_by) = line_numbers.count_by {
+                e.push_attribute(("w:countBy", buf.format(count_by)));
+            }
+            if let Some(start) = line_numbers.start {
+                e.push_attribute(("w:start", buf.format(start)));
+            }
+            if let Some(distance) = line_numbers.distance {
+                e.push_attribute(("w:distance", buf.format(distance.0)));
+            }
+            if let Some(restart) = line_numbers.restart {
+                e.push_attribute(("w:restart", restart.to_str()));
+            }
+            writer.write_event(Event::Empty(e))?;
+        }
+        if ordered_raw {
+            self.write_raw_position(writer, 5, 3)?;
+        }
+
         // pgNumType. M24 format and chapter attributes stay byte-exact unless start changes.
         if let Some(page_number) = &self.page_number {
             page_number.to_xml(writer)?;
@@ -1065,6 +1722,16 @@ impl CT_SectPr {
             self.write_raw_position(writer, 7, 0)?;
         }
 
+        // vAlign
+        if let Some(vertical_alignment) = self.vertical_alignment {
+            let mut e = BytesStart::new("w:vAlign");
+            e.push_attribute(("w:val", vertical_alignment.to_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+        if ordered_raw {
+            self.write_raw_position(writer, 7, 1)?;
+        }
+
         // titlePg
         if let Some(title_pg) = self.title_pg {
             let mut e = BytesStart::new("w:titlePg");
@@ -1076,6 +1743,17 @@ impl CT_SectPr {
 
         if ordered_raw {
             self.write_raw_position(writer, 8, 0)?;
+        }
+
+        // textDirection. Authored and preserved here, projected by F-266c.
+        if let Some(text_direction) = &self.text_direction {
+            let mut e = BytesStart::new("w:textDirection");
+            e.push_attribute(("w:val", text_direction.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        if ordered_raw {
+            self.write_raw_position(writer, 8, 1)?;
         } else {
             // Legacy callers that populate only `extra_xml` retain the previous position.
             for raw in &self.extra_xml {
@@ -1164,6 +1842,108 @@ impl CT_SectPr {
     }
 }
 
+impl CT_PageBorders {
+    /// Write `w:pgBorders` with its edges in `xsd:sequence` order.
+    ///
+    /// Retained attributes are written ahead of the modeled ones and retained
+    /// children after the modeled edges, which is what `CT_BorderEdge` does.
+    fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut e = BytesStart::new("w:pgBorders");
+        push_retained_attributes(&mut e, &self.extra_attributes);
+        if let Some(z_order) = self.z_order {
+            e.push_attribute(("w:zOrder", z_order.to_str()));
+        }
+        if let Some(display) = self.display {
+            e.push_attribute(("w:display", display.to_str()));
+        }
+        if let Some(offset_from) = self.offset_from {
+            e.push_attribute(("w:offsetFrom", offset_from.to_str()));
+        }
+        if self.top.is_none()
+            && self.left.is_none()
+            && self.bottom.is_none()
+            && self.right.is_none()
+            && self.extra_xml.is_empty()
+        {
+            writer.write_event(Event::Empty(e))?;
+            return Ok(());
+        }
+        writer.write_event(Event::Start(e))?;
+        for (edge, tag) in [
+            (&self.top, "w:top"),
+            (&self.left, "w:left"),
+            (&self.bottom, "w:bottom"),
+            (&self.right, "w:right"),
+        ] {
+            if let Some(edge) = edge {
+                edge.to_xml(writer, tag)?;
+            }
+        }
+        for raw in &self.extra_xml {
+            writer.get_mut().write_all(raw)?;
+        }
+        writer.write_event(Event::End(BytesEnd::new("w:pgBorders")))?;
+        Ok(())
+    }
+}
+
+impl CT_NoteProperties {
+    /// Write section note properties under `tag`, in `xsd:sequence` order.
+    fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
+        if self.pos.is_none()
+            && self.num_fmt.is_none()
+            && self.num_start.is_none()
+            && self.num_restart.is_none()
+            && self.extra_xml.is_empty()
+        {
+            writer.write_event(Event::Empty(BytesStart::new(tag)))?;
+            return Ok(());
+        }
+        writer.write_event(Event::Start(BytesStart::new(tag)))?;
+        self.write_retained_children(writer, 0)?;
+        if let Some(pos) = &self.pos {
+            let mut e = BytesStart::new("w:pos");
+            e.push_attribute(("w:val", pos.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+        self.write_retained_children(writer, 1)?;
+        if let Some(num_fmt) = &self.num_fmt {
+            let mut e = BytesStart::new("w:numFmt");
+            e.push_attribute(("w:val", num_fmt.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+        self.write_retained_children(writer, 2)?;
+        if let Some(num_start) = self.num_start {
+            let mut buf = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:numStart");
+            e.push_attribute(("w:val", buf.format(num_start)));
+            writer.write_event(Event::Empty(e))?;
+        }
+        self.write_retained_children(writer, 3)?;
+        if let Some(num_restart) = &self.num_restart {
+            let mut e = BytesStart::new("w:numRestart");
+            e.push_attribute(("w:val", num_restart.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+        self.write_retained_children(writer, 4)?;
+        writer.write_event(Event::End(BytesEnd::new(tag)))?;
+        Ok(())
+    }
+
+    fn write_retained_children<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        slot: usize,
+    ) -> Result<()> {
+        for (candidate, raw) in &self.extra_xml {
+            if *candidate == slot {
+                writer.get_mut().write_all(raw)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl CT_PageNumberType {
     fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         if let Some(raw) = &self.raw_xml {
@@ -1188,6 +1968,51 @@ impl CT_PageNumberType {
         }
         writer.write_event(Event::Empty(element))?;
         Ok(())
+    }
+}
+
+/// Store a parsed unsigned attribute, or retain it verbatim when the source
+/// value falls outside what the field models, so nothing is dropped on write.
+fn store_unsigned_attribute(
+    value: &str,
+    key: &[u8],
+    field: &mut Option<u32>,
+    retained: &mut Vec<(String, String)>,
+) -> Result<()> {
+    match value.parse() {
+        Ok(parsed) => *field = Some(parsed),
+        Err(_) => retained.push((std::str::from_utf8(key)?.to_owned(), value.to_owned())),
+    }
+    Ok(())
+}
+
+/// Return the `w:val` of an element whose only attribute is `w:val`.
+///
+/// `None` means the element carries something this crate does not model, and
+/// the caller keeps the element raw rather than typing part of it.
+fn sole_val_attribute(e: &BytesStart<'_>, word_prefixes: &[String]) -> Result<Option<String>> {
+    let mut value = None;
+    for attribute in e.attributes() {
+        let attribute = attribute?;
+        if !is_word_attribute(attribute.key.as_ref(), b"val", word_prefixes) {
+            return Ok(None);
+        }
+        value = Some(
+            attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, e.decoder())?
+                .into_owned(),
+        );
+    }
+    Ok(value)
+}
+
+/// Write the retained attributes of a section child, ahead of modeled ones.
+fn push_retained_attributes(e: &mut BytesStart<'_>, retained: &[(String, String)]) {
+    for (name, value) in retained {
+        e.push_attribute(quick_xml::events::attributes::Attribute {
+            key: quick_xml::name::QName(name.as_bytes()),
+            value: std::borrow::Cow::Borrowed(value.as_bytes()),
+        });
     }
 }
 

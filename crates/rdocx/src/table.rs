@@ -31,11 +31,15 @@ impl VerticalAlignment {
         }
     }
 
+    /// Map the OOXML value onto the three alignments this facade exposes.
+    ///
+    /// `both` has no facade spelling and reads back as `Top`, which is how it
+    /// lays out. The cell keeps its source value in `CT_TcPr`.
     fn from_st(st: ST_VerticalJc) -> Self {
         match st {
-            ST_VerticalJc::Top => Self::Top,
             ST_VerticalJc::Center => Self::Center,
             ST_VerticalJc::Bottom => Self::Bottom,
+            ST_VerticalJc::Top | _ => Self::Top,
         }
     }
 }

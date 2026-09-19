@@ -1189,6 +1189,8 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document {
@@ -1376,6 +1378,8 @@ mod tests {
         let input = crate::input::LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
             default_tab_stop: None,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document {

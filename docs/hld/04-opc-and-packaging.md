@@ -1088,6 +1088,22 @@ required attributes, and a `w:cr`, `w:noBreakHyphen`, or `w:softHyphen`
 carrying any attribute stay in positioned raw capture, because a partial
 projection would drop bytes a no-op save must return.
 
+Section property readers select every modeled `w:sectPr` child by its bound
+WordprocessingML namespace and replay each retained raw child at its recorded
+schema slot and sub-slot. The sub-slot is what keeps `xsd:sequence` intact now
+that `w:vAlign` sits between `w:formProt` and `w:noEndnote`, and
+`w:textDirection` between `w:titlePg` and `w:bidi`. `w:footnotePr`,
+`w:endnotePr`, `w:paperSrc`, `w:pgBorders`, `w:lnNumType`, `w:vAlign` and
+`w:textDirection` are modeled. `w:formProt`, `w:noEndnote`, `w:bidi`,
+`w:rtlGutter`, `w:docGrid` and `w:printerSettings` stay byte-preserved at their
+slots, and `w:bidi` and `w:rtlGutter` belong to the bidirectional family of
+F-266. `w:pgBorders`, `w:paperSrc` and `w:lnNumType` write their retained
+attributes before the modeled ones, exactly as a border edge does. A modeled
+child whose source element carried an attribute the model does not own is
+replayed in place of the canonical form rather than typed in part, which is the
+choice `w:pgSz` already makes and which keeps a parse and save of an untouched
+section byte identical.
+
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
 with every inherited namespace binding they use. Typed table, cell, border,

@@ -17,10 +17,13 @@ use oxml_layout::{
     PositionedElement, Rect, Transform, Underline, break_into_lines, break_multilingual_into_lines,
 };
 
+use rdocx_oxml::borders::{CT_BorderEdge, CT_PBdr};
+use rdocx_oxml::document::{ST_LineNumberRestart, ST_PageBorderDisplay, ST_PageBorderOffset};
 use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV, WrapType,
 };
 use rdocx_oxml::shared::ST_Border;
+use rdocx_oxml::table::ST_VerticalJc;
 
 use crate::WordBodyLayoutFragment;
 use crate::input::{ImageData, MediaRegistry};
@@ -55,8 +58,48 @@ impl PlacedWrap {
 /// A resolved border edge: (thickness in pt, color, optional dash pattern as (dash, gap)).
 type BorderEdge = (f64, Color, Option<(f64, f64)>);
 
-/// Page geometry derived from section properties.
+/// One resolved column track in points, left to right.
 #[derive(Debug, Clone, Copy)]
+pub struct ColumnTrack {
+    /// Left edge, measured from the page's left edge.
+    pub x: f64,
+    /// Track measure.
+    pub width: f64,
+}
+
+/// A section's page border frame, resolved to points.
+#[derive(Debug, Clone)]
+pub struct PageBorderFrame {
+    /// Which physical pages of the section carry the frame.
+    pub display: ST_PageBorderDisplay,
+    /// Whether the edge offsets are measured from the page or from the text.
+    pub offset_from: ST_PageBorderOffset,
+    /// Whether the frame draws in front of the page content.
+    pub in_front: bool,
+    /// The four edges, reusing the paragraph border carrier so the frame goes
+    /// through the same renderer.
+    pub edges: CT_PBdr,
+}
+
+/// A section's margin line numbering.
+#[derive(Debug, Clone)]
+pub struct LineNumbering {
+    /// Interval at which a number is printed.
+    pub count_by: u32,
+    /// First line number of the section.
+    pub start: u32,
+    /// Gap between the number and the track it labels, in points.
+    pub distance: f64,
+    /// Where numbering starts over.
+    pub restart: ST_LineNumberRestart,
+    /// Number font, resolved before pagination because the paginator holds the
+    /// font manager immutably. `None` when no font resolved, and then nothing
+    /// is drawn.
+    pub font_id: Option<oxml_layout::FontId>,
+}
+
+/// Page geometry derived from section properties.
+#[derive(Debug, Clone)]
 pub struct PageGeometry {
     pub page_width: f64,
     pub page_height: f64,
@@ -66,17 +109,60 @@ pub struct PageGeometry {
     pub margin_left: f64,
     pub header_distance: f64,
     pub footer_distance: f64,
+    /// Resolved column tracks, left to right.
+    ///
+    /// **Empty for a single-column section**, which is what keeps that section
+    /// on the exact `text_measure` expression it has always used. A neutral
+    /// one-track form would reassociate the arithmetic and move every
+    /// recorded baseline in the workspace.
+    pub columns: Vec<ColumnTrack>,
+    /// Whether a rule is drawn between the tracks.
+    pub column_separator: bool,
+    /// The page border frame, when the section declares one.
+    pub page_borders: Option<PageBorderFrame>,
+    /// Margin line numbering, when the section declares it.
+    pub line_numbers: Option<LineNumbering>,
+    /// Vertical alignment of the body band within the page.
+    ///
+    /// `None` and `Top` take the untouched code path, and so does `Both`,
+    /// which preserves its source value and lays out as `Top`.
+    pub vertical_alignment: Option<ST_VerticalJc>,
+    /// Whether even displayed pages swap their inside and outside margins.
+    ///
+    /// The gutter is already folded into the inside margin when this is set,
+    /// so the swap alone puts it on the binding edge of either page.
+    pub mirror_margins: bool,
 }
 
 impl PageGeometry {
-    /// Content area width.
+    /// Content area width, which is one column track's measure.
     pub fn content_width(&self) -> f64 {
+        match self.columns.first() {
+            Some(track) => track.width,
+            None => self.text_measure(),
+        }
+    }
+
+    /// The full text measure, ignoring any column tracks.
+    ///
+    /// Headers, footers and page furniture span the text width whatever the
+    /// body's columns do.
+    pub fn text_measure(&self) -> f64 {
         self.page_width - self.margin_left - self.margin_right
     }
 
     /// Content area height.
     pub fn content_height(&self) -> f64 {
         self.page_height - self.margin_top - self.margin_bottom
+    }
+
+    /// The same page with its column tracks removed.
+    fn without_columns(&self) -> PageGeometry {
+        PageGeometry {
+            columns: Vec::new(),
+            column_separator: false,
+            ..self.clone()
+        }
     }
 }
 
@@ -92,6 +178,12 @@ impl Default for PageGeometry {
             margin_left: 72.0,
             header_distance: 36.0,
             footer_distance: 36.0,
+            columns: Vec::new(),
+            column_separator: false,
+            page_borders: None,
+            line_numbers: None,
+            vertical_alignment: None,
+            mirror_margins: false,
         }
     }
 }
@@ -189,7 +281,7 @@ pub fn paginate_sections(
         let s = &sections[0];
         return paginate_with_media(
             &s.blocks,
-            s.geometry,
+            s.geometry.clone(),
             s.header_footer.as_ref(),
             None,
             s.title_pg,
@@ -213,7 +305,7 @@ pub fn paginate_sections(
             .unwrap_or(next_section_page_number);
         let (mut pages, mut outlines) = paginate_with_media(
             &section.blocks,
-            section.geometry,
+            section.geometry.clone(),
             section.header_footer.as_ref(),
             None,
             section.title_pg,
@@ -257,7 +349,7 @@ pub(crate) fn paginate_shared_sections(
         let section = &sections[0];
         let result = paginate_with_media_recorded(
             &section.blocks,
-            section.geometry,
+            section.geometry.clone(),
             section.header_footer.as_ref(),
             section.header_footer_semantics.as_ref(),
             section.title_pg,
@@ -285,7 +377,7 @@ pub(crate) fn paginate_shared_sections(
             .unwrap_or(next_section_page_number);
         let mut result = paginate_with_media_recorded(
             &section.blocks,
-            section.geometry,
+            section.geometry.clone(),
             section.header_footer.as_ref(),
             section.header_footer_semantics.as_ref(),
             section.title_pg,
@@ -325,7 +417,7 @@ pub(crate) fn paginate_shared_single_section_recorded(
         next_header_page_number: section.page_number_start.unwrap_or(1),
     });
     let context = PassContext {
-        geometry: section.geometry,
+        geometry: section.geometry.clone(),
         header_footer: section.header_footer.as_ref(),
         header_footer_semantics: section.header_footer_semantics.as_ref(),
         title_pg: section.title_pg,
@@ -530,9 +622,8 @@ fn paginate_pass_from<B: LayoutBlockLike>(
             stopped_at: None,
         };
     }
-    let geometry = context.geometry;
     let mut pager = Pager::new(
-        geometry,
+        context.geometry.clone(),
         context.header_footer,
         context.header_footer_semantics,
         context.title_pg,
@@ -572,11 +663,13 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                 break;
             }
         } else if let Some(table) = block.table() {
-            let table_x = geometry.margin_left + table.table_indent;
             let tbl_borders = table.borders.as_ref();
             let body_index = block.body_index();
 
             for (row_idx, row) in table.rows.iter().enumerate() {
+                // Read per row, because finishing a page may have moved the
+                // body into the next column track.
+                let table_x = pager.geometry.margin_left + table.table_indent;
                 let row_semantics = table
                     .semantics
                     .and_then(|semantics| semantics.rows.get(row_idx));
@@ -667,6 +760,21 @@ fn paginate_pass_from<B: LayoutBlockLike>(
     }
 }
 
+/// One body line the page has placed, waiting to be numbered in the margin.
+#[derive(Debug, Clone, Copy)]
+struct NumberedLine {
+    /// Baseline, measured from the top of the content area.
+    baseline: f64,
+    /// Left edge of the column track the line sits in.
+    track_x: f64,
+}
+
+/// Point size the margin line numbers are drawn at.
+///
+/// Word takes this from the document default. A fixed size keeps the numbers
+/// deterministic, which a rendering baseline needs.
+const LINE_NUMBER_FONT_SIZE: f64 = 9.0;
+
 /// Helper struct to track page state during pagination.
 struct Pager<'a> {
     pages: Vec<PageFrame>,
@@ -679,7 +787,22 @@ struct Pager<'a> {
     page_number: usize,
     header_page_number: usize,
     content_height: f64,
+    /// Geometry of the body band, narrowed to the active column track.
     geometry: PageGeometry,
+    /// The section as authored, before a page mirrors it or a track narrows it.
+    section_geometry: PageGeometry,
+    /// The page being built, mirrored for its displayed number, at full text
+    /// measure. Headers, footers and page furniture are drawn against this.
+    page_geometry: PageGeometry,
+    /// Column tracks of the page being built, left to right. Empty for a
+    /// single-column section, which never leaves the untouched path.
+    tracks: Vec<ColumnTrack>,
+    /// Which track the body is filling.
+    track_index: usize,
+    /// Body lines placed on this page, in placement order, for line numbering.
+    numbered_lines: Vec<NumberedLine>,
+    /// The number the next body line of this section receives.
+    next_line_number: u32,
     header_footer: Option<&'a HeaderFooterContent>,
     header_footer_semantics: Option<&'a HeaderFooterSemantics>,
     has_content_flag: bool,
@@ -740,7 +863,11 @@ impl<'a> Pager<'a> {
         is_first_page: bool,
         stop_at: Option<PaginationCheckpoint>,
     ) -> Self {
-        Pager {
+        let next_line_number = geometry
+            .line_numbers
+            .as_ref()
+            .map_or(1, |numbering| numbering.start);
+        let mut pager = Pager {
             pages: Vec::new(),
             elements: Vec::new(),
             behind_elements: Vec::new(),
@@ -748,6 +875,12 @@ impl<'a> Pager<'a> {
             page_number: first_page_number,
             header_page_number: first_header_page_number,
             content_height: geometry.content_height(),
+            section_geometry: geometry.clone(),
+            page_geometry: geometry.clone(),
+            tracks: Vec::new(),
+            track_index: 0,
+            numbered_lines: Vec::new(),
+            next_line_number,
             geometry,
             header_footer,
             header_footer_semantics,
@@ -769,7 +902,78 @@ impl<'a> Pager<'a> {
             stop_at,
             stopped_at: None,
             trailing_run_page_break_before: None,
+        };
+        pager.begin_page();
+        pager
+    }
+
+    /// Resolve the geometry of the page now being built.
+    ///
+    /// A section that neither mirrors its margins nor declares column tracks
+    /// gets its own geometry back unchanged, which is the path every existing
+    /// document takes.
+    fn begin_page(&mut self) {
+        self.track_index = 0;
+        let mut page = self.section_geometry.without_columns();
+        if self.section_geometry.mirror_margins && self.header_page_number.is_multiple_of(2) {
+            std::mem::swap(&mut page.margin_left, &mut page.margin_right);
         }
+        let shift = page.margin_left - self.section_geometry.margin_left;
+        self.tracks = self
+            .section_geometry
+            .columns
+            .iter()
+            .map(|track| ColumnTrack {
+                x: track.x + shift,
+                width: track.width,
+            })
+            .collect();
+        self.page_geometry = page;
+        if let Some(numbering) = self.section_geometry.line_numbers.as_ref()
+            && numbering.restart == ST_LineNumberRestart::NewPage
+        {
+            self.next_line_number = numbering.start;
+        }
+        self.apply_active_track();
+    }
+
+    /// Narrow the body geometry to the active column track.
+    fn apply_active_track(&mut self) {
+        let Some(track) = self.tracks.get(self.track_index).copied() else {
+            self.geometry = self.page_geometry.clone();
+            return;
+        };
+        self.geometry = PageGeometry {
+            margin_left: track.x,
+            margin_right: self.page_geometry.page_width - track.x - track.width,
+            columns: vec![track],
+            ..self.page_geometry.clone()
+        };
+    }
+
+    /// Move the body into the next column track of this page.
+    ///
+    /// False when the section has no tracks, or the last one just filled, and
+    /// then the caller finishes the page instead.
+    fn advance_column_track(&mut self) -> bool {
+        if self.track_index + 1 >= self.tracks.len() {
+            return false;
+        }
+        self.track_index += 1;
+        self.apply_active_track();
+        self.cursor_y = 0.0;
+        self.has_content_flag = false;
+        true
+    }
+
+    /// End the page outright, whichever column track the body is filling.
+    ///
+    /// An explicit page break leaves the remaining columns empty, which is
+    /// what Word does. A column break is a different element and F-269 does
+    /// not model it.
+    fn finish_page_outright(&mut self) {
+        self.track_index = self.tracks.len().saturating_sub(1);
+        self.finish_page();
     }
 
     fn has_content(&self) -> bool {
@@ -1197,9 +1401,209 @@ impl<'a> Pager<'a> {
         }
     }
 
+    /// Number the body lines this page placed, in the margin beside them.
+    ///
+    /// The numbers are page furniture, so they are wrapped in marked content
+    /// with no structure and never enter the PDF reading order.
+    fn draw_line_numbers(&mut self) {
+        let placed = std::mem::take(&mut self.numbered_lines);
+        let Some(numbering) = self.section_geometry.line_numbers.clone() else {
+            return;
+        };
+        let mut children = Vec::new();
+        for line in placed {
+            let value = self.next_line_number;
+            self.next_line_number = self.next_line_number.saturating_add(1);
+            if !value.is_multiple_of(numbering.count_by) {
+                continue;
+            }
+            let Some(font_id) = numbering.font_id else {
+                continue;
+            };
+            let text = value.to_string();
+            let Ok(shaped) = self.fm.shape_text(font_id, &text, LINE_NUMBER_FONT_SIZE) else {
+                continue;
+            };
+            children.push(PositionedElement::Text(GlyphRun {
+                origin: Point {
+                    x: line.track_x - numbering.distance - shaped.width,
+                    y: self.page_geometry.margin_top + line.baseline,
+                },
+                font_id,
+                font_size: LINE_NUMBER_FONT_SIZE,
+                glyph_ids: shaped.glyph_ids,
+                advances: shaped.advances,
+                text,
+                source: None,
+                color: Color::BLACK,
+                bold: false,
+                italic: false,
+                field_kind: None,
+                field_source: None,
+                note: None,
+            }));
+        }
+        if !children.is_empty() {
+            self.elements.push(PositionedElement::MarkedContent {
+                structure: None,
+                children,
+            });
+        }
+    }
+
+    /// Record the body lines placed at `top`, so the page can number them.
+    ///
+    /// A section without line numbering records nothing, so nothing else in
+    /// the workspace pays for this.
+    fn record_numbered_lines(&mut self, lines: &[LayoutLine], top: f64) {
+        if self.section_geometry.line_numbers.is_none() {
+            return;
+        }
+        let track_x = self.geometry.margin_left;
+        let mut y = top;
+        for line in lines {
+            self.numbered_lines.push(NumberedLine {
+                baseline: y + line.ascent,
+                track_x,
+            });
+            y += line.height;
+        }
+    }
+
+    /// Shift the body band down for a centred or bottom vertical alignment.
+    ///
+    /// `None`, `Top` and `Both` return before touching anything, which is the
+    /// untouched code path. `Both` keeps its source value and lays out as
+    /// `Top`, and true vertical distribution is a named follow-up.
+    fn apply_vertical_alignment(&mut self) {
+        // The note area is reserved out of the content height before the band
+        // moves, or a bottom-aligned page would push its body into the notes
+        // it already made room for.
+        let unused = (self.content_height - self.reserved_height() - self.ink_bottom).max(0.0);
+        let dy = match self.page_geometry.vertical_alignment {
+            Some(ST_VerticalJc::Center) => unused / 2.0,
+            Some(ST_VerticalJc::Bottom) => unused,
+            _ => return,
+        };
+        if dy <= 0.0 {
+            return;
+        }
+        for element in self
+            .elements
+            .iter_mut()
+            .chain(self.behind_elements.iter_mut())
+        {
+            translate_element_tree(element, 0.0, dy);
+        }
+    }
+
+    /// Draw the rule between column tracks, when `w:sep` asked for one.
+    fn draw_column_separators(&self, elements: &mut Vec<PositionedElement>) {
+        if !self.section_geometry.column_separator || self.tracks.len() < 2 {
+            return;
+        }
+        let top = self.page_geometry.margin_top;
+        let bottom = top + self.content_height;
+        for pair in self.tracks.windows(2) {
+            let x = (pair[0].x + pair[0].width + pair[1].x) / 2.0;
+            elements.push(PositionedElement::Line {
+                start: Point { x, y: top },
+                end: Point { x, y: bottom },
+                width: 0.5,
+                color: Color::BLACK,
+                dash_pattern: None,
+            });
+        }
+    }
+
+    /// The section's page border frame, for the page being built.
+    fn page_border_elements(&self) -> Vec<PositionedElement> {
+        let Some(frame) = self.page_geometry.page_borders.as_ref() else {
+            return Vec::new();
+        };
+        let draws = match frame.display {
+            ST_PageBorderDisplay::AllPages => true,
+            ST_PageBorderDisplay::FirstPage => self.is_first_page,
+            ST_PageBorderDisplay::NotFirstPage => !self.is_first_page,
+        };
+        if !draws {
+            return Vec::new();
+        }
+        let geometry = &self.page_geometry;
+        let mut elements = Vec::new();
+        match frame.offset_from {
+            ST_PageBorderOffset::Text => {
+                // Each edge's `w:space` is measured outward from the text,
+                // which is exactly what the shared border renderer applies.
+                render_border_edges(
+                    &frame.edges,
+                    geometry.margin_left,
+                    geometry.margin_top,
+                    geometry.text_measure(),
+                    geometry.content_height(),
+                    &mut elements,
+                );
+            }
+            ST_PageBorderOffset::Page => {
+                // Here `w:space` is measured inward from the page edge, so the
+                // rectangle is inset here and the edges carry no offset.
+                let inset = |edge: &Option<CT_BorderEdge>| {
+                    edge.as_ref().and_then(|edge| edge.space).unwrap_or(0) as f64
+                };
+                let left = inset(&frame.edges.left);
+                let right = inset(&frame.edges.right);
+                let top = inset(&frame.edges.top);
+                let bottom = inset(&frame.edges.bottom);
+                let strip = |edge: &Option<CT_BorderEdge>| {
+                    edge.as_ref().map(|edge| CT_BorderEdge {
+                        space: None,
+                        ..edge.clone()
+                    })
+                };
+                let edges = CT_PBdr {
+                    top: strip(&frame.edges.top),
+                    left: strip(&frame.edges.left),
+                    bottom: strip(&frame.edges.bottom),
+                    right: strip(&frame.edges.right),
+                    between: None,
+                    bar: None,
+                };
+                render_border_edges(
+                    &edges,
+                    left,
+                    top,
+                    geometry.page_width - left - right,
+                    geometry.page_height - top - bottom,
+                    &mut elements,
+                );
+            }
+        }
+        elements
+    }
+
     fn finish_page(&mut self) {
+        if self.advance_column_track() {
+            return;
+        }
+        // Numbers label body lines, so they are drawn before the band moves.
+        // Notes are anchored to the bottom margin and must not move with it,
+        // so they are placed after.
+        self.draw_line_numbers();
+        self.apply_vertical_alignment();
         self.place_page_notes();
         let mut all_elements = Vec::new();
+        // A frame with `w:zOrder="back"` goes down before anything else, and
+        // one in front is appended after the footer. The vector is drained by
+        // whichever of the two appends runs.
+        let mut page_borders = self.page_border_elements();
+        if !self
+            .page_geometry
+            .page_borders
+            .as_ref()
+            .is_some_and(|frame| frame.in_front)
+        {
+            all_elements.append(&mut page_borders);
+        }
 
         if let Some(hf) = self.header_footer {
             let watermark = if self.is_first_page && self.title_pg {
@@ -1236,11 +1640,11 @@ impl<'a> Pager<'a> {
                 }
             });
             if !header_blocks.is_empty() {
-                let header_y = self.geometry.header_distance;
+                let header_y = self.page_geometry.header_distance;
                 render_hf_blocks(
                     header_blocks,
                     header_directions,
-                    &self.geometry,
+                    &self.page_geometry,
                     header_y,
                     self.page_number,
                     &mut all_elements,
@@ -1249,6 +1653,7 @@ impl<'a> Pager<'a> {
             }
         }
 
+        self.draw_column_separators(&mut all_elements);
         all_elements.append(&mut self.elements);
 
         if let Some(hf) = self.header_footer {
@@ -1271,12 +1676,13 @@ impl<'a> Pager<'a> {
             });
             if !footer_blocks.is_empty() {
                 let footer_height: f64 = footer_blocks.iter().map(|b| b.content_height()).sum();
-                let footer_y =
-                    self.geometry.page_height - self.geometry.footer_distance - footer_height;
+                let footer_y = self.page_geometry.page_height
+                    - self.page_geometry.footer_distance
+                    - footer_height;
                 render_hf_blocks(
                     footer_blocks,
                     footer_directions,
-                    &self.geometry,
+                    &self.page_geometry,
                     footer_y,
                     self.page_number,
                     &mut all_elements,
@@ -1285,10 +1691,12 @@ impl<'a> Pager<'a> {
             }
         }
 
+        all_elements.append(&mut page_borders);
+
         let mut page = PageFrame::new(
             self.page_number,
-            self.geometry.page_width,
-            self.geometry.page_height,
+            self.page_geometry.page_width,
+            self.page_geometry.page_height,
             all_elements,
         );
         page.displayed_page_number = self.header_page_number;
@@ -1300,10 +1708,23 @@ impl<'a> Pager<'a> {
         self.ink_bottom = 0.0;
         self.has_content_flag = false;
         self.is_first_page = false;
+        self.begin_page();
     }
 
+    /// Make room for the block at `next_block_index`.
+    ///
+    /// Content that simply ran out of room flows into the next column track
+    /// when the section has one, and ends the page only when it does not.
+    fn advance_flow_before(&mut self, next_block_index: usize) {
+        if self.advance_column_track() {
+            return;
+        }
+        self.finish_page_before(next_block_index);
+    }
+
+    /// End the page before `next_block_index`, whatever column the body is in.
     fn finish_page_before(&mut self, next_block_index: usize) {
-        self.finish_page();
+        self.finish_page_outright();
         if self.pending_notes.is_empty()
             && self.page_note_ids.is_empty()
             && self.page_wraps.is_empty()
@@ -1323,14 +1744,14 @@ impl<'a> Pager<'a> {
     fn flush(mut self) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
         // Always create at least one page
         if self.has_content() || self.pages.is_empty() {
-            self.finish_page();
+            self.finish_page_outright();
         }
         // A note that ran past the last page of body text still has to land
         // somewhere, so keep making pages until the queue drains. Each page
         // places at least one note line, so this terminates.
         while !self.pending_notes.is_empty() {
             let before = self.pending_notes.clone();
-            self.finish_page();
+            self.finish_page_outright();
             if self.pending_notes == before {
                 // Every page places at least one note line, so this is
                 // unreachable. It exists so a future change that breaks that
@@ -1610,7 +2031,7 @@ fn draw_note(
     let note_geometry = PageGeometry {
         margin_top: 0.0,
         margin_left: geometry.margin_left + NOTE_INDENT,
-        ..*geometry
+        ..geometry.without_columns()
     };
     let empty_media = HashMap::new();
     for paragraph in render {
@@ -1835,7 +2256,29 @@ fn page_foot_notes_in_line(line: &LayoutLine) -> impl Iterator<Item = NoteRef> +
 ///
 /// Paragraph rendering always lays out against the page margins, so a text box
 /// is rendered at the margin first and then moved to where the shape sits.
-fn translate_element(element: &mut PositionedElement, dx: f64, dy: f64) {
+/// Move one element and everything nested inside it.
+///
+/// The shallow form below deliberately leaves nested elements alone, and
+/// `render_shape_text` depends on that. Vertical page alignment moves the
+/// whole body band, so it needs this one. The two are named apart so neither
+/// can be reached for by accident.
+fn translate_element_tree(element: &mut PositionedElement, dx: f64, dy: f64) {
+    match element {
+        PositionedElement::MarkedContent { children, .. } => {
+            for child in children {
+                translate_element_tree(child, dx, dy);
+            }
+        }
+        PositionedElement::Group(group) => {
+            group.transform.e += dx;
+            group.transform.f += dy;
+        }
+        other => translate_element_shallow(other, dx, dy),
+    }
+}
+
+/// Move one element, leaving anything nested inside it where it is.
+fn translate_element_shallow(element: &mut PositionedElement, dx: f64, dy: f64) {
     match element {
         PositionedElement::Text(run) => {
             run.origin.x += dx;
@@ -1900,7 +2343,7 @@ fn render_shape_text(
     let dx = rect.x - geometry.margin_left;
     let dy = rect.y - geometry.margin_top;
     for element in &mut local {
-        translate_element(element, dx, dy);
+        translate_element_shallow(element, dx, dy);
     }
     local
 }
@@ -2159,7 +2602,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
     if total_needed > remaining && pager.has_content() {
         // Paragraph doesn't fit. Decide: move whole or split.
         if para.keep_lines || para.lines.len() <= 2 {
-            pager.finish_page_before(block_idx);
+            pager.advance_flow_before(block_idx);
             if pager.stopped_at.is_some() {
                 return;
             }
@@ -2177,7 +2620,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
 
         if para.widow_control && lines_that_fit < 2 {
             // Can't fit enough lines — move whole paragraph
-            pager.finish_page_before(block_idx);
+            pager.advance_flow_before(block_idx);
             if pager.stopped_at.is_some() {
                 return;
             }
@@ -2206,7 +2649,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         }
 
         // No lines fit (shouldn't happen since we checked has_content above)
-        pager.finish_page_before(block_idx);
+        pager.advance_flow_before(block_idx);
         if pager.stopped_at.is_some() {
             return;
         }
@@ -2241,7 +2684,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
             > pager.available_height_for(&para.lines)
             && pager.has_content()
         {
-            pager.finish_page_before(block_idx);
+            pager.advance_flow_before(block_idx);
             if pager.stopped_at.is_some() {
                 return;
             }
@@ -2306,6 +2749,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         &mut pager.elements,
         pager.media,
     );
+    pager.record_numbered_lines(&para.lines, pager.cursor_y + para.content_offset_top);
     render_change_bar(
         para.block,
         pager.cursor_y,
@@ -2352,6 +2796,10 @@ fn render_para_split(
         pager.cursor_y,
         &mut pager.elements,
         pager.media,
+    );
+    pager.record_numbered_lines(
+        &para.lines[..split_at],
+        pager.cursor_y + para.content_offset_top,
     );
     let first_height = para.content_offset_top
         + para.lines[..split_at]
@@ -2471,6 +2919,7 @@ fn render_para_split(
         &mut pager.elements,
         pager.media,
     );
+    pager.record_numbered_lines(remaining_lines, 0.0);
     render_change_bar(
         para.block,
         0.0,
@@ -3546,7 +3995,7 @@ fn render_table_row(
                         margin_left: cell_x + cell.margin_left,
                         margin_right: 0.0,
                         page_width: cell_x + cell.width - cell.margin_right,
-                        ..*geometry
+                        ..geometry.without_columns()
                     };
                     render_paragraph_lines(
                         &paragraph.lines,
@@ -5849,7 +6298,7 @@ mod tests {
             margin_left: 200.0,
             margin_right: 0.0,
             page_width: 300.0,
-            ..page
+            ..page.clone()
         };
         let anchor = |behind_doc| AnchoredDrawing {
             behind_doc,

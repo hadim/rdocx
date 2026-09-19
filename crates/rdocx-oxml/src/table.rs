@@ -1233,12 +1233,18 @@ fn tr_pr_raw_boundary(name: &[u8], current: usize, word_prefixes: &[String]) -> 
 
 // ---- Cell properties ----
 
-/// Vertical alignment within a cell.
+/// `ST_VerticalJc` -- vertical alignment within a cell or a section page.
+///
+/// `#[non_exhaustive]` so a later ECMA value is an addition rather than a
+/// second breaking change for every downstream match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ST_VerticalJc {
     Top,
     Center,
     Bottom,
+    /// `both`, ECMA's vertical distribution. Laid out as `Top` for now.
+    Both,
 }
 
 impl ST_VerticalJc {
@@ -1246,6 +1252,7 @@ impl ST_VerticalJc {
         match s {
             "center" => Self::Center,
             "bottom" => Self::Bottom,
+            "both" => Self::Both,
             _ => Self::Top,
         }
     }
@@ -1255,6 +1262,7 @@ impl ST_VerticalJc {
             Self::Top => "top",
             Self::Center => "center",
             Self::Bottom => "bottom",
+            Self::Both => "both",
         }
     }
 }

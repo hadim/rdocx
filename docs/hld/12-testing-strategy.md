@@ -923,6 +923,31 @@ and visual inspection. The Word 16.112.4 structure record is reviewed
 statically when GUI automation is unavailable. No sample opts into the new
 options, so all 49 hash entries remain unchanged.
 
+The M24 section page-semantics gate is
+`section_page_semantics_match_pinned_libreoffice_render`. It source-builds one
+document carrying two columns with a rule, a page border, line numbering and
+mirrored margins, renders it through the deterministic font manager, converts
+the same package with LibreOffice 26.2.5.2, and rasterises both at 150 DPI with
+`pdftoppm` 26.01.0. The comparison is the horizontal ink blocks of the page
+interior, which are the line-number band, each column track and the rule
+between them, and each block edge must agree within six pixels, or 2.9 points.
+Global-window luminance structural similarity is reported and floored at 0.15
+as a collapse guard rather than a similarity claim, because over a page of 11
+point prose it measures glyph rasterization far more than layout: the measured
+agreement is 0.21 while the same page against a blank sheet scores 0.02.
+
+**Word GUI automation is not available on the machine that produced this
+gate**, so no Word-authored pinned record set was recorded for it. The Word
+confirmation lands instead as the mandatory `#[ignore]` capture test
+`capture_f269_word_section_evidence`, which asserts the installed Word build
+before it records anything and is never part of the automated gate, plus a
+named follow-up in `docs/hld/14-development-backlog.md`. That is the same
+pattern every other GUI-only evidence path in this document uses. F-251's
+`pdftotext` and `pdfinfo` 26.09.0 pins are left exactly as they are. The only
+two tests that invoke those binaries are `#[ignore]`d regeneration helpers, so
+nothing fails today, and re-pinning them to the installed 26.01.0 would
+invalidate recorded evidence no human here can re-capture.
+
 The Word glyph-provenance regression resolves every attributed run through its
 result-local `WordSourcePath` and requires the selected paragraph's exact
 Unicode-scalar slice to equal the displayed run. Its in-code fixture covers

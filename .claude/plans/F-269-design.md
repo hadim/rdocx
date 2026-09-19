@@ -1,6 +1,6 @@
 # F-269, Complete section page semantics
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-250, F-251
@@ -373,41 +373,41 @@ one story per sprint wave and this story does not hold it.
 
 ## Implementation checklist
 
-- [ ] Confirm F-264 and F-270 are integrated first. This story consumes the
+- [x] Confirm F-264 and F-270 are integrated first. This story consumes the
       retaining `CT_BorderEdge` from F-264 and the typed settings accessors from
       F-270, and starts before either is a plan for a merge conflict.
-- [ ] Add `CT_PageBorders`, `CT_LineNumber`, `CT_PaperSource` and the shared
+- [x] Add `CT_PageBorders`, `CT_LineNumber`, `CT_PaperSource` and the shared
       note-properties type to `crates/rdocx-oxml/src/document.rs`, with raw
       retention for attributes they do not type.
-- [ ] Add the `Both` variant and `#[non_exhaustive]` to `ST_VerticalJc` at
+- [x] Add the `Both` variant and `#[non_exhaustive]` to `ST_VerticalJc` at
       `crates/rdocx-oxml/src/table.rs:1238`, and fix every match arm the change
       surfaces.
-- [ ] Add the matching `CT_SectPr` fields, including typed `w:textDirection`,
+- [x] Add the matching `CT_SectPr` fields, including typed `w:textDirection`,
       and remove those locals from `raw_child_schema_slot` at
       `crates/rdocx-oxml/src/document.rs:816`.
-- [ ] Parse and write each new child at its existing slot, keeping the slot
+- [x] Parse and write each new child at its existing slot, keeping the slot
       boundaries and `write_raw_position` calls correct for the children that
       stay raw.
-- [ ] Extend `SectionRef` and `Section` in `crates/rdocx/src/document.rs` with
+- [x] Extend `SectionRef` and `Section` in `crates/rdocx/src/document.rs` with
       one read and write pair per family, reusing the `checked_*_section_twips`
       validators.
-- [ ] Update `section_has_layout` at `crates/rdocx/src/document.rs:21986`.
-- [ ] Add `columns` and `column_separator` to `PageGeometry`, resolve tracks in
+- [x] Update `section_has_layout` at `crates/rdocx/src/document.rs:21986`.
+- [x] Add `columns` and `column_separator` to `PageGeometry`, resolve tracks in
       `sect_pr_to_geometry`, and keep the one-column path textually unchanged.
-- [ ] Implement column flow, the separator rule, page borders, line numbers,
+- [x] Implement column flow, the separator rule, page borders, line numbers,
       vertical alignment and mirrored margins in
       `crates/rdocx-layout/src/paginator.rs`, consuming F-270's settings
       accessors for the mirroring toggle.
-- [ ] Account for the new owned allocations in the layout cache capacity
+- [x] Account for the new owned allocations in the layout cache capacity
       calculation at `crates/rdocx-layout/src/engine.rs:4582`.
-- [ ] Add the test modules to the two existing integration entrypoints, assert
+- [x] Add the test modules to the two existing integration entrypoints, assert
       LibreOffice 26.2.5.2 and `pdftoppm` 26.01.0 in source, and leave F-251's
       26.09.0 pins untouched.
-- [ ] Record the three named follow-ups in
+- [x] Record the three named follow-ups in
       `docs/hld/14-development-backlog.md`: Word GUI human-action confirmation
       for section page semantics, true vertical distribution for
       `w:vAlign="both"`, and column balancing at a continuous section break.
-- [ ] Run `cargo test -p rdocx-oxml`, `-p rdocx-layout`, `-p rdocx`, then
+- [x] Run `cargo test -p rdocx-oxml`, `-p rdocx-layout`, `-p rdocx`, then
       `/verify`, and confirm the harness reports 49 of 49 unchanged.
 
 ## Open questions

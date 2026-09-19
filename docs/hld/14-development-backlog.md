@@ -2683,6 +2683,46 @@ footnote and endnote configuration.
 **Depends on**: F-250, F-251.
 **Test gate**: differential. Every supported section property survives
 round-trip and changes only its declared layout behavior.
+**Delivered**: `CT_PageBorders`, `CT_LineNumber`, `CT_PaperSource` and the
+shared `CT_NoteProperties` join `CT_SectPr` beside typed `w:vAlign` and
+`w:textDirection`, so `w:footnotePr`, `w:endnotePr`, `w:paperSrc`,
+`w:pgBorders`, `w:lnNumType`, `w:vAlign` and `w:textDirection` leave
+`extra_xml` while the retained children keep their slots through a new
+sub-slot. The central defect is closed: `Section::set_columns` wrote `w:cols`
+that `sect_pr_to_geometry` never read, and column tracks now reach pagination
+with a separator rule, while the single-column path bypasses the track
+arithmetic so all 49 hash entries stay unchanged. Page borders, margin line
+numbering excluded from the PDF reading order, vertical page alignment and
+mirrored margins all render. `ST_VerticalJc` gains `Both` and
+`#[non_exhaustive]`, which is a breaking change to `rdocx-oxml`. DOCX-036 stays
+`partial` and its remaining owner is F-274.
+
+### F-269a, Word GUI confirmation for section page semantics (S)
+Record the Word-authored oracle for columns, page borders, line numbering,
+vertical alignment and mirrored margins. F-269 could not: Word GUI automation
+is not available on the machine that produced it, so the capture path landed as
+the `#[ignore]` test `capture_f269_word_section_evidence` instead.
+**Depends on**: F-269.
+**Test gate**: differential. The capture asserts the installed Word build
+before it records anything, and the recorded set becomes a pinned oracle.
+
+### F-269b, True vertical distribution for section `w:vAlign="both"` (S)
+`both` preserves its source value, lays out as `top` and emits one diagnostic
+per section. Distributing the body band's paragraphs across the unused vertical
+measure is the remaining work.
+**Depends on**: F-269.
+**Test gate**: integration. A `both` section distributes its blocks and emits
+no diagnostic, while `top`, `center` and `bottom` are unchanged.
+
+### F-269c, Column balancing and per-track line breaking (M)
+Two gaps left open deliberately by F-269. Word balances column heights at a
+continuous section break, and this workspace fills tracks left to right without
+balancing. Word also breaks each track to its own measure, and this workspace
+breaks a whole section to the first track's measure, which only differs when
+`w:equalWidth` is `0` with tracks of different widths.
+**Depends on**: F-269.
+**Test gate**: differential. A balanced continuous break and an unequal track
+list both match the pinned LibreOffice render.
 
 ### F-270, Complete settings and web settings authoring (L)
 Model and author the remaining modern document settings, compatibility options,

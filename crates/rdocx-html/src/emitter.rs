@@ -513,10 +513,13 @@ fn emit_table(
 
                 // Vertical alignment
                 if let Some(va) = &props.v_align {
+                    // `both` distributes vertically in Word. HTML has no
+                    // equivalent on a cell, and top is what this workspace
+                    // already lays it out as.
                     let css_va = match va {
-                        rdocx_oxml::table::ST_VerticalJc::Top => "top",
                         rdocx_oxml::table::ST_VerticalJc::Center => "middle",
                         rdocx_oxml::table::ST_VerticalJc::Bottom => "bottom",
+                        rdocx_oxml::table::ST_VerticalJc::Top | _ => "top",
                     };
                     td_style.push_str(&format!("vertical-align:{css_va};"));
                 }
