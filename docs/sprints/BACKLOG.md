@@ -488,7 +488,7 @@ regenerated, never hand-edited.
 | F-266 | International and vertical typography | S74 | L | pending |
 | F-266a | Script identity and font slot resolution | S74 | L | done |
 | F-266b | Ruby and emphasis marks | S74 | L | done |
-| F-266c | Character grid and vertical text | S74 | L | pending |
+| F-266c | Character grid and vertical text | S74 | L | in-progress |
 | F-267 | Complete table style and conditional formatting authoring | S74 | L | done |
 | F-268 | Floating and advanced table layout | S74 | L | pending |
 | F-268a | Advanced table authoring and geometry | S74 | L | done |

@@ -43,7 +43,7 @@ evidence.
 | F-266 | International and vertical typography | L | split | - |
 | F-266a | Script identity and font slot resolution | L | done | - |
 | F-266b | Ruby and emphasis marks | L | done | - |
-| F-266c | Character grid and vertical text | L | pending | - |
+| F-266c | Character grid and vertical text | L | in-progress | claude |
 | F-268 | Floating and advanced table layout | L | split | - |
 | F-268a | Advanced table authoring and geometry | L | done | - |
 | F-268b | Floating table placement and wrap | M | done | - |
