@@ -6210,6 +6210,37 @@ rdocx-layout = "=0.10.1"
                 readme_doctests.archive_measurement(archive),
                 (archive.stat().st_size, len(payload), 1),
             )
+            clean_archive = Path(temp_dir) / "clean.crate"
+            dirty_archive = Path(temp_dir) / "dirty.crate"
+            clean_vcs = {
+                "git": {"sha1": "1" * 40},
+                "path_in_vcs": "crates/sample",
+            }
+            dirty_vcs = {
+                "git": {"sha1": "2" * 40, "dirty": True},
+                "path_in_vcs": "crates/sample",
+            }
+            for target, vcs_info in (
+                (clean_archive, clean_vcs),
+                (dirty_archive, dirty_vcs),
+            ):
+                with tarfile.open(target, "w:gz") as package_archive:
+                    vcs_payload = json.dumps(vcs_info, indent=2).encode()
+                    vcs_member = tarfile.TarInfo(
+                        "sample-0.1.0/.cargo_vcs_info.json"
+                    )
+                    vcs_member.size = len(vcs_payload)
+                    package_archive.addfile(vcs_member, io.BytesIO(vcs_payload))
+                    payload_member = tarfile.TarInfo("sample-0.1.0/payload")
+                    payload_member.size = len(payload)
+                    package_archive.addfile(payload_member, io.BytesIO(payload))
+            clean_measurement = readme_doctests.archive_measurement(clean_archive)
+            dirty_measurement = readme_doctests.archive_measurement(dirty_archive)
+            self.assertEqual(clean_measurement[1:], dirty_measurement[1:])
+            self.assertLessEqual(
+                abs(clean_measurement[0] - dirty_measurement[0]),
+                readme_doctests.ARCHIVE_COMPRESSION_TOLERANCE_BYTES,
+            )
 
     def test_measurement_speed_claims_never_exceed_the_gated_floor(self) -> None:
         thresholds = readme_doctests.performance_thresholds()

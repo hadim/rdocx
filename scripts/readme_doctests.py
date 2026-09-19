@@ -367,29 +367,30 @@ MEASUREMENT_COLUMNS = (
 )
 MEASUREMENT_DATE = "2026-09-19"
 MEASUREMENT_PLATFORM = "macOS 26.6.2, Apple M5 Max, arm64"
+ARCHIVE_COMPRESSION_TOLERANCE_BYTES = 64
 ARCHIVE_MEASUREMENTS = {
-    "oxml-chart": (102_042, 659_386, 6),
-    "oxml-cli-support": (6_718, 21_605, 6),
-    "oxml-core": (20_677, 100_143, 15),
-    "oxml-drawing": (159_703, 1_121_596, 24),
+    "oxml-chart": (102_042, 659_367, 6),
+    "oxml-cli-support": (6_718, 21_586, 6),
+    "oxml-core": (20_677, 100_124, 15),
+    "oxml-drawing": (159_703, 1_121_577, 24),
     "oxml-layout": (4_623_324, 9_227_483, 51),
-    "oxml-media": (12_252, 51_011, 6),
-    "oxml-opc": (91_907, 354_472, 12),
-    "oxml-pdf": (66_015, 304_451, 14),
-    "oxml-sml": (12_511, 49_822, 6),
-    "rdocx": (1_076_425, 6_419_081, 36),
-    "rdocx-cli": (33_805, 145_275, 8),
-    "rdocx-html": (15_486, 63_913, 11),
-    "rdocx-layout": (251_566, 1_368_564, 15),
-    "rdocx-opc": (3_655, 9_687, 6),
-    "rdocx-oxml": (367_095, 2_377_410, 32),
-    "rdocx-pdf": (8_111, 26_777, 6),
-    "rpptx": (387_762, 2_018_584, 16),
-    "rpptx-chart": (6_648, 21_155, 6),
-    "rpptx-cli": (27_236, 108_850, 8),
-    "rpptx-layout": (79_109, 458_131, 11),
-    "rpptx-oxml": (152_243, 1_038_468, 20),
-    "rpptx-render": (57_790, 320_857, 8),
+    "oxml-media": (12_252, 50_992, 6),
+    "oxml-opc": (91_907, 354_453, 12),
+    "oxml-pdf": (66_015, 304_432, 14),
+    "oxml-sml": (12_511, 49_803, 6),
+    "rdocx": (1_076_425, 6_419_062, 36),
+    "rdocx-cli": (33_805, 145_256, 8),
+    "rdocx-html": (15_486, 63_894, 11),
+    "rdocx-layout": (251_566, 1_368_545, 15),
+    "rdocx-opc": (3_655, 9_668, 6),
+    "rdocx-oxml": (367_095, 2_377_391, 32),
+    "rdocx-pdf": (8_111, 26_758, 6),
+    "rpptx": (387_762, 2_018_565, 16),
+    "rpptx-chart": (6_648, 21_136, 6),
+    "rpptx-cli": (27_236, 108_831, 8),
+    "rpptx-layout": (79_109, 458_112, 11),
+    "rpptx-oxml": (152_243, 1_038_449, 20),
+    "rpptx-render": (57_790, 320_838, 8),
 }
 PACKAGE_VERSIONS = {
     **{name: "0.12.1" for name, _ in LOCAL_PATCHES if not name.startswith("rdocx")},
@@ -1264,7 +1265,22 @@ def build_package_archive(package: dict[str, object]) -> Path | None:
 def archive_measurement(archive: Path) -> tuple[int, int, int]:
     with tarfile.open(archive, "r:gz") as package_archive:
         members = package_archive.getmembers()
-    return archive.stat().st_size, sum(member.size for member in members), len(members)
+        member_bytes = 0
+        for member in members:
+            if not member.name.endswith("/.cargo_vcs_info.json"):
+                member_bytes += member.size
+                continue
+            extracted = package_archive.extractfile(member)
+            if extracted is None:
+                member_bytes += member.size
+                continue
+            vcs_info = json.loads(extracted.read())
+            git = vcs_info.get("git")
+            if isinstance(git, dict):
+                git.pop("dirty", None)
+                git["sha1"] = "0" * 40
+            member_bytes += len(json.dumps(vcs_info, indent=2).encode())
+    return archive.stat().st_size, member_bytes, len(members)
 
 
 def recorded_archive_measurement(row: MeasurementRow) -> tuple[int, int, int] | None:
@@ -1308,9 +1324,15 @@ def validate_archive_measurement(package: str, archive: Path) -> bool:
         and observed_compressed < 10 * 1024 * 1024
     )
     if pinned_rustc_is_active():
-        valid = valid and observed_compressed == recorded_compressed
+        valid = valid and (
+            abs(observed_compressed - recorded_compressed)
+            <= ARCHIVE_COMPRESSION_TOLERANCE_BYTES
+        )
     else:
-        valid = valid and observed_compressed <= recorded_compressed
+        valid = valid and (
+            observed_compressed
+            <= recorded_compressed + ARCHIVE_COMPRESSION_TOLERANCE_BYTES
+        )
     if not valid:
         print(
             f"README doctest error: {package} archive measurement differs, "

@@ -2847,8 +2847,12 @@ dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner. The
 archive gate re-derives compressed bytes, member bytes, and member count. It
-requires exact source-determined member values, exact compressed size under
-the pinned Rust toolchain, and no compressed-size growth on another toolchain.
+normalizes Cargo's generated `.cargo_vcs_info.json` to a fixed-length clean
+revision before requiring exact source-determined member values. Compressed
+size must stay within 64 bytes of the recorded observation under the pinned
+toolchain, may grow by no more than the same allowance on another toolchain,
+and always remains subject to the 10 MiB ceiling. The allowance covers the
+generated commit hash and dirty marker, not tracked source growth.
 `--record-measurements` prints the derived archive rows and the approved speed
 rows in their exact Markdown form. Mutation coverage rejects incomplete or
 stale provenance, row-to-page drift, a speed guarantee beyond its code gate,

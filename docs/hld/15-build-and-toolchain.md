@@ -749,10 +749,15 @@ external crate bindings, and warnings denied.
 The same runner is part of canonical non-fast verification. It creates each of
 the 22 publishable archives, requires exactly one packaged README, and
 byte-compares it with the declared source. It re-derives compressed size, tar
-member bytes, and tar member count. The `--record-measurements` mode prints the
-exact Markdown rows for review. The default validator binds those rows to
-Cargo metadata, the pinned toolchain, the 10 MiB ceiling, their approved pages,
-and the performance constants. It also rejects incomplete provenance, deferred
+member bytes, and tar member count. Cargo's generated
+`.cargo_vcs_info.json` is normalized to a fixed-length clean revision for the
+exact member-byte total. The compressed archive may differ from the recorded
+observation by at most 64 bytes under the pinned toolchain, or grow by at most
+that allowance elsewhere, because the generated commit hash and dirty marker
+are not package payload. The `--record-measurements` mode prints the exact
+Markdown rows for review. The default validator binds those rows to Cargo
+metadata, the pinned toolchain, the 10 MiB ceiling, their approved pages, and
+the performance constants. It also rejects incomplete provenance, deferred
 placeholder numbers, and unbounded superlatives across the 27-page family.
 Version, tag, publication, and release-family metadata remain unchanged.
 

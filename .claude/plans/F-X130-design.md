@@ -120,14 +120,15 @@ root page cannot disagree.
 **Tier one, re-derived on every validator run. Lands.** Rust `.crate` archive
 footprint. `validate_package_archive` already builds all 22 publishable
 archives with the same local patch set the release dry run uses. It gains the
-size capture for free. The gate asserts the uncompressed member-byte total and
-the member count exactly, because those depend only on tracked source and the
-include list, and asserts that the compressed `.crate` byte size equals the
-recorded value when `rustc --version` matches `rust-toolchain.toml`, and is at
-most the recorded value and below the 10 MiB ceiling otherwise. That decision
-is deliberate. A `.crate` is a gzip tarball, so an unconditional exact
-assertion would make an unrelated cargo bump look like a regression, while the
-source-determined uncompressed figures stay exact on every machine.
+size capture for free. The gate normalizes Cargo's generated
+`.cargo_vcs_info.json` to a fixed-length clean revision before totaling member
+bytes, then asserts that source-determined total and the member count exactly.
+The compressed `.crate` byte size stays below the 10 MiB ceiling and within 64
+bytes of the recorded observation under the pinned toolchain. Another
+toolchain may produce an archive no more than 64 bytes above that observation.
+The narrow allowance covers only the commit hash and dirty marker in Cargo's
+generated metadata. Tracked source growth still changes the exact normalized
+member total and fails the gate.
 
 **Tier two, bound to a threshold that lives in code. Lands.** Layout and PDF
 throughput and peak allocation. The README publishes both the enforced floor
