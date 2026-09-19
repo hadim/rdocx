@@ -12,6 +12,8 @@ PDF.
 - Add a slide from a layout index.
 - Keep rendering out of the default profile.
 - Add deterministic PDF through the optional `render` feature.
+- Complete package serialization preserves relationship-backed and safe
+  unmodelled content beyond the focused JavaScript editing surface.
 
 ## Use it when
 

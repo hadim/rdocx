@@ -9,6 +9,8 @@ stale-handle detection, units, and errors.
 - Revision capture and validation for stale element handles.
 - Shared stale-element errors.
 - EMU, inch, centimetre, millimetre, point, and twip conversions.
+- Both native bindings share the same ordered path segments and revision
+  checks, so structural mutation invalidates held Python handles consistently.
 
 ## Use it when
 

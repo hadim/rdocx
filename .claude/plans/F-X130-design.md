@@ -1,6 +1,6 @@
 # F-X130, Show package depth, footprint, and speed
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-X089, F-264, F-265, F-266a, F-266b, F-266c, F-267, F-268a,
@@ -336,34 +336,34 @@ and must not touch `scripts/hash_baseline.json`.
 
 ## Implementation checklist
 
-- [ ] Confirm F-264, F-265, F-266a, F-266b, F-266c, F-267, F-268a, F-268b,
+- [x] Confirm F-264, F-265, F-266a, F-266b, F-266c, F-267, F-268a, F-268b,
       F-269 and F-270 are all completed and integrated, and that the sprint
       branch is the final S74 surface, before taking any measurement.
-- [ ] Add `MEASUREMENT_ROWS`, `MEASUREMENT_PAGES` and `MEASUREMENT_TIERS` to
+- [x] Add `MEASUREMENT_ROWS`, `MEASUREMENT_PAGES` and `MEASUREMENT_TIERS` to
       `scripts/readme_doctests.py`.
-- [ ] Add `--record-measurements` and capture archive footprint inside the
+- [x] Add `--record-measurements` and capture archive footprint inside the
       existing 22-archive build.
-- [ ] Parse the four throughput and peak constants out of
+- [x] Parse the four throughput and peak constants out of
       `crates/rdocx/tests/regression_test.rs` and bound every published figure
       by them.
-- [ ] Take the tier two observation once on the named Apple M5 Max with the
+- [x] Take the tier two observation once on the named Apple M5 Max with the
       locked release binary and one test thread.
-- [ ] Leave every tier three row absent, keep the `recorded` tier empty, and
+- [x] Leave every tier three row absent, keep the `recorded` tier empty, and
       add the tracked human-action follow-up entries to
       `docs/hld/14-development-backlog.md`.
-- [ ] Add `## Measured footprint and speed` to the root page and to each listed
+- [x] Add `## Measured footprint and speed` to the root page and to each listed
       crate page, with speed rows on exactly the root page, `rdocx-layout`,
       `oxml-pdf` and `rdocx-py`.
-- [ ] Rewrite the depth summaries on all 27 pages for the final S74 surface,
+- [x] Rewrite the depth summaries on all 27 pages for the final S74 surface,
       deepening the existing `Rich authoring` row and adding no eighth row.
-- [ ] Rewrite both Python long descriptions for native engine, typed API, local
+- [x] Rewrite both Python long descriptions for native engine, typed API, local
       execution, rendering, review and package preservation.
-- [ ] Add `validate_measurement_evidence` and the superlative ban.
-- [ ] Add the named test gate and every mutation test in the table.
-- [ ] Run `readme_doctests.py`, `--check-official-links`, the patched publish
+- [x] Add `validate_measurement_evidence` and the superlative ban.
+- [x] Add the named test gate and every mutation test in the table.
+- [x] Run `readme_doctests.py`, `--check-official-links`, the patched publish
       dry run, `prose_check.py`, `sync_agent_skills.py --check` and full
       `/verify`.
-- [ ] Update exactly the three listed HLD files.
+- [x] Update exactly the three listed HLD files.
 
 ## Open questions
 

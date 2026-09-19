@@ -703,6 +703,12 @@ generation-isolated peak heap allocations. Workflow mutation coverage rejects
 removing or weakening any part of this invocation and rejects swallowed
 failures.
 
+The same constants bound the four dated README speed rows. The root,
+`rdocx-layout`, `oxml-pdf`, and `rdocx-py` pages repeat those rows exactly.
+The validator reads the four regression constants and rejects a published
+throughput guarantee above its floor or an allocation guarantee below its
+ceiling.
+
 **Workspace package READMEs in the docs job.** Every one of the 27 workspace
 packages explicitly declares one distinct README. The root file is the
 high-level `rdocx` guide. It has exactly three compiling Rust examples and a
@@ -715,6 +721,15 @@ three implemented capabilities before direct-use guidance, neighbouring
 package boundaries, publication status, and an example suited to the actual
 consumer surface. The three deprecated shims direct new consumers to
 `oxml-opc`, `oxml-pdf`, and `oxml-chart`.
+
+Measurement evidence stays outside the alternatives table. Every measurement
+row supplies an exact value, version, platform, build mode, input, command,
+statistic, and date. The root and 22 publishable crate pages record their
+re-derived `.crate` archive footprint. Speed rows appear only on the four pages
+whose consumers can reproduce the large-document gate. Python wheel and source
+distribution sizes, installed Python footprint, CLI release archive sizes,
+WASM bundle sizes, and Python boundary timings stay absent until their pinned
+release or human workflow records them.
 
 After the workspace documentation build, `scripts/readme_doctests.py` checks
 the exact 27-package inventory, validates Rust, shell, Python, and JavaScript
@@ -733,8 +748,13 @@ them to rustdoc with the repository edition, dependency search path, matching
 external crate bindings, and warnings denied.
 The same runner is part of canonical non-fast verification. It creates each of
 the 22 publishable archives, requires exactly one packaged README, and
-byte-compares it with the declared source. Version, tag, publication, and
-release-family metadata remain unchanged.
+byte-compares it with the declared source. It re-derives compressed size, tar
+member bytes, and tar member count. The `--record-measurements` mode prints the
+exact Markdown rows for review. The default validator binds those rows to
+Cargo metadata, the pinned toolchain, the 10 MiB ceiling, their approved pages,
+and the performance constants. It also rejects incomplete provenance, deferred
+placeholder numbers, and unbounded superlatives across the 27-page family.
+Version, tag, publication, and release-family metadata remain unchanged.
 
 **A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
 uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM

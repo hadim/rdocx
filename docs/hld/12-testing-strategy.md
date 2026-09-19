@@ -2804,6 +2804,14 @@ official evidence for rdocx, python-docx, docx-rs, docx4j, and Aspose.Words.
 `ND` means not documented in that evidence, and no row makes a volatile
 performance, popularity, price, or footprint claim.
 
+Every published measurement uses a fixed nine-column table that names the
+value, version, platform, build mode, input, command, statistic, and date. The
+root plus all 22 publishable crate pages carry their re-derived `.crate`
+archive footprint. Exactly the root, `rdocx-layout`, `oxml-pdf`, and
+`rdocx-py` pages also carry the four large-document layout and PDF rows. The
+rows state the enforced floor or ceiling and one dated observation. A row
+shared by several pages is byte-identical on each page.
+
 Each crate-local document leads with an outcome and at least three implemented
 capabilities, then states direct-use guidance, adjacent package relationships,
 publication status, and a concrete Rust, CLI, Python, or JavaScript example.
@@ -2837,7 +2845,15 @@ byte-compares their single packaged README with the declared source. Archive
 creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
-docs job and canonical non-fast verification call this same runner.
+docs job and canonical non-fast verification call this same runner. The
+archive gate re-derives compressed bytes, member bytes, and member count. It
+requires exact source-determined member values, exact compressed size under
+the pinned Rust toolchain, and no compressed-size growth on another toolchain.
+`--record-measurements` prints the derived archive rows and the approved speed
+rows in their exact Markdown form. Mutation coverage rejects incomplete or
+stale provenance, row-to-page drift, a speed guarantee beyond its code gate,
+an untracked deferred measurement, and unbounded superlatives across all 27
+pages.
 The stable 0.14.0 carrier regression pins all ten inherited version carriers,
 the `rdocx` Python project version, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
@@ -3001,6 +3017,13 @@ or below 64 MiB and at or above 250 pages per second, and PDF rendering at or
 below 16 MiB additional peak and at or above 1,000 pages per second. Workflow
 mutation tests reject a missing, unlocked, debug, non-ignored, non-exact,
 parallel, or failure-swallowing invocation.
+
+The dated macOS 26.6.2 observation on an Apple M5 Max with rustc 1.97.1 uses
+that exact release-mode invocation with one test thread. It records 31,019.1
+layout pages per second at a 29.03 MiB peak and 60,058.0 PDF pages per second at
+a 1.73 MiB additional peak. These values are observations. The lower throughput
+floors and higher allocation ceilings remain the portable guarantees enforced
+in CI.
 
 ## What CI runs
 

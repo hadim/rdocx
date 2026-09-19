@@ -5909,6 +5909,17 @@ wheel, source archive, and CLI bundle carries the intended README text.
 comparisons, reproducible measurement provenance, checked examples, and
 byte-identical packaged long descriptions.
 
+**Tracked human action**: Python wheel and source-distribution sizes remain
+absent until the six-platform `wheels.yml` job records them for the
+`rdocx-py` and `rpptx-py` pages. The installed Python site-packages footprint
+and Python boundary timing remain absent until each reviewed wheel is measured
+with its pinned interpreter. CLI release archive sizes remain absent until the
+selected-family `publish.yml` tag job records all six assets for the matching
+CLI page. WASM bundle sizes remain absent until the pinned wasm-pack and
+wasm-opt jobs produce the reviewed browser artifacts for the two WASM pages.
+These are release or human measurements, not values a native workspace test
+can reproduce, so F-X130 publishes no placeholder number for them.
+
 ### F-X131, Retain only the namespace declarations a root attribute uses (S)
 
 F-X128 retains producer root attributes on `CT_P`, `CT_R`, and `CT_SectPr`, but
