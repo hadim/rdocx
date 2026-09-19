@@ -367,13 +367,30 @@ profiles select package identity without manufacturing executable content.
 Python, WASM, and CLI construction continues through `Document::new()` and
 therefore receives the compatible DOCX default without a new selector surface.
 
-Native Rust re-exports `StyleType`. `StyleBuilder` authors paragraph,
-character, and table styles with inheritance, reciprocal links, next styles,
-UI flags, base properties, and conditional table regions. `add_style` is
+Native Rust re-exports `StyleType`, `TableStyleRegion` and
+`ConditionalTableStyle`. `StyleBuilder` authors paragraph, character, and table
+styles with inheritance, reciprocal links, next styles, UI flags, base
+properties including a table style's own row and cell properties, and
+conditional table regions carrying all five property layers. `add_style` is
 fallible in the pre-1.0 API. `set_style`, `remove_style`,
 `set_default_style`, and `validate_style_graph` use the same `Result` boundary.
 Builder clear operations remove optional links, UI metadata, base properties,
-and conditional regions during a staged update.
+and conditional regions during a staged update, and
+`remove_conditional_table_style` removes exactly one region while its siblings
+survive. `Style::conditional_table_styles` returns typed
+`ConditionalTableStyle` values rather than the OXML region type, so a caller
+can name the return value without taking on schema order.
+`StyleBuilder::conditional_table_style` takes a `TableStyleRegion` in place of
+the earlier `&str`, which makes an invalid region unrepresentable. That is a
+breaking change within the 0.x series, landing in the unreleased 0.14.0. Every
+string the earlier form accepted is expressible as a variant, so the typed form
+replaces it rather than sitting beside it.
+`Table::set_look` writes the six booleans and the equivalent legacy `w:val`
+bitmask together, `Table::clear_look` removes the selection, and the checked
+`set_row_band_size` and `set_column_band_size` reject a band of no rows or
+columns. `Paragraph::set_conditional_formatting` and
+`Paragraph::conditional_formatting` select conditional regions through the same
+`TableConditionalFormatting` shape a row and a cell already use.
 Python, WASM, and CLI retain style package and render behavior without new
 style mutation entry points.
 

@@ -2,7 +2,7 @@
 
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::shared::ST_Jc;
-use rdocx_oxml::styles::CT_Styles;
+use rdocx_oxml::styles::{CT_Styles, TableStyleRegion};
 use rdocx_oxml::table::{
     CT_Row, CT_Tbl, CT_TblBorders, CT_TblGrid, CT_TblPr, CT_Tc, ST_VerticalJc, VMerge,
 };
@@ -406,12 +406,7 @@ fn layout_table_inner(
                 col_index,
                 num_rows,
                 col_widths.len(),
-                row.properties
-                    .as_ref()
-                    .and_then(|properties| properties.cnf_style.as_deref()),
-                cell.properties
-                    .as_ref()
-                    .and_then(|properties| properties.cnf_style.as_deref()),
+                &cell_conditional_selectors(row, cell),
             );
 
             // Direct cell borders overlay table-style region borders.
@@ -452,6 +447,7 @@ fn layout_table_inner(
                     story,
                     cell_path,
                     style_cell.paragraph_properties.as_ref(),
+                    style_cell.run_properties.as_ref(),
                 )?
             };
 
@@ -648,6 +644,12 @@ fn overlay_table_properties(target: &mut CT_TblPr, source: &CT_TblPr) {
     if source.style_id.is_some() {
         target.style_id.clone_from(&source.style_id);
     }
+    if source.row_band_size.is_some() {
+        target.row_band_size = source.row_band_size;
+    }
+    if source.column_band_size.is_some() {
+        target.column_band_size = source.column_band_size;
+    }
     if source.width.is_some() {
         target.width.clone_from(&source.width);
     }
@@ -784,6 +786,7 @@ fn layout_cell_content(
     story: &WordStory,
     cell_path: &[usize],
     table_style_ppr: Option<&rdocx_oxml::properties::CT_PPr>,
+    table_style_rpr: Option<&rdocx_oxml::properties::CT_RPr>,
 ) -> Result<(Vec<CellBlock>, Vec<CellBlockSemantics>)> {
     use crate::engine;
     use rdocx_oxml::table::CellContent;
@@ -807,6 +810,7 @@ fn layout_cell_content(
                     diagnostics,
                     source,
                     table_style_ppr,
+                    table_style_rpr,
                 )?;
                 blocks.push(CellBlock::Paragraph(block));
                 semantics.push(CellBlockSemantics::Paragraph(ParagraphSemantics {
@@ -846,6 +850,7 @@ fn layout_cell_content(
                 story,
                 &source_path,
                 table_style_ppr,
+                table_style_rpr,
                 &mut blocks,
                 &mut semantics,
             )?,
@@ -868,6 +873,7 @@ fn layout_control_cell_content(
     story: &WordStory,
     path: &[usize],
     table_style_ppr: Option<&rdocx_oxml::properties::CT_PPr>,
+    table_style_rpr: Option<&rdocx_oxml::properties::CT_RPr>,
     blocks: &mut Vec<CellBlock>,
     semantics: &mut Vec<CellBlockSemantics>,
 ) -> Result<()> {
@@ -890,6 +896,7 @@ fn layout_control_cell_content(
                     diagnostics,
                     source,
                     table_style_ppr,
+                    table_style_rpr,
                 )?;
                 blocks.push(CellBlock::Paragraph(block));
                 semantics.push(CellBlockSemantics::Paragraph(ParagraphSemantics {
@@ -928,6 +935,7 @@ fn layout_control_cell_content(
                 story,
                 &source_path,
                 table_style_ppr,
+                table_style_rpr,
                 blocks,
                 semantics,
             )?,
@@ -943,8 +951,44 @@ fn layout_control_cell_content(
 #[derive(Default)]
 struct ResolvedTableCellStyle {
     paragraph_properties: Option<rdocx_oxml::properties::CT_PPr>,
+    run_properties: Option<rdocx_oxml::properties::CT_RPr>,
     borders: Option<CT_TblBorders>,
     shading: Option<rdocx_oxml::properties::CT_Shd>,
+}
+
+/// The conditional-region selectors that apply to one cell.
+///
+/// Word writes `w:cnfStyle` on the row, on the cell and on every paragraph
+/// inside the cell, and a bit set anywhere selects the region. The cell's own
+/// paragraphs are collected here because a table style resolves once per cell,
+/// before its paragraphs are laid out.
+fn cell_conditional_selectors<'a>(row: &'a CT_Row, cell: &'a CT_Tc) -> Vec<&'a str> {
+    let mut selectors = Vec::new();
+    if let Some(value) = row
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.cnf_style.as_deref())
+    {
+        selectors.push(value);
+    }
+    if let Some(value) = cell
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.cnf_style.as_deref())
+    {
+        selectors.push(value);
+    }
+    for item in &cell.content {
+        if let rdocx_oxml::table::CellContent::Paragraph(paragraph) = item
+            && let Some(value) = paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.cnf_style.as_deref())
+        {
+            selectors.push(value);
+        }
+    }
+    selectors
 }
 
 fn resolve_table_style_cell(
@@ -954,8 +998,7 @@ fn resolve_table_style_cell(
     column: usize,
     row_count: usize,
     column_count: usize,
-    row_cnf_style: Option<&str>,
-    cell_cnf_style: Option<&str>,
+    selectors: &[&str],
 ) -> ResolvedTableCellStyle {
     let Some(mut style_id) = table
         .properties
@@ -969,6 +1012,7 @@ fn resolve_table_style_cell(
     else {
         return ResolvedTableCellStyle::default();
     };
+    // Most derived first, so `rev()` below applies from the base outwards.
     let mut chain = Vec::new();
     let mut visited = std::collections::HashSet::new();
     while visited.insert(style_id) {
@@ -981,12 +1025,20 @@ fn resolve_table_style_cell(
         };
         style_id = base;
     }
+
     let mut resolved = ResolvedTableCellStyle::default();
-    for style in chain.into_iter().rev() {
+    // The style's own property layers, applied base first.
+    for style in chain.iter().rev() {
         if let Some(properties) = &style.ppr {
             resolved
                 .paragraph_properties
                 .get_or_insert_with(rdocx_oxml::properties::CT_PPr::default)
+                .merge_from(properties);
+        }
+        if let Some(properties) = &style.rpr {
+            resolved
+                .run_properties
+                .get_or_insert_with(rdocx_oxml::properties::CT_RPr::default)
                 .merge_from(properties);
         }
         if let Some(borders) = style
@@ -1003,56 +1055,98 @@ fn resolve_table_style_cell(
         {
             resolved.shading = Some(shading.clone());
         }
-        for region in applicable_table_regions(
-            table,
-            row,
-            column,
-            row_count,
-            column_count,
-            row_cnf_style,
-            cell_cnf_style,
-        ) {
+    }
+
+    // `table` already carries the style chain's table properties, resolved by
+    // `resolve_base_table_properties` before the rows are laid out, so the
+    // band sizes here are the resolved ones. Absent means one row or column
+    // per band, which is what Word assumes.
+    let band_size = |size: Option<u32>| size.unwrap_or(1).max(1) as usize;
+    let row_band_size = band_size(
+        table
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.row_band_size),
+    );
+    let column_band_size = band_size(
+        table
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.column_band_size),
+    );
+
+    // Regions apply in ascending priority. The whole `basedOn` chain is
+    // flattened for one region before the next region starts, so a base
+    // style's `firstRow` still beats a derived style's `wholeTable`.
+    for region in applicable_table_regions(
+        table,
+        row,
+        column,
+        row_count,
+        column_count,
+        row_band_size,
+        column_band_size,
+        selectors,
+    ) {
+        for style in chain.iter().rev() {
             for conditional in style
                 .conditional_table_styles
                 .iter()
-                .filter(|conditional| conditional.region == region)
+                .filter(|conditional| conditional.region == Some(region))
             {
-                if let Some(properties) = &conditional.paragraph_properties {
-                    resolved
-                        .paragraph_properties
-                        .get_or_insert_with(rdocx_oxml::properties::CT_PPr::default)
-                        .merge_from(properties);
-                }
-                if let Some(borders) = conditional
-                    .cell_properties
-                    .as_ref()
-                    .and_then(|properties| properties.borders.as_ref())
-                    .or_else(|| {
-                        conditional
-                            .table_properties
-                            .as_ref()
-                            .and_then(|properties| properties.borders.as_ref())
-                    })
-                {
-                    overlay_borders(&mut resolved.borders, borders);
-                }
-                if let Some(shading) = conditional
-                    .cell_properties
-                    .as_ref()
-                    .and_then(|properties| properties.shading.as_ref())
-                    .or_else(|| {
-                        conditional
-                            .table_properties
-                            .as_ref()
-                            .and_then(|properties| properties.shading.as_ref())
-                    })
-                {
-                    resolved.shading = Some(shading.clone());
-                }
+                apply_conditional_region(&mut resolved, conditional);
             }
         }
     }
     resolved
+}
+
+/// Overlay one conditional region's layers onto the resolved cell style.
+///
+/// The region's `w:trPr` is modeled and round-tripped but not applied. Row
+/// geometry from a conditional region belongs to F-268a.
+fn apply_conditional_region(
+    resolved: &mut ResolvedTableCellStyle,
+    conditional: &rdocx_oxml::styles::CT_TblStylePr,
+) {
+    if let Some(properties) = &conditional.paragraph_properties {
+        resolved
+            .paragraph_properties
+            .get_or_insert_with(rdocx_oxml::properties::CT_PPr::default)
+            .merge_from(properties);
+    }
+    if let Some(properties) = &conditional.run_properties {
+        resolved
+            .run_properties
+            .get_or_insert_with(rdocx_oxml::properties::CT_RPr::default)
+            .merge_from(properties);
+    }
+    if let Some(borders) = conditional
+        .cell_properties
+        .as_ref()
+        .and_then(|properties| properties.borders.as_ref())
+        .or_else(|| {
+            conditional
+                .table_properties
+                .as_ref()
+                .and_then(|properties| properties.borders.as_ref())
+        })
+    {
+        overlay_borders(&mut resolved.borders, borders);
+    }
+    if let Some(shading) = conditional
+        .cell_properties
+        .as_ref()
+        .and_then(|properties| properties.shading.as_ref())
+        .or_else(|| {
+            conditional
+                .table_properties
+                .as_ref()
+                .and_then(|properties| properties.shading.as_ref())
+        })
+    {
+        resolved.shading = Some(shading.clone());
+    }
 }
 
 fn applicable_table_regions(
@@ -1061,13 +1155,13 @@ fn applicable_table_regions(
     column: usize,
     row_count: usize,
     column_count: usize,
-    row_cnf_style: Option<&str>,
-    cell_cnf_style: Option<&str>,
-) -> Vec<&'static str> {
+    row_band_size: usize,
+    column_band_size: usize,
+    selectors: &[&str],
+) -> Vec<TableStyleRegion> {
     let cnf = |index: usize| {
-        [row_cnf_style, cell_cnf_style]
-            .into_iter()
-            .flatten()
+        selectors
+            .iter()
             .any(|value| value.as_bytes().get(index) == Some(&b'1'))
     };
     let look = table
@@ -1081,71 +1175,77 @@ fn applicable_table_regions(
                 .map_or(default, |value| value & mask != 0)
         })
     };
-    let first_row =
-        (enabled(look.and_then(|look| look.first_row), 0x20, false) && row == 0) || cnf(0);
+    let heads_rows = enabled(look.and_then(|look| look.first_row), 0x20, false);
+    let heads_columns = enabled(look.and_then(|look| look.first_column), 0x80, false);
+    let first_row = (heads_rows && row == 0) || cnf(0);
     let last_row = (enabled(look.and_then(|look| look.last_row), 0x40, false)
         && row + 1 == row_count)
         || cnf(1);
-    let first_column =
-        (enabled(look.and_then(|look| look.first_column), 0x80, false) && column == 0) || cnf(2);
+    let first_column = (heads_columns && column == 0) || cnf(2);
     let last_column = (enabled(look.and_then(|look| look.last_column), 0x100, false)
         && column + 1 == column_count)
         || cnf(3);
     let no_h_band = enabled(look.and_then(|look| look.no_h_band), 0x200, false);
     let no_v_band = enabled(look.and_then(|look| look.no_v_band), 0x400, false);
 
-    let mut regions = vec!["wholeTable"];
+    let mut regions = vec![TableStyleRegion::WholeTable];
+    // Banding counts whole bands of the resolved size, and starts after the
+    // header row the look designates. The header row itself is in no band.
     if cnf(6) {
-        regions.push("band1Horz");
+        regions.push(TableStyleRegion::Band1Horz);
     } else if cnf(7) {
-        regions.push("band2Horz");
-    } else if !no_h_band {
-        regions.push(if row.is_multiple_of(2) {
-            "band1Horz"
+        regions.push(TableStyleRegion::Band2Horz);
+    } else if !no_h_band && let Some(offset) = row.checked_sub(usize::from(heads_rows)) {
+        regions.push(if (offset / row_band_size).is_multiple_of(2) {
+            TableStyleRegion::Band1Horz
         } else {
-            "band2Horz"
+            TableStyleRegion::Band2Horz
         });
     }
     if cnf(4) {
-        regions.push("band1Vert");
+        regions.push(TableStyleRegion::Band1Vert);
     } else if cnf(5) {
-        regions.push("band2Vert");
-    } else if !no_v_band {
-        regions.push(if column.is_multiple_of(2) {
-            "band1Vert"
+        regions.push(TableStyleRegion::Band2Vert);
+    } else if !no_v_band && let Some(offset) = column.checked_sub(usize::from(heads_columns)) {
+        regions.push(if (offset / column_band_size).is_multiple_of(2) {
+            TableStyleRegion::Band1Vert
         } else {
-            "band2Vert"
+            TableStyleRegion::Band2Vert
         });
     }
     if first_column {
-        regions.push("firstCol");
+        regions.push(TableStyleRegion::FirstCol);
     }
     if last_column {
-        regions.push("lastCol");
+        regions.push(TableStyleRegion::LastCol);
     }
     if first_row {
-        regions.push("firstRow");
+        regions.push(TableStyleRegion::FirstRow);
     }
     if last_row {
-        regions.push("lastRow");
+        regions.push(TableStyleRegion::LastRow);
     }
     if cnf(9) {
-        regions.push("nwCell");
+        regions.push(TableStyleRegion::NwCell);
     } else if cnf(8) {
-        regions.push("neCell");
+        regions.push(TableStyleRegion::NeCell);
     } else if cnf(11) {
-        regions.push("swCell");
+        regions.push(TableStyleRegion::SwCell);
     } else if cnf(10) {
-        regions.push("seCell");
+        regions.push(TableStyleRegion::SeCell);
     } else {
         match (first_row, last_row, first_column, last_column) {
-            (true, _, true, _) => regions.push("nwCell"),
-            (true, _, _, true) => regions.push("neCell"),
-            (_, true, true, _) => regions.push("swCell"),
-            (_, true, _, true) => regions.push("seCell"),
+            (true, _, true, _) => regions.push(TableStyleRegion::NwCell),
+            (true, _, _, true) => regions.push(TableStyleRegion::NeCell),
+            (_, true, true, _) => regions.push(TableStyleRegion::SwCell),
+            (_, true, _, true) => regions.push(TableStyleRegion::SeCell),
             _ => {}
         }
     }
+    // Declaration order is priority order, so sorting is what makes the
+    // precedence a property of the type rather than of the push order above.
+    regions.sort_unstable();
+    regions.dedup();
     regions
 }
 
@@ -1618,7 +1718,7 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
-        let resolved = resolve_table_style_cell(&CT_Tbl::new(), &styles, 0, 0, 1, 1, None, None);
+        let resolved = resolve_table_style_cell(&CT_Tbl::new(), &styles, 0, 0, 1, 1, &[]);
         assert_eq!(
             resolved
                 .shading

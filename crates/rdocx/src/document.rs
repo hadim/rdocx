@@ -9338,6 +9338,7 @@ fn merge_style_update(
     existing: &rdocx_oxml::styles::CT_Style,
     authored: &mut rdocx_oxml::styles::CT_Style,
     cleared: u16,
+    removed_regions: &[rdocx_oxml::styles::TableStyleRegion],
 ) {
     authored.is_default = existing.is_default;
     if authored.based_on.is_none() && cleared & style::CLEAR_BASED_ON == 0 {
@@ -9397,15 +9398,27 @@ fn merge_style_update(
     }
     authored.table_properties_original = existing.table_properties_original.clone();
     authored.table_properties_xml = existing.table_properties_xml.clone();
+    if authored.table_row_properties.is_none() && cleared & style::CLEAR_TABLE_ROW_PROPERTIES == 0 {
+        authored.table_row_properties = existing.table_row_properties.clone();
+    }
+    if authored.table_cell_properties.is_none() && cleared & style::CLEAR_TABLE_CELL_PROPERTIES == 0
+    {
+        authored.table_cell_properties = existing.table_cell_properties.clone();
+    }
     let authored_regions = std::mem::take(&mut authored.conditional_table_styles);
     let mut merged_regions = if cleared & style::CLEAR_CONDITIONAL_TABLE_STYLES == 0 {
         existing.conditional_table_styles.clone()
     } else {
         Vec::new()
     };
+    merged_regions.retain(|conditional| {
+        conditional
+            .region
+            .is_none_or(|region| !removed_regions.contains(&region))
+    });
     let mut authored_region_names = std::collections::HashSet::new();
     for authored_region in authored_regions {
-        if !authored_region_names.insert(authored_region.region.clone()) {
+        if !authored_region_names.insert(authored_region.region) {
             merged_regions.push(authored_region);
             continue;
         }
@@ -9431,11 +9444,20 @@ fn merge_conditional_table_style(
         let target = updated.paragraph_properties.get_or_insert_default();
         target.merge_from(properties);
     }
+    if let Some(properties) = &authored.run_properties {
+        let target = updated.run_properties.get_or_insert_default();
+        target.merge_from(properties);
+    }
     if let Some(properties) = &authored.table_properties {
         updated.table_properties = Some(merge_table_style_properties(
             updated.table_properties.as_ref(),
             properties,
         ));
+    }
+    if let Some(properties) = &authored.row_properties {
+        // A row layer has no typed merge of its own, so an authored row layer
+        // replaces the existing one outright.
+        updated.row_properties = Some(properties.clone());
     }
     if let Some(properties) = &authored.cell_properties {
         updated.cell_properties = Some(merge_table_cell_style_properties(
@@ -9527,6 +9549,12 @@ fn merge_table_style_properties(
     let mut updated = existing.cloned().unwrap_or_default();
     if authored.style_id.is_some() {
         updated.style_id.clone_from(&authored.style_id);
+    }
+    if authored.row_band_size.is_some() {
+        updated.row_band_size = authored.row_band_size;
+    }
+    if authored.column_band_size.is_some() {
+        updated.column_band_size = authored.column_band_size;
     }
     if authored.width.is_some() {
         updated.width.clone_from(&authored.width);
@@ -17363,7 +17391,7 @@ impl Document {
     pub fn add_style(&mut self, builder: StyleBuilder) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.reserve_styles_bundle()?;
-        let (authored, _) = builder.build();
+        let (authored, _, _) = builder.build();
         if candidate.styles.get_by_id(&authored.style_id).is_some() {
             return Err(Error::Other(format!(
                 "style '{}' already exists",
@@ -17399,7 +17427,7 @@ impl Document {
     pub fn set_style(&mut self, builder: StyleBuilder) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.reserve_styles_bundle()?;
-        let (mut authored, cleared) = builder.build();
+        let (mut authored, cleared, removed_regions) = builder.build();
         let index = candidate
             .styles
             .styles
@@ -17416,7 +17444,7 @@ impl Document {
             )));
         }
         let old_link = existing.linked_style.clone();
-        merge_style_update(existing, &mut authored, cleared);
+        merge_style_update(existing, &mut authored, cleared, &removed_regions);
         let existing_numbering = existing
             .ppr
             .as_ref()

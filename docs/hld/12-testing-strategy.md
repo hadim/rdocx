@@ -28,6 +28,24 @@ the bytes as written is what the no-op save contract requires.
 `explicit_font_priority_divergence_from_word_is_deliberate` asserts our side so
 a later change cannot drop the decision silently.
 
+The table style and conditional formatting story compares against a pinned
+`w:tblStylePr` reference tree built as source XML, for the same reason. Word
+GUI capture is not available on the development machine, so confirming that
+Word reopens the authored package without offering to repair it is a tracked
+human action under the Milestone 24 end-of-milestone gate rather than an
+automated gate. The raster half of
+`every_conditional_table_region_matches_word` converts the same package with
+the pinned LibreOffice 26.2.5.2 build in an isolated profile and rasterizes
+both sides with the pinned pdftoppm 26.01.0 at 150 dpi in deterministic font
+mode. One disagreement is recorded as deliberate under rule 5 of
+`.claude/skills/differential-testing.md`. ECMA-376 orders the conditional
+regions with the vertical bands before the horizontal bands and a later region
+overriding an earlier one, so the horizontal band outranks the vertical band.
+Word resolves it that way and this workspace follows Word. LibreOffice
+26.2.5.2 inverts it and paints the vertical band. The test asserts both sides
+of the divergence, so neither our resolution nor a future oracle change can
+move without failing.
+
 The existing repository convention is preserved: **no binary fixture files.**
 Fixtures are constructed in code, including hand-assembled PNG and JPEG headers
 with precomputed CRCs. It keeps the `.crate` payload small and the diffs

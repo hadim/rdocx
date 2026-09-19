@@ -14,6 +14,7 @@ use rdocx_oxml::text::{
 use rdocx_oxml::units::{HalfPoint, Twips};
 
 use crate::run::{Run, RunRef};
+use crate::table::TableConditionalFormatting;
 use crate::{ContentControlRef, Length, RevisionRef};
 
 /// Paragraph alignment options.
@@ -2072,6 +2073,17 @@ impl<'a> Paragraph<'a> {
         self.ensure_ppr().div_id = div_id;
     }
 
+    /// Set or clear the conditional table-style regions this paragraph selects.
+    ///
+    /// A paragraph, a row and a cell all select regions through the same
+    /// shape. A bit set on any of them selects the region for the cell.
+    pub fn set_conditional_formatting(&mut self, regions: Option<TableConditionalFormatting>) {
+        if regions.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().cnf_style = regions.map(|regions| regions.to_value());
+    }
+
     /// Edit the formatting of the paragraph mark itself.
     pub fn mark(&mut self) -> ParagraphMark<'_> {
         ParagraphMark {
@@ -2721,6 +2733,16 @@ impl<'a> ParagraphRef<'a> {
     /// Get the web settings division this paragraph belongs to.
     pub fn div_id(&self) -> Option<u32> {
         self.inner.properties.as_ref().and_then(|ppr| ppr.div_id)
+    }
+
+    /// Get the conditional table-style regions this paragraph selects.
+    pub fn conditional_formatting(&self) -> Option<TableConditionalFormatting> {
+        self.inner
+            .properties
+            .as_ref()?
+            .cnf_style
+            .as_deref()
+            .and_then(TableConditionalFormatting::from_value)
     }
 
     /// Read the formatting of the paragraph mark itself.

@@ -120,7 +120,7 @@ pub use rdocx_oxml::settings::{
     DocumentZoom, MailMerge, MailMergeDestination, MailMergeDocumentType, ProofState,
     ProtectionMode, SettingsDiagnostic, SettingsDiagnosticReason, ThemeFontLanguage, ZoomKind,
 };
-pub use rdocx_oxml::styles::StyleType;
+pub use rdocx_oxml::styles::{StyleType, TableStyleRegion};
 pub use rdocx_oxml::text::{
     AcceptedRunPath, AcceptedRunPathSegment, ST_PTabAlignment, ST_PTabLeader, ST_PTabRelativeTo,
     SpecialCharacter,
@@ -133,7 +133,7 @@ pub use run::{
     FieldRef, LegacyHorizontalRuleRef, Run, RunFontSlot, RunItemRef, RunProperties, RunRef,
     UnderlineStyle,
 };
-pub use style::{Style, StyleBuilder};
+pub use style::{ConditionalTableStyle, Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};
 pub use table::{
     Cell, CellBorderEdge, CellItemRef, CellRef, CellTextDirection, Row, RowHeight, RowRef, Table,

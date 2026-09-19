@@ -1459,6 +1459,8 @@ fn render_styles(styles: &CT_Styles) -> Result<CT_Styles> {
             table_properties: None,
             table_properties_original: None,
             table_properties_xml: None,
+            table_row_properties: None,
+            table_cell_properties: None,
             conditional_table_styles: Vec::new(),
             extra_attributes: Vec::new(),
             modeled_xml: Vec::new(),

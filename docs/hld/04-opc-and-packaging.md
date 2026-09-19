@@ -1019,6 +1019,21 @@ empty `tblGridChange` remains unmodelled in its original slot. Serialization
 writes active columns first and the modeled historical change after them in
 schema order.
 
+A table style's conditional regions project all five `CT_TblStylePr` layers.
+`w:pPr`, `w:rPr`, `w:tblPr`, `w:trPr` and `w:tcPr` are modeled and serialized
+in that schema sequence, and a region whose five layers are unchanged since
+parsing serializes back as its original bytes, unmodelled children and foreign
+attributes included. `w:type` is projected to a closed region enum. A value the
+workspace does not recognize projects as absent, round-trips from its preserved
+bytes, and is never a reason to refuse the file. A style's own base `w:trPr`
+and `w:tcPr` are modeled at their schema ranks beside its `w:tblPr`.
+`w:tblStyleRowBandSize` and `w:tblStyleColBandSize` are modeled at their
+`w:tblPr` schema slots and are counts rather than measurements, so no unit
+conversion applies. `w:cnfStyle` on `w:pPr` is modeled at its schema slot
+between `w:divId` and `w:rPr`, and the source element is retained as an
+attribute carrier so the per-region attribute form of `CT_Cnf` survives being
+modeled.
+
 The native table facade authors auto, fixed-twip, and percentage widths through
 one typed width mode. Checked physical measurements must be nonnegative and fit
 the signed twip representation after the repository's pinned truncating unit

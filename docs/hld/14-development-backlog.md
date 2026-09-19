@@ -2643,6 +2643,25 @@ property layers.
 **Depends on**: F-246, F-257, F-258.
 **Test gate**: differential. Every conditional region resolves and renders like
 the pinned Word-authored table.
+**Delivered**: `CT_TblStylePr` gains its `w:rPr` and `w:trPr` layers and a
+closed `TableStyleRegion` whose declaration order is Word's priority order,
+`CT_Style` gains its base `w:trPr` and `w:tcPr`, `CT_TblPr` gains
+`w:tblStyleRowBandSize` and `w:tblStyleColBandSize`, and `CT_PPr` gains the
+`w:cnfStyle` F-264 handed over raw-preserved. Resolution now flattens the
+`basedOn` chain per region before region precedence applies, gives the
+horizontal band the higher priority, counts bands by the resolved band size
+after the header row or first column, and threads a table-style run layer into
+`resolve_run_properties`. The facade gains the typed region parameter, the run
+and row layers, per-region removal, a typed read side, `clear_look`, checked
+band sizes, a `set_look` that writes the legacy bitmask beside the booleans,
+and a paragraph conditional selector. The conditional `w:trPr` is modeled and
+round-tripped, and its row geometry moves to F-268a with the DOCX-034 layout
+and render columns, which the F-268 parent owns in the capability matrix.
+**Tracked human action**: Word GUI capture is not available on the development
+machine, so confirming that Word reopens an authored thirteen-region table
+without offering to repair it is performed by hand at the Milestone 24
+end-of-milestone gate above and recorded as performed or not performed. No
+automated story test depends on it, and no gate skips in its absence.
 
 ### F-268, Floating and advanced table layout (L)
 Author floating table positioning, overlap, bidirectional visual order, complete
@@ -2660,7 +2679,9 @@ float, which is the part that touches the shared obstacle machinery.
 The `w:tblpPr`, `w:tblOverlap`, `w:bidiVisual`, `w:tblCellSpacing`,
 `w:tblCaption`, and `w:tblDescription` grammar, the row `w:wBefore` and
 `w:wAfter` offsets, the public authoring surface, autofit column widths, and
-bidirectional visual column order.
+bidirectional visual column order. It also owns applying a conditional region's
+`w:trPr` at layout, which F-267 modeled and round-tripped without applying, and
+with it the remaining DOCX-034 layout and render columns.
 **Depends on**: F-267.
 **Test gate**: golden.
 `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages` pins the

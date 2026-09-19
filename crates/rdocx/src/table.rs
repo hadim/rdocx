@@ -173,7 +173,7 @@ pub struct TableConditionalFormatting {
 }
 
 impl TableConditionalFormatting {
-    fn to_value(self) -> String {
+    pub(crate) fn to_value(self) -> String {
         [
             self.first_row,
             self.last_row,
@@ -193,7 +193,7 @@ impl TableConditionalFormatting {
         .collect()
     }
 
-    fn from_value(value: &str) -> Option<Self> {
+    pub(crate) fn from_value(value: &str) -> Option<Self> {
         let bits = value.as_bytes();
         if bits.len() != 12 || bits.iter().any(|bit| !matches!(bit, b'0' | b'1')) {
             return None;
@@ -233,6 +233,30 @@ pub struct TableLook {
     pub vertical_banding: bool,
 }
 
+impl TableLook {
+    /// The legacy `w:tblLook/@w:val` bitmask for this selection.
+    ///
+    /// The two banding fields are inverted, because the mask records the
+    /// suppression bits `noHBand` and `noVBand`. Four uppercase hex digits is
+    /// the form Word writes.
+    fn to_mask(self) -> String {
+        let mut mask = 0u16;
+        for (enabled, bit) in [
+            (self.first_row, 0x0020),
+            (self.last_row, 0x0040),
+            (self.first_column, 0x0080),
+            (self.last_column, 0x0100),
+            (!self.horizontal_banding, 0x0200),
+            (!self.vertical_banding, 0x0400),
+        ] {
+            if enabled {
+                mask |= bit;
+            }
+        }
+        format!("{mask:04X}")
+    }
+}
+
 /// Default margins applied to every table cell.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TableCellMargins {
@@ -267,6 +291,13 @@ impl TableBorderRef<'_> {
     pub fn color(&self) -> Option<&str> {
         self.inner.color.as_deref()
     }
+}
+
+fn checked_band_size(name: &str, value: u32) -> Result<u32> {
+    if value == 0 {
+        return Err(Error::Other(format!("{name} must be at least one")));
+    }
+    Ok(value)
 }
 
 fn checked_table_twips(name: &str, value: Length) -> Result<i32> {
@@ -683,9 +714,13 @@ impl<'a> Table<'a> {
     }
 
     /// Select the conditional regions supplied by the table style.
+    ///
+    /// Both forms are written. `Table::look` still reads the legacy `w:val`
+    /// bitmask as a fallback, and Word writes both, so writing only the
+    /// booleans leaves the two forms free to disagree.
     pub fn set_look(&mut self, look: TableLook) {
         self.ensure_tbl_pr().look = Some(CT_TblLook {
-            val: None,
+            val: Some(look.to_mask()),
             first_row: Some(look.first_row),
             last_row: Some(look.last_row),
             first_column: Some(look.first_column),
@@ -693,6 +728,38 @@ impl<'a> Table<'a> {
             no_h_band: Some(!look.horizontal_banding),
             no_v_band: Some(!look.vertical_banding),
         });
+    }
+
+    /// Remove the conditional region selection.
+    pub fn clear_look(&mut self) {
+        if let Some(properties) = self.inner.properties.as_mut() {
+            properties.look = None;
+        }
+    }
+
+    /// Set the number of rows in each horizontal conditional band.
+    ///
+    /// A band is a count of rows, not a length, so no unit conversion applies.
+    /// Zero is rejected because a band of no rows selects nothing.
+    pub fn set_row_band_size(&mut self, rows: u32) -> Result<()> {
+        let rows = checked_band_size("table style row band size", rows)?;
+        self.ensure_tbl_pr().row_band_size = Some(rows);
+        Ok(())
+    }
+
+    /// Set the number of columns in each vertical conditional band.
+    pub fn set_column_band_size(&mut self, columns: u32) -> Result<()> {
+        let columns = checked_band_size("table style column band size", columns)?;
+        self.ensure_tbl_pr().column_band_size = Some(columns);
+        Ok(())
+    }
+
+    /// Remove both conditional band sizes, restoring the one-row default.
+    pub fn clear_band_sizes(&mut self) {
+        if let Some(properties) = self.inner.properties.as_mut() {
+            properties.row_band_size = None;
+            properties.column_band_size = None;
+        }
     }
 
     /// Replace the complete active grid and synchronize the fixed table width
@@ -1802,6 +1869,16 @@ impl<'a> TableRef<'a> {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Get the number of rows in each horizontal conditional band.
+    pub fn row_band_size(&self) -> Option<u32> {
+        self.inner.properties.as_ref()?.row_band_size
+    }
+
+    /// Get the number of columns in each vertical conditional band.
+    pub fn column_band_size(&self) -> Option<u32> {
+        self.inner.properties.as_ref()?.column_band_size
     }
 
     /// Get the selected conditional table-style regions.

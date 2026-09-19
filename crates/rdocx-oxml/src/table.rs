@@ -403,6 +403,13 @@ pub struct CT_TblGridCol {
 pub struct CT_TblPr {
     /// Table style ID
     pub style_id: Option<String>,
+    /// `w:tblStyleRowBandSize` — rows per horizontal conditional band.
+    ///
+    /// A count, not a length, so no unit constructor applies. Absent means one
+    /// row per band, which is what Word assumes.
+    pub row_band_size: Option<u32>,
+    /// `w:tblStyleColBandSize` — columns per vertical conditional band.
+    pub column_band_size: Option<u32>,
     /// Table width
     pub width: Option<CT_TblWidth>,
     /// Table alignment
@@ -568,6 +575,14 @@ impl CT_TblPr {
                     let (at, next) = tbl_pr_raw_boundary(name.as_ref(), boundary, &prefixes);
                     if is_word_element(name.as_ref(), b"tblStyle", &prefixes) {
                         pr.style_id = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"tblStyleRowBandSize", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
+                            pr.row_band_size = Some(val.parse()?);
+                        }
+                    } else if is_word_element(name.as_ref(), b"tblStyleColBandSize", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
+                            pr.column_band_size = Some(val.parse()?);
+                        }
                     } else if is_word_element(name.as_ref(), b"tblW", &prefixes) {
                         pr.width = Some(CT_TblWidth::from_xml_attrs_with_prefixes(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"jc", &prefixes) {
@@ -691,9 +706,25 @@ impl CT_TblPr {
             writer.write_event(Event::Empty(e))?;
         }
 
-        for boundary in 1..=6 {
+        for boundary in 1..=4 {
             write_extras_at(writer, &self.extra_xml, boundary)?;
         }
+        if let Some(size) = self.row_band_size {
+            let mut buffer = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:tblStyleRowBandSize");
+            e.push_attribute(("w:val", buffer.format(size)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        write_extras_at(writer, &self.extra_xml, 5)?;
+        if let Some(size) = self.column_band_size {
+            let mut buffer = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:tblStyleColBandSize");
+            e.push_attribute(("w:val", buffer.format(size)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        write_extras_at(writer, &self.extra_xml, 6)?;
         if let Some(ref width) = self.width {
             width.write_xml(writer, "w:tblW")?;
         }
@@ -955,6 +986,13 @@ pub struct CT_TrPr {
 impl CT_TrPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_owned()], &[])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, word_prefixes, &[])
     }
 
     fn from_xml_with_prefixes_and_owner_bindings(

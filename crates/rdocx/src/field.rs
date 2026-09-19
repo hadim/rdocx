@@ -5759,7 +5759,7 @@ fn ensure_toc_entry_styles(
                     .map(|style| style.style_id.clone())
             })
             .unwrap_or_else(|| {
-                let (style, _) =
+                let (style, _, _) =
                     style::StyleBuilder::paragraph(&canonical_id, &format!("TOC {level}")).build();
                 document.styles.styles.push(style);
                 canonical_id

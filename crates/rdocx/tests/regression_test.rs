@@ -30268,3 +30268,393 @@ mod f269_section_page_semantics {
         assert_eq!(page_records(&direct), expected);
     }
 }
+
+/// F-267. Table style and conditional formatting precedence.
+///
+/// Each test is named as the failure it prevents, so a reintroduced
+/// precedence inversion is obvious from the test name rather than the diff.
+mod f267_table_style_regressions {
+    use super::*;
+    use rdocx::table::TableLook;
+    use rdocx::{StyleBuilder, TableStyleRegion};
+    use rdocx_oxml::properties::CT_Shd;
+    use rdocx_oxml::table::CT_TcPr;
+
+    /// A cell shading region, as a builder argument.
+    fn shaded(fill: &str) -> Option<CT_TcPr> {
+        Some(CT_TcPr {
+            shading: Some(CT_Shd {
+                val: "clear".to_owned(),
+                color: Some("auto".to_owned()),
+                fill: Some(fill.to_owned()),
+                ..CT_Shd::default()
+            }),
+            ..CT_TcPr::default()
+        })
+    }
+
+    /// A conditional region carrying only cell shading.
+    fn shaded_region(region: TableStyleRegion, fill: &str) -> (TableStyleRegion, Option<CT_TcPr>) {
+        (region, shaded(fill))
+    }
+
+    /// The conditional region selection every test in this module starts from.
+    fn plain_look() -> TableLook {
+        TableLook {
+            first_row: false,
+            last_row: false,
+            first_column: false,
+            last_column: false,
+            horizontal_banding: true,
+            vertical_banding: true,
+        }
+    }
+
+    /// Build a document holding one styled table of `rows` by `columns`.
+    fn styled_table_document(
+        styles: Vec<StyleBuilder>,
+        style_id: &str,
+        rows: usize,
+        columns: usize,
+        look: TableLook,
+    ) -> Document {
+        let mut document = Document::new();
+        for style in styles {
+            document.add_style(style).expect("table style is valid");
+        }
+        let mut table = document.add_table(rows, columns);
+        table.set_style(style_id);
+        table.set_look(look);
+        for row in 0..rows {
+            for column in 0..columns {
+                let mut row_handle = table.row(row).expect("authored row");
+                let mut cell = row_handle.cell(column).expect("authored cell");
+                cell.set_text("x");
+            }
+        }
+        document
+    }
+
+    /// The resolved cell fills of page one, ordered by row then column.
+    ///
+    /// Cell shading reaches the page as a filled rectangle, which is the only
+    /// place the resolved region is observable from outside the layout crate.
+    fn resolved_cell_fills(document: &Document) -> Vec<(i64, i64, String)> {
+        let layout = document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("deterministic styled-table layout");
+        let page = &layout.layout.pages[0];
+        let mut fills = compatibility_page_elements(&page.elements)
+            .into_iter()
+            .filter_map(|element| match element {
+                oxml_layout::PositionedElement::FilledRect { rect, color } => Some((
+                    (rect.y * 100.0).round() as i64,
+                    (rect.x * 100.0).round() as i64,
+                    format!(
+                        "{:02X}{:02X}{:02X}",
+                        (color.r * 255.0).round() as u8,
+                        (color.g * 255.0).round() as u8,
+                        (color.b * 255.0).round() as u8
+                    ),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        fills.sort();
+        fills
+    }
+
+    /// The fills alone, in row then column order.
+    fn fill_sequence(document: &Document) -> Vec<String> {
+        resolved_cell_fills(document)
+            .into_iter()
+            .map(|(_, _, fill)| fill)
+            .collect()
+    }
+
+    fn banded_style(regions: &[(TableStyleRegion, Option<CT_TcPr>)]) -> StyleBuilder {
+        let mut builder = StyleBuilder::table("Banded", "Banded");
+        for (region, cell_properties) in regions {
+            builder = builder.conditional_table_style(
+                *region,
+                None,
+                None,
+                None,
+                None,
+                cell_properties.clone(),
+            );
+        }
+        builder
+    }
+
+    #[test]
+    fn a_vertical_band_no_longer_overrides_the_horizontal_band_it_should_lose_to() {
+        // Both bands select the single cell. Word gives the horizontal band
+        // the higher priority, so the vertical band must lose.
+        let document = styled_table_document(
+            vec![banded_style(&[
+                shaded_region(TableStyleRegion::Band1Vert, "AA1111"),
+                shaded_region(TableStyleRegion::Band1Horz, "22BB22"),
+            ])],
+            "Banded",
+            1,
+            1,
+            plain_look(),
+        );
+        assert_eq!(fill_sequence(&document), vec!["22BB22".to_owned()]);
+
+        // The source order of the two regions must not change the answer.
+        let reversed = styled_table_document(
+            vec![banded_style(&[
+                shaded_region(TableStyleRegion::Band1Horz, "22BB22"),
+                shaded_region(TableStyleRegion::Band1Vert, "AA1111"),
+            ])],
+            "Banded",
+            1,
+            1,
+            plain_look(),
+        );
+        assert_eq!(fill_sequence(&reversed), vec!["22BB22".to_owned()]);
+    }
+
+    #[test]
+    fn a_derived_whole_table_region_no_longer_beats_a_base_style_first_row() {
+        // The chain flattens per region before region precedence applies, so
+        // the base style's higher-priority region still wins.
+        let base = StyleBuilder::table("ChainBase", "Chain Base").conditional_table_style(
+            TableStyleRegion::FirstRow,
+            None,
+            None,
+            None,
+            None,
+            shaded("112233"),
+        );
+        let derived = StyleBuilder::table("ChainDerived", "Chain Derived")
+            .based_on("ChainBase")
+            .conditional_table_style(
+                TableStyleRegion::WholeTable,
+                None,
+                None,
+                None,
+                None,
+                shaded("445566"),
+            );
+        let look = TableLook {
+            first_row: true,
+            ..plain_look()
+        };
+        let document = styled_table_document(vec![base, derived], "ChainDerived", 2, 1, look);
+        assert_eq!(
+            fill_sequence(&document),
+            vec!["112233".to_owned(), "445566".to_owned()]
+        );
+    }
+
+    #[test]
+    fn banding_no_longer_ignores_band_size_and_the_header_row_offset() {
+        // Two rows per band, counted after the header row. The header row is
+        // in no band at all.
+        let style = banded_style(&[
+            shaded_region(TableStyleRegion::FirstRow, "303030"),
+            shaded_region(TableStyleRegion::Band1Horz, "101010"),
+            shaded_region(TableStyleRegion::Band2Horz, "202020"),
+        ]);
+        let look = TableLook {
+            first_row: true,
+            ..plain_look()
+        };
+        let mut document = styled_table_document(vec![style], "Banded", 5, 1, look);
+        document
+            .table_mut(0)
+            .expect("authored table")
+            .set_row_band_size(2)
+            .expect("two rows per band");
+        eprintln!(
+            "PROBE band size = {:?}",
+            document.table(0).unwrap().row_band_size()
+        );
+
+        assert_eq!(
+            fill_sequence(&document),
+            vec![
+                "303030".to_owned(),
+                "101010".to_owned(),
+                "101010".to_owned(),
+                "202020".to_owned(),
+                "202020".to_owned(),
+            ]
+        );
+
+        // Column banding counts the same way against the first column.
+        let column_style = banded_style(&[
+            shaded_region(TableStyleRegion::FirstCol, "303030"),
+            shaded_region(TableStyleRegion::Band1Vert, "101010"),
+            shaded_region(TableStyleRegion::Band2Vert, "202020"),
+        ]);
+        let look = TableLook {
+            first_column: true,
+            ..plain_look()
+        };
+        let mut columns = styled_table_document(vec![column_style], "Banded", 1, 5, look);
+        columns
+            .table_mut(0)
+            .expect("authored table")
+            .set_column_band_size(2)
+            .expect("two columns per band");
+        assert_eq!(
+            fill_sequence(&columns),
+            vec![
+                "303030".to_owned(),
+                "101010".to_owned(),
+                "101010".to_owned(),
+                "202020".to_owned(),
+                "202020".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_conditional_region_no_longer_risks_refusing_the_file() {
+        let mut document = Document::new();
+        document
+            .add_style(StyleBuilder::table("Mystery", "Mystery"))
+            .expect("table style is valid");
+        let mut table = document.add_table(1, 1);
+        table.set_style("Mystery");
+        table.set_look(plain_look());
+        table.row(0).unwrap().cell(0).unwrap().set_text("x");
+        let mystery = concat!(
+            r#"<w:tblStylePr w:type="mysteryRegion" x:note="kept" xmlns:x="urn:producer">"#,
+            r#"<w:tcPr><w:shd w:val="clear" w:fill="FF00FF"/></w:tcPr>"#,
+            r#"<x:unmodelled x:value="kept"/>"#,
+            r#"</w:tblStylePr>"#
+        );
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .expect("authored package opens");
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        let injected = styles.replace(
+            r#"<w:name w:val="Mystery"/>"#,
+            &format!(r#"<w:name w:val="Mystery"/>{mystery}"#),
+        );
+        package.set_part("/word/styles.xml", injected.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+
+        // The file opens rather than being refused.
+        let reopened = Document::from_bytes(bytes.get_ref()).expect("unknown region reopens");
+        reopened
+            .validate_style_graph()
+            .expect("an unknown region is not an invalid style graph");
+        let style = reopened.style("Mystery").unwrap();
+        let regions = style.conditional_table_styles();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].region(), None);
+
+        // It serialises back from its preserved bytes, unmodelled child and
+        // foreign attribute included.
+        let mut reopened = reopened;
+        let saved = reopened.to_bytes().expect("unknown region saves");
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        assert!(styles.contains(mystery), "{styles}");
+
+        // It contributes nothing to resolution.
+        assert_eq!(fill_sequence(&reopened), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_table_look_change_no_longer_drops_the_legacy_bitmask() {
+        let mut document = Document::new();
+        document
+            .add_style(StyleBuilder::table("Looked", "Looked"))
+            .expect("table style is valid");
+        let mut table = document.add_table(1, 1);
+        table.set_style("Looked");
+        table.set_look(TableLook {
+            first_row: true,
+            last_row: false,
+            first_column: true,
+            last_column: false,
+            horizontal_banding: true,
+            vertical_banding: false,
+        });
+        let saved = document.to_bytes().expect("look saves");
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        let body =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        // 0x0020 firstRow, 0x0080 firstColumn, 0x0400 noVBand.
+        assert!(
+            body.contains(
+                r#"<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/>"#
+            ),
+            "{body}"
+        );
+
+        // The mask a reader falls back to agrees with the booleans beside it.
+        let reopened = Document::from_bytes(
+            &Document::from_bytes(&document.to_bytes().unwrap())
+                .unwrap()
+                .to_bytes()
+                .unwrap(),
+        )
+        .unwrap();
+        let look = reopened.table(0).unwrap().look().expect("look reopens");
+        assert!(look.first_row);
+        assert!(look.first_column);
+        assert!(!look.last_row);
+        assert!(!look.last_column);
+        assert!(look.horizontal_banding);
+        assert!(!look.vertical_banding);
+
+        let mut cleared = reopened;
+        cleared.table_mut(0).unwrap().clear_look();
+        assert_eq!(cleared.table(0).unwrap().look(), None);
+    }
+
+    #[test]
+    fn removing_one_conditional_region_leaves_its_siblings() {
+        let mut document = Document::new();
+        document
+            .add_style(banded_style(&[
+                shaded_region(TableStyleRegion::FirstRow, "111111"),
+                shaded_region(TableStyleRegion::LastRow, "222222"),
+                shaded_region(TableStyleRegion::Band1Horz, "333333"),
+            ]))
+            .expect("table style is valid");
+        document
+            .set_style(
+                StyleBuilder::table("Banded", "Banded")
+                    .remove_conditional_table_style(TableStyleRegion::LastRow),
+            )
+            .expect("one region is removable");
+        let style = document.style("Banded").unwrap();
+        let surviving = style
+            .conditional_table_styles()
+            .iter()
+            .map(|region| region.region())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            surviving,
+            vec![
+                Some(TableStyleRegion::FirstRow),
+                Some(TableStyleRegion::Band1Horz)
+            ]
+        );
+
+        // Clearing is still all or nothing, which is what per-region removal
+        // is not.
+        document
+            .set_style(StyleBuilder::table("Banded", "Banded").clear_conditional_table_styles())
+            .expect("clearing is still available");
+        assert!(
+            document
+                .style("Banded")
+                .unwrap()
+                .conditional_table_styles()
+                .is_empty()
+        );
+    }
+}

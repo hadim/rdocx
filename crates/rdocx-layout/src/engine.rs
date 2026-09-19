@@ -5725,6 +5725,7 @@ pub(crate) fn layout_paragraph_with_source(
         source_node,
         None,
         None,
+        None,
     )
 }
 
@@ -5752,6 +5753,7 @@ pub(crate) fn layout_paragraph_with_source_and_direction(
         diagnostics,
         source_node,
         None,
+        None,
         Some(&mut direction),
     )?;
     Ok((block, direction))
@@ -5769,6 +5771,7 @@ pub(crate) fn layout_paragraph_with_source_in_table(
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
+    table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
 ) -> Result<(ParagraphBlock, TextDirection)> {
     let mut direction = TextDirection::Auto;
     let block = layout_paragraph_with_source_and_table(
@@ -5782,6 +5785,7 @@ pub(crate) fn layout_paragraph_with_source_in_table(
         diagnostics,
         source_node,
         table_properties,
+        table_run_properties,
         Some(&mut direction),
     )?;
     Ok((block, direction))
@@ -5799,6 +5803,7 @@ fn layout_paragraph_with_source_and_table(
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
+    table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
     reflow_direction_out: Option<&mut TextDirection>,
 ) -> Result<ParagraphBlock> {
     // Resolve paragraph properties
@@ -5890,10 +5895,15 @@ fn layout_paragraph_with_source_and_table(
             // Shape the marker text
             let marker_rpr = marker.marker_rpr;
             let marker_font_size = marker_rpr.sz.map(|hp| hp.to_pt()).unwrap_or_else(|| {
-                style_resolver::resolve_run_properties(para_style_id, None, styles)
-                    .sz
-                    .map(|hp| hp.to_pt())
-                    .unwrap_or(11.0)
+                style_resolver::resolve_run_properties(
+                    para_style_id,
+                    None,
+                    styles,
+                    table_run_properties,
+                )
+                .sz
+                .map(|hp| hp.to_pt())
+                .unwrap_or(11.0)
             });
             let marker_bold = marker_rpr.bold.unwrap_or(false);
             let marker_italic = marker_rpr.italic.unwrap_or(false);
@@ -6030,8 +6040,12 @@ fn layout_paragraph_with_source_and_table(
 
         let run_style_id = run.properties.as_ref().and_then(|p| p.style_id.as_deref());
 
-        let resolved_rpr =
-            style_resolver::resolve_run_properties(para_style_id, run_style_id, styles);
+        let resolved_rpr = style_resolver::resolve_run_properties(
+            para_style_id,
+            run_style_id,
+            styles,
+            table_run_properties,
+        );
 
         // Merge direct run properties
         let mut effective_rpr = resolved_rpr;
@@ -6326,6 +6340,7 @@ fn layout_paragraph_with_source_and_table(
                                 para_style_id,
                                 segment_style_id,
                                 styles,
+                                table_run_properties,
                             )
                         } else {
                             effective_rpr.clone()
@@ -6583,7 +6598,8 @@ fn layout_paragraph_with_source_and_table(
         }
     }
 
-    let mut equation_rpr = style_resolver::resolve_run_properties(para_style_id, None, styles);
+    let mut equation_rpr =
+        style_resolver::resolve_run_properties(para_style_id, None, styles, table_run_properties);
     if let Some(paragraph_mark_rpr) = direct_ppr.and_then(|ppr| ppr.rpr.as_ref()) {
         equation_rpr.merge_from(paragraph_mark_rpr);
     }
@@ -6605,7 +6621,12 @@ fn layout_paragraph_with_source_and_table(
 
     let attributed_empty_paragraph = inline_items.is_empty();
     if attributed_empty_paragraph {
-        let mut caret_rpr = style_resolver::resolve_run_properties(para_style_id, None, styles);
+        let mut caret_rpr = style_resolver::resolve_run_properties(
+            para_style_id,
+            None,
+            styles,
+            table_run_properties,
+        );
         if let Some(paragraph_mark_rpr) = direct_ppr.and_then(|ppr| ppr.rpr.as_ref()) {
             caret_rpr.merge_from(paragraph_mark_rpr);
         }

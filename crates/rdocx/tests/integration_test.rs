@@ -13,7 +13,7 @@ use rdocx::table::{
 use rdocx::{
     BodyItemRef, BorderStyle, Length, ListLevel, MhtmlDiagnostic, ParagraphRef, RunPosition,
     RunRange, SectionBreak, StoryItemKind, StoryKind, StyleBuilder, TabAlignment, TabLeader,
-    UnderlineStyle,
+    TableStyleRegion, UnderlineStyle,
 };
 use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, WordPackageClass};
 use rdocx_oxml::CT_BorderEdge;
@@ -9719,8 +9719,22 @@ fn invalid_style_graph_never_publishes_a_partial_mutation() {
         document
             .set_style(
                 StyleBuilder::table("DuplicateRegion", "Duplicate Region")
-                    .conditional_table_style("firstRow", None, None, None)
-                    .conditional_table_style("firstRow", None, None, None),
+                    .conditional_table_style(
+                        TableStyleRegion::FirstRow,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None
+                    )
+                    .conditional_table_style(
+                        TableStyleRegion::FirstRow,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None
+                    ),
             )
             .is_err()
     );
@@ -9777,11 +9791,13 @@ fn authored_style_graph_survives_save_and_reopen() {
     let table = reopened.style("CorpusTable").unwrap();
     assert!(table.is_default());
     assert_eq!(table.conditional_table_styles().len(), 1);
-    assert_eq!(table.conditional_table_styles()[0].region, "band1Horz");
+    assert_eq!(
+        table.conditional_table_styles()[0].region(),
+        Some(TableStyleRegion::Band1Horz)
+    );
     assert_eq!(
         table.conditional_table_styles()[0]
-            .cell_properties
-            .as_ref()
+            .cell_properties()
             .and_then(|properties| properties.shading.as_ref())
             .and_then(|shading| shading.fill.as_deref()),
         Some("D9EAF7")
@@ -9843,16 +9859,20 @@ fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
         .set_style(
             StyleBuilder::table("CorpusTable", "Corpus Table")
                 .conditional_table_style(
-                    "band1Horz",
+                    TableStyleRegion::Band1Horz,
                     Some(CT_PPr {
                         space_after: Some(rdocx::Twips(60)),
                         ..CT_PPr::default()
                     }),
                     None,
                     None,
+                    None,
+                    None,
                 )
                 .conditional_table_style(
-                    "firstRow",
+                    TableStyleRegion::FirstRow,
+                    None,
+                    None,
                     None,
                     None,
                     Some(CT_TcPr {
@@ -9870,20 +9890,18 @@ fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
 
     let table = document.style("CorpusTable").unwrap();
     assert_eq!(table.conditional_table_styles().len(), 2);
-    let band = table
-        .conditional_table_styles()
+    let regions = table.conditional_table_styles();
+    let band = regions
         .iter()
-        .find(|region| region.region == "band1Horz")
+        .find(|region| region.region() == Some(TableStyleRegion::Band1Horz))
         .unwrap();
     assert_eq!(
-        band.paragraph_properties
-            .as_ref()
+        band.paragraph_properties()
             .and_then(|properties| properties.space_after),
         Some(rdocx::Twips(60))
     );
     assert_eq!(
-        band.cell_properties
-            .as_ref()
+        band.cell_properties()
             .and_then(|properties| properties.shading.as_ref())
             .and_then(|shading| shading.fill.as_deref()),
         Some("D9EAF7")
@@ -9893,13 +9911,13 @@ fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
         .set_style(
             StyleBuilder::table("CorpusTable", "Corpus Table")
                 .clear_conditional_table_styles()
-                .conditional_table_style("lastRow", None, None, None),
+                .conditional_table_style(TableStyleRegion::LastRow, None, None, None, None, None),
         )
         .unwrap();
     let table = document.style("CorpusTable").unwrap();
     let regions = table.conditional_table_styles();
     assert_eq!(regions.len(), 1);
-    assert_eq!(regions[0].region, "lastRow");
+    assert_eq!(regions[0].region(), Some(TableStyleRegion::LastRow));
 }
 
 #[test]
@@ -10108,7 +10126,9 @@ fn corpus_style_document() -> Document {
                     ..CT_TblPr::default()
                 })
                 .conditional_table_style(
-                    "band1Horz",
+                    TableStyleRegion::Band1Horz,
+                    None,
+                    None,
                     None,
                     None,
                     Some(CT_TcPr {
@@ -17670,5 +17690,984 @@ for image in (first, second):
             footnote < endnote && endnote < paper && paper < borders,
             "{saved}"
         );
+    }
+}
+
+/// F-267. Table style and conditional formatting authoring.
+mod f267_table_style_conditional_tests {
+    use super::*;
+    use rdocx::table::TableLook;
+    use rdocx_oxml::table::{CT_TblCellMar, CT_TrPr};
+    use rdocx_oxml::units::{HalfPoint, Twips};
+
+    /// The LibreOffice build this story compares its renders against.
+    const F267_LIBREOFFICE_ORACLE: &str =
+        "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+    /// The rasterizer this story compares its renders through.
+    const F267_PDFTOPPM_ORACLE: &str = "pdftoppm version 26.01.0";
+    /// Rasterization resolution, high enough to separate adjacent table rows
+    /// and low enough to keep the comparison quick.
+    const F267_RASTER_DPI: f64 = 150.0;
+
+    /// Word GUI capture is not available on this machine, so the reference is
+    /// the `w:tblStylePr` tree Word writes, pinned here as source XML. The
+    /// structural side of the gate asserts against this tree. The confirmation
+    /// that Word itself reopens the authored package without offering to
+    /// repair it is a tracked human action recorded in
+    /// `docs/hld/14-development-backlog.md`, not a gate this machine can run.
+    const F267_WORD_REFERENCE_REGIONS: &str = concat!(
+        r#"<w:tblStylePr w:type="wholeTable"><w:pPr><w:spacing w:after="10"/></w:pPr><w:rPr><w:sz w:val="20"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="10" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="EEEEEE"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="band1Vert"><w:pPr><w:spacing w:after="11"/></w:pPr><w:rPr><w:sz w:val="21"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="11" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="E1E1F1"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="band2Vert"><w:pPr><w:spacing w:after="12"/></w:pPr><w:rPr><w:sz w:val="22"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="12" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="E2E2F2"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="band1Horz"><w:pPr><w:spacing w:after="13"/></w:pPr><w:rPr><w:sz w:val="23"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="13" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="D1F1D1"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="band2Horz"><w:pPr><w:spacing w:after="14"/></w:pPr><w:rPr><w:sz w:val="24"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="14" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="D2F2D2"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="firstCol"><w:pPr><w:spacing w:after="15"/></w:pPr><w:rPr><w:sz w:val="25"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="15" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="C1C1F1"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="lastCol"><w:pPr><w:spacing w:after="16"/></w:pPr><w:rPr><w:sz w:val="26"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="16" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="C2C2F2"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="firstRow"><w:pPr><w:spacing w:after="17"/></w:pPr><w:rPr><w:sz w:val="27"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="17" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/><w:tblHeader/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="B1F1B1"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="lastRow"><w:pPr><w:spacing w:after="18"/></w:pPr><w:rPr><w:sz w:val="28"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="18" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="B2F2B2"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="nwCell"><w:pPr><w:spacing w:after="19"/></w:pPr><w:rPr><w:sz w:val="29"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="19" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A10000"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="neCell"><w:pPr><w:spacing w:after="20"/></w:pPr><w:rPr><w:sz w:val="30"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="20" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A20000"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="swCell"><w:pPr><w:spacing w:after="21"/></w:pPr><w:rPr><w:sz w:val="31"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="21" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A30000"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="seCell"><w:pPr><w:spacing w:after="22"/></w:pPr><w:rPr><w:sz w:val="32"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="22" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A40000"/></w:tcPr></w:tblStylePr>"#,
+    );
+
+    /// One region of the pinned reference, in Word's priority order.
+    ///
+    /// The tuple is the region, its `w:spacing w:after`, its `w:sz`, its
+    /// `w:tblCellMar w:top` and its `w:shd w:fill`, which is what the five
+    /// layers of the reference carry.
+    const F267_REGIONS: [(TableStyleRegion, i32, u32, i32, &str); 13] = [
+        (TableStyleRegion::WholeTable, 10, 20, 10, "EEEEEE"),
+        (TableStyleRegion::Band1Vert, 11, 21, 11, "E1E1F1"),
+        (TableStyleRegion::Band2Vert, 12, 22, 12, "E2E2F2"),
+        (TableStyleRegion::Band1Horz, 13, 23, 13, "D1F1D1"),
+        (TableStyleRegion::Band2Horz, 14, 24, 14, "D2F2D2"),
+        (TableStyleRegion::FirstCol, 15, 25, 15, "C1C1F1"),
+        (TableStyleRegion::LastCol, 16, 26, 16, "C2C2F2"),
+        (TableStyleRegion::FirstRow, 17, 27, 17, "B1F1B1"),
+        (TableStyleRegion::LastRow, 18, 28, 18, "B2F2B2"),
+        (TableStyleRegion::NwCell, 19, 29, 19, "A10000"),
+        (TableStyleRegion::NeCell, 20, 30, 20, "A20000"),
+        (TableStyleRegion::SwCell, 21, 31, 21, "A30000"),
+        (TableStyleRegion::SeCell, 22, 32, 22, "A40000"),
+    ];
+
+    fn f267_shading(fill: &str) -> CT_Shd {
+        CT_Shd {
+            val: "clear".to_owned(),
+            color: Some("auto".to_owned()),
+            fill: Some(fill.to_owned()),
+            ..CT_Shd::default()
+        }
+    }
+
+    /// Author the pinned reference's thirteen regions through the facade.
+    fn f267_authored_style() -> StyleBuilder {
+        let mut builder = StyleBuilder::table("RegionGrid", "Region Grid");
+        for (region, after, size, margin, fill) in F267_REGIONS {
+            builder = builder.conditional_table_style(
+                region,
+                Some(CT_PPr {
+                    space_after: Some(Twips(after)),
+                    ..CT_PPr::default()
+                }),
+                Some(CT_RPr {
+                    sz: Some(HalfPoint(size)),
+                    ..CT_RPr::default()
+                }),
+                Some(CT_TblPr {
+                    cell_margin: Some(CT_TblCellMar {
+                        top: Some(Twips(margin)),
+                        ..CT_TblCellMar::default()
+                    }),
+                    ..CT_TblPr::default()
+                }),
+                Some(CT_TrPr {
+                    cant_split: Some(true),
+                    header: (region == TableStyleRegion::FirstRow).then_some(true),
+                    ..CT_TrPr::default()
+                }),
+                Some(CT_TcPr {
+                    shading: Some(f267_shading(fill)),
+                    ..CT_TcPr::default()
+                }),
+            );
+        }
+        builder
+    }
+
+    /// Reopen a package whose `RegionGrid` style is the pinned reference.
+    fn f267_reference_document() -> Document {
+        let mut seed = Document::new();
+        seed.add_style(StyleBuilder::table("RegionGrid", "Region Grid"))
+            .expect("seed table style");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        let injected = styles.replace(
+            r#"<w:name w:val="Region Grid"/>"#,
+            &format!(r#"<w:name w:val="Region Grid"/>{F267_WORD_REFERENCE_REGIONS}"#),
+        );
+        package.set_part("/word/styles.xml", injected.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).expect("the reference reopens")
+    }
+
+    /// The five typed layers of one region, as comparable scalars.
+    type RegionLayers = (
+        Option<TableStyleRegion>,
+        Option<Twips>,
+        Option<HalfPoint>,
+        Option<Twips>,
+        Option<bool>,
+        Option<bool>,
+        Option<String>,
+    );
+
+    fn f267_region_layers(style: &rdocx::Style<'_>) -> Vec<RegionLayers> {
+        style
+            .conditional_table_styles()
+            .iter()
+            .map(|region| {
+                (
+                    region.region(),
+                    region
+                        .paragraph_properties()
+                        .and_then(|properties| properties.space_after),
+                    region.run_properties().and_then(|properties| properties.sz),
+                    region
+                        .table_properties()
+                        .and_then(|properties| properties.cell_margin.as_ref())
+                        .and_then(|margins| margins.top),
+                    region
+                        .row_properties()
+                        .and_then(|properties| properties.cant_split),
+                    region
+                        .row_properties()
+                        .and_then(|properties| properties.header),
+                    region
+                        .cell_properties()
+                        .and_then(|properties| properties.shading.as_ref())
+                        .and_then(|shading| shading.fill.clone()),
+                )
+            })
+            .collect()
+    }
+
+    /// A four by four table selecting every conditional region.
+    fn f267_region_table(style: StyleBuilder) -> Document {
+        let mut document = Document::new();
+        document.add_style(style).expect("region style is valid");
+        let mut table = document.add_table(4, 4);
+        table.set_style("RegionGrid");
+        table.set_look(TableLook {
+            first_row: true,
+            last_row: true,
+            first_column: true,
+            last_column: true,
+            horizontal_banding: true,
+            vertical_banding: true,
+        });
+        for row in 0..4 {
+            for column in 0..4 {
+                table
+                    .row(row)
+                    .unwrap()
+                    .cell(column)
+                    .unwrap()
+                    .set_text(&format!("r{row}c{column}"));
+            }
+        }
+        document
+    }
+
+    /// Flatten grouped and marked page content into drawable elements.
+    fn f267_page_elements(
+        elements: &[oxml_layout::PositionedElement],
+    ) -> Vec<&oxml_layout::PositionedElement> {
+        fn collect<'a>(
+            elements: &'a [oxml_layout::PositionedElement],
+            output: &mut Vec<&'a oxml_layout::PositionedElement>,
+        ) {
+            for element in elements {
+                match element {
+                    oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                        collect(children, output)
+                    }
+                    oxml_layout::PositionedElement::Group(group) => {
+                        collect(&group.children, output)
+                    }
+                    other => output.push(other),
+                }
+            }
+        }
+        let mut output = Vec::new();
+        collect(elements, &mut output);
+        output
+    }
+
+    /// The resolved fill of every cell, in row then column order.
+    fn f267_cell_fills(document: &Document) -> Vec<String> {
+        let layout = document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("deterministic region layout");
+        let mut fills = f267_page_elements(&layout.layout.pages[0].elements)
+            .into_iter()
+            .filter_map(|element| match element {
+                oxml_layout::PositionedElement::FilledRect { rect, color } => Some((
+                    (rect.y * 100.0).round() as i64,
+                    (rect.x * 100.0).round() as i64,
+                    format!(
+                        "{:02X}{:02X}{:02X}",
+                        (color.r * 255.0).round() as u8,
+                        (color.g * 255.0).round() as u8,
+                        (color.b * 255.0).round() as u8
+                    ),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        fills.sort();
+        fills.into_iter().map(|(_, _, fill)| fill).collect()
+    }
+
+    #[test]
+    fn every_conditional_table_region_matches_word() {
+        // 1. The pinned Word-authored tree projects to all five layers.
+        let reference = f267_reference_document();
+        let style = reference.style("RegionGrid").unwrap();
+        let reference_layers = f267_region_layers(&style);
+        assert_eq!(reference_layers.len(), 13);
+        for (index, (region, after, size, margin, fill)) in F267_REGIONS.into_iter().enumerate() {
+            assert_eq!(
+                reference_layers[index],
+                (
+                    Some(region),
+                    Some(Twips(after)),
+                    Some(HalfPoint(size)),
+                    Some(Twips(margin)),
+                    Some(true),
+                    (region == TableStyleRegion::FirstRow).then_some(true),
+                    Some(fill.to_owned()),
+                ),
+                "{}",
+                region.to_str()
+            );
+        }
+
+        // 2. An untouched reference serialises back as its original bytes.
+        let mut reopened = reference;
+        let saved = reopened.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        assert!(styles.contains(F267_WORD_REFERENCE_REGIONS), "{styles}");
+
+        // 3. The authored tree agrees with the reference tree. The comparison
+        //    is over the parsed tree, not the bytes, because attribute order
+        //    and prefix choice are ours to decide.
+        let mut authored = Document::new();
+        authored
+            .add_style(f267_authored_style())
+            .expect("authored regions are valid");
+        let authored = Document::from_bytes(&authored.to_bytes().unwrap()).unwrap();
+        let authored_style = authored.style("RegionGrid").unwrap();
+        assert_eq!(f267_region_layers(&authored_style), reference_layers);
+
+        // 4. The authored `w:tblStylePr` keeps the schema sequence.
+        let mut authored_bytes = authored;
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(authored_bytes.to_bytes().unwrap()))
+                .unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        let first_row = styles
+            .split(r#"<w:tblStylePr w:type="firstRow">"#)
+            .nth(1)
+            .and_then(|tail| tail.split("</w:tblStylePr>").next())
+            .expect("an authored firstRow region");
+        let order = ["<w:pPr>", "<w:rPr>", "<w:tblPr>", "<w:trPr>", "<w:tcPr>"].map(|tag| {
+            first_row
+                .find(tag)
+                .unwrap_or_else(|| panic!("{tag}: {first_row}"))
+        });
+        assert!(
+            order.windows(2).all(|pair| pair[0] < pair[1]),
+            "{first_row}"
+        );
+
+        // 5. Every region resolves onto the cell Word's priority order picks.
+        let resolved = f267_cell_fills(&f267_region_table(f267_authored_style()));
+        assert_eq!(
+            resolved,
+            [
+                // Row 0 is the header row, so no horizontal band applies.
+                "A10000", "B1F1B1", "B1F1B1", "A20000", //
+                // Row 1 is the first banded row, column 0 the first column.
+                "C1C1F1", "D1F1D1", "D1F1D1", "C2C2F2", //
+                // Row 2 is the second banded row.
+                "C1C1F1", "D2F2D2", "D2F2D2", "C2C2F2", //
+                // Row 3 is the last row, whose corners outrank it.
+                "A30000", "B2F2B2", "B2F2B2", "A40000",
+            ]
+            .map(str::to_owned)
+        );
+
+        // The whole-table region is what a table with no edges and no bands
+        // resolves to.
+        let mut plain = Document::new();
+        plain
+            .add_style(f267_authored_style())
+            .expect("region style is valid");
+        let mut table = plain.add_table(1, 1);
+        table.set_style("RegionGrid");
+        table.set_look(TableLook {
+            first_row: false,
+            last_row: false,
+            first_column: false,
+            last_column: false,
+            horizontal_banding: false,
+            vertical_banding: false,
+        });
+        table.row(0).unwrap().cell(0).unwrap().set_text("plain");
+        assert_eq!(f267_cell_fills(&plain), vec!["EEEEEE".to_owned()]);
+
+        // 6. The raster side, against the pinned oracle.
+        f267_assert_render_matches_oracle(f267_region_table(f267_authored_style()));
+    }
+
+    /// Rasterize the styled table through the pinned oracle and compare.
+    fn f267_assert_render_matches_oracle(mut document: Document) {
+        let version = std::process::Command::new("soffice")
+            .arg("--version")
+            .output()
+            .expect("pinned LibreOffice is installed");
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            F267_LIBREOFFICE_ORACLE
+        );
+        let rasterizer = std::process::Command::new("pdftoppm")
+            .arg("-v")
+            .output()
+            .expect("pinned rasterizer is installed");
+        assert!(rasterizer.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&rasterizer.stderr).lines().next(),
+            Some(F267_PDFTOPPM_ORACLE)
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "rdocx-f267-render-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let output = root.join("output");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+
+        let source = root.join("source.docx");
+        std::fs::write(&source, document.to_bytes().unwrap()).unwrap();
+        let ours = root.join("ours.pdf");
+        std::fs::write(&ours, document.to_pdf_deterministic().unwrap()).unwrap();
+
+        let status = std::process::Command::new("soffice")
+            .arg("--headless")
+            .arg(format!(
+                "-env:UserInstallation=file://{}",
+                profile.display()
+            ))
+            .arg("--convert-to")
+            .arg("pdf:writer_pdf_Export")
+            .arg("--outdir")
+            .arg(&output)
+            .arg(&source)
+            .status()
+            .expect("LibreOffice conversion starts");
+        assert!(status.success());
+        let oracle = output.join("source.pdf");
+
+        let rasterize = |pdf: &std::path::Path, prefix: &str| {
+            let target = root.join(prefix);
+            let rendered = std::process::Command::new("pdftoppm")
+                .args(["-png", "-f", "1", "-l", "1", "-r"])
+                .arg(F267_RASTER_DPI.to_string())
+                .arg(pdf)
+                .arg(&target)
+                .output()
+                .expect("rasterize page one");
+            assert!(
+                rendered.status.success(),
+                "{}",
+                String::from_utf8_lossy(&rendered.stderr)
+            );
+            root.join(format!("{prefix}-1.png"))
+        };
+        let ours_png = rasterize(&ours, "ours");
+        let oracle_png = rasterize(&oracle, "oracle");
+
+        // Two records per raster: the global SSIM, then the vertical extent of
+        // every band of shaded rows in the page interior. The bands are what
+        // the conditional regions paint, so agreeing on where they start and
+        // end is the layout claim.
+        let script = r#"import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+from golden_png_harness import decode_png
+from pptx_ssim_harness import composite_luminance, structural_similarity
+
+SHADED = 250
+MINIMUM_ROW_INK = 40
+BLOCK_GAP = 4
+
+first = decode_png(Path(sys.argv[1]))
+second = decode_png(Path(sys.argv[2]))
+width = min(first[0], second[0])
+height = min(first[1], second[1])
+
+def crop(image):
+    image_width, _, rgba = image
+    rows = []
+    for y in range(height):
+        start = (y * image_width) * 4
+        rows.append(rgba[start : start + width * 4])
+    return (width, height, b"".join(rows))
+
+def shaded_rows(image):
+    image_width, image_height, rgba = image
+    luminance = composite_luminance(rgba)
+    inked = []
+    for y in range(image_height):
+        count = sum(
+            1
+            for x in range(image_width)
+            if luminance[y * image_width + x] < SHADED
+        )
+        if count > MINIMUM_ROW_INK:
+            inked.append(y)
+    blocks = []
+    for y in inked:
+        if blocks and y - blocks[-1][1] <= BLOCK_GAP:
+            blocks[-1][1] = y
+        else:
+            blocks.append([y, y])
+    return blocks
+
+print(structural_similarity(crop(first), crop(second)))
+for image in (first, second):
+    print(" ".join(f"{start},{end}" for start, end in shaded_rows(image)))
+for image in (first, second):
+    image_width, image_height, rgba = image
+    counts = {}
+    for index in range(0, len(rgba), 4):
+        pixel = rgba[index : index + 3]
+        counts[bytes(pixel)] = counts.get(bytes(pixel), 0) + 1
+    fills = sorted(
+        (value.hex().upper(), count)
+        for value, count in counts.items()
+        if count >= 200
+    )
+    print(" ".join(f"{name}:{count}" for name, count in fills))
+"#;
+        let scripts = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts")
+            .canonicalize()
+            .unwrap();
+        let measured = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg(&ours_png)
+            .arg(&oracle_png)
+            .arg(&scripts)
+            .output()
+            .expect("structural similarity runs");
+        assert!(
+            measured.status.success(),
+            "{}",
+            String::from_utf8_lossy(&measured.stderr)
+        );
+        let reported = String::from_utf8_lossy(&measured.stdout);
+        let mut lines = reported.lines();
+        let ssim: f64 = lines
+            .next()
+            .expect("structural similarity line")
+            .trim()
+            .parse()
+            .expect("structural similarity is a number");
+        let parse_blocks = |line: &str| {
+            line.split_whitespace()
+                .map(|block| {
+                    let (start, end) = block.split_once(',').expect("shaded block bounds");
+                    (
+                        start.parse::<i64>().expect("shaded block start"),
+                        end.parse::<i64>().expect("shaded block end"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let ours_blocks = parse_blocks(lines.next().expect("our shaded rows"));
+        let oracle_blocks = parse_blocks(lines.next().expect("oracle shaded rows"));
+        let region_fills = F267_REGIONS.map(|(_, _, _, _, fill)| fill);
+        let parse_fills = |line: &str| {
+            let mut fills = line
+                .split_whitespace()
+                .filter_map(|entry| entry.split_once(':').map(|(name, _)| name.to_owned()))
+                .filter(|name| region_fills.contains(&name.as_str()))
+                .collect::<Vec<_>>();
+            fills.sort();
+            fills
+        };
+        let ours_fills = parse_fills(lines.next().expect("our painted fills"));
+        let oracle_fills = parse_fills(lines.next().expect("oracle painted fills"));
+
+        // The page-wide similarity is a collapse guard, not the layout claim.
+        // Two engines never put the same ink in the same pixel, and the
+        // declared band divergence below moves a sixth of the painted area.
+        // The measured agreement is 0.73.
+        assert!(ssim > 0.60, "structural similarity {ssim}");
+
+        // The table paints one contiguous band of shaded rows in both, and
+        // both start it on the same scanline. Where it ends differs, because
+        // the two engines disagree about row height by about three points a
+        // row, which is not what this story changes.
+        assert_eq!(ours_blocks.len(), 1, "{ours_blocks:?}");
+        assert_eq!(oracle_blocks.len(), 1, "{oracle_blocks:?}");
+        assert!(
+            (ours_blocks[0].0 - oracle_blocks[0].0).abs() <= 2,
+            "shaded table start: {ours_blocks:?} against {oracle_blocks:?}"
+        );
+
+        // Ten of the thirteen regions reach a cell in this table. The four
+        // corners, the two row edges and the two column edges resolve
+        // identically in both engines.
+        let shared = [
+            "A10000", "A20000", "A30000", "A40000", "B1F1B1", "B2F2B2", "C1C1F1", "C2C2F2",
+        ];
+        for fill in shared {
+            assert!(ours_fills.contains(&fill.to_owned()), "{ours_fills:?}");
+            assert!(oracle_fills.contains(&fill.to_owned()), "{oracle_fills:?}");
+        }
+
+        // The declared divergence, asserted so a later change cannot drop it
+        // silently. ECMA-376 orders `w:tblStylePr` band1Vert and band2Vert
+        // before band1Horz and band2Horz, and a later region overrides an
+        // earlier one, so the horizontal band outranks the vertical band.
+        // Word resolves it that way and this workspace follows Word.
+        // LibreOffice 26.2.5.2 resolves it the other way and paints the
+        // vertical band. The oracle is wrong here, so the divergence is
+        // recorded rather than followed.
+        assert_eq!(
+            ours_fills,
+            {
+                let mut expected = shared.to_vec();
+                expected.extend(["D1F1D1", "D2F2D2"]);
+                expected.sort();
+                expected.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            },
+            "{F267_LIBREOFFICE_ORACLE}"
+        );
+        assert_eq!(
+            oracle_fills,
+            {
+                let mut expected = shared.to_vec();
+                expected.extend(["E1E1F1", "E2E2F2"]);
+                expected.sort();
+                expected.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            },
+            "{F267_LIBREOFFICE_ORACLE} no longer inverts the band priority"
+        );
+    }
+    #[test]
+    fn conditional_run_properties_reach_resolved_runs() {
+        let mut document = Document::new();
+        document
+            .add_style(
+                StyleBuilder::table("HeaderRun", "Header Run").conditional_table_style(
+                    TableStyleRegion::FirstRow,
+                    None,
+                    Some(CT_RPr {
+                        bold: Some(true),
+                        color: Some("CC0000".to_owned()),
+                        ..CT_RPr::default()
+                    }),
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            .expect("header run style is valid");
+        let mut table = document.add_table(2, 1);
+        table.set_style("HeaderRun");
+        table.set_look(TableLook {
+            first_row: true,
+            last_row: false,
+            first_column: false,
+            last_column: false,
+            horizontal_banding: false,
+            vertical_banding: false,
+        });
+        table.row(0).unwrap().cell(0).unwrap().set_text("head");
+        table.row(1).unwrap().cell(0).unwrap().set_text("body");
+
+        let layout = document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("deterministic run layout");
+        let mut runs = f267_page_elements(&layout.layout.pages[0].elements)
+            .into_iter()
+            .filter_map(|element| match element {
+                oxml_layout::PositionedElement::Text(run) if !run.text.is_empty() => Some((
+                    (run.origin.y * 100.0).round() as i64,
+                    run.text.clone(),
+                    run.bold,
+                    format!(
+                        "{:02X}{:02X}{:02X}",
+                        (run.color.r * 255.0).round() as u8,
+                        (run.color.g * 255.0).round() as u8,
+                        (run.color.b * 255.0).round() as u8
+                    ),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        runs.sort();
+        assert_eq!(
+            runs.iter()
+                .map(|(_, text, bold, color)| (text.as_str(), *bold, color.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("head", true, "CC0000"), ("body", false, "000000"),]
+        );
+    }
+
+    #[test]
+    fn paragraph_cnf_style_selects_conditional_regions() {
+        let mut document = Document::new();
+        document
+            .add_style(
+                StyleBuilder::table("ParagraphCnf", "Paragraph Cnf").conditional_table_style(
+                    TableStyleRegion::FirstRow,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(CT_TcPr {
+                        shading: Some(f267_shading("123456")),
+                        ..CT_TcPr::default()
+                    }),
+                ),
+            )
+            .expect("paragraph selector style is valid");
+        let mut table = document.add_table(2, 1);
+        table.set_style("ParagraphCnf");
+        // No region comes from the look, so only the paragraph selector can
+        // reach the first-row region.
+        table.set_look(TableLook {
+            first_row: false,
+            last_row: false,
+            first_column: false,
+            last_column: false,
+            horizontal_banding: false,
+            vertical_banding: false,
+        });
+        table.row(0).unwrap().cell(0).unwrap().set_text("plain");
+        table.row(1).unwrap().cell(0).unwrap().set_text("selected");
+        table
+            .row(1)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .paragraph_mut(0)
+            .expect("the authored paragraph")
+            .set_conditional_formatting(Some(TableConditionalFormatting {
+                first_row: true,
+                ..TableConditionalFormatting::default()
+            }));
+
+        assert_eq!(f267_cell_fills(&document), vec!["123456".to_owned()]);
+
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let selected = reopened
+            .table(0)
+            .unwrap()
+            .row(1)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .conditional_formatting()
+            .expect("the paragraph selector reopens");
+        assert!(selected.first_row);
+        assert!(!selected.last_row);
+        assert_eq!(f267_cell_fills(&reopened), vec!["123456".to_owned()]);
+    }
+
+    #[test]
+    fn conditional_region_run_and_row_layers_survive_reopen() {
+        let mut document = Document::new();
+        document
+            .add_style(
+                f267_authored_style()
+                    .table_row_properties(CT_TrPr {
+                        cant_split: Some(true),
+                        ..CT_TrPr::default()
+                    })
+                    .table_cell_properties(CT_TcPr {
+                        shading: Some(f267_shading("F0F0F0")),
+                        ..CT_TcPr::default()
+                    })
+                    .table_properties(CT_TblPr {
+                        row_band_size: Some(2),
+                        column_band_size: Some(3),
+                        ..CT_TblPr::default()
+                    }),
+            )
+            .expect("authored regions are valid");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let style = reopened.style("RegionGrid").unwrap();
+
+        // The style's own base row and cell layers reopen beside its regions.
+        assert_eq!(
+            style
+                .table_row_properties()
+                .and_then(|properties| properties.cant_split),
+            Some(true)
+        );
+        assert_eq!(
+            style
+                .table_cell_properties()
+                .and_then(|properties| properties.shading.as_ref())
+                .and_then(|shading| shading.fill.as_deref()),
+            Some("F0F0F0")
+        );
+        let regions = style.conditional_table_styles();
+        assert_eq!(regions.len(), 13);
+        for (index, (region, _, size, _, _)) in F267_REGIONS.into_iter().enumerate() {
+            assert_eq!(regions[index].region(), Some(region));
+            assert_eq!(
+                regions[index].run_properties().and_then(|rpr| rpr.sz),
+                Some(HalfPoint(size)),
+                "{}",
+                region.to_str()
+            );
+            assert_eq!(
+                regions[index]
+                    .row_properties()
+                    .and_then(|trpr| trpr.cant_split),
+                Some(true),
+                "{}",
+                region.to_str()
+            );
+        }
+        assert_eq!(
+            regions[7].row_properties().and_then(|trpr| trpr.header),
+            Some(true)
+        );
+
+        // Every region keeps the `pPr`, `rPr`, `tblPr`, `trPr`, `tcPr`
+        // sequence the schema requires.
+        let mut reopened = reopened;
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+
+        // The style's own base layers sit at their schema ranks, in `w:trPr`
+        // then `w:tcPr` order and before the first region.
+        let definition = styles
+            .split(r#"<w:style w:type="table" w:styleId="RegionGrid">"#)
+            .nth(1)
+            .and_then(|tail| tail.split("</w:style>").next())
+            .unwrap_or_else(|| panic!("{styles}"));
+        let base = ["<w:trPr>", "<w:tcPr>", "<w:tblStylePr "].map(|tag| {
+            definition
+                .find(tag)
+                .unwrap_or_else(|| panic!("{tag}: {definition}"))
+        });
+        assert!(
+            base.windows(2).all(|pair| pair[0] < pair[1]),
+            "{definition}"
+        );
+
+        // Removing one base layer during an update leaves the other.
+        let mut updated = Document::from_bytes(&reopened.to_bytes().unwrap()).unwrap();
+        updated
+            .set_style(
+                StyleBuilder::table("RegionGrid", "Region Grid")
+                    .clear_table_row_properties()
+                    .table_properties(CT_TblPr {
+                        shading: Some(f267_shading("FAFAFA")),
+                        row_band_size: Some(5),
+                        ..CT_TblPr::default()
+                    }),
+            )
+            .expect("one base layer is removable");
+        let style = updated.style("RegionGrid").unwrap();
+        assert_eq!(style.table_row_properties(), None);
+        assert!(style.table_cell_properties().is_some());
+
+        // An updated band size reaches the merged style properties, and the
+        // one the update did not mention keeps its existing value.
+        assert_eq!(
+            style
+                .table_properties()
+                .map(|properties| (properties.row_band_size, properties.column_band_size)),
+            Some((Some(5), Some(3)))
+        );
+        for region in F267_REGIONS.map(|(region, _, _, _, _)| region) {
+            let body = styles
+                .split(&format!(r#"<w:tblStylePr w:type="{}">"#, region.to_str()))
+                .nth(1)
+                .and_then(|tail| tail.split("</w:tblStylePr>").next())
+                .unwrap_or_else(|| panic!("{}: {styles}", region.to_str()));
+            let order = ["<w:pPr>", "<w:rPr>", "<w:tblPr>", "<w:trPr>", "<w:tcPr>"]
+                .map(|tag| body.find(tag).unwrap_or_else(|| panic!("{tag}: {body}")));
+            assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{body}");
+        }
+    }
+
+    #[test]
+    fn paragraph_conditional_selector_survives_reopen() {
+        let mut document = Document::new();
+        let mut paragraph = document.add_paragraph("selector");
+        paragraph.set_div_id_value(Some(7));
+        paragraph.set_conditional_formatting(Some(TableConditionalFormatting {
+            first_row: true,
+            last_row_first_column: true,
+            ..TableConditionalFormatting::default()
+        }));
+        paragraph.mark().set_bold(true);
+
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let body =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        // Schema slot 32, between `w:divId` at 31 and `w:rPr` at 33.
+        let div_id = body.find(r#"<w:divId w:val="7"/>"#).expect("divId");
+        let cnf = body
+            .find(r#"<w:cnfStyle w:val="100000000001"/>"#)
+            .unwrap_or_else(|| panic!("{body}"));
+        let rpr = body.find("<w:rPr>").expect("paragraph mark properties");
+        assert!(div_id < cnf && cnf < rpr, "{body}");
+
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let selector = reopened
+            .paragraph(0)
+            .unwrap()
+            .conditional_formatting()
+            .expect("the selector reopens");
+        assert!(selector.first_row);
+        assert!(selector.last_row_first_column);
+        assert_eq!(reopened.paragraph(0).unwrap().div_id(), Some(7));
+
+        // Unrelated producer XML at the same slot keeps its place.
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let injected = body.replace(
+            r#"<w:cnfStyle w:val="100000000001"/>"#,
+            r#"<x:marker xmlns:x="urn:producer" x:keep="1"/><w:cnfStyle w:val="100000000001" x:extra="kept" xmlns:x="urn:producer"/>"#,
+        );
+        package.set_part("/word/document.xml", injected.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut carried = Document::from_bytes(bytes.get_ref()).expect("producer XML reopens");
+        assert!(
+            carried
+                .paragraph(0)
+                .unwrap()
+                .conditional_formatting()
+                .expect("the selector still projects")
+                .first_row
+        );
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(carried.to_bytes().unwrap())).unwrap();
+        let saved =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        assert!(
+            saved.contains(r#"<x:marker xmlns:x="urn:producer" x:keep="1"/>"#),
+            "{saved}"
+        );
+        assert!(saved.contains(r#"x:extra="kept""#), "{saved}");
+    }
+
+    #[test]
+    fn untouched_conditional_regions_serialize_byte_for_byte() {
+        let region = concat!(
+            r#"<w:tblStylePr w:type="firstRow" x:note="kept" xmlns:x="urn:producer">"#,
+            r#"<w:pPr><w:spacing w:after="40"/></w:pPr>"#,
+            r#"<w:rPr><w:b/></w:rPr>"#,
+            r#"<w:tblPr/>"#,
+            r#"<w:trPr><w:cantSplit/></w:trPr>"#,
+            r#"<w:tcPr><w:shd w:val="clear" w:fill="E8F1F8"/></w:tcPr>"#,
+            r#"<x:unmodelled x:value="kept"/>"#,
+            r#"</w:tblStylePr>"#
+        );
+        let mut seed = Document::new();
+        seed.add_style(StyleBuilder::table("Preserved", "Preserved"))
+            .expect("seed table style");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        let injected = styles.replace(
+            r#"<w:name w:val="Preserved"/>"#,
+            &format!(r#"<w:name w:val="Preserved"/>{region}"#),
+        );
+        package.set_part("/word/styles.xml", injected.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+
+        let mut reopened = Document::from_bytes(bytes.get_ref()).expect("the region reopens");
+        let style = reopened.style("Preserved").unwrap();
+        let regions = style.conditional_table_styles();
+        assert_eq!(regions[0].region(), Some(TableStyleRegion::FirstRow));
+        assert_eq!(
+            regions[0].run_properties().and_then(|rpr| rpr.bold),
+            Some(true)
+        );
+        assert_eq!(
+            regions[0].row_properties().and_then(|trpr| trpr.cant_split),
+            Some(true)
+        );
+
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+        let saved =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        assert!(saved.contains(region), "{saved}");
+    }
+
+    #[test]
+    fn invalid_band_size_leaves_document_bytes_unchanged() {
+        let mut document = Document::new();
+        document
+            .add_style(StyleBuilder::table("Sized", "Sized"))
+            .expect("table style is valid");
+        let mut table = document.add_table(1, 1);
+        table.set_style("Sized");
+        table.row(0).unwrap().cell(0).unwrap().set_text("x");
+        let before = document.to_bytes().unwrap();
+
+        let mut table = document.table_mut(0).unwrap();
+        assert!(table.set_row_band_size(0).is_err());
+        assert!(table.set_column_band_size(0).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert_eq!(document.table(0).unwrap().row_band_size(), None);
+        assert_eq!(document.table(0).unwrap().column_band_size(), None);
+
+        let mut table = document.table_mut(0).unwrap();
+        table.set_row_band_size(3).unwrap();
+        table.set_column_band_size(2).unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.table(0).unwrap().row_band_size(), Some(3));
+        assert_eq!(reopened.table(0).unwrap().column_band_size(), Some(2));
+
+        let mut cleared = reopened;
+        cleared.table_mut(0).unwrap().clear_band_sizes();
+        assert_eq!(cleared.table(0).unwrap().row_band_size(), None);
+        assert_eq!(cleared.table(0).unwrap().column_band_size(), None);
     }
 }

@@ -653,9 +653,23 @@ segments draw after all cell fills and text so a neighbouring fill cannot cover
 them. Table cells do not use the shape autofit algorithm.
 
 Word table styles resolve base-first through `basedOn`, then apply table-region
-properties in deterministic whole-table, band, edge, and corner priority.
+properties in deterministic whole-table, band, edge, and corner priority. The
+priority order is whole table, the two vertical bands, the two horizontal
+bands, the column edges, the row edges, then the four corners, and a later
+region overrides an earlier one. The horizontal band therefore outranks the
+vertical band. The `basedOn` chain flattens for one region before the next
+region applies, so a base style's `firstRow` still beats a derived style's
+`wholeTable`. Banding counts whole bands of the resolved
+`w:tblStyleRowBandSize` and `w:tblStyleColBandSize`, defaulting to one, and
+starts after the header row or first column when the table look designates one.
+The header row and first column are in no band.
 Table-style paragraph properties sit between document defaults and paragraph
-styles. Direct table and cell properties remain the final overlay. An explicit
+styles, and table-style run properties sit at the same place in the run chain,
+so a `firstRow` region's `w:rPr` reaches the header row's runs. A conditional
+region's `w:trPr` is modeled and round-tripped but not applied, which is row
+geometry owned by F-268a. Region selection reads the table look together with
+every `w:cnfStyle` on the row, the cell and the cell's paragraphs. Direct table
+and cell properties remain the final overlay. An explicit
 cell `nil` or `none` border yields to a visible table border only on the exact
 outer edge. The same value remains suppressive on an interior edge.
 

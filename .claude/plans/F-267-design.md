@@ -1,6 +1,6 @@
 # F-267, Complete table style and conditional formatting authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-246, F-257, F-258
@@ -357,40 +357,40 @@ proceeding. An unexplained delta blocks the merge.
 
 ## Implementation checklist
 
-- [ ] Add the failing differential first, then the three failing precedence
+- [x] Add the failing differential first, then the three failing precedence
       regressions named as the sentences in the test plan.
-- [ ] Model `w:rPr` and `w:trPr` on `CT_TblStylePr` and base `w:trPr` and
+- [x] Model `w:rPr` and `w:trPr` on `CT_TblStylePr` and base `w:trPr` and
       `w:tcPr` on `CT_Style`, with schema-ordered writes and the extended
       byte-identical short circuit.
-- [ ] Model `tblStyleRowBandSize` and `tblStyleColBandSize` on `CT_TblPr` at
+- [x] Model `tblStyleRowBandSize` and `tblStyleColBandSize` on `CT_TblPr` at
       their existing schema slots.
-- [ ] Model `w:cnfStyle` on `CT_PPr` at schema slot 32, the element F-264 hands
+- [x] Model `w:cnfStyle` on `CT_PPr` at schema slot 32, the element F-264 hands
       over raw-preserved, and feed it into region selection beside the row and
       cell selectors.
-- [ ] Introduce `TableStyleRegion` in `crates/rdocx-oxml/src/styles.rs` with
+- [x] Introduce `TableStyleRegion` in `crates/rdocx-oxml/src/styles.rs` with
       Word's priority ordering, re-export it from `crates/rdocx`, and replace
       the string region list in model, resolution and facade.
-- [ ] Preserve an unrecognised region through `raw_xml` and exclude it from
+- [x] Preserve an unrecognised region through `raw_xml` and exclude it from
       resolution, never refusing the file.
-- [ ] Fix the horizontal against vertical band inversion in
+- [x] Fix the horizontal against vertical band inversion in
       `applicable_table_regions`.
-- [ ] Flatten the `basedOn` chain per region before applying region precedence,
+- [x] Flatten the `basedOn` chain per region before applying region precedence,
       so a derived `wholeTable` no longer beats a base `firstRow`.
-- [ ] Compute banding from band size with the header-row and first-column
+- [x] Compute banding from band size with the header-row and first-column
       offsets.
-- [ ] Widen `ResolvedTableCellStyle` and thread the run layer through
+- [x] Widen `ResolvedTableCellStyle` and thread the run layer through
       `layout_cell_content`, `layout_paragraph_with_source_in_table` and
       `resolve_run_properties`, passing `None` at every non-table call site.
-- [ ] Model and round-trip the conditional `w:trPr` without applying it at
+- [x] Model and round-trip the conditional `w:trPr` without applying it at
       layout, which belongs to F-268a.
-- [ ] Complete the facade: typed region layers, per-region removal, typed read
+- [x] Complete the facade: typed region layers, per-region removal, typed read
       side, the paragraph conditional selector, `set_look` writing both forms,
       `clear_look`, checked band sizes.
-- [ ] Extend the style update merge for the two new conditional layers.
-- [ ] Update the five `CT_Style` literal construction sites.
-- [ ] Record the Word no-repair confirmation as a tracked human-action
+- [x] Extend the style update merge for the two new conditional layers.
+- [x] Update the five `CT_Style` literal construction sites.
+- [x] Record the Word no-repair confirmation as a tracked human-action
       follow-up in `docs/hld/14-development-backlog.md`.
-- [ ] Run the impacted oxml, layout, facade, round-trip, differential, public
+- [x] Run the impacted oxml, layout, facade, round-trip, differential, public
       API dry-run, hash harness, prose, full verify and microscope gates.
 
 ## Open questions

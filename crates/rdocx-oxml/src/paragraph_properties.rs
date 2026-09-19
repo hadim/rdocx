@@ -246,6 +246,13 @@ pub struct CT_PPr {
     pub textbox_tight_wrap: Option<String>,
     /// Web settings division this paragraph belongs to (divId/@w:val).
     pub div_id: Option<u32>,
+    /// `w:cnfStyle` — which conditional parts of a table style this paragraph
+    /// selects, as the twelve-bit string the schema uses.
+    ///
+    /// The row and cell selectors on `CT_TrPr` and `CT_TcPr` carry the same
+    /// shape. A paragraph inside a styled table adds its own selection to
+    /// theirs.
+    pub cnf_style: Option<String>,
     /// Outline level 0-8 (outlineLvl)
     pub outline_lvl: Option<u32>,
     /// Paragraph borders (pBdr).
@@ -326,6 +333,7 @@ const PPR_TEXT_ALIGNMENT_SLOT: u8 = 28;
 const PPR_TEXTBOX_TIGHT_WRAP_SLOT: u8 = 29;
 const PPR_OUTLINE_SLOT: u8 = 30;
 const PPR_DIV_ID_SLOT: u8 = 31;
+const PPR_CNF_STYLE_SLOT: u8 = 32;
 const PPR_RUN_PROPERTIES_SLOT: u8 = 33;
 const PPR_SECTION_SLOT: u8 = 34;
 const PPR_CHANGE_SLOT: u8 = 35;
@@ -810,6 +818,36 @@ impl CT_PPr {
                     } else if is_word_element(name.as_ref(), b"divId", &prefixes) {
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             ppr.div_id = Some(val.parse()?);
+                        }
+                    } else if is_word_element(name.as_ref(), b"cnfStyle", &prefixes) {
+                        // `CT_Cnf` carries a per-region attribute form beside
+                        // `w:val`. The source element is retained as an
+                        // attribute carrier when it holds anything but `w:val`,
+                        // so that form survives being modeled, the same way the
+                        // modeled toggles keep theirs.
+                        let value = get_word_val_attr(e, &prefixes)?;
+                        if value.is_none() || toggle_has_unsupported_attributes(e, &prefixes)? {
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?;
+                            let occurrence = occurrences[PPR_CNF_STYLE_SLOT as usize] - 1;
+                            if value.is_some() {
+                                record_modeled_toggle_candidate(
+                                    &mut ppr.revision_xml,
+                                    &mut ppr.revision_xml_positions,
+                                    raw,
+                                    PPR_CNF_STYLE_SLOT,
+                                    occurrence,
+                                );
+                            } else {
+                                // Without `w:val` there is nothing to model, so
+                                // the element stays raw at its own slot.
+                                record_ppr_raw_at(&mut ppr, raw, PPR_CNF_STYLE_SLOT, occurrence);
+                            }
+                        }
+                        if value.is_some() {
+                            ppr.cnf_style = value;
                         }
                     } else if is_word_element(name.as_ref(), b"outlineLvl", &prefixes) {
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
@@ -1373,6 +1411,12 @@ impl CT_PPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        if let Some(ref cnf_style) = self.cnf_style {
+            let mut e = BytesStart::new("w:cnfStyle");
+            e.push_attribute(("w:val", cnf_style.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+
         if let Some(ref rpr) = self.rpr {
             rpr.to_xml(writer)?;
         }
@@ -1422,6 +1466,7 @@ impl CT_PPr {
             && self.text_alignment.is_none()
             && self.textbox_tight_wrap.is_none()
             && self.div_id.is_none()
+            && self.cnf_style.is_none()
             && self.outline_lvl.is_none()
             && self.borders.is_none()
             && self.tabs.is_none()
@@ -1532,6 +1577,9 @@ impl CT_PPr {
         }
         if other.div_id.is_some() {
             self.div_id = other.div_id;
+        }
+        if other.cnf_style.is_some() {
+            self.cnf_style.clone_from(&other.cnf_style);
         }
         if other.outline_lvl.is_some() {
             self.outline_lvl = other.outline_lvl;
@@ -1711,7 +1759,7 @@ fn ppr_slot_for_name(local: &[u8]) -> u8 {
         b"textboxTightWrap" => PPR_TEXTBOX_TIGHT_WRAP_SLOT,
         b"outlineLvl" => PPR_OUTLINE_SLOT,
         b"divId" => PPR_DIV_ID_SLOT,
-        b"cnfStyle" => 32,
+        b"cnfStyle" => PPR_CNF_STYLE_SLOT,
         b"rPr" => PPR_RUN_PROPERTIES_SLOT,
         b"sectPr" => PPR_SECTION_SLOT,
         b"pPrChange" => PPR_CHANGE_SLOT,
@@ -1757,6 +1805,7 @@ fn ppr_modeled_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
             | b"textboxTightWrap"
             | b"outlineLvl"
             | b"divId"
+            | b"cnfStyle"
             | b"rPr"
             | b"sectPr"
             | b"pPrChange"
@@ -1811,6 +1860,7 @@ fn ppr_modeled_toggle_present(ppr: &CT_PPr, slot: u8) -> bool {
         PPR_CONTEXTUAL_SPACING_SLOT => ppr.contextual_spacing.is_some(),
         PPR_MIRROR_INDENTS_SLOT => ppr.mirror_indents.is_some(),
         PPR_SUPPRESS_OVERLAP_SLOT => ppr.suppress_overlap.is_some(),
+        PPR_CNF_STYLE_SLOT => ppr.cnf_style.is_some(),
         _ => true,
     }
 }

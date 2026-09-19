@@ -286,10 +286,16 @@ pub fn resolve_paragraph_properties_in_table(
 }
 
 /// Resolve run properties by walking paragraph and character style chains.
+///
+/// `table_properties` is the run layer a table style resolved for the cell the
+/// paragraph sits in, and is `None` everywhere outside a styled table. It
+/// merges after the document defaults and before the paragraph style, which is
+/// the ordering `resolve_paragraph_properties_in_table` already uses.
 pub fn resolve_run_properties(
     para_style_id: Option<&str>,
     run_style_id: Option<&str>,
     styles: &CT_Styles,
+    table_properties: Option<&CT_RPr>,
 ) -> CT_RPr {
     let mut effective = CT_RPr::default();
 
@@ -298,6 +304,10 @@ pub fn resolve_run_properties(
         && let Some(ref rpr) = defaults.rpr
     {
         effective.merge_from(rpr);
+    }
+
+    if let Some(properties) = table_properties {
+        effective.merge_from(properties);
     }
 
     // 2. paragraph style's rpr (following basedOn chain)
@@ -775,6 +785,8 @@ mod tests {
             table_properties: None,
             table_properties_original: None,
             table_properties_xml: None,
+            table_row_properties: None,
+            table_cell_properties: None,
             conditional_table_styles: Vec::new(),
             extra_attributes: Vec::new(),
             modeled_xml: Vec::new(),
@@ -810,7 +822,7 @@ mod tests {
     #[test]
     fn resolve_heading2_rpr() {
         let styles = test_styles();
-        let rpr = resolve_run_properties(Some("Heading2"), None, &styles);
+        let rpr = resolve_run_properties(Some("Heading2"), None, &styles, None);
         assert_eq!(rpr.font_ascii, Some("Calibri".to_string()));
         assert_eq!(rpr.sz, Some(HalfPoint(26)));
         assert_eq!(rpr.bold, Some(true));
