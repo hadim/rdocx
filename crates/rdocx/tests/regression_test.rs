@@ -30659,6 +30659,419 @@ mod f267_table_style_regressions {
     }
 }
 
+/// F-268a, the layout facts advanced table geometry must keep.
+mod advanced_table_geometry_regressions {
+    use rdocx_oxml::styles::CT_Styles;
+    use rdocx_oxml::table::{
+        CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, CT_TcPr, CT_TrPr,
+    };
+    use rdocx_oxml::units::Twips;
+
+    fn layout_input() -> rdocx_layout::LayoutInput {
+        rdocx_layout::LayoutInput {
+            automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
+            math_properties: None,
+            document: rdocx_oxml::document::CT_Document {
+                body: rdocx_oxml::document::CT_Body {
+                    content: Vec::new(),
+                    sect_pr: None,
+                },
+                extra_namespaces: Vec::new(),
+                background_xml: None,
+                background_extra_xml: Vec::new(),
+            },
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            headers: std::collections::HashMap::new(),
+            footers: std::collections::HashMap::new(),
+            images: std::collections::HashMap::new(),
+            charts: std::collections::HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
+            core_properties: None,
+            hyperlink_urls: std::collections::HashMap::new(),
+            footnotes: None,
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+            revision_view: rdocx_layout::RevisionView::Accepted,
+        }
+    }
+
+    fn lay_out_with(
+        table: &CT_Tbl,
+        styles: &CT_Styles,
+        available_width: f64,
+    ) -> rdocx_layout::table::TableBlock {
+        let input = layout_input();
+        let media = rdocx_layout::MediaRegistry::new(&input.images);
+        let mut fonts =
+            oxml_layout::FontManager::new_deterministic().expect("deterministic fonts load");
+        let mut numbering = rdocx_layout::style_resolver::NumberingState::new();
+        let mut diagnostics = Vec::new();
+        rdocx_layout::table::layout_table(
+            table,
+            available_width,
+            styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("table lays out")
+    }
+
+    fn lay_out(table: &CT_Tbl, available_width: f64) -> rdocx_layout::table::TableBlock {
+        lay_out_with(table, &CT_Styles::new_default(), available_width)
+    }
+
+    /// A fixed-layout table whose cells carry one shaded paragraph each.
+    fn shaded_table(columns: &[i32], rows: &[&[&str]]) -> CT_Tbl {
+        let mut table = CT_Tbl::new();
+        table.properties = Some(CT_TblPr {
+            layout: Some("fixed".to_owned()),
+            width: Some(CT_TblWidth::dxa(columns.iter().sum())),
+            ..CT_TblPr::default()
+        });
+        table.grid = Some(CT_TblGrid {
+            columns: columns
+                .iter()
+                .map(|width| CT_TblGridCol {
+                    width: Twips(*width),
+                })
+                .collect(),
+            ..CT_TblGrid::default()
+        });
+        for cells in rows {
+            let mut row = CT_Row::new();
+            for text in cells.iter() {
+                let mut cell = CT_Tc::new();
+                cell.paragraphs_mut()[0].add_run(text);
+                cell.properties = Some(CT_TcPr {
+                    shading: Some(rdocx_oxml::properties::CT_Shd {
+                        val: "clear".to_owned(),
+                        color: None,
+                        fill: Some("DDDDDD".to_owned()),
+                        ..Default::default()
+                    }),
+                    ..CT_TcPr::default()
+                });
+                row.cells.push(cell);
+            }
+            table.rows.push(row);
+        }
+        table
+    }
+
+    /// Every painted cell rectangle on the document's pages, in paint order.
+    ///
+    /// Cell shading is what marks a painted cell, so a document whose cells
+    /// are shaded reports one `(x, width)` pair per cell.
+    fn painted_cells(document: &rdocx::Document) -> Vec<(f64, f64)> {
+        fn collect(elements: &[oxml_layout::PositionedElement], output: &mut Vec<(f64, f64)>) {
+            let round = |value: f64| (value * 100.0).round() / 100.0;
+            for element in elements {
+                match element {
+                    oxml_layout::PositionedElement::FilledRect { rect, .. } => {
+                        output.push((round(rect.x), round(rect.width)))
+                    }
+                    oxml_layout::PositionedElement::Group(group) => {
+                        collect(&group.children, output)
+                    }
+                    oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                        collect(children, output)
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let layout = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        let mut output = Vec::new();
+        for page in &layout.layout.pages {
+            collect(&page.elements, &mut output);
+        }
+        output
+    }
+
+    /// A three-column shaded table authored through the public facade.
+    fn shaded_document(columns: &[i32], rows: &[&[&str]]) -> rdocx::Document {
+        let mut document = rdocx::Document::new();
+        {
+            let mut table = document.add_table(rows.len(), columns.len());
+            table
+                .set_grid_widths(
+                    &columns
+                        .iter()
+                        .map(|width| rdocx::Length::twips(*width))
+                        .collect::<Vec<_>>(),
+                )
+                .expect("grid widths are valid");
+            table.set_layout(rdocx::table::TableLayout::Fixed);
+            for (row_index, texts) in rows.iter().enumerate() {
+                let mut row = table.row(row_index).expect("row");
+                for (cell_index, text) in texts.iter().enumerate() {
+                    if text.is_empty() {
+                        // An untouched cell stays discardable for a grid
+                        // omission and paints nothing.
+                        continue;
+                    }
+                    let mut cell = row.cell(cell_index).expect("cell");
+                    cell.set_text(text);
+                    cell.set_shading("DDDDDD");
+                }
+            }
+        }
+        document
+    }
+
+    #[test]
+    fn a_bidi_visual_table_reverses_columns_without_changing_logical_cell_order() {
+        let columns = [1440, 2880, 4320];
+        let rows: [&[&str]; 1] = [&["first", "second", "third"]];
+        let forward = shaded_document(&columns, &rows);
+        let mut reversed = shaded_document(&columns, &rows);
+        reversed
+            .table_mut(0)
+            .expect("table")
+            .set_bidi_visual(Some(true));
+
+        // The painted cells reverse. A left-to-right row paints the narrow
+        // first column at the table origin, and a bidirectional row paints it
+        // last, at the table's trailing edge.
+        assert_eq!(
+            painted_cells(&forward),
+            vec![(72.0, 72.0), (144.0, 144.0), (288.0, 216.0)]
+        );
+        assert_eq!(
+            painted_cells(&reversed),
+            vec![(72.0, 216.0), (288.0, 144.0), (432.0, 72.0)]
+        );
+
+        // Logical cell ownership does not reverse. Every cell keeps its source
+        // order, its text, its grid column and its width.
+        let logical = |document: &rdocx::Document| {
+            let table = document.table(0).expect("table");
+            let row = table.row(0).expect("row");
+            (0..row.cell_count())
+                .map(|index| row.cell(index).expect("cell").text())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(logical(&forward), logical(&reversed));
+
+        let mut table = shaded_table(&columns, &rows);
+        let forward_block = lay_out(&table, 468.0);
+        table
+            .properties
+            .as_mut()
+            .expect("table properties")
+            .bidi_visual = Some(true);
+        let reversed_block = lay_out(&table, 468.0);
+        assert!(!forward_block.bidi_visual);
+        assert!(reversed_block.bidi_visual);
+        let logical_geometry = |block: &rdocx_layout::table::TableBlock| {
+            block.rows[0]
+                .cells
+                .iter()
+                .map(|cell| (cell.col_index, (cell.width * 100.0).round() / 100.0))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            logical_geometry(&forward_block),
+            logical_geometry(&reversed_block)
+        );
+        assert_eq!(forward_block.col_widths, reversed_block.col_widths);
+        assert_eq!(forward_block.table_width, reversed_block.table_width);
+    }
+
+    #[test]
+    fn grid_before_and_width_before_offset_the_row_without_moving_the_table() {
+        let mut table = shaded_table(
+            &[1440, 2880, 4320],
+            &[&["a", "b", "c"], &["a", "b", "c"], &["a", "b", "c"]],
+        );
+        let plain = lay_out(&table, 468.0);
+
+        // The middle row omits its first grid column.
+        table.rows[1].cells.remove(0);
+        table.rows[1].properties = Some(CT_TrPr {
+            grid_before: Some(1),
+            ..CT_TrPr::default()
+        });
+        let omitted = lay_out(&table, 468.0);
+        assert_eq!(omitted.table_width, plain.table_width);
+        assert_eq!(omitted.rows[0].offset_left, 0.0);
+        assert_eq!(omitted.rows[2].offset_left, 0.0);
+        assert_eq!(omitted.rows[1].offset_left, 72.0);
+        // The remaining cells take the grid columns they actually occupy.
+        assert_eq!(
+            omitted.rows[1]
+                .cells
+                .iter()
+                .map(|cell| cell.col_index)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            omitted.rows[0]
+                .cells
+                .iter()
+                .map(|cell| (cell.col_index, cell.width))
+                .collect::<Vec<_>>(),
+            plain.rows[0]
+                .cells
+                .iter()
+                .map(|cell| (cell.col_index, cell.width))
+                .collect::<Vec<_>>()
+        );
+
+        // The same omission through the facade shifts only the painted cells
+        // of that one row.
+        let columns = [1440, 2880, 4320];
+        // The middle row's leading cell is empty, which is what lets it be
+        // replaced by a grid omission.
+        let rows: [&[&str]; 3] = [&["a", "b", "c"], &["", "b", "c"], &["a", "b", "c"]];
+        let mut document = shaded_document(&columns, &rows);
+        document
+            .table_mut(0)
+            .expect("table")
+            .set_row_grid_omissions(1, Some(1), None)
+            .expect("the leading column is empty and can be omitted");
+        assert_eq!(
+            painted_cells(&document),
+            vec![
+                (72.0, 72.0),
+                (144.0, 144.0),
+                (288.0, 216.0),
+                (144.0, 144.0),
+                (288.0, 216.0),
+                (72.0, 72.0),
+                (144.0, 144.0),
+                (288.0, 216.0),
+            ]
+        );
+
+        // An explicit `w:wBefore` replaces the omitted columns' own width.
+        table.rows[1]
+            .properties
+            .as_mut()
+            .expect("row properties")
+            .width_before = Some(CT_TblWidth::dxa(400));
+        let authored = lay_out(&table, 468.0);
+        assert_eq!(authored.rows[1].offset_left, 20.0);
+        assert_eq!(authored.table_width, plain.table_width);
+    }
+
+    #[test]
+    fn a_conditional_region_row_height_reaches_layout() {
+        let styles = CT_Styles::from_xml(
+            format!(
+                concat!(
+                    r#"<w:styles xmlns:w="{ns}">"#,
+                    r#"<w:style w:type="table" w:styleId="Banded">"#,
+                    r#"<w:tblStylePr w:type="firstRow"><w:trPr>"#,
+                    r#"<w:trHeight w:val="1440" w:hRule="exact"/><w:tblHeader/>"#,
+                    r#"</w:trPr></w:tblStylePr></w:style></w:styles>"#
+                ),
+                ns = rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .expect("conditional table style parses");
+        assert!(
+            styles
+                .get_by_id("Banded")
+                .expect("style is present")
+                .conditional_table_styles
+                .iter()
+                .any(|conditional| conditional.row_properties.is_some()),
+            "the conditional region carries row properties"
+        );
+
+        let mut table = shaded_table(&[2880, 2880], &[&["a", "b"], &["c", "d"]]);
+        let properties = table.properties.as_mut().expect("table properties");
+        properties.style_id = Some("Banded".to_owned());
+        properties.look = Some(rdocx_oxml::table::CT_TblLook {
+            first_row: Some(true),
+            ..rdocx_oxml::table::CT_TblLook::default()
+        });
+
+        let block = lay_out_with(&table, &styles, 468.0);
+        assert_eq!(block.rows[0].height, 72.0);
+        assert_eq!(block.header_row_indices, vec![0]);
+        assert!(block.rows[1].height < 72.0);
+    }
+
+    #[test]
+    fn an_authored_dxa_table_width_never_enters_the_autofit_path() {
+        // `Document::add_table` writes `w:tblW` as `dxa` unconditionally, so
+        // every authored table keeps its declared grid whatever the layout
+        // mode says.
+        let mut document = rdocx::Document::new();
+        {
+            let mut table = document.add_table(1, 3);
+            table.set_layout(rdocx::table::TableLayout::AutoFit);
+            for index in 0..3 {
+                table
+                    .row(0)
+                    .expect("row")
+                    .cell(index)
+                    .expect("cell")
+                    .set_text("x");
+            }
+        }
+        let bytes = document.to_bytes().expect("document saves");
+        let reopened = rdocx::Document::from_bytes(&bytes).expect("document reopens");
+        assert_eq!(
+            reopened.table(0).expect("table").width_mode(),
+            Some(rdocx::table::TableWidth::Fixed(rdocx::Length::twips(9360)))
+        );
+
+        let mut table = shaded_table(&[3120, 3120, 3120], &[&["x", "x", "x"]]);
+        table.properties.as_mut().expect("table properties").layout = Some("autofit".to_owned());
+        let block = lay_out(&table, 468.0);
+        assert_eq!(block.col_widths, vec![156.0, 156.0, 156.0]);
+        assert_eq!(block.table_width, 468.0);
+    }
+
+    #[test]
+    fn a_corpus_shaped_auto_width_table_without_explicit_autofit_keeps_its_grid() {
+        // Word writes `<w:tblW w:w="0" w:type="auto"/>` with no `w:tblLayout`
+        // for an ordinary table, and 131 of the 141 tables in the Word corpus
+        // have exactly that shape. Engagement requires the `w:tblLayout`
+        // element, so this shape keeps its declared grid. Admitting it moves
+        // the reference page count that
+        // `scripts/docx_authoring_conformance.py --private-required` pins.
+        let mut table = shaded_table(
+            &[1440, 7200],
+            &[&["ID", "A considerably longer second column heading"]],
+        );
+        let properties = table.properties.as_mut().expect("table properties");
+        properties.layout = None;
+        properties.width = Some(CT_TblWidth::auto());
+
+        let untouched = lay_out(&table, 468.0);
+        assert_eq!(untouched.col_widths, vec![72.0, 360.0]);
+
+        // Declaring the layout mode autofit opts the same table in, which is
+        // the positive arm of the same predicate.
+        table.properties.as_mut().expect("table properties").layout = Some("autofit".to_owned());
+        let autofitted = lay_out(&table, 468.0);
+        let rounded = autofitted
+            .col_widths
+            .iter()
+            .map(|width| (width * 100.0).round() / 100.0)
+            .collect::<Vec<_>>();
+        assert_eq!(rounded, vec![20.34, 215.19]);
+    }
+}
+
 mod f_x132_retained_namespace_owner_regressions {
     use rdocx::Document;
     use rdocx_oxml::namespace::W_NS;

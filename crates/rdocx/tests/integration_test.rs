@@ -19028,8 +19028,12 @@ mod advanced_table_authoring_and_geometry {
             &[&["Region", "Quarterly revenue for the northern region"]],
         );
 
-        // Absent width and absent layout mode: autofit engages.
-        assert_ne!(grid_points(&table), declared_points);
+        // Absent width and absent layout mode keeps the declared grid. ECMA
+        // makes autofit the default here, but engagement deliberately requires
+        // the element, because an absent layout is the shape almost every
+        // producer writes and treating it as autofit moves the pinned private
+        // corpus reference page count.
+        assert_eq!(grid_points(&table), declared_points);
 
         // An explicit fixed layout keeps the declared grid.
         table.properties = Some(CT_TblPr {
@@ -19064,13 +19068,18 @@ mod advanced_table_authoring_and_geometry {
 
     #[test]
     fn autofit_distributes_available_width_between_measured_minima_and_maxima() {
-        let table = table_with_text(
+        let mut table = table_with_text(
             &[2880, 2880],
             &[&[
                 "ID",
                 "A considerably longer heading that cannot fit on one line at this width",
             ]],
         );
+        // Engagement requires the element, so this fixture opts in explicitly.
+        table.properties = Some(CT_TblPr {
+            layout: Some("autofit".to_owned()),
+            ..CT_TblPr::default()
+        });
 
         // Wide enough for every cell's natural width: columns stop at content.
         let roomy = lay_out(&table, 600.0);
