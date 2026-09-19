@@ -1038,6 +1038,17 @@ and row or cell `xsd:sequence`, while unrelated row, cell, and border extension
 bytes remain exact. Checked nested tables are nonempty and retain the required
 trailing cell paragraph.
 
+Paragraph property readers select every modeled `w:pPr` child and attribute by
+its bound WordprocessingML namespace, and a foreign same-local child stays
+unmodelled in its own schema slot. Serialization writes canonical values with
+fixed `w` attributes at each child's `xsd:sequence` position and replays every
+retained raw child at its recorded slot and occurrence. `w:framePr` and each
+border edge write their retained attributes before the modeled ones, so typing
+those elements drops no producer attribute and keeps the retained ones in
+source order. A modeled toggle whose source element carried an attribute the
+model does not own replays that element in place of the canonical form, which
+keeps a parse and save of an untouched paragraph byte identical.
+
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
 with every inherited namespace binding they use. Typed table, cell, border,

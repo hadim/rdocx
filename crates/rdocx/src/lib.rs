@@ -99,8 +99,10 @@ pub use oxml_opc::{
 };
 pub use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 pub use paragraph::{
-    Alignment, BorderStyle, HyperlinkItemRef, HyperlinkRef, Paragraph, ParagraphBorderRef,
-    ParagraphItemRef, ParagraphRef, SectionBreak, TabAlignment, TabLeader,
+    Alignment, BorderStyle, DropCap, FrameAnchor, FrameWrap, HyperlinkItemRef, HyperlinkRef,
+    Paragraph, ParagraphBorderEdge, ParagraphBorderRef, ParagraphFrame, ParagraphItemRef,
+    ParagraphMark, ParagraphMarkRef, ParagraphRef, ParagraphTextAlignment, ParagraphTextDirection,
+    SectionBreak, TabAlignment, TabLeader, TabStopRef, TextboxTightWrap,
 };
 pub use rdocx_layout::RevisionView;
 pub use rdocx_oxml::header_footer::HdrFtrType;

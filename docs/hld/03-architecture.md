@@ -430,6 +430,19 @@ and every unmodelled property remain in their original schema slots. The
 and run properties from the final direct, style, and numbering identities. It
 does not maintain a second reader model.
 
+`CT_PPr` types the complete authored paragraph-property set. Text frame
+placement, line-number suppression, document-grid right indentation, contextual
+spacing, mirrored indentation, frame overlap suppression, text flow, vertical
+character alignment, text box tight wrap, and the web-settings division all
+have typed members beside the borders, shading, tabs, indentation, spacing, and
+paragraph-mark state that were already modeled. Every remaining `w:pPr` child
+keeps its original schema slot. A newly typed toggle retains its source element
+as an attribute carrier, so an attribute the model does not own survives being
+modeled. `CT_FramePr` and `CT_BorderEdge` retain their unmodelled attributes in
+source order and replay them ahead of the modeled ones. `CT_PPr` stores its
+frame and its borders behind a `Box`, which keeps the value small enough for
+recursive callers that carry paragraph properties on the stack.
+
 The low-level text reader decodes visible `w:t` and `w:delText` content
 fallibly and rejects malformed encoded values instead of publishing partial
 text. The numbering grammar types the complete standard `w:numFmt` token set
@@ -1087,6 +1100,16 @@ Both facades use the same borrow-handle idiom rdocx already has: a mutable
 consuming builders for formatting so calls chain, `&mut self` methods for adding
 content that return a nested handle, and index-based `Option`-returning
 accessors that never panic.
+
+`Paragraph` follows that idiom for the whole paragraph-property surface. Each
+property has a consuming builder, an in-place setter, and a `_value` form that
+takes an `Option` and removes the direct value, and every index accessor for a
+tab stop or a border edge returns an `Option`. `Paragraph::mark` returns a
+nested `ParagraphMark` handle over the paragraph mark's own run properties
+rather than adding a prefixed method per mark property. `ParagraphFrame` is the
+checked mirror of `w:framePr` and converts through the pinned truncating twip
+constructors. Relative frame alignment, the frame height rule, and any producer
+attribute are not mirrored and survive a facade write unchanged.
 
 The native Word facade creates a complete Word-compatible DOCX graph by
 default. `WordCreationProfile` separates package completeness from the four

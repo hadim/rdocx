@@ -18,11 +18,11 @@ use rdocx::{
     EmbeddedSignatureState, FieldDateTime, FieldEvaluationContext, FieldOutcome,
     FragmentConflictPolicy, HdrFtrType, HeaderFooterKind, HyperlinkItemRef, HyperlinkRef, Length,
     ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText, MailMergeImage,
-    MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions,
-    RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange, RunRef, StoryId,
-    StoryItemKind, StoryKind, StoryRunPosition, StoryRunRange, StyleBuilder, StyleType, TableRef,
-    TcField, TocEntrySelection, TocField, TocRebuildReport, UnderlineStyle, UnsupportedXmlRef,
-    WordCreationProfile, WordPackageClass,
+    MailMergeRecord, MailMergeValue, ParagraphFrame, ParagraphItemRef, ParagraphRef, RasterFormat,
+    RasterOptions, RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange,
+    RunRef, StoryId, StoryItemKind, StoryKind, StoryRunPosition, StoryRunRange, StyleBuilder,
+    StyleType, TableRef, TcField, TocEntrySelection, TocField, TocRebuildReport, UnderlineStyle,
+    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 use rdocx_oxml::content_control::SdtContent;
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
@@ -29501,5 +29501,115 @@ fn contributor_document_body_reader_semantics_survive_reopen() {
     assert_eq!(
         second_package.get_part("/word/document.xml"),
         Some(first_xml)
+    );
+}
+
+fn f264_document_bytes(paragraph_properties: &str) -> Vec<u8> {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            concat!(
+                r#"<w:document xmlns:w="{}"><w:body><w:p><w:pPr>{}</w:pPr>"#,
+                r#"<w:r><w:t>framed</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#,
+            ),
+            W_NS, paragraph_properties
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    bytes.into_inner()
+}
+
+fn f264_document_xml(bytes: &[u8]) -> String {
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+}
+
+#[test]
+fn a_paragraph_that_only_gains_a_modeled_frame_keeps_its_producer_attribute_order() {
+    let source = f264_document_bytes(concat!(
+        r#"<w:framePr xmlns:ext="urn:producer" ext:first="one" w:w="1440""#,
+        r#" ext:second="two" w:hRule="exact" w:xAlign="center"/>"#,
+    ));
+    let mut untouched = Document::from_bytes(&source).unwrap();
+    let saved = f264_document_xml(&untouched.to_bytes().unwrap());
+    let first = saved
+        .find(r#"ext:first="one""#)
+        .expect("the first producer attribute");
+    let second = saved
+        .find(r#"ext:second="two""#)
+        .expect("the second producer attribute");
+    assert!(first < second, "{saved}");
+    assert!(saved.contains(r#"xmlns:ext="urn:producer""#), "{saved}");
+    assert!(saved.contains(r#"w:w="1440""#), "{saved}");
+
+    let mut widened = Document::from_bytes(&source).unwrap();
+    let frame = widened
+        .paragraph(0)
+        .unwrap()
+        .frame()
+        .expect("a typed frame");
+    widened.paragraph_mut(0).unwrap().set_frame(ParagraphFrame {
+        width: Some(Length::twips(2880)),
+        ..frame
+    });
+    let mutated = f264_document_xml(&widened.to_bytes().unwrap());
+    let first = mutated
+        .find(r#"ext:first="one""#)
+        .expect("the first producer attribute");
+    let second = mutated
+        .find(r#"ext:second="two""#)
+        .expect("the second producer attribute");
+    assert!(first < second, "{mutated}");
+    assert!(mutated.contains(r#"w:w="2880""#), "{mutated}");
+    assert!(mutated.contains(r#"w:hRule="exact""#), "{mutated}");
+    assert!(mutated.contains(r#"w:xAlign="center""#), "{mutated}");
+}
+
+#[test]
+fn logical_indentation_set_through_the_facade_survives_save_and_reopen() {
+    let mut document = Document::new();
+    {
+        let mut paragraph = document.add_paragraph("logical");
+        paragraph.set_indent_start(Length::twips(720));
+        paragraph.set_indent_end(Length::twips(360));
+    }
+
+    let bytes = document.to_bytes().unwrap();
+    let xml = f264_document_xml(&bytes);
+    assert!(xml.contains(r#"w:start="720""#), "{xml}");
+    assert!(xml.contains(r#"w:end="360""#), "{xml}");
+
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    assert_eq!(paragraph.indent_start(), Some(Length::twips(720)));
+    assert_eq!(paragraph.indent_end(), Some(Length::twips(360)));
+}
+
+#[test]
+fn clearing_the_last_paragraph_property_removes_the_empty_ppr() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("cleared")
+        .set_contextual_spacing(true);
+    assert!(f264_document_xml(&document.to_bytes().unwrap()).contains("<w:contextualSpacing/>"),);
+
+    document
+        .paragraph_mut(0)
+        .unwrap()
+        .set_contextual_spacing_value(None);
+    let xml = f264_document_xml(&document.to_bytes().unwrap());
+    assert!(!xml.contains("<w:pPr"), "{xml}");
+    assert_eq!(
+        Document::from_bytes(&document.to_bytes().unwrap())
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .contextual_spacing_value(),
+        None
     );
 }

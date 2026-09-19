@@ -27,8 +27,158 @@ use crate::properties::{
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
 use crate::run_properties::CT_RPr;
-use crate::shared::ST_Jc;
+use crate::shared::{ST_Jc, ST_OnOff};
 use crate::units::Twips;
+
+/// `CT_FramePr` — Text frame placement for a paragraph (`w:framePr`).
+///
+/// Every member is an attribute. A value outside its `ST_*` enumeration stays
+/// a `String` so a producer token survives unchanged.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CT_FramePr {
+    /// Drop cap placement (@w:dropCap): "none", "drop", "margin".
+    pub drop_cap: Option<String>,
+    /// Drop cap height in lines (@w:lines).
+    pub lines: Option<u32>,
+    /// Frame width in twips (@w:w).
+    pub w: Option<Twips>,
+    /// Frame height in twips (@w:h).
+    pub h: Option<Twips>,
+    /// Vertical distance from the surrounding text in twips (@w:vSpace).
+    pub v_space: Option<Twips>,
+    /// Horizontal distance from the surrounding text in twips (@w:hSpace).
+    pub h_space: Option<Twips>,
+    /// Text wrapping around the frame (@w:wrap).
+    pub wrap: Option<String>,
+    /// Horizontal anchor (@w:hAnchor): "margin", "page", "text".
+    pub h_anchor: Option<String>,
+    /// Vertical anchor (@w:vAnchor): "margin", "page", "text".
+    pub v_anchor: Option<String>,
+    /// Absolute horizontal position in twips (@w:x).
+    pub x: Option<Twips>,
+    /// Relative horizontal alignment (@w:xAlign).
+    pub x_align: Option<String>,
+    /// Absolute vertical position in twips (@w:y).
+    pub y: Option<Twips>,
+    /// Relative vertical alignment (@w:yAlign).
+    pub y_align: Option<String>,
+    /// Frame height rule (@w:hRule): "auto", "atLeast", "exact".
+    pub h_rule: Option<String>,
+    /// Whether the frame stays with the paragraph it anchors (@w:anchorLock).
+    pub anchor_lock: Option<bool>,
+    /// Attributes this type does not model, in source order.
+    ///
+    /// Names and values keep their stored spelling, and they are written back
+    /// ahead of the modeled attributes so typing `w:framePr` drops nothing.
+    /// The value is serialized verbatim, so a caller storing one itself is
+    /// storing attribute-value syntax and owns the escaping.
+    pub extra_attributes: Vec<(String, String)>,
+}
+
+impl CT_FramePr {
+    fn from_xml_attrs_with_prefixes(e: &BytesStart, word_prefixes: &[String]) -> Result<Self> {
+        let mut frame = CT_FramePr::default();
+        for attribute in e.attributes() {
+            let attribute = attribute?;
+            let key = attribute.key.as_ref();
+            let value = std::str::from_utf8(&attribute.value)?;
+            if is_word_attribute(key, b"dropCap", word_prefixes) {
+                frame.drop_cap = Some(value.to_owned());
+            } else if is_word_attribute(key, b"lines", word_prefixes) {
+                frame.lines = Some(value.parse()?);
+            } else if is_word_attribute(key, b"w", word_prefixes) {
+                frame.w = Some(Twips(value.parse()?));
+            } else if is_word_attribute(key, b"h", word_prefixes) {
+                frame.h = Some(Twips(value.parse()?));
+            } else if is_word_attribute(key, b"vSpace", word_prefixes) {
+                frame.v_space = Some(Twips(value.parse()?));
+            } else if is_word_attribute(key, b"hSpace", word_prefixes) {
+                frame.h_space = Some(Twips(value.parse()?));
+            } else if is_word_attribute(key, b"wrap", word_prefixes) {
+                frame.wrap = Some(value.to_owned());
+            } else if is_word_attribute(key, b"hAnchor", word_prefixes) {
+                frame.h_anchor = Some(value.to_owned());
+            } else if is_word_attribute(key, b"vAnchor", word_prefixes) {
+                frame.v_anchor = Some(value.to_owned());
+            } else if is_word_attribute(key, b"x", word_prefixes) {
+                frame.x = Some(Twips(value.parse()?));
+            } else if is_word_attribute(key, b"xAlign", word_prefixes) {
+                frame.x_align = Some(value.to_owned());
+            } else if is_word_attribute(key, b"y", word_prefixes) {
+                frame.y = Some(Twips(value.parse()?));
+            } else if is_word_attribute(key, b"yAlign", word_prefixes) {
+                frame.y_align = Some(value.to_owned());
+            } else if is_word_attribute(key, b"hRule", word_prefixes) {
+                frame.h_rule = Some(value.to_owned());
+            } else if is_word_attribute(key, b"anchorLock", word_prefixes) {
+                frame.anchor_lock = Some(ST_OnOff::from_str_or_default(Some(value)).is_on());
+            } else {
+                frame
+                    .extra_attributes
+                    .push((std::str::from_utf8(key)?.to_owned(), value.to_owned()));
+            }
+        }
+        Ok(frame)
+    }
+
+    fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut buf = itoa::Buffer::new();
+        let mut e = BytesStart::new("w:framePr");
+        for (name, value) in &self.extra_attributes {
+            e.push_attribute(Attribute {
+                key: QName(name.as_bytes()),
+                value: Cow::Borrowed(value.as_bytes()),
+            });
+        }
+        if let Some(ref drop_cap) = self.drop_cap {
+            e.push_attribute(("w:dropCap", drop_cap.as_str()));
+        }
+        if let Some(lines) = self.lines {
+            e.push_attribute(("w:lines", buf.format(lines)));
+        }
+        if let Some(w) = self.w {
+            e.push_attribute(("w:w", buf.format(w.0)));
+        }
+        if let Some(h) = self.h {
+            e.push_attribute(("w:h", buf.format(h.0)));
+        }
+        if let Some(v_space) = self.v_space {
+            e.push_attribute(("w:vSpace", buf.format(v_space.0)));
+        }
+        if let Some(h_space) = self.h_space {
+            e.push_attribute(("w:hSpace", buf.format(h_space.0)));
+        }
+        if let Some(ref wrap) = self.wrap {
+            e.push_attribute(("w:wrap", wrap.as_str()));
+        }
+        if let Some(ref h_anchor) = self.h_anchor {
+            e.push_attribute(("w:hAnchor", h_anchor.as_str()));
+        }
+        if let Some(ref v_anchor) = self.v_anchor {
+            e.push_attribute(("w:vAnchor", v_anchor.as_str()));
+        }
+        if let Some(x) = self.x {
+            e.push_attribute(("w:x", buf.format(x.0)));
+        }
+        if let Some(ref x_align) = self.x_align {
+            e.push_attribute(("w:xAlign", x_align.as_str()));
+        }
+        if let Some(y) = self.y {
+            e.push_attribute(("w:y", buf.format(y.0)));
+        }
+        if let Some(ref y_align) = self.y_align {
+            e.push_attribute(("w:yAlign", y_align.as_str()));
+        }
+        if let Some(ref h_rule) = self.h_rule {
+            e.push_attribute(("w:hRule", h_rule.as_str()));
+        }
+        if let Some(anchor_lock) = self.anchor_lock {
+            e.push_attribute(("w:anchorLock", if anchor_lock { "1" } else { "0" }));
+        }
+        writer.write_event(Event::Empty(e))?;
+        Ok(())
+    }
+}
 
 /// `CT_PPr` — Paragraph properties.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -73,10 +223,36 @@ pub struct CT_PPr {
     pub suppress_auto_hyphens: Option<bool>,
     /// Paragraph base direction (bidi).
     pub bidi: Option<bool>,
+    /// Text frame placement (framePr).
+    ///
+    /// Boxed because a frame is rare and `CT_FramePr` is large next to the
+    /// rest of this struct, which sits on the stack in recursive callers.
+    pub frame: Option<Box<CT_FramePr>>,
+    /// Suppress line numbering for this paragraph (suppressLineNumbers)
+    pub suppress_line_numbers: Option<bool>,
+    /// Adjust right indentation for a document grid (adjustRightInd)
+    pub adjust_right_ind: Option<bool>,
+    /// Drop the space between paragraphs of the same style (contextualSpacing)
+    pub contextual_spacing: Option<bool>,
+    /// Swap inside and outside indentation on facing pages (mirrorIndents)
+    pub mirror_indents: Option<bool>,
+    /// Suppress overlap with a neighbouring frame (suppressOverlap)
+    pub suppress_overlap: Option<bool>,
+    /// Paragraph text flow (textDirection/@w:val), e.g. "lrTb" or "tbRlV".
+    pub text_direction: Option<String>,
+    /// Vertical character alignment on a line (textAlignment/@w:val).
+    pub text_alignment: Option<String>,
+    /// Text box tight wrap mode (textboxTightWrap/@w:val).
+    pub textbox_tight_wrap: Option<String>,
+    /// Web settings division this paragraph belongs to (divId/@w:val).
+    pub div_id: Option<u32>,
     /// Outline level 0-8 (outlineLvl)
     pub outline_lvl: Option<u32>,
-    /// Paragraph borders (pBdr)
-    pub borders: Option<CT_PBdr>,
+    /// Paragraph borders (pBdr).
+    ///
+    /// Boxed for the same reason as [`CT_PPr::frame`]. Six typed edges are
+    /// large next to the rest of this struct.
+    pub borders: Option<Box<CT_PBdr>>,
     /// Tab stops (tabs)
     pub tabs: Option<CT_Tabs>,
     /// Paragraph shading (shd)
@@ -124,17 +300,27 @@ const PPR_STYLE_SLOT: u8 = 0;
 const PPR_KEEP_NEXT_SLOT: u8 = 1;
 const PPR_KEEP_LINES_SLOT: u8 = 2;
 const PPR_PAGE_BREAK_SLOT: u8 = 3;
+const PPR_FRAME_SLOT: u8 = 4;
 const PPR_WIDOW_SLOT: u8 = 5;
 const PPR_NUM_SLOT: u8 = 6;
+const PPR_SUPPRESS_LINE_NUMBERS_SLOT: u8 = 7;
 const PPR_BORDER_SLOT: u8 = 8;
 const PPR_SHADING_SLOT: u8 = 9;
 const PPR_TABS_SLOT: u8 = 10;
 const PPR_SUPPRESS_HYPHENS_SLOT: u8 = 11;
 const PPR_BIDI_SLOT: u8 = 18;
+const PPR_ADJUST_RIGHT_IND_SLOT: u8 = 19;
 const PPR_SPACING_SLOT: u8 = 21;
 const PPR_INDENT_SLOT: u8 = 22;
+const PPR_CONTEXTUAL_SPACING_SLOT: u8 = 23;
+const PPR_MIRROR_INDENTS_SLOT: u8 = 24;
+const PPR_SUPPRESS_OVERLAP_SLOT: u8 = 25;
 const PPR_JUSTIFICATION_SLOT: u8 = 26;
+const PPR_TEXT_DIRECTION_SLOT: u8 = 27;
+const PPR_TEXT_ALIGNMENT_SLOT: u8 = 28;
+const PPR_TEXTBOX_TIGHT_WRAP_SLOT: u8 = 29;
 const PPR_OUTLINE_SLOT: u8 = 30;
+const PPR_DIV_ID_SLOT: u8 = 31;
 const PPR_RUN_PROPERTIES_SLOT: u8 = 33;
 const PPR_SECTION_SLOT: u8 = 34;
 const PPR_CHANGE_SLOT: u8 = 35;
@@ -425,7 +611,7 @@ impl CT_PPr {
         let mut numbering_change_raw_index = 0usize;
         let mut pending_raw = Vec::new();
         let mut occurrences = [0usize; PPR_END_SLOT as usize + 1];
-        let mut bidi_carrier_required = false;
+        let mut toggle_carrier_required = [false; PPR_END_SLOT as usize + 1];
         let mut buf = Vec::new();
 
         loop {
@@ -456,7 +642,9 @@ impl CT_PPr {
                             &mut numbering_change_raw_index,
                         )?;
                     } else if is_word_element(name.as_ref(), b"pBdr", &prefixes) {
-                        ppr.borders = Some(CT_PBdr::from_xml_with_prefixes(reader, &prefixes)?);
+                        ppr.borders = Some(Box::new(CT_PBdr::from_xml_with_prefixes(
+                            reader, &prefixes,
+                        )?));
                     } else if is_word_element(name.as_ref(), b"tabs", &prefixes) {
                         ppr.tabs = Some(CT_Tabs::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
@@ -492,24 +680,27 @@ impl CT_PPr {
                             owner_bindings,
                         )?;
                         pending_raw.push(raw);
-                    } else if is_word_element(name.as_ref(), b"bidi", &prefixes) {
+                    } else if let Some(slot) = ppr_toggle_slot(name.as_ref(), &prefixes) {
                         let captured = capture_element(reader, e)?;
                         let raw =
                             crate::text::raw_with_external_bindings(&captured, owner_bindings)?;
                         if toggle_element_is_explicitly_empty(&captured)? {
-                            ppr.bidi = Some(parse_word_toggle(e, &prefixes)?);
-                            bidi_carrier_required =
+                            let value = parse_word_toggle(e, &prefixes)?;
+                            if let Some(field) = ppr_toggle_field_mut(&mut ppr, slot) {
+                                *field = Some(value);
+                            }
+                            toggle_carrier_required[slot as usize] =
                                 toggle_has_unsupported_attributes(e, &prefixes)?;
                             record_modeled_toggle_candidate(
                                 &mut ppr.revision_xml,
                                 &mut ppr.revision_xml_positions,
                                 raw,
-                                PPR_BIDI_SLOT,
-                                occurrences[PPR_BIDI_SLOT as usize] - 1,
+                                slot,
+                                occurrences[slot as usize] - 1,
                             );
                         } else {
-                            let occurrence = occurrences[PPR_BIDI_SLOT as usize] - 1;
-                            record_ppr_raw_at(&mut ppr, raw, PPR_BIDI_SLOT, occurrence);
+                            let occurrence = occurrences[slot as usize] - 1;
+                            record_ppr_raw_at(&mut ppr, raw, slot, occurrence);
                         }
                     } else {
                         let raw = crate::text::raw_with_external_bindings(
@@ -583,9 +774,13 @@ impl CT_PPr {
                         ppr.widow_control = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"suppressAutoHyphens", &prefixes) {
                         ppr.suppress_auto_hyphens = Some(parse_word_toggle(e, &prefixes)?);
-                    } else if is_word_element(name.as_ref(), b"bidi", &prefixes) {
-                        ppr.bidi = Some(parse_word_toggle(e, &prefixes)?);
-                        bidi_carrier_required = toggle_has_unsupported_attributes(e, &prefixes)?;
+                    } else if let Some(slot) = ppr_toggle_slot(name.as_ref(), &prefixes) {
+                        let value = parse_word_toggle(e, &prefixes)?;
+                        if let Some(field) = ppr_toggle_field_mut(&mut ppr, slot) {
+                            *field = Some(value);
+                        }
+                        toggle_carrier_required[slot as usize] =
+                            toggle_has_unsupported_attributes(e, &prefixes)?;
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_empty_element(e)?,
                             owner_bindings,
@@ -594,9 +789,23 @@ impl CT_PPr {
                             &mut ppr.revision_xml,
                             &mut ppr.revision_xml_positions,
                             raw,
-                            PPR_BIDI_SLOT,
-                            occurrences[PPR_BIDI_SLOT as usize] - 1,
+                            slot,
+                            occurrences[slot as usize] - 1,
                         );
+                    } else if is_word_element(name.as_ref(), b"framePr", &prefixes) {
+                        ppr.frame = Some(Box::new(CT_FramePr::from_xml_attrs_with_prefixes(
+                            e, &prefixes,
+                        )?));
+                    } else if is_word_element(name.as_ref(), b"textDirection", &prefixes) {
+                        ppr.text_direction = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"textAlignment", &prefixes) {
+                        ppr.text_alignment = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"textboxTightWrap", &prefixes) {
+                        ppr.textbox_tight_wrap = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"divId", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
+                            ppr.div_id = Some(val.parse()?);
+                        }
                     } else if is_word_element(name.as_ref(), b"outlineLvl", &prefixes) {
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             ppr.outline_lvl = Some(val.parse()?);
@@ -652,12 +861,14 @@ impl CT_PPr {
         }
 
         flush_ppr_raw(&mut ppr, &mut pending_raw, PPR_END_SLOT);
-        remove_redundant_modeled_toggle_candidate(
-            &mut ppr.revision_xml,
-            &mut ppr.revision_xml_positions,
-            PPR_BIDI_SLOT,
-            bidi_carrier_required,
-        );
+        for (_, slot) in PPR_MODELED_TOGGLES {
+            remove_redundant_modeled_toggle_candidate(
+                &mut ppr.revision_xml,
+                &mut ppr.revision_xml_positions,
+                slot,
+                toggle_carrier_required[slot as usize],
+            );
+        }
 
         Ok(ppr)
     }
@@ -905,6 +1116,9 @@ impl CT_PPr {
         if let Some(page_break) = self.page_break_before {
             write_toggle(writer, "w:pageBreakBefore", page_break)?;
         }
+        if let Some(ref frame) = self.frame {
+            frame.to_xml(writer)?;
+        }
         if let Some(widow) = self.widow_control {
             write_toggle(writer, "w:widowControl", widow)?;
         }
@@ -1018,6 +1232,10 @@ impl CT_PPr {
             writer.write_event(Event::End(BytesEnd::new("w:numPr")))?;
         }
 
+        if let Some(suppress) = self.suppress_line_numbers {
+            write_toggle(writer, "w:suppressLineNumbers", suppress)?;
+        }
+
         // pBdr
         if let Some(ref borders) = self.borders
             && !borders.is_empty()
@@ -1041,6 +1259,10 @@ impl CT_PPr {
 
         if let Some(bidi) = self.bidi {
             write_toggle(writer, "w:bidi", bidi)?;
+        }
+
+        if let Some(adjust) = self.adjust_right_ind {
+            write_toggle(writer, "w:adjustRightInd", adjust)?;
         }
 
         // spacing
@@ -1102,15 +1324,47 @@ impl CT_PPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        if let Some(contextual) = self.contextual_spacing {
+            write_toggle(writer, "w:contextualSpacing", contextual)?;
+        }
+        if let Some(mirror) = self.mirror_indents {
+            write_toggle(writer, "w:mirrorIndents", mirror)?;
+        }
+        if let Some(overlap) = self.suppress_overlap {
+            write_toggle(writer, "w:suppressOverlap", overlap)?;
+        }
+
         if let Some(jc) = self.jc {
             let mut e = BytesStart::new("w:jc");
             e.push_attribute(("w:val", jc.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
+        if let Some(ref direction) = self.text_direction {
+            let mut e = BytesStart::new("w:textDirection");
+            e.push_attribute(("w:val", direction.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+        if let Some(ref alignment) = self.text_alignment {
+            let mut e = BytesStart::new("w:textAlignment");
+            e.push_attribute(("w:val", alignment.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+        if let Some(ref tight_wrap) = self.textbox_tight_wrap {
+            let mut e = BytesStart::new("w:textboxTightWrap");
+            e.push_attribute(("w:val", tight_wrap.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+
         if let Some(lvl) = self.outline_lvl {
             let mut e = BytesStart::new("w:outlineLvl");
             e.push_attribute(("w:val", buf.format(lvl)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        if let Some(div_id) = self.div_id {
+            let mut e = BytesStart::new("w:divId");
+            e.push_attribute(("w:val", buf.format(div_id)));
             writer.write_event(Event::Empty(e))?;
         }
 
@@ -1153,6 +1407,16 @@ impl CT_PPr {
             && self.widow_control.is_none()
             && self.suppress_auto_hyphens.is_none()
             && self.bidi.is_none()
+            && self.frame.is_none()
+            && self.suppress_line_numbers.is_none()
+            && self.adjust_right_ind.is_none()
+            && self.contextual_spacing.is_none()
+            && self.mirror_indents.is_none()
+            && self.suppress_overlap.is_none()
+            && self.text_direction.is_none()
+            && self.text_alignment.is_none()
+            && self.textbox_tight_wrap.is_none()
+            && self.div_id.is_none()
             && self.outline_lvl.is_none()
             && self.borders.is_none()
             && self.tabs.is_none()
@@ -1234,6 +1498,36 @@ impl CT_PPr {
         if other.bidi.is_some() {
             self.bidi = other.bidi;
         }
+        if other.frame.is_some() {
+            self.frame = other.frame.clone();
+        }
+        if other.suppress_line_numbers.is_some() {
+            self.suppress_line_numbers = other.suppress_line_numbers;
+        }
+        if other.adjust_right_ind.is_some() {
+            self.adjust_right_ind = other.adjust_right_ind;
+        }
+        if other.contextual_spacing.is_some() {
+            self.contextual_spacing = other.contextual_spacing;
+        }
+        if other.mirror_indents.is_some() {
+            self.mirror_indents = other.mirror_indents;
+        }
+        if other.suppress_overlap.is_some() {
+            self.suppress_overlap = other.suppress_overlap;
+        }
+        if other.text_direction.is_some() {
+            self.text_direction = other.text_direction.clone();
+        }
+        if other.text_alignment.is_some() {
+            self.text_alignment = other.text_alignment.clone();
+        }
+        if other.textbox_tight_wrap.is_some() {
+            self.textbox_tight_wrap = other.textbox_tight_wrap.clone();
+        }
+        if other.div_id.is_some() {
+            self.div_id = other.div_id;
+        }
         if other.outline_lvl.is_some() {
             self.outline_lvl = other.outline_lvl;
         }
@@ -1262,10 +1556,8 @@ fn write_ppr_with_positioned_raw<W: std::io::Write>(
 ) -> Result<()> {
     let mut raw_order = (0..ppr.revision_xml.len())
         .filter(|index| {
-            replay_modeled_toggle_raw(
-                ppr.revision_xml_positions[*index],
-                ppr.revision_xml_positions[*index].0 != PPR_BIDI_SLOT || ppr.bidi.is_some(),
-            )
+            let position = ppr.revision_xml_positions[*index];
+            replay_modeled_toggle_raw(position, ppr_modeled_toggle_present(ppr, position.0))
         })
         .collect::<Vec<_>>();
     raw_order.sort_by_key(|index| {
@@ -1356,13 +1648,15 @@ fn write_ppr_raw_before<W: std::io::Write>(
 fn effective_ppr_raw_position(ppr: &CT_PPr, index: usize) -> (u8, usize) {
     let mut position = ppr.revision_xml_positions[index];
     position.1 = raw_occurrence(position);
-    if position.0 == PPR_BIDI_SLOT
+    if PPR_MODELED_TOGGLES
+        .iter()
+        .any(|(_, slot)| *slot == position.0)
         && let Some((carrier_index, carrier_occurrence)) = ppr
             .revision_xml_positions
             .iter()
             .enumerate()
             .find(|candidate| {
-                candidate.1.0 == PPR_BIDI_SLOT && raw_is_modeled_attribute_carrier(*candidate.1)
+                candidate.1.0 == position.0 && raw_is_modeled_attribute_carrier(*candidate.1)
             })
             .map(|(carrier_index, candidate)| (carrier_index, raw_occurrence(*candidate)))
     {
@@ -1384,10 +1678,10 @@ fn ppr_slot_for_name(local: &[u8]) -> u8 {
         b"keepNext" => PPR_KEEP_NEXT_SLOT,
         b"keepLines" => PPR_KEEP_LINES_SLOT,
         b"pageBreakBefore" => PPR_PAGE_BREAK_SLOT,
-        b"framePr" => 4,
+        b"framePr" => PPR_FRAME_SLOT,
         b"widowControl" => PPR_WIDOW_SLOT,
         b"numPr" => PPR_NUM_SLOT,
-        b"suppressLineNumbers" => 7,
+        b"suppressLineNumbers" => PPR_SUPPRESS_LINE_NUMBERS_SLOT,
         b"pBdr" => PPR_BORDER_SLOT,
         b"shd" => PPR_SHADING_SLOT,
         b"tabs" => PPR_TABS_SLOT,
@@ -1399,19 +1693,19 @@ fn ppr_slot_for_name(local: &[u8]) -> u8 {
         b"autoSpaceDE" => 16,
         b"autoSpaceDN" => 17,
         b"bidi" => PPR_BIDI_SLOT,
-        b"adjustRightInd" => 19,
+        b"adjustRightInd" => PPR_ADJUST_RIGHT_IND_SLOT,
         b"snapToGrid" => 20,
         b"spacing" => PPR_SPACING_SLOT,
         b"ind" => PPR_INDENT_SLOT,
-        b"contextualSpacing" => 23,
-        b"mirrorIndents" => 24,
-        b"suppressOverlap" => 25,
+        b"contextualSpacing" => PPR_CONTEXTUAL_SPACING_SLOT,
+        b"mirrorIndents" => PPR_MIRROR_INDENTS_SLOT,
+        b"suppressOverlap" => PPR_SUPPRESS_OVERLAP_SLOT,
         b"jc" => PPR_JUSTIFICATION_SLOT,
-        b"textDirection" => 27,
-        b"textAlignment" => 28,
-        b"textboxTightWrap" => 29,
+        b"textDirection" => PPR_TEXT_DIRECTION_SLOT,
+        b"textAlignment" => PPR_TEXT_ALIGNMENT_SLOT,
+        b"textboxTightWrap" => PPR_TEXTBOX_TIGHT_WRAP_SLOT,
         b"outlineLvl" => PPR_OUTLINE_SLOT,
-        b"divId" => 31,
+        b"divId" => PPR_DIV_ID_SLOT,
         b"cnfStyle" => 32,
         b"rPr" => PPR_RUN_PROPERTIES_SLOT,
         b"sectPr" => PPR_SECTION_SLOT,
@@ -1437,22 +1731,83 @@ fn ppr_modeled_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
             | b"keepNext"
             | b"keepLines"
             | b"pageBreakBefore"
+            | b"framePr"
             | b"widowControl"
             | b"numPr"
+            | b"suppressLineNumbers"
             | b"pBdr"
             | b"shd"
             | b"tabs"
             | b"suppressAutoHyphens"
             | b"bidi"
+            | b"adjustRightInd"
             | b"spacing"
             | b"ind"
+            | b"contextualSpacing"
+            | b"mirrorIndents"
+            | b"suppressOverlap"
             | b"jc"
+            | b"textDirection"
+            | b"textAlignment"
+            | b"textboxTightWrap"
             | b"outlineLvl"
+            | b"divId"
             | b"rPr"
             | b"sectPr"
             | b"pPrChange"
     )
     .then(|| ppr_slot_for_name(local))
+}
+
+/// The `w:pPr` toggles that retain their source element as an attribute
+/// carrier, so an unowned attribute survives being modeled.
+const PPR_MODELED_TOGGLES: [(&[u8], u8); 6] = [
+    (b"bidi", PPR_BIDI_SLOT),
+    (b"suppressLineNumbers", PPR_SUPPRESS_LINE_NUMBERS_SLOT),
+    (b"adjustRightInd", PPR_ADJUST_RIGHT_IND_SLOT),
+    (b"contextualSpacing", PPR_CONTEXTUAL_SPACING_SLOT),
+    (b"mirrorIndents", PPR_MIRROR_INDENTS_SLOT),
+    (b"suppressOverlap", PPR_SUPPRESS_OVERLAP_SLOT),
+];
+
+/// The schema slot of a modeled `w:pPr` toggle, or `None` for any other
+/// element name.
+fn ppr_toggle_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
+    let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
+    if !is_word_element(name, local, word_prefixes) {
+        return None;
+    }
+    PPR_MODELED_TOGGLES
+        .iter()
+        .find(|(candidate, _)| *candidate == local)
+        .map(|(_, slot)| *slot)
+}
+
+fn ppr_toggle_field_mut(ppr: &mut CT_PPr, slot: u8) -> Option<&mut Option<bool>> {
+    match slot {
+        PPR_BIDI_SLOT => Some(&mut ppr.bidi),
+        PPR_SUPPRESS_LINE_NUMBERS_SLOT => Some(&mut ppr.suppress_line_numbers),
+        PPR_ADJUST_RIGHT_IND_SLOT => Some(&mut ppr.adjust_right_ind),
+        PPR_CONTEXTUAL_SPACING_SLOT => Some(&mut ppr.contextual_spacing),
+        PPR_MIRROR_INDENTS_SLOT => Some(&mut ppr.mirror_indents),
+        PPR_SUPPRESS_OVERLAP_SLOT => Some(&mut ppr.suppress_overlap),
+        _ => None,
+    }
+}
+
+/// Whether the modeled toggle at `slot` still has a value, which decides
+/// whether a retained duplicate carrier replays. A slot that is not a modeled
+/// toggle is always present, so every other retained child is unaffected.
+fn ppr_modeled_toggle_present(ppr: &CT_PPr, slot: u8) -> bool {
+    match slot {
+        PPR_BIDI_SLOT => ppr.bidi.is_some(),
+        PPR_SUPPRESS_LINE_NUMBERS_SLOT => ppr.suppress_line_numbers.is_some(),
+        PPR_ADJUST_RIGHT_IND_SLOT => ppr.adjust_right_ind.is_some(),
+        PPR_CONTEXTUAL_SPACING_SLOT => ppr.contextual_spacing.is_some(),
+        PPR_MIRROR_INDENTS_SLOT => ppr.mirror_indents.is_some(),
+        PPR_SUPPRESS_OVERLAP_SLOT => ppr.suppress_overlap.is_some(),
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -1607,6 +1962,211 @@ mod tests {
         let shd = ppr.shading.unwrap();
         assert_eq!(shd.val, "clear");
         assert_eq!(shd.fill, Some("FFFF00".to_string()));
+    }
+
+    fn write_ppr(ppr: &CT_PPr) -> String {
+        let mut output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    fn assert_token_order(output: &str, tokens: &[&str]) {
+        let positions = tokens
+            .iter()
+            .map(|token| {
+                output
+                    .find(token)
+                    .unwrap_or_else(|| panic!("missing {token}: {output}"))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn frame_properties_round_trip_every_modeled_attribute() {
+        let source = concat!(
+            r#"<w:framePr xmlns:ext="urn:producer" ext:first="kept" w:dropCap="drop" w:lines="3""#,
+            r#" w:w="2880" w:h="1440" w:vSpace="120" w:hSpace="240" w:wrap="around""#,
+            r#" w:hAnchor="margin" w:vAnchor="text" w:x="720" w:xAlign="center" w:y="360""#,
+            r#" w:yAlign="top" w:hRule="exact" w:anchorLock="1" ext:last="kept"/>"#,
+        );
+        let ppr = parse_ppr(source);
+        let frame = *ppr.frame.clone().expect("a typed w:framePr");
+        assert_eq!(frame.drop_cap.as_deref(), Some("drop"));
+        assert_eq!(frame.lines, Some(3));
+        assert_eq!(frame.w, Some(Twips(2880)));
+        assert_eq!(frame.h, Some(Twips(1440)));
+        assert_eq!(frame.v_space, Some(Twips(120)));
+        assert_eq!(frame.h_space, Some(Twips(240)));
+        assert_eq!(frame.wrap.as_deref(), Some("around"));
+        assert_eq!(frame.h_anchor.as_deref(), Some("margin"));
+        assert_eq!(frame.v_anchor.as_deref(), Some("text"));
+        assert_eq!(frame.x, Some(Twips(720)));
+        assert_eq!(frame.x_align.as_deref(), Some("center"));
+        assert_eq!(frame.y, Some(Twips(360)));
+        assert_eq!(frame.y_align.as_deref(), Some("top"));
+        assert_eq!(frame.h_rule.as_deref(), Some("exact"));
+        assert_eq!(frame.anchor_lock, Some(true));
+        assert_eq!(
+            frame.extra_attributes,
+            vec![
+                ("xmlns:ext".to_owned(), "urn:producer".to_owned()),
+                ("ext:first".to_owned(), "kept".to_owned()),
+                ("ext:last".to_owned(), "kept".to_owned()),
+            ]
+        );
+
+        let output = write_ppr(&ppr);
+        assert_eq!(
+            output,
+            concat!(
+                r#"<w:pPr><w:framePr xmlns:ext="urn:producer" ext:first="kept" ext:last="kept""#,
+                r#" w:dropCap="drop" w:lines="3" w:w="2880" w:h="1440" w:vSpace="120""#,
+                r#" w:hSpace="240" w:wrap="around" w:hAnchor="margin" w:vAnchor="text""#,
+                r#" w:x="720" w:xAlign="center" w:y="360" w:yAlign="top" w:hRule="exact""#,
+                r#" w:anchorLock="1"/></w:pPr>"#,
+            )
+        );
+
+        let reopened = parse_ppr(
+            output
+                .strip_prefix("<w:pPr>")
+                .unwrap()
+                .strip_suffix("</w:pPr>")
+                .unwrap(),
+        );
+        assert_eq!(reopened.frame, ppr.frame);
+        assert_eq!(write_ppr(&reopened), output);
+    }
+
+    #[test]
+    fn modeled_paragraph_children_serialize_in_schema_sequence_order() {
+        let mut ppr = parse_ppr(
+            r#"<w:kinsoku/><w:snapToGrid/><w:cnfStyle w:val="100000000000"/><w:autoSpaceDE/>"#,
+        );
+        ppr.frame = Some(Box::new(CT_FramePr {
+            w: Some(Twips(2880)),
+            ..Default::default()
+        }));
+        ppr.suppress_line_numbers = Some(true);
+        ppr.adjust_right_ind = Some(true);
+        ppr.contextual_spacing = Some(true);
+        ppr.mirror_indents = Some(true);
+        ppr.suppress_overlap = Some(true);
+        ppr.jc = Some(ST_Jc::Center);
+        ppr.text_direction = Some("tbRlV".to_owned());
+        ppr.text_alignment = Some("center".to_owned());
+        ppr.textbox_tight_wrap = Some("firstAndLastLine".to_owned());
+        ppr.outline_lvl = Some(2);
+        ppr.div_id = Some(7);
+
+        assert_token_order(
+            &write_ppr(&ppr),
+            &[
+                "<w:framePr",
+                "<w:suppressLineNumbers",
+                "<w:kinsoku",
+                "<w:autoSpaceDE",
+                "<w:adjustRightInd",
+                "<w:snapToGrid",
+                "<w:contextualSpacing",
+                "<w:mirrorIndents",
+                "<w:suppressOverlap",
+                "<w:jc",
+                "<w:textDirection",
+                "<w:textAlignment",
+                "<w:textboxTightWrap",
+                "<w:outlineLvl",
+                "<w:divId",
+                "<w:cnfStyle",
+            ],
+        );
+    }
+
+    #[test]
+    fn newly_modeled_paragraph_toggles_replay_their_source_carrier() {
+        for (local, slot) in PPR_MODELED_TOGGLES {
+            assert_eq!(
+                ppr_modeled_slot(local, &[String::new()]),
+                Some(slot),
+                "a carrier toggle that is not a modeled slot underflows its occurrence"
+            );
+        }
+
+        for element in [
+            "suppressLineNumbers",
+            "adjustRightInd",
+            "contextualSpacing",
+            "mirrorIndents",
+            "suppressOverlap",
+        ] {
+            let ppr = parse_ppr(&format!(
+                r#"<w:{element} xmlns:x="urn:producer" x:flag="kept"/>"#
+            ));
+            let value = match element {
+                "suppressLineNumbers" => ppr.suppress_line_numbers,
+                "adjustRightInd" => ppr.adjust_right_ind,
+                "contextualSpacing" => ppr.contextual_spacing,
+                "mirrorIndents" => ppr.mirror_indents,
+                _ => ppr.suppress_overlap,
+            };
+            assert_eq!(value, Some(true), "{element}");
+
+            let output = write_ppr(&ppr);
+            assert_eq!(
+                output,
+                format!(r#"<w:pPr><w:{element} xmlns:x="urn:producer" x:flag="kept"/></w:pPr>"#),
+                "{element}"
+            );
+
+            let reopened = parse_ppr(
+                output
+                    .strip_prefix("<w:pPr>")
+                    .unwrap()
+                    .strip_suffix("</w:pPr>")
+                    .unwrap(),
+            );
+            assert_eq!(write_ppr(&reopened), output, "{element}");
+        }
+    }
+
+    #[test]
+    fn paragraph_property_parsing_accepts_alias_and_foreign_namespaces() {
+        let xml = format!(
+            concat!(
+                r#"<x:pPr xmlns:x="{}" xmlns:ext="urn:producer"><x:framePr x:w="1440"/>"#,
+                r#"<x:suppressLineNumbers/><x:contextualSpacing x:val="0"/>"#,
+                r#"<x:textDirection x:val="tbRlV"/><x:textAlignment x:val="center"/>"#,
+                r#"<x:textboxTightWrap x:val="lastLineOnly"/><x:divId x:val="9"/>"#,
+                r#"<ext:contextualSpacing/><ext:textDirection ext:val="lrTb"/></x:pPr>"#,
+            ),
+            W_NS
+        );
+        let ppr = crate::numbering::parse_scoped_ppr(xml.as_bytes(), &["x".to_owned()]).unwrap();
+        assert_eq!(
+            ppr.frame.as_ref().and_then(|frame| frame.w),
+            Some(Twips(1440))
+        );
+        assert_eq!(ppr.suppress_line_numbers, Some(true));
+        assert_eq!(ppr.contextual_spacing, Some(false));
+        assert_eq!(ppr.text_direction.as_deref(), Some("tbRlV"));
+        assert_eq!(ppr.text_alignment.as_deref(), Some("center"));
+        assert_eq!(ppr.textbox_tight_wrap.as_deref(), Some("lastLineOnly"));
+        assert_eq!(ppr.div_id, Some(9));
+
+        let output = write_ppr(&ppr);
+        assert!(
+            output.contains(r#"<ext:contextualSpacing xmlns:ext="urn:producer"/>"#),
+            "{output}"
+        );
+        assert!(
+            output.contains(r#"<ext:textDirection ext:val="lrTb" xmlns:ext="urn:producer"/>"#),
+            "{output}"
+        );
+        assert!(output.contains(r#"<w:framePr w:w="1440"/>"#), "{output}");
     }
 
     #[test]

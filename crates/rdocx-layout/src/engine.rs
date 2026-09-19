@@ -3774,7 +3774,7 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
                 properties
                     .borders
                     .as_ref()
-                    .map_or(0, paragraph_border_bytes),
+                    .map_or(0, |borders| paragraph_border_bytes(borders)),
             )
             .saturating_add(properties.tabs.as_ref().map_or(0, |tabs| {
                 tabs.tabs
@@ -4778,7 +4778,12 @@ fn paragraph_cache_entry_bytes(
     fn paragraph_properties_bytes(properties: &CT_PPr) -> usize {
         option_string_bytes(&properties.style_id)
             .saturating_add(option_string_bytes(&properties.line_rule))
-            .saturating_add(properties.borders.as_ref().map_or(0, border_bytes))
+            .saturating_add(
+                properties
+                    .borders
+                    .as_ref()
+                    .map_or(0, |borders| border_bytes(borders)),
+            )
             .saturating_add(properties.tabs.as_ref().map_or(0, |tabs| {
                 tabs.tabs
                     .capacity()
@@ -6536,7 +6541,7 @@ fn layout_paragraph_with_source_and_table(
         lines,
         space_before,
         space_after,
-        effective_ppr.borders,
+        effective_ppr.borders.map(|borders| *borders),
         shading,
         ind_left,
         ind_right,

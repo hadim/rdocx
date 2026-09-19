@@ -8,7 +8,7 @@ use crate::namespace::{W_NS, matches_local_name};
 use crate::run_properties::language_element_is_explicitly_empty;
 use crate::shared::ST_OnOff;
 
-pub use crate::paragraph_properties::CT_PPr;
+pub use crate::paragraph_properties::{CT_FramePr, CT_PPr};
 pub use crate::run_properties::CT_RPr;
 
 /// `CT_Shd` — Shading/background fill.

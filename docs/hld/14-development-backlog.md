@@ -2568,9 +2568,16 @@ binding-parity checks without Word repair.
 Expose the full supported paragraph-property model through public setters and
 readers, including logical indentation, automatic spacing, borders, shading,
 tabs, pagination, frames, outline, direction, and paragraph-mark properties.
+The paragraph grammar owns `w:divId` and its paragraph accessor, while F-270
+owns the matching `CT_WebSettings` projection. It also owns ordered attribute
+retention on `CT_BorderEdge`, which F-269 consumes for page borders.
+Positioned frame placement is layout work this story does not build, so the
+`DOCX-030` layout and render columns stay partial.
 **Depends on**: F-253.
-**Test gate**: round-trip. Every public-authored paragraph property reopens as
-modeled content and preserves unrelated producer XML.
+**Test gate**: round-trip.
+`every_public_paragraph_property_reopens_and_preserves_unrelated_xml` proves
+every public-authored paragraph property reopens as modeled content and
+preserves unrelated producer XML.
 
 ### F-265, Complete run property and inline authoring (L)
 Expose full run fonts, theme references, colors, complex-script formatting,

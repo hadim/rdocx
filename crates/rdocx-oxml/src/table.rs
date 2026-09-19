@@ -3763,12 +3763,14 @@ mod tests {
                     sz: Some(4),
                     space: Some(0),
                     color: Some("000000".to_string()),
+                    extra_attributes: Vec::new(),
                 }),
                 bottom: Some(CT_BorderEdge {
                     val: ST_Border::Single,
                     sz: Some(4),
                     space: Some(0),
                     color: Some("000000".to_string()),
+                    extra_attributes: Vec::new(),
                 }),
                 ..Default::default()
             }),

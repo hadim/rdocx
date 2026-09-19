@@ -1,6 +1,6 @@
 # F-264, Complete paragraph property authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-253
@@ -404,31 +404,31 @@ harness obligation in its own commit, ahead of this story.
 
 ## Implementation checklist
 
-- [ ] Start from the split base. Confirm the paragraph property module exists
+- [x] Start from the split base. Confirm the paragraph property module exists
       and its re-exports preserve every public path before editing.
-- [ ] Add `CT_FramePr` and the nine `CT_PPr` fields with their doc comments.
-- [ ] Extend `ppr_modeled_slot` and both parse arms, prefix tolerant.
-- [ ] Insert each field into `to_xml` at its schema slot.
-- [ ] Replace the hard-coded bidi carrier test with `ppr_modeled_toggle_present`.
-- [ ] Extend `is_empty` and `merge_from`.
-- [ ] Add ordered attribute retention to `CT_BorderEdge` in
+- [x] Add `CT_FramePr` and the nine `CT_PPr` fields with their doc comments.
+- [x] Extend `ppr_modeled_slot` and both parse arms, prefix tolerant.
+- [x] Insert each field into `to_xml` at its schema slot.
+- [x] Replace the hard-coded bidi carrier test with `ppr_modeled_toggle_present`.
+- [x] Extend `is_empty` and `merge_from`.
+- [x] Add ordered attribute retention to `CT_BorderEdge` in
       `crates/rdocx-oxml/src/borders.rs`, covering `w:shadow`, `w:frame`,
       `w:themeColor`, `w:themeTint` and `w:themeShade`, for F-269 to consume.
-- [ ] Type `w:divId` on `CT_PPr` at slot 31 and expose its paragraph facade
+- [x] Type `w:divId` on `CT_PPr` at slot 31 and expose its paragraph facade
       accessor, with a round-trip test. F-270 owns the matching
       `CT_WebSettings::div_ids()` projection and the two halves meet at
       integration, so this story asserts only the paragraph side.
-- [ ] Add the facade enums, `ParagraphFrame`, `TabStopRef`, `ParagraphMark` and
+- [x] Add the facade enums, `ParagraphFrame`, `TabStopRef`, `ParagraphMark` and
       `ParagraphMarkRef` to `crates/rdocx/src/paragraph.rs`.
-- [ ] Add every `Paragraph` setter triple in the file's existing convention,
+- [x] Add every `Paragraph` setter triple in the file's existing convention,
       including the named `right_to_left` deliverable for F-266a.
-- [ ] Add every matching `ParagraphRef` reader, including `right_to_left` and
+- [x] Add every matching `ParagraphRef` reader, including `right_to_left` and
       the four missing for already-modeled state.
-- [ ] Export the new public names from `crates/rdocx/src/lib.rs`.
-- [ ] Write the round-trip gate, then the unit, integration and regression tests.
-- [ ] Update the `DOCX-030` row to `Y` on the authoring columns and name the
+- [x] Export the new public names from `crates/rdocx/src/lib.rs`.
+- [x] Write the round-trip gate, then the unit, integration and regression tests.
+- [x] Update the `DOCX-030` row to `Y` on the authoring columns and name the
       positioned-frame owner in its evidence cell.
-- [ ] Run the impacted crate tests, clippy, fmt, the hash harness and the prose
+- [x] Run the impacted crate tests, clippy, fmt, the hash harness and the prose
       gate.
 
 ## Open questions

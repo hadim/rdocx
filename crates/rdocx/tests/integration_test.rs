@@ -9928,6 +9928,7 @@ fn table_style_updates_merge_nested_borders_and_margins() {
                         sz: Some(16),
                         space: None,
                         color: Some("AABBCC".to_owned()),
+                        extra_attributes: Vec::new(),
                     }),
                     ..CT_TblBorders::default()
                 }),
@@ -15240,5 +15241,339 @@ mod legacy_forms_and_building_blocks {
                 assert!(document.legacy_form_fields().is_err(), "{target}");
             }
         }
+    }
+}
+
+mod f264_paragraph_property_tests {
+    use super::*;
+    use rdocx::{
+        DropCap, FrameAnchor, FrameWrap, ParagraphBorderEdge, ParagraphFrame,
+        ParagraphTextAlignment, ParagraphTextDirection, TextboxTightWrap,
+    };
+
+    const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    /// Children of `w:pPr` that rdocx does not model, at four schema slots
+    /// around the ones this feature types.
+    const PRODUCER_CHILDREN: [&str; 4] = [
+        "<w:kinsoku/>",
+        "<w:snapToGrid/>",
+        r#"<w:cnfStyle w:val="100000000000"/>"#,
+        r#"<ext:marker xmlns:ext="urn:producer" ext:keep="exact"/>"#,
+    ];
+
+    fn producer_document(paragraph_properties: &str) -> Vec<u8> {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                concat!(
+                    r#"<w:document xmlns:w="{}">"#,
+                    r#"<w:body><w:p><w:pPr>{}</w:pPr><w:r><w:t>framed</w:t></w:r></w:p>"#,
+                    r#"<w:sectPr/></w:body></w:document>"#,
+                ),
+                WORD_NS, paragraph_properties
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
+
+    fn document_xml(bytes: &[u8]) -> String {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+    }
+
+    /// The first `w:pPr` element of the saved body, or the empty string when
+    /// the paragraph carries no properties at all.
+    fn paragraph_properties_xml(bytes: &[u8]) -> String {
+        let xml = document_xml(bytes);
+        let Some(start) = xml.find("<w:pPr>") else {
+            return String::new();
+        };
+        let end = xml.find("</w:pPr>").expect("a w:pPr end tag");
+        xml[start..end].to_owned()
+    }
+
+    fn authored_frame() -> ParagraphFrame {
+        ParagraphFrame {
+            width: Some(Length::twips(2880)),
+            height: Some(Length::twips(1440)),
+            horizontal_space: Some(Length::twips(180)),
+            vertical_space: Some(Length::twips(120)),
+            horizontal_position: Some(Length::twips(720)),
+            vertical_position: Some(Length::twips(360)),
+            horizontal_anchor: Some(FrameAnchor::Margin),
+            vertical_anchor: Some(FrameAnchor::Text),
+            wrap: Some(FrameWrap::Around),
+            drop_cap: Some(DropCap::Drop),
+            drop_cap_lines: Some(3),
+            anchor_lock: Some(true),
+        }
+    }
+
+    #[test]
+    fn every_public_paragraph_property_reopens_and_preserves_unrelated_xml() {
+        let source = producer_document(&PRODUCER_CHILDREN.concat());
+        let mut document = Document::from_bytes(&source).unwrap();
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            paragraph.set_indent_start(Length::twips(720));
+            paragraph.set_indent_end(Length::twips(360));
+            paragraph.set_hanging_indent_value(Some(Length::twips(240)));
+            paragraph.set_mirror_indents(true);
+            paragraph.set_adjust_right_indent(true);
+            paragraph.set_space_before_auto(true);
+            paragraph.set_space_after_auto(false);
+            paragraph.set_contextual_spacing(true);
+            paragraph.set_border(
+                ParagraphBorderEdge::Between,
+                BorderStyle::Dashed,
+                6,
+                "FF0000",
+            );
+            paragraph.set_shading_pattern("pct20", "FFFF00", "auto");
+            paragraph.set_add_tab_stop(TabAlignment::Right, Length::twips(8640));
+            paragraph.set_suppress_line_numbers(true);
+            paragraph.set_suppress_auto_hyphens(true);
+            paragraph.set_frame(authored_frame());
+            paragraph.set_suppress_overlap(true);
+            paragraph.set_textbox_tight_wrap(TextboxTightWrap::FirstAndLastLine);
+            assert!(paragraph.set_outline_level_value(Some(9)));
+            paragraph.set_right_to_left(true);
+            paragraph.set_text_direction(ParagraphTextDirection::TopToBottomRightToLeftVertical);
+            paragraph.set_text_alignment(ParagraphTextAlignment::Center);
+            paragraph.set_div_id_value(Some(11));
+            paragraph.mark().set_bold(true);
+            paragraph.mark().set_color("00FF00");
+        }
+
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraph = reopened.paragraph(0).unwrap();
+        assert_eq!(paragraph.indent_start(), Some(Length::twips(720)));
+        assert_eq!(paragraph.indent_end(), Some(Length::twips(360)));
+        assert_eq!(paragraph.hanging_indent(), Some(Length::twips(240)));
+        assert_eq!(paragraph.mirror_indents_value(), Some(true));
+        assert_eq!(paragraph.adjust_right_indent_value(), Some(true));
+        assert_eq!(paragraph.space_before_auto_value(), Some(true));
+        assert_eq!(paragraph.space_after_auto_value(), Some(false));
+        assert_eq!(paragraph.contextual_spacing_value(), Some(true));
+        let between = paragraph.border(ParagraphBorderEdge::Between).unwrap();
+        assert_eq!(between.style(), "dashed");
+        assert_eq!(between.size_eighths_pt(), Some(6));
+        assert_eq!(between.color(), Some("FF0000"));
+        assert_eq!(paragraph.shading_pattern(), Some("pct20"));
+        assert_eq!(paragraph.shading_fill(), Some("FFFF00"));
+        assert_eq!(paragraph.shading_color(), Some("auto"));
+        let tab = paragraph.tab_stop(0).unwrap();
+        assert_eq!(tab.alignment(), Some(TabAlignment::Right));
+        assert_eq!(tab.position(), Length::twips(8640));
+        assert_eq!(paragraph.suppress_line_numbers_value(), Some(true));
+        assert_eq!(paragraph.suppress_auto_hyphens_value(), Some(true));
+        assert_eq!(paragraph.frame(), Some(authored_frame()));
+        assert_eq!(paragraph.suppress_overlap_value(), Some(true));
+        assert_eq!(
+            paragraph.textbox_tight_wrap(),
+            Some(TextboxTightWrap::FirstAndLastLine)
+        );
+        assert_eq!(paragraph.outline_level(), Some(9));
+        assert_eq!(paragraph.right_to_left_value(), Some(true));
+        assert_eq!(
+            paragraph.text_direction(),
+            Some(ParagraphTextDirection::TopToBottomRightToLeftVertical)
+        );
+        assert_eq!(
+            paragraph.text_alignment(),
+            Some(ParagraphTextAlignment::Center)
+        );
+        assert_eq!(paragraph.div_id(), Some(11));
+        assert_eq!(paragraph.mark().bold_value(), Some(true));
+        assert_eq!(paragraph.mark().color(), Some("00FF00"));
+
+        let xml = document_xml(&bytes);
+        for child in PRODUCER_CHILDREN {
+            assert!(xml.contains(child), "{child} was lost: {xml}");
+        }
+    }
+
+    #[test]
+    fn paragraph_border_edges_author_read_and_clear_individually() {
+        let source = producer_document(
+            r#"<w:pBdr><w:top w:val="single" w:sz="4" w:themeColor="accent1"/></w:pBdr>"#,
+        );
+        let mut document = Document::from_bytes(&source).unwrap();
+        let edges = [
+            ParagraphBorderEdge::Top,
+            ParagraphBorderEdge::Bottom,
+            ParagraphBorderEdge::Left,
+            ParagraphBorderEdge::Right,
+            ParagraphBorderEdge::Between,
+            ParagraphBorderEdge::Bar,
+        ];
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            for (index, edge) in edges.into_iter().enumerate() {
+                paragraph.set_border(edge, BorderStyle::Single, index as u32 + 2, "0000FF");
+            }
+        }
+
+        let bytes = document.to_bytes().unwrap();
+        assert!(
+            document_xml(&bytes).contains(r#"w:themeColor="accent1""#),
+            "an edge mutation dropped a retained attribute"
+        );
+
+        let mut document = Document::from_bytes(&bytes).unwrap();
+        for (index, edge) in edges.into_iter().enumerate() {
+            let paragraph = document.paragraph(0).unwrap();
+            let border = paragraph.border(edge).expect("an authored edge");
+            assert_eq!(border.style(), "single");
+            assert_eq!(border.size_eighths_pt(), Some(index as u32 + 2));
+        }
+
+        document
+            .paragraph_mut(0)
+            .unwrap()
+            .set_border_value(ParagraphBorderEdge::Left, None);
+        let paragraph = document.paragraph(0).unwrap();
+        assert!(paragraph.border(ParagraphBorderEdge::Left).is_none());
+        assert_eq!(paragraph.border_count(), 5);
+
+        document.paragraph_mut(0).unwrap().clear_borders();
+        assert_eq!(document.paragraph(0).unwrap().border_count(), 0);
+        assert!(!document.paragraph(0).unwrap().has_borders());
+    }
+
+    #[test]
+    fn tab_stops_read_mutate_and_remove_by_index() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("tabs");
+            paragraph.set_add_tab_stop(TabAlignment::Left, Length::twips(720));
+            paragraph.set_add_tab_stop_with_leader(
+                TabAlignment::Center,
+                Length::twips(2880),
+                TabLeader::Dot,
+            );
+            paragraph.set_add_tab_stop(TabAlignment::Right, Length::twips(8640));
+            assert!(paragraph.tab_stop(3).is_none());
+            assert!(!paragraph.set_tab_stop(3, TabAlignment::Left, Length::twips(100), None));
+            assert!(!paragraph.remove_tab_stop(3));
+            assert!(paragraph.set_tab_stop(
+                1,
+                TabAlignment::Decimal,
+                Length::twips(4320),
+                Some(TabLeader::Hyphen)
+            ));
+            assert!(paragraph.remove_tab_stop(0));
+        }
+
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraph = reopened.paragraph(0).unwrap();
+        assert_eq!(paragraph.tab_stop_count(), 2);
+        let first = paragraph.tab_stop(0).unwrap();
+        assert_eq!(first.alignment(), Some(TabAlignment::Decimal));
+        assert_eq!(first.position(), Length::twips(4320));
+        assert_eq!(first.leader(), Some(TabLeader::Hyphen));
+        let second = paragraph.tab_stop(1).unwrap();
+        assert_eq!(second.alignment(), Some(TabAlignment::Right));
+        assert_eq!(second.position(), Length::twips(8640));
+        assert!(paragraph.tab_stop(2).is_none());
+
+        let mut document = reopened;
+        document.paragraph_mut(0).unwrap().clear_tab_stops();
+        assert_eq!(document.paragraph(0).unwrap().tab_stop_count(), 0);
+        assert!(document.paragraph(0).unwrap().tab_stop(0).is_none());
+    }
+
+    #[test]
+    fn paragraph_mark_formatting_authors_reads_and_clears() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("marked");
+            let mut mark = paragraph.mark();
+            mark.set_bold(true);
+            mark.set_italic(true);
+            mark.set_underline(true);
+            mark.set_strike(true);
+            mark.set_size(18.0);
+            mark.set_font("Georgia");
+            mark.set_color("112233");
+        }
+
+        let bytes = document.to_bytes().unwrap();
+        assert!(
+            paragraph_properties_xml(&bytes).contains("<w:rPr>"),
+            "the mark properties must live inside w:pPr"
+        );
+
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        {
+            let paragraph = reopened.paragraph(0).unwrap();
+            let mark = paragraph.mark();
+            assert!(mark.is_present());
+            assert_eq!(mark.bold_value(), Some(true));
+            assert_eq!(mark.italic_value(), Some(true));
+            assert_eq!(mark.underline_value(), Some(true));
+            assert_eq!(mark.strike_value(), Some(true));
+            assert_eq!(mark.size(), Some(18.0));
+            assert_eq!(mark.font_name(), Some("Georgia"));
+            assert_eq!(mark.color(), Some("112233"));
+        }
+
+        reopened.paragraph_mut(0).unwrap().clear_mark();
+        assert!(!reopened.paragraph(0).unwrap().mark().is_present());
+        let cleared = reopened.to_bytes().unwrap();
+        assert!(
+            !paragraph_properties_xml(&cleared).contains("<w:rPr>"),
+            "clear_mark must remove the element"
+        );
+        assert!(
+            !Document::from_bytes(&cleared)
+                .unwrap()
+                .paragraph(0)
+                .unwrap()
+                .mark()
+                .is_present()
+        );
+    }
+
+    #[test]
+    fn outline_level_accepts_zero_through_nine_and_rejects_above() {
+        let mut document = Document::new();
+        document.add_paragraph("outline");
+        for level in 0..=9 {
+            assert!(
+                document
+                    .paragraph_mut(0)
+                    .unwrap()
+                    .set_outline_level_value(Some(level)),
+                "{level}"
+            );
+            assert_eq!(document.paragraph(0).unwrap().outline_level(), Some(level));
+        }
+        for rejected in [10, u32::MAX] {
+            assert!(
+                !document
+                    .paragraph_mut(0)
+                    .unwrap()
+                    .set_outline_level_value(Some(rejected)),
+                "{rejected}"
+            );
+            assert_eq!(document.paragraph(0).unwrap().outline_level(), Some(9));
+        }
+        assert!(
+            document
+                .paragraph_mut(0)
+                .unwrap()
+                .set_outline_level_value(None)
+        );
+        assert_eq!(document.paragraph(0).unwrap().outline_level(), None);
     }
 }

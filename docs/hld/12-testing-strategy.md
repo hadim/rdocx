@@ -1587,6 +1587,20 @@ positioned foreign run child, proves the raw bytes stay on their original side
 of the field boundary, and proves an invalid field instruction is atomic. The
 reopened document must render through deterministic bundled fonts.
 
+The Word paragraph-property round-trip gate is
+`every_public_paragraph_property_reopens_and_preserves_unrelated_xml`. It opens
+a source-built document whose `w:pPr` carries unmodelled children at four
+schema slots, authors every paragraph property through `Paragraph`, saves,
+reopens, and reads each value back through `ParagraphRef`. The retained
+children must survive byte identical. Focused unit coverage proves the frame
+attribute round trip, the schema sequence of the newly typed children among
+retained raw siblings, the attribute carrier of each newly typed toggle,
+prefix-tolerant reads with a foreign same-local element left unmodelled, the
+border edge attribute retention that section page borders consume, and style
+inheritance for the new members. Integration coverage authors, reads, and
+clears each border edge, each tab stop by index, and the paragraph mark, and
+pins the accepted outline-level range.
+
 The Word owner-attribute round-trip gate is
 `paragraph_run_and_section_identity_attributes_survive_noop_save`. It
 source-builds paragraph, run, and section-property roots with aliased modern

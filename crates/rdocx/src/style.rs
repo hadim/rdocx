@@ -778,6 +778,47 @@ mod tests {
     }
 
     #[test]
+    fn new_paragraph_properties_inherit_through_the_style_chain() {
+        use rdocx_oxml::properties::CT_FramePr;
+
+        let mut styles = test_styles();
+        let defaults = styles
+            .doc_defaults
+            .as_mut()
+            .expect("docDefaults")
+            .ppr
+            .get_or_insert_with(CT_PPr::default);
+        defaults.suppress_line_numbers = Some(true);
+        defaults.text_alignment = Some("baseline".to_owned());
+        for style in &mut styles.styles {
+            let ppr = style.ppr.get_or_insert_with(CT_PPr::default);
+            if style.style_id == "Heading1" {
+                ppr.contextual_spacing = Some(true);
+                ppr.text_direction = Some("tbRlV".to_owned());
+                ppr.text_alignment = Some("center".to_owned());
+                ppr.frame = Some(Box::new(CT_FramePr {
+                    w: Some(Twips(2880)),
+                    ..Default::default()
+                }));
+                ppr.div_id = Some(4);
+            }
+            if style.style_id == "Heading2" {
+                ppr.mirror_indents = Some(true);
+                ppr.text_direction = Some("lrTb".to_owned());
+            }
+        }
+
+        let ppr = resolve_paragraph_properties(Some("Heading2"), &styles);
+        assert_eq!(ppr.suppress_line_numbers, Some(true));
+        assert_eq!(ppr.contextual_spacing, Some(true));
+        assert_eq!(ppr.mirror_indents, Some(true));
+        assert_eq!(ppr.text_alignment.as_deref(), Some("center"));
+        assert_eq!(ppr.text_direction.as_deref(), Some("lrTb"));
+        assert_eq!(ppr.frame.and_then(|frame| frame.w), Some(Twips(2880)));
+        assert_eq!(ppr.div_id, Some(4));
+    }
+
+    #[test]
     fn resolve_default_when_no_style() {
         let mut styles = test_styles();
         for style in &mut styles.styles {
