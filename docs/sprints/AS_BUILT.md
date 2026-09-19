@@ -15670,11 +15670,30 @@ lose anything by dropping it.
 **Why it exists.** `scripts/docx_ssim_harness.py --check` failed at its
 acceptor on `corpus/docx/redlined_no_footer.docx`. The document opened,
 `accept_all` accepted 21 revisions, and the save then failed with
-`cannot identify retained 'r' nested namespace owner after mutation`. F-X128
-gave `CT_R` root-attribute retention, and the retained record materializes a
-redundant binding onto every run that keeps a prefixed producer attribute.
-Those runs looked like namespace owners while owning nothing, and `accept_all`
-merges adjacent runs, so the matcher could no longer tell them apart.
+`cannot identify retained 'r' nested namespace owner after mutation`.
+
+The mechanism, confirmed by instrumenting the failure rather than inferred. The
+refusal comes from the arm that fires when an owner is both
+`ambiguous_without_namespace` and `same_namespace_structural_alternate`, which
+returns before any semantic comparison, reached through
+`canonicalize_drawing_ids` rather than the document flush. The owner is a run
+whose only declaration is `xmlns:w`, with two candidates that are byte
+identical to each other. The producer's `word/document.xml` declares `xmlns:w`
+exactly once, on the root. The 888 copies on paragraphs and runs are written by
+our own save, because F-X128 retains the producer root attributes and F-X131's
+`used_prefixes` loop keeps the `w` binding those attributes use. The part is
+then read back and those redundant bindings are read as nested owners. The
+corpus document has two byte-identical runs, each an equally good owner of the
+other's declaration, so the matcher refuses. `accept_all` matters only because
+it marks the document modified, so the save takes the canonical path rather
+than the byte-for-byte one.
+
+An earlier hypothesis, that the `semantic` vector failed because retained
+`w:rsid` values differed between candidates, was measured and disproved. The
+candidates agree on every identity value, so excluding them would have fixed
+nothing and would have deleted the only signal able to tell two otherwise
+identical runs apart. The commit message for this story states that superseded
+hypothesis. This entry is the correct record.
 
 **Bisect.** Source-built probe against the corpus document. `f80b8e14`, the
 sprint base, saves 80237 bytes. `5bad2f26`, immediately before F-X128, saves.

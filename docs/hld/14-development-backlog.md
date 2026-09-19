@@ -5899,6 +5899,24 @@ redlined document whose runs carry `w:rsid` identities accepts, saves, reopens
 and keeps every identity attribute, while a genuinely rebinding declaration on
 two indistinguishable owners still fails closed.
 
+### F-X133, Stop rebinding a canonical prefix on every retained element (S)
+
+F-X131 stops `push_root_attribute_record` writing the canonical `w14` binding
+onto its target, because the part root already owns it, but the canonical `w`
+binding is still written. F-X128 retains producer root attributes on every
+paragraph and run, and F-X131's `used_prefixes` loop keeps the `w` declaration
+those attributes use, so a plain save emits `xmlns:w` on every retained
+paragraph and run. On `corpus/docx/redlined_no_footer.docx` that is 888
+declarations and grows the part from 387397 bytes to 578815, about 49 percent,
+none of which resolves a name differently. Extend the skip to every canonical
+prefix the part root already declares.
+**Depends on**: F-X131, F-X132.
+**Test gate**: regression.
+`a_retained_element_does_not_rebind_a_prefix_its_part_root_declares` proves a
+plain save of a document carrying producer root attributes emits no redundant
+canonical declaration, that the retained attributes still round-trip, and that
+a genuinely new binding is still written.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this
