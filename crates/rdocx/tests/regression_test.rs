@@ -30659,416 +30659,6 @@ mod f267_table_style_regressions {
     }
 }
 
-/// F-268a, the layout facts advanced table geometry must keep.
-mod advanced_table_geometry_regressions {
-    use rdocx_oxml::styles::CT_Styles;
-    use rdocx_oxml::table::{
-        CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, CT_TcPr, CT_TrPr,
-    };
-    use rdocx_oxml::units::Twips;
-
-    fn layout_input() -> rdocx_layout::LayoutInput {
-        rdocx_layout::LayoutInput {
-            automatic_hyphenation: false,
-            mirror_margins: false,
-            gutter_at_top: false,
-            default_tab_stop: None,
-            math_properties: None,
-            document: rdocx_oxml::document::CT_Document {
-                body: rdocx_oxml::document::CT_Body {
-                    content: Vec::new(),
-                    sect_pr: None,
-                },
-                extra_namespaces: Vec::new(),
-                background_xml: None,
-                background_extra_xml: Vec::new(),
-            },
-            styles: CT_Styles::new_default(),
-            numbering: None,
-            headers: std::collections::HashMap::new(),
-            footers: std::collections::HashMap::new(),
-            images: std::collections::HashMap::new(),
-            charts: std::collections::HashMap::new(),
-            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
-            chart_color_map: oxml_drawing::color::ColorMap::default(),
-            core_properties: None,
-            hyperlink_urls: std::collections::HashMap::new(),
-            footnotes: None,
-            endnotes: None,
-            theme: None,
-            fonts: Vec::new(),
-            revision_view: rdocx_layout::RevisionView::Accepted,
-        }
-    }
-
-    fn lay_out_with(
-        table: &CT_Tbl,
-        styles: &CT_Styles,
-        available_width: f64,
-    ) -> rdocx_layout::table::TableBlock {
-        let input = layout_input();
-        let media = rdocx_layout::MediaRegistry::new(&input.images);
-        let mut fonts =
-            oxml_layout::FontManager::new_deterministic().expect("deterministic fonts load");
-        let mut numbering = rdocx_layout::style_resolver::NumberingState::new();
-        let mut diagnostics = Vec::new();
-        rdocx_layout::table::layout_table(
-            table,
-            available_width,
-            styles,
-            &input,
-            &media,
-            &mut fonts,
-            &mut numbering,
-            &mut diagnostics,
-        )
-        .expect("table lays out")
-    }
-
-    fn lay_out(table: &CT_Tbl, available_width: f64) -> rdocx_layout::table::TableBlock {
-        lay_out_with(table, &CT_Styles::new_default(), available_width)
-    }
-
-    /// A fixed-layout table whose cells carry one shaded paragraph each.
-    fn shaded_table(columns: &[i32], rows: &[&[&str]]) -> CT_Tbl {
-        let mut table = CT_Tbl::new();
-        table.properties = Some(CT_TblPr {
-            layout: Some("fixed".to_owned()),
-            width: Some(CT_TblWidth::dxa(columns.iter().sum())),
-            ..CT_TblPr::default()
-        });
-        table.grid = Some(CT_TblGrid {
-            columns: columns
-                .iter()
-                .map(|width| CT_TblGridCol {
-                    width: Twips(*width),
-                })
-                .collect(),
-            ..CT_TblGrid::default()
-        });
-        for cells in rows {
-            let mut row = CT_Row::new();
-            for text in cells.iter() {
-                let mut cell = CT_Tc::new();
-                cell.paragraphs_mut()[0].add_run(text);
-                cell.properties = Some(CT_TcPr {
-                    shading: Some(rdocx_oxml::properties::CT_Shd {
-                        val: "clear".to_owned(),
-                        color: None,
-                        fill: Some("DDDDDD".to_owned()),
-                        ..Default::default()
-                    }),
-                    ..CT_TcPr::default()
-                });
-                row.cells.push(cell);
-            }
-            table.rows.push(row);
-        }
-        table
-    }
-
-    /// Every painted cell rectangle on the document's pages, in paint order.
-    ///
-    /// Cell shading is what marks a painted cell, so a document whose cells
-    /// are shaded reports one `(x, width)` pair per cell.
-    fn painted_cells(document: &rdocx::Document) -> Vec<(f64, f64)> {
-        fn collect(elements: &[oxml_layout::PositionedElement], output: &mut Vec<(f64, f64)>) {
-            let round = |value: f64| (value * 100.0).round() / 100.0;
-            for element in elements {
-                match element {
-                    oxml_layout::PositionedElement::FilledRect { rect, .. } => {
-                        output.push((round(rect.x), round(rect.width)))
-                    }
-                    oxml_layout::PositionedElement::Group(group) => {
-                        collect(&group.children, output)
-                    }
-                    oxml_layout::PositionedElement::MarkedContent { children, .. } => {
-                        collect(children, output)
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let layout = document
-            .layout_deterministic()
-            .expect("document lays out in deterministic font mode");
-        let mut output = Vec::new();
-        for page in &layout.layout.pages {
-            collect(&page.elements, &mut output);
-        }
-        output
-    }
-
-    /// A three-column shaded table authored through the public facade.
-    fn shaded_document(columns: &[i32], rows: &[&[&str]]) -> rdocx::Document {
-        let mut document = rdocx::Document::new();
-        {
-            let mut table = document.add_table(rows.len(), columns.len());
-            table
-                .set_grid_widths(
-                    &columns
-                        .iter()
-                        .map(|width| rdocx::Length::twips(*width))
-                        .collect::<Vec<_>>(),
-                )
-                .expect("grid widths are valid");
-            table.set_layout(rdocx::table::TableLayout::Fixed);
-            for (row_index, texts) in rows.iter().enumerate() {
-                let mut row = table.row(row_index).expect("row");
-                for (cell_index, text) in texts.iter().enumerate() {
-                    if text.is_empty() {
-                        // An untouched cell stays discardable for a grid
-                        // omission and paints nothing.
-                        continue;
-                    }
-                    let mut cell = row.cell(cell_index).expect("cell");
-                    cell.set_text(text);
-                    cell.set_shading("DDDDDD");
-                }
-            }
-        }
-        document
-    }
-
-    #[test]
-    fn a_bidi_visual_table_reverses_columns_without_changing_logical_cell_order() {
-        let columns = [1440, 2880, 4320];
-        let rows: [&[&str]; 1] = [&["first", "second", "third"]];
-        let forward = shaded_document(&columns, &rows);
-        let mut reversed = shaded_document(&columns, &rows);
-        reversed
-            .table_mut(0)
-            .expect("table")
-            .set_bidi_visual(Some(true));
-
-        // The painted cells reverse. A left-to-right row paints the narrow
-        // first column at the table origin, and a bidirectional row paints it
-        // last, at the table's trailing edge.
-        assert_eq!(
-            painted_cells(&forward),
-            vec![(72.0, 72.0), (144.0, 144.0), (288.0, 216.0)]
-        );
-        assert_eq!(
-            painted_cells(&reversed),
-            vec![(72.0, 216.0), (288.0, 144.0), (432.0, 72.0)]
-        );
-
-        // Logical cell ownership does not reverse. Every cell keeps its source
-        // order, its text, its grid column and its width.
-        let logical = |document: &rdocx::Document| {
-            let table = document.table(0).expect("table");
-            let row = table.row(0).expect("row");
-            (0..row.cell_count())
-                .map(|index| row.cell(index).expect("cell").text())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(logical(&forward), logical(&reversed));
-
-        let mut table = shaded_table(&columns, &rows);
-        let forward_block = lay_out(&table, 468.0);
-        table
-            .properties
-            .as_mut()
-            .expect("table properties")
-            .bidi_visual = Some(true);
-        let reversed_block = lay_out(&table, 468.0);
-        assert!(!forward_block.bidi_visual);
-        assert!(reversed_block.bidi_visual);
-        let logical_geometry = |block: &rdocx_layout::table::TableBlock| {
-            block.rows[0]
-                .cells
-                .iter()
-                .map(|cell| (cell.col_index, (cell.width * 100.0).round() / 100.0))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            logical_geometry(&forward_block),
-            logical_geometry(&reversed_block)
-        );
-        assert_eq!(forward_block.col_widths, reversed_block.col_widths);
-        assert_eq!(forward_block.table_width, reversed_block.table_width);
-    }
-
-    #[test]
-    fn grid_before_and_width_before_offset_the_row_without_moving_the_table() {
-        let mut table = shaded_table(
-            &[1440, 2880, 4320],
-            &[&["a", "b", "c"], &["a", "b", "c"], &["a", "b", "c"]],
-        );
-        let plain = lay_out(&table, 468.0);
-
-        // The middle row omits its first grid column.
-        table.rows[1].cells.remove(0);
-        table.rows[1].properties = Some(CT_TrPr {
-            grid_before: Some(1),
-            ..CT_TrPr::default()
-        });
-        let omitted = lay_out(&table, 468.0);
-        assert_eq!(omitted.table_width, plain.table_width);
-        assert_eq!(omitted.rows[0].offset_left, 0.0);
-        assert_eq!(omitted.rows[2].offset_left, 0.0);
-        assert_eq!(omitted.rows[1].offset_left, 72.0);
-        // The remaining cells take the grid columns they actually occupy.
-        assert_eq!(
-            omitted.rows[1]
-                .cells
-                .iter()
-                .map(|cell| cell.col_index)
-                .collect::<Vec<_>>(),
-            vec![1, 2]
-        );
-        assert_eq!(
-            omitted.rows[0]
-                .cells
-                .iter()
-                .map(|cell| (cell.col_index, cell.width))
-                .collect::<Vec<_>>(),
-            plain.rows[0]
-                .cells
-                .iter()
-                .map(|cell| (cell.col_index, cell.width))
-                .collect::<Vec<_>>()
-        );
-
-        // The same omission through the facade shifts only the painted cells
-        // of that one row.
-        let columns = [1440, 2880, 4320];
-        // The middle row's leading cell is empty, which is what lets it be
-        // replaced by a grid omission.
-        let rows: [&[&str]; 3] = [&["a", "b", "c"], &["", "b", "c"], &["a", "b", "c"]];
-        let mut document = shaded_document(&columns, &rows);
-        document
-            .table_mut(0)
-            .expect("table")
-            .set_row_grid_omissions(1, Some(1), None)
-            .expect("the leading column is empty and can be omitted");
-        assert_eq!(
-            painted_cells(&document),
-            vec![
-                (72.0, 72.0),
-                (144.0, 144.0),
-                (288.0, 216.0),
-                (144.0, 144.0),
-                (288.0, 216.0),
-                (72.0, 72.0),
-                (144.0, 144.0),
-                (288.0, 216.0),
-            ]
-        );
-
-        // An explicit `w:wBefore` replaces the omitted columns' own width.
-        table.rows[1]
-            .properties
-            .as_mut()
-            .expect("row properties")
-            .width_before = Some(CT_TblWidth::dxa(400));
-        let authored = lay_out(&table, 468.0);
-        assert_eq!(authored.rows[1].offset_left, 20.0);
-        assert_eq!(authored.table_width, plain.table_width);
-    }
-
-    #[test]
-    fn a_conditional_region_row_height_reaches_layout() {
-        let styles = CT_Styles::from_xml(
-            format!(
-                concat!(
-                    r#"<w:styles xmlns:w="{ns}">"#,
-                    r#"<w:style w:type="table" w:styleId="Banded">"#,
-                    r#"<w:tblStylePr w:type="firstRow"><w:trPr>"#,
-                    r#"<w:trHeight w:val="1440" w:hRule="exact"/><w:tblHeader/>"#,
-                    r#"</w:trPr></w:tblStylePr></w:style></w:styles>"#
-                ),
-                ns = rdocx_oxml::namespace::W_NS
-            )
-            .as_bytes(),
-        )
-        .expect("conditional table style parses");
-        assert!(
-            styles
-                .get_by_id("Banded")
-                .expect("style is present")
-                .conditional_table_styles
-                .iter()
-                .any(|conditional| conditional.row_properties.is_some()),
-            "the conditional region carries row properties"
-        );
-
-        let mut table = shaded_table(&[2880, 2880], &[&["a", "b"], &["c", "d"]]);
-        let properties = table.properties.as_mut().expect("table properties");
-        properties.style_id = Some("Banded".to_owned());
-        properties.look = Some(rdocx_oxml::table::CT_TblLook {
-            first_row: Some(true),
-            ..rdocx_oxml::table::CT_TblLook::default()
-        });
-
-        let block = lay_out_with(&table, &styles, 468.0);
-        assert_eq!(block.rows[0].height, 72.0);
-        assert_eq!(block.header_row_indices, vec![0]);
-        assert!(block.rows[1].height < 72.0);
-    }
-
-    #[test]
-    fn an_authored_dxa_table_width_never_enters_the_autofit_path() {
-        // `Document::add_table` writes `w:tblW` as `dxa` unconditionally, so
-        // every authored table keeps its declared grid whatever the layout
-        // mode says.
-        let mut document = rdocx::Document::new();
-        {
-            let mut table = document.add_table(1, 3);
-            table.set_layout(rdocx::table::TableLayout::AutoFit);
-            for index in 0..3 {
-                table
-                    .row(0)
-                    .expect("row")
-                    .cell(index)
-                    .expect("cell")
-                    .set_text("x");
-            }
-        }
-        let bytes = document.to_bytes().expect("document saves");
-        let reopened = rdocx::Document::from_bytes(&bytes).expect("document reopens");
-        assert_eq!(
-            reopened.table(0).expect("table").width_mode(),
-            Some(rdocx::table::TableWidth::Fixed(rdocx::Length::twips(9360)))
-        );
-
-        let mut table = shaded_table(&[3120, 3120, 3120], &[&["x", "x", "x"]]);
-        table.properties.as_mut().expect("table properties").layout = Some("autofit".to_owned());
-        let block = lay_out(&table, 468.0);
-        assert_eq!(block.col_widths, vec![156.0, 156.0, 156.0]);
-        assert_eq!(block.table_width, 468.0);
-    }
-
-    #[test]
-    fn a_corpus_shaped_auto_width_table_without_explicit_autofit_keeps_its_grid() {
-        // Word writes `<w:tblW w:w="0" w:type="auto"/>` with no `w:tblLayout`
-        // for an ordinary table. The settled S74 predicate admits that shape,
-        // so its resolved widths are recorded here rather than left implicit.
-        let mut table = shaded_table(
-            &[1440, 7200],
-            &[&["ID", "A considerably longer second column heading"]],
-        );
-        let properties = table.properties.as_mut().expect("table properties");
-        properties.layout = None;
-        properties.width = Some(CT_TblWidth::auto());
-
-        let autofitted = lay_out(&table, 468.0);
-        let rounded = autofitted
-            .col_widths
-            .iter()
-            .map(|width| (width * 100.0).round() / 100.0)
-            .collect::<Vec<_>>();
-        assert_eq!(rounded, vec![20.34, 215.19]);
-
-        // Declaring the layout mode fixed returns the table to its grid, which
-        // is the negative arm of the same predicate.
-        table.properties.as_mut().expect("table properties").layout = Some("fixed".to_owned());
-        let fixed = lay_out(&table, 468.0);
-        assert_eq!(fixed.col_widths, vec![72.0, 360.0]);
-    }
-}
-
 mod f_x132_retained_namespace_owner_regressions {
     use rdocx::Document;
     use rdocx_oxml::namespace::W_NS;
@@ -31180,5 +30770,319 @@ mod f_x132_retained_namespace_owner_regressions {
             1,
             "{saved_xml}"
         );
+    }
+}
+
+/// F-266a, script identity and font slot resolution.
+mod f266a_script_and_font_slot_regressions {
+    use super::*;
+    use oxml_layout::{PositionedElement, TextScript};
+    use rdocx::RunFontSlot;
+
+    const HEBREW: &str = "שלום עולם";
+    const ARABIC_WORD: &str = "العربية";
+
+    /// Every rich run on the page, in paint order.
+    fn rich_runs(
+        result: &rdocx_layout::WordLayoutResult,
+    ) -> Vec<oxml_layout::MultilingualGlyphRun> {
+        let mut runs = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let PositionedElement::MultilingualText(run) = element {
+                    runs.push(run.clone());
+                }
+            });
+        }
+        runs
+    }
+
+    /// Every legacy run on the page. A numbering marker with no complex
+    /// script is painted here, not on the rich path.
+    fn legacy_runs(result: &rdocx_layout::WordLayoutResult) -> Vec<oxml_layout::GlyphRun> {
+        let mut runs = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let PositionedElement::Text(run) = element {
+                    runs.push(run.clone());
+                }
+            });
+        }
+        runs
+    }
+
+    fn family_of(result: &rdocx_layout::WordLayoutResult, id: oxml_layout::FontId) -> String {
+        result
+            .layout
+            .fonts
+            .iter()
+            .find(|font| font.id == id)
+            .map(|font| font.family.clone())
+            .expect("every painted run names a font in the result font table")
+    }
+
+    fn style_hebrew(run: &mut rdocx::Run<'_>) {
+        run.set_slot_font(RunFontSlot::ComplexScript, Some("Noto Sans Hebrew"));
+        run.set_rtl_value(Some(true));
+        run.set_complex_script_value(Some(true));
+        run.set_language_bidi_value(Some("he-IL"));
+    }
+
+    fn style_arabic(run: &mut rdocx::Run<'_>) {
+        run.set_slot_font(RunFontSlot::ComplexScript, Some("Noto Sans Arabic"));
+        run.set_rtl_value(Some(true));
+        run.set_complex_script_value(Some(true));
+        run.set_language_bidi_value(Some("ar-SA"));
+    }
+
+    #[test]
+    fn a_right_to_left_paragraph_keeps_logical_order_in_extracted_text() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("").right_to_left(true);
+            style_hebrew(&mut paragraph.add_run(HEBREW));
+        }
+
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic right-to-left layout");
+        let mut runs = rich_runs(&result);
+        assert!(runs.len() > 1, "the paragraph splits into several spans");
+
+        // Painted order is reversed. The first logical span sits furthest
+        // right, which is the only thing UAX 9 reordering is allowed to
+        // change.
+        runs.sort_by_key(|run| run.logical_index);
+        let painted = runs.iter().map(|run| run.origin.x).collect::<Vec<_>>();
+        assert!(
+            painted.windows(2).all(|pair| pair[0] > pair[1]),
+            "logical order must paint right to left, got {painted:?}"
+        );
+
+        // Logical order survives everywhere the text is read back.
+        let logical = runs
+            .iter()
+            .map(|run| run.logical_text.as_str())
+            .collect::<String>();
+        assert_eq!(logical, HEBREW, "rich runs retain logical text");
+
+        // Each run's cluster map still points at logical character indices,
+        // which is what carries the reversal back to a reader.
+        for run in &runs {
+            let characters = run.logical_text.chars().count() as u32;
+            assert!(
+                run.clusters
+                    .iter()
+                    .all(|cluster| cluster.char_end <= characters),
+                "cluster ranges stay inside the logical text"
+            );
+        }
+
+        let svg = document
+            .render_page_to_svg_deterministic(0)
+            .expect("deterministic SVG")
+            .expect("page one exists");
+        for run in &runs {
+            assert!(
+                svg.svg.contains(&format!(">{}</text>", run.logical_text)),
+                "SVG keeps {:?} searchable in logical order",
+                run.logical_text
+            );
+        }
+
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraphs()[0].text(), HEBREW);
+    }
+
+    /// Joining is contextual, so a shaper told the wrong script or the wrong
+    /// direction silently emits isolated forms that still pass a glyph-count
+    /// check.
+    ///
+    /// The control arm is the same word inside the same single `w:r` with a
+    /// zero-width non-joiner between every letter, which is the one thing
+    /// that suppresses joining without changing the run structure. A control
+    /// built from one run per letter would instead encode the current
+    /// no-joining-across-runs behaviour as the expected baseline, and would
+    /// then fail with a misleading message if that behaviour were ever fixed.
+    ///
+    /// Joining does not currently cross a `w:r` boundary, because Word
+    /// multilingual reassembly requires every shaped span to stay inside the
+    /// inline item it came from. That gap is recorded in the F-266a entry of
+    /// `docs/hld/14-development-backlog.md` and is not this story's diff.
+    #[test]
+    fn arabic_shaping_applies_contextual_joining_forms_within_one_run() {
+        let glyphs_of = |text: &str| {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("").right_to_left(true);
+                style_arabic(&mut paragraph.add_run(text));
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic Arabic layout");
+            let mut runs = rich_runs(&result);
+            runs.sort_by_key(|run| run.logical_index);
+            runs.iter()
+                .flat_map(|run| run.glyph_ids.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let connected = glyphs_of(ARABIC_WORD);
+        let disjoined = glyphs_of(
+            &ARABIC_WORD
+                .chars()
+                .map(|character| character.to_string())
+                .collect::<Vec<_>>()
+                .join("\u{200c}"),
+        );
+
+        assert!(!connected.is_empty(), "the Arabic word reaches the shaper");
+        assert_ne!(
+            connected, disjoined,
+            "one connected Arabic word must not shape to the same glyphs as the \
+             same letters separated by zero-width non-joiners"
+        );
+        // Differing is not enough on its own, since the separator adds glyphs
+        // of its own. Joining must produce a contextual form that the same
+        // letters never produce unjoined.
+        assert!(
+            connected.iter().any(|glyph| !disjoined.contains(glyph)),
+            "joining must produce a form the unjoined letters never take, \
+             connected {connected:?} against disjoined {disjoined:?}"
+        );
+    }
+
+    #[test]
+    fn numbering_markers_stay_on_the_leading_edge_of_a_right_to_left_paragraph() {
+        let mut document = Document::new();
+        let num_id = document.add_list_definition(&[ListLevel::decimal()]);
+        {
+            let mut paragraph = document.add_paragraph("").right_to_left(true);
+            paragraph.set_numbering(num_id, 0);
+            style_hebrew(&mut paragraph.add_run(HEBREW));
+        }
+
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic numbered right-to-left layout");
+        let marker = legacy_runs(&result)
+            .into_iter()
+            .find(|run| run.text.starts_with('1'))
+            .expect("the decimal marker reaches the page");
+        let rightmost_text = rich_runs(&result)
+            .iter()
+            .filter(|run| run.script == TextScript::Hebrew)
+            .map(|run| run.origin.x)
+            .fold(f64::MIN, f64::max);
+        assert!(
+            marker.origin.x > rightmost_text,
+            "a right-to-left list marker paints on the leading, right-hand edge, \
+             marker at {} against text at {rightmost_text}",
+            marker.origin.x
+        );
+    }
+
+    /// `w:rFonts/@w:hint` must reach a rendered font family.
+    ///
+    /// The attribute is the one F-265 handed over specifically so this story
+    /// could consume it, and a slot table that classified Word's ambiguous
+    /// set by codepoint would leave it inert on exactly the characters a
+    /// document writes it for. Nothing proves it arrives unless a test drives
+    /// it through layout, so dropping `font_hint` at the production call
+    /// sites would otherwise leave the suite green.
+    ///
+    /// The run is punctuation only, because the two faces have to share a
+    /// repertoire for the hint to be the thing that decides. Noto Sans SC and
+    /// Noto Sans JP both approve ASCII comma and space, per their
+    /// `SUBSET-*.md` records, and comma is in Word's ambiguous set, so
+    /// coverage fallback cannot move either answer.
+    #[test]
+    fn a_font_hint_reaches_the_rendered_font_family() {
+        let resolved_family = |hint: Option<&str>| {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("");
+                let mut run = paragraph.add_run(", , ,");
+                run.set_slot_font(RunFontSlot::Ascii, Some("Noto Sans SC"));
+                run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+                run.set_font_hint(hint);
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic hinted layout");
+            let runs = legacy_runs(&result)
+                .into_iter()
+                .filter(|run| !run.text.trim().is_empty())
+                .collect::<Vec<_>>();
+            assert!(!runs.is_empty(), "the hinted run reaches the page");
+            let families = runs
+                .iter()
+                .map(|run| family_of(&result, run.font_id))
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                families.len(),
+                1,
+                "one family for one run, got {families:?}"
+            );
+            families.into_iter().next().expect("one family")
+        };
+
+        assert_eq!(
+            resolved_family(None),
+            "Noto Sans SC",
+            "an unhinted ambiguous run keeps w:ascii"
+        );
+        assert_eq!(
+            resolved_family(Some("eastAsia")),
+            "Noto Sans JP",
+            "an eastAsia hint moves an ambiguous run to w:eastAsia"
+        );
+    }
+
+    #[test]
+    fn an_east_asian_run_reads_its_own_font_slot_and_not_the_ascii_one() {
+        // Both bundled faces cover these two Kanji, so coverage fallback
+        // cannot decide the Kanji paragraph and only the `w:rFonts` slot can.
+        // Noto Sans JP carries no Latin letters, per
+        // `crates/oxml-layout/fonts/SUBSET-NotoSansJP.md`, so the Latin
+        // paragraph proves the ASCII slot still answers rather than that
+        // coverage was forced.
+        let mut document = Document::new();
+        for text in ["世界", "World"] {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run(text);
+            run.set_slot_font(RunFontSlot::Ascii, Some("Noto Sans SC"));
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+        }
+
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic East Asian layout");
+
+        let han = rich_runs(&result)
+            .into_iter()
+            .filter(|run| run.script == TextScript::Han)
+            .collect::<Vec<_>>();
+        assert!(!han.is_empty(), "the Kanji reach the page");
+        for run in &han {
+            assert_eq!(
+                family_of(&result, run.font_id),
+                "Noto Sans JP",
+                "East Asian text reads w:eastAsia, never w:ascii"
+            );
+        }
+
+        let latin = legacy_runs(&result)
+            .into_iter()
+            .filter(|run| !run.text.trim().is_empty())
+            .collect::<Vec<_>>();
+        assert!(!latin.is_empty(), "the Latin word reaches the page");
+        for run in &latin {
+            assert_eq!(
+                family_of(&result, run.font_id),
+                "Noto Sans SC",
+                "ASCII text keeps reading w:ascii"
+            );
+        }
     }
 }

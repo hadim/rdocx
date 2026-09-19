@@ -2619,6 +2619,14 @@ Hebrew, Korean, and Japanese subset faces.
 mixed Arabic, Hebrew, Korean, Japanese, and Latin page geometry and reading
 order in deterministic font mode.
 
+Two boundaries are recorded rather than closed here. Shaping does not cross a
+`w:r` boundary, so one Arabic word split across two runs loses its joining
+forms, because Word multilingual reassembly requires every shaped span to stay
+inside the inline item it came from. Lifting that is a redesign of the
+reassembly contract and belongs to its own story. Separately, a paragraph on
+the rich shaping path cannot enter the paragraph block cache, which now
+includes Korean alongside Arabic, Hebrew, and CJK.
+
 ### F-266b, Ruby and emphasis marks (L)
 `w:ruby` typed paragraph content with its base and phonetic lines, and `w:em`
 emphasis marks projected into layout.

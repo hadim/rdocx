@@ -487,7 +487,10 @@ is smaller than the glyph box.
 
 Complex text enters shared layout as one paragraph-wide logical sequence.
 Coverage and script boundaries select deterministic fonts before HarfRust
-receives explicit script, language, and direction. ICU supplies Thai and
+receives explicit script, language, and direction. Script identity separates
+Latin, Arabic, Hebrew, Devanagari, Thai, Han, Hangul, and Kana, because each
+needs its own shaper feature set. Hangul and Kana are never folded into Han,
+which would silently change how existing Han text shapes. ICU supplies Thai and
 complex-script opportunities, shared punctuation rules protect CJK line edges,
 and language-specific Liang dictionaries supply conditional hyphens. Fitting
 never divides a shaping cluster. After fitting, UAX 9 reorders each completed
@@ -498,10 +501,15 @@ explicit DrawingML direction also controls numeric and Latin text on both
 sides of a forced line break.
 
 Word uses the same paragraph-wide rich shaping and line path when a paragraph
-contains Arabic, Devanagari, Thai, or CJK text. The Word projection selects the
-effective direct, bidirectional, or East Asian language value for each run and
-retains exact logical source intervals. Shared shaping still owns script and
-coverage segmentation, clusters, offsets, and line fitting. Exact Word line
+contains Arabic, Hebrew, Devanagari, Thai, Hangul, Kana, or Han text. The Word
+projection selects the effective direct, bidirectional, or East Asian language
+value for each run and retains exact logical source intervals. Hangul takes the
+East Asian language slot, which is where Word puts it, and the language table
+claims every codepoint the script table calls Hangul, Kana, or Han, since a
+character the language table skipped would inherit the preceding slot. A
+paragraph on this path leaves the paragraph block cache, because the retained
+size of a rich inline item cannot be bounded. Shared shaping still owns script
+and coverage segmentation, clusters, offsets, and line fitting. Exact Word line
 spacing places rich text on the Word baseline at 0.8 of the largest run em for
 the line. Automatic spacing and the established Latin-only path retain their
 existing metrics and output bytes. Producer-written fractional paragraph line
@@ -606,6 +614,68 @@ attribute for the same slot. Word prefers the theme attribute, so this is a
 recorded deliberate divergence, reachable only on a producer document the
 caller never edited, since setting either form through the facade clears the
 other.
+
+Which slot that is comes from the run's own characters. A character whose
+codepoint settles its own script selects one of the four `w:rFonts` slots,
+`w:ascii`, `w:hAnsi`, `w:eastAsia`, or `w:cs`, and ignores
+`w:rFonts/@w:hint`. Every other character belongs to Word's ambiguous set, the
+punctuation, symbols, digits, Greek and Cyrillic that belong to no script in
+particular, and there the hint decides. That is what the attribute is for, so
+classifying the ambiguous set by codepoint would leave it inert on exactly the
+characters a document writes it for. Without a hint the seven-bit range keeps
+`w:ascii` and everything above it takes `w:hAnsi`.
+
+The slot boundaries are not the language-slot boundaries, because Word draws
+Devanagari and Thai from `w:cs` while their language still comes from
+`w:lang/@w:val`. They do agree about East Asian text, and the language table
+claims the same set the font table does, since a character East Asian to one
+and unclaimed by the other would be attached to the preceding slot and take
+the wrong language.
+
+One family is resolved per run, since coverage fallback already replaces one
+face for a whole run. Only an alphabetic character claims a slot, so spaces,
+digits, and punctuation take whatever the rest of the run takes. A run with no
+letter at all has nothing to follow, so its own remaining characters decide
+under the same consensus rule, after the `w:ascii` candidates among them are
+dropped, since `w:ascii` is also what a disagreement gives. That is how a run
+of East Asian punctuation or fullwidth digits reaches `w:eastAsia`.
+
+A run whose alphabetic characters disagree keeps the `w:ascii` slot, because
+preferring either half would be wrong for the other. Word draws the halves
+from two different slots, so this is a known divergence, recorded under rule 5
+of `.claude/skills/differential-testing.md`. It has three costs. A mixed Latin
+and East Asian run keeps the `w:ascii` family for its East Asian half, and
+resolving such a run through `w:eastAsia` instead would trade that for
+breaking the Latin half, which is the more common shape. A run with no letter
+whose remaining characters disagree, an ideographic comma beside an em dash,
+loses `w:eastAsia` for its ideographic half the same way. And `w:hAnsi` is
+reachable only by a run with no ASCII letter in it, since an accented word
+almost always carries unaccented letters too and the two disagree. All three
+costs are bounded by `w:hAnsi` and every other slot falling back to the
+`w:ascii` family, so a run resolves to a named family either way. A run of ASCII
+resolves exactly as it did before slots existed.
+
+Each slot reads its own theme attribute, so `majorEastAsia`, `minorEastAsia`,
+`majorBidi`, and `minorBidi` come from `w:eastAsiaTheme` and `w:cstheme`
+rather than collapsing onto whatever `w:asciiTheme` named. Those four name the
+theme's `a:ea` and `a:cs` typefaces, and the `Theme` model carries only
+`a:latin`, so inside a slot they resolve to nothing and fall through to the
+run's own `w:ascii` family. Answering with the Latin typeface there would be
+worse than declining, because it is a face that usually cannot draw the text
+and it would outrank the family the author named. Word behaves the same way,
+since `a:cs` is empty in every stock Office theme. `majorAscii`, `majorHAnsi`,
+`minorAscii`, and `minorHAnsi` do name `a:latin` and resolve normally, and a
+slot with no theme attribute of its own falls back to `w:asciiTheme`,
+mirroring the explicit fallback.
+
+Declining inside the slot is what keeps the Latin face from outranking a named
+family, not a refusal to use it at all. After both the character's slot and
+the `w:ascii` slot have declined, a run whose only font property is one of the
+four non-Latin references would otherwise lose its theme typeface for the
+engine default, so the Latin typeface is the answer as a last resort. Full
+resolution is therefore five steps: the slot's explicit family, the slot's
+theme font, the same two for the `w:ascii` slot, then that last resort, then
+nothing so the default applies.
 
 `w:outline`, `w:shadow`, `w:emboss`, `w:imprint`, `w:bdr`, `w:kern`, and
 `w:fitText` are modeled, authored, and round-tripped, and their render

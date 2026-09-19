@@ -568,7 +568,7 @@ class SprintWorkflowTests(unittest.TestCase):
             f"fonts/{path.name}"
             for path in sorted((*fonts.glob("LICENSE-*"), *fonts.glob("NOTICE-*")))
         )
-        self.assertEqual(len(expected_fonts), 24)
+        self.assertEqual(len(expected_fonts), 27)
         self.assertEqual(len(expected_legal), 6)
         self.assertEqual(listed_fonts, expected_fonts)
         self.assertEqual(listed_legal, expected_legal)
@@ -1121,6 +1121,9 @@ class SprintWorkflowTests(unittest.TestCase):
         noto_entries = (
             "fonts/NotoSansArabic.ttf",
             "fonts/NotoSansDevanagari.ttf",
+            "fonts/NotoSansHebrew-F266a-subset.ttf",
+            "fonts/NotoSansJP-F266a-subset.ttf",
+            "fonts/NotoSansKR-F266a-subset.ttf",
             "fonts/NotoSansSC-FX058-subset.ttf",
             "fonts/NotoSansThai.ttf",
             "fonts/LICENSE-Noto",
@@ -9097,7 +9100,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertIn("system-fonts", features)
         self.assertNotIn("bundled-fonts", features)
         claimed_font_count = re.findall(r"([0-9]+) bundled TTFs", claude)
-        self.assertEqual(claimed_font_count, ["24"])
+        self.assertEqual(claimed_font_count, ["27"])
         fonts = font_path / "fonts"
         self.assertEqual(len(tuple(fonts.glob("*.ttf"))), int(claimed_font_count[0]))
         for legal_file in (

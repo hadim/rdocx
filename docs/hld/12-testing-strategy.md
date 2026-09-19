@@ -1369,6 +1369,56 @@ The SHA-bound PowerPoint artifact is
 `7525e9a088c5fbf58fa1ed98cdfa0ec2fabf998662112ced7a6b6521f2c4edfc`.
 The recorded crop result is `750x450 differing=0`.
 
+## The mixed-script geometry golden gate
+
+`mixed_script_page_matches_the_pinned_geometry_and_reading_order` builds one
+page through the public facade with Arabic, Hebrew, Korean, Japanese, Latin,
+and one Kanji paragraph, each setting its font through the `w:rFonts` slot
+Word uses for it, and lays it out with `FontManager::new_deterministic`. The
+digest is taken over a canonical serialisation of every painted run in paint
+order, carrying its font family, point size, origin, logical text, glyph ids,
+and advances, and for a rich run also its direction, script, bidi embedding
+level, both offset axes, and its cluster ranges.
+
+The recorded digest is
+`516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402`.
+
+The Kanji paragraph is what makes slot resolution load bearing in the gate. It
+names `Noto Sans SC` on `w:ascii` and `Noto Sans JP` on `w:eastAsia`, and both
+faces cover its text, so coverage fallback cannot choose between them. Every
+other paragraph has exactly one bundled face that covers it, so those prove
+script identity, reading order, and geometry rather than slot resolution.
+
+The gate is a geometry digest and not a pinned-oracle raster, because every
+property under test is stated exactly by the layout result. A rasteriser would
+add an external dependency and prove less. The serialisation is host-stable
+because the pipeline is f64 throughout with no FMA contraction, the shaper is
+pure Rust, and every face is bundled, so each coordinate is an integer font
+unit scaled by one multiply and summed in a fixed order. Printing four decimal
+places is not what makes it stable. It is a guard band that keeps an ordinary
+representation difference away from the printed digits, and it is applied to a
+value whose sign of zero has been normalised first, because a negative zero
+would otherwise print a leading minus and move the digest for no geometric
+reason. Reading order, script identity, resolved family, and bidi embedding
+level are asserted separately and readably before the digest, so a failure
+names the property that broke rather than only reporting that a hash moved.
+Logical order is asserted as exact reassembly per source paragraph, not as
+containment, so a dropped span fails.
+
+Adjacent regressions prove that a right-to-left paragraph keeps logical order
+in its rich runs, its cluster ranges, its SVG text, and its round-trip XML,
+that Arabic shaping applies contextual joining forms inside one run against a
+zero-width non-joiner control, that a numbering marker stays on the leading
+right-hand edge of a right-to-left paragraph, and that East Asian text reads
+`w:eastAsia` rather than `w:ascii` where both named families cover the text.
+
+Korean text now reaches the rich shaping path, and a paragraph on that path
+cannot enter the paragraph block cache, because the retained size of a rich
+inline item cannot be bounded. That has always been true of Arabic, Hebrew,
+and CJK. `a_complex_script_paragraph_is_never_admitted_to_the_paragraph_block_cache`
+asserts it for all five rather than leaving it to be rediscovered, and the
+incremental relayout tests use Latin fixtures so they still measure reuse.
+
 ## The deck corpus
 
 Fifty real `.pptx` files are stored outside the published crates and fetched by

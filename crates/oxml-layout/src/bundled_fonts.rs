@@ -12,9 +12,14 @@
 //!   under the SIL Open Font License 1.1
 //! - **Liberation Mono** — metric-compatible with Courier New, licensed under
 //!   the SIL Open Font License 1.1
-//! - **Noto Sans Arabic**, **Noto Sans Devanagari**, **Noto Sans Thai**, and
-//!   **Noto Sans SC** — deterministic complex-script fallbacks licensed under
-//!   the SIL Open Font License 1.1
+//! - **Noto Sans Arabic**, **Noto Sans Devanagari**, **Noto Sans Thai**,
+//!   **Noto Sans SC**, **Noto Sans Hebrew**, **Noto Sans KR**, and **Noto Sans
+//!   JP** — deterministic complex-script fallbacks licensed under the SIL Open
+//!   Font License 1.1
+//!
+//! The Noto Sans SC, Hebrew, KR and JP faces are deterministic subsets, not
+//! the full families. Each ships only its approved fixture repertoire, which
+//! its `fonts/SUBSET-*.md` record names and reproduces.
 
 /// Returns bundled font data: `(family_name, font_bytes)` pairs.
 ///
@@ -123,6 +128,18 @@ pub fn bundled_font_data() -> Vec<(&'static str, &'static [u8])> {
             "Noto Sans SC",
             include_bytes!("../fonts/NotoSansSC-FX058-subset.ttf").as_slice(),
         ),
+        (
+            "Noto Sans Hebrew",
+            include_bytes!("../fonts/NotoSansHebrew-F266a-subset.ttf").as_slice(),
+        ),
+        (
+            "Noto Sans KR",
+            include_bytes!("../fonts/NotoSansKR-F266a-subset.ttf").as_slice(),
+        ),
+        (
+            "Noto Sans JP",
+            include_bytes!("../fonts/NotoSansJP-F266a-subset.ttf").as_slice(),
+        ),
     ]
 }
 
@@ -142,6 +159,9 @@ mod tests {
             ("Liberation Serif", "LICENSE-Liberation"),
             ("Noto Sans Arabic", "LICENSE-Noto"),
             ("Noto Sans Devanagari", "LICENSE-Noto"),
+            ("Noto Sans Hebrew", "LICENSE-Noto"),
+            ("Noto Sans JP", "LICENSE-Noto"),
+            ("Noto Sans KR", "LICENSE-Noto"),
             ("Noto Sans SC", "LICENSE-Noto"),
             ("Noto Sans Thai", "LICENSE-Noto"),
         ];
@@ -166,7 +186,17 @@ mod tests {
 
         assert!(fonts_dir.join("NOTICE-Caladea").is_file());
         assert!(fonts_dir.join("NOTICE-Noto").is_file());
-        assert!(fonts_dir.join("SUBSET-NotoSansSC.md").is_file());
+        for subset_record in [
+            "SUBSET-NotoSansSC.md",
+            "SUBSET-NotoSansHebrew.md",
+            "SUBSET-NotoSansKR.md",
+            "SUBSET-NotoSansJP.md",
+        ] {
+            assert!(
+                fonts_dir.join(subset_record).is_file(),
+                "{subset_record} is missing"
+            );
+        }
     }
 
     #[test]
@@ -176,6 +206,9 @@ mod tests {
             ("Noto Sans Devanagari", "कि"),
             ("Noto Sans Thai", "ภาษาไทยยินดีต้อนรับ"),
             ("Noto Sans SC", "〈中〉、你好世界"),
+            ("Noto Sans Hebrew", "שלום עולם"),
+            ("Noto Sans KR", "안녕하세요 세계"),
+            ("Noto Sans JP", "こんにちは、カタカナ世界"),
         ];
         for (family, text) in fixtures {
             let bytes = bundled_font_data()

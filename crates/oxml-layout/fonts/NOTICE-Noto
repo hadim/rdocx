@@ -2,7 +2,8 @@ The Noto font files bundled by oxml-layout are distributed under the SIL Open
 Font License 1.1 in LICENSE-Noto.
 
 Upstream project: https://github.com/google/fonts
-Upstream revision: main, retrieved 2026-08-26
+Upstream revision: main, retrieved 2026-08-26, and retrieved 2026-09-19 for the
+three F-266a subsets
 
 Source file SHA-256 values:
 
@@ -10,6 +11,11 @@ Source file SHA-256 values:
 - NotoSansDevanagari[wdth,wght].ttf: 9ce7b04f60e363d8870e5997744cf85cf69d38a4d7d129d364d92a3b14b461d7
 - NotoSansThai[wdth,wght].ttf: 5a1c559bb539583c8a1fd99d1c5b9491e5e14478c9cd2bd0970d5c3096cc9ef8
 - NotoSansSC[wght].ttf: a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da
+- NotoSansHebrew[wdth,wght].ttf: 7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88
+- NotoSansKR[wght].ttf: 194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252
+- NotoSansJP[wght].ttf: c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f
 
-The Noto Sans SC file in this package is a deterministic subset. Its exact
-reproduction command and repertoire are recorded in SUBSET-NotoSansSC.md.
+The Noto Sans SC, Noto Sans Hebrew, Noto Sans KR and Noto Sans JP files in this
+package are deterministic subsets. Their exact reproduction commands and
+repertoires are recorded in SUBSET-NotoSansSC.md, SUBSET-NotoSansHebrew.md,
+SUBSET-NotoSansKR.md and SUBSET-NotoSansJP.md.

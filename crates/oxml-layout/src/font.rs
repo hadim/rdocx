@@ -113,7 +113,12 @@ pub(crate) fn explicit_direction_levels(
 }
 
 /// Script identity used to select shaping behavior and deterministic fallback.
+///
+/// This enum keeps growing as scripts are added, and every addition is a
+/// breaking change for a downstream exhaustive match. `#[non_exhaustive]`
+/// takes that break once, at the pre-1.0 moment it is cheapest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TextScript {
     Latin,
     Arabic,
@@ -121,6 +126,10 @@ pub enum TextScript {
     Devanagari,
     Thai,
     Han,
+    /// Hangul jamo, compatibility jamo and precomposed syllables.
+    Hangul,
+    /// Hiragana, Katakana and the Katakana phonetic extensions.
+    Kana,
     Common,
 }
 
@@ -1767,6 +1776,18 @@ fn script_for_char(character: char) -> TextScript {
         0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x08ff => TextScript::Arabic,
         0x0900..=0x097f | 0xa8e0..=0xa8ff => TextScript::Devanagari,
         0x0e00..=0x0e7f => TextScript::Thai,
+        // Hangul and Kana are deliberately not folded into Han. They need
+        // different shaper feature sets, and folding them would silently
+        // change how existing Han text shapes.
+        //
+        // Hangul is the jamo, the Extended-A and Extended-B jamo, the
+        // compatibility jamo, the precomposed syllables, and the halfwidth
+        // jamo. Kana is Hiragana, Katakana, the Katakana phonetic
+        // extensions, and the halfwidth Katakana.
+        0x1100..=0x11ff | 0x3130..=0x318f | 0xa960..=0xa97f | 0xac00..=0xd7ff | 0xffa0..=0xffdc => {
+            TextScript::Hangul
+        }
+        0x3040..=0x30ff | 0x31f0..=0x31ff | 0xff66..=0xff9f => TextScript::Kana,
         0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff => TextScript::Han,
         _ => TextScript::Common,
     }
@@ -1780,6 +1801,10 @@ fn harfrust_script(script: TextScript) -> harfrust::Script {
         TextScript::Devanagari => harfrust::script::DEVANAGARI,
         TextScript::Thai => harfrust::script::THAI,
         TextScript::Han => harfrust::script::HAN,
+        TextScript::Hangul => harfrust::script::HANGUL,
+        // HarfBuzz unifies Hiragana and Katakana under one shaping model, and
+        // HIRAGANA is the tag it canonicalises the pair to.
+        TextScript::Kana => harfrust::script::HIRAGANA,
         TextScript::Common => harfrust::script::COMMON,
     }
 }
@@ -3043,5 +3068,77 @@ mod tests {
             fm.uncovered(new_idx, "这是中文").len() < fm.uncovered(idx, "这是中文").len(),
             "the replacement must cover more of the text than the original"
         );
+    }
+
+    #[test]
+    fn hangul_and_kana_receive_their_own_script_and_shaper_tag() {
+        for character in [
+            '\u{1100}', '\u{1112}', '\u{3131}', '\u{318e}', '\u{a960}', '\u{a97c}', '한', '힣',
+            '\u{d7b0}', '\u{d7ff}', '\u{ffa0}', '\u{ffdc}',
+        ] {
+            assert_eq!(
+                script_for_char(character),
+                TextScript::Hangul,
+                "{character:?} is Hangul"
+            );
+        }
+        for character in [
+            '\u{3041}', 'こ', 'ン', '\u{30ff}', '\u{31f0}', '\u{31ff}', '\u{ff66}', '\u{ff9f}',
+        ] {
+            assert_eq!(
+                script_for_char(character),
+                TextScript::Kana,
+                "{character:?} is Kana"
+            );
+        }
+        assert_eq!(
+            harfrust_script(TextScript::Hangul),
+            harfrust::script::HANGUL
+        );
+        assert_eq!(
+            harfrust_script(TextScript::Kana),
+            harfrust::script::HIRAGANA
+        );
+
+        // The two new ranges must be additions, never a re-routing. Sweeping
+        // the whole Basic Multilingual Plane proves no codepoint that already
+        // had a script identity moved to a different one.
+        let previously_mapped = |codepoint: u32| match codepoint {
+            0x0041..=0x024f | 0x1e00..=0x1eff => Some(TextScript::Latin),
+            0x0590..=0x05ff => Some(TextScript::Hebrew),
+            0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x08ff => Some(TextScript::Arabic),
+            0x0900..=0x097f | 0xa8e0..=0xa8ff => Some(TextScript::Devanagari),
+            0x0e00..=0x0e7f => Some(TextScript::Thai),
+            0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff => Some(TextScript::Han),
+            _ => None,
+        };
+        for codepoint in 0..=0xffff_u32 {
+            let Some(character) = char::from_u32(codepoint) else {
+                continue;
+            };
+            let Some(expected) = previously_mapped(codepoint) else {
+                continue;
+            };
+            assert_eq!(
+                script_for_char(character),
+                expected,
+                "U+{codepoint:04X} changed script"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mixed_script_string_shapes_every_script_with_a_covering_bundled_face() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        for text in ["안녕하세요", "こんにちは", "カタカナ", "שלום"] {
+            let font_id = fm
+                .resolve_font_for_text(Some("Carlito"), false, false, text)
+                .expect("a bundled face covers the fixture repertoire");
+            let index = fm.index_of(font_id).expect("resolved font is indexed");
+            assert!(
+                fm.uncovered(index, text).is_empty(),
+                "no bundled face covers {text}"
+            );
+        }
     }
 }

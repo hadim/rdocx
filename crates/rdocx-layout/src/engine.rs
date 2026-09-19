@@ -6077,7 +6077,12 @@ fn layout_paragraph_with_source_and_table(
         let italic = effective_rpr.italic.unwrap_or(false);
 
         // Resolve font family: theme font takes priority when no explicit font is set
-        let font_family = resolve_font_family(&effective_rpr, input.theme.as_ref());
+        let run_text = run.text();
+        let font_family = resolve_font_family(
+            &effective_rpr,
+            input.theme.as_ref(),
+            word_font_slot_for_text(&run_text, effective_rpr.font_hint.as_deref()),
+        );
 
         // Resolve color: theme color takes priority over literal color value
         let color = resolve_run_color(&effective_rpr, input.theme.as_ref());
@@ -6119,8 +6124,7 @@ fn layout_paragraph_with_source_and_table(
 
         // Resolved against the run's own text, so a family without glyphs for
         // this script is replaced by one that has them.
-        let font_id =
-            fm.resolve_font_for_text(font_family.as_deref(), bold, italic, &run.text())?;
+        let font_id = fm.resolve_font_for_text(font_family.as_deref(), bold, italic, &run_text)?;
         let metrics = fm.metrics(font_id, font_size)?;
 
         let content_char_starts = projected_content_char_starts(run);
@@ -6355,8 +6359,11 @@ fn layout_paragraph_with_source_and_table(
                             segment_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0);
                         let segment_bold = segment_rpr.bold.unwrap_or(false);
                         let segment_italic = segment_rpr.italic.unwrap_or(false);
-                        let segment_font_family =
-                            resolve_font_family(&segment_rpr, input.theme.as_ref());
+                        let segment_font_family = resolve_font_family(
+                            &segment_rpr,
+                            input.theme.as_ref(),
+                            word_font_slot_for_text(value, segment_rpr.font_hint.as_deref()),
+                        );
                         let segment_color = resolve_run_color(&segment_rpr, input.theme.as_ref());
                         let segment_underline = if projected.force_underline {
                             Some(Underline::Single)
@@ -6633,7 +6640,10 @@ fn layout_paragraph_with_source_and_table(
         let font_size = caret_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0);
         let bold = caret_rpr.bold.unwrap_or(false);
         let italic = caret_rpr.italic.unwrap_or(false);
-        let font_family = resolve_font_family(&caret_rpr, input.theme.as_ref());
+        // The caret of an empty paragraph draws no character, so it has no
+        // slot of its own and keeps the ASCII one it has always used.
+        let font_family =
+            resolve_font_family(&caret_rpr, input.theme.as_ref(), WordFontSlot::Ascii);
         let font_id = fm.resolve_font_for_metrics(font_family.as_deref(), bold, italic)?;
         let metrics = fm.metrics(font_id, font_size)?;
         inline_items.push(InlineItem::Text(TextSegment {
@@ -8279,43 +8289,270 @@ fn vml_color(value: &str) -> Option<Color> {
         .then(|| Color::from_hex(hex))
 }
 
-/// Resolve the effective font family for a run, considering theme fonts.
+/// One of the four `w:rFonts` script slots, as this engine resolves them.
 ///
-/// Priority: explicit font_ascii > theme font > None (use default).
-fn resolve_font_family(
+/// `rdocx::RunFontSlot` is the same four slots on the authoring side, but
+/// `rdocx-layout` sits below `rdocx` and cannot name it. The shape here
+/// deliberately mirrors [`WordLanguageSlot`] next to it, so a reader meets one
+/// pattern rather than two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WordFontSlot {
+    Ascii,
+    HighAnsi,
+    EastAsia,
+    ComplexScript,
+}
+
+/// Word's East Asian codepoint set.
+///
+/// Three tables ask this question, the font slot, the language slot and the
+/// rich-path gate, and asking it three times is how they drifted apart. They
+/// now ask it once. It is a superset of every codepoint `script_for_char`
+/// calls Hangul, Kana or Han, because Word draws whole CJK-adjacent blocks
+/// from `w:eastAsia` that need no complex shaping of their own.
+fn is_east_asian(codepoint: u32) -> bool {
+    matches!(
+        codepoint,
+        // Hangul jamo, including Extended-A and Extended-B, and the
+        // precomposed syllables and halfwidth jamo.
+        0x1100..=0x11ff
+            | 0xa960..=0xa97f
+            | 0xac00..=0xd7ff
+            // CJK radicals, Kangxi radicals and the ideographic description
+            // characters.
+            | 0x2e80..=0x2eff
+            | 0x2f00..=0x2fdf
+            | 0x2ff0..=0x2fff
+            // CJK punctuation, Kana, Bopomofo, Kanbun, the CJK strokes and
+            // the enclosed and compatibility blocks.
+            | 0x3000..=0x33ff
+            // Han, its extension A, the compatibility ideographs and its
+            // supplementary-plane extensions.
+            | 0x3400..=0x9fff
+            | 0xf900..=0xfaff
+            | 0x20000..=0x2fa1f
+            // CJK compatibility forms, small form variants, and the
+            // halfwidth and fullwidth forms.
+            | 0xfe30..=0xfe6f
+            | 0xff00..=0xffef
+    )
+}
+
+/// The `w:rFonts` slot one character resolves through.
+///
+/// The slot boundaries are not the [`word_language_slot`] boundaries. Word
+/// routes Devanagari and Thai through `w:cs` while their language still comes
+/// from `w:lang/@w:val`, which is why these are two tables and not one.
+///
+/// A character whose codepoint settles its own script decides its own slot and
+/// ignores `w:rFonts/@w:hint`. Everything else is Word's ambiguous set, the
+/// punctuation, symbols, digits, Greek and Cyrillic that belong to no script
+/// in particular, and there the hint decides. That is the whole reason the
+/// attribute exists, so a table that classified the ambiguous set by codepoint
+/// would leave the hint inert on exactly the characters it is written for.
+fn word_font_slot(character: char, hint: Option<&str>) -> WordFontSlot {
+    let codepoint = character as u32;
+    match codepoint {
+        // Hebrew, Arabic, Syriac, Thaana and the Arabic presentation forms,
+        // plus the Devanagari and Thai ranges Word also draws from `w:cs`.
+        0x0590..=0x08ff | 0x0900..=0x097f | 0x0e00..=0x0e7f | 0xfb1d..=0xfdff | 0xfe70..=0xfeff => {
+            WordFontSlot::ComplexScript
+        }
+        // Every CJK-adjacent block, which Word draws from `w:eastAsia`.
+        codepoint if is_east_asian(codepoint) => WordFontSlot::EastAsia,
+        // The Latin letters Word draws from `w:ascii`.
+        0x0041..=0x005a | 0x0061..=0x007a => WordFontSlot::Ascii,
+        // The Latin supplement and extensions, the IPA extensions and
+        // spacing modifier letters, Latin Extended-D and the Latin ligatures,
+        // which Word draws from `w:hAnsi`. The IPA and modifier blocks are
+        // Latin script by Unicode even though this workspace's shaping table
+        // stops at U+024F, so their slot is not in doubt either.
+        0x00c0..=0x02ff | 0x1e00..=0x1eff | 0xa720..=0xa7ff | 0xfb00..=0xfb1c => {
+            WordFontSlot::HighAnsi
+        }
+        // Word's ambiguous set. Only here does `w:hint` decide, and without
+        // one the seven-bit range keeps `w:ascii` and everything above it
+        // takes `w:hAnsi`, which is what each did before slots existed.
+        _ => match hint {
+            Some("eastAsia") => WordFontSlot::EastAsia,
+            Some("cs") => WordFontSlot::ComplexScript,
+            _ if codepoint <= 0x007f => WordFontSlot::Ascii,
+            _ => WordFontSlot::HighAnsi,
+        },
+    }
+}
+
+/// The `w:rFonts` slot a whole run resolves through.
+///
+/// One family is resolved per run, because `resolve_font_for_text` already
+/// picks one face for the run's entire text and replaces it wholesale when it
+/// cannot draw the run.
+///
+/// Only an alphabetic character claims a slot. Spaces, digits and punctuation
+/// take whatever the letters take, so they do not decide it while a letter is
+/// present. A run with no letter at all has nothing to follow, so its own
+/// characters decide instead, which is how a run of East Asian punctuation or
+/// fullwidth digits reaches `w:eastAsia`. A run of exactly that shape is
+/// ordinary in Japanese and Chinese prose, because Word splits runs at
+/// formatting, proofing and revision boundaries.
+///
+/// Both passes take the same consensus rule, so a run's answer never turns on
+/// which character the author typed first. Any disagreement resolves to
+/// `w:ascii`, because preferring either side would be wrong for the other and
+/// `w:ascii` is what such a run resolved through before any slot existed. A
+/// run of ASCII therefore resolves exactly as it always has.
+///
+/// The second pass drops its `w:ascii` candidates before counting them, since
+/// `w:ascii` is also the answer a disagreement gives, so counting them would
+/// make every run of ideographic punctuation around a space answer `w:ascii`
+/// twice over.
+fn word_font_slot_for_text(text: &str, hint: Option<&str>) -> WordFontSlot {
+    /// The one slot every candidate agrees on, `Ascii` if they disagree, or
+    /// None if there was no candidate. Generic over the iterator because it is
+    /// called with two different ones just below.
+    fn consensus(slots: impl Iterator<Item = WordFontSlot>) -> Option<WordFontSlot> {
+        let mut claimed: Option<WordFontSlot> = None;
+        for slot in slots {
+            match claimed {
+                None => claimed = Some(slot),
+                Some(existing) if existing == slot => {}
+                Some(_) => return Some(WordFontSlot::Ascii),
+            }
+        }
+        claimed
+    }
+
+    if let Some(slot) = consensus(
+        text.chars()
+            .filter(|character| character.is_alphabetic())
+            .map(|character| word_font_slot(character, hint)),
+    ) {
+        return slot;
+    }
+
+    // `w:ascii` candidates are dropped rather than counted, because `w:ascii`
+    // is also the answer a disagreement gives, so counting them would make
+    // every mixed run of punctuation answer `w:ascii` twice over.
+    consensus(
+        text.chars()
+            .map(|character| word_font_slot(character, hint))
+            .filter(|slot| *slot != WordFontSlot::Ascii),
+    )
+    .unwrap_or(WordFontSlot::Ascii)
+}
+
+/// The explicit `w:rFonts` family for one slot.
+///
+/// Word falls back to the `w:ascii` family when the slot the character wants
+/// is absent, which is also what keeps an `ascii`-only run resolving the way
+/// it always has.
+fn word_font_for_slot(
     rpr: &rdocx_oxml::properties::CT_RPr,
     theme: Option<&rdocx_oxml::theme::Theme>,
+    slot: WordFontSlot,
 ) -> Option<String> {
-    // Explicit font name takes priority.
+    // Explicit font name takes priority over the theme attribute beside it.
     //
     // Word prefers the theme attribute when a producer presents both for one
     // slot, so this is a deliberate divergence, pre-declared under rule 5 of
     // .claude/skills/differential-testing.md. A document authored through this
-    // facade never presents both, because setting either slot clears the
-    // other, so the divergence is reachable only on a producer document the
-    // caller never edited. Leaving those bytes as written is what the no-op
-    // save contract requires.
-    if rpr.font_ascii.is_some() {
-        return rpr.font_ascii.clone();
+    // facade never presents both for one slot, because setting either form
+    // clears the other, so the divergence is reachable only on a producer
+    // document the caller never edited. Leaving those bytes as written is what
+    // the no-op save contract requires.
+    let explicit = match slot {
+        WordFontSlot::Ascii => &rpr.font_ascii,
+        WordFontSlot::HighAnsi => &rpr.font_hansi,
+        WordFontSlot::EastAsia => &rpr.font_east_asia,
+        WordFontSlot::ComplexScript => &rpr.font_cs,
+    };
+    if explicit.is_some() {
+        return explicit.clone();
     }
 
-    // Resolve theme font reference
-    if let (Some(theme_ref), Some(theme)) = (&rpr.font_ascii_theme, theme) {
-        let font = match theme_ref.as_str() {
-            "majorAscii" | "majorHAnsi" | "majorBidi" | "majorEastAsia" => {
-                theme.major_font.as_deref()
-            }
-            "minorAscii" | "minorHAnsi" | "minorBidi" | "minorEastAsia" => {
-                theme.minor_font.as_deref()
-            }
-            _ => None,
-        };
-        if let Some(f) = font {
-            return Some(f.to_string());
-        }
+    // Each slot reads its own theme attribute. Reading `w:asciiTheme` for
+    // every slot made `w:eastAsiaTheme` and `w:cstheme` inert and collapsed
+    // majorEastAsia, minorEastAsia, majorBidi and minorBidi onto whatever the
+    // ASCII slot named.
+    let theme_ref = match slot {
+        WordFontSlot::Ascii => &rpr.font_ascii_theme,
+        WordFontSlot::HighAnsi => &rpr.font_hansi_theme,
+        WordFontSlot::EastAsia => &rpr.font_east_asia_theme,
+        WordFontSlot::ComplexScript => &rpr.font_cs_theme,
+    }
+    .as_deref()?;
+    let theme = theme?;
+    match theme_ref {
+        // These four name the theme's `a:latin` typeface, which is the one
+        // `rdocx_oxml::theme::Theme` carries.
+        "majorAscii" | "majorHAnsi" => theme.major_font.as_deref(),
+        "minorAscii" | "minorHAnsi" => theme.minor_font.as_deref(),
+        // majorEastAsia, minorEastAsia, majorBidi and minorBidi name the
+        // theme's `a:ea` and `a:cs` typefaces. `Theme` models neither, so
+        // there is no entry to read and the answer here is None, which falls
+        // through to the run's own `w:ascii` family. Word behaves the same
+        // way, since `a:cs` is empty in every stock Office theme.
+        //
+        // Declining *here* is what stops a Latin face, which usually cannot
+        // draw the text, outranking the family the author named.
+        // `resolve_font_family` answers with that face only after both slots
+        // have declined, where there is nothing else left to answer with.
+        _ => None,
+    }
+    .map(str::to_owned)
+}
+
+/// Resolve the effective font family for a run, considering theme fonts.
+///
+/// Five steps, in order. The slot's explicit family, the slot's theme font,
+/// then the same two for the `w:ascii` slot, then the Latin typeface for a
+/// non-Latin theme reference as a last resort, then None so the default
+/// applies.
+///
+/// The character's own slot is resolved completely before the `w:ascii`
+/// fallback, because returning the explicit `w:ascii` family first would leave
+/// `w:eastAsiaTheme` and `w:cstheme` exactly as inert as they were before they
+/// were read at all.
+///
+/// The last resort exists because `majorEastAsia`, `minorEastAsia`,
+/// `majorBidi` and `minorBidi` decline inside a slot, and a run whose only
+/// font property is one of those four would otherwise lose its theme typeface
+/// entirely. Declining inside the slot and answering outside it is what makes
+/// the Latin face reachable without ever letting it outrank a family the
+/// author named.
+fn resolve_font_family(
+    rpr: &rdocx_oxml::properties::CT_RPr,
+    theme: Option<&rdocx_oxml::theme::Theme>,
+    slot: WordFontSlot,
+) -> Option<String> {
+    if let Some(family) = word_font_for_slot(rpr, theme, slot)
+        .or_else(|| word_font_for_slot(rpr, theme, WordFontSlot::Ascii))
+    {
+        return Some(family);
     }
 
-    None
+    // Last resort. The four non-Latin references decline above so they can
+    // never outrank a family the author named, but a run whose only font
+    // property is one of them has nothing else to fall back to, and the Latin
+    // typeface is a better answer for it than the engine default. This is
+    // reachable only from a producer document, since Word writes those four
+    // on `w:eastAsiaTheme` and `w:cstheme` where the run's own `w:ascii`
+    // family answers first.
+    let theme = theme?;
+    let reference = match slot {
+        WordFontSlot::Ascii => &rpr.font_ascii_theme,
+        WordFontSlot::HighAnsi => &rpr.font_hansi_theme,
+        WordFontSlot::EastAsia => &rpr.font_east_asia_theme,
+        WordFontSlot::ComplexScript => &rpr.font_cs_theme,
+    }
+    .as_deref()
+    .or(rpr.font_ascii_theme.as_deref())?;
+    match reference {
+        "majorEastAsia" | "majorBidi" => theme.major_font.as_deref(),
+        "minorEastAsia" | "minorBidi" => theme.minor_font.as_deref(),
+        _ => None,
+    }
+    .map(str::to_owned)
 }
 
 /// Resolve the effective color for a run, considering theme colors.
@@ -8353,7 +8590,7 @@ fn resolve_run_color(
         .unwrap_or(Color::BLACK)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WordLanguageSlot {
     Direct,
     EastAsia,
@@ -8363,8 +8600,25 @@ enum WordLanguageSlot {
 fn word_language_slot(character: char) -> Option<WordLanguageSlot> {
     match character as u32 {
         0x0590..=0x08ff | 0xfb1d..=0xfdff | 0xfe70..=0xfeff => Some(WordLanguageSlot::Bidi),
-        0x3000..=0x30ff | 0x3400..=0x9fff | 0xf900..=0xfaff => Some(WordLanguageSlot::EastAsia),
-        0x0041..=0x024f | 0x0900..=0x097f | 0x0e00..=0x0e7f | 0x1e00..=0x1eff => {
+        // A character East Asian to one table and absent from this one would
+        // be attached to whichever slot preceded it, and at the start of a
+        // run that is the direct slot, so it would silently take
+        // `w:lang/@w:val` where Word takes `@w:eastAsia`.
+        codepoint if is_east_asian(codepoint) => Some(WordLanguageSlot::EastAsia),
+        // The Latin letters, including the IPA extensions, which are letters
+        // in their own right.
+        //
+        // This stops short of the spacing modifier letters and modifier
+        // symbols at 0x02b0..=0x02ff, which `word_font_slot` does claim for
+        // `w:hAnsi`. The two tables have different residual cases, so
+        // mirroring a boundary between them is the wrong operation. `None`
+        // here means inherit, and `word_language_ranges` leaves an unclaimed
+        // character inside the range it fell in, which is what a modifier
+        // should do. Claiming them would split a Bopomofo syllable from its
+        // tone mark, since `U+02C7`, `U+02CA`, `U+02CB` and `U+02D9` all live
+        // there, and hand the mark `w:lang/@w:val` where Word keeps the
+        // syllable's `@w:eastAsia`.
+        0x0041..=0x02af | 0x0900..=0x097f | 0x0e00..=0x0e7f | 0x1e00..=0x1eff => {
             Some(WordLanguageSlot::Direct)
         }
         _ => None,
@@ -8456,19 +8710,32 @@ fn word_multilingual_segment_slice(
     Ok(slice)
 }
 
+/// Whether this text needs the rich shaping path rather than the legacy one.
+///
+/// The East Asian half is the same shared set the font and language tables
+/// use, so no character is East Asian to one of the three and invisible to
+/// another. The rest is every range `script_for_char` gives a non-Latin
+/// script identity, which is why Hangul is here at all. Without it Korean
+/// text never reached the shaper, and giving Hangul a script identity one
+/// layer down would have changed nothing.
+///
+/// A paragraph that lands on this path leaves the paragraph block cache, since
+/// `inline_bytes` cannot bound the retained size of a rich inline item and
+/// scores it `usize::MAX`. That has always been true of Arabic, Hebrew and
+/// CJK, and is now true of Korean.
 fn needs_word_multilingual_layout(text: &str) -> bool {
     text.chars().any(|character| {
-        matches!(
-            character as u32,
-            0x0590..=0x08ff
-                | 0x0900..=0x097f
-                | 0x0e00..=0x0e7f
-                | 0x3000..=0x30ff
-                | 0x3400..=0x9fff
-                | 0xf900..=0xfaff
-                | 0xfb1d..=0xfdff
-                | 0xfe70..=0xfeff
-        )
+        let codepoint = character as u32;
+        is_east_asian(codepoint)
+            || matches!(
+                codepoint,
+                0x0590..=0x08ff
+                    | 0x0900..=0x097f
+                    | 0x0e00..=0x0e7f
+                    | 0xa8e0..=0xa8ff
+                    | 0xfb1d..=0xfdff
+                    | 0xfe70..=0xfeff
+            )
     })
 }
 
@@ -11770,12 +12037,19 @@ mod tests {
         assert_eq!(engine.paragraph_cache_counts(), (699, 701));
     }
 
+    /// A long body of cacheable paragraphs interleaved with safe tables.
+    ///
+    /// The text is deliberately Latin. A paragraph carrying a complex script
+    /// takes the rich multilingual path, whose inline items `inline_bytes`
+    /// scores as `usize::MAX` because their retained size cannot be bounded,
+    /// so such a paragraph is never admitted to the block cache and cannot
+    /// exercise the reuse these tests exist to prove.
     fn mixed_editor_input() -> LayoutInput {
         let mut input = make_input_with_text("");
         input.document.body.content.clear();
         for index in 0..700 {
             let mut paragraph = CT_P::new();
-            paragraph.add_run(&format!("편집 paragraph {index:03} stable line"));
+            paragraph.add_run(&format!("edited paragraph {index:03} stable line"));
             input.document.body.add_paragraph(paragraph);
             if index % 50 == 49 {
                 input
@@ -11813,7 +12087,7 @@ mod tests {
         assert_eq!(engine.hot_path_work_counts(), (0, 0));
 
         mixed_editor_paragraph_mut(&mut input, 350).runs[0].content = vec![RunContent::Text(
-            rdocx_oxml::text::CT_Text::new("편집 paragraph 350 changed line"),
+            rdocx_oxml::text::CT_Text::new("edited paragraph 350 changed line"),
         )];
         let warm = engine.layout(&input).expect("mixed warm layout");
         let fresh = Engine::new_deterministic()
@@ -18894,5 +19168,579 @@ mod tests {
             .expect("fresh sourced layout");
         let fresh = fresh_engine.take_body_fragments();
         assert_eq!(warm, fresh);
+    }
+
+    #[test]
+    fn korean_text_takes_the_east_asian_language_slot() {
+        for character in ['안', '녕', '\u{1100}', '\u{3131}', '\u{d7a3}'] {
+            assert_eq!(
+                word_language_slot(character),
+                Some(WordLanguageSlot::EastAsia),
+                "{character:?} is East Asian"
+            );
+        }
+        // The answers that already existed must not move.
+        for character in ['あ', 'ン', '中', '\u{f900}'] {
+            assert_eq!(
+                word_language_slot(character),
+                Some(WordLanguageSlot::EastAsia),
+                "{character:?} stays East Asian"
+            );
+        }
+        for character in ['ש', 'ع'] {
+            assert_eq!(word_language_slot(character), Some(WordLanguageSlot::Bidi));
+        }
+        for character in ['A', 'क', 'ก'] {
+            assert_eq!(
+                word_language_slot(character),
+                Some(WordLanguageSlot::Direct)
+            );
+        }
+    }
+
+    /// A modifier must not break the language run it modifies.
+    ///
+    /// `word_language_slot` returning `None` means inherit, and
+    /// `word_language_ranges` leaves an unclaimed character inside the range
+    /// it fell in. Returning `Some(Direct)` instead starts a new range. So the
+    /// boundary between the two is load bearing in a way the font table has no
+    /// equivalent of, since that table has no inherit answer at all, and
+    /// mirroring its boundary onto this one is the wrong operation. This test
+    /// states the boundary so it cannot move again without saying so.
+    #[test]
+    fn a_latin_letter_takes_the_direct_language_slot_and_a_modifier_inherits() {
+        // IPA extensions are letters in their own right and take the direct
+        // slot.
+        for codepoint in 0x0250..=0x02af_u32 {
+            let character = char::from_u32(codepoint).expect("BMP scalar");
+            assert_eq!(
+                word_language_slot(character),
+                Some(WordLanguageSlot::Direct),
+                "U+{codepoint:04X} is a letter"
+            );
+        }
+
+        // Spacing modifier letters and modifier symbols carry no language of
+        // their own, so they inherit.
+        for codepoint in 0x02b0..=0x02ff_u32 {
+            let character = char::from_u32(codepoint).expect("BMP scalar");
+            assert_eq!(
+                word_language_slot(character),
+                None,
+                "U+{codepoint:04X} is a modifier and must inherit"
+            );
+        }
+
+        // The case that makes it matter. A Bopomofo syllable and its tone mark
+        // are one East Asian language range, not a syllable plus a stray
+        // direct range whose text is shaped as its own slice.
+        let text = "\u{3105}\u{02cb}";
+        let ranges = word_language_ranges(text);
+        assert_eq!(ranges.len(), 1, "{ranges:?}");
+        assert_eq!(ranges[0].0, 0);
+        assert_eq!(ranges[0].1, text.len());
+        assert_eq!(ranges[0].2, WordLanguageSlot::EastAsia);
+    }
+
+    fn slot_fonts() -> rdocx_oxml::properties::CT_RPr {
+        rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("AsciiFace".to_owned()),
+            font_hansi: Some("HighAnsiFace".to_owned()),
+            font_east_asia: Some("EastAsiaFace".to_owned()),
+            font_cs: Some("ComplexFace".to_owned()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn run_fonts_resolve_from_the_matching_script_slot() {
+        let rpr = slot_fonts();
+        for (character, expected) in [
+            ('A', "AsciiFace"),
+            ('\u{2014}', "HighAnsiFace"),
+            ('É', "HighAnsiFace"),
+            ('안', "EastAsiaFace"),
+            ('こ', "EastAsiaFace"),
+            ('中', "EastAsiaFace"),
+            ('ש', "ComplexFace"),
+            ('ع', "ComplexFace"),
+            ('क', "ComplexFace"),
+            ('ก', "ComplexFace"),
+        ] {
+            let slot = word_font_slot(character, None);
+            assert_eq!(
+                resolve_font_family(&rpr, None, slot).as_deref(),
+                Some(expected),
+                "{character:?} resolves through its own slot"
+            );
+        }
+
+        // An absent slot falls back to the ASCII family, which is both what
+        // Word does and what keeps an ascii-only run resolving as it always
+        // has.
+        let ascii_only = rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("AsciiFace".to_owned()),
+            ..Default::default()
+        };
+        for character in ['A', '\u{2014}', '안', 'ש'] {
+            let slot = word_font_slot(character, None);
+            assert_eq!(
+                resolve_font_family(&ascii_only, None, slot).as_deref(),
+                Some("AsciiFace"),
+                "{character:?} falls back to the ascii family"
+            );
+        }
+    }
+
+    #[test]
+    fn a_font_hint_decides_only_the_ambiguous_slot() {
+        let rpr = slot_fonts();
+
+        // Word's ambiguous set is what its own table calls Common, the
+        // punctuation, symbols, digits, Greek and Cyrillic that belong to no
+        // script. These are the characters `w:hint` exists for, so a table
+        // that classified them by codepoint would leave the attribute inert
+        // on exactly the text a real document writes it for.
+        for ambiguous in [
+            '\u{2014}', '\u{2022}', '\u{2026}', '\u{24ff}', '\u{25a0}', '\u{03b1}', '\u{0410}',
+            '7', '\u{0085}',
+        ] {
+            assert_eq!(
+                word_font_slot(ambiguous, Some("eastAsia")),
+                WordFontSlot::EastAsia,
+                "{ambiguous:?} follows an eastAsia hint"
+            );
+            assert_eq!(
+                word_font_slot(ambiguous, Some("cs")),
+                WordFontSlot::ComplexScript,
+                "{ambiguous:?} follows a cs hint"
+            );
+        }
+        assert_eq!(
+            resolve_font_family(&rpr, None, word_font_slot('\u{2014}', Some("eastAsia")))
+                .as_deref(),
+            Some("EastAsiaFace")
+        );
+
+        // Without a hint the seven-bit range keeps `w:ascii` and everything
+        // above it takes `w:hAnsi`, which is what each took before slots
+        // existed.
+        assert_eq!(word_font_slot('7', None), WordFontSlot::Ascii);
+        assert_eq!(word_font_slot('\u{2014}', None), WordFontSlot::HighAnsi);
+
+        // A character whose codepoint settles its own script ignores the hint
+        // entirely.
+        for settled in ['A', 'z', '\u{00e9}', '안', 'こ', '世', 'ש', 'ع', 'क', 'ก'] {
+            for hint in [None, Some("eastAsia"), Some("cs"), Some("default")] {
+                assert_eq!(
+                    word_font_slot(settled, hint),
+                    word_font_slot(settled, None),
+                    "{settled:?} settles its own slot, so {hint:?} must not move it"
+                );
+            }
+        }
+    }
+
+    /// The four non-Latin theme references must never outrank the family the
+    /// author named.
+    ///
+    /// The plan asked for `majorEastAsia`, `minorEastAsia`, `majorBidi` and
+    /// `minorBidi` to read their own theme entry rather than collapsing onto
+    /// the ASCII theme font. They now read their own `w:rFonts` attribute,
+    /// but the entry those attributes name is the theme's `a:ea` and `a:cs`
+    /// typeface, and `rdocx_oxml::theme::Theme` carries only `a:latin`.
+    /// Modelling those two is a parser change this story's risk routing
+    /// excludes.
+    ///
+    /// So the four decline inside a slot, and a run that also names a family
+    /// keeps that family. They answer with the Latin typeface only as a last
+    /// resort, after every slot has declined, so a run whose sole font
+    /// property is one of the four still resolves to a face rather than
+    /// dropping to the engine default. Both halves are asserted below,
+    /// because either one alone is a defect a previous pass found.
+    #[test]
+    fn east_asia_and_bidi_theme_references_never_outrank_the_family_the_author_named() {
+        let theme = rdocx_oxml::theme::Theme {
+            colors: Default::default(),
+            major_font: Some("MajorFace".to_owned()),
+            minor_font: Some("MinorFace".to_owned()),
+        };
+
+        // Word's own docDefaults shape: the body font on ascii and hAnsi, the
+        // heading font on eastAsia and cs.
+        let rpr = rdocx_oxml::properties::CT_RPr {
+            font_ascii_theme: Some("minorHAnsi".to_owned()),
+            font_hansi_theme: Some("minorHAnsi".to_owned()),
+            font_east_asia_theme: Some("majorEastAsia".to_owned()),
+            font_cs_theme: Some("majorBidi".to_owned()),
+            ..Default::default()
+        };
+        for (character, expected) in [
+            ('A', "MinorFace"),
+            ('\u{00e9}', "MinorFace"),
+            // These four decline and fall through to the ascii slot, which
+            // here resolves to the Latin minor typeface. What matters is that
+            // they do not answer `MajorFace`, the Latin heading typeface,
+            // which has nothing to do with `a:ea` or `a:cs`.
+            ('안', "MinorFace"),
+            ('こ', "MinorFace"),
+            ('ש', "MinorFace"),
+            ('ع', "MinorFace"),
+        ] {
+            let slot = word_font_slot(character, None);
+            assert_eq!(
+                resolve_font_family(&rpr, Some(&theme), slot).as_deref(),
+                Some(expected),
+                "{character:?} must not be drawn with a typeface its theme reference never named"
+            );
+        }
+
+        // The ascii and hAnsi references do name `a:latin`, so they resolve,
+        // and each reads its own attribute rather than the ascii one.
+        let split = rdocx_oxml::properties::CT_RPr {
+            font_ascii_theme: Some("majorAscii".to_owned()),
+            font_hansi_theme: Some("minorHAnsi".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_font_family(&split, Some(&theme), WordFontSlot::Ascii).as_deref(),
+            Some("MajorFace")
+        );
+        assert_eq!(
+            resolve_font_family(&split, Some(&theme), WordFontSlot::HighAnsi).as_deref(),
+            Some("MinorFace")
+        );
+
+        // A slot with no theme attribute of its own still falls back to
+        // `w:asciiTheme`, which is what a document carrying only that
+        // attribute has always relied on.
+        let ascii_theme_only = rdocx_oxml::properties::CT_RPr {
+            font_ascii_theme: Some("minorHAnsi".to_owned()),
+            ..Default::default()
+        };
+        for slot in [
+            WordFontSlot::Ascii,
+            WordFontSlot::HighAnsi,
+            WordFontSlot::EastAsia,
+            WordFontSlot::ComplexScript,
+        ] {
+            assert_eq!(
+                resolve_font_family(&ascii_theme_only, Some(&theme), slot).as_deref(),
+                Some("MinorFace"),
+                "{slot:?} falls back to the ascii theme attribute"
+            );
+        }
+
+        // The character's own slot is resolved completely, explicit family
+        // then that slot's theme attribute, before the ascii fallback. An
+        // explicit family the author named must never be beaten by a theme
+        // reference that resolves to nothing.
+        let explicit_beside_slot_themes = rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("Noto Sans Arabic".to_owned()),
+            font_east_asia_theme: Some("majorEastAsia".to_owned()),
+            font_cs_theme: Some("minorBidi".to_owned()),
+            ..Default::default()
+        };
+        for slot in [
+            WordFontSlot::Ascii,
+            WordFontSlot::HighAnsi,
+            WordFontSlot::EastAsia,
+            WordFontSlot::ComplexScript,
+        ] {
+            assert_eq!(
+                resolve_font_family(&explicit_beside_slot_themes, Some(&theme), slot).as_deref(),
+                Some("Noto Sans Arabic"),
+                "{slot:?} keeps the family the author named"
+            );
+        }
+
+        // A slot theme reference that does resolve still outranks the ascii
+        // fallback, which is what stops `w:hAnsiTheme` being inert.
+        let hansi_theme_beside_ascii_family = rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("AsciiFace".to_owned()),
+            font_hansi_theme: Some("majorHAnsi".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_font_family(
+                &hansi_theme_beside_ascii_family,
+                Some(&theme),
+                WordFontSlot::HighAnsi
+            )
+            .as_deref(),
+            Some("MajorFace")
+        );
+
+        // A run whose only font property is a non-Latin reference has nothing
+        // to fall through to, so the Latin typeface is still the answer as a
+        // last resort. `ST_Theme` admits all eight values in all four
+        // attributes, so this is schema-valid even though Word never writes
+        // it, and declining outright would silently change the face on a
+        // document that rendered correctly before.
+        for (reference, expected) in [
+            ("majorEastAsia", "MajorFace"),
+            ("minorEastAsia", "MinorFace"),
+            ("majorBidi", "MajorFace"),
+            ("minorBidi", "MinorFace"),
+        ] {
+            let only_reference = rdocx_oxml::properties::CT_RPr {
+                font_ascii_theme: Some(reference.to_owned()),
+                ..Default::default()
+            };
+            assert_eq!(
+                resolve_font_family(&only_reference, Some(&theme), WordFontSlot::Ascii).as_deref(),
+                Some(expected),
+                "{reference} alone still resolves to a face"
+            );
+        }
+
+        // The last resort must stay a last resort. An explicit family still
+        // wins, which is the whole point of the four declining above.
+        let non_latin_reference_beside_family = rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("Noto Sans Arabic".to_owned()),
+            font_cs_theme: Some("minorBidi".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_font_family(
+                &non_latin_reference_beside_family,
+                Some(&theme),
+                WordFontSlot::ComplexScript
+            )
+            .as_deref(),
+            Some("Noto Sans Arabic")
+        );
+    }
+
+    /// Every table that asks whether a character is East Asian must give the
+    /// same answer.
+    ///
+    /// The font slot, the language slot and the rich-path gate all ask it.
+    /// They are not the same table as the language slot's other arms, because
+    /// Word draws Devanagari and Thai from `w:cs` while their language still
+    /// comes from `w:lang/@w:val`. That freedom does not extend to disagreeing
+    /// about East Asian text. A character East Asian to one and unclaimed by
+    /// another is attached to the preceding slot, which at the start of a run
+    /// is the direct slot, so it silently takes the wrong language.
+    #[test]
+    fn every_east_asian_codepoint_agrees_across_all_three_tables() {
+        // Stated here independently of the shared set under test, so a range
+        // added to `is_east_asian` and forgotten in a caller fails, and so
+        // does a range dropped from `is_east_asian` itself.
+        const EAST_ASIAN: &[std::ops::RangeInclusive<u32>] = &[
+            0x1100..=0x11ff,   // Hangul jamo
+            0x2e80..=0x2eff,   // CJK radicals supplement
+            0x2f00..=0x2fdf,   // Kangxi radicals
+            0x2ff0..=0x2fff,   // Ideographic description characters
+            0x3000..=0x303f,   // CJK symbols and punctuation
+            0x3040..=0x309f,   // Hiragana
+            0x30a0..=0x30ff,   // Katakana
+            0x3100..=0x312f,   // Bopomofo
+            0x3130..=0x318f,   // Hangul compatibility jamo
+            0x3190..=0x31ef,   // Kanbun, Bopomofo extended, CJK strokes
+            0x31f0..=0x31ff,   // Katakana phonetic extensions
+            0x3200..=0x33ff,   // Enclosed CJK and CJK compatibility
+            0x3400..=0x4dbf,   // CJK unified ideographs extension A
+            0x4dc0..=0x4dff,   // Yijing hexagram symbols
+            0x4e00..=0x9fff,   // CJK unified ideographs
+            0xa960..=0xa97f,   // Hangul jamo extended A
+            0xac00..=0xd7ff,   // Hangul syllables and jamo extended B
+            0xf900..=0xfaff,   // CJK compatibility ideographs
+            0xfe30..=0xfe4f,   // CJK compatibility forms
+            0xfe50..=0xfe6f,   // Small form variants
+            0xff00..=0xffef,   // Halfwidth and fullwidth forms
+            0x20000..=0x2fa1f, // CJK unified ideographs extension B and later
+        ];
+
+        let declared = |codepoint: u32| EAST_ASIAN.iter().any(|range| range.contains(&codepoint));
+
+        for codepoint in 0..=0x10ffff_u32 {
+            let Some(character) = char::from_u32(codepoint) else {
+                continue;
+            };
+            let expected = declared(codepoint);
+            assert_eq!(
+                is_east_asian(codepoint),
+                expected,
+                "U+{codepoint:04X} disagrees with the declared East Asian set"
+            );
+            assert_eq!(
+                word_font_slot(character, None) == WordFontSlot::EastAsia,
+                expected,
+                "U+{codepoint:04X} disagrees with the font slot table"
+            );
+            assert_eq!(
+                word_language_slot(character) == Some(WordLanguageSlot::EastAsia),
+                expected,
+                "U+{codepoint:04X} disagrees with the language slot table"
+            );
+            if expected {
+                assert!(
+                    needs_word_multilingual_layout(&character.to_string()),
+                    "U+{codepoint:04X} is East Asian and must reach the shaper"
+                );
+            }
+        }
+
+        // The rich-path gate is the union of the shared set with every range
+        // `script_for_char` gives a non-Latin identity, so it also admits the
+        // complex scripts that are not East Asian.
+        for character in ['\u{05d0}', '\u{0627}', '\u{0915}', '\u{0e01}', '\u{a8e0}'] {
+            assert!(
+                needs_word_multilingual_layout(&character.to_string()),
+                "{character:?} is a complex script and must reach the shaper"
+            );
+        }
+        assert!(!needs_word_multilingual_layout("plain latin 2026"));
+    }
+
+    /// A complex-script paragraph cannot enter the paragraph block cache.
+    ///
+    /// `inline_bytes` scores `InlineItem::MultilingualText` as `usize::MAX`
+    /// because its retained size cannot be bounded, and the surrounding sum
+    /// saturates, so the entry is refused. That has always been true of
+    /// Arabic, Hebrew and CJK. Korean joined them when Hangul was admitted to
+    /// `needs_word_multilingual_layout`, which is a real behaviour change for
+    /// every existing Korean document and is asserted here rather than left
+    /// to be rediscovered.
+    #[test]
+    fn a_complex_script_paragraph_is_never_admitted_to_the_paragraph_block_cache() {
+        let cache_counts = |text: &str| {
+            let mut input = make_input_with_text("");
+            input.document.body.content.clear();
+            for index in 0..8 {
+                let mut paragraph = CT_P::new();
+                paragraph.add_run(&format!("{text} {index:03}"));
+                input.document.body.add_paragraph(paragraph);
+            }
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine.layout(&input).expect("cold layout");
+            engine.layout(&input).expect("warm layout");
+            engine.paragraph_cache_counts()
+        };
+
+        assert_eq!(
+            cache_counts("latin paragraph"),
+            (8, 8),
+            "a Latin paragraph is cacheable and the warm pass reuses it"
+        );
+
+        for complex in ["안녕하세요", "こんにちは", "שלום", "العربية", "你好"]
+        {
+            assert_eq!(
+                cache_counts(complex),
+                (0, 16),
+                "{complex} takes the rich path, which the block cache refuses"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_resolves_one_slot_and_a_run_that_disagrees_keeps_the_ascii_one() {
+        assert_eq!(
+            word_font_slot_for_text("Hello, world.", None),
+            WordFontSlot::Ascii
+        );
+        assert_eq!(
+            word_font_slot_for_text("안녕하세요", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text("שלום", None),
+            WordFontSlot::ComplexScript
+        );
+        assert_eq!(word_font_slot_for_text("", None), WordFontSlot::Ascii);
+
+        // Spaces, digits and punctuation take whatever the rest of the run
+        // takes, so they must not decide it.
+        assert_eq!(
+            word_font_slot_for_text("こんにちは、カタカナ世界", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{05e9}\u{05dc}\u{05d5}\u{05dd}, 2026", None),
+            WordFontSlot::ComplexScript
+        );
+
+        // A run with no letter at all has nothing for its punctuation to
+        // follow, so the remaining characters decide. Word draws East Asian
+        // punctuation and fullwidth digits from `w:eastAsia`, and a run of
+        // exactly that shape is ordinary wherever Word split the run at a
+        // formatting boundary.
+        assert_eq!(
+            word_font_slot_for_text("\u{3001}\u{3002} \u{300c}\u{300d}", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{ff12}\u{ff10}\u{ff12}\u{ff16}", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(word_font_slot_for_text("2026", None), WordFontSlot::Ascii);
+        assert_eq!(word_font_slot_for_text("- , .", None), WordFontSlot::Ascii);
+
+        // A letter still outranks the punctuation beside it.
+        assert_eq!(
+            word_font_slot_for_text("\u{3001}\u{3002} Latin", None),
+            WordFontSlot::Ascii
+        );
+
+        // The no-letter pass takes the same consensus rule the letter pass
+        // takes, so the answer never turns on which character came first.
+        // U+3001 is East Asian and U+2014 is high ANSI, and neither ordering
+        // may pick a winner.
+        assert_eq!(
+            word_font_slot_for_text("\u{3001}\u{2014}", None),
+            WordFontSlot::Ascii
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{2014}\u{3001}", None),
+            WordFontSlot::Ascii
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{3001}\u{3001}", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{2014}\u{2014}", None),
+            WordFontSlot::HighAnsi
+        );
+        // A run of Latin-1 punctuation alone takes w:hAnsi, which is what
+        // Word does and which falls back to the w:ascii family when no
+        // w:hAnsi family is named.
+        assert_eq!(
+            word_font_slot_for_text("\u{00ab}\u{00bb}", None),
+            WordFontSlot::HighAnsi
+        );
+
+        // S4 of the pass 3 review. The hint must reach the run-level answer,
+        // not only the per-character one.
+        assert_eq!(
+            word_font_slot_for_text("2026", Some("eastAsia")),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text(", ", Some("cs")),
+            WordFontSlot::ComplexScript
+        );
+        // A run whose letters settle their own slot ignores the hint.
+        assert_eq!(
+            word_font_slot_for_text("Latin", Some("eastAsia")),
+            WordFontSlot::Ascii
+        );
+
+        // A run whose alphabetic characters disagree keeps the ascii slot.
+        // Only one family is resolved per run, so preferring either half
+        // would be wrong for the other, and Word would draw the two halves
+        // from two different slots. Resolving such a run through w:eastAsia
+        // would newly break the Latin half, which is the normal shape of East
+        // Asian prose.
+        assert_eq!(
+            word_font_slot_for_text("Hello 世界", None),
+            WordFontSlot::Ascii
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{05e9}\u{05dc}\u{05d5}\u{05dd} world", None),
+            WordFontSlot::Ascii
+        );
     }
 }

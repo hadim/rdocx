@@ -1,6 +1,6 @@
 # F-266a, Script identity and font slot resolution
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-264, F-265
@@ -316,26 +316,26 @@ This story does not claim the sprint's exclusive baseline re-record.
 
 ## Implementation checklist
 
-- [ ] Confirm F-264 and F-265 are `done` and that all six consumed surfaces in
+- [x] Confirm F-264 and F-265 are `done` and that all six consumed surfaces in
       "Prerequisites delivered by earlier stories" exist. Stop and re-design if
       any is absent or shaped differently.
-- [ ] Confirm the run-property module split has landed and read `CT_RPr` from
+- [x] Confirm the run-property module split has landed and read `CT_RPr` from
       it.
-- [ ] Produce the three subsets with `pyftsubset`, record source and output
+- [x] Produce the three subsets with `pyftsubset`, record source and output
       SHA-256 in three `SUBSET-*.md` files, and add the `NOTICE-Noto` entries.
-- [ ] Add the three faces to `bundled_font_data`, the `Cargo.toml` include list,
+- [x] Add the three faces to `bundled_font_data`, the `Cargo.toml` include list,
       the CI expected-font list, and both `bundled_fonts.rs` tests.
       **Own labelled commit, nothing else in it. Run both harnesses on it
       alone.**
-- [ ] Add `TextScript::Hangul`, `TextScript::Kana` and `#[non_exhaustive]` in
+- [x] Add `TextScript::Hangul`, `TextScript::Kana` and `#[non_exhaustive]` in
       one commit, with the ranges and the HarfRust tags.
-- [ ] Add the Hangul East Asian language slot in `word_language_slot`.
-- [ ] Add `WordFontSlot`, slot-aware `resolve_font_family`, and the four
+- [x] Add the Hangul East Asian language slot in `word_language_slot`.
+- [x] Add `WordFontSlot`, slot-aware `resolve_font_family`, and the four
       corrected East Asian and complex-script theme references.
-- [ ] Add every test in `## Test plan` to the existing entrypoints.
-- [ ] Record the golden geometry digest, with its reason, in the test and in
+- [x] Add every test in `## Test plan` to the existing entrypoints.
+- [x] Record the golden geometry digest, with its reason, in the test and in
       `docs/hld/12-testing-strategy.md`.
-- [ ] Run `/verify`, plus `cargo test -p oxml-layout --no-default-features`,
+- [x] Run `/verify`, plus `cargo test -p oxml-layout --no-default-features`,
       `cargo check --target wasm32-unknown-unknown -p rdocx-wasm -p rpptx-wasm`,
       and `cargo publish --dry-run` with the archive-size assertion.
 

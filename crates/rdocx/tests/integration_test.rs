@@ -19223,3 +19223,373 @@ mod advanced_table_authoring_and_geometry {
         (423.0, 192.3, 111.6, 19.87),
     ];
 }
+
+/// F-266a, script identity and font slot resolution.
+///
+/// The gate is a recorded geometry digest over a deterministic mixed-script
+/// page. It uses no rasteriser and no external oracle, because the properties
+/// under test are glyph identity, glyph positioning, cluster mapping and
+/// painted order, all of which the layout result already states exactly. A
+/// pixel comparison would add an external dependency and prove less.
+mod f266a_mixed_script_typography {
+    use super::*;
+    use oxml_layout::{PositionedElement, TextDirection, TextScript};
+    use rdocx::RunFontSlot;
+    use sha2::{Digest, Sha256};
+
+    const LATIN: &str = "Mixed script page";
+    const ARABIC: &str = "العربية";
+    const HEBREW: &str = "שלום עולם";
+    const KOREAN: &str = "안녕하세요 세계";
+    const JAPANESE: &str = "こんにちは、カタカナ世界";
+    const KANJI: &str = "世界";
+
+    /// The recorded geometry of the mixed-script page.
+    ///
+    /// Re-record only with a stated reason. The digest covers every painted
+    /// run on the page in paint order, with its font family, point size,
+    /// origin, logical text, glyph ids and advances, and for a rich run also
+    /// its direction, script, bidi embedding level, both offset axes and its
+    /// cluster ranges.
+    ///
+    /// The serialisation is host-stable because the pipeline is f64
+    /// throughout with no FMA contraction, the shaper is pure Rust, and every
+    /// face is bundled, so each coordinate is an integer font unit scaled by
+    /// one multiply and summed in a fixed order. Four decimal places is not
+    /// what makes it stable. It is a guard band that keeps an ordinary
+    /// representation difference away from the printed digits, and it is
+    /// applied to a value whose sign of zero has been normalised, because
+    /// `format!("{:.4}", -0.0)` renders `-0.0000`.
+    const MIXED_SCRIPT_GEOMETRY_DIGEST: &str =
+        "516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402";
+
+    /// One page holding all five scripts, authored through the public facade.
+    ///
+    /// Every script sets its font through the `w:rFonts` slot Word uses for
+    /// it. The Kanji paragraph is what makes slot resolution load bearing
+    /// here, because `Noto Sans SC` on `w:ascii` and `Noto Sans JP` on
+    /// `w:eastAsia` both cover its text, so coverage fallback cannot choose
+    /// between them and only the slot can. Every other paragraph has exactly
+    /// one bundled face that covers it, so those prove script identity,
+    /// reading order and geometry rather than slot resolution.
+    fn mixed_script_document() -> Document {
+        let mut document = Document::new();
+
+        let mut latin = document.add_paragraph("");
+        latin.add_run(LATIN).font("Carlito").language("en-US");
+
+        let mut arabic = document.add_paragraph("").right_to_left(true);
+        {
+            let mut run = arabic.add_run(ARABIC);
+            run.set_slot_font(RunFontSlot::ComplexScript, Some("Noto Sans Arabic"));
+            run.set_rtl_value(Some(true));
+            run.set_complex_script_value(Some(true));
+            run.set_language_bidi_value(Some("ar-SA"));
+        }
+
+        let mut hebrew = document.add_paragraph("").right_to_left(true);
+        {
+            let mut run = hebrew.add_run(HEBREW);
+            run.set_slot_font(RunFontSlot::ComplexScript, Some("Noto Sans Hebrew"));
+            run.set_rtl_value(Some(true));
+            run.set_complex_script_value(Some(true));
+            run.set_language_bidi_value(Some("he-IL"));
+        }
+
+        let mut korean = document.add_paragraph("");
+        {
+            let mut run = korean.add_run(KOREAN);
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans KR"));
+            run.set_language_east_asia_value(Some("ko-KR"));
+        }
+
+        let mut japanese = document.add_paragraph("");
+        {
+            let mut run = japanese.add_run(JAPANESE);
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+        }
+
+        let mut kanji = document.add_paragraph("");
+        {
+            let mut run = kanji.add_run(KANJI);
+            run.set_slot_font(RunFontSlot::Ascii, Some("Noto Sans SC"));
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+        }
+
+        document
+    }
+
+    fn family_of(result: &rdocx_layout::WordLayoutResult, id: oxml_layout::FontId) -> String {
+        result
+            .layout
+            .fonts
+            .iter()
+            .find(|font| font.id == id)
+            .map(|font| font.family.clone())
+            .expect("every painted run names a font in the result font table")
+    }
+
+    /// Every rich run on the page, which is every run that reached the shaper.
+    fn rich_runs(
+        result: &rdocx_layout::WordLayoutResult,
+    ) -> Vec<oxml_layout::MultilingualGlyphRun> {
+        let mut runs = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let PositionedElement::MultilingualText(run) = element {
+                    runs.push(run.clone());
+                }
+            });
+        }
+        runs
+    }
+
+    /// Every legacy run on the page. Text with no complex script stays here,
+    /// which is the path the Latin paragraph takes.
+    fn legacy_runs(result: &rdocx_layout::WordLayoutResult) -> Vec<oxml_layout::GlyphRun> {
+        let mut runs = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let PositionedElement::Text(run) = element {
+                    runs.push(run.clone());
+                }
+            });
+        }
+        runs
+    }
+
+    /// One coordinate, with the sign of zero normalised first.
+    ///
+    /// A shaper that returns `-0.0` for an offset is arithmetically equal to
+    /// one that returns `0.0`, but `format!("{:.4}", -0.0)` renders
+    /// `-0.0000`, which would move the digest for no geometric reason.
+    fn number(value: f64) -> String {
+        format!("{:.4}", if value == 0.0 { 0.0 } else { value })
+    }
+
+    fn numbers(values: &[f64]) -> String {
+        values
+            .iter()
+            .copied()
+            .map(number)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn glyphs(values: &[u16]) -> String {
+        values
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// The canonical serialisation the digest is taken over.
+    fn canonical_geometry(result: &rdocx_layout::WordLayoutResult) -> String {
+        let mut lines = Vec::new();
+        for (page_index, page) in result.layout.pages.iter().enumerate() {
+            let mut paint_index = 0usize;
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                let body = match element {
+                    PositionedElement::Text(run) => format!(
+                        "kind=legacy font={} size={} origin={},{} text={} \
+                         glyphs={} adv={}",
+                        family_of(result, run.font_id),
+                        number(run.font_size),
+                        number(run.origin.x),
+                        number(run.origin.y),
+                        run.text,
+                        glyphs(&run.glyph_ids),
+                        numbers(&run.advances),
+                    ),
+                    PositionedElement::MultilingualText(run) => format!(
+                        "kind=rich font={} size={} origin={},{} dir={:?} \
+                         script={:?} bidi={} logical={} text={} glyphs={} \
+                         xadv={} yadv={} xoff={} yoff={} clusters={}",
+                        family_of(result, run.font_id),
+                        number(run.font_size),
+                        number(run.origin.x),
+                        number(run.origin.y),
+                        run.direction,
+                        run.script,
+                        run.bidi_level,
+                        run.logical_index,
+                        run.logical_text,
+                        glyphs(&run.glyph_ids),
+                        numbers(&run.x_advances),
+                        numbers(&run.y_advances),
+                        numbers(&run.x_offsets),
+                        numbers(&run.y_offsets),
+                        run.clusters
+                            .iter()
+                            .map(|cluster| format!(
+                                "{}:{}>{}:{}",
+                                cluster.glyph_start,
+                                cluster.glyph_end,
+                                cluster.char_start,
+                                cluster.char_end
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
+                    _ => return,
+                };
+                lines.push(format!("page={page_index} paint={paint_index} {body}"));
+                paint_index += 1;
+            });
+        }
+        lines.join("\n")
+    }
+
+    fn digest(text: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(text.as_bytes());
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn mixed_script_page_matches_the_pinned_geometry_and_reading_order() {
+        let mut document = mixed_script_document();
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic mixed-script layout");
+        assert_eq!(result.layout.pages.len(), 1, "the fixture is one page");
+
+        let rich = rich_runs(&result);
+        let legacy = legacy_runs(&result);
+        assert!(!rich.is_empty(), "the complex scripts reach the shaper");
+
+        // Reading order and identity are asserted one property at a time, so
+        // a failure names the property that broke rather than only reporting
+        // that a hash moved.
+        //
+        // The Latin paragraph has no complex script, so it stays on the
+        // legacy path, which is correct and is asserted separately below.
+        for (script, family) in [
+            (TextScript::Arabic, "Noto Sans Arabic"),
+            (TextScript::Hebrew, "Noto Sans Hebrew"),
+            (TextScript::Hangul, "Noto Sans KR"),
+            (TextScript::Kana, "Noto Sans JP"),
+            (TextScript::Han, "Noto Sans JP"),
+        ] {
+            let script_runs = rich
+                .iter()
+                .filter(|run| run.script == script)
+                .collect::<Vec<_>>();
+            assert!(
+                !script_runs.is_empty(),
+                "{script:?} must reach the page with its own script identity"
+            );
+            for run in &script_runs {
+                assert!(run.is_valid(), "{script:?} run is a complete rich run");
+                assert_eq!(
+                    family_of(&result, run.font_id),
+                    family,
+                    "{script:?} must resolve through its own w:rFonts slot"
+                );
+            }
+        }
+
+        // Logical order is exact, not merely contained. Each source paragraph
+        // reassembles to its whole fixture string when its rich runs are read
+        // back in logical index order, so a dropped or reordered span fails
+        // here and names the paragraph.
+        let mut by_paragraph = std::collections::BTreeMap::<u32, Vec<_>>::new();
+        for run in &rich {
+            let node = run
+                .source
+                .unwrap_or_else(|| panic!("rich run {:?} retains provenance", run.logical_text));
+            by_paragraph.entry(node.node.get()).or_default().push(run);
+        }
+        let mut reassembled = by_paragraph
+            .into_values()
+            .map(|mut runs| {
+                runs.sort_by_key(|run| run.logical_index);
+                runs.iter()
+                    .map(|run| run.logical_text.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        reassembled.sort();
+        let mut expected = vec![
+            ARABIC.to_owned(),
+            HEBREW.to_owned(),
+            KOREAN.to_owned(),
+            JAPANESE.to_owned(),
+            KANJI.to_owned(),
+        ];
+        expected.sort();
+        assert_eq!(
+            reassembled, expected,
+            "every complex-script paragraph reassembles to its whole fixture string"
+        );
+
+        // The Latin paragraph stays on the legacy path with its own family.
+        let latin = legacy
+            .iter()
+            .filter(|run| !run.text.trim().is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            latin
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>(),
+            LATIN,
+            "the Latin paragraph keeps its text and its order"
+        );
+        for run in &latin {
+            assert_eq!(family_of(&result, run.font_id), "Carlito");
+        }
+
+        // The two right-to-left paragraphs carry a right-to-left direction and
+        // an odd bidi embedding level, which is what reordering acts on.
+        for script in [TextScript::Arabic, TextScript::Hebrew] {
+            for run in rich.iter().filter(|run| run.script == script) {
+                assert_eq!(
+                    run.direction,
+                    TextDirection::RightToLeft,
+                    "{script:?} paints right to left"
+                );
+                assert_eq!(
+                    run.bidi_level % 2,
+                    1,
+                    "{script:?} carries an odd bidi embedding level"
+                );
+            }
+        }
+
+        // The East Asian paragraphs must not have been swept into the
+        // right-to-left base direction.
+        for script in [TextScript::Hangul, TextScript::Kana, TextScript::Han] {
+            for run in rich.iter().filter(|run| run.script == script) {
+                assert_eq!(
+                    run.bidi_level % 2,
+                    0,
+                    "{script:?} keeps an even bidi embedding level"
+                );
+            }
+        }
+
+        // Reordering is a painting concern. The saved bytes stay logical.
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let saved = reopened
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>();
+        assert_eq!(saved, vec![LATIN, ARABIC, HEBREW, KOREAN, JAPANESE, KANJI]);
+
+        let geometry = canonical_geometry(&result);
+        assert_eq!(
+            digest(&geometry),
+            MIXED_SCRIPT_GEOMETRY_DIGEST,
+            "mixed-script page geometry moved:\n{geometry}"
+        );
+    }
+}
