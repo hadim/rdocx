@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 54 | 5 | 0 | 49 |
-| X, Cross-cutting (opportunistic)            | 141 | 136 | 0 | 1  |
-| **Total** | **466** | **391** | **0** | **71** |
+| X, Cross-cutting (opportunistic)            | 142 | 137 | 0 | 1  |
+| **Total** | **467** | **392** | **2** | **69** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -685,4 +685,5 @@ regenerated, never hand-edited.
 | F-X129 | Tolerate unmatched notes placeholders | S74 | S | done |
 | F-X130 | Show package depth, footprint, and speed | S74 | L | pending |
 | F-X131 | Retain only the namespace declarations a root attribute uses | S74 | S | done |
+| F-X132 | Match a retained namespace owner by structure, not by identity | S74 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

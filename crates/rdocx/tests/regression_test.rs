@@ -31068,3 +31068,117 @@ mod advanced_table_geometry_regressions {
         assert_eq!(fixed.col_widths, vec![72.0, 360.0]);
     }
 }
+
+mod f_x132_retained_namespace_owner_regressions {
+    use rdocx::Document;
+    use rdocx_oxml::namespace::W_NS;
+
+    fn document_from_body(body: &str) -> Document {
+        super::document_with_content_controls(&super::wrap_word_body(body))
+    }
+
+    fn saved_document_xml(bytes: &[u8]) -> String {
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+    }
+
+    #[test]
+    fn accepting_revisions_still_saves_when_runs_carry_revision_identities() {
+        // F-X128 retains a run's producer root attributes, and F-X131 keeps the
+        // `w` binding those attributes use. Both are written onto the run, so a
+        // re-read of the flushed part sees a `w` declaration that rebinds the
+        // prefix to the namespace already in scope. Two runs that agree on
+        // every retained fact then look like two equally good owners of that
+        // declaration, and the save used to fail closed on an ambiguity that
+        // only the redundant declaration created.
+        let identical_run =
+            r#"<w:r w:rsidRPr="00BB1111"><w:rPr><w:b/></w:rPr><w:t>same</w:t></w:r>"#;
+        let body = format!(
+            r#"<w:p w:rsidR="00AA0000" w:rsidRDefault="00AA0000"><w:ins w:id="1" w:author="Reviewer" w:date="2026-01-01T00:00:00Z">{identical_run}</w:ins><w:r w:rsidRPr="00CC2222"><w:t>tail</w:t></w:r></w:p><w:p w:rsidR="00AA0000" w:rsidRDefault="00AA0000">{identical_run}</w:p>"#
+        );
+        let mut document = document_from_body(&body);
+        assert_eq!(document.accept_all().unwrap(), 1);
+
+        let saved = document.to_bytes().unwrap();
+        let saved_xml = saved_document_xml(&saved);
+        assert!(!saved_xml.contains("<w:ins"), "{saved_xml}");
+        for identity in [
+            r#"w:rsidR="00AA0000""#,
+            r#"w:rsidRDefault="00AA0000""#,
+            r#"w:rsidRPr="00BB1111""#,
+            r#"w:rsidRPr="00CC2222""#,
+        ] {
+            assert!(saved_xml.contains(identity), "{identity} lost: {saved_xml}");
+        }
+
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.paragraph(0).unwrap().text(), "sametail");
+        assert_eq!(reopened.paragraph(1).unwrap().text(), "same");
+        assert_eq!(saved_document_xml(&reopened.to_bytes().unwrap()), saved_xml);
+    }
+
+    #[test]
+    fn indistinguishable_owners_of_a_rebinding_declaration_still_fail_closed() {
+        // The same two runs, each carrying a declaration that genuinely binds a
+        // prefix the enclosing scope does not. Nothing tells the two apart, so
+        // the matcher must still refuse rather than guess which run owns which
+        // declaration.
+        let identical_run = r#"<w:r w:rsidRPr="00BB1111" xmlns:x="urn:producer"><x:producer/><w:t>same</w:t></w:r>"#;
+        let body = format!(
+            r#"<w:p w:rsidR="00AA0000">{identical_run}</w:p><w:p w:rsidR="00AA0000">{identical_run}</w:p>"#
+        );
+        let mut document = document_from_body(&body);
+        document.add_paragraph("changed");
+
+        let error = document.to_bytes().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot identify retained `r` nested namespace owner after mutation"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_semantic_difference_still_routes_each_rebinding_declaration_home() {
+        // The positive arm of the same predicate. The two runs agree on their
+        // retained identity and differ in their text, and that difference is
+        // enough for each rebinding declaration to land back on the run that
+        // authored it rather than on the other one.
+        let body = r#"<w:p w:rsidR="00AA0000"><w:r w:rsidRPr="00BB1111" xmlns:x="urn:producer"><x:producer/><w:t>alpha</w:t></w:r></w:p><w:p w:rsidR="00AA0000"><w:r w:rsidRPr="00BB1111" xmlns:y="urn:other"><y:producer/><w:t>beta</w:t></w:r></w:p>"#;
+        let mut document = document_from_body(body);
+        document.add_paragraph("changed");
+
+        let saved_xml = saved_document_xml(&document.to_bytes().unwrap());
+        let alpha = saved_xml.find("alpha").unwrap();
+        let beta = saved_xml.find("beta").unwrap();
+        let alpha_owner = saved_xml[..alpha].rfind("<w:r ").unwrap();
+        let beta_owner = saved_xml[..beta].rfind("<w:r ").unwrap();
+        assert!(saved_xml[alpha_owner..alpha].contains(r#"xmlns:x="urn:producer""#));
+        assert!(!saved_xml[alpha_owner..alpha].contains(r#"xmlns:y="urn:other""#));
+        assert!(saved_xml[beta_owner..beta].contains(r#"xmlns:y="urn:other""#));
+        assert!(!saved_xml[beta_owner..beta].contains(r#"xmlns:x="urn:producer""#));
+    }
+
+    #[test]
+    fn a_table_redeclaring_the_binding_it_inherits_keeps_none_of_its_own() {
+        // The narrowing the fix accepts, stated as a test rather than left
+        // silent. The unmodelled child holds the `w` prefix, which is what
+        // made the redeclaration a replayed owner before. It resolves through
+        // the root binding either way, so the modified save now writes the
+        // document's single `w` declaration and the retained child unchanged.
+        let body = format!(
+            r#"<w:tbl xmlns:w="{W_NS}"><w:tr><w:tc><w:p/></w:tc></w:tr><w:producerOnly/></w:tbl><w:p/>"#
+        );
+        let mut document = document_from_body(&body);
+        document.add_paragraph("changed");
+
+        let saved_xml = saved_document_xml(&document.to_bytes().unwrap());
+        assert!(saved_xml.contains("<w:producerOnly/>"), "{saved_xml}");
+        assert_eq!(
+            saved_xml.matches(&format!(r#"xmlns:w="{W_NS}""#)).count(),
+            1,
+            "{saved_xml}"
+        );
+    }
+}

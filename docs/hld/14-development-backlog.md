@@ -5869,6 +5869,28 @@ proves the redundant declaration is gone, that a declaration a retained
 attribute does use is still written, and that expanded-name precedence still
 resolves.
 
+### F-X132, Match a retained namespace owner by structure, not by identity (S)
+
+F-X128 gave `CT_R` and `CT_P` root-attribute retention and F-X131 keeps the
+declaration a retained attribute's prefix needs, so every retained paragraph
+and run is written with a `w` binding that the document root already owns.
+`prepare_staged_package` flushes the document part before
+`canonicalize_drawing_ids` reads it back, so
+`nested_modeled_namespace_owners` in `crates/rdocx/src/document.rs` sees those
+redundant declarations and treats each retained element as a nested namespace
+owner. Two runs that agree on every retained fact then own each other's
+declaration equally, and `replay_nested_namespace_declarations` fails closed
+with `cannot identify retained 'r' nested namespace owner after mutation`.
+A declaration that rebinds
+a prefix to the URI already in scope resolves no name differently, so it owns
+no namespace and must not make an element an owner.
+**Depends on**: F-X128, F-X131.
+**Test gate**: regression.
+`accepting_revisions_still_saves_when_runs_carry_revision_identities` proves a
+redlined document whose runs carry `w:rsid` identities accepts, saves, reopens
+and keeps every identity attribute, while a genuinely rebinding declaration on
+two indistinguishable owners still fails closed.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

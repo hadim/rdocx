@@ -480,6 +480,7 @@ defended.
 | F-265 | S74 | L | 5 | 1 | 2026-09-19 | Typed sixteen run children and closed three theme-attribute data-loss paths, deferring the visual effect render to F-312 |
 | F-270 | S74 | L | 5 | 1 | 2026-09-19 | Modeled the remaining settings behind one order table and made web settings a modeled part |
 | F-264 | S74 | L | 5 | 1 | 2026-09-19 | Typed nine paragraph children and shipped the full paragraph facade, with border retention and w:bidi as cross-story contracts |
+| F-X132 | S74 | S | 1 | 1 | 2026-09-19 | Stopped a redundant namespace declaration making its element an owner, clearing the second F-X128 regression on the Word corpus |
 | F-X131 | S74 | S | 1 | 1 | 2026-09-19 | Stopped modeled roots rebinding a namespace their scope already owns, clearing five pre-existing F-X128 failures |
 | F-X129 | S74 | S | 1 | 1 | 2026-09-18 | Skipped unmatched notes-slide placeholder overlays with ordered diagnostics while preserving strict ownership failures |
 | F-X128 | S74 | M | 2 | 1 | 2026-09-18 | Preserved ordered paragraph, run, and section root identities across save, reopen, and typed mutation |

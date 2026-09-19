@@ -1563,6 +1563,29 @@ fn namespace_declarations(element: &BytesStart<'_>) -> Result<Vec<(String, Strin
     Ok(declarations)
 }
 
+/// The declarations on `element` that change a binding `inherited` already
+/// holds.
+///
+/// A declaration that rebinds a prefix to the URI already in scope resolves no
+/// name differently from the scope it sits in, so the element owns no
+/// namespace and canonical serialization cannot lose one by dropping it. The
+/// retained root-attribute record materializes exactly such a redundant
+/// binding onto every paragraph and run that keeps a prefixed producer
+/// attribute, and treating those as owners makes identical runs
+/// indistinguishable to the retained-owner matcher.
+fn rebinding_namespace_declarations(
+    element: &BytesStart<'_>,
+    inherited: &[(String, String)],
+) -> Result<Vec<(String, String)>> {
+    let mut declarations = namespace_declarations(element)?;
+    declarations.retain(|(name, value)| {
+        !inherited
+            .iter()
+            .any(|(candidate, bound)| candidate == name && bound == value)
+    });
+    Ok(declarations)
+}
+
 fn root_namespace_declarations(xml: &[u8]) -> Result<Vec<(String, String)>> {
     let mut reader = quick_xml::Reader::from_reader(xml);
     let mut buffer = Vec::new();
@@ -1817,7 +1840,8 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
         match event {
             Event::Start(element) => {
                 let local_name = element.local_name();
-                let mut bindings = scope_stack.last().cloned().unwrap_or_default();
+                let inherited = scope_stack.last().map(Vec::as_slice).unwrap_or_default();
+                let mut bindings = inherited.to_vec();
                 apply_namespace_declarations(&element, &mut bindings)?;
                 if inside_body && is_word && is_modeled_owner(local_name.as_ref()) {
                     let index = spans.len();
@@ -1829,7 +1853,7 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
                             .to_owned(),
                         start,
                         end: 0,
-                        declarations: namespace_declarations(&element)?,
+                        declarations: rebinding_namespace_declarations(&element, inherited)?,
                         bindings: bindings.clone(),
                     });
                     owner_stack.push((depth, index));
@@ -1842,7 +1866,8 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
             }
             Event::Empty(element) => {
                 let local_name = element.local_name();
-                let mut bindings = scope_stack.last().cloned().unwrap_or_default();
+                let inherited = scope_stack.last().map(Vec::as_slice).unwrap_or_default();
+                let mut bindings = inherited.to_vec();
                 apply_namespace_declarations(&element, &mut bindings)?;
                 if inside_body && is_word && is_modeled_owner(local_name.as_ref()) {
                     spans.push(ModeledOwnerSpan {
@@ -1853,7 +1878,7 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
                             .to_owned(),
                         start,
                         end,
-                        declarations: namespace_declarations(&element)?,
+                        declarations: rebinding_namespace_declarations(&element, inherited)?,
                         bindings,
                     });
                 }

@@ -15656,6 +15656,56 @@ S74 stories hit it after this one. Box composite members from the start.
 DOCX-030 stays partial and its owner moved to F-311, which owns positioned
 frame placement.
 
+### F-X132, Match a retained namespace owner by structure, not by identity
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** A namespace declaration that rebinds a prefix to the URI
+already in scope no longer makes its element a namespace owner. It resolves no
+name differently from the scope it sits in, so canonical serialization cannot
+lose anything by dropping it.
+
+**Why it exists.** `scripts/docx_ssim_harness.py --check` failed at its
+acceptor on `corpus/docx/redlined_no_footer.docx`. The document opened,
+`accept_all` accepted 21 revisions, and the save then failed with
+`cannot identify retained 'r' nested namespace owner after mutation`. F-X128
+gave `CT_R` root-attribute retention, and the retained record materializes a
+redundant binding onto every run that keeps a prefixed producer attribute.
+Those runs looked like namespace owners while owning nothing, and `accept_all`
+merges adjacent runs, so the matcher could no longer tell them apart.
+
+**Bisect.** Source-built probe against the corpus document. `f80b8e14`, the
+sprint base, saves 80237 bytes. `5bad2f26`, immediately before F-X128, saves.
+`976611ee`, F-X128, is where it breaks, and every later commit inherits it.
+This is a second F-X128 regression, alongside the five test failures F-X131
+fixed, and it is not caused by the property split, by F-X131, or by any of the
+five wave 1 to 3 stories.
+
+**Non-obvious choices.** The first direction considered was excluding the
+`w:rsid` family from the semantic comparison, which would have treated the
+symptom. Ownership is the real question, and a redundant declaration is not
+ownership. The ambiguity error was not loosened, so two genuinely different
+candidate owners are still rejected.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md` and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `accepting_revisions_still_saves_when_runs_carry_revision_identities`
+is the gate. It builds a redlined document in source whose runs carry
+identities, accepts, saves and reopens, asserts the identities survive, and
+asserts a genuine semantic difference is still distinguished so the fix cannot
+be a blanket loosening.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The corpus gate is not part of `/verify`, which
+is how both F-X128 regressions reached an integrated sprint branch. Run
+`scripts/docx_ssim_harness.py --check` when a change touches retention,
+namespaces or revision acceptance, and build `rdocx-cli` first or its `cargo
+run` hits a 300 second build timeout that reads like a render hang.
+
 ### F-X131, Retain only the namespace declarations a root attribute uses
 
 **Sprint.** S74
