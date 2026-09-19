@@ -41,11 +41,11 @@ evidence.
 | F-269 | Complete section page semantics | L | done | - |
 | F-270 | Complete settings and web settings authoring | L | done | - |
 | F-266 | International and vertical typography | L | split | - |
-| F-266a | Script identity and font slot resolution | L | in-progress | claude |
+| F-266a | Script identity and font slot resolution | L | done | - |
 | F-266b | Ruby and emphasis marks | L | pending | - |
 | F-266c | Character grid and vertical text | L | pending | - |
 | F-268 | Floating and advanced table layout | L | split | - |
-| F-268a | Advanced table authoring and geometry | L | in-progress | claude |
+| F-268a | Advanced table authoring and geometry | L | done | - |
 | F-268b | Floating table placement and wrap | M | pending | - |
 | F-X123 | Accept producer TOC style variants | S | done | - |
 | F-X124 | Make content cloning linear and explicit | M | done | - |

@@ -15656,6 +15656,120 @@ S74 stories hit it after this one. Box composite members from the start.
 DOCX-030 stays partial and its owner moved to F-311, which owns positioned
 frame placement.
 
+### F-266a, Script identity and font slot resolution
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Hangul and Kana gained their own script identity and
+HarfRust tags, `w:rFonts` now chooses a family per script slot, and the
+deterministic Hebrew, Korean and Japanese subsets the golden gate needs are
+bundled. The shipped font set could not draw three of the five scripts
+DOCX-033 names, so the gate was impossible before this.
+
+**Three things that looked done were inert.** The explicit `w:ascii` family
+outranked a slot's own theme attribute, so `w:eastAsiaTheme` and `w:cstheme`
+never applied through the public facade. `w:hint` was inert for every character
+a document writes it on. `needs_word_multilingual_layout` omitted Hangul
+entirely, so Korean never reached the rich shaping path and adding the script
+variant alone would have changed nothing.
+
+**Non-obvious choices.** The fonts landed as their own commit with nothing else
+in it, and both the hash harness and the golden pixel manifest ran on that
+commit alone and held at 49 of 49 and 7 of 7, which proves no sample was
+already taking a coverage fallback. Each subset carries a `SUBSET` record with
+source and output SHA-256 and the exact `pyftsubset` command, following the
+Simplified Chinese precedent. The archive is 4.41 MiB against the 10 MiB
+ceiling.
+
+**Deviations from the design plan.** Two tests the plan named are not writable
+as written. Shaping does not cross a `w:r` boundary, so Arabic joining is
+locked inside one run against a zero-width non-joiner control and the gap is
+recorded as owed its own F-ID. The `Theme` model parses only `a:latin`, so the
+East Asian and complex-script theme entries the plan named do not exist, and
+creating them is a parser change the plan's own risk routing excludes. The
+plan's font size estimate was also wrong, and the spec now carries the measured
+10.4 MB and 9.6 MB rather than the estimated 5 MB.
+
+**Spec sections touched.** The four files the plan listed, plus `CLAUDE.md`,
+`.github/workflows/ci.yml` and `scripts/test_sprint_workflow.py` for the 24 to
+27 font inventory.
+
+**Tests.** `mixed_script_page_matches_the_pinned_geometry_and_reading_order`
+asserts each script resolves through its own `w:rFonts` slot to its own family,
+so a notdef fallback fails it, and reassembles logical order exactly per
+paragraph. Seven microscope passes to zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49, and the golden pixel manifest unmoved at
+7 of 7.
+
+**Notes for future sessions.** A paragraph on the rich path cannot enter the
+paragraph block cache. That was already true of Arabic, Hebrew and CJK and is
+now true of Korean, so an incremental fixture moved to Latin to keep proving
+the reuse it exists to prove. One family resolves per run, so a run whose
+alphabetic characters disagree keeps `w:ascii` where Word draws from two slots,
+recorded as a deliberate divergence. `scripts/golden_png_harness.py` cannot run
+from a worker worktree, because the pinned `pdftoppm` wrapper bind mounts only
+the canonical repository path.
+
+### F-268a, Advanced table authoring and geometry
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The six `w:tblPr` and four `w:trPr` children that survived
+only as positioned raw XML, their public authoring surface, and the layout that
+makes three previously inert things mean something. `w:gridBefore` and
+`w:gridAfter` were modeled and readable but no layout code referenced them.
+`w:tblLayout` was an opaque string `compute_column_widths` never read, so
+autofit and fixed produced identical geometry. The conditional `w:trPr` that
+F-267 modeled now resolves into row height, header repetition and grid offsets,
+which is what lets DOCX-034 close.
+
+**Non-obvious choices.** Bidirectional order reverses placement in
+`render_table_row` rather than reversing the lowered cell vectors, because
+those vectors carry positional alignment the semantics assigners depend on and
+reversing them moves cell ownership out of reading order.
+
+**Two defects caught in review.** `w:tblCaption` and `w:tblDescription` are the
+first free-text values in this family and were escaped on write but never
+unescaped on read, so an ampersand double-escaped on a second save. The autofit
+maximum added the horizontal cell margin twice when a natural width fell below
+its longest unbreakable run.
+
+**Corrections applied at integration, recorded here rather than hidden.** Two.
+First, autofit engagement was narrowed to require the `w:tblLayout` element.
+The plan stated the narrow rule in its hash harness section and the broad one
+in its approach, and the worker implemented the approach while flagging the
+contradiction rather than deciding alone. Measured both ways, the broad rule
+fails `scripts/docx_authoring_conformance.py --private-required` with a moved
+P3 reference page count, because 131 of the 141 tables in the Word corpus are
+written as `w:tblW type="auto"` with no `w:tblLayout`. Three test expectations
+moved with the contract, including one regression whose name already described
+the narrow rule while its assertion pinned the broad one. Second, the
+integrator's merge resolution for F-266a discarded this story's
+`advanced_table_geometry_regressions` module, five tests, which was restored
+and is now pinned by an arithmetic reconciliation of both test entrypoints.
+
+**Spec sections touched.** The five files the plan listed.
+
+**Tests.** `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`
+is the gate, proven by forcing autofit to return `None` and watching every row
+origin shift. Two microscope passes to zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49, with all four sample facts verified by
+reading the generator rather than assumed, and the golden pixel manifest
+unmoved at 7 of 7.
+
+**Notes for future sessions.** Adopting the literal ECMA autofit default, where
+an absent `w:tblLayout` means autofit, is its own story with its own reviewed
+geometry delta. The SSIM harness covers only `corpus/docx`, five documents, so
+a rendering change can pass it and still fail
+`docx_authoring_conformance.py --private-required`, which covers
+`corpus/private-docx`. Run both.
+
 ### F-X132, Match a retained namespace owner by structure, not by identity
 
 **Sprint.** S74
