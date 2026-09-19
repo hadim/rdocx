@@ -36,7 +36,7 @@ pub use oxml_core::{core_properties, error, raw_xml, units};
 
 pub use borders::{CT_BorderEdge, CT_PBdr, CT_TabStop, CT_Tabs};
 pub use content_control::{CT_DataBinding, CT_Sdt, CT_SdtPr, SdtContent, SdtType};
-pub use document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
+pub use document::{BodyContent, CT_Body, CT_DocGrid, CT_Document, CT_SectPr, ST_DocGrid};
 pub use math::{CT_OMath, CT_OMathPara, MathArgument, MathExpression, MathProperties, OfficeMath};
 pub use numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_NumLvl, CT_Numbering, ST_NumberFormat};
 pub use properties::{CT_FramePr, CT_PPr, CT_RPr};

@@ -30721,6 +30721,7 @@ mod advanced_table_geometry_regressions {
             &mut fonts,
             &mut numbering,
             &mut diagnostics,
+            None,
         )
         .expect("table lays out")
     }
@@ -31942,5 +31943,455 @@ mod floating_table_placement_regressions {
         let (first, second) = origins(None);
         assert_eq!(first, [(1, MARGIN_LEFT, MARGIN_TOP, 100.0, 39.74)]);
         assert_eq!(second, [(1, 82.0, 82.0, 100.0, 39.74)]);
+    }
+}
+
+/// F-266c regressions, the East Asian character grid and vertical text.
+///
+/// Each test is named as the failure it prevents. The character grid touches
+/// line advance and the transposed box touches cell measurement, so the two
+/// ways this story could quietly move existing geometry are pinned here.
+mod f266c_character_grid_and_vertical_text_regressions {
+    use oxml_layout::PositionedElement;
+    use rdocx::table::CellTextDirection;
+    use rdocx::{CT_DocGrid, Document, Length, ST_DocGrid};
+    use rdocx_oxml::units::Twips;
+
+    /// Every painted run on the page, as text with its page-space origin.
+    fn painted(document: &Document) -> Vec<(String, String)> {
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic layout");
+        let mut runs = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, transform| {
+                if let PositionedElement::Text(run) = element
+                    && !run.text.trim().is_empty()
+                {
+                    let point = transform.apply(run.origin);
+                    runs.push((run.text.clone(), format!("{:.4},{:.4}", point.x, point.y)));
+                }
+            });
+        }
+        runs
+    }
+
+    /// A `default` grid must produce geometry identical to no grid at all.
+    ///
+    /// The `default` type is deliberately kept off the grid arithmetic. A
+    /// no-op multiply that still runs is a floating-point step on every
+    /// existing line, which is exactly how a silent baseline delta is made.
+    #[test]
+    fn the_default_doc_grid_type_does_not_change_line_advance() {
+        let build = |grid: Option<ST_DocGrid>| {
+            let mut document = Document::new();
+            document.add_paragraph("first paragraph of the gridded section");
+            document.add_paragraph("second paragraph of the gridded section");
+            if let Some(grid_type) = grid {
+                document
+                    .section_mut(0)
+                    .expect("final section")
+                    .set_doc_grid(Some(CT_DocGrid {
+                        grid_type: Some(grid_type),
+                        line_pitch: Some(Twips(360)),
+                        char_space: Some(120),
+                        extra_attributes: Vec::new(),
+                    }));
+            }
+            painted(&document)
+        };
+
+        let ungridded = build(None);
+        assert!(!ungridded.is_empty(), "the fixture paints");
+        assert_eq!(
+            build(Some(ST_DocGrid::Default)),
+            ungridded,
+            "a default grid takes the ungridded branch, character space and all"
+        );
+        assert_ne!(
+            build(Some(ST_DocGrid::LinesAndChars)),
+            ungridded,
+            "a snapping grid does change the geometry, or the test proves nothing"
+        );
+    }
+
+    /// Adding a rotated neighbour must not move a horizontal cell.
+    #[test]
+    fn a_horizontal_cell_beside_a_vertical_cell_keeps_its_geometry() {
+        let build = |direction: CellTextDirection| {
+            let mut document = Document::new();
+            {
+                let mut table = document.add_table(1, 2);
+                table.cell(0, 0).expect("control cell").set_text("Across");
+                let mut neighbour = table.cell(0, 1).expect("neighbour cell");
+                neighbour.set_text_direction(Some(direction));
+                neighbour.set_text("Down");
+            }
+            painted(&document)
+                .into_iter()
+                .filter(|(text, _)| text.trim() == "Across")
+                .collect::<Vec<_>>()
+        };
+
+        let horizontal = build(CellTextDirection::LeftToRightTopToBottom);
+        assert!(!horizontal.is_empty(), "the control cell paints");
+        assert_eq!(
+            build(CellTextDirection::TopToBottomRightToLeft),
+            horizontal,
+            "a rotated neighbour must not move the horizontal cell"
+        );
+    }
+
+    /// Rotation is a painting concern, so every text projection stays logical.
+    #[test]
+    fn vertical_cell_text_is_extracted_in_logical_order() {
+        let mut document = Document::new();
+        {
+            let mut table = document.add_table(1, 1);
+            let mut cell = table.cell(0, 0).expect("authored cell");
+            cell.set_text_direction(Some(CellTextDirection::TopToBottomRightToLeft));
+            cell.set_text("Logical order");
+        }
+
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let tables = reopened.tables();
+        let table = tables.first().expect("the authored table");
+        assert_eq!(
+            table.cell(0, 0).expect("the authored cell").text(),
+            "Logical order"
+        );
+
+        let painted = painted(&reopened)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(
+            painted.contains("Logical") && painted.contains("order"),
+            "the rotated cell still paints its own words: {painted}"
+        );
+        let svg = reopened
+            .render_page_to_svg_deterministic(0)
+            .expect("the page renders to SVG")
+            .expect("one page");
+        assert!(
+            svg.svg.contains("Logical"),
+            "the SVG projection carries the logical text: {}",
+            svg.svg
+        );
+        let saved = String::from_utf8(
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap()))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            saved.contains("<w:t>Logical order</w:t>"),
+            "the saved XML keeps the logical run: {saved}"
+        );
+    }
+
+    const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    /// A rotated cell must paint inside its own column.
+    ///
+    /// The line direction of a rotated cell runs down the cell, so wrapping it
+    /// at the column width would wrap on the stacking axis instead. The stack
+    /// would then be taller than the column is wide and the content would
+    /// paint outside the table and past the page margin.
+    #[test]
+    fn a_vertical_cell_paints_inside_its_own_column() {
+        let source = format!(
+            concat!(
+                r#"<w:document xmlns:w="{ns}"><w:body><w:tbl>"#,
+                r#"<w:tblGrid><w:gridCol w:w="720"/><w:gridCol w:w="7200"/></w:tblGrid>"#,
+                r#"<w:tr>"#,
+                r#"<w:tc><w:tcPr><w:textDirection w:val="tbRl"/></w:tcPr>"#,
+                r#"<w:p><w:r><w:t>A much longer stretch of vertical cell text</w:t>"#,
+                r#"</w:r></w:p></w:tc>"#,
+                r#"<w:tc><w:p><w:r><w:t>neighbour</w:t></w:r></w:p></w:tc>"#,
+                r#"</w:tr></w:tbl><w:sectPr/></w:body></w:document>"#,
+            ),
+            ns = W_NS,
+        );
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/document.xml", source.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let document = Document::from_bytes(&bytes.into_inner()).unwrap();
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic vertical cell layout");
+
+        // The first column is 720 twips, 36 points, from the page's left
+        // margin at 72 points.
+        const COLUMN_LEFT: f64 = 72.0;
+        const COLUMN_RIGHT: f64 = 108.0;
+        let mut painted = 0usize;
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, transform| {
+                let PositionedElement::Text(run) = element else {
+                    return;
+                };
+                if run.text.trim().is_empty() || run.text.trim() == "neighbour" {
+                    return;
+                }
+                painted += 1;
+                let x = transform.apply(run.origin).x;
+                assert!(
+                    (COLUMN_LEFT..=COLUMN_RIGHT).contains(&x),
+                    "{:?} paints inside its own column, at {x}",
+                    run.text
+                );
+            });
+        }
+        assert!(painted > 0, "the rotated cell paints");
+    }
+
+    /// A gridded paragraph that reflows around a float stays on the grid.
+    ///
+    /// The float reflow re-breaks lines through the generic line breaker,
+    /// which knows nothing about the section grid, so the snap has to be
+    /// applied again over its result or a gridded section loses its advance
+    /// wherever a floating table or a wrapping drawing pushes text aside.
+    #[test]
+    fn a_gridded_paragraph_that_reflows_around_a_float_stays_on_the_grid() {
+        let advances = |float: bool| {
+            let mut document = Document::new();
+            if float {
+                let mut table = document.add_table(1, 1);
+                table
+                    .set_float_position(Some(rdocx::table::TableFloatPosition {
+                        horizontal_anchor: rdocx::table::TableAnchor::Text,
+                        vertical_anchor: rdocx::table::TableAnchor::Text,
+                        horizontal: rdocx::table::TableFloatX::Offset(Length::twips(0)),
+                        vertical: rdocx::table::TableFloatY::Offset(Length::twips(0)),
+                        distance_from_text: rdocx::table::TableTextDistance {
+                            top: Length::twips(0),
+                            right: Length::twips(180),
+                            bottom: Length::twips(0),
+                            left: Length::twips(0),
+                        },
+                    }))
+                    .expect("the float position is authored");
+                table.cell(0, 0).expect("float cell").set_text("float");
+            }
+            for _ in 0..4 {
+                document.add_paragraph(
+                    "A paragraph long enough to wrap beside the floating table above it",
+                );
+            }
+            document
+                .section_mut(0)
+                .expect("final section")
+                .set_doc_grid(Some(CT_DocGrid {
+                    grid_type: Some(ST_DocGrid::Lines),
+                    line_pitch: Some(Twips(720)),
+                    char_space: None,
+                    extra_attributes: Vec::new(),
+                }));
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic gridded layout");
+            let mut origins = Vec::new();
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Text(run) = element
+                        && run.text.starts_with('A')
+                    {
+                        origins.push(run.origin.y);
+                    }
+                });
+            }
+            origins
+                .windows(2)
+                .map(|pair| pair[1] - pair[0])
+                .collect::<Vec<_>>()
+        };
+
+        // A 720 twip pitch is 36 points, so every baseline-to-baseline advance
+        // is a whole number of grid rows plus the paragraph spacing, which the
+        // ungridded first advance states. A float legitimately moves the text
+        // it pushes aside, so the rule is asserted rather than the numbers.
+        const PITCH: f64 = 36.0;
+        let plain = advances(false);
+        assert!(!plain.is_empty(), "the gridded fixture paints its lines");
+        let spacing = plain[0] - PITCH;
+        assert!(
+            (0.0..PITCH).contains(&spacing),
+            "the ungridded advance is one grid row plus its spacing: {plain:?}"
+        );
+        let floated = advances(true);
+        assert_eq!(
+            floated.len(),
+            plain.len(),
+            "the float does not lose a paragraph: {floated:?}"
+        );
+        assert_ne!(
+            floated, plain,
+            "the float really does reflow the text, or the test proves nothing"
+        );
+        for advance in plain.iter().chain(&floated) {
+            let rows = (advance - spacing) / PITCH;
+            assert!(
+                rows >= 1.0 && (rows - rows.round()).abs() < 1e-6,
+                "{advance} is not a whole number of grid rows plus {spacing}: \
+                 {plain:?} against {floated:?}"
+            );
+        }
+    }
+
+    /// A revised paragraph in a rotated cell keeps its change bar.
+    ///
+    /// The bar spans the whole row band for a rotated cell, so it is drawn
+    /// once. Recording that a paragraph was seen rather than that a bar was
+    /// drawn would let an unrevised first paragraph suppress the bar of the
+    /// revised paragraph after it.
+    #[test]
+    fn a_revised_paragraph_after_a_plain_one_in_a_vertical_cell_keeps_its_bar() {
+        let bars = |direction: &str, paragraphs: &str| {
+            let source = format!(
+                concat!(
+                    r#"<w:document xmlns:w="{ns}"><w:body><w:tbl>"#,
+                    r#"<w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>"#,
+                    r#"<w:tr><w:tc><w:tcPr><w:textDirection w:val="{direction}"/></w:tcPr>"#,
+                    r#"{paragraphs}</w:tc></w:tr>"#,
+                    r#"</w:tbl><w:sectPr/></w:body></w:document>"#,
+                ),
+                ns = W_NS,
+                direction = direction,
+                paragraphs = paragraphs,
+            );
+            let mut seed = Document::new();
+            let mut package =
+                oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                    .unwrap();
+            package.set_part("/word/document.xml", source.into_bytes());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let document = Document::from_bytes(&bytes.into_inner()).unwrap();
+            let result = document
+                .layout_deterministic_with_options(rdocx::RenderOptions {
+                    revision_view: rdocx_layout::RevisionView::Tracked,
+                })
+                .expect("deterministic tracked layout");
+            let mut bars = 0usize;
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Line { start, end, .. } = element
+                        && (start.x - end.x).abs() < 1e-9
+                    {
+                        bars += 1;
+                    }
+                });
+            }
+            bars
+        };
+
+        let plain = r#"<w:p><w:r><w:t>plain</w:t></w:r></w:p>"#;
+        let revised = concat!(
+            r#"<w:p><w:pPr><w:pPrChange w:id="1" w:author="A" w:date="2026-01-01T00:00:00Z">"#,
+            r#"<w:pPr/></w:pPrChange></w:pPr><w:r><w:t>revised</w:t></w:r></w:p>"#,
+        );
+        assert_eq!(
+            bars("tbRl", &format!("{revised}{plain}")),
+            1,
+            "a revised first paragraph draws the cell's bar"
+        );
+        assert_eq!(
+            bars("tbRl", &format!("{plain}{revised}")),
+            1,
+            "a plain first paragraph must not suppress the bar after it"
+        );
+        assert_eq!(
+            bars("tbRl", &format!("{revised}{revised}")),
+            1,
+            "the bar spans the row band and is drawn once"
+        );
+        // The rule has two sides. A horizontal cell still marks each revised
+        // paragraph on its own, because only a rotated cell's bar covers the
+        // whole row band, and a de-duplication that reached the horizontal
+        // path would silently drop every bar after the first.
+        assert_eq!(
+            bars("lrTb", &format!("{revised}{revised}")),
+            2,
+            "a horizontal cell keeps one bar for every revised paragraph"
+        );
+    }
+
+    /// Autofit must not size a rotated column from its text length.
+    ///
+    /// A rotated cell is measured in its transposed box, so the width it needs
+    /// is the stacked height of its lines. Measuring it the way a horizontal
+    /// cell is measured hands it a column as wide as its text is long, and
+    /// measuring it at the narrow trial width hands its minimum the largest
+    /// number it can produce, which then rescales every other column.
+    #[test]
+    fn autofit_does_not_size_a_vertical_column_from_its_text_length() {
+        let table = |direction: &str| {
+            format!(
+                concat!(
+                    r#"<w:document xmlns:w="{ns}"><w:body><w:tbl>"#,
+                    r#"<w:tblPr><w:tblW w:w="0" w:type="auto"/>"#,
+                    r#"<w:tblLayout w:type="autofit"/></w:tblPr>"#,
+                    r#"<w:tr>"#,
+                    r#"<w:tc><w:tcPr><w:textDirection w:val="{direction}"/></w:tcPr>"#,
+                    r#"<w:p><w:r><w:t>A much longer stretch of vertical cell text</w:t>"#,
+                    r#"</w:r></w:p></w:tc>"#,
+                    r#"<w:tc><w:p><w:r><w:t>neighbour</w:t></w:r></w:p></w:tc>"#,
+                    r#"</w:tr></w:tbl><w:sectPr/></w:body></w:document>"#,
+                ),
+                ns = W_NS,
+                direction = direction,
+            )
+        };
+        let neighbour_origin = |direction: &str| {
+            let mut seed = Document::new();
+            let mut package =
+                oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                    .unwrap();
+            package.set_part("/word/document.xml", table(direction).into_bytes());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let document = Document::from_bytes(&bytes.into_inner()).unwrap();
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic autofit layout");
+            let mut origin = None;
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, transform| {
+                    if let PositionedElement::Text(run) = element
+                        && run.text.trim() == "neighbour"
+                        && origin.is_none()
+                    {
+                        origin = Some(transform.apply(run.origin).x);
+                    }
+                });
+            }
+            origin.expect("the neighbouring cell paints")
+        };
+
+        // The neighbour starts where the first column ends, so its origin is
+        // how wide autofit made that column.
+        let horizontal = neighbour_origin("lrTb");
+        let rotated = neighbour_origin("tbRl");
+        assert!(
+            rotated < horizontal,
+            "a rotated cell needs less width than the same text laid out across, \
+             {rotated} against {horizontal}"
+        );
+        // One line of eleven-point text is under twenty points tall, and the
+        // default cell margins add under eleven more, so a column sized from
+        // the stacked height sits well inside the text length.
+        assert!(
+            rotated < horizontal / 2.0,
+            "the rotated column is sized from the stacked height, \
+             {rotated} against {horizontal}"
+        );
     }
 }

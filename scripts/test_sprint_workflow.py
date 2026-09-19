@@ -9399,6 +9399,12 @@ Pedro Assumpcao and the rdocx maintainers.
                 # and wrapped the float, so the parent no longer owns an
                 # incomplete row.
                 268,
+                # F-266 closed DOCX-033 to complete in S74 once F-266c landed
+                # the character grid and the vertical text projection, so the
+                # parent no longer owns an incomplete row. The row's remaining
+                # fallbacks are recorded in its evidence cell rather than held
+                # open by an owner.
+                266,
                 # F-270 closed DOCX-007 and DOCX-037 to complete in S74, so it
                 # no longer owns an incomplete row.
                 270,

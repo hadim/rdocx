@@ -12,13 +12,13 @@ use rdocx_oxml::text::Field;
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{
-    BodyContent, CT_Document, CT_SectPr, ST_LineNumberRestart, ST_PageBorderDisplay,
-    ST_PageBorderOffset, ST_PageBorderZOrder,
+    BodyContent, CT_DocGrid, CT_Document, CT_SectPr, ST_DocGrid, ST_LineNumberRestart,
+    ST_PageBorderDisplay, ST_PageBorderOffset, ST_PageBorderZOrder,
 };
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::{HdrFtrType, VmlWatermark};
 use rdocx_oxml::numbering::ST_LvlSuffix;
-use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd, ST_Em};
+use rdocx_oxml::properties::{CT_EastAsianLayout, CT_PPr, CT_RPr, CT_Shd, ST_Em};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::ruby::{CT_Ruby, ST_RubyAlign};
 use rdocx_oxml::shared::ST_HighlightColor;
@@ -46,9 +46,9 @@ use crate::{WordBodyLayoutFragment, WordSourcePath, WordStory};
 use oxml_layout::{
     Color, Diagnostic, DocumentMetadata, DocumentStructure, FieldKind, FieldSource, FontId,
     FontManager, GlyphRun, GroupElement, InlineItem, LayoutError, LayoutResult, LineItem, NoteRef,
-    NoteStream, PageFrame, Point, PositionedElement, Rect, Result, SourceNodeId, SourceSpan,
-    StructureId, StructureNode, StructureRole, TextDirection, TextSegment, Transform, Underline,
-    break_into_lines, break_multilingual_into_lines,
+    NoteStream, PageFrame, Point, PositionedElement, Rect, Result, ShapedText, SourceNodeId,
+    SourceSpan, StructureId, StructureNode, StructureRole, TextDirection, TextSegment, Transform,
+    Underline, break_into_lines, break_multilingual_into_lines,
 };
 
 #[derive(Clone)]
@@ -1113,6 +1113,12 @@ struct ParagraphCacheKey {
     paragraph: CT_P,
     content_width_bits: u64,
     revision_view: RevisionView,
+    /// The section character grid the block was broken against.
+    ///
+    /// A gridded and an ungridded section give the same paragraph different
+    /// line advance, so a cache keyed without this would serve one section's
+    /// blocks to the other.
+    doc_grid: Option<CT_DocGrid>,
 }
 
 struct ParagraphCacheEntry {
@@ -1131,6 +1137,8 @@ struct TableCacheKey {
     content_width_bits: u64,
     revision_view: RevisionView,
     with_provenance: bool,
+    /// The section character grid, for the reason `ParagraphCacheKey` states.
+    doc_grid: Option<CT_DocGrid>,
 }
 
 struct TableCacheEntry {
@@ -1673,8 +1681,22 @@ impl Engine {
         let media = scoped_media.as_ref().unwrap_or(&media);
         let mut numbering = NumberingState::new();
         let mut diagnostics = Vec::new();
+        // Caller-width measurement loads what whole-document layout loads, so
+        // it reads the body section's grid rather than measuring ungridded. A
+        // related story measures ungridded, because that is what header,
+        // footer and note layout does with the same content.
+        let doc_grid = if related_story_scope.is_none() {
+            input
+                .document
+                .body
+                .sect_pr
+                .as_ref()
+                .and_then(|sect_pr| sect_pr.doc_grid.as_deref())
+        } else {
+            None
+        };
         let height = match content {
-            BodyContent::Paragraph(paragraph) => layout_paragraph(
+            BodyContent::Paragraph(paragraph) => layout_paragraph_with_grid(
                 paragraph,
                 available_width,
                 &input.styles,
@@ -1683,6 +1705,7 @@ impl Engine {
                 &mut self.font_manager,
                 &mut numbering,
                 &mut diagnostics,
+                doc_grid,
             )?
             .total_height(),
             BodyContent::Table(table) => crate::table::layout_table(
@@ -1694,6 +1717,7 @@ impl Engine {
                 &mut self.font_manager,
                 &mut numbering,
                 &mut diagnostics,
+                doc_grid,
             )?
             .total_height(),
             BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
@@ -1974,13 +1998,14 @@ impl Engine {
                     });
                     let mut block = self.layout_body_paragraph(
                         para,
-                        geometry.content_width(),
+                        geometry.body_measure(),
                         styles,
                         input,
                         &media,
                         &mut num_state,
                         &mut diagnostics,
                         source,
+                        sect_pr_for_layout.doc_grid.as_deref(),
                     )?;
 
                     // Detect heading style for outline generation
@@ -2066,7 +2091,7 @@ impl Engine {
 
                     let mut table_block = self.layout_body_table(
                         tbl,
-                        geometry.content_width(),
+                        geometry.body_measure(),
                         styles,
                         input,
                         &media,
@@ -2075,6 +2100,7 @@ impl Engine {
                         sources,
                         &WordStory::Document,
                         &path,
+                        sect_pr_for_layout.doc_grid.as_deref(),
                     )?;
                     if sources.is_some() {
                         table_block.set_body_index(path[0]);
@@ -2761,6 +2787,7 @@ impl Engine {
         numbering: &mut NumberingState,
         diagnostics: &mut Vec<Diagnostic>,
         source_node: Option<SourceNodeId>,
+        doc_grid: Option<&CT_DocGrid>,
     ) -> Result<SharedLayoutBlock> {
         if !paragraph_is_cache_safe(paragraph, styles) {
             // Traversal-sensitive content can change generated state consumed
@@ -2777,6 +2804,7 @@ impl Engine {
                 numbering,
                 diagnostics,
                 source_node,
+                doc_grid,
             )?;
             return Ok(SharedLayoutBlock::Owned {
                 block: Box::new(LayoutBlock::Paragraph(block)),
@@ -2795,6 +2823,7 @@ impl Engine {
                     && entry.key.paragraph == *paragraph
                     && entry.key.content_width_bits == content_width.to_bits()
                     && entry.key.revision_view == input.revision_view
+                    && entry.key.doc_grid.as_ref() == doc_grid
             })
         {
             diagnostics.extend(entry.diagnostics.iter().cloned());
@@ -2824,6 +2853,7 @@ impl Engine {
             numbering,
             diagnostics,
             Some(CACHE_SOURCE_NODE),
+            doc_grid,
         );
         let font_trace = self.font_manager.finish_paragraph_font_trace();
         let (mut block, reflow_direction) = block_result?;
@@ -2844,6 +2874,7 @@ impl Engine {
                     paragraph: paragraph.clone(),
                     content_width_bits: content_width.to_bits(),
                     revision_view: input.revision_view,
+                    doc_grid: doc_grid.cloned(),
                 },
                 block: Arc::clone(&block),
                 diagnostics: cached_diagnostics,
@@ -2883,6 +2914,7 @@ impl Engine {
         sources: Option<&SourceRegistry>,
         story: &WordStory,
         path: &[usize],
+        doc_grid: Option<&CT_DocGrid>,
     ) -> Result<SharedLayoutBlock> {
         if !table_is_cache_safe(table, styles) {
             self.paragraph_cache_reads_enabled = false;
@@ -2898,6 +2930,7 @@ impl Engine {
                 sources,
                 story,
                 path,
+                doc_grid,
             )
             .map(|(block, semantics)| SharedLayoutBlock::Table {
                 block: Arc::new(block),
@@ -2915,6 +2948,7 @@ impl Engine {
                     && entry.key.content_width_bits == content_width.to_bits()
                     && entry.key.revision_view == input.revision_view
                     && entry.key.with_provenance == sources.is_some()
+                    && entry.key.doc_grid.as_ref() == doc_grid
             })
         {
             diagnostics.extend(entry.diagnostics.iter().cloned());
@@ -2949,6 +2983,7 @@ impl Engine {
             sources,
             story,
             path,
+            doc_grid,
         );
         let font_trace = self.font_manager.finish_paragraph_font_trace();
         let (mut block, semantics) = block_result?;
@@ -2962,6 +2997,7 @@ impl Engine {
                 content_width_bits: content_width.to_bits(),
                 revision_view: input.revision_view,
                 with_provenance: sources.is_some(),
+                doc_grid: doc_grid.cloned(),
             };
             let bytes = table_cache_entry_bytes(
                 &key,
@@ -5715,6 +5751,36 @@ pub fn layout_paragraph(
     )
 }
 
+/// Lay out one paragraph on a section character grid.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn layout_paragraph_with_grid(
+    para: &CT_P,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    doc_grid: Option<&CT_DocGrid>,
+) -> Result<ParagraphBlock> {
+    layout_paragraph_with_source_and_table(
+        para,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        None,
+        None,
+        None,
+        None,
+        doc_grid,
+    )
+}
+
 pub(crate) fn layout_paragraph_with_source(
     para: &CT_P,
     available_width: f64,
@@ -5739,6 +5805,7 @@ pub(crate) fn layout_paragraph_with_source(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -5753,6 +5820,7 @@ pub(crate) fn layout_paragraph_with_source_and_direction(
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(ParagraphBlock, TextDirection)> {
     let mut direction = TextDirection::Auto;
     let block = layout_paragraph_with_source_and_table(
@@ -5768,6 +5836,7 @@ pub(crate) fn layout_paragraph_with_source_and_direction(
         None,
         None,
         Some(&mut direction),
+        doc_grid,
     )?;
     Ok((block, direction))
 }
@@ -5785,6 +5854,7 @@ pub(crate) fn layout_paragraph_with_source_in_table(
     source_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
     table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(ParagraphBlock, TextDirection)> {
     let mut direction = TextDirection::Auto;
     let block = layout_paragraph_with_source_and_table(
@@ -5800,6 +5870,7 @@ pub(crate) fn layout_paragraph_with_source_in_table(
         table_properties,
         table_run_properties,
         Some(&mut direction),
+        doc_grid,
     )?;
     Ok((block, direction))
 }
@@ -5818,6 +5889,7 @@ fn layout_paragraph_with_source_and_table(
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
     table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
     reflow_direction_out: Option<&mut TextDirection>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<ParagraphBlock> {
     // Resolve paragraph properties
     let para_style_id = para.properties.as_ref().and_then(|p| p.style_id.as_deref());
@@ -5866,6 +5938,21 @@ fn layout_paragraph_with_source_and_table(
     let widow_control = effective_ppr.widow_control.unwrap_or(true);
     let automatic_hyphenation =
         input.automatic_hyphenation && effective_ppr.suppress_auto_hyphens != Some(true);
+
+    // The section character grid, gated by the paragraph's own `w:snapToGrid`.
+    // A `default` grid, and an absent one, leave both values at their
+    // ungridded form, so an ungridded paragraph takes the branch it always
+    // took with no new arithmetic on it.
+    let doc_grid = doc_grid.filter(|_| effective_ppr.snap_to_grid != Some(false));
+    let grid_char_space_pt = doc_grid
+        .filter(|grid| grid.grid_type.is_some_and(ST_DocGrid::snaps_characters))
+        .and_then(|grid| grid.char_space)
+        .map_or(0.0, |space| rdocx_oxml::units::Twips(space).to_pt());
+    let grid_line_pitch_pt = doc_grid
+        .filter(|grid| grid.grid_type.is_some_and(ST_DocGrid::snaps_lines))
+        .and_then(|grid| grid.line_pitch)
+        .map(|pitch| pitch.to_pt())
+        .filter(|pitch| *pitch > 0.0);
 
     // Parse shading color
     let shading = effective_ppr
@@ -6184,35 +6271,6 @@ fn layout_paragraph_with_source_and_table(
                         continue;
                     }
 
-                    if let Some(ref mark) = effective_rpr.emphasis_mark
-                        && push_emphasis_marked_text(
-                            &mut inline_items,
-                            fm,
-                            diagnostics,
-                            mark,
-                            &text,
-                            &AnnotationBase {
-                                font_id,
-                                font_size,
-                                color,
-                                bold,
-                                italic,
-                                baseline_offset,
-                                spacing: effective_rpr
-                                    .spacing
-                                    .map_or(0.0, |spacing| spacing.to_pt()),
-                                underline,
-                                strike,
-                                dstrike,
-                                highlight,
-                                font_family: font_family.as_deref(),
-                            },
-                        )?
-                    {
-                        continue;
-                    }
-
-                    let mut shaped = fm.shape_text(font_id, &text, font_size)?;
                     let source = if text == ct_text.text {
                         source_node.and_then(|node| {
                             let char_start = u32::try_from(content_char_start).ok()?;
@@ -6229,9 +6287,53 @@ fn layout_paragraph_with_source_and_table(
                         None
                     };
 
-                    // Apply character spacing from run properties (in twips)
-                    if let Some(spacing) = effective_rpr.spacing {
-                        let extra = spacing.to_pt();
+                    let annotation_base = AnnotationBase {
+                        font_id,
+                        font_size,
+                        color,
+                        bold,
+                        italic,
+                        baseline_offset,
+                        spacing: word_character_advance_pt(&effective_rpr, grid_char_space_pt),
+                        underline,
+                        strike,
+                        dstrike,
+                        highlight,
+                        font_family: font_family.as_deref(),
+                    };
+
+                    if let Some(layout) = effective_rpr.east_asian_layout.as_deref()
+                        && push_east_asian_layout_text(
+                            &mut inline_items,
+                            fm,
+                            layout,
+                            &text,
+                            &annotation_base,
+                            source,
+                        )?
+                    {
+                        continue;
+                    }
+
+                    if let Some(ref mark) = effective_rpr.emphasis_mark
+                        && push_emphasis_marked_text(
+                            &mut inline_items,
+                            fm,
+                            diagnostics,
+                            mark,
+                            &text,
+                            &annotation_base,
+                        )?
+                    {
+                        continue;
+                    }
+
+                    let mut shaped = fm.shape_text(font_id, &text, font_size)?;
+
+                    // Apply character spacing from run properties, plus the
+                    // section character grid when one is in force.
+                    let extra = word_character_advance_pt(&effective_rpr, grid_char_space_pt);
+                    if extra != 0.0 {
                         for advance in &mut shaped.advances {
                             *advance += extra;
                         }
@@ -6271,7 +6373,7 @@ fn layout_paragraph_with_source_and_table(
                             language_east_asia: effective_rpr.language_east_asia.clone(),
                             language_bidi: effective_rpr.language_bidi.clone(),
                             direction: word_text_direction(effective_rpr.rtl),
-                            spacing: effective_rpr.spacing.map_or(0.0, |value| value.to_pt()),
+                            spacing: word_character_advance_pt(&effective_rpr, grid_char_space_pt),
                         },
                     );
                     if automatic_hyphenation && let Some(language) = effective_rpr.language.as_ref()
@@ -6491,8 +6593,9 @@ fn layout_paragraph_with_source_and_table(
                                 }
                                 let mut shaped =
                                     fm.shape_text(segment_font_id, &text, segment_font_size)?;
-                                if let Some(spacing) = segment_rpr.spacing {
-                                    let extra = spacing.to_pt();
+                                let extra =
+                                    word_character_advance_pt(&segment_rpr, grid_char_space_pt);
+                                if extra != 0.0 {
                                     for advance in &mut shaped.advances {
                                         *advance += extra;
                                     }
@@ -6506,9 +6609,10 @@ fn layout_paragraph_with_source_and_table(
                                         language_east_asia: segment_rpr.language_east_asia.clone(),
                                         language_bidi: segment_rpr.language_bidi.clone(),
                                         direction: word_text_direction(segment_rpr.rtl),
-                                        spacing: segment_rpr
-                                            .spacing
-                                            .map_or(0.0, |value| value.to_pt()),
+                                        spacing: word_character_advance_pt(
+                                            &segment_rpr,
+                                            grid_char_space_pt,
+                                        ),
                                     },
                                 );
                                 inline_items.push(InlineItem::Text(TextSegment {
@@ -6787,7 +6891,7 @@ fn layout_paragraph_with_source_and_table(
             .is_none()
     {
         let mut lines = break_into_lines(&[], &line_params, fm)?;
-        convert::restore_word_line_heights(&mut lines, &effective_ppr);
+        convert::restore_word_line_heights(&mut lines, &effective_ppr, grid_line_pitch_pt);
         lines.pop()
     } else {
         None
@@ -6819,7 +6923,7 @@ fn layout_paragraph_with_source_and_table(
     } else {
         break_into_lines(&inline_items, &line_params, fm)?
     };
-    convert::restore_word_line_heights(&mut lines, &effective_ppr);
+    convert::restore_word_line_heights(&mut lines, &effective_ppr, grid_line_pitch_pt);
     if let (Some(line), Some(legacy)) = (lines.first_mut(), legacy_empty_line) {
         line.ascent = legacy.ascent;
         line.descent = legacy.descent;
@@ -6852,6 +6956,8 @@ fn layout_paragraph_with_source_and_table(
     result.reflow = Some(Box::new(block::ParagraphReflow {
         items: inline_items,
         params: line_params,
+        grid_line_pitch_pt: grid_line_pitch_pt
+            .filter(|_| effective_ppr.line_rule.as_deref() != Some("exact")),
     }));
     Ok(result)
 }
@@ -7612,6 +7718,12 @@ fn sect_pr_to_geometry(sect_pr: &CT_SectPr) -> PageGeometry {
         line_numbers: sect_pr_line_numbers(sect_pr),
         vertical_alignment: sect_pr.vertical_alignment,
         mirror_margins: false,
+        // F-269 authors and preserves `w:sectPr/w:textDirection`. This is the
+        // render projection over it, and it writes nothing back.
+        body_rotation: sect_pr
+            .text_direction
+            .as_deref()
+            .and_then(crate::table::text_direction_rotation),
     };
     resolve_column_tracks(sect_pr, geometry)
 }
@@ -7723,6 +7835,18 @@ fn section_page_geometry(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> PageGeometry {
     let mut geometry = sect_pr_to_geometry(sect_pr);
+    // A vertical section fills one transposed band. Composing it with column
+    // tracks would transpose each track about its own centre while the page
+    // rotates about one, so the tracks are dropped and the fact is recorded
+    // rather than painted wrong.
+    if geometry.body_rotation.is_some() && !geometry.columns.is_empty() {
+        push_unique_diagnostic(
+            diagnostics,
+            "vertical section text is laid out in one column track".to_owned(),
+        );
+        geometry.columns = Vec::new();
+        geometry.column_separator = false;
+    }
     if geometry.vertical_alignment == Some(ST_VerticalJc::Both) {
         diagnostics.push(Diagnostic {
             message: "section vertical alignment both is laid out as top, vertical distribution is not implemented"
@@ -8232,6 +8356,9 @@ fn layout_header_footer_variant_uncached(
             num_state,
             diagnostics,
             source,
+            // Headers and footers are page furniture laid out against their
+            // own measure, so the section grid does not reach them.
+            None,
         )?;
         blocks.push(block);
         directions.push(direction);
@@ -8699,6 +8826,198 @@ fn emphasis_chunks(text: &str) -> Vec<&str> {
     chunks
 }
 
+/// The bracket pair `w:combineBrackets` names, drawn around a combined run.
+///
+/// The ASCII pair is deliberate. Every bundled face carries it, so a combined
+/// run draws the same brackets on every host, which a fullwidth pair present
+/// in only some East Asian faces would not.
+fn combine_bracket_pair(brackets: Option<&str>) -> (&'static str, &'static str) {
+    match brackets {
+        Some("round") => ("(", ")"),
+        Some("square") => ("[", "]"),
+        Some("angle") => ("<", ">"),
+        Some("curly") => ("{", "}"),
+        _ => ("", ""),
+    }
+}
+
+/// Lay one run out under `w:eastAsianLayout`, or report that it does not apply.
+///
+/// `w:combine` compresses the run into one base-character advance inside the
+/// bracket pair `w:combineBrackets` names. `w:vert` rotates the run 90 degrees
+/// within its line, and `w:vertCompress` narrows the rotated run to one base
+/// advance. A run that sets neither returns `false` and takes the ordinary
+/// path. A run that sets this and `w:em` takes this, because combining and
+/// rotating change the run's advance while an emphasis mark decorates it.
+#[allow(clippy::too_many_arguments)]
+fn push_east_asian_layout_text(
+    inline_items: &mut Vec<InlineItem>,
+    fm: &mut FontManager,
+    layout: &CT_EastAsianLayout,
+    text: &str,
+    base: &AnnotationBase<'_>,
+    source: Option<SourceSpan>,
+) -> Result<bool> {
+    let combine = layout.combine == Some(true);
+    let vert = layout.vert == Some(true);
+    if !combine && !vert {
+        return Ok(false);
+    }
+    let metrics = fm.metrics(base.font_id, base.font_size)?;
+    let ascent = metrics.ascent.max(0.0);
+    let descent = metrics.descent.max(0.0);
+    let mut shaped = fm.shape_text(base.font_id, text, base.font_size)?;
+    if base.spacing != 0.0 {
+        for advance in &mut shaped.advances {
+            *advance += base.spacing;
+        }
+        shaped.width += base.spacing * shaped.advances.len() as f64;
+    }
+    if shaped.width <= 0.0 {
+        return Ok(false);
+    }
+
+    // One base-character advance is one em of the run's own size, which is
+    // the character cell `w:combine` fits a run into and the advance
+    // `w:vertCompress` narrows a rotated run to. It is deliberately not the
+    // run's first shaped advance: shaping returns visual order, so a
+    // right-to-left run's first advance is its logically last character, and a
+    // run that begins with a space would collapse into the space.
+    let base_advance = base.font_size;
+
+    let raise = base.baseline_offset;
+    let group_ascent = ascent + raise.max(0.0);
+    let group_descent = descent + (-raise).max(0.0);
+    let baseline = group_ascent - raise;
+    let glyph_run = |x: f64, y: f64, shaped: &ShapedText, text: &str| {
+        PositionedElement::Text(GlyphRun {
+            origin: Point { x, y },
+            font_id: base.font_id,
+            font_size: base.font_size,
+            glyph_ids: shaped.glyph_ids.clone(),
+            advances: shaped.advances.clone(),
+            text: text.to_owned(),
+            source,
+            color: base.color,
+            bold: base.bold,
+            italic: base.italic,
+            field_kind: None,
+            field_source: None,
+            note: None,
+        })
+    };
+
+    if combine {
+        let cell = base_advance;
+        let (open, close) = combine_bracket_pair(layout.combine_brackets.as_deref());
+        let open_shaped = match open.is_empty() {
+            true => None,
+            false => Some(fm.shape_text(base.font_id, open, base.font_size)?),
+        };
+        let close_shaped = match close.is_empty() {
+            true => None,
+            false => Some(fm.shape_text(base.font_id, close, base.font_size)?),
+        };
+        let open_width = open_shaped.as_ref().map_or(0.0, |shaped| shaped.width);
+        let close_width = close_shaped.as_ref().map_or(0.0, |shaped| shaped.width);
+        let width = open_width + cell + close_width;
+        let mut children = Vec::new();
+        if let Some(highlight) = base.highlight {
+            children.push(PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width,
+                    height: group_ascent + group_descent,
+                },
+                color: highlight,
+            });
+        }
+        if let Some(ref open_shaped) = open_shaped {
+            children.push(glyph_run(0.0, baseline, open_shaped, open));
+        }
+        children.push(PositionedElement::Group(GroupElement {
+            transform: Transform {
+                a: cell / shaped.width,
+                e: open_width,
+                ..Transform::IDENTITY
+            },
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: vec![glyph_run(0.0, baseline, &shaped, text)],
+        }));
+        if let Some(ref close_shaped) = close_shaped {
+            children.push(glyph_run(open_width + cell, baseline, close_shaped, close));
+        }
+        push_annotation_decorations(&mut children, base, baseline, width, ascent, descent);
+        inline_items.push(InlineItem::Group {
+            width,
+            height: group_ascent + group_descent,
+            baseline: Some(group_ascent),
+            group: GroupElement {
+                transform: Transform::IDENTITY,
+                clip: None,
+                opacity: 1.0,
+                effects: Vec::new(),
+                children,
+            },
+        });
+        return Ok(true);
+    }
+
+    // `w:vert`. The run is laid out horizontally and rotated 90 degrees, so
+    // its own line height becomes the advance it takes along the line and its
+    // text length becomes the height it needs.
+    let thickness = group_ascent + group_descent;
+    if thickness <= 0.0 {
+        return Ok(false);
+    }
+    // A compressed run is narrowed to one base-character advance, and never
+    // widened, because compression may only take space away.
+    let compressed = layout.vert_compress == Some(true) && base_advance < thickness;
+    let width = if compressed { base_advance } else { thickness };
+    let mut children = Vec::new();
+    if let Some(highlight) = base.highlight {
+        children.push(PositionedElement::FilledRect {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: shaped.width,
+                height: thickness,
+            },
+            color: highlight,
+        });
+    }
+    children.push(glyph_run(0.0, baseline, &shaped, text));
+    push_annotation_decorations(&mut children, base, baseline, shaped.width, ascent, descent);
+    // Rotate about the group origin, then bring the rotated box back into
+    // positive x, then narrow it when `w:vertCompress` asked for that.
+    let mut transform = Transform::rotate_about(90.0, 0.0, 0.0).then(Transform {
+        e: thickness,
+        ..Transform::IDENTITY
+    });
+    if compressed {
+        transform = transform.then(Transform {
+            a: width / thickness,
+            ..Transform::IDENTITY
+        });
+    }
+    inline_items.push(InlineItem::Group {
+        width,
+        height: shaped.width,
+        baseline: None,
+        group: GroupElement {
+            transform,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children,
+        },
+    });
+    Ok(true)
+}
+
 /// The base run style an annotation draws against.
 struct AnnotationBase<'a> {
     font_id: FontId,
@@ -8716,7 +9035,7 @@ struct AnnotationBase<'a> {
 }
 
 /// Record a diagnostic once, matching the media registry's dedupe by message.
-fn push_unique_diagnostic(diagnostics: &mut Vec<Diagnostic>, message: String) {
+pub(crate) fn push_unique_diagnostic(diagnostics: &mut Vec<Diagnostic>, message: String) {
     if !diagnostics.iter().any(|entry| entry.message == message) {
         diagnostics.push(Diagnostic { message });
     }
@@ -9195,6 +9514,20 @@ fn word_language_for_slot(style: &WordMultilingualStyle, slot: WordLanguageSlot)
             .language_bidi
             .clone()
             .or_else(|| style.language.clone()),
+    }
+}
+
+/// The advance one character adds beyond its own glyph advance.
+///
+/// `w:spacing` is the run's own character spacing. A `linesAndChars` or
+/// `snapToChars` section grid adds `w:charSpace` on top of it, and a run that
+/// opts out with `w:snapToGrid w:val="0"` keeps only its own spacing.
+fn word_character_advance_pt(rpr: &CT_RPr, grid_char_space_pt: f64) -> f64 {
+    let spacing = rpr.spacing.map_or(0.0, |value| value.to_pt());
+    if rpr.snap_to_grid == Some(false) {
+        spacing
+    } else {
+        spacing + grid_char_space_pt
     }
 }
 
@@ -11050,6 +11383,7 @@ mod tests {
             &mut fonts,
             &mut numbering,
             &mut diagnostics,
+            None,
             None,
         )
         .expect("field-only paragraph lays out");
@@ -13694,6 +14028,7 @@ mod tests {
                 None,
                 &WordStory::Document,
                 &[0],
+                None,
             )
             .expect("real table container lays out");
         let SharedLayoutBlock::Table { semantics, .. } = shared else {
@@ -15921,6 +16256,7 @@ mod tests {
                     paragraph,
                     content_width_bits: PageGeometry::default().content_width().to_bits(),
                     revision_view: RevisionView::Accepted,
+                    doc_grid: None,
                 },
                 block: template.block.clone(),
                 diagnostics: template.diagnostics.clone(),
@@ -15999,6 +16335,7 @@ mod tests {
         block.reflow = Some(Box::new(block::ParagraphReflow {
             items: vec![InlineItem::Text(retained)],
             params: oxml_layout::LineBreakParams::default(),
+            grid_line_pitch_pt: None,
         }));
         let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
             panic!("body paragraph");
@@ -16014,6 +16351,7 @@ mod tests {
                 paragraph: paragraph.clone(),
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
                 revision_view: RevisionView::Accepted,
+                doc_grid: None,
             },
             block: Arc::new(block),
             diagnostics: Vec::new(),
@@ -16118,6 +16456,7 @@ mod tests {
                 paragraph,
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
                 revision_view: RevisionView::Accepted,
+                doc_grid: None,
             },
             block,
             diagnostics: Vec::new(),
@@ -16845,6 +17184,7 @@ mod tests {
             is_first_row,
             is_last_row: !is_first_row,
             v_align: None,
+            rotation: None,
         };
         let table = table::TableBlock {
             structure_id: None,

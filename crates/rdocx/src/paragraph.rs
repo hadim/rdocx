@@ -1700,6 +1700,66 @@ impl<'a> Paragraph<'a> {
         self.ensure_ppr().adjust_right_ind = val;
     }
 
+    // The seven East Asian paragraph toggles. Each takes the `Option` form
+    // alone, because a three-state toggle needs nothing else to create, read,
+    // change and remove it, and this paragraph handle is already large.
+
+    /// Set or clear direct `w:kinsoku`, East Asian line-breaking rules.
+    pub fn set_kinsoku_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().kinsoku = val;
+    }
+
+    /// Set or clear direct `w:wordWrap`, breaking a Latin word only at a break opportunity.
+    pub fn set_word_wrap_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().word_wrap = val;
+    }
+
+    /// Set or clear direct `w:overflowPunct`, letting trailing punctuation hang past the measure.
+    pub fn set_overflow_punct_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().overflow_punct = val;
+    }
+
+    /// Set or clear direct `w:topLinePunct`, compressing punctuation at the start of a line.
+    pub fn set_top_line_punct_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().top_line_punct = val;
+    }
+
+    /// Set or clear direct `w:autoSpaceDE`, automatic spacing between East Asian and Latin text.
+    pub fn set_auto_space_de_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().auto_space_de = val;
+    }
+
+    /// Set or clear direct `w:autoSpaceDN`, automatic spacing between East Asian text and digits.
+    pub fn set_auto_space_dn_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().auto_space_dn = val;
+    }
+
+    /// Set or clear direct `w:snapToGrid`, snapping line advance to the section character grid.
+    pub fn set_snap_to_grid_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().snap_to_grid = val;
+    }
+
     /// Let the consumer choose the space before the paragraph.
     pub fn space_before_auto(mut self, val: bool) -> Self {
         self.set_space_before_auto(val);
@@ -2640,6 +2700,56 @@ impl<'a> ParagraphRef<'a> {
             .properties
             .as_ref()
             .and_then(|ppr| ppr.adjust_right_ind)
+    }
+
+    /// Get direct `w:kinsoku`, East Asian line-breaking rules.
+    pub fn kinsoku_value(&self) -> Option<bool> {
+        self.inner.properties.as_ref().and_then(|ppr| ppr.kinsoku)
+    }
+
+    /// Get direct `w:wordWrap`, breaking a Latin word only at a break opportunity.
+    pub fn word_wrap_value(&self) -> Option<bool> {
+        self.inner.properties.as_ref().and_then(|ppr| ppr.word_wrap)
+    }
+
+    /// Get direct `w:overflowPunct`, letting trailing punctuation hang past the measure.
+    pub fn overflow_punct_value(&self) -> Option<bool> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.overflow_punct)
+    }
+
+    /// Get direct `w:topLinePunct`, compressing punctuation at the start of a line.
+    pub fn top_line_punct_value(&self) -> Option<bool> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.top_line_punct)
+    }
+
+    /// Get direct `w:autoSpaceDE`, automatic spacing between East Asian and Latin text.
+    pub fn auto_space_de_value(&self) -> Option<bool> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.auto_space_de)
+    }
+
+    /// Get direct `w:autoSpaceDN`, automatic spacing between East Asian text and digits.
+    pub fn auto_space_dn_value(&self) -> Option<bool> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.auto_space_dn)
+    }
+
+    /// Get direct `w:snapToGrid`, snapping line advance to the section character grid.
+    pub fn snap_to_grid_value(&self) -> Option<bool> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.snap_to_grid)
     }
 
     /// Get direct automatic spacing before the paragraph.

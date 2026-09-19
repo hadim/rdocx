@@ -96,6 +96,14 @@ pub(crate) fn default_tab_interval_pt(default_tab_stop: Option<Twips>) -> f64 {
         .map_or(36.0, |value| value.to_pt())
 }
 
+/// How close to a whole grid row a line may be and still take that row.
+///
+/// Line height is a sum of font metrics, so a line that is arithmetically a
+/// whole number of grid rows can land just above one. Without this it would
+/// take an extra row. The value is an absolute tolerance on the row count,
+/// which is a small number for any real pitch and height.
+pub(crate) const GRID_ROW_TOLERANCE: f64 = 1e-9;
+
 pub(crate) fn line_break_params(
     properties: &CT_PPr,
     available_width: f64,
@@ -120,7 +128,17 @@ pub(crate) fn line_break_params(
     }
 }
 
-pub(crate) fn restore_word_line_heights(lines: &mut [LayoutLine], properties: &CT_PPr) {
+/// Restore Word line advance, optionally on a section character grid.
+///
+/// `grid_line_pitch_pt` is `Some` only for a `lines`, `linesAndChars` or
+/// `snapToChars` grid on a paragraph that has not opted out with
+/// `w:snapToGrid w:val="0"`. `None` is the ungridded path, byte for byte the
+/// arithmetic this function has always run.
+pub(crate) fn restore_word_line_heights(
+    lines: &mut [LayoutLine],
+    properties: &CT_PPr,
+    grid_line_pitch_pt: Option<f64>,
+) {
     for line in lines {
         let natural = line.ascent + line.descent;
         let natural = if natural < 1.0 { 12.0 } else { natural };
@@ -131,6 +149,20 @@ pub(crate) fn restore_word_line_heights(lines: &mut [LayoutLine], properties: &C
             (Some(spacing), _) => natural * spacing.0 as f64 / 240.0,
             (None, _) => natural,
         };
+        // A gridded line takes whole grid rows. An exact `w:lineRule` is an
+        // author's absolute height and stays absolute, which is what Word
+        // does with the two together. The pitch is guarded here as well as at
+        // the caller, because a zero would turn the height into a `NaN` that
+        // then spreads silently through pagination. The tolerance keeps a
+        // height that is an exact multiple of the pitch on its own row rather
+        // than pushing it onto the next one over a representation error.
+        if let Some(pitch) = grid_line_pitch_pt
+            && pitch > 0.0
+            && properties.line_rule.as_deref() != Some("exact")
+        {
+            let rows = (line.height / pitch - GRID_ROW_TOLERANCE).ceil().max(1.0);
+            line.height = pitch * rows;
+        }
     }
 }
 
@@ -282,7 +314,7 @@ mod tests {
             line_rule: Some("auto".to_string()),
             ..Default::default()
         };
-        restore_word_line_heights(&mut lines, &properties);
+        restore_word_line_heights(&mut lines, &properties, None);
         assert_eq!(lines[0].height, 26.0);
         assert_eq!(lines[0].line_gap, 0.0);
     }

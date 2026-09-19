@@ -1,6 +1,6 @@
 # F-266c, Character grid and vertical text
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: L
 **Depends on**: F-266a, F-269
@@ -290,39 +290,75 @@ asserts both sibling golden digests unmoved rather than re-recording them.
 
 ## Implementation checklist
 
-- [ ] Confirm F-266a and F-269 are `done`, that the shared golden fixture module
+- [x] Confirm F-266a and F-269 are `done`, that the shared golden fixture module
       and both recorded digests exist, and that F-269 delivered the typed
       `w:sectPr/w:textDirection` field this story only reads.
-- [ ] Confirm the run-property module split has landed and add
+- [x] Confirm the run-property module split has landed and add
       `CT_RPr::east_asian_layout` there.
-- [ ] Add `CT_EastAsianLayout` and `ST_CombineBrackets` with the parser and
-      serialiser at the `w:eastAsianLayout` schema slot.
-- [ ] Add `CT_DocGrid` and `ST_DocGrid` on `CT_SectPr` in
+- [x] Add `CT_EastAsianLayout` and `ST_CombineBrackets` with the parser and
+      serialiser at the `w:eastAsianLayout` schema slot. **Deviation**: F-265
+      had already landed `CT_EastAsianLayout` with `combine_brackets` as a
+      `String`, so this story consumed it rather than replacing that public
+      field with an `ST_CombineBrackets` nobody had asked for.
+- [x] Add `CT_DocGrid` and `ST_DocGrid` on `CT_SectPr` in
       `crates/rdocx-oxml/src/document.rs` at the `w:docGrid` slot, keeping the
       existing raw round-trip test green.
-- [ ] Add the facade setters and readers in `crates/rdocx/src/run.rs` and
-      `crates/rdocx/src/document.rs`.
-- [ ] Apply `linePitch` and `charSpace` to advance for `lines`,
+- [x] Add the facade setters and readers in `crates/rdocx/src/run.rs` and
+      `crates/rdocx/src/document.rs`. **Deviation**: `run.rs` already carried
+      `set_east_asian_layout_value` and `east_asian_layout` from F-265, so only
+      the section grid accessors were new.
+- [x] Apply `linePitch` and `charSpace` to advance for `lines`,
       `linesAndChars` and `snapToChars` only, leaving `default` on the existing
       branch.
-- [ ] Apply `combine`, `combineBrackets`, `vert` and `vertCompress` to run
+- [x] Apply `combine`, `combineBrackets`, `vert` and `vertCompress` to run
       advance and rotation.
-- [ ] Project `w:tcPr/w:textDirection` into a transposed same-centre box wrapped
+- [x] Project `w:tcPr/w:textDirection` into a transposed same-centre box wrapped
       in a `Group`, with the rotations in the table above and the
       upright-stacking diagnostic.
-- [ ] Make row height and the equal-height pass measure the transposed box in
+- [x] Make row height and the equal-height pass measure the transposed box in
       `crates/rdocx-layout/src/table.rs`.
-- [ ] Project `w:sectPr/w:textDirection` the same way, reading F-269's field and
+- [x] Project `w:sectPr/w:textDirection` the same way, reading F-269's field and
       writing nothing.
-- [ ] Add every test in `## Test plan` to the existing entrypoints.
-- [ ] Record this story's golden digest, with its reason, in the test and in
+- [x] Add every test in `## Test plan` to the existing entrypoints.
+- [x] Record this story's golden digest, with its reason, in the test and in
       `docs/hld/12-testing-strategy.md`, and assert both sibling digests unmoved.
-- [ ] Update DOCX-033 in `docs/hld/02-scope-and-non-goals.md` to its final
+- [x] Update DOCX-033 in `docs/hld/02-scope-and-non-goals.md` to its final
       classification, stating the fixture-repertoire font coverage and the
       upright-stacking fallback honestly.
-- [ ] Run `/verify`, plus `cargo test -p oxml-layout --no-default-features`,
+- [x] Run `/verify`, plus `cargo test -p oxml-layout --no-default-features`,
       `cargo check --target wasm32-unknown-unknown -p rdocx-wasm -p rpptx-wasm`,
       and `cargo publish --dry-run` with the archive-size assertion.
+      **Deviation**: `cargo publish --dry-run` verifies for `rdocx-oxml`, which
+      packages 32 files at 2.3 MiB and 358 KiB compressed, and fails for
+      `rdocx-layout` and `rdocx` because they resolve `rdocx-oxml` from the
+      registry and 0.14.0 is not published yet. That failure predates this
+      story and is the known worker-worktree artifact.
+
+## Deviations
+
+- The seven East Asian paragraph toggles F-264 left raw-preserved and named
+  for this story, `w:kinsoku`, `w:wordWrap`, `w:overflowPunct`,
+  `w:topLinePunct`, `w:autoSpaceDE`, `w:autoSpaceDN` and `w:snapToGrid`, are
+  typed on `CT_PPr` with a public paragraph surface, which the approved plan
+  did not list. They are what DOCX-033's `Create` column turns on, and this
+  story is the last child, so leaving them raw would have left the row
+  unclosable. `w:snapToGrid` gets its render projection here as the gate on
+  the character grid. The other six are authorable with the render position
+  the row's evidence cell states.
+- Files touched beyond `## Files the diff touches`:
+  `crates/rdocx-layout/src/convert.rs`, `notes.rs` and `paginator.rs` for the
+  line advance, the note story exclusion and the render projections,
+  `crates/rdocx-oxml/src/paragraph_properties.rs` and
+  `crates/rdocx/src/paragraph.rs` for the toggles, and
+  `scripts/test_sprint_workflow.py` for the DOCX-033 owner exclusion the
+  closing row requires.
+- Headers, footers and note text are laid out off the character grid. The plan
+  did not discuss them. The narrowing is recorded in
+  `docs/hld/08-rendering-spec.md`.
+- A vertical section drops its column tracks and records a diagnostic, because
+  transposing each track about its own centre while the page rotates about one
+  is a wrong picture rather than a missing one. Recorded in the rendering spec
+  and in the DOCX-033 evidence cell.
 
 ## Open questions
 

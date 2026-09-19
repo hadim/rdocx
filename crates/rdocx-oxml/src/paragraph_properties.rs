@@ -221,6 +221,24 @@ pub struct CT_PPr {
     pub widow_control: Option<bool>,
     /// Suppress auto-hyphens (suppressAutoHyphens)
     pub suppress_auto_hyphens: Option<bool>,
+    /// East Asian line-breaking rules (kinsoku), schema slot 12.
+    ///
+    /// The six East Asian line-breaking policy toggles are modeled and
+    /// authored here. Their effect on break opportunities and inter-script
+    /// spacing is named as the remaining boundary on DOCX-033.
+    pub kinsoku: Option<bool>,
+    /// Break Latin words only at a break opportunity (wordWrap), slot 13.
+    pub word_wrap: Option<bool>,
+    /// Let trailing punctuation hang past the measure (overflowPunct), slot 14.
+    pub overflow_punct: Option<bool>,
+    /// Compress punctuation at the start of a line (topLinePunct), slot 15.
+    pub top_line_punct: Option<bool>,
+    /// Auto space between East Asian and Latin text (autoSpaceDE), slot 16.
+    pub auto_space_de: Option<bool>,
+    /// Auto space between East Asian text and digits (autoSpaceDN), slot 17.
+    pub auto_space_dn: Option<bool>,
+    /// Snap line advance to the section character grid (snapToGrid), slot 20.
+    pub snap_to_grid: Option<bool>,
     /// Paragraph base direction (bidi).
     pub bidi: Option<bool>,
     /// Text frame placement (framePr).
@@ -320,8 +338,15 @@ const PPR_BORDER_SLOT: u8 = 8;
 const PPR_SHADING_SLOT: u8 = 9;
 const PPR_TABS_SLOT: u8 = 10;
 const PPR_SUPPRESS_HYPHENS_SLOT: u8 = 11;
+const PPR_KINSOKU_SLOT: u8 = 12;
+const PPR_WORD_WRAP_SLOT: u8 = 13;
+const PPR_OVERFLOW_PUNCT_SLOT: u8 = 14;
+const PPR_TOP_LINE_PUNCT_SLOT: u8 = 15;
+const PPR_AUTO_SPACE_DE_SLOT: u8 = 16;
+const PPR_AUTO_SPACE_DN_SLOT: u8 = 17;
 const PPR_BIDI_SLOT: u8 = 18;
 const PPR_ADJUST_RIGHT_IND_SLOT: u8 = 19;
+const PPR_SNAP_TO_GRID_SLOT: u8 = 20;
 const PPR_SPACING_SLOT: u8 = 21;
 const PPR_INDENT_SLOT: u8 = 22;
 const PPR_CONTEXTUAL_SPACING_SLOT: u8 = 23;
@@ -1300,12 +1325,40 @@ impl CT_PPr {
             write_toggle(writer, "w:suppressAutoHyphens", suppress)?;
         }
 
+        if let Some(kinsoku) = self.kinsoku {
+            write_toggle(writer, "w:kinsoku", kinsoku)?;
+        }
+
+        if let Some(word_wrap) = self.word_wrap {
+            write_toggle(writer, "w:wordWrap", word_wrap)?;
+        }
+
+        if let Some(overflow_punct) = self.overflow_punct {
+            write_toggle(writer, "w:overflowPunct", overflow_punct)?;
+        }
+
+        if let Some(top_line_punct) = self.top_line_punct {
+            write_toggle(writer, "w:topLinePunct", top_line_punct)?;
+        }
+
+        if let Some(auto_space_de) = self.auto_space_de {
+            write_toggle(writer, "w:autoSpaceDE", auto_space_de)?;
+        }
+
+        if let Some(auto_space_dn) = self.auto_space_dn {
+            write_toggle(writer, "w:autoSpaceDN", auto_space_dn)?;
+        }
+
         if let Some(bidi) = self.bidi {
             write_toggle(writer, "w:bidi", bidi)?;
         }
 
         if let Some(adjust) = self.adjust_right_ind {
             write_toggle(writer, "w:adjustRightInd", adjust)?;
+        }
+
+        if let Some(snap_to_grid) = self.snap_to_grid {
+            write_toggle(writer, "w:snapToGrid", snap_to_grid)?;
         }
 
         // spacing
@@ -1455,6 +1508,13 @@ impl CT_PPr {
             && self.page_break_before.is_none()
             && self.widow_control.is_none()
             && self.suppress_auto_hyphens.is_none()
+            && self.kinsoku.is_none()
+            && self.word_wrap.is_none()
+            && self.overflow_punct.is_none()
+            && self.top_line_punct.is_none()
+            && self.auto_space_de.is_none()
+            && self.auto_space_dn.is_none()
+            && self.snap_to_grid.is_none()
             && self.bidi.is_none()
             && self.frame.is_none()
             && self.suppress_line_numbers.is_none()
@@ -1544,6 +1604,27 @@ impl CT_PPr {
         }
         if other.suppress_auto_hyphens.is_some() {
             self.suppress_auto_hyphens = other.suppress_auto_hyphens;
+        }
+        if other.kinsoku.is_some() {
+            self.kinsoku = other.kinsoku;
+        }
+        if other.word_wrap.is_some() {
+            self.word_wrap = other.word_wrap;
+        }
+        if other.overflow_punct.is_some() {
+            self.overflow_punct = other.overflow_punct;
+        }
+        if other.top_line_punct.is_some() {
+            self.top_line_punct = other.top_line_punct;
+        }
+        if other.auto_space_de.is_some() {
+            self.auto_space_de = other.auto_space_de;
+        }
+        if other.auto_space_dn.is_some() {
+            self.auto_space_dn = other.auto_space_dn;
+        }
+        if other.snap_to_grid.is_some() {
+            self.snap_to_grid = other.snap_to_grid;
         }
         if other.bidi.is_some() {
             self.bidi = other.bidi;
@@ -1739,15 +1820,15 @@ fn ppr_slot_for_name(local: &[u8]) -> u8 {
         b"shd" => PPR_SHADING_SLOT,
         b"tabs" => PPR_TABS_SLOT,
         b"suppressAutoHyphens" => PPR_SUPPRESS_HYPHENS_SLOT,
-        b"kinsoku" => 12,
-        b"wordWrap" => 13,
-        b"overflowPunct" => 14,
-        b"topLinePunct" => 15,
-        b"autoSpaceDE" => 16,
-        b"autoSpaceDN" => 17,
+        b"kinsoku" => PPR_KINSOKU_SLOT,
+        b"wordWrap" => PPR_WORD_WRAP_SLOT,
+        b"overflowPunct" => PPR_OVERFLOW_PUNCT_SLOT,
+        b"topLinePunct" => PPR_TOP_LINE_PUNCT_SLOT,
+        b"autoSpaceDE" => PPR_AUTO_SPACE_DE_SLOT,
+        b"autoSpaceDN" => PPR_AUTO_SPACE_DN_SLOT,
         b"bidi" => PPR_BIDI_SLOT,
         b"adjustRightInd" => PPR_ADJUST_RIGHT_IND_SLOT,
-        b"snapToGrid" => 20,
+        b"snapToGrid" => PPR_SNAP_TO_GRID_SLOT,
         b"spacing" => PPR_SPACING_SLOT,
         b"ind" => PPR_INDENT_SLOT,
         b"contextualSpacing" => PPR_CONTEXTUAL_SPACING_SLOT,
@@ -1792,6 +1873,13 @@ fn ppr_modeled_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
             | b"shd"
             | b"tabs"
             | b"suppressAutoHyphens"
+            | b"kinsoku"
+            | b"wordWrap"
+            | b"overflowPunct"
+            | b"topLinePunct"
+            | b"autoSpaceDE"
+            | b"autoSpaceDN"
+            | b"snapToGrid"
             | b"bidi"
             | b"adjustRightInd"
             | b"spacing"
@@ -1815,7 +1903,14 @@ fn ppr_modeled_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
 
 /// The `w:pPr` toggles that retain their source element as an attribute
 /// carrier, so an unowned attribute survives being modeled.
-const PPR_MODELED_TOGGLES: [(&[u8], u8); 6] = [
+const PPR_MODELED_TOGGLES: [(&[u8], u8); 13] = [
+    (b"kinsoku", PPR_KINSOKU_SLOT),
+    (b"wordWrap", PPR_WORD_WRAP_SLOT),
+    (b"overflowPunct", PPR_OVERFLOW_PUNCT_SLOT),
+    (b"topLinePunct", PPR_TOP_LINE_PUNCT_SLOT),
+    (b"autoSpaceDE", PPR_AUTO_SPACE_DE_SLOT),
+    (b"autoSpaceDN", PPR_AUTO_SPACE_DN_SLOT),
+    (b"snapToGrid", PPR_SNAP_TO_GRID_SLOT),
     (b"bidi", PPR_BIDI_SLOT),
     (b"suppressLineNumbers", PPR_SUPPRESS_LINE_NUMBERS_SLOT),
     (b"adjustRightInd", PPR_ADJUST_RIGHT_IND_SLOT),
@@ -1839,6 +1934,13 @@ fn ppr_toggle_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
 
 fn ppr_toggle_field_mut(ppr: &mut CT_PPr, slot: u8) -> Option<&mut Option<bool>> {
     match slot {
+        PPR_KINSOKU_SLOT => Some(&mut ppr.kinsoku),
+        PPR_WORD_WRAP_SLOT => Some(&mut ppr.word_wrap),
+        PPR_OVERFLOW_PUNCT_SLOT => Some(&mut ppr.overflow_punct),
+        PPR_TOP_LINE_PUNCT_SLOT => Some(&mut ppr.top_line_punct),
+        PPR_AUTO_SPACE_DE_SLOT => Some(&mut ppr.auto_space_de),
+        PPR_AUTO_SPACE_DN_SLOT => Some(&mut ppr.auto_space_dn),
+        PPR_SNAP_TO_GRID_SLOT => Some(&mut ppr.snap_to_grid),
         PPR_BIDI_SLOT => Some(&mut ppr.bidi),
         PPR_SUPPRESS_LINE_NUMBERS_SLOT => Some(&mut ppr.suppress_line_numbers),
         PPR_ADJUST_RIGHT_IND_SLOT => Some(&mut ppr.adjust_right_ind),
@@ -1854,6 +1956,13 @@ fn ppr_toggle_field_mut(ppr: &mut CT_PPr, slot: u8) -> Option<&mut Option<bool>>
 /// toggle is always present, so every other retained child is unaffected.
 fn ppr_modeled_toggle_present(ppr: &CT_PPr, slot: u8) -> bool {
     match slot {
+        PPR_KINSOKU_SLOT => ppr.kinsoku.is_some(),
+        PPR_WORD_WRAP_SLOT => ppr.word_wrap.is_some(),
+        PPR_OVERFLOW_PUNCT_SLOT => ppr.overflow_punct.is_some(),
+        PPR_TOP_LINE_PUNCT_SLOT => ppr.top_line_punct.is_some(),
+        PPR_AUTO_SPACE_DE_SLOT => ppr.auto_space_de.is_some(),
+        PPR_AUTO_SPACE_DN_SLOT => ppr.auto_space_dn.is_some(),
+        PPR_SNAP_TO_GRID_SLOT => ppr.snap_to_grid.is_some(),
         PPR_BIDI_SLOT => ppr.bidi.is_some(),
         PPR_SUPPRESS_LINE_NUMBERS_SLOT => ppr.suppress_line_numbers.is_some(),
         PPR_ADJUST_RIGHT_IND_SLOT => ppr.adjust_right_ind.is_some(),

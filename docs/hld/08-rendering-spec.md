@@ -680,7 +680,47 @@ nothing so the default applies.
 `w:outline`, `w:shadow`, `w:emboss`, `w:imprint`, `w:bdr`, `w:kern`, and
 `w:fitText` are modeled, authored, and round-tripped, and their render
 projection is the remaining work on DOCX-032. `w:em`, `w:eastAsianLayout`,
-`w:snapToGrid`, and `w:cs` rendering belongs to DOCX-033.
+`w:snapToGrid`, and `w:cs` render under DOCX-033.
+
+**The section character grid.** A `w:sectPr/w:docGrid` of type `lines`,
+`linesAndChars` or `snapToChars` puts line advance on `w:linePitch`, so a line
+takes the whole number of grid rows its natural height needs. The last two
+types also add `w:charSpace` to every advance of a run's own text, on the same
+step that applies the run's own `w:spacing`. A numbering marker, a `w:sym`
+glyph and a `w:noBreakHyphen` keep their own advance, exactly as they already
+do for `w:spacing`, and so does a `w:ruby` annotation line, which is measured
+against its own base rather than against the grid. The `default` type, and an
+absent grid, take the ungridded branch with no new arithmetic on it, which is
+what leaves every existing document's advance untouched. A paragraph that sets
+`w:snapToGrid w:val="0"` leaves the grid, and so does a run that sets it. The
+grid belongs to the section's body flow. Headers, footers and note text are
+page furniture laid out against their own measure and stay off it.
+
+**The East Asian paragraph toggles.** `w:kinsoku` and `w:wordWrap` are modeled
+and authored, and at their default on value the UAX#14 line breaker already
+does what they ask: it refuses to start a line with East Asian closing
+punctuation, refuses to end one with an opening bracket, and breaks a Latin
+word only at a break opportunity. `w:topLinePunct` is modeled and authored and
+defaults to off, which asks for nothing. `w:overflowPunct`,
+`w:autoSpaceDE` and `w:autoSpaceDN` are modeled and authored and their default
+hanging punctuation and inter-script spacing are not applied, which is the
+remaining metric work the DOCX-033 row records.
+
+**`w:eastAsianLayout`.** One base-character advance is one em of the run's own
+size, which is the character cell ECMA's two-lines-in-one fits a run into. It
+is deliberately not the run's first shaped advance, because shaping returns
+visual order and a run that begins with a space would collapse into the space.
+`w:combine` compresses the run into one such advance, inside the bracket pair
+`w:combineBrackets` names, drawn from the ASCII inventory every bundled face
+carries. `w:vert` rotates the run 90 degrees within its line, so the run's own
+line height becomes the advance it takes and its text length becomes the height
+it needs, and `w:vertCompress` narrows that advance to one base character,
+never widening it. A run that sets both this and `w:em` takes this, because
+combining and rotating change the run's advance while an emphasis mark
+decorates it, and `w:combine` wins over `w:vert` when a run sets both. A
+combined or rotated run becomes one annotation group, so it keeps its source
+provenance and loses its hyperlink annotation and note reference, which is the
+limit an emphasis-marked run already carries.
 
 Slide-number fields substitute the one-based `PageFrame` number before text
 shaping and carry `FieldKind::Page` into the emitted glyph run. An untyped field
@@ -720,6 +760,34 @@ direction.
 Each table origin draws its fill before its text. The table's unique border
 segments draw after all cell fills and text so a neighbouring fill cannot cover
 them. Table cells do not use the shape autofit algorithm.
+
+**Vertical Word text.** `w:tcPr/w:textDirection` and `w:sectPr/w:textDirection`
+lower onto the same transposed box and `Group` rotation the shape path uses.
+`lrTb` is the horizontal path, unchanged and with no group. `tbRl` and `tbRlV`
+rotate 90 degrees, and `btLr`, `lrTbV` and `tbLrV` rotate -90. Upright stacked
+East Asian text is out of scope, stays visible as rotated text, and records
+`east Asian vertical text rendered as rotated vertical text`, which is the
+fallback the shape path already documents. A rotated cell lays its content out
+in the transposed box, so the measure runs down the cell. A row that declares a
+height gives that measure exactly. An auto-height row has no height until its
+content produces one, so the cell lays out unwrapped, bounded at ten thousand
+points, and the row becomes the length the text produced. That length, not the
+stacked line height, is what the cell contributes to the row. Measuring an
+auto-height rotated cell at its column width instead would wrap it on the
+stacking axis, and the stack would then be wider than the column. Past the
+bound the stack does grow past the column, the way an over-wide horizontal cell
+overflows its own.
+
+A vertical section transposes the body band about its own centre before the
+flow fills it and rotates the painted band back about that same centre. Margin
+line numbers label body lines and rotate with the band. Headers, footers,
+notes and page borders are placed after the rotation and stay upright, and so
+are a rotated cell's change bar and anchored drawings, which take the cell's
+own upright row band and draw one bar for the whole cell. A vertical section
+fills one band, so its column tracks are dropped and
+`vertical section text is laid out in one column track` is recorded. Composing
+the two would transpose each track about its own centre while the page rotates
+about one, which is a wrong picture rather than a missing one.
 
 Right-to-left tables reverse visual column placement without changing logical
 cell ownership. Both grammars satisfy that sentence. The DrawingML `a:tbl`

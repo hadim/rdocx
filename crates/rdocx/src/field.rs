@@ -7981,6 +7981,7 @@ fn empty_section_properties() -> CT_SectPr {
         line_numbers: None,
         vertical_alignment: None,
         text_direction: None,
+        doc_grid: None,
         title_pg: None,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),

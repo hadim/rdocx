@@ -133,6 +133,12 @@ pub struct PageGeometry {
     /// The gutter is already folded into the inside margin when this is set,
     /// so the swap alone puts it on the binding edge of either page.
     pub mirror_margins: bool,
+    /// Degrees the section's body band rotates for `w:sectPr/w:textDirection`.
+    ///
+    /// `None` is the horizontal section, which keeps the band and the
+    /// arithmetic it always had. F-269 authors and preserves the property, and
+    /// this is the render projection over it.
+    pub body_rotation: Option<f64>,
 }
 
 impl PageGeometry {
@@ -155,6 +161,18 @@ impl PageGeometry {
     /// Content area height.
     pub fn content_height(&self) -> f64 {
         self.page_height - self.margin_top - self.margin_bottom
+    }
+
+    /// The measure body blocks are broken at.
+    ///
+    /// A section whose `w:textDirection` is vertical lays its body out in a
+    /// same-centre transposed box, so the measure runs down the page instead
+    /// of across it. Every other section takes `content_width` unchanged.
+    pub fn body_measure(&self) -> f64 {
+        match self.body_rotation {
+            Some(_) => self.content_height(),
+            None => self.content_width(),
+        }
     }
 
     /// The same page with its column tracks removed.
@@ -185,6 +203,7 @@ impl Default for PageGeometry {
             line_numbers: None,
             vertical_alignment: None,
             mirror_margins: false,
+            body_rotation: None,
         }
     }
 }
@@ -1058,6 +1077,7 @@ impl<'a> Pager<'a> {
     fn apply_active_track(&mut self) {
         let Some(track) = self.tracks.get(self.track_index).copied() else {
             self.geometry = self.page_geometry.clone();
+            self.transpose_body_band();
             return;
         };
         self.geometry = PageGeometry {
@@ -1066,6 +1086,33 @@ impl<'a> Pager<'a> {
             columns: vec![track],
             ..self.page_geometry.clone()
         };
+        self.transpose_body_band();
+    }
+
+    /// Swap the body band about its own centre for a vertical section.
+    ///
+    /// The band is the box the flow fills, so transposing it here is what
+    /// makes the paginator break lines down the page. Painting rotates the
+    /// result back about the same centre. A horizontal section returns before
+    /// touching anything.
+    fn transpose_body_band(&mut self) {
+        if self.geometry.body_rotation.is_none() {
+            return;
+        }
+        let (x, y, width, height) = crate::table::transposed_box(
+            self.geometry.margin_left,
+            self.geometry.margin_top,
+            self.geometry.text_measure(),
+            self.geometry.content_height(),
+        );
+        self.geometry.margin_left = x;
+        self.geometry.margin_right = self.geometry.page_width - x - width;
+        self.geometry.margin_top = y;
+        self.geometry.margin_bottom = self.geometry.page_height - y - height;
+        // The transposed band is one track. A column track of the untransposed
+        // band no longer describes it.
+        self.geometry.columns = Vec::new();
+        self.content_height = height;
     }
 
     /// Move the body into the next column track of this page.
@@ -1222,6 +1269,23 @@ impl<'a> Pager<'a> {
         if width <= 0.0 || height <= 0.0 {
             return;
         }
+        // A fragment is a page-space rectangle that comment anchors and float
+        // keep-out bands are resolved against outside layout. A vertical
+        // section places blocks in the transposed band, so the rectangle is
+        // mapped through the same rotation the painted band takes and
+        // recorded as the axis-aligned box it covers on the page.
+        let (x, y, width, height) = match self.body_rotation_transform() {
+            Some(transform) => {
+                let rect = transform.transform_rect_bbox(Rect {
+                    x,
+                    y,
+                    width,
+                    height,
+                });
+                (rect.x, rect.y, rect.width, rect.height)
+            }
+            None => (x, y, width, height),
+        };
         if let Some((previous_body, previous)) = self.body_fragments.last_mut()
             && *previous_body == body_index
             && previous.physical_page == self.page_number
@@ -1660,7 +1724,11 @@ impl<'a> Pager<'a> {
             children.push(PositionedElement::Text(GlyphRun {
                 origin: Point {
                     x: line.track_x - numbering.distance - shaped.width,
-                    y: self.page_geometry.margin_top + line.baseline,
+                    // The baseline and the track were both recorded against
+                    // the body band, so the top margin comes from the band
+                    // too. For every section but a vertical one the band's
+                    // top margin is the page's, so nothing moves.
+                    y: self.geometry.margin_top + line.baseline,
                 },
                 font_id,
                 font_size: LINE_NUMBER_FONT_SIZE,
@@ -1727,6 +1795,43 @@ impl<'a> Pager<'a> {
             .chain(self.behind_elements.iter_mut())
         {
             translate_element_tree(element, 0.0, dy);
+        }
+    }
+
+    /// The transform a vertical section's body band is painted through.
+    ///
+    /// The band was laid out transposed about its own centre, so rotating
+    /// about that same centre lands it back on the page. `None` is the
+    /// horizontal section, which is painted where it was laid out.
+    fn body_rotation_transform(&self) -> Option<Transform> {
+        let degrees = self.page_geometry.body_rotation?;
+        Some(Transform::rotate_about(
+            degrees,
+            self.page_geometry.margin_left + self.page_geometry.text_measure() / 2.0,
+            self.page_geometry.margin_top + self.page_geometry.content_height() / 2.0,
+        ))
+    }
+
+    /// Rotate the painted body band for a vertical section.
+    ///
+    /// Notes, headers, footers and page borders are placed after this and stay
+    /// upright, and so do a cell's change bars and anchored drawings.
+    fn apply_body_rotation(&mut self) {
+        let Some(transform) = self.body_rotation_transform() else {
+            return;
+        };
+        for elements in [&mut self.elements, &mut self.behind_elements] {
+            if elements.is_empty() {
+                continue;
+            }
+            let children = std::mem::take(elements);
+            elements.push(PositionedElement::Group(GroupElement {
+                transform,
+                clip: None,
+                opacity: 1.0,
+                effects: Vec::new(),
+                children,
+            }));
         }
     }
 
@@ -1823,6 +1928,7 @@ impl<'a> Pager<'a> {
         // so they are placed after.
         self.draw_line_numbers();
         self.apply_vertical_alignment();
+        self.apply_body_rotation();
         self.place_page_notes();
         let mut all_elements = Vec::new();
         // A frame with `w:zOrder="back"` goes down before anything else, and
@@ -2763,6 +2869,20 @@ fn reflow_around_wraps(
             return None;
         };
         lines = reflowed;
+        // The re-break went through the generic line breaker, which knows
+        // nothing about the section grid, so the snap is applied again over
+        // its result. It runs inside the loop, so the second pass reserves
+        // against the heights the first will actually paint. Snapping an
+        // already-snapped height leaves it where it is. A paragraph off the
+        // grid carries no pitch and is untouched.
+        if let Some(pitch) = reflow.grid_line_pitch_pt.filter(|pitch| *pitch > 0.0) {
+            for line in &mut lines {
+                let rows = (line.height / pitch - crate::convert::GRID_ROW_TOLERANCE)
+                    .ceil()
+                    .max(1.0);
+                line.height = pitch * rows;
+            }
+        }
         offset_top = next_offset_top;
     }
 
@@ -4212,22 +4332,43 @@ fn render_table_row(
 
         let content_element_start = elements.len();
         let behind_element_start = behind_elements.len();
+        // A change bar is drawn at the page margin and an anchored drawing
+        // resolves against a page frame, so both are page furniture. They are
+        // collected apart from the cell's own content and appended after the
+        // rotation below, or a rotated cell would carry them off the page.
+        let mut cell_furniture = Vec::new();
+        let mut behind_furniture = Vec::new();
+        let mut change_bar_drawn = false;
+        // The cell's own upright band, built once for a rotated cell.
+        let upright_band = cell.rotation.map(|_| PageGeometry {
+            margin_left: cell_x + cell.margin_left,
+            margin_right: 0.0,
+            page_width: cell_x + cell.width - cell.margin_right,
+            ..geometry.without_columns()
+        });
 
         let content_height = cell
             .blocks
             .iter()
             .map(crate::table::CellBlock::total_height)
             .sum::<f64>();
+        // A rotated cell is laid out in a same-centre transposed box and the
+        // result is rotated back over the cell. A horizontal cell's box is the
+        // cell itself, so it keeps the arithmetic it always had.
+        let (box_x, box_y, box_width, box_height) = match cell.rotation {
+            Some(_) => crate::table::transposed_box(cell_x, row_y, cell.width, paint_height),
+            None => (cell_x, row_y, cell.width, paint_height),
+        };
         let v_offset = match cell.v_align {
             Some(rdocx_oxml::table::ST_VerticalJc::Center) => {
-                ((paint_height - cell.margin_top - content_height) / 2.0).max(0.0)
+                ((box_height - cell.margin_top - content_height) / 2.0).max(0.0)
             }
             Some(rdocx_oxml::table::ST_VerticalJc::Bottom) => {
-                (paint_height - cell.margin_top - content_height).max(0.0)
+                (box_height - cell.margin_top - content_height).max(0.0)
             }
             _ => 0.0,
         };
-        let mut content_y = row_y - geometry.margin_top + cell.margin_top + v_offset;
+        let mut content_y = box_y - geometry.margin_top + cell.margin_top + v_offset;
         for (block_index, block) in cell.blocks.iter().enumerate() {
             let block_semantics = cell_semantics.and_then(|cell| cell.blocks.get(block_index));
             match block {
@@ -4237,9 +4378,9 @@ fn render_table_row(
                         _ => None,
                     };
                     let cell_geometry = PageGeometry {
-                        margin_left: cell_x + cell.margin_left,
+                        margin_left: box_x + cell.margin_left,
                         margin_right: 0.0,
-                        page_width: cell_x + cell.width - cell.margin_right,
+                        page_width: box_x + box_width - cell.margin_right,
                         ..geometry.without_columns()
                     };
                     render_paragraph_lines(
@@ -4258,31 +4399,68 @@ fn render_table_row(
                         elements,
                         media,
                     );
+                    // A horizontal cell keeps the interleaved painted order
+                    // and the frame it always had. A rotated cell's change bar
+                    // and anchored drawings are page furniture that must not
+                    // turn with the text, so they are collected apart and
+                    // placed against the cell's own upright row band rather
+                    // than against the transposed box the text was laid out
+                    // in. That band is the only page-space statement of where
+                    // the cell is.
+                    let rotated = cell.rotation.is_some();
+                    let (anchor_front, anchor_behind): (
+                        &mut Vec<PositionedElement>,
+                        &mut Vec<PositionedElement>,
+                    ) = if rotated {
+                        (&mut cell_furniture, &mut behind_furniture)
+                    } else {
+                        (elements, behind_elements)
+                    };
+                    // The upright band is built once per rotated cell rather
+                    // than per paragraph, and a horizontal cell borrows the
+                    // geometry it already built instead of cloning it.
+                    let (furniture_y, furniture_height) = if rotated {
+                        (
+                            row_y - geometry.margin_top + cell.margin_top,
+                            (paint_height - cell.margin_top - cell.margin_bottom).max(0.0),
+                        )
+                    } else {
+                        (content_y, paragraph.content_height())
+                    };
+                    let furniture_geometry = upright_band.as_ref().unwrap_or(&cell_geometry);
                     place_cell_anchored(
                         &paragraph.anchored,
                         geometry,
-                        &cell_geometry,
-                        content_y,
+                        furniture_geometry,
+                        furniture_y,
                         paragraph.indent_left,
-                        elements,
-                        behind_elements,
+                        anchor_front,
+                        anchor_behind,
                         media,
                     );
-                    render_change_bar(
-                        paragraph,
-                        content_y,
-                        paragraph.content_height(),
-                        geometry,
-                        page_number,
-                        elements,
-                    );
+                    // A rotated cell's bar spans the whole row band, so it is
+                    // drawn once however many revised paragraphs the cell
+                    // holds. The flag records that a bar was drawn, not that a
+                    // paragraph was seen, or an unrevised first paragraph
+                    // would suppress the bar of a revised second one.
+                    if !rotated || !change_bar_drawn {
+                        render_change_bar(
+                            paragraph,
+                            furniture_y,
+                            furniture_height,
+                            geometry,
+                            page_number,
+                            anchor_front,
+                        );
+                        change_bar_drawn |= rotated && paragraph.has_visible_revision;
+                    }
                 }
                 crate::table::CellBlock::Table(table) => {
                     let semantics = match block_semantics {
                         Some(CellBlockSemantics::Table(semantics)) => Some(semantics),
                         _ => None,
                     };
-                    let nested_x = cell_x + cell.margin_left + table.table_indent;
+                    let nested_x = box_x + cell.margin_left + table.table_indent;
                     let mut nested_y = geometry.margin_top + content_y;
                     for (nested_row_index, nested_row) in table.rows.iter().enumerate() {
                         render_table_row(
@@ -4305,6 +4483,32 @@ fn render_table_row(
             }
             content_y += block.total_height();
         }
+        // Rotate the cell's painted content about the box centre, which is
+        // the cell centre, so the transposed layout lands back in the cell.
+        if let Some(degrees) = cell.rotation {
+            let transform = Transform::rotate_about(
+                degrees,
+                cell_x + cell.width / 2.0,
+                row_y + paint_height / 2.0,
+            );
+            let rotate = |source: &mut Vec<PositionedElement>, start: usize| {
+                let children = source.split_off(start);
+                if !children.is_empty() {
+                    source.push(PositionedElement::Group(GroupElement {
+                        transform,
+                        clip: None,
+                        opacity: 1.0,
+                        effects: Vec::new(),
+                        children,
+                    }));
+                }
+            };
+            rotate(elements, content_element_start);
+            rotate(behind_elements, behind_element_start);
+        }
+        elements.append(&mut cell_furniture);
+        behind_elements.append(&mut behind_furniture);
+
         if cell.clip_content {
             let clip = Some(Path::rect(Rect {
                 x: cell_x,
@@ -4811,6 +5015,7 @@ mod tests {
         paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
             items: reflow_items,
             params,
+            grid_line_pitch_pt: None,
         }));
         let wrap = PlacedWrap {
             rect: Rect {
@@ -4895,6 +5100,7 @@ mod tests {
                 available_width: 468.0,
                 ..Default::default()
             },
+            grid_line_pitch_pt: None,
         }));
         let mut elements = Vec::new();
         render_paragraph_lines(
@@ -4981,6 +5187,7 @@ mod tests {
                 available_width: 468.0,
                 ..Default::default()
             },
+            grid_line_pitch_pt: None,
         }));
 
         let mut elements = Vec::new();
@@ -5071,6 +5278,7 @@ mod tests {
                     available_width: 468.0,
                     ..Default::default()
                 },
+                grid_line_pitch_pt: None,
             }));
             let semantics = ParagraphSemantics {
                 source_node: Some(source_node),
@@ -5173,6 +5381,7 @@ mod tests {
                 available_width: 468.0,
                 ..Default::default()
             },
+            grid_line_pitch_pt: None,
         }));
         let semantics = ParagraphSemantics {
             source_node: Some(rebound),
@@ -5303,6 +5512,7 @@ mod tests {
                     available_width: 468.0,
                     ..Default::default()
                 },
+                grid_line_pitch_pt: None,
             }));
             let mut elements = Vec::new();
             render_paragraph_lines(
@@ -5413,6 +5623,7 @@ mod tests {
                 available_width: 468.0,
                 ..Default::default()
             },
+            grid_line_pitch_pt: None,
         }));
 
         let mut elements = Vec::new();
@@ -5506,6 +5717,7 @@ mod tests {
                 available_width: 468.0,
                 ..Default::default()
             },
+            grid_line_pitch_pt: None,
         }));
 
         let mut elements = Vec::new();
@@ -6662,6 +6874,7 @@ mod tests {
                 is_first_row: true,
                 is_last_row: true,
                 v_align: None,
+                rotation: None,
             }],
             height: 10.0,
             is_header: false,

@@ -25,7 +25,7 @@ use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
 use rdocx_oxml::document::{
-    BodyContent, CT_Column, CT_Columns, CT_Document, CT_LineNumber, CT_NoteProperties,
+    BodyContent, CT_Column, CT_Columns, CT_DocGrid, CT_Document, CT_LineNumber, CT_NoteProperties,
     CT_PageBorders, CT_PaperSource, CT_SectPr,
 };
 use rdocx_oxml::drawing::{
@@ -2802,6 +2802,11 @@ impl<'a> SectionRef<'a> {
         self.inner.text_direction.as_deref()
     }
 
+    /// Return this section's `w:docGrid` character grid.
+    pub fn doc_grid(&self) -> Option<&'a CT_DocGrid> {
+        self.inner.doc_grid.as_deref()
+    }
+
     /// Return the explicitly configured page-number restart.
     pub fn page_number_start(&self) -> Option<u32> {
         self.inner.page_number.as_ref()?.start
@@ -3115,6 +3120,21 @@ impl Section<'_> {
         self.inner.text_direction = Some(direction.to_owned());
     }
 
+    /// Return this section's `w:docGrid` character grid.
+    pub fn doc_grid(&self) -> Option<&CT_DocGrid> {
+        self.inner.doc_grid.as_deref()
+    }
+
+    /// Set or clear this section's `w:docGrid` character grid.
+    ///
+    /// A `default` grid, and an absent one, keep the ordinary line and
+    /// character metrics. `lines`, `linesAndChars` and `snapToChars` put line
+    /// advance on the grid pitch, and the last two put character advance on
+    /// the character space as well.
+    pub fn set_doc_grid(&mut self, grid: Option<CT_DocGrid>) {
+        self.inner.doc_grid = grid.map(Box::new);
+    }
+
     /// Return the explicitly configured page-number restart.
     pub fn page_number_start(&self) -> Option<u32> {
         self.inner.page_number.as_ref()?.start
@@ -3235,6 +3255,7 @@ fn empty_section_properties() -> CT_SectPr {
         line_numbers: None,
         vertical_alignment: None,
         text_direction: None,
+        doc_grid: None,
         title_pg: None,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),

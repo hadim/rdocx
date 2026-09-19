@@ -17003,12 +17003,12 @@ mod f269_section_page_semantics {
         }
     }
 
+    /// F-269 authors and preserves `w:sectPr/w:textDirection`. F-266c owns the
+    /// render projection over it, and asserts it in
+    /// `f266c_character_grid_and_vertical_text`, so this test states the
+    /// authoring contract and the round trip alone.
     #[test]
-    fn section_text_direction_round_trips_without_render_effect() {
-        let mut plain = Document::new();
-        plain.add_paragraph("body");
-        let before = page_records(&plain);
-
+    fn section_text_direction_round_trips_as_authored() {
         let mut document = Document::new();
         document.add_paragraph("body");
         document
@@ -17019,8 +17019,6 @@ mod f269_section_page_semantics {
             document.sections().next().unwrap().text_direction(),
             Some("tbRl")
         );
-        // F-266c owns the render projection, so nothing may move here.
-        assert_eq!(page_records(&document), before);
 
         let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
         assert_eq!(
@@ -18798,6 +18796,7 @@ mod advanced_table_authoring_and_geometry {
             &mut fonts,
             &mut numbering,
             &mut diagnostics,
+            None,
         )
         .expect("table lays out")
     }
@@ -19637,7 +19636,7 @@ mod f266b_ruby_and_emphasis_typography {
     /// groups, because the canonical serialisation walks the element tree
     /// rather than the top level. The serialisation is the one F-266a
     /// documents, and it is host-stable for the same reasons.
-    const RUBY_AND_EMPHASIS_GEOMETRY_DIGEST: &str =
+    pub(super) const RUBY_AND_EMPHASIS_GEOMETRY_DIGEST: &str =
         "b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6";
 
     /// Wrap producer body XML in a package a `Document` can open.
@@ -19697,7 +19696,7 @@ mod f266b_ruby_and_emphasis_typography {
 
     /// One page carrying ruby-annotated Japanese, emphasis-marked Japanese
     /// and Korean, and a Latin control, all authored through the facade.
-    fn ruby_and_emphasis_document() -> Document {
+    pub(super) fn ruby_and_emphasis_document() -> Document {
         let mut document = Document::new();
 
         let mut latin = document.add_paragraph("");
@@ -20360,5 +20359,1083 @@ mod floating_table_placement_and_wrap {
         let float = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
         assert_eq!(indented(Some(float)), MARGIN_LEFT);
         assert_eq!(indented(None), MARGIN_LEFT + 72.0);
+    }
+}
+
+/// F-266c, the East Asian character grid and vertical text.
+///
+/// The gate is a recorded geometry digest over a deterministic page carrying a
+/// gridded Japanese section, a table with rotated and horizontal cells, and a
+/// combined run. It uses no rasteriser and no external oracle, because what is
+/// under test is glyph identity, placement, rotation and painted order, all of
+/// which the layout result already states exactly.
+///
+/// The serialisation this module records is F-266a's with the accumulated
+/// group transform added, because a rotation is invisible in a glyph run's own
+/// group-local origin and this story's whole subject is rotation.
+///
+/// Both sibling digests are asserted unmoved in the same module, so this story
+/// cannot quietly move F-266a's or F-266b's recorded baseline while recording
+/// its own.
+mod f266c_character_grid_and_vertical_text {
+    use super::f266a_mixed_script_typography::{
+        MIXED_SCRIPT_GEOMETRY_DIGEST, canonical_geometry, digest, mixed_script_document,
+    };
+    use super::f266b_ruby_and_emphasis_typography::{
+        RUBY_AND_EMPHASIS_GEOMETRY_DIGEST, ruby_and_emphasis_document,
+    };
+    use super::*;
+    use oxml_layout::{PositionedElement, Transform};
+    use rdocx::table::CellTextDirection;
+    use rdocx::{CT_DocGrid, CT_EastAsianLayout, RunFontSlot, ST_DocGrid, ST_Em};
+    use rdocx_oxml::units::Twips;
+
+    const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    const GRIDDED_JAPANESE: &str = "こんにちは世界";
+    const COMBINED: &str = "世界";
+    const VERTICAL_CELL: &str = "縦書き";
+    const HORIZONTAL_CELL: &str = "Across";
+    const LATIN_CONTROL: &str = "Grid and vertical page";
+    const ROTATED_RUN: &str = "縦書き";
+    /// One character of `ROTATED_RUN`. Shaping splits East Asian text at every
+    /// character, so a whole-string match would find nothing.
+    const ROTATED_GLYPH: &str = "縦";
+
+    /// The recorded geometry of the gridded and vertical page.
+    ///
+    /// Re-record only with a stated reason. It covers every painted run on the
+    /// page in paint order with the properties F-266a's serialisation records,
+    /// and the six coefficients of the transform that maps the run into page
+    /// space, which is what makes a lost or altered rotation fail here.
+    const GRID_AND_VERTICAL_GEOMETRY_DIGEST: &str =
+        "cb3043d53719f5dd9e16b61a001aff8c8827c19f96536972d4a17b9a626d2164";
+
+    /// One coordinate, with the sign of zero normalised, as F-266a documents.
+    fn number(value: f64) -> String {
+        format!("{:.4}", if value == 0.0 { 0.0 } else { value })
+    }
+
+    /// F-266a's canonical serialisation, plus the transform each run carries.
+    fn canonical_rotated_geometry(result: &rdocx_layout::WordLayoutResult) -> String {
+        let mut lines = Vec::new();
+        for (page_index, page) in result.layout.pages.iter().enumerate() {
+            let mut paint_index = 0usize;
+            oxml_layout::walk(&page.elements, &mut |element, transform| {
+                let text = match element {
+                    PositionedElement::Text(run) => run.text.clone(),
+                    PositionedElement::MultilingualText(run) => run.logical_text.clone(),
+                    _ => return,
+                };
+                let origin = match element {
+                    PositionedElement::Text(run) => run.origin,
+                    PositionedElement::MultilingualText(run) => run.origin,
+                    _ => return,
+                };
+                lines.push(format!(
+                    "page={page_index} paint={paint_index} text={text} \
+                     origin={},{} transform={},{},{},{},{},{}",
+                    number(origin.x),
+                    number(origin.y),
+                    number(transform.a),
+                    number(transform.b),
+                    number(transform.c),
+                    number(transform.d),
+                    number(transform.e),
+                    number(transform.f),
+                ));
+                paint_index += 1;
+            });
+        }
+        lines.join("\n")
+    }
+
+    /// Every painted string on the page, in paint order.
+    fn painted(result: &rdocx_layout::WordLayoutResult) -> Vec<String> {
+        let mut painted = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                PositionedElement::Text(run) if !run.text.trim().is_empty() => {
+                    painted.push(run.text.clone());
+                }
+                PositionedElement::MultilingualText(run) if !run.logical_text.trim().is_empty() => {
+                    painted.push(run.logical_text.clone());
+                }
+                _ => {}
+            });
+        }
+        painted
+    }
+
+    /// The page-space x the painted run carrying `text` starts at.
+    ///
+    /// A run placed after another one starts where its predecessor's advance
+    /// ended, so this is how far the run before it reached along the line.
+    fn painted_origin_x(result: &rdocx_layout::WordLayoutResult, text: &str) -> f64 {
+        let mut found = None;
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, transform| {
+                let origin = match element {
+                    PositionedElement::Text(run) if run.text.contains(text) => run.origin,
+                    PositionedElement::MultilingualText(run) if run.logical_text.contains(text) => {
+                        run.origin
+                    }
+                    _ => return,
+                };
+                if found.is_none() {
+                    found = Some(transform.apply(origin).x);
+                }
+            });
+        }
+        found.unwrap_or_else(|| panic!("{text} reaches the page"))
+    }
+
+    /// The transform every painted run carrying `text` reached the page with.
+    fn transforms_for(result: &rdocx_layout::WordLayoutResult, text: &str) -> Vec<Transform> {
+        let mut found = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, transform| {
+                let matches = match element {
+                    PositionedElement::Text(run) => run.text.contains(text),
+                    PositionedElement::MultilingualText(run) => run.logical_text.contains(text),
+                    _ => false,
+                };
+                if matches {
+                    found.push(*transform);
+                }
+            });
+        }
+        found
+    }
+
+    /// Wrap producer body XML in a package a `Document` can open.
+    fn producer_body(body: &str) -> Vec<u8> {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body>{body}<w:sectPr/></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
+
+    /// A `linesAndChars` grid, the type that puts both axes on the grid.
+    fn lines_and_chars_grid() -> CT_DocGrid {
+        CT_DocGrid {
+            grid_type: Some(ST_DocGrid::LinesAndChars),
+            line_pitch: Some(Twips(360)),
+            char_space: Some(120),
+            extra_attributes: Vec::new(),
+        }
+    }
+
+    /// One page holding a gridded Japanese section, a table with a rotated
+    /// cell on each side of a horizontal control, a combined run and a Latin
+    /// control, all authored through the public facade.
+    fn grid_and_vertical_document() -> Document {
+        let mut document = Document::new();
+
+        let mut latin = document.add_paragraph("");
+        latin
+            .add_run(LATIN_CONTROL)
+            .font("Carlito")
+            .language("en-US");
+
+        let mut japanese = document.add_paragraph("");
+        {
+            let mut run = japanese.add_run(GRIDDED_JAPANESE);
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+        }
+
+        let mut combined = document.add_paragraph("");
+        {
+            let mut run = combined.add_run(COMBINED);
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+            run.set_east_asian_layout_value(Some(CT_EastAsianLayout {
+                combine: Some(true),
+                combine_brackets: Some("round".to_owned()),
+                ..CT_EastAsianLayout::default()
+            }));
+        }
+
+        {
+            let mut table = document.add_table(1, 3);
+            for (column, direction, text) in [
+                (0, CellTextDirection::TopToBottomRightToLeft, VERTICAL_CELL),
+                (
+                    1,
+                    CellTextDirection::LeftToRightTopToBottom,
+                    HORIZONTAL_CELL,
+                ),
+                (2, CellTextDirection::BottomToTopLeftToRight, VERTICAL_CELL),
+            ] {
+                let mut cell = table.cell(0, column).expect("authored cell");
+                cell.set_text_direction(Some(direction));
+                cell.set_text(text);
+                let mut paragraph = cell.paragraph_mut(0).expect("cell paragraph");
+                let mut run = paragraph.run_mut(0).expect("cell run");
+                run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+                run.set_slot_font(RunFontSlot::Ascii, Some("Carlito"));
+            }
+        }
+
+        document
+            .section_mut(0)
+            .expect("final section")
+            .set_doc_grid(Some(lines_and_chars_grid()));
+
+        document
+    }
+
+    /// **The test gate.** The gridded and vertical page keeps its recorded
+    /// geometry and its reading order, and both siblings' pages are unmoved.
+    #[test]
+    fn grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order() {
+        let mut document = grid_and_vertical_document();
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic grid and vertical layout");
+        assert_eq!(result.layout.pages.len(), 1, "the fixture is one page");
+
+        // Shaping splits a run at every break opportunity, so containment is
+        // asserted over the whole painted page rather than one painted run.
+        let painted = painted(&result);
+        let whole = painted.concat();
+        for text in [LATIN_CONTROL, GRIDDED_JAPANESE, HORIZONTAL_CELL] {
+            assert!(whole.contains(text), "{text} reaches the page: {painted:?}");
+        }
+        assert_eq!(
+            whole.matches(VERTICAL_CELL).count(),
+            2,
+            "both rotated cells paint their text: {painted:?}"
+        );
+
+        // The rotated cells reach the page through a rotation, and the
+        // horizontal control does not. Shaping splits the vertical cell's
+        // text at every East Asian break opportunity, so the transforms are
+        // collected on one of its characters rather than the whole string.
+        let rotated = transforms_for(&result, "縦");
+        assert_eq!(
+            rotated.len(),
+            2,
+            "both rotated cells reach the page: {rotated:?}"
+        );
+        for transform in &rotated {
+            assert!(
+                !transform.is_identity(),
+                "a rotated cell carries a transform: {transform:?}"
+            );
+        }
+        let horizontal = transforms_for(&result, HORIZONTAL_CELL);
+        assert_eq!(horizontal.len(), 1, "the horizontal control paints once");
+        for transform in &horizontal {
+            assert!(
+                transform.is_identity(),
+                "the horizontal control keeps the untransformed path: {transform:?}"
+            );
+        }
+
+        // Rotation and combining are painting concerns. The saved bytes stay
+        // logical, and the cell text comes back in grid order.
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened
+                .paragraphs()
+                .iter()
+                .map(|paragraph| paragraph.text())
+                .collect::<Vec<_>>(),
+            vec![LATIN_CONTROL, GRIDDED_JAPANESE, COMBINED]
+        );
+        let tables = reopened.tables();
+        let table = tables.first().expect("the authored table");
+        assert_eq!(
+            (0..3)
+                .map(|column| table.cell(0, column).expect("cell").text())
+                .collect::<Vec<_>>(),
+            vec![VERTICAL_CELL, HORIZONTAL_CELL, VERTICAL_CELL]
+        );
+
+        let geometry = canonical_rotated_geometry(&result);
+        assert_eq!(
+            digest(&geometry),
+            GRID_AND_VERTICAL_GEOMETRY_DIGEST,
+            "grid and vertical page geometry moved:\n{geometry}"
+        );
+
+        // Both siblings' pages are measured again here, so this story cannot
+        // move either recorded baseline without failing.
+        let mixed = mixed_script_document()
+            .layout_deterministic()
+            .expect("deterministic mixed-script layout");
+        assert_eq!(
+            digest(&canonical_geometry(&mixed)),
+            MIXED_SCRIPT_GEOMETRY_DIGEST,
+            "F-266a's recorded geometry moved"
+        );
+        let ruby = ruby_and_emphasis_document()
+            .layout_deterministic()
+            .expect("deterministic ruby and emphasis layout");
+        assert_eq!(
+            digest(&canonical_geometry(&ruby)),
+            RUBY_AND_EMPHASIS_GEOMETRY_DIGEST,
+            "F-266b's recorded geometry moved"
+        );
+    }
+
+    /// `w:docGrid` authors, saves and reopens typed at its `w:sectPr` sequence
+    /// position, and the unrelated producer children stay byte for byte.
+    #[test]
+    fn doc_grid_reopens_on_its_section() {
+        for (grid_type, expected) in [
+            (ST_DocGrid::Default, "default"),
+            (ST_DocGrid::Lines, "lines"),
+            (ST_DocGrid::LinesAndChars, "linesAndChars"),
+            (ST_DocGrid::SnapToChars, "snapToChars"),
+        ] {
+            let mut document = Document::new();
+            document.add_paragraph("body");
+            document
+                .section_mut(0)
+                .expect("final section")
+                .set_doc_grid(Some(CT_DocGrid {
+                    grid_type: Some(grid_type),
+                    line_pitch: Some(Twips(312)),
+                    char_space: Some(179),
+                    extra_attributes: Vec::new(),
+                }));
+
+            let bytes = document.to_bytes().unwrap();
+            let reopened = Document::from_bytes(&bytes).unwrap();
+            let grid = reopened
+                .sections()
+                .next()
+                .unwrap()
+                .doc_grid()
+                .expect("the grid reopens typed")
+                .clone();
+            assert_eq!(grid.grid_type, Some(grid_type));
+            assert_eq!(grid.line_pitch, Some(Twips(312)));
+            assert_eq!(grid.char_space, Some(179));
+
+            let xml = String::from_utf8(
+                OpcPackage::from_reader(std::io::Cursor::new(&bytes))
+                    .unwrap()
+                    .get_part("/word/document.xml")
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(
+                xml.contains(&format!(
+                    "<w:docGrid w:type=\"{expected}\" w:linePitch=\"312\" w:charSpace=\"179\"/>"
+                )),
+                "the fixed `w:` prefix and the attribute order are written: {xml}"
+            );
+            let grid_at = xml.find("<w:docGrid").expect("w:docGrid is written");
+            let sect_end = xml.find("</w:sectPr>").expect("the section closes");
+            assert!(grid_at < sect_end, "w:docGrid sits inside w:sectPr");
+        }
+    }
+
+    /// The whole `w:docGrid` sequence position, including the producer
+    /// children that share its slot, is preserved byte for byte.
+    #[test]
+    fn an_unmodelled_doc_grid_attribute_survives_a_noop_save() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:textDirection w:val=\"tbRl\"/>",
+            "<w:bidi w:val=\"0\"/>",
+            "<w:rtlGutter w:val=\"0\"/>",
+            "<w:docGrid xmlns:x=\"urn:producer\" x:kept=\"grid\" ",
+            "w:type=\"linesAndChars\" w:linePitch=\"360\" w:charSpace=\"120\"/>",
+            "<w:printerSettings r:id=\"rIdPrinter\" ",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/>",
+            "</w:sectPr>",
+        );
+        let source = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p>{sect_pr}</w:body></w:document>"#
+        );
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/document.xml", source.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+
+        let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+        let grid = document
+            .sections()
+            .next()
+            .unwrap()
+            .doc_grid()
+            .expect("the grid is typed")
+            .clone();
+        assert_eq!(grid.grid_type, Some(ST_DocGrid::LinesAndChars));
+        assert_eq!(grid.line_pitch, Some(Twips(360)));
+        assert_eq!(grid.char_space, Some(120));
+        assert_eq!(
+            grid.extra_attributes,
+            vec![
+                ("xmlns:x".to_owned(), "urn:producer".to_owned()),
+                ("x:kept".to_owned(), "grid".to_owned()),
+            ],
+            "the producer attribute the model does not own is retained"
+        );
+
+        let saved = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        // The writer indents between children, so the comparison states child
+        // order and attribute bytes rather than pretty printing.
+        let saved = saved
+            .split('\n')
+            .map(str::trim_start)
+            .collect::<Vec<_>>()
+            .concat();
+        let start = saved.find("<w:sectPr>").expect("the section is written");
+        let end = saved.find("</w:sectPr>").expect("the section closes") + "</w:sectPr>".len();
+        assert_eq!(&saved[start..end], sect_pr);
+    }
+
+    /// `w:eastAsianLayout` round-trips typed, prefix-aliased on read and with
+    /// the fixed `w:` prefix on write.
+    #[test]
+    fn east_asian_layout_reopens_as_modeled_state() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("combined");
+            run.set_east_asian_layout_value(Some(CT_EastAsianLayout {
+                id: Some(7),
+                combine: Some(true),
+                combine_brackets: Some("square".to_owned()),
+                vert: Some(true),
+                vert_compress: Some(true),
+                extra_attributes: Vec::new(),
+            }));
+        }
+        let bytes = document.to_bytes().unwrap();
+        let xml = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(&bytes))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            xml.contains(concat!(
+                "<w:eastAsianLayout w:id=\"7\" w:combine=\"1\" ",
+                "w:combineBrackets=\"square\" w:vert=\"1\" w:vertCompress=\"1\"/>"
+            )),
+            "the fixed prefix and the attribute order are written: {xml}"
+        );
+
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraph = reopened.paragraphs().into_iter().next().unwrap();
+        let run = paragraph.runs().next().expect("the authored run");
+        let layout = run.east_asian_layout().expect("the layout reopens typed");
+        assert_eq!(layout.id, Some(7));
+        assert_eq!(layout.combine, Some(true));
+        assert_eq!(layout.combine_brackets.as_deref(), Some("square"));
+        assert_eq!(layout.vert, Some(true));
+        assert_eq!(layout.vert_compress, Some(true));
+    }
+
+    /// `w:vert` rotates the run inside its line, `w:vertCompress` narrows the
+    /// rotated run to one base advance, and `w:combine` wins when a run asks
+    /// for both. A run carrying `w:em` as well takes the East Asian layout,
+    /// because combining and rotating change the run's advance.
+    #[test]
+    fn a_vertical_run_rotates_inside_its_line_and_compresses_on_request() {
+        let build = |layout: CT_EastAsianLayout, mark: Option<ST_Em>| {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("");
+                {
+                    // A bundled East Asian face, because `w:vertCompress`
+                    // narrows a rotated run to one em and a face whose ascent
+                    // and descent already sum to one em could not show it.
+                    let mut run = paragraph.add_run(ROTATED_RUN);
+                    run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+                    run.set_language_east_asia_value(Some("ja-JP"));
+                    run.set_east_asian_layout_value(Some(layout));
+                    if let Some(mark) = mark {
+                        run.set_emphasis_mark_value(Some(mark));
+                    }
+                }
+                // A trailing run starts where the run before it stopped, so
+                // its origin states the advance the East Asian layout took.
+                paragraph.add_run("END").set_font("Carlito");
+            }
+            document
+                .layout_deterministic()
+                .expect("deterministic rotated run layout")
+        };
+
+        // An ordinary run reaches the page untransformed.
+        let plain = build(CT_EastAsianLayout::default(), None);
+        let plain_transforms = transforms_for(&plain, ROTATED_GLYPH);
+        assert!(!plain_transforms.is_empty(), "the plain run paints");
+        assert!(
+            plain_transforms
+                .iter()
+                .all(|transform| transform.is_identity()),
+            "a run with neither combine nor vert keeps the ordinary path"
+        );
+        // A blank document is US Letter with one-inch margins, so the line
+        // starts at 72 points and the advance is measured from there.
+        const LINE_START: f64 = 72.0;
+        let plain_advance = painted_origin_x(&plain, "END") - LINE_START;
+
+        // `w:vert` rotates it 90 degrees within the line.
+        let rotated = build(
+            CT_EastAsianLayout {
+                vert: Some(true),
+                ..CT_EastAsianLayout::default()
+            },
+            None,
+        );
+        let transforms = transforms_for(&rotated, ROTATED_GLYPH);
+        assert_eq!(transforms.len(), 1, "the rotated run paints once");
+        assert!(
+            (transforms[0].b - 1.0).abs() < 1e-9 && (transforms[0].a).abs() < 1e-9,
+            "the run rotates 90 degrees inside its line: {:?}",
+            transforms[0]
+        );
+        // Rotated, the run takes its own line height along the line rather
+        // than its text length, so it advances far less than it did.
+        let rotated_advance = painted_origin_x(&rotated, "END") - LINE_START;
+        assert!(
+            rotated_advance < plain_advance / 2.0,
+            "the rotated run takes its line height along the line, \
+             {rotated_advance} against {plain_advance}"
+        );
+
+        // `w:vertCompress` narrows the rotated run further.
+        let compressed = build(
+            CT_EastAsianLayout {
+                vert: Some(true),
+                vert_compress: Some(true),
+                ..CT_EastAsianLayout::default()
+            },
+            None,
+        );
+        assert!(
+            painted_origin_x(&compressed, "END") - LINE_START < rotated_advance,
+            "vertCompress narrows the rotated run to one base advance"
+        );
+
+        // `w:combine` wins over `w:vert`, and both win over `w:em`.
+        let combined = build(
+            CT_EastAsianLayout {
+                combine: Some(true),
+                vert: Some(true),
+                combine_brackets: Some("round".to_owned()),
+                ..CT_EastAsianLayout::default()
+            },
+            Some(ST_Em::Dot),
+        );
+        let painted = painted(&combined).concat();
+        assert!(
+            painted.contains('('),
+            "the combined run draws its brackets, so combine won: {painted}"
+        );
+        assert!(
+            !painted.contains('\u{2022}'),
+            "the East Asian layout wins over the emphasis mark: {painted}"
+        );
+    }
+
+    /// The seven East Asian paragraph toggles F-264 left raw author, save,
+    /// reopen and remove through the public paragraph surface.
+    #[test]
+    fn the_east_asian_paragraph_toggles_reopen_as_modeled_state() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("gridded");
+            paragraph.set_kinsoku_value(Some(false));
+            paragraph.set_word_wrap_value(Some(false));
+            paragraph.set_overflow_punct_value(Some(false));
+            paragraph.set_top_line_punct_value(Some(true));
+            paragraph.set_auto_space_de_value(Some(false));
+            paragraph.set_auto_space_dn_value(Some(false));
+            paragraph.set_snap_to_grid_value(Some(false));
+        }
+        let bytes = document.to_bytes().unwrap();
+        let xml = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(&bytes))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let order = [
+            "<w:kinsoku",
+            "<w:wordWrap",
+            "<w:overflowPunct",
+            "<w:topLinePunct",
+            "<w:autoSpaceDE",
+            "<w:autoSpaceDN",
+            "<w:snapToGrid",
+        ];
+        let mut previous = 0usize;
+        for element in order {
+            let at = xml
+                .find(element)
+                .unwrap_or_else(|| panic!("{element} is written: {xml}"));
+            assert!(at > previous, "{element} follows its predecessor: {xml}");
+            previous = at;
+        }
+
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraph = reopened.paragraphs().into_iter().next().unwrap();
+        assert_eq!(paragraph.kinsoku_value(), Some(false));
+        assert_eq!(paragraph.word_wrap_value(), Some(false));
+        assert_eq!(paragraph.overflow_punct_value(), Some(false));
+        assert_eq!(paragraph.top_line_punct_value(), Some(true));
+        assert_eq!(paragraph.auto_space_de_value(), Some(false));
+        assert_eq!(paragraph.auto_space_dn_value(), Some(false));
+        assert_eq!(paragraph.snap_to_grid_value(), Some(false));
+
+        let mut removable = Document::from_bytes(&bytes).unwrap();
+        removable
+            .paragraph_mut(0)
+            .expect("the authored paragraph")
+            .set_kinsoku_value(None);
+        let removed = Document::from_bytes(&removable.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            removed
+                .paragraphs()
+                .into_iter()
+                .next()
+                .unwrap()
+                .kinsoku_value(),
+            None
+        );
+    }
+
+    /// A producer spelling of the seven toggles reopens typed and is written
+    /// in the canonical form, and an attribute the model does not own keeps
+    /// the source element as its carrier.
+    #[test]
+    fn a_producer_spelling_of_an_east_asian_toggle_reopens_typed() {
+        let body = concat!(
+            "<w:p><w:pPr>",
+            "<w:kinsoku w:val=\"true\"/>",
+            "<w:wordWrap w:val=\"0\"/>",
+            "<w:overflowPunct w:val=\"off\"/>",
+            "<w:topLinePunct/>",
+            "<w:autoSpaceDE w:val=\"false\"/>",
+            "<w:autoSpaceDN w:val=\"1\"/>",
+            "<w:snapToGrid w:val=\"on\"/>",
+            "</w:pPr><w:r><w:t>body</w:t></w:r></w:p>",
+        );
+        let mut document = Document::from_bytes(&producer_body(body)).unwrap();
+        {
+            let paragraph = document.paragraphs().into_iter().next().unwrap();
+            assert_eq!(paragraph.kinsoku_value(), Some(true));
+            assert_eq!(paragraph.word_wrap_value(), Some(false));
+            assert_eq!(paragraph.overflow_punct_value(), Some(false));
+            assert_eq!(paragraph.top_line_punct_value(), Some(true));
+            assert_eq!(paragraph.auto_space_de_value(), Some(false));
+            assert_eq!(paragraph.auto_space_dn_value(), Some(true));
+            assert_eq!(paragraph.snap_to_grid_value(), Some(true));
+        }
+
+        // A modeled toggle writes the canonical spelling, which is bare for
+        // an on value and `w:val="false"` for an off one, exactly as the
+        // toggles F-264 already modeled do.
+        let saved = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        for expected in [
+            "<w:kinsoku/>",
+            "<w:wordWrap w:val=\"false\"/>",
+            "<w:overflowPunct w:val=\"false\"/>",
+            "<w:topLinePunct/>",
+            "<w:autoSpaceDE w:val=\"false\"/>",
+            "<w:autoSpaceDN/>",
+            "<w:snapToGrid/>",
+        ] {
+            assert!(
+                saved.contains(expected),
+                "{expected} is written canonically: {saved}"
+            );
+        }
+    }
+
+    /// A `w:docGrid` attribute bound on an ancestor keeps its binding, because
+    /// the root declaration that binds it is retained with the root.
+    #[test]
+    fn a_doc_grid_attribute_bound_on_the_root_keeps_its_binding() {
+        let body = concat!(
+            "<w:p><w:r><w:t>body</w:t></w:r></w:p>",
+            "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:docGrid w:type=\"lines\" w:linePitch=\"360\" x:kept=\"grid\"/>",
+            "</w:sectPr>",
+        );
+        let source = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body>{body}</w:body></w:document>"#
+        );
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/document.xml", source.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+
+        let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+        assert_eq!(
+            document
+                .sections()
+                .next()
+                .unwrap()
+                .doc_grid()
+                .expect("the grid is typed")
+                .extra_attributes,
+            vec![("x:kept".to_owned(), "grid".to_owned())]
+        );
+        let saved = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            saved.contains("x:kept=\"grid\""),
+            "the retained attribute is written: {saved}"
+        );
+        let root_start = saved.find("<w:document").expect("the root element opens");
+        let root_end = root_start
+            + saved[root_start..]
+                .find('>')
+                .expect("the root element closes");
+        assert!(
+            saved[root_start..root_end].contains("xmlns:x=\"urn:producer\""),
+            "the ancestor binding that scopes it is still on the root: {saved}"
+        );
+    }
+
+    /// Every `w:tcPr/w:textDirection` value projects to the rotation the
+    /// rendering spec names, and upright stacking records its diagnostic.
+    #[test]
+    fn every_supported_cell_text_direction_renders_at_its_rotation() {
+        let expected = [
+            (CellTextDirection::LeftToRightTopToBottom, None, false),
+            (
+                CellTextDirection::TopToBottomRightToLeft,
+                Some(90.0_f64),
+                false,
+            ),
+            (
+                CellTextDirection::BottomToTopLeftToRight,
+                Some(-90.0),
+                false,
+            ),
+            (
+                CellTextDirection::LeftToRightTopToBottomVertical,
+                Some(-90.0),
+                true,
+            ),
+            (
+                CellTextDirection::TopToBottomRightToLeftVertical,
+                Some(90.0),
+                true,
+            ),
+            (
+                CellTextDirection::TopToBottomLeftToRightVertical,
+                Some(-90.0),
+                true,
+            ),
+        ];
+        for (direction, rotation, stacks_upright) in expected {
+            let mut document = Document::new();
+            {
+                let mut table = document.add_table(1, 1);
+                let mut cell = table.cell(0, 0).expect("authored cell");
+                cell.set_text_direction(Some(direction));
+                cell.set_text("Vertical");
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic vertical cell layout");
+            let transforms = transforms_for(&result, "Vertical");
+            assert_eq!(transforms.len(), 1, "the cell paints once: {direction:?}");
+            match rotation {
+                None => assert!(
+                    transforms[0].is_identity(),
+                    "{direction:?} keeps the untransformed path"
+                ),
+                Some(degrees) => {
+                    let (sin, cos) = degrees.to_radians().sin_cos();
+                    assert!(
+                        (transforms[0].a - cos).abs() < 1e-9
+                            && (transforms[0].b - sin).abs() < 1e-9,
+                        "{direction:?} rotates {degrees} degrees: {:?}",
+                        transforms[0]
+                    );
+                }
+            }
+            let diagnostics = result
+                .layout
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                diagnostics.iter().any(|message| message
+                    == "east Asian vertical text rendered as rotated vertical text"),
+                stacks_upright,
+                "{direction:?} records the upright-stacking fallback only when it asks for \
+                 upright stacking: {diagnostics:?}"
+            );
+        }
+    }
+
+    /// A rotated cell's row height comes from the transposed box, so it is the
+    /// text's own length rather than its stacked line height.
+    #[test]
+    fn a_vertical_cell_drives_the_row_height_from_its_transposed_box() {
+        // The row height decides where the block after the table sits, which
+        // is the only public statement of it that survives to the page.
+        let row_height = |direction: CellTextDirection| {
+            let mut document = Document::new();
+            {
+                let mut table = document.add_table(1, 2);
+                let mut cell = table.cell(0, 0).expect("authored cell");
+                cell.set_text_direction(Some(direction));
+                cell.set_text("A much longer stretch of vertical cell text");
+                table.cell(0, 1).expect("control cell").set_text("short");
+            }
+            document.add_paragraph("below");
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic vertical cell layout");
+            let mut below = None;
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Text(run) = element
+                        && run.text.trim() == "below"
+                    {
+                        below = Some(run.origin.y);
+                    }
+                });
+            }
+            below.expect("the block after the table paints")
+        };
+
+        let horizontal = row_height(CellTextDirection::LeftToRightTopToBottom);
+        let vertical = row_height(CellTextDirection::TopToBottomRightToLeft);
+        assert!(
+            vertical > horizontal + 1.0,
+            "the rotated cell grows the row to its text length, {vertical} against {horizontal}"
+        );
+
+        // The height is the transposed box's measure, not merely larger.
+        // Lengthening the rotated cell's single word moves the block after
+        // the table down by exactly the width that word gained, because the
+        // row height is the transposed measure and nothing else. Both numbers
+        // are read from layout, so this states the rule rather than pinning a
+        // recorded value.
+        let vertical_row = |text: &str| {
+            let mut document = Document::new();
+            {
+                let mut table = document.add_table(1, 1);
+                let mut cell = table.cell(0, 0).expect("rotated cell");
+                cell.set_text_direction(Some(CellTextDirection::TopToBottomRightToLeft));
+                cell.set_text(text);
+            }
+            document.add_paragraph("below");
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic vertical cell layout");
+            let mut below = None;
+            let mut width = 0.0f64;
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Text(run) = element {
+                        if run.text.trim() == "below" {
+                            below = Some(run.origin.y);
+                        } else if text.contains(run.text.trim()) && !run.text.trim().is_empty() {
+                            width += run.advances.iter().sum::<f64>();
+                        }
+                    }
+                });
+            }
+            (below.expect("the block after the table paints"), width)
+        };
+
+        let (short_below, short_width) = vertical_row("Narrow");
+        let (long_below, long_width) = vertical_row("NarrowNarrow");
+        assert!(
+            long_width > short_width,
+            "the longer word is wider, {long_width} against {short_width}"
+        );
+        assert!(
+            ((long_below - short_below) - (long_width - short_width)).abs() < 1e-6,
+            "the row grew by exactly the transposed measure the word gained, \
+             {} against {}",
+            long_below - short_below,
+            long_width - short_width
+        );
+    }
+
+    /// Each grid type that snaps line advance does so, and `default` does not.
+    #[test]
+    fn a_gridded_section_snaps_line_advance_to_its_line_pitch() {
+        let advance = |grid: Option<ST_DocGrid>| {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("first");
+                paragraph.add_line_break();
+                paragraph.add_run("second");
+            }
+            if let Some(grid_type) = grid {
+                document
+                    .section_mut(0)
+                    .expect("final section")
+                    .set_doc_grid(Some(CT_DocGrid {
+                        grid_type: Some(grid_type),
+                        line_pitch: Some(Twips(720)),
+                        char_space: None,
+                        extra_attributes: Vec::new(),
+                    }));
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic gridded layout");
+            let mut origins = Vec::new();
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Text(run) = element
+                        && !run.text.trim().is_empty()
+                    {
+                        origins.push(run.origin.y);
+                    }
+                });
+            }
+            assert_eq!(origins.len(), 2, "both lines paint");
+            origins[1] - origins[0]
+        };
+
+        let ungridded = advance(None);
+        assert_eq!(
+            advance(Some(ST_DocGrid::Default)),
+            ungridded,
+            "a default grid keeps the ungridded advance"
+        );
+        assert!(
+            ungridded < 36.0,
+            "the ungridded advance is inside one grid row, so the snap is visible"
+        );
+        // A 720 twip pitch is 36 points, which is more than one line of the
+        // default face, so a snapping grid takes exactly one grid row.
+        for grid_type in [
+            ST_DocGrid::Lines,
+            ST_DocGrid::LinesAndChars,
+            ST_DocGrid::SnapToChars,
+        ] {
+            assert!(
+                (advance(Some(grid_type)) - 36.0).abs() < 1e-9,
+                "{grid_type:?} puts the next baseline on the grid pitch"
+            );
+        }
+    }
+
+    /// The section-level projection reads the property F-269 delivers and
+    /// writes nothing back.
+    #[test]
+    fn section_text_direction_renders_over_the_property_f269_delivers() {
+        let mut plain = Document::new();
+        plain.add_paragraph("body text for the section");
+        let plain_result = plain
+            .layout_deterministic()
+            .expect("deterministic horizontal layout");
+        let plain_transforms = transforms_for(&plain_result, "section");
+        assert_eq!(plain_transforms.len(), 1, "the horizontal body paints once");
+        assert!(
+            plain_transforms
+                .iter()
+                .all(|transform| transform.is_identity()),
+            "a horizontal section keeps the untransformed path"
+        );
+
+        let mut document = Document::new();
+        document.add_paragraph("body text for the section");
+        document
+            .section_mut(0)
+            .expect("final section")
+            .set_text_direction("tbRl");
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic vertical section layout");
+        let transforms = transforms_for(&result, "section");
+        assert_eq!(transforms.len(), 1, "the body paints once");
+        assert!(
+            (transforms[0].b - 1.0).abs() < 1e-9,
+            "the body band rotates 90 degrees: {:?}",
+            transforms[0]
+        );
+
+        // A vertical section fills one band, so a declared column layout is
+        // dropped and the fact is recorded rather than painted wrong.
+        let mut columns = Document::new();
+        columns.add_paragraph("body text for the section");
+        {
+            let mut section = columns.section_mut(0).expect("final section");
+            section.set_text_direction("tbRl");
+            section.set_columns(2, Length::twips(360)).unwrap();
+        }
+        let columns_result = columns
+            .layout_deterministic()
+            .expect("deterministic vertical column layout");
+        assert!(
+            columns_result
+                .layout
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message
+                    == "vertical section text is laid out in one column track"),
+            "the dropped column tracks are recorded: {:?}",
+            columns_result.layout.diagnostics
+        );
+
+        // The projection is read-only. The saved property is exactly what was
+        // authored, and reopening gives it back unchanged.
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.sections().next().unwrap().text_direction(),
+            Some("tbRl")
+        );
+        assert_eq!(
+            reopened
+                .section_mut(0)
+                .expect("final section")
+                .text_direction(),
+            Some("tbRl")
+        );
     }
 }

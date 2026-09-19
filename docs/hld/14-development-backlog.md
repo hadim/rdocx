@@ -2657,6 +2657,25 @@ applies to and would cost a slice of every glyph cluster to avoid.
 the vertical and character-grid page and asserts the earlier digests are
 unmoved.
 
+**Delivered**: `CT_SectPr` gains a typed `w:docGrid` at its own `xsd:sequence`
+slot, and `w:printerSettings` moves to the slot after it so the producer
+children that shared the old raw slot still round-trip byte for byte. The
+section grid reaches paragraph and table layout as a threaded value and a cache
+key, so a gridded and an ungridded section can never share a cached block.
+`lines`, `linesAndChars` and `snapToChars` put line advance on `w:linePitch`,
+the last two add `w:charSpace` to every character advance, and `default` stays
+off the new arithmetic entirely. `w:eastAsianLayout`, modeled by F-265, gains
+its render projection: `w:combine` compresses the run into one base-character
+advance inside the `w:combineBrackets` pair, `w:vert` rotates it 90 degrees
+within the line, and `w:vertCompress` narrows the rotated run to one advance.
+`w:tcPr/w:textDirection` and `w:sectPr/w:textDirection` both lower onto a
+same-centre transposed box wrapped in a rotated `Group`, and a rotated cell
+contributes the transposed box's measure to its row height. The seven East
+Asian paragraph toggles F-264 left raw-preserved are typed on `CT_PPr` with a
+public authoring surface, and `w:snapToGrid` gates the grid. The six
+line-breaking policy toggles carry no break-opportunity projection, which is
+recorded on the DOCX-033 row.
+
 ### F-267, Complete table style and conditional formatting authoring (L)
 Create and mutate table styles, conditional regions, band sizes, table look,
 row and cell conditional selectors, and their paragraph, run, table, and cell

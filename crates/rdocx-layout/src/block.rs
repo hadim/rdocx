@@ -382,6 +382,13 @@ impl LayoutBlock {
 pub struct ParagraphReflow {
     pub items: Vec<InlineItem>,
     pub params: LineBreakParams,
+    /// The section grid pitch this paragraph's line advance snaps to.
+    ///
+    /// `LineBreakParams` has no grid, so a re-break around a float would
+    /// leave the grid without this. It is `None` for every paragraph off the
+    /// grid, including one on an exact `w:lineRule`, so an ungridded reflow
+    /// takes the arithmetic it always took.
+    pub grid_line_pitch_pt: Option<f64>,
 }
 
 /// A laid-out paragraph with its lines and spacing.

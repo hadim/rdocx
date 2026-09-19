@@ -256,6 +256,72 @@ pub struct CT_PaperSource {
     pub extra_attributes: Vec<(String, String)>,
 }
 
+/// `ST_DocGrid` -- how a section's character grid constrains its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ST_DocGrid {
+    /// No grid. Lines and characters keep their ordinary metrics.
+    Default,
+    /// Line advance snaps to the grid pitch. Characters keep their advance.
+    Lines,
+    /// Line advance snaps to the pitch and characters snap to the char space.
+    LinesAndChars,
+    /// Characters snap to the char space, and line advance snaps too.
+    SnapToChars,
+}
+
+impl ST_DocGrid {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "default" => Some(Self::Default),
+            "lines" => Some(Self::Lines),
+            "linesAndChars" => Some(Self::LinesAndChars),
+            "snapToChars" => Some(Self::SnapToChars),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Lines => "lines",
+            Self::LinesAndChars => "linesAndChars",
+            Self::SnapToChars => "snapToChars",
+        }
+    }
+
+    /// Whether this grid type puts line advance on the grid pitch.
+    ///
+    /// `Default` is deliberately false. Keeping the default type off the grid
+    /// path is what leaves every ungridded document on the arithmetic it
+    /// already had, with no new floating-point step on the existing branch.
+    pub fn snaps_lines(self) -> bool {
+        matches!(self, Self::Lines | Self::LinesAndChars | Self::SnapToChars)
+    }
+
+    /// Whether this grid type puts per-character advance on the grid.
+    pub fn snaps_characters(self) -> bool {
+        matches!(self, Self::LinesAndChars | Self::SnapToChars)
+    }
+}
+
+/// `CT_DocGrid` -- the `w:docGrid` character grid of a section.
+///
+/// `line_pitch` is the twip distance between two grid lines. `char_space` is
+/// the twip addition to one East Asian character cell.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub struct CT_DocGrid {
+    /// `w:type`, which of the grid constraints apply.
+    pub grid_type: Option<ST_DocGrid>,
+    /// `w:linePitch`, the grid line spacing in twips.
+    pub line_pitch: Option<Twips>,
+    /// `w:charSpace`, the grid character advance addition in twips.
+    pub char_space: Option<i32>,
+    /// Attributes this type does not model, in source order, written first.
+    pub extra_attributes: Vec<(String, String)>,
+}
+
 /// Section-level note configuration, shared by `w:footnotePr` and `w:endnotePr`.
 ///
 /// F-269 models the values and the authoring surface. Their effect on marker
@@ -380,6 +446,12 @@ pub struct CT_SectPr {
     pub vertical_alignment: Option<ST_VerticalJc>,
     /// `w:textDirection`. Authored and preserved here, projected by F-266c.
     pub text_direction: Option<String>,
+    /// `w:docGrid`, the section character grid.
+    ///
+    /// Boxed with the other composite members so a section stays cheap on the
+    /// stack. `CT_SectPr` sits inside `CT_PPr`, which test threads build by
+    /// value against a 2 MiB ceiling.
+    pub doc_grid: Option<Box<CT_DocGrid>>,
     /// Title page (different first page header/footer)
     pub title_pg: Option<bool>,
     /// Header references
@@ -419,6 +491,7 @@ impl CT_SectPr {
             line_numbers: None,
             vertical_alignment: None,
             text_direction: None,
+            doc_grid: None,
             title_pg: None,
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
@@ -477,6 +550,7 @@ impl CT_SectPr {
             line_numbers: None,
             vertical_alignment: None,
             text_direction: None,
+            doc_grid: None,
             title_pg: None,
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
@@ -509,6 +583,7 @@ impl CT_SectPr {
             line_numbers: None,
             vertical_alignment: None,
             text_direction: None,
+            doc_grid: None,
             title_pg: None,
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
@@ -715,6 +790,20 @@ impl CT_SectPr {
                             }
                         }
                         raw_position = (8, 1);
+                    } else if is_word_element(name.as_ref(), b"docGrid", &prefixes) {
+                        if sect.doc_grid.is_none() {
+                            sect.doc_grid = Some(Box::new(Self::parse_doc_grid(e, &prefixes)?));
+                        } else {
+                            // The schema allows one. A second is retained
+                            // after the typed one rather than before it, the
+                            // way a second `w:paperSrc` already is.
+                            let raw = crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?;
+                            sect.push_extra_xml(raw, 8, 2);
+                        }
+                        raw_position = (8, 2);
                     } else if is_word_element(name.as_ref(), b"headerReference", &prefixes) {
                         let mut hdr_type = HdrFtrType::Default;
                         let mut rel_id = String::new();
@@ -943,6 +1032,16 @@ impl CT_SectPr {
                         )?;
                         sect.push_extra_xml(raw, 8, 0);
                         raw_position = (8, 1);
+                    } else if is_word_element(name.as_ref(), b"docGrid", &prefixes) {
+                        // The schema makes `w:docGrid` empty. One that carries
+                        // children is a producer extension, so it stays raw at
+                        // the slot the typed element would have written.
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        sect.push_extra_xml(raw, 8, 1);
+                        raw_position = (8, 2);
                     } else if is_word_element(name.as_ref(), b"pgNumType", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
@@ -1206,9 +1305,52 @@ impl CT_SectPr {
         match local {
             b"formProt" => Some((7, 0)),
             b"noEndnote" => Some((7, 1)),
-            b"bidi" | b"rtlGutter" | b"docGrid" | b"printerSettings" => Some((8, 1)),
+            b"bidi" | b"rtlGutter" => Some((8, 1)),
+            b"printerSettings" => Some((8, 2)),
             _ => None,
         }
+    }
+
+    /// Read `w:docGrid`, keeping every attribute this type does not model.
+    fn parse_doc_grid(e: &BytesStart, word_prefixes: &[String]) -> Result<CT_DocGrid> {
+        let mut grid = CT_DocGrid::default();
+        for attribute in e.attributes() {
+            let attribute = attribute?;
+            let key = attribute.key.as_ref();
+            let value = std::str::from_utf8(&attribute.value)?;
+            let modeled = if is_word_attribute(key, b"type", word_prefixes) {
+                match ST_DocGrid::from_str(value) {
+                    Some(grid_type) => {
+                        grid.grid_type = Some(grid_type);
+                        true
+                    }
+                    None => false,
+                }
+            } else if is_word_attribute(key, b"linePitch", word_prefixes) {
+                match value.parse() {
+                    Ok(parsed) => {
+                        grid.line_pitch = Some(Twips(parsed));
+                        true
+                    }
+                    Err(_) => false,
+                }
+            } else if is_word_attribute(key, b"charSpace", word_prefixes) {
+                match value.parse() {
+                    Ok(parsed) => {
+                        grid.char_space = Some(parsed);
+                        true
+                    }
+                    Err(_) => false,
+                }
+            } else {
+                false
+            };
+            if !modeled {
+                grid.extra_attributes
+                    .push((std::str::from_utf8(key)?.to_owned(), value.to_owned()));
+            }
+        }
+        Ok(grid)
     }
 
     fn parse_paper_source(e: &BytesStart, word_prefixes: &[String]) -> Result<CT_PaperSource> {
@@ -1752,9 +1894,35 @@ impl CT_SectPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        // docGrid. The grid type, line pitch and character space this crate
+        // models, with any producer attribute it does not written first. A
+        // legacy caller that populates only `extra_xml` gets the modeled
+        // element ahead of its raw dump, which is the order the rest of this
+        // serialiser already writes a modeled child in.
+        let mut write_doc_grid = |writer: &mut Writer<W>| -> Result<()> {
+            if let Some(doc_grid) = &self.doc_grid {
+                let mut e = BytesStart::new("w:docGrid");
+                push_retained_attributes(&mut e, &doc_grid.extra_attributes);
+                if let Some(grid_type) = doc_grid.grid_type {
+                    e.push_attribute(("w:type", grid_type.to_str()));
+                }
+                if let Some(line_pitch) = doc_grid.line_pitch {
+                    e.push_attribute(("w:linePitch", buf.format(line_pitch.0)));
+                }
+                if let Some(char_space) = doc_grid.char_space {
+                    e.push_attribute(("w:charSpace", buf.format(char_space)));
+                }
+                writer.write_event(Event::Empty(e))?;
+            }
+            Ok(())
+        };
         if ordered_raw {
             self.write_raw_position(writer, 8, 1)?;
+            write_doc_grid(writer)?;
+            self.write_raw_position(writer, 8, 2)?;
+            self.write_raw_position(writer, 9, 0)?;
         } else {
+            write_doc_grid(writer)?;
             // Legacy callers that populate only `extra_xml` retain the previous position.
             for raw in &self.extra_xml {
                 if is_root_attribute_record(raw) {
@@ -1762,10 +1930,6 @@ impl CT_SectPr {
                 }
                 writer.get_mut().write_all(raw)?;
             }
-        }
-
-        if ordered_raw {
-            self.write_raw_position(writer, 9, 0)?;
         }
         if let Some(change) = &self.change {
             change.write_xml(writer)?;

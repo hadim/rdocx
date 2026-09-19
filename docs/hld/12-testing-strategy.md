@@ -1469,6 +1469,43 @@ run split before an annotation carries the span with it rather than leaving it
 on the neighbouring run, and that a marked run advances exactly as far as an
 unmarked one.
 
+## The grid and vertical geometry golden gate
+
+`grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order` builds
+one page through the public facade carrying a `linesAndChars` gridded Japanese
+paragraph, a combined run inside round brackets, a table with a `tbRl` cell and
+a `btLr` cell on either side of an `lrTb` control, and a Latin control, and
+lays it out with `FontManager::new_deterministic`.
+
+Its serialisation is the mixed-script one with the accumulated group transform
+added. A rotation never reaches a glyph run's own origin, because the run keeps
+group-local coordinates and the rotation lives on the group above it, so a
+digest over origins alone would pass with every rotation removed. Recording the
+six transform coefficients is what makes this gate prove the subject it exists
+for.
+
+The recorded digest is
+`cb3043d53719f5dd9e16b61a001aff8c8827c19f96536972d4a17b9a626d2164`.
+
+The same test lays out both sibling pages again and asserts
+`516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402` and
+`b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6` are unmoved,
+so this story cannot move either recorded baseline while recording its own.
+
+Before the digest the test asserts the properties one at a time. Both rotated
+cells paint their text and reach the page through a transform, the horizontal
+control reaches it untransformed, and the reopened document returns its
+paragraphs and its cells in grid order, because rotation and combining are
+painting concerns and the saved bytes stay logical.
+
+The gate is a geometry digest and not a pinned-oracle raster, for the reasons
+the mixed-script section gives. Nothing here needs a rasteriser.
+
+Adjacent regressions prove that a `default` grid produces geometry identical to
+no grid at all, that adding a rotated neighbour does not move a horizontal
+cell, and that a rotated cell's text is still extracted, rendered to SVG and
+saved in logical order.
+
 ## The deck corpus
 
 Fifty real `.pptx` files are stored outside the published crates and fetched by

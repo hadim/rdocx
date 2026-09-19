@@ -1,6 +1,7 @@
 //! Table layout: column widths, cell content, merge handling.
 
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
+use rdocx_oxml::document::CT_DocGrid;
 use rdocx_oxml::drawing::{AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV};
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::styles::{CT_Styles, TableStyleRegion};
@@ -321,6 +322,60 @@ pub struct TableCell {
     pub is_last_row: bool,
     /// Vertical alignment of content within the cell.
     pub v_align: Option<ST_VerticalJc>,
+    /// Degrees the cell's content box rotates for `w:tcPr/w:textDirection`.
+    ///
+    /// `None` is the ordinary horizontal cell, which takes the placement
+    /// arithmetic it always had with no group wrapper.
+    pub rotation: Option<f64>,
+}
+
+/// The diagnostic an upright stacked East Asian direction records.
+///
+/// Upright stacking is out of scope and stays visible as rotated text, which
+/// is the fallback `docs/hld/08-rendering-spec.md` already documents for the
+/// DrawingML shape path, so the product says one thing about it.
+pub(crate) const UPRIGHT_STACK_DIAGNOSTIC: &str =
+    "east Asian vertical text rendered as rotated vertical text";
+
+/// The rotation in degrees a `w:textDirection` value projects onto.
+///
+/// `lrTb` and any unmodelled value return `None`, which is today's horizontal
+/// path. `tbRl` and `tbRlV` rotate 90 degrees, and `btLr`, `lrTbV` and
+/// `tbLrV` rotate -90.
+pub(crate) fn text_direction_rotation(value: &str) -> Option<f64> {
+    match value {
+        "tbRl" | "tbRlV" => Some(90.0),
+        "btLr" | "lrTbV" | "tbLrV" => Some(-90.0),
+        _ => None,
+    }
+}
+
+/// The rotation one cell's `w:tcPr/w:textDirection` projects onto.
+pub(crate) fn cell_rotation(cell: &CT_Tc) -> Option<f64> {
+    cell.properties
+        .as_ref()
+        .and_then(|properties| properties.text_direction.as_deref())
+        .and_then(text_direction_rotation)
+}
+
+/// Whether a `w:textDirection` value asks for upright stacked East Asian text.
+pub(crate) fn text_direction_stacks_upright(value: &str) -> bool {
+    matches!(value, "lrTbV" | "tbRlV" | "tbLrV")
+}
+
+/// The same-centre transposed content box a rotated cell is laid out in.
+///
+/// Width and height swap about the box centre, so rotating the laid-out
+/// result about that same centre lands it back inside the cell.
+pub(crate) fn transposed_box(x: f64, y: f64, width: f64, height: f64) -> (f64, f64, f64, f64) {
+    let center_x = x + width / 2.0;
+    let center_y = y + height / 2.0;
+    (
+        center_x - height / 2.0,
+        center_y - width / 2.0,
+        height,
+        width,
+    )
 }
 
 /// Lay out a table into a TableBlock.
@@ -333,6 +388,7 @@ pub fn layout_table(
     fm: &mut FontManager,
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<TableBlock> {
     layout_table_inner(
         tbl,
@@ -346,6 +402,7 @@ pub fn layout_table(
         None,
         &WordStory::Document,
         &[],
+        doc_grid,
     )
     .map(|(block, _)| block)
 }
@@ -362,6 +419,7 @@ pub(crate) fn layout_table_with_provenance(
     sources: Option<&SourceRegistry>,
     story: &WordStory,
     path: &[usize],
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(TableBlock, TableSemantics)> {
     layout_table_inner(
         tbl,
@@ -375,9 +433,11 @@ pub(crate) fn layout_table_with_provenance(
         sources,
         story,
         path,
+        doc_grid,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layout_table_inner(
     tbl: &CT_Tbl,
     available_width: f64,
@@ -390,6 +450,7 @@ fn layout_table_inner(
     sources: Option<&SourceRegistry>,
     story: &WordStory,
     path: &[usize],
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(TableBlock, TableSemantics)> {
     let direct_width = tbl
         .properties
@@ -440,6 +501,7 @@ fn layout_table_inner(
         fm,
         num_state,
         path,
+        doc_grid,
     )? {
         Some(widths) => widths,
         None => compute_column_widths(tbl.grid.as_ref(), available_width, tbl, path),
@@ -616,13 +678,42 @@ fn layout_table_inner(
 
             let content_width = (cell_width - cell_margin_left - cell_margin_right).max(0.0);
 
+            // A rotated cell lays its content out in a same-centre transposed
+            // box, so the measure runs along the cell's height rather than its
+            // width. The painted box is the cell's height less its left and
+            // right margins, because those margins sit across the transposed
+            // box, so the measure subtracts the same pair. A row that declares
+            // a height gives the measure exactly. An auto-height row grows to
+            // the text, so the cell lays out unwrapped and the row becomes the
+            // length it produced, which is then the measure the paginator
+            // paints into.
+            let cell_direction = cell
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.text_direction.as_deref());
+            let rotation = cell_rotation(cell);
+            if cell_direction.is_some_and(text_direction_stacks_upright) {
+                crate::engine::push_unique_diagnostic(
+                    diagnostics,
+                    UPRIGHT_STACK_DIAGNOSTIC.to_owned(),
+                );
+            }
+            let declared_height = row_properties.height.map(|h| h.to_pt()).unwrap_or(0.0);
+            let layout_width = match rotation {
+                Some(_) if declared_height > 0.0 => {
+                    (declared_height - cell_margin_left - cell_margin_right).max(1.0)
+                }
+                Some(_) => VERTICAL_AUTO_MEASURE,
+                None => content_width,
+            };
+
             // Layout cell content (paragraphs and nested tables)
             let (blocks, block_semantics) = if is_vmerge_continue {
                 (Vec::new(), Vec::new())
             } else {
                 layout_cell_content(
                     &cell.content,
-                    content_width,
+                    layout_width,
                     styles,
                     input,
                     media,
@@ -634,12 +725,21 @@ fn layout_table_inner(
                     cell_path,
                     style_cell.paragraph_properties.as_ref(),
                     style_cell.run_properties.as_ref(),
+                    doc_grid,
                 )?
             };
 
-            let content_height: f64 = blocks.iter().map(CellBlock::total_height).sum::<f64>()
-                + cell_margin_top
-                + cell_margin_bottom;
+            // A rotated cell contributes the transposed box's measure to the
+            // row, because its line direction runs down the cell. The left and
+            // right margins are added back, so the row height the paginator
+            // then strips them from is exactly the measure this laid out at.
+            let content_height: f64 = if rotation.is_some() && !is_vmerge_continue {
+                measured_content_width(&blocks) + cell_margin_left + cell_margin_right
+            } else {
+                blocks.iter().map(CellBlock::total_height).sum::<f64>()
+                    + cell_margin_top
+                    + cell_margin_bottom
+            };
 
             let v_align = cell.properties.as_ref().and_then(|p| p.v_align);
 
@@ -664,6 +764,7 @@ fn layout_table_inner(
                 is_first_row: row_idx == 0,
                 is_last_row: row_idx == num_rows - 1,
                 v_align,
+                rotation,
             });
             cell_semantics.push(CellSemantics {
                 blocks: block_semantics,
@@ -1060,6 +1161,16 @@ fn overlay_table_properties(target: &mut CT_TblPr, source: &CT_TblPr) {
     }
 }
 
+/// The line-length measure an auto-height rotated cell lays out against.
+///
+/// A rotated cell's line direction runs down the cell, so its measure is the
+/// row height. An auto-height row has no height until its content produces
+/// one, and Word grows such a row to the text rather than wrapping it, so the
+/// cell lays out against a measure only a forced break ends a line inside.
+/// Measuring it against the column width instead would wrap on the stacking
+/// axis, and the stack would then be taller than the column is wide.
+const VERTICAL_AUTO_MEASURE: f64 = AUTOFIT_MAX_TRIAL_WIDTH;
+
 /// The trial width a maximum content measurement is taken against.
 ///
 /// Wide enough that only a forced break ends a line, so the longest line is
@@ -1096,6 +1207,7 @@ fn autofit_column_widths(
     fm: &mut FontManager,
     num_state: &NumberingState,
     path: &[usize],
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<Option<Vec<f64>>> {
     let properties = tbl.properties.as_ref();
     // ECMA makes autofit the default when `w:tblLayout` is absent, but this
@@ -1189,6 +1301,10 @@ fn autofit_column_widths(
                     (width, width)
                 }
                 None => {
+                    // A rotated cell is measured in its transposed box, so the
+                    // width it needs is the stacked height of its lines, not
+                    // their length. Its line length belongs to the row height.
+                    let rotated = cell_rotation(cell).is_some();
                     let mut measure = |trial_width: f64| -> Result<f64> {
                         let mut measurement_state = num_state.clone();
                         let mut measurement_diagnostics = Vec::new();
@@ -1206,12 +1322,31 @@ fn autofit_column_widths(
                             cell_path,
                             style_cell.paragraph_properties.as_ref(),
                             style_cell.run_properties.as_ref(),
+                            doc_grid,
                         )?;
-                        Ok(measured_content_width(&blocks))
+                        Ok(if rotated {
+                            blocks.iter().map(CellBlock::total_height).sum::<f64>()
+                        } else {
+                            measured_content_width(&blocks)
+                        })
                     };
-                    let minimum = measure(AUTOFIT_MIN_TRIAL_WIDTH)?.max(0.0) + horizontal_margin;
-                    let maximum = measure(AUTOFIT_MAX_TRIAL_WIDTH)?.max(0.0) + horizontal_margin;
-                    (minimum, maximum)
+                    if rotated {
+                        // The stacked height runs the other way to a content
+                        // width across the two trials: a one-point trial puts
+                        // one word on every line and makes the stack as tall
+                        // as it can be. Measuring a rotated cell at the narrow
+                        // trial would hand its minimum the largest number it
+                        // can produce, so it is measured once, at the width
+                        // its lines will actually have.
+                        let width = measure(AUTOFIT_MAX_TRIAL_WIDTH)?.max(0.0) + horizontal_margin;
+                        (width, width)
+                    } else {
+                        let minimum =
+                            measure(AUTOFIT_MIN_TRIAL_WIDTH)?.max(0.0) + horizontal_margin;
+                        let maximum =
+                            measure(AUTOFIT_MAX_TRIAL_WIDTH)?.max(0.0) + horizontal_margin;
+                        (minimum, maximum)
+                    }
                 }
             };
             maximum = maximum.max(minimum);
@@ -1384,6 +1519,7 @@ fn layout_cell_content(
     cell_path: &[usize],
     table_style_ppr: Option<&rdocx_oxml::properties::CT_PPr>,
     table_style_rpr: Option<&rdocx_oxml::properties::CT_RPr>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(Vec<CellBlock>, Vec<CellBlockSemantics>)> {
     use crate::engine;
     use rdocx_oxml::table::CellContent;
@@ -1408,6 +1544,7 @@ fn layout_cell_content(
                     source,
                     table_style_ppr,
                     table_style_rpr,
+                    doc_grid,
                 )?;
                 blocks.push(CellBlock::Paragraph(block));
                 semantics.push(CellBlockSemantics::Paragraph(ParagraphSemantics {
@@ -1430,6 +1567,7 @@ fn layout_cell_content(
                     sources,
                     story,
                     &source_path,
+                    doc_grid,
                 )?;
                 blocks.push(CellBlock::Table(nested));
                 semantics.push(CellBlockSemantics::Table(nested_semantics));
@@ -1448,6 +1586,7 @@ fn layout_cell_content(
                 &source_path,
                 table_style_ppr,
                 table_style_rpr,
+                doc_grid,
                 &mut blocks,
                 &mut semantics,
             )?,
@@ -1471,6 +1610,7 @@ fn layout_control_cell_content(
     path: &[usize],
     table_style_ppr: Option<&rdocx_oxml::properties::CT_PPr>,
     table_style_rpr: Option<&rdocx_oxml::properties::CT_RPr>,
+    doc_grid: Option<&CT_DocGrid>,
     blocks: &mut Vec<CellBlock>,
     semantics: &mut Vec<CellBlockSemantics>,
 ) -> Result<()> {
@@ -1494,6 +1634,7 @@ fn layout_control_cell_content(
                     source,
                     table_style_ppr,
                     table_style_rpr,
+                    doc_grid,
                 )?;
                 blocks.push(CellBlock::Paragraph(block));
                 semantics.push(CellBlockSemantics::Paragraph(ParagraphSemantics {
@@ -1515,6 +1656,7 @@ fn layout_control_cell_content(
                     sources,
                     story,
                     &source_path,
+                    doc_grid,
                 )?;
                 blocks.push(CellBlock::Table(nested));
                 semantics.push(CellBlockSemantics::Table(nested_semantics));
@@ -1533,6 +1675,7 @@ fn layout_control_cell_content(
                 &source_path,
                 table_style_ppr,
                 table_style_rpr,
+                doc_grid,
                 blocks,
                 semantics,
             )?,
@@ -1924,6 +2067,7 @@ mod tests {
             &mut font_manager,
             &mut numbering,
             &mut Vec::new(),
+            None,
         )
         .unwrap()
     }
@@ -2116,6 +2260,7 @@ mod tests {
             &mut fm,
             &mut num_state,
             &mut diagnostics,
+            None,
         );
         assert!(result.is_ok());
         let block = result.unwrap();

@@ -184,6 +184,10 @@ impl NoteRegistry {
                             num_state,
                             diagnostics,
                             source,
+                            // Note text is page furniture at the bottom
+                            // margin, laid out against its own measure, so
+                            // the section grid does not reach it.
+                            None,
                         )?;
                         let first = lines.len();
                         if block.has_visible_revision && !block.lines.is_empty() {

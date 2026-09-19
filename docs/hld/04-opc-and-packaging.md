@@ -1126,13 +1126,18 @@ is the rule `w:kern` already follows.
 Section property readers select every modeled `w:sectPr` child by its bound
 WordprocessingML namespace and replay each retained raw child at its recorded
 schema slot and sub-slot. The sub-slot is what keeps `xsd:sequence` intact now
-that `w:vAlign` sits between `w:formProt` and `w:noEndnote`, and
-`w:textDirection` between `w:titlePg` and `w:bidi`. `w:footnotePr`,
-`w:endnotePr`, `w:paperSrc`, `w:pgBorders`, `w:lnNumType`, `w:vAlign` and
-`w:textDirection` are modeled. `w:formProt`, `w:noEndnote`, `w:bidi`,
-`w:rtlGutter`, `w:docGrid` and `w:printerSettings` stay byte-preserved at their
-slots, and `w:bidi` and `w:rtlGutter` belong to the bidirectional family of
-F-266. `w:pgBorders`, `w:paperSrc` and `w:lnNumType` write their retained
+that `w:vAlign` sits between `w:formProt` and `w:noEndnote`,
+`w:textDirection` between `w:titlePg` and `w:bidi`, and `w:docGrid` between
+`w:rtlGutter` and `w:printerSettings`. `w:footnotePr`, `w:endnotePr`,
+`w:paperSrc`, `w:pgBorders`, `w:lnNumType`, `w:vAlign`, `w:textDirection` and
+`w:docGrid` are modeled. `w:formProt`, `w:noEndnote`, `w:bidi`, `w:rtlGutter`
+and `w:printerSettings` stay byte-preserved at their slots, and `w:bidi` and
+`w:rtlGutter` belong to the bidirectional family of F-266. `w:docGrid` reads
+its `w:type`, `w:linePitch` and `w:charSpace` prefix-tolerantly, keeps any
+other attribute in source order, and writes the retained attributes before the
+modeled ones under the fixed `w:` prefix. A value outside `ST_DocGrid`, or a
+pitch or space that is not an integer, is retained as an unmodelled attribute
+rather than typed in part. `w:pgBorders`, `w:paperSrc` and `w:lnNumType` write their retained
 attributes before the modeled ones, exactly as a border edge does. A modeled
 child whose source element carried an attribute the model does not own is
 replayed in place of the canonical form rather than typed in part, which is the
