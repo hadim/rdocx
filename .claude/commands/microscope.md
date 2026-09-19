@@ -42,9 +42,11 @@ Without it, review the F-ID's commits on the sprint branch.
 
 6. **Write** `.claude/reviews/F-XXX-<aspect>-pass-N.md`, incrementing `N`.
 
-7. **Iterate.** The implementing session fixes defects and smells, then
-   `/microscope` runs again as pass `N+1`. **The exit condition is zero defects
-   and zero smells.** Nitpicks may remain.
+7. **Hand back.** Return after the review file is written. The implementing
+   phase fixes defects and smells, then `/microscope` runs again as pass `N+1`.
+   An active orchestration command may perform those phases sequentially in the
+   same user invocation. **The exit condition is zero defects and zero smells.**
+   Nitpicks may remain.
 
 ## Template
 
@@ -84,4 +86,6 @@ Aspects checked that produced nothing. Say so explicitly, by name.
 - **Manufacturing findings to fill a section.** Zero findings in a category is a
   valid and expected result. Report it as such.
 - **Reviewing an F-ID that is not `in-progress`.**
-- **Beginning remediation.** Stop when the review file is written.
+- **Beginning remediation inside the review pass.** Return to the caller when
+  the review file is written. An active orchestration command may then begin a
+  distinct remediation phase without asking for another user invocation.

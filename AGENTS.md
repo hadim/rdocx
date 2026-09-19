@@ -163,7 +163,11 @@ working diff.
    delete it rather than softening it.
 3. Reporting zero findings in a category is a valid and expected result. Say so
    explicitly. Do not manufacture findings to fill a section.
-4. Stop when the required output file is written. Do not begin remediating.
+4. End the review pass when the required output file is written. Do not begin
+   remediating inside that pass. If an orchestration command invoked the review,
+   return control to it.
 
 Remediation is the opposite mode: a normal F-ID, the normal lifecycle, a working
-diff with tests. The two must not happen in the same session.
+diff with tests. Keep the review pass and remediation phase distinct. An
+orchestration command may run them sequentially in one session without another
+user invocation.

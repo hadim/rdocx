@@ -307,7 +307,9 @@ confirmation pass after a clean pass.
 Otherwise: fix every safe `fix-now` finding, re-run the impacted checks, commit
 the remediation separately, and start a fresh independent pass. Reuse finding
 IDs across passes so a reader can follow one defect through the sprint. Record
-each pass with `record-review`.
+each pass with `record-review`. Continue this loop inside the current
+`/run-sprint` invocation. A review pass remains read-only, but returning from it
+to a distinct remediation phase does not require another user invocation.
 
 At the bound, if actionable findings remain, `set-phase SNN blocked`, do not
 push, and report what is outstanding. Closure stays forbidden.
@@ -352,5 +354,7 @@ When the latest pass is clean:
 - **Deleting a worker branch or worktree.** `/close-sprint` owns cleanup after
   the sprint is safely pushed.
 - **Running a confirmation pass after a clean review pass.**
+- **Asking the user to rerun `/run-sprint` solely to cross from a completed
+  review pass into its remediation phase.**
 - **Merging to `main` or creating a tag directly.** `/close-sprint` owns the
   merge and sprint tag. `/release` owns release tags.
