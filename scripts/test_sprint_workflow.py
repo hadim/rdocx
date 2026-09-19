@@ -9355,7 +9355,7 @@ Pedro Assumpcao and the rdocx maintainers.
         incomplete = {"partial", "unsupported"}
         expected_owners = {
             f"F-{number:03d}"
-            for number in range(244, 311)
+            for number in range(244, 313)
             if number
             not in {
                 244,
@@ -9378,6 +9378,11 @@ Pedro Assumpcao and the rdocx maintainers.
                 261,
                 262,
                 263,
+                # F-264 and F-265 delivered the authoring columns of DOCX-030
+                # and DOCX-032 in S74 and handed the remaining layout and
+                # render work to F-311 and F-312, so neither owns a row now.
+                264,
+                265,
                 # F-269 delivered the section page semantics of DOCX-036 in
                 # S74 and handed the row's remaining note policy to F-274, so
                 # it no longer owns an incomplete row.

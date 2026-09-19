@@ -3060,6 +3060,26 @@ markup compatibility before publication.
 **Test gate**: differential. The complete generated corpus passes the strict
 validator and pinned Word no-repair check, and one mutation per rule fails.
 
+### F-311, Positioned paragraph frame placement (M)
+Lay out and render the `w:framePr` positioned paragraph frame, including its
+anchors, wrap mode, drop cap and the text that flows around it. F-264 models
+and authors the whole property, so this story is layout and rendering only.
+**Depends on**: F-264.
+**Test gate**: golden. A page holding a margin-anchored frame, a page-anchored
+frame and a drop cap matches the pinned deterministic geometry, and the
+surrounding text wraps where Word wraps it.
+
+### F-312, Run visual effect render projection (L)
+Render the run effects F-265 models but does not paint: `w:outline` stroke-only
+glyphs, `w:shadow` and `w:emboss` and `w:imprint` relief, the `w:bdr` character
+border box, `w:kern` gating by size, and `w:fitText` horizontal segment
+scaling. Needs new segment state in `oxml-layout` and the matching PDF backend
+work, which is why F-265 stopped at the model.
+**Depends on**: F-265.
+**Test gate**: golden. One deterministic page carrying every effect matches its
+pinned geometry, and a run with no effect is byte identical to the same run
+before this story.
+
 ### F-310, Determinism, resource limits, bindings, and stability gate (L)
 Close M24 with byte determinism, explicit memory and time bounds, cancellation,
 complex-document performance budgets, native, Python, WASM, and CLI capability

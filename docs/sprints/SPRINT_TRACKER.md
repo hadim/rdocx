@@ -475,6 +475,11 @@ defended.
 | F-X124 | S74 | M | 2 | 1 | 2026-09-18 | Made Python content cloning linear through one owned body inventory and added explicit source and destination type errors |
 | F-X125 | S74 | M | 2 | 1 | 2026-09-18 | Compared gained, lost, and resized table grids as exact tracked table replacements with clean accept and reject outcomes |
 | F-X127 | S74 | S | 1 | 1 | 2026-09-18 | Collapsed adjacent trailing run and paragraph page-break requests while preserving visible and structural boundaries |
+| F-267 | S74 | L | 5 | 1 | 2026-09-19 | Completed table style conditional layers and fixed three precedence defects that resolved bands and chains unlike Word |
+| F-269 | S74 | L | 5 | 1 | 2026-09-19 | Made authored columns reach pagination and typed seven preserved section children without moving a harness entry |
+| F-265 | S74 | L | 5 | 1 | 2026-09-19 | Typed sixteen run children and closed three theme-attribute data-loss paths, deferring the visual effect render to F-312 |
+| F-270 | S74 | L | 5 | 1 | 2026-09-19 | Modeled the remaining settings behind one order table and made web settings a modeled part |
+| F-264 | S74 | L | 5 | 1 | 2026-09-19 | Typed nine paragraph children and shipped the full paragraph facade, with border retention and w:bidi as cross-story contracts |
 | F-X131 | S74 | S | 1 | 1 | 2026-09-19 | Stopped modeled roots rebinding a namespace their scope already owns, clearing five pre-existing F-X128 failures |
 | F-X129 | S74 | S | 1 | 1 | 2026-09-18 | Skipped unmatched notes-slide placeholder overlays with ordered diagnostics while preserving strict ownership failures |
 | F-X128 | S74 | M | 2 | 1 | 2026-09-18 | Preserved ordered paragraph, run, and section root identities across save, reopen, and typed mutation |

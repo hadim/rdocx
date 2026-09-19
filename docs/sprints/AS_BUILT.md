@@ -15434,6 +15434,228 @@ Poppler PDF coverage remains green.
 Do not generalize it into suppression of page breaks on empty pages, since
 explicit blank pages remain valid authored content.
 
+### F-267, Complete table style and conditional formatting authoring
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The two conditional property layers the projection dropped,
+`w:rPr` and `w:trPr`, plus a table style's own base row and cell properties and
+the two band sizes. An ordered `TableStyleRegion` enum whose declaration order
+is Word's priority order, a table-style run layer threaded into
+`resolve_run_properties`, typed per-region authoring and removal, and
+`w:cnfStyle` on `w:pPr` handed over by F-264.
+
+**Non-obvious choices.** Three precedence defects were fixed, not worked
+around. The vertical band was overriding the horizontal band because later
+regions overwrote earlier ones and the push order was inverted. A derived
+style's `wholeTable` was beating a base style's `firstRow` because the
+conditional merge ran inside the `basedOn` loop instead of flattening the chain
+per region first. Banding ignored band size and counted from the header row and
+first column rather than skipping them. Precedence is now a property of the
+enum's declaration order, which is why removing a single `sort_unstable` makes
+the gate fail.
+
+**Deviations from the design plan.** Two, both narrowing and both recorded in
+the handoff. Only the run layer joins `ResolvedTableCellStyle`, because no
+checklist item or test covered cell margins, vertical alignment or text
+direction and threading them would be an unverified layout change the harness
+cannot see. `StyleBuilder` gained row and cell property setters the Approach
+did not spell out, without which the newly modeled base layers would be
+read-only and DOCX-034 could not claim Create or Mutate.
+
+**Spec sections touched.** The six files the plan listed.
+
+**Tests.** `every_conditional_table_region_matches_word` is the gate, proven
+reversible. Thirteen tests including the three precedence regressions, each
+named as the failure it prevents.
+
+**Hash harness.** Unchanged, 49 of 49. Both named failure modes were checked
+first, no sample carries a band size and the new run layer is `None` outside a
+styled table.
+
+**Notes for future sessions.** The differential found a real oracle divergence.
+LibreOffice paints the vertical band where Word and this workspace paint the
+horizontal band, which is the inversion this story fixes. Both sides are
+asserted so neither our resolution nor an oracle upgrade can move silently.
+DOCX-034 stays partial because conditional row geometry is applied by F-268a,
+so the row's owner moved to F-268.
+
+### F-269, Complete section page semantics
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The seven `w:sectPr` children that were preserved but
+untyped, and the layout that makes them mean something. Page borders, line
+numbering, variable-width columns with separators, vertical page alignment and
+mirrored margins with gutter reach pagination. Paper source, the book fold trio
+and the section note properties round-trip only.
+
+**Why it matters.** `Section::set_columns` wrote valid XML the layout engine
+never read, while `docs/hld/08-rendering-spec.md` already claimed columns
+reached pagination. That was spec drift rather than an omission, and the claim
+is now true.
+
+**Non-obvious choices.** The single-column path returns the geometry untouched
+rather than evaluating a neutral one-track form. Routing it through generalised
+track arithmetic would reassociate float operations and shift a glyph by an
+ulp, moving all seven page images and all 21 PDF entries with nothing visible
+changing. `a_single_column_section_keeps_its_exact_content_width` holds that
+line and also asserts a two-column section does move, so it cannot pass
+vacuously. Line numbers are a PDF artifact excluded from the reading order,
+which is what a screen reader wants. `w:vAlign="both"` preserves its value,
+lays out as `Top` and emits a diagnostic.
+
+**Deviations from the design plan.** Five `CT_SectPr` members are boxed,
+because growing the struct inline overflowed the 2 MiB test-thread stack in the
+same comparison test that caught F-264. The differential states an SSIM floor
+as a collapse guard rather than a similarity claim, with the layout claim
+carried by an ink block comparison.
+
+**Spec sections touched.** The five files the plan listed.
+
+**Tests.** `section_page_semantics_match_pinned_libreoffice_render` is the
+gate, and it fails with two ink blocks instead of four when column resolution
+is bypassed.
+
+**Hash harness.** Unchanged, 49 of 49, checked at every layer rather than once
+at the end.
+
+**Notes for future sessions.** Line breaking uses the first track's measure for
+a whole section, so unequal tracks break to the first one's measure while
+positioning still uses each track's own geometry. Recorded as F-269c alongside
+column balancing. Word confirmation is F-269a, true vertical distribution is
+F-269b. DOCX-036's owner moved to F-274, which owns the remaining note policy.
+
+### F-265, Complete run property and inline authoring
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The sixteen remaining `EG_RPrBase` children at the slots
+they already owned, the complete `w:rFonts` slot set with `w:hint`, typed
+theme colour with tint and shade, and two ordered inline variants for symbols
+and special characters.
+
+**Why it matters.** Three real data-loss paths were closed. `w:rFonts` was
+dropping `eastAsiaTheme`, `cstheme` and `hint`, `w:color` was dropping
+`themeTint` and `themeShade`, and `CT_Shd` was dropping all six of its theme
+attributes, so a no-op save silently discarded producer theme intent.
+
+**Non-obvious choices.** Explicit font replacement now clears that slot's theme
+attribute, which is a correction rather than a change: the previous call left a
+`w:rFonts` where Word still resolved the theme font and the caller's explicit
+choice did nothing. `apply_tint_shade` goes live for the first time with a
+zero-line diff on `theme.rs`, because it is deliberately naive and correcting
+it during the migration would be indistinguishable from a bug. Ordered inline
+content gained two `RunContent` variants rather than six, because the enum is
+matched in ten files and 137 times in the layout engine alone.
+
+**Deviations from the design plan.** The render projection for `w:outline`,
+`w:shadow`, `w:emboss`, `w:imprint`, `w:bdr`, `w:kern` and `w:fitText` is not
+built. It needs new segment state in `oxml-layout`, a format-neutral crate with
+32 `TextSegment` literals, plus PDF backend work, which is a story of its own.
+What does render is `w:sym`, `w:cr`, `w:noBreakHyphen`, `w:ptab` and the tint
+and shade step. Three existing members were boxed to stay under the stack
+ceiling.
+
+**Spec sections touched.** The eight files the plan listed.
+
+**Tests.** `complete_run_formatting_and_inline_order_match_the_pinned_word_reference`
+is the gate, proven to fail when the `w:themeTint` write is disabled.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The explicit-before-theme font priority diverges
+from Word deliberately and is asserted so the differential finding is
+pre-explained. DOCX-032 stays partial and its owner moved to F-312, which owns
+the render projection.
+
+### F-270, Complete settings and web settings authoring
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** One `SETTINGS_ORDER` table replacing three hand-maintained
+copies, a closed 31-name `SUPPORTED_SETTINGS` constant, diagnostics computed
+once during parse, `w:proofState`, the complete closed `w:compat` on-off set,
+mail merge with in-group ordering, every missing remover, and typed document
+protection. Web settings became a modeled part for the first time, with its own
+module, relationship type and facade wiring.
+
+**Non-obvious choices.** `SUPPORTED_SETTINGS` makes "no unmodeled supported
+child" decidable rather than a judgement, and a unit test proves it is a strict
+subsequence of the order table. Diagnostics let a caller tell absent from
+present but not owned, which the previous silent reset to `None` made
+impossible. A fresh Word-compatible package still gains no web settings part,
+so the authoring conformance member set is unchanged. Document protection
+records caller metadata verbatim and derives no password material, stated as an
+explicit non-goal rather than left as a gap.
+
+**Deviations from the design plan.** `CompatibilityOption::find` is
+prefix-aware rather than taking a local name. The facade mail-merge accessors
+carry a `_settings` suffix because `Document::mail_merge` already names the
+field-merge operation.
+
+**Spec sections touched.** The five files the plan listed.
+
+**Tests.** `public_authored_settings_package_reports_no_unmodeled_supported_children`
+is the gate. It does not merely fail against reverted code, it does not
+compile, because the whole surface is new.
+
+**Hash harness.** Unchanged, 49 of 49. `word/settings.xml` is not a recorded
+part, and the default tab fallback is byte identical to the literal it
+replaced.
+
+**Notes for future sessions.** Two defects were caught in microscope rather
+than by a user: a self-closing group leaked its namespace scope onto following
+siblings, and a self-closing `w:divs` swallowed every later top-level child.
+Both have named regressions. `oxml-layout` needs a pre-1.0 minor bump for the
+new public `LineBreakParams` field.
+
+### F-264, Complete paragraph property authoring
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The nine remaining `w:pPr` children plus `CT_FramePr` and
+`w:divId`, each at the schema slot it already owned, and the full paragraph
+facade: logical indentation, automatic spacing, six border edges, shading,
+indexed tab stops, frames, outline level, direction and the paragraph mark.
+
+**Non-obvious choices.** Two changes are contracts other S74 stories consume.
+`CT_BorderEdge` gained ordered attribute retention covering `w:shadow`,
+`w:frame` and the three theme attributes, which F-269 uses for page borders
+instead of adding a second retaining path. The `w:bidi` setter ships here
+because F-266a needs to build a right-to-left fixture through the public
+facade. `w:divId` is typed here because it is a `w:pPr` child and this was the
+only wave 1 story editing `CT_PPr`, while F-270 owns the web settings half.
+
+**Deviations from the design plan.** `CT_PPr::frame` and `CT_PPr::borders` are
+boxed. Typing the new members inline grew the struct enough to overflow the
+2 MiB test-thread stack in two existing comparison tests, and bisecting showed
+the base was already peaking at 2.03 to 2.06 MiB with effectively no margin.
+`CT_PPr` is now 192 bytes smaller than the base. This follows F-084, which
+boxed for the same reason and explicitly rejected raising `RUST_MIN_STACK`.
+
+**Spec sections touched.** The five files the plan listed.
+
+**Tests.** `every_public_paragraph_property_reopens_and_preserves_unrelated_xml`
+is the gate, proven real by reverting the `w:framePr` write.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The stack ceiling is real and shared. Three more
+S74 stories hit it after this one. Box composite members from the start.
+DOCX-030 stays partial and its owner moved to F-311, which owns positioned
+frame placement.
+
 ### F-X131, Retain only the namespace declarations a root attribute uses
 
 **Sprint.** S74
