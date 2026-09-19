@@ -429,6 +429,16 @@ duplicate rejection and authored paragraph identity precedence, so an authored
 local name. Typed child mutation leaves all other retained root attributes in
 source order.
 
+Retention covers attributes, not namespace bindings. A declaration is recorded
+only when a retained attribute uses its prefix, because the alias machinery
+already materializes a binding onto every element that needs one, and recording
+a declaration a child carries for itself would emit it twice. A root carrying
+nothing but declarations retains no record at all. On the way back out, the
+canonical `w14` binding is not copied onto the written element, since the part
+root that owns the element already declares it and the authored identity write
+makes the same assumption. Together these keep a reopened save byte identical
+to the save it was read from.
+
 An unknown default namespace declared on the document root is classified by
 its effective lexical scope before canonical serialization. An unused root
 default may be omitted without blocking a typed mutation. An unprefixed element

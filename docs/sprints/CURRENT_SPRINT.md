@@ -55,6 +55,7 @@ evidence.
 | F-X128 | Preserve Word paragraph and revision identities | M | done | - |
 | F-X129 | Tolerate unmatched notes placeholders | S | done | - |
 | F-X130 | Show package depth, footprint, and speed | L | pending | - |
+| F-X131 | Retain only the namespace declarations a root attribute uses | S | done | - |
 
 ## Sequencing note
 

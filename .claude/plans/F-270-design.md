@@ -130,9 +130,12 @@ story consumes them and F-270 runs in wave 1 and completes first.
   work and adds none of its own. Building them here removes a duplicate-accessor
   conflict inside a single file. `bookFoldPrintingSheets` is a signed integer
   sheet count, the other four are on-off toggles.
-- **`w:divId`.** F-264 leaves it raw-preserved at the slot already reserved at
-  `crates/rdocx-oxml/src/properties.rs:2571` and hands it to F-270, because it
-  references a `w:div` in the web settings part that only this story models.
+- **`w:divId`.** F-264 types the `CT_PPr` field at slot 31 and ships its
+  paragraph facade accessor, because `w:divId` is a `w:pPr` child and F-264 is
+  the only wave 1 story that edits `CT_PPr`. This story owns the other half,
+  `CT_WebSettings` and the read-only `div_ids()` projection that says whether a
+  reference resolves. Splitting it this way keeps two wave 1 workers out of one
+  struct.
 
 `SUPPORTED_SETTINGS` is a strict subsequence of the existing 96-name order
 table, and a unit test proves that mechanically.
@@ -406,7 +409,7 @@ moving, so it is not an optional detail.
 | integration | `web_settings_part_is_created_on_demand_and_pruned_when_empty` | A document without a web settings relationship gains no part on an ordinary save, gains a collision-safe part and relationship on the first authored value, and loses the part, relationship and content-type override when the last value is removed. |
 | integration | `fresh_package_profiles_gain_no_web_settings_part` | The four Word-compatible profiles keep their exact existing member inventory. |
 | unit | `document_default_tab_stop_drives_implicit_tab_positions` | A paragraph with no explicit tab stops resolves implicit stops at the document `w:defaultTabStop` interval, and an absent setting reproduces the 36.0 point fallback exactly. Deterministic font mode. |
-| round-trip | `paragraph_div_id_round_trips_and_resolves_against_web_settings` | `w:divId` is typed at slot 31, survives save and reopen with neighbouring `w:pPr` children byte identical, and `CT_WebSettings::div_ids()` reports the declared divisions so an unresolved reference is detectable. A paragraph whose `w:divId` names no declared division still round-trips unchanged. |
+| round-trip | `web_settings_divisions_are_reported_for_reference_checking` | `CT_WebSettings::div_ids()` reports every declared `w:div` from a producer web settings part, the retained `w:divs` subtree stays byte identical through save and reopen, and an empty or absent `w:divs` reports no divisions. This asserts only this story's half. F-264 owns the `w:divId` field and its round-trip, and the two halves meet at integration rather than inside either worker. |
 | round-trip | `mirror_margins_gutter_at_top_and_book_fold_round_trip` | The five accessors F-269 consumes read, write, remove and survive save and reopen, with `bookFoldPrintingSheets` keeping its integer value and all five landing at their schema positions between `saveFormsData` and `hideSpellingErrors` and between `evenAndOddHeaders` and `characterSpacingControl`. |
 | unit | `document_protection_authoring_records_caller_metadata_verbatim` | `set_document_protection` stores the caller's hash, salt and spin count unchanged and derives nothing, and two identical calls produce byte-identical output. Pins the non-goal. |
 | unit | `compatibility_option_covers_the_complete_compat_on_off_set` | Every `CompatibilityOption` variant maps to a distinct local name, the set matches the closed `CT_Compat` on-off child list, and a fixture carrying all of them reports zero diagnostics. |
@@ -503,10 +506,9 @@ If any of the 49 entries moves, that is an unexplained delta and the work stops.
 - [ ] Deliver the `w:mirrorMargins`, `w:gutterAtTop`, `w:bookFoldRevPrinting`,
       `w:bookFoldPrinting` and `w:bookFoldPrintingSheets` accessors that F-269
       consumes. These are contract deliverables, not incidentals.
-- [ ] Type `w:divId` on `CT_PPr` at the reserved slot 31
-      (`crates/rdocx-oxml/src/properties.rs:2571`), expose it on the paragraph
-      facade, and add `CT_WebSettings::div_ids()` over the retained `w:divs`
-      subtree. Taken over from F-264.
+- [ ] Add `CT_WebSettings::div_ids()` over the retained `w:divs` subtree, so a
+      caller can tell whether a `w:divId` resolves. F-264 types the `CT_PPr`
+      field and its facade accessor, because it owns `CT_PPr` in wave 1.
 - [ ] Add the missing removers and `set_document_protection`, and extend
       `CT_Settings::is_empty` to every new member.
 - [ ] Add `crates/rdocx-oxml/src/web_settings.rs`, register it in

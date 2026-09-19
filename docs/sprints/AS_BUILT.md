@@ -15434,6 +15434,64 @@ Poppler PDF coverage remains green.
 Do not generalize it into suppression of page breaks on empty pages, since
 explicit blank pages remain valid authored content.
 
+### F-X131, Retain only the namespace declarations a root attribute uses
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Root-attribute retention now records a namespace
+declaration only when a retained attribute uses its prefix, and the write side
+no longer copies the canonical `w14` binding onto the element it restores.
+Together these stop a modeled root rebinding a prefix its surrounding scope
+already owns.
+
+**Why it exists.** Five tests were failing on `sprint/s74` before this story,
+all from F-X128. `every_property_revision_keeps_owner_local_aliases` in
+`rdocx-oxml`, and `intermediate_raw_shadow_is_safe_but_direct_fixed_prefix_use_fails_closed`,
+`unused_fixed_prefix_declarations_do_not_reject_safe_raw_replay`,
+`repeated_saves_are_byte_identical_after_allocation` and
+`typed_comment_flush_preserves_canonical_story_history` in `rdocx`. The failures
+were confirmed at `5d8e68cc` in a clean worktree with its own target directory,
+so they were not stale builds, and they were present on both sides of the
+property grammar split at `f224c3b2`. Two of the five appear only when
+`/private/tmp/rdocx-s73-bin` is first on `PATH`, which is part of why they
+survived integration.
+
+**Non-obvious choices.** The write side was fixed rather than the authored
+side. Making the authored path declare `xmlns:w14` would also have made the two
+paths agree, but it changes authored bytes and therefore breaks
+`WORD_COMMENT_CANDIDATE_SHA256`, which binds the exact file a human opened in
+Word 16.104 to confirm no repair. That evidence cannot be re-obtained in this
+workspace, so authored bytes were left untouched. The record still carries the
+declarations its own resolver needs, so F-X128's expanded-name precedence for
+an authored paragraph identity is unaffected.
+
+**Deviations from the design plan.** The plan described the capture side only.
+The write-side defect was found while running the wider gate and was folded
+into the same story, because it is the same mistake on the other side and
+splitting it would have left the branch red in between. Both the plan and the
+microscope record the addition.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for retention
+covering attributes rather than namespace bindings, and
+`docs/hld/14-development-backlog.md`, for the F-X131 acceptance contract.
+
+**Tests.** `a_section_root_retains_no_namespace_declaration_its_attributes_do_not_use`
+is the gate and was verified to fail against the unfixed capture side.
+`a_reopened_paragraph_identity_does_not_rebind_the_prefix_its_part_root_owns`
+covers the write side. `a_retained_root_attribute_keeps_the_declaration_its_own_prefix_needs`
+and `a_root_with_only_namespace_declarations_records_nothing` pin the capture
+rules. The five previously failing tests pass unedited, and no recorded
+baseline was re-recorded.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Run the gate with `/private/tmp/rdocx-s73-bin`
+first on `PATH`. Without it two different `rdocx` tests fail for an unrelated
+reason and the real failures stay hidden. Retention is for attributes. A
+namespace binding belongs to whatever scope already declares it.
+
 ### F-X129, Tolerate unmatched notes placeholders
 
 **Sprint.** S74

@@ -62,42 +62,40 @@ pub(crate) fn capture_root_attribute_record(
         let value = attribute
             .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
             .into_owned();
-        if !namespace_declaration(name) {
-            let namespace = root_attribute_namespace(name, &bindings)?;
-            let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
-            if !expanded.insert((namespace, local.to_vec())) {
-                return Err(OxmlError::InvalidValue(format!(
-                    "duplicate expanded root attribute `{}`",
-                    String::from_utf8_lossy(local)
-                )));
-            }
-            if let Some(separator) = name.iter().position(|byte| *byte == b':')
-                && let prefix = &name[..separator]
-                && prefix != b"xml"
-                && !used_prefixes.iter().any(|candidate| candidate == prefix)
-            {
-                used_prefixes.push(prefix.to_vec());
-            }
+        // A namespace declaration is not retained for its own sake. The loop
+        // below re-declares exactly the prefixes these attributes use, and the
+        // alias machinery declares the rest on the elements that use them, so
+        // recording a declaration here would emit it twice.
+        if namespace_declaration(name) {
+            continue;
         }
-        attributes.push((
-            std::str::from_utf8(name)?.to_owned(),
-            value,
-            namespace_declaration(name),
-        ));
+        let namespace = root_attribute_namespace(name, &bindings)?;
+        let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
+        if !expanded.insert((namespace, local.to_vec())) {
+            return Err(OxmlError::InvalidValue(format!(
+                "duplicate expanded root attribute `{}`",
+                String::from_utf8_lossy(local)
+            )));
+        }
+        if let Some(separator) = name.iter().position(|byte| *byte == b':')
+            && let prefix = &name[..separator]
+            && prefix != b"xml"
+            && !used_prefixes.iter().any(|candidate| candidate == prefix)
+        {
+            used_prefixes.push(prefix.to_vec());
+        }
+        attributes.push((std::str::from_utf8(name)?.to_owned(), value));
     }
     if attributes.is_empty() {
         return Ok(None);
     }
 
     let mut record = BytesStart::new(std::str::from_utf8(ROOT_ATTRIBUTES_ELEMENT)?);
-    for (name, value, _) in &attributes {
+    for (name, value) in &attributes {
         record.push_attribute((name.as_str(), value.as_str()));
     }
     for prefix in used_prefixes {
         let declaration = format!("xmlns:{}", String::from_utf8_lossy(&prefix));
-        if attributes.iter().any(|(name, _, _)| name == &declaration) {
-            continue;
-        }
         let namespace = bindings
             .iter()
             .find(|(candidate, _)| candidate.as_bytes() == prefix)
@@ -150,6 +148,13 @@ pub(crate) fn push_root_attribute_record(
         let attribute = attribute?;
         let name = attribute.key.as_ref();
         if existing.contains(name) {
+            continue;
+        }
+        // `w14` is bound by the part root that owns the element, the same
+        // assumption the authored `w14:paraId` write already makes. Rebinding
+        // it here would make a reopened save differ from the save it came
+        // from, purely by a declaration that changes nothing.
+        if name == b"xmlns:w14" && attribute.value.as_ref() == W14_NS.as_bytes() {
             continue;
         }
         if !namespace_declaration(name)
@@ -8325,6 +8330,50 @@ mod tests {
         assert!(output.contains(r#"w14:paraId="AAAAAAAA""#), "{output}");
         assert!(output.contains(r#"i:textId="22222222""#), "{output}");
         assert!(output.contains(r#"x:keep="yes""#), "{output}");
+    }
+
+    #[test]
+    fn a_retained_root_attribute_keeps_the_declaration_its_own_prefix_needs() {
+        let source = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:i="http://schemas.microsoft.com/office/word/2010/wordml" i:paraId="11111111"/>"#;
+        let paragraph = CT_P::from_xml_fragment(source).unwrap();
+        let mut output = Vec::new();
+        paragraph.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(r#"i:paraId="11111111""#), "{output}");
+        assert!(
+            output.contains(&format!(r#"xmlns:i="{W14_NS}""#)),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn a_reopened_paragraph_identity_does_not_rebind_the_prefix_its_part_root_owns() {
+        // A paragraph written with a bare `w14:paraId` and reopened used to
+        // come back carrying its own `xmlns:w14`, so saving the reopened
+        // document produced different bytes from the save it was read from.
+        let w_ns = crate::namespace::W_NS;
+        let source =
+            format!(r#"<w:p xmlns:w="{w_ns}" xmlns:w14="{W14_NS}" w14:paraId="00000001"/>"#);
+        let paragraph = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+        let mut output = Vec::new();
+        paragraph.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(r#"w14:paraId="00000001""#), "{output}");
+        assert!(
+            !output.contains("xmlns:w14"),
+            "the paragraph rebound a prefix its part root already owns: {output}"
+        );
+    }
+
+    #[test]
+    fn a_root_with_only_namespace_declarations_records_nothing() {
+        let start = BytesStart::from_content(
+            r#"w:sectPr xmlns:sa="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:sx="urn:section""#,
+            "w:sectPr".len(),
+        );
+        let record =
+            capture_root_attribute_record(&start, &["w".to_owned()]).expect("capture succeeds");
+        assert!(record.is_none(), "{record:?}");
     }
 
     #[test]

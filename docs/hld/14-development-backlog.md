@@ -2580,7 +2580,7 @@ content. Explicit-font replacement has a documented theme-clearing policy.
 **Test gate**: differential. Effective run formatting and inline ordering match
 the pinned Word reference across save, reopen, and render.
 
-### F-266, International and vertical typography (L, split at implementation)
+### F-266, International and vertical typography (L)
 Author and render bidirectional, East Asian, complex-script, vertical, ruby,
 phonetic, emphasis-mark, character-grid, and locale-sensitive text behavior.
 **Depends on**: F-264, F-265.
@@ -2627,7 +2627,7 @@ property layers.
 **Test gate**: differential. Every conditional region resolves and renders like
 the pinned Word-authored table.
 
-### F-268, Floating and advanced table layout (L, split at implementation)
+### F-268, Floating and advanced table layout (L)
 Author floating table positioning, overlap, bidirectional visual order, complete
 width modes, autofit, captions, descriptions, and advanced row-grid behavior.
 **Depends on**: F-257 through F-259.
@@ -5731,6 +5731,22 @@ wheel, source archive, and CLI bundle carries the intended README text.
 27-page inventory, complete family and Python depth summaries, bounded official
 comparisons, reproducible measurement provenance, checked examples, and
 byte-identical packaged long descriptions.
+
+### F-X131, Retain only the namespace declarations a root attribute uses (S)
+
+F-X128 retains producer root attributes on `CT_P`, `CT_R`, and `CT_SectPr`, but
+`capture_root_attribute_record` records every namespace declaration on the
+source element, including declarations no retained attribute uses. The existing
+alias machinery already materializes a binding onto each element that needs one,
+so a declaration used only by a child is emitted twice, once on the modeled root
+and once on the child. Retain a declaration only when a retained attribute uses
+its prefix.
+**Depends on**: F-X128.
+**Test gate**: regression.
+`a_section_root_retains_no_namespace_declaration_its_attributes_do_not_use`
+proves the redundant declaration is gone, that a declaration a retained
+attribute does use is still written, and that expanded-name precedence still
+resolves.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

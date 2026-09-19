@@ -1451,6 +1451,38 @@ mod tests {
     }
 
     #[test]
+    fn a_section_root_retains_no_namespace_declaration_its_attributes_do_not_use() {
+        // F-X128 retained every attribute on a modeled root, declarations
+        // included, so a binding used only by a child was written twice, once
+        // on `w:sectPr` and once on the child that already carried it.
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p/>
+<w:sectPr xmlns:sa="{W_NS}" xmlns:sx="urn:section"><sa:sectPrChange sa:id="401" sa:author="Ada"><sa:sectPr/></sa:sectPrChange><sx:sectPrChange sx:mark="raw"/></w:sectPr>
+</w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+        let output = String::from_utf8(document.to_xml().expect("document writes")).unwrap();
+
+        // The declaration reaches the one child that uses it, and no more.
+        assert_eq!(
+            output.matches(&format!(r#"xmlns:sa="{W_NS}""#)).count(),
+            1,
+            "{output}"
+        );
+        assert_eq!(
+            output.matches(r#"xmlns:sx="urn:section""#).count(),
+            1,
+            "{output}"
+        );
+        assert!(
+            !output.contains(&format!(r#"<w:sectPr xmlns:sa="{W_NS}""#)),
+            "the section root kept a declaration none of its attributes use: {output}"
+        );
+        assert!(output.contains(r#"sa:id="401""#), "{output}");
+        assert!(output.contains(r#"sx:mark="raw""#), "{output}");
+    }
+
+    #[test]
     fn revision_elements_round_trip_unchanged_and_report_metadata() {
         let revisions = [
             r#"<w:ins w:id="1" w:author="Ada" w:date="2026-08-01T10:00:00Z"><w:r><w:t>added</w:t></w:r></w:ins>"#,

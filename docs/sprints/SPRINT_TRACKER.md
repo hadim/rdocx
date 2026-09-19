@@ -475,6 +475,7 @@ defended.
 | F-X124 | S74 | M | 2 | 1 | 2026-09-18 | Made Python content cloning linear through one owned body inventory and added explicit source and destination type errors |
 | F-X125 | S74 | M | 2 | 1 | 2026-09-18 | Compared gained, lost, and resized table grids as exact tracked table replacements with clean accept and reject outcomes |
 | F-X127 | S74 | S | 1 | 1 | 2026-09-18 | Collapsed adjacent trailing run and paragraph page-break requests while preserving visible and structural boundaries |
+| F-X131 | S74 | S | 1 | 1 | 2026-09-19 | Stopped modeled roots rebinding a namespace their scope already owns, clearing five pre-existing F-X128 failures |
 | F-X129 | S74 | S | 1 | 1 | 2026-09-18 | Skipped unmatched notes-slide placeholder overlays with ordered diagnostics while preserving strict ownership failures |
 | F-X128 | S74 | M | 2 | 1 | 2026-09-18 | Preserved ordered paragraph, run, and section root identities across save, reopen, and typed mutation |
 | F-X126 | S74 | M | 2 | 1 | 2026-09-18 | Normalized drawing namespace ownership in comparison-only story projections while preserving exact story-scoped package payloads |

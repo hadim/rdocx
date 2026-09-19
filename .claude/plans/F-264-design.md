@@ -289,10 +289,17 @@ The row is therefore explained rather than bare, and the classification stays
   `DOCX-033` East Asian family, and the sprint assigned them to **F-266c**,
   character grid and vertical text. Typing them without the typography
   behaviour would claim a capability the renderer does not have.
-- Model `w:cnfStyle` and `w:divId` here. `w:cnfStyle` is table conditional
-  formatting owned by **F-267**, and `w:divId` references a web-settings
-  `w:div` owned by **F-270**, which owns `webSettings.xml`. Both stay
-  raw-preserved at slots 32 and 31 respectively.
+- Model `w:cnfStyle` here. It is table conditional formatting owned by
+  **F-267**, and stays raw-preserved at slot 32.
+
+`w:divId` is the exception to the hand-off pattern above, and it is typed
+here. It is a `w:pPr` child, so the paragraph property grammar owns it under
+the sprint's ownership rule, and F-264 is the only wave 1 story that edits
+`CT_PPr`. Typing it in **F-270** instead would put two wave 1 workers in the
+same struct, the same parse arm and the same write order. F-264 therefore
+types `w:divId` at slot 31 and ships its paragraph facade accessor. **F-270**
+owns the other half, `CT_WebSettings` and the read-only `div_ids()`
+projection that says whether a reference resolves.
 - Type the five border attributes F-269 needs as five named fields on
   `CT_BorderEdge`. Ordered attribute retention covers those five and every
   other producer attribute in one mechanism, so it removes a whole class of
@@ -407,6 +414,10 @@ harness obligation in its own commit, ahead of this story.
 - [ ] Add ordered attribute retention to `CT_BorderEdge` in
       `crates/rdocx-oxml/src/borders.rs`, covering `w:shadow`, `w:frame`,
       `w:themeColor`, `w:themeTint` and `w:themeShade`, for F-269 to consume.
+- [ ] Type `w:divId` on `CT_PPr` at slot 31 and expose its paragraph facade
+      accessor, with a round-trip test. F-270 owns the matching
+      `CT_WebSettings::div_ids()` projection and the two halves meet at
+      integration, so this story asserts only the paragraph side.
 - [ ] Add the facade enums, `ParagraphFrame`, `TabStopRef`, `ParagraphMark` and
       `ParagraphMarkRef` to `crates/rdocx/src/paragraph.rs`.
 - [ ] Add every `Paragraph` setter triple in the file's existing convention,
