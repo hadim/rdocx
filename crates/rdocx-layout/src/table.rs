@@ -1,11 +1,12 @@
 //! Table layout: column widths, cell content, merge handling.
 
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
+use rdocx_oxml::drawing::{AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV};
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::styles::{CT_Styles, TableStyleRegion};
 use rdocx_oxml::table::{
-    CT_Row, CT_Tbl, CT_TblBorders, CT_TblGrid, CT_TblPr, CT_TblWidth, CT_Tc, CT_TrPr,
-    ST_VerticalJc, VMerge,
+    CT_Row, CT_Tbl, CT_TblBorders, CT_TblGrid, CT_TblPPr, CT_TblPr, CT_TblWidth, CT_Tc, CT_TrPr,
+    ST_TblAnchor, ST_TblOverlap, ST_VerticalJc, ST_YAlign, VMerge,
 };
 
 use crate::WordStory;
@@ -106,6 +107,96 @@ fn collect_control_cells<'a>(
     }
 }
 
+/// Where a floating table sits, lowered from `w:tblpPr` onto the anchor frames
+/// the paginator already resolves for a floating drawing.
+///
+/// This is deliberately the positioning half of `AnchoredDrawing`, field for
+/// field, so `resolve_anchor_h` and `resolve_anchor_v` take it without a
+/// signature change. The content half does not apply, because the content is
+/// the table's own rows.
+#[derive(Debug, Clone)]
+pub struct FloatingTable {
+    /// Frame the horizontal offset is measured from.
+    pub rel_h: ST_RelativeFromH,
+    /// Horizontal offset in points.
+    pub off_h: f64,
+    /// Horizontal alignment, used instead of the offset when present.
+    pub align_h: Option<AnchorAlignH>,
+    /// Frame the vertical offset is measured from.
+    pub rel_v: ST_RelativeFromV,
+    /// Vertical offset in points.
+    pub off_v: f64,
+    /// Vertical alignment, used instead of the offset when present.
+    pub align_v: Option<AnchorAlignV>,
+    /// Clearance kept between the table and the text flowing around it, in
+    /// points.
+    pub dist_top: f64,
+    pub dist_bottom: f64,
+    pub dist_left: f64,
+    pub dist_right: f64,
+    /// Whether `w:tblOverlap` lets this float overlap another one.
+    pub overlap_allowed: bool,
+}
+
+/// Map `w:horzAnchor` onto the horizontal frame a drawing anchor names.
+///
+/// Three of the eight variants are reachable, because `ST_TblAnchor` spells
+/// only three. An absent anchor reads as `margin`, which is Word's default.
+fn floating_frame_h(anchor: Option<ST_TblAnchor>) -> ST_RelativeFromH {
+    match anchor {
+        Some(ST_TblAnchor::Page) => ST_RelativeFromH::Page,
+        Some(ST_TblAnchor::Text) => ST_RelativeFromH::Column,
+        Some(ST_TblAnchor::Margin) | None => ST_RelativeFromH::Margin,
+    }
+}
+
+/// Map `w:vertAnchor` onto the vertical frame a drawing anchor names.
+fn floating_frame_v(anchor: Option<ST_TblAnchor>) -> ST_RelativeFromV {
+    match anchor {
+        Some(ST_TblAnchor::Page) => ST_RelativeFromV::Page,
+        Some(ST_TblAnchor::Text) => ST_RelativeFromV::Paragraph,
+        Some(ST_TblAnchor::Margin) | None => ST_RelativeFromV::Margin,
+    }
+}
+
+/// Lower the resolved table properties onto a float, when they declare one.
+///
+/// `tblpYSpec="inline"` is how `w:tblpPr` spells "not floating", and an absent
+/// `w:tblpPr` means the same, so both leave the table in the flow. This is the
+/// one place that decides whether a table floats, so the engine asks it rather
+/// than repeating the rule.
+pub(crate) fn floating_table(properties: &CT_TblPr) -> Option<FloatingTable> {
+    let position: &CT_TblPPr = properties.float_position.as_deref()?;
+    if position.tbl_p_y_spec == Some(ST_YAlign::Inline) {
+        return None;
+    }
+    let align_v = match position.tbl_p_y_spec {
+        Some(ST_YAlign::Top) => Some(AnchorAlignV::Top),
+        Some(ST_YAlign::Center) => Some(AnchorAlignV::Center),
+        Some(ST_YAlign::Bottom) => Some(AnchorAlignV::Bottom),
+        Some(ST_YAlign::Inside) => Some(AnchorAlignV::Inside),
+        Some(ST_YAlign::Outside) => Some(AnchorAlignV::Outside),
+        Some(ST_YAlign::Inline) | None => None,
+    };
+    // An absent measurement is zero, which is the schema default for each of
+    // these attributes and what the public reader already reports.
+    let points =
+        |value: Option<rdocx_oxml::Twips>| value.map_or(0.0, |twips| twips.0 as f64 / 20.0);
+    Some(FloatingTable {
+        rel_h: floating_frame_h(position.horz_anchor),
+        off_h: points(position.tbl_p_x),
+        align_h: position.tbl_p_x_spec,
+        rel_v: floating_frame_v(position.vert_anchor),
+        off_v: points(position.tbl_p_y),
+        align_v,
+        dist_top: points(position.top_from_text),
+        dist_bottom: points(position.bottom_from_text),
+        dist_left: points(position.left_from_text),
+        dist_right: points(position.right_from_text),
+        overlap_allowed: properties.overlap != Some(ST_TblOverlap::Never),
+    })
+}
+
 /// A laid-out table.
 #[derive(Debug, Clone)]
 pub struct TableBlock {
@@ -129,6 +220,12 @@ pub struct TableBlock {
     /// `col_index` stay logical, which is what keeps cell ownership, the
     /// structure tree and the body fragments in reading order.
     pub bidi_visual: bool,
+    /// Where `w:tblpPr` floats this table, or `None` for a table in the flow.
+    ///
+    /// Boxed, like the `CT_TblPPr` it is lowered from, so a table stays cheap
+    /// on the stack. Test threads build whole documents by value against a
+    /// 2 MiB ceiling, and `TableBlock` nests inside itself through `CellBlock`.
+    pub floating: Option<Box<FloatingTable>>,
 }
 
 impl TableBlock {
@@ -326,6 +423,11 @@ fn layout_table_inner(
         .as_ref()
         .and_then(|properties| properties.bidi_visual)
         .unwrap_or(false);
+    let floating = tbl
+        .properties
+        .as_ref()
+        .and_then(floating_table)
+        .map(Box::new);
     // 1. Compute column widths. Content-driven autofit engages only for an
     //    auto or absent width with an autofit or absent layout mode.
     let col_widths = match autofit_column_widths(
@@ -675,6 +777,7 @@ fn layout_table_inner(
             table_indent,
             borders: table_borders,
             bidi_visual,
+            floating,
         },
         TableSemantics {
             rows: row_semantics,

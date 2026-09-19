@@ -1,6 +1,6 @@
 # F-268b, Floating table placement and wrap
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S74
 **Size**: M
 **Depends on**: F-268a
@@ -278,25 +278,35 @@ story, so it is reviewed and explained rather than re-recorded blind.
 
 ## Implementation checklist
 
-- [ ] Add failing coverage for margin, page and text anchored floats, for a
+- [x] Add failing coverage for margin, page and text anchored floats, for a
       float that does not fit, and for two floats that forbid overlap.
-- [ ] Add `FloatingTable` and `TableBlock::floating`, and map the `CT_TblPPr`
+- [x] Add `FloatingTable` and `TableBlock::floating`, and map the `CT_TblPPr`
       that F-268a modeled onto the drawing anchor frames.
-- [ ] Add `Pager::place_floating_table`, rendering rows at the resolved rect
+- [x] Add `Pager::place_floating_table`, rendering rows at the resolved rect
       without advancing `cursor_y` and recording body fragments.
-- [ ] Push one `PlacedWrap` per float and record a text-anchored float into
+- [x] Push one `PlacedWrap` per float and record a text-anchored float into
       `resolved_out`.
-- [ ] Extend `has_paragraph_relative_wrap` and `lookahead_wraps` to see a
+- [x] Extend `has_paragraph_relative_wrap` and `lookahead_wraps` to see a
       floating table block.
-- [ ] Move a float whole to the next page when its rect does not fit.
-- [ ] Resolve float against float on one page for
+- [x] Move a float whole to the next page when its rect does not fit.
+- [x] Resolve float against float on one page for
       `w:tblOverlap w:val="never"`.
-- [ ] Record the golden geometry in deterministic font mode and pin it.
-- [ ] Run the impacted layout, facade, golden, clippy, prose, hash and
+- [x] Record the golden geometry in deterministic font mode and pin it.
+- [x] Run the impacted layout, facade, golden, clippy, prose, hash and
       golden-PNG gates and confirm the 49 entries and the pixel manifest are
       unmoved.
-- [ ] Review and explain any private Word corpus geometry change rather than
+- [x] Review and explain any private Word corpus geometry change rather than
       re-recording it.
+
+**Worker note.** `scripts/docx_authoring_conformance.py --private-required` and
+`scripts/docx_ssim_harness.py --check` cannot run from a worker worktree,
+because `corpus/` is gitignored and does not exist there. The integrator runs
+both over the integrated result. `scripts/golden_png_harness.py --check` cannot
+run there either, because the pinned `pdftoppm` wrapper bind mounts only the
+canonical repository path. The seven digests were proved instead by staging the
+generated sample PDFs under `/private/tmp` and calling the harness's own
+`decode_png` and `compare_pixels` against `scripts/golden_pixel_manifest.json`,
+with the pinned Poppler 26.01.0. All seven match.
 
 ## Open questions
 

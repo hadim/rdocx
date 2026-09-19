@@ -7215,11 +7215,25 @@ fn bookmark_text(input: &LayoutInput, name: &str) -> Option<String> {
     Some(parts.join("\n"))
 }
 
-/// Whether any drawing in the document body wraps text around itself.
+/// Whether any drawing or floating table in the document body wraps text
+/// around itself.
 ///
 /// A document without one can never reach the reflow path, so it does not pay
-/// for it.
+/// for it, and it also never needs the second pagination pass.
 fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
+    /// Whether a `w:tblpPr` on the table itself floats it.
+    ///
+    /// The rule belongs to the lowering, so this asks it rather than repeating
+    /// it. Direct properties only: a float declared by a table style is as rare
+    /// as a drawing inside a nested table, and the conservative answer there is
+    /// the same, look no deeper and lose the reflow rather than the table.
+    fn table_floats(table: &rdocx_oxml::table::CT_Tbl) -> bool {
+        table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| crate::table::floating_table(properties).is_some())
+    }
+
     fn paragraph_wraps(para: &CT_P, view: RevisionView) -> bool {
         fn run_wraps(run: &CT_R) -> bool {
             run.content
@@ -7253,20 +7267,23 @@ fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
         .iter()
         .any(|content| match content {
             BodyContent::Paragraph(para) => paragraph_wraps(para, input.revision_view),
-            BodyContent::Table(table) => table
-                .rows
-                .iter()
-                .flat_map(|row| row.cells.iter())
-                .flat_map(|cell| cell.content.iter())
-                .any(|content| match content {
-                    rdocx_oxml::table::CellContent::Paragraph(para) => {
-                        paragraph_wraps(para, input.revision_view)
-                    }
-                    // A drawing inside a nested table is rare enough that the
-                    // conservative answer is to look no deeper.
-                    rdocx_oxml::table::CellContent::Table(_) => false,
-                    rdocx_oxml::table::CellContent::ContentControl(_) => false,
-                }),
+            BodyContent::Table(table) => {
+                table_floats(table)
+                    || table
+                        .rows
+                        .iter()
+                        .flat_map(|row| row.cells.iter())
+                        .flat_map(|cell| cell.content.iter())
+                        .any(|content| match content {
+                            rdocx_oxml::table::CellContent::Paragraph(para) => {
+                                paragraph_wraps(para, input.revision_view)
+                            }
+                            // A drawing inside a nested table is rare enough that
+                            // the conservative answer is to look no deeper.
+                            rdocx_oxml::table::CellContent::Table(_) => false,
+                            rdocx_oxml::table::CellContent::ContentControl(_) => false,
+                        })
+            }
             _ => false,
         })
 }
@@ -16853,6 +16870,7 @@ mod tests {
             table_indent: 0.0,
             borders: None,
             bidi_visual: false,
+            floating: None,
         };
         let mut sections = [paginator::Section {
             blocks: vec![

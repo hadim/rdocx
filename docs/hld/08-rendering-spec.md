@@ -739,6 +739,46 @@ grid columns they actually cover. A resolved `w:tblCellSpacing` adds half its
 width to every cell margin, so adjacent content boxes are one whole gap apart
 and the table edge carries half. A row-level value wins over the table's.
 
+A `w:tblpPr` table is positioned rather than flowed. Its origin comes entirely
+from the resolved anchor, so `w:tblInd` does not contribute, and the flow
+cursor does not advance, so every block after it sits where it would have sat
+without it. `w:horzAnchor` and `w:vertAnchor` lower onto the same anchor frames
+a floating drawing uses, with `margin`, `page` and `text` reading as the margin
+frame, the page frame, and the text column or the anchoring block.
+`w:tblpXSpec` and `w:tblpYSpec` are alignments against that frame and win over
+the offset. `tblpYSpec="inline"` is how the grammar spells not floating, and an
+absent `w:tblpPr` means the same, so both leave the table in the flow.
+
+A float pushes one square keep-out band onto the page, carrying
+`w:leftFromText`, `w:rightFromText`, `w:topFromText` and `w:bottomFromText`.
+Text flows around it through the same reflow the wrapping drawings use, and a
+float anchored to a later block still pushes the text above it aside. A float
+measured from its own block has no vertical position until the flow places that
+block, so the first pagination pass records where it landed and the second
+offers that rect to the text above it. Those are the same two passes a
+paragraph-relative drawing takes, and a document with no float still paginates
+in one. The look-ahead offers a float at the place it settles on the page being
+built, and only a float measured from its own block is re-offered across the
+two passes, so a float that moves to the next page for any other reason leaves
+the text above it holding a band it no longer needs.
+
+A float whose rect runs past the bottom of the body moves whole to the next
+page, which is what Word does. It is never split and it never repeats a header
+row, because it never crosses a page boundary. Only a float measured from its
+own block can move, because a page or margin frame resolves to the same place
+on every page.
+
+`w:tblOverlap` is a rule between floating tables, resolved within one page. Two
+floats that both allow the overlap are left intersecting, and otherwise the
+later one in body order drops below the earlier one's keep-out band.
+Facing-page and section-scoped resolution is not modelled.
+
+Two limits are deliberate. A table that does not float still takes the full
+measure beside a float rather than narrowing its columns inside the keep-out
+band, because that is a re-layout rather than a re-position. `w:cantSplit`
+stays a round-trip and reader fact, because making it meaningful needs row
+splitting for the default case.
+
 A conditional table-style region's `w:trPr` resolves base first, exactly like
 its cell layers. The style's base row properties apply first, then every region
 that scopes a whole row, which is the whole table, the two horizontal bands,

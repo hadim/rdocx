@@ -941,6 +941,22 @@ sample authors a floating, bidirectional, spaced, or auto-width table, and the
 engagement predicate keeps every authored `dxa` and `pct` table on the declared
 grid, so all 49 hash entries remain unchanged.
 
+The floating table golden gate is
+`floating_tables_match_reviewed_word_page_geometry_and_pagination`. It builds
+one document in code holding a margin-anchored, a page-anchored, and a
+text-anchored float, lays it out in deterministic font mode, and pins the page
+count, the three float origins, and the line boxes of the text inside each
+float's keep-out band. Focused tests cover the anchor frame mapping and the
+inline spelling, a float taking its origin from the anchor rather than the
+indent, a float that does not fit moving whole to the next page without
+repeating a header row, the two-pass convergence of a text-anchored float, the
+look-ahead that pushes the text above a float aside, and float against float
+resolution for `w:tblOverlap`. The named guard that the wrap extensions stay
+inert is `a_document_with_no_floating_table_still_paginates_in_one_pass`, which
+holds the two-pass predicate false for an ordinary table and for a float framed
+by the page or a margin. No standard sample authors a floating table, so all 49
+hash entries remain unchanged.
+
 The M23 drawing gate is `m23_drawings_text_boxes_and_watermarks_match_word`.
 It authors cropped inline and floating pictures, every wrap family, rotated and
 vertical text boxes, compatibility fallbacks, and section-selected watermarks

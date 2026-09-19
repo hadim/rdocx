@@ -2732,6 +2732,22 @@ integration, and float against float resolution within one page.
 `floating_tables_match_reviewed_word_page_geometry_and_pagination` pins the
 float origins, page count, and the wrapped line boxes beside a margin-anchored,
 a page-anchored, and a text-anchored float.
+**Delivered**: `TableBlock` gains `floating`, a boxed `FloatingTable` lowered
+from the `CT_TblPPr` F-268a modeled onto the drawing anchor frames, so
+`resolve_anchor_h` and `resolve_anchor_v` take it unchanged. The paginator's
+table arm branches on it, and `Pager::place_floating_table` resolves the rect,
+renders every row at that origin, records the body fragments, pushes one square
+`PlacedWrap` carrying the four from-text distances, and never advances
+`cursor_y`. `has_paragraph_relative_wrap` and `lookahead_wraps` now see a
+floating table, so the text above a float is pushed aside and a `text`-anchored
+float settles across the existing two passes. `document_has_wrapping_drawing`
+sees one too, which is what routes a float document onto the two-pass path
+rather than the single-pass restart path. A float that does not fit moves whole
+to the next page, never splits, and never repeats a header row, and
+`w:tblOverlap` resolves float against float within one page. The reciprocal
+half, a non-floating table narrowing beside a float, and `w:cantSplit` row
+splitting stay named follow-ups. No sample floats, so all 49 hash entries and
+the seven-entry golden pixel manifest are unchanged.
 
 ### F-269, Complete section page semantics (L)
 Add page borders, line numbering, variable-width columns, separators, vertical

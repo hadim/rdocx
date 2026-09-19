@@ -20095,3 +20095,270 @@ mod f266b_ruby_and_emphasis_typography {
         );
     }
 }
+
+mod floating_table_placement_and_wrap {
+    use rdocx::table::{
+        TableAnchor, TableFloatPosition, TableFloatX, TableFloatY, TableTextDistance,
+    };
+    use rdocx::{Document, Length};
+
+    /// Letter page, one inch margins, which is what `Document::new` produces.
+    const MARGIN_LEFT: f64 = 72.0;
+    const MARGIN_TOP: f64 = 72.0;
+
+    /// A float position with the four from-text distances every case shares.
+    ///
+    /// 180 twips is 9 points and 80 twips is 4 points, so the reserved band is
+    /// readable in the pinned geometry rather than an artefact of rounding.
+    fn float_at(
+        anchor_h: TableAnchor,
+        anchor_v: TableAnchor,
+        x: i32,
+        y: i32,
+    ) -> TableFloatPosition {
+        TableFloatPosition {
+            horizontal_anchor: anchor_h,
+            vertical_anchor: anchor_v,
+            horizontal: TableFloatX::Offset(Length::twips(x)),
+            vertical: TableFloatY::Offset(Length::twips(y)),
+            distance_from_text: TableTextDistance {
+                top: Length::twips(80),
+                right: Length::twips(180),
+                bottom: Length::twips(80),
+                left: Length::twips(180),
+            },
+        }
+    }
+
+    /// A two by two table 100 points wide, labelled so its cells are
+    /// distinguishable from body text in the placed elements.
+    fn add_float(document: &mut Document, label: &str, position: Option<TableFloatPosition>) {
+        let mut table = document.add_table(2, 2);
+        table.set_column_width(0, Length::twips(1000));
+        table.set_column_width(1, Length::twips(1000));
+        table.set_width(Length::twips(2000));
+        table
+            .set_float_position(position)
+            .expect("float position is valid");
+        for row in 0..2 {
+            for column in 0..2 {
+                table
+                    .cell(row, column)
+                    .expect("cell exists")
+                    .set_text(&format!("{label}{row}{column}"));
+            }
+        }
+    }
+
+    fn prose(document: &mut Document, from: usize, to: usize) {
+        for index in from..to {
+            document.add_paragraph(&format!(
+                "Body line {index:02} with enough words to wrap across the measure of the page and show the reservation."
+            ));
+        }
+    }
+
+    fn round(value: f64) -> f64 {
+        (value * 100.0).round() / 100.0
+    }
+
+    /// Where one direct body item landed, rounded, as (page, x, y, w, h).
+    fn placed(
+        result: &rdocx_layout::WordLayoutResult,
+        body_index: usize,
+    ) -> Vec<(usize, f64, f64, f64, f64)> {
+        result
+            .body_layout_fragments(body_index)
+            .expect("body index is in range")
+            .iter()
+            .map(|fragment| {
+                (
+                    fragment.physical_page,
+                    round(fragment.x),
+                    round(fragment.y),
+                    round(fragment.width),
+                    round(fragment.height),
+                )
+            })
+            .collect()
+    }
+
+    /// Body line boxes of one page as (baseline, left edge, right edge).
+    ///
+    /// A float's own cell text is excluded by its label, so what remains is the
+    /// prose that had to flow around it.
+    fn body_line_boxes(page: &oxml_layout::PageFrame) -> Vec<(f64, f64, f64)> {
+        let mut lines: Vec<(f64, f64, f64)> = Vec::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let oxml_layout::PositionedElement::Text(run) = element else {
+                return;
+            };
+            let is_cell_label = run.text.len() == 3
+                && run.text.starts_with(['M', 'P', 'T'])
+                && run.text[1..].chars().all(|glyph| glyph.is_ascii_digit());
+            if run.text.trim().is_empty() || is_cell_label {
+                return;
+            }
+            let baseline = round(run.origin.y);
+            let left = run.origin.x;
+            let right = run.origin.x + run.advances.iter().sum::<f64>();
+            match lines.iter_mut().find(|line| line.0 == baseline) {
+                Some(line) => {
+                    line.1 = line.1.min(left);
+                    line.2 = line.2.max(right);
+                }
+                None => lines.push((baseline, left, right)),
+            }
+        });
+        lines.sort_by(|left, right| left.0.total_cmp(&right.0));
+        lines
+            .into_iter()
+            .map(|(baseline, left, right)| (baseline, round(left), round(right)))
+            .collect()
+    }
+
+    /// The body line boxes whose baseline falls inside one float's keep-out
+    /// band, which is exactly the text that float pushed aside.
+    fn boxes_in_band(page: &oxml_layout::PageFrame, top: f64, bottom: f64) -> Vec<(f64, f64, f64)> {
+        body_line_boxes(page)
+            .into_iter()
+            .filter(|(baseline, ..)| *baseline > top && *baseline < bottom)
+            .collect()
+    }
+
+    /// The reviewed geometry of a page carrying a margin-anchored float, a
+    /// page-anchored float and a text-anchored float.
+    ///
+    /// Recorded in deterministic font mode. The margin float and the text float
+    /// sit on the left, so the lines beside them start at 181 points, which is
+    /// the left margin plus the 100 point table plus its 9 point right
+    /// clearance. The page float sits on the right, so the lines beside it keep
+    /// their left edge and lose their right.
+    #[test]
+    fn floating_tables_match_reviewed_word_page_geometry_and_pagination() {
+        let mut document = Document::new();
+        prose(&mut document, 0, 4);
+        add_float(
+            &mut document,
+            "M",
+            Some(float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0)),
+        );
+        prose(&mut document, 4, 10);
+        add_float(
+            &mut document,
+            "T",
+            Some(float_at(TableAnchor::Text, TableAnchor::Text, 0, 0)),
+        );
+        prose(&mut document, 10, 20);
+        add_float(
+            &mut document,
+            "P",
+            Some(float_at(TableAnchor::Page, TableAnchor::Page, 7200, 9000)),
+        );
+        prose(&mut document, 20, 30);
+
+        let result = document.layout_deterministic().expect("document lays out");
+        assert_eq!(result.layout.pages.len(), 2, "page count moved");
+
+        // Each float sits whole on one page, at the rect its anchor resolves
+        // to, and none of them advanced the flow.
+        assert_eq!(placed(&result, 4), [(1, 72.0, 72.0, 100.0, 39.74)]);
+        assert_eq!(placed(&result, 11), [(1, 72.0, 294.45, 100.0, 39.74)]);
+        assert_eq!(placed(&result, 22), [(1, 360.0, 450.0, 100.0, 39.74)]);
+
+        let first = &result.layout.pages[0];
+        assert_eq!(
+            boxes_in_band(first, 68.0, 115.75),
+            [
+                (80.25, 181.0, 525.39),
+                (92.12, 181.0, 277.95),
+                (111.99, 181.0, 525.39),
+            ],
+            "margin-anchored float geometry moved"
+        );
+        assert_eq!(
+            boxes_in_band(first, 290.45, 338.2),
+            [
+                (302.7, 181.0, 525.39),
+                (314.57, 181.0, 277.95),
+                (334.44, 181.0, 525.39),
+            ],
+            "text-anchored float geometry moved"
+        );
+        assert_eq!(
+            boxes_in_band(first, 446.0, 493.75),
+            [
+                (457.54, 72.0, 241.43),
+                (477.41, 72.0, 343.91),
+                (489.28, 72.0, 241.43),
+            ],
+            "page-anchored float geometry moved"
+        );
+    }
+
+    /// `w:horzAnchor` and `w:vertAnchor` name three frames, and each resolves
+    /// to a different origin. Margin and text coincide horizontally, because
+    /// the text column and the margin start at the same edge, so the vertical
+    /// frame is what separates them.
+    #[test]
+    fn tblp_pr_anchors_map_onto_the_drawing_anchor_frames() {
+        let origin_for = |anchor: TableAnchor| {
+            let mut document = Document::new();
+            document.add_paragraph("One line above the float.");
+            add_float(&mut document, "M", Some(float_at(anchor, anchor, 0, 0)));
+            let result = document.layout_deterministic().expect("document lays out");
+            let fragments = placed(&result, 1);
+            assert_eq!(fragments.len(), 1, "a float occupies one page");
+            (fragments[0].1, fragments[0].2)
+        };
+
+        // The page frame starts at the physical page corner.
+        assert_eq!(origin_for(TableAnchor::Page), (0.0, 0.0));
+        // The margin frame starts at the top left of the text area.
+        assert_eq!(origin_for(TableAnchor::Margin), (MARGIN_LEFT, MARGIN_TOP));
+        // The text frame starts where the floating block itself landed, which
+        // is below the paragraph above it.
+        let (text_x, text_y) = origin_for(TableAnchor::Text);
+        assert_eq!(text_x, MARGIN_LEFT);
+        assert!(
+            text_y > MARGIN_TOP,
+            "a text anchor follows the flow, got {text_y}"
+        );
+
+        // `tblpYSpec="inline"` is how `w:tblpPr` spells "not floating", so the
+        // table keeps the flow position an inline table would have had.
+        let mut document = Document::new();
+        document.add_paragraph("One line above the float.");
+        let mut inline = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
+        inline.vertical = TableFloatY::Inline;
+        add_float(&mut document, "M", Some(inline));
+        let result = document.layout_deterministic().expect("document lays out");
+        assert_eq!(placed(&result, 1), [(1, MARGIN_LEFT, text_y, 100.0, 39.74)]);
+    }
+
+    /// `w:tblpPr` is a position, and a position leaves no room for `w:tblInd`
+    /// to contribute. An inline table with the same indent still takes it.
+    #[test]
+    fn a_floating_table_takes_its_origin_from_the_anchor_not_the_indent() {
+        let indented = |position: Option<TableFloatPosition>| {
+            let mut document = Document::new();
+            document.add_paragraph("One line above the table.");
+            {
+                let mut table = document.add_table(2, 2);
+                table.set_column_width(0, Length::twips(1000));
+                table.set_column_width(1, Length::twips(1000));
+                table.set_width(Length::twips(2000));
+                table.set_indent(Length::twips(1440));
+                table
+                    .set_float_position(position)
+                    .expect("float position is valid");
+            }
+            let result = document.layout_deterministic().expect("document lays out");
+            placed(&result, 1)[0].1
+        };
+
+        let float = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
+        assert_eq!(indented(Some(float)), MARGIN_LEFT);
+        assert_eq!(indented(None), MARGIN_LEFT + 72.0);
+    }
+}

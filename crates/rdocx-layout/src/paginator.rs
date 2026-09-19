@@ -5,8 +5,9 @@
 
 use crate::block::{
     AnchoredContent, AnchoredDrawing, CellBlockSemantics, LayoutBlock, LayoutBlockLike,
-    ParagraphBlock, ParagraphView, ShapePreset, SharedLayoutBlock,
+    ParagraphBlock, ParagraphView, ShapePreset, SharedLayoutBlock, TableView,
 };
+use crate::table::FloatingTable;
 use std::collections::HashMap;
 
 #[cfg(test)]
@@ -479,12 +480,21 @@ pub fn paginate(
 /// in the same order.
 type ResolvedWraps = HashMap<(usize, usize), (usize, PlacedWrap)>;
 
-/// Whether any block anchors a wrapping drawing to its own paragraph or line.
+/// Whether any block anchors a wrapping drawing, or a floating table, to its
+/// own paragraph or line.
 ///
 /// A document without one paginates in a single pass, which is every sample and
-/// every corpus document today.
+/// every corpus document today. A table that does not float, or that floats
+/// against the page or a margin, keeps it that way: its vertical position does
+/// not depend on where the flow put it, so one pass already knows where it is.
 fn has_paragraph_relative_wrap<B: LayoutBlockLike>(blocks: &[B]) -> bool {
     blocks.iter().any(|block| {
+        if let Some(table) = block.table() {
+            return table
+                .floating
+                .as_deref()
+                .is_some_and(is_paragraph_relative_float);
+        }
         let Some(para) = block.paragraph() else {
             return false;
         };
@@ -499,6 +509,95 @@ fn is_paragraph_relative_wrap(anchored: &AnchoredDrawing) -> bool {
             anchored.rel_v,
             ST_RelativeFromV::Paragraph | ST_RelativeFromV::Line
         )
+}
+
+/// The same filter for a floating table, which always wraps.
+///
+/// A `w:vertAnchor="text"` float is measured from the block that carries it, so
+/// it has no vertical position until the flow has placed that block.
+fn is_paragraph_relative_float(floating: &FloatingTable) -> bool {
+    matches!(
+        floating.rel_v,
+        ST_RelativeFromV::Paragraph | ST_RelativeFromV::Line
+    )
+}
+
+/// Drop a floating table below every float on the page it may not overlap.
+///
+/// `w:tblOverlap` is a rule between floating tables, so `placed` holds only
+/// those, each with whether it lets another float overlap it. Two floats that
+/// both allow the overlap are left intersecting, and otherwise the later one in
+/// body order is the one that moves. Each sweep moves the candidate strictly
+/// downward, so one sweep per already placed float settles it.
+///
+/// Resolution is within one page. Facing-page and section-scoped resolution is
+/// out of scope for F-268b, because no reviewed geometry exercises it.
+fn settle_float(candidate: &mut PlacedWrap, overlap_allowed: bool, placed: &[(PlacedWrap, bool)]) {
+    for _ in 0..placed.len() {
+        let mut moved = false;
+        for (other, other_allows) in placed {
+            if (overlap_allowed && *other_allows) || !rects_intersect(&candidate.rect, &other.rect)
+            {
+                continue;
+            }
+            candidate.rect.y = other.keep_out_bottom() + candidate.dist_top;
+            moved = true;
+        }
+        if !moved {
+            break;
+        }
+    }
+}
+
+/// Whether two placed rectangles share any area.
+///
+/// Touching edges do not count, so two floats stacked exactly band to band are
+/// settled rather than pushed again.
+fn rects_intersect(left: &Rect, right: &Rect) -> bool {
+    left.x < right.x + right.width
+        && right.x < left.x + left.width
+        && left.y < right.y + right.height
+        && right.y < left.y + left.height
+}
+
+/// The keep-out band a floating table asks the text around it to respect.
+///
+/// A float takes its origin entirely from the resolved anchor, which is what
+/// `w:tblpPr` means, so `table_indent` does not reach this function.
+fn floating_wrap(
+    floating: &FloatingTable,
+    width: f64,
+    height: f64,
+    geometry: &PageGeometry,
+    para_top: f64,
+) -> PlacedWrap {
+    PlacedWrap {
+        rect: Rect {
+            x: resolve_anchor_h(
+                floating.rel_h,
+                floating.off_h,
+                floating.align_h,
+                width,
+                geometry,
+                0.0,
+            ),
+            y: resolve_anchor_v(
+                floating.rel_v,
+                floating.off_v,
+                floating.align_v,
+                height,
+                geometry,
+                para_top,
+            ),
+            width,
+            height,
+        },
+        wrap: WrapType::Square,
+        dist_top: floating.dist_top,
+        dist_bottom: floating.dist_bottom,
+        dist_left: floating.dist_left,
+        dist_right: floating.dist_right,
+    }
 }
 
 fn paginate_with_media<B: LayoutBlockLike>(
@@ -666,6 +765,14 @@ fn paginate_pass_from<B: LayoutBlockLike>(
             let tbl_borders = table.borders.as_ref();
             let body_index = block.body_index();
 
+            // A floating table is positioned rather than flowed, so it never
+            // reaches the row loop below and never advances the cursor.
+            if let Some(floating) = table.floating.as_deref() {
+                let para_top = pager.cursor_y;
+                pager.place_floating_table(&table, floating, body_index, block_idx, para_top);
+                continue;
+            }
+
             for (row_idx, row) in table.rows.iter().enumerate() {
                 // Read per row, because finishing a page may have moved the
                 // body into the next column track.
@@ -828,6 +935,13 @@ struct Pager<'a> {
     /// Rectangles of the wrapping drawings already placed on this page, with
     /// the wrap mode and text distances each one asks for.
     page_wraps: Vec<PlacedWrap>,
+    /// Floating tables already placed on this page, in body order, each with
+    /// whether `w:tblOverlap` lets another float overlap it.
+    ///
+    /// Separate from `page_wraps` because `w:tblOverlap` is a rule between
+    /// floating tables. A drawing is not a float in that sense, and folding the
+    /// flag into `PlacedWrap` would make every drawing a party to the rule.
+    page_floats: Vec<(PlacedWrap, bool)>,
     /// Where the body's last mark sits, ignoring trailing paragraph spacing.
     ///
     /// `cursor_y` includes the space after the final paragraph, and that space
@@ -896,6 +1010,7 @@ impl<'a> Pager<'a> {
             pending_notes: Vec::new(),
             fm,
             page_wraps: Vec::new(),
+            page_floats: Vec::new(),
             ink_bottom: 0.0,
             resolved_in,
             resolved_out: ResolvedWraps::new(),
@@ -1194,12 +1309,52 @@ impl<'a> Pager<'a> {
     ) -> Vec<PlacedWrap> {
         let mut out = Vec::new();
         let mut height = self.cursor_y;
+        // Seeded with the floats already on this page, so a float the flow has
+        // not reached yet is offered at the place it will actually settle on
+        // rather than at its unresolved anchor.
+        let mut floats = self.page_floats.clone();
 
         for (offset, block) in blocks.iter().enumerate().skip(block_idx + 1) {
             if block.page_break_before() || height > self.content_height {
                 break;
             }
             height += block.space_before() + block.content_height() + block.space_after();
+
+            if let Some(table) = block.table() {
+                if let Some(floating) = table.floating.as_deref() {
+                    // A floating table is the same obstacle as a drawing, and
+                    // the same rule decides whether this pass can position it.
+                    // Anchor index 0 cannot collide, because a table block
+                    // carries no `anchored` vector.
+                    //
+                    // Only a block-measured float is re-offered from the
+                    // previous pass, so a float that moved to the next page for
+                    // any other reason is still offered here. That is the
+                    // recorded boundary in `08-rendering-spec.md`.
+                    let placed = if is_paragraph_relative_float(floating) {
+                        // Already settled by the previous pass, or not at all.
+                        self.resolved_in
+                            .get(&(offset, 0))
+                            .filter(|(page, _)| *page == self.page_number)
+                            .map(|(_, placed)| *placed)
+                    } else {
+                        let mut candidate = floating_wrap(
+                            floating,
+                            table.table_width,
+                            table.content_height(),
+                            &self.geometry,
+                            0.0,
+                        );
+                        settle_float(&mut candidate, floating.overlap_allowed, &floats);
+                        Some(candidate)
+                    };
+                    if let Some(placed) = placed {
+                        floats.push((placed, floating.overlap_allowed));
+                        out.push(placed);
+                    }
+                }
+                continue;
+            }
 
             let Some(para) = block.paragraph() else {
                 continue;
@@ -1286,6 +1441,82 @@ impl<'a> Pager<'a> {
                 self.elements.append(&mut produced);
             }
         }
+    }
+
+    /// Place a floating table at its resolved anchor, leaving the flow alone.
+    ///
+    /// A float is positioned, not flowed, so `cursor_y` is untouched and every
+    /// block after it sits where it would have without it. What changes is the
+    /// text, which flows around the keep-out band this pushes onto the page.
+    ///
+    /// `para_top` is the top of the floating block, measured from the top of
+    /// the content area, which is what a `w:vertAnchor="text"` float resolves
+    /// against.
+    fn place_floating_table(
+        &mut self,
+        table: &TableView<'_>,
+        floating: &FloatingTable,
+        body_index: Option<usize>,
+        block_idx: usize,
+        para_top: f64,
+    ) {
+        let width = table.table_width;
+        let height = table.content_height();
+        let mut placed = floating_wrap(floating, width, height, &self.geometry, para_top);
+        settle_float(&mut placed, floating.overlap_allowed, &self.page_floats);
+
+        // A float that runs past the bottom of the body moves whole to the next
+        // page, which is what Word does and what a row loop cannot express.
+        //
+        // Moving helps only when the rect depends on this page. That is a float
+        // measured from its own block, and a float that had to drop below one
+        // already on the page. A page or margin frame on an empty page resolves
+        // to the same place overleaf, so moving it changes nothing and retrying
+        // it would not terminate. One attempt either way.
+        let depends_on_this_page =
+            is_paragraph_relative_float(floating) || !self.page_floats.is_empty();
+        if depends_on_this_page
+            && self.has_content()
+            && placed.rect.y + height > self.geometry.margin_top + self.available_height() + 0.01
+        {
+            self.finish_page();
+            placed = floating_wrap(floating, width, height, &self.geometry, self.cursor_y);
+            settle_float(&mut placed, floating.overlap_allowed, &self.page_floats);
+        }
+
+        // Render every row at the resolved origin. A float never crosses a page
+        // boundary, so it never repeats a header row.
+        let mut row_y = placed.rect.y;
+        for (row_idx, row) in table.rows.iter().enumerate() {
+            if let Some(body_index) = body_index {
+                self.record_body_fragment(body_index, placed.rect.x, row_y, width, row.height);
+            }
+            render_table_row(
+                row,
+                table
+                    .semantics
+                    .and_then(|semantics| semantics.rows.get(row_idx)),
+                &table.col_widths,
+                placed.rect.x,
+                row_y,
+                &self.geometry,
+                self.page_number,
+                table.borders.as_ref(),
+                table.bidi_visual,
+                &mut self.elements,
+                &mut self.behind_elements,
+                self.media,
+            );
+            row_y += row.height;
+        }
+
+        if is_paragraph_relative_float(floating) {
+            self.resolved_out
+                .insert((block_idx, 0), (self.page_number, placed));
+        }
+        self.page_wraps.push(placed);
+        self.page_floats.push((placed, floating.overlap_allowed));
+        self.mark_content();
     }
 
     /// Draw the note area for the page being built, and carry what did not
@@ -1707,6 +1938,7 @@ impl<'a> Pager<'a> {
         self.header_page_number += 1;
         self.cursor_y = 0.0;
         self.page_wraps.clear();
+        self.page_floats.clear();
         self.ink_bottom = 0.0;
         self.has_content_flag = false;
         self.is_first_page = false;
@@ -6680,6 +6912,74 @@ mod tests {
         assert!(!has_paragraph_relative_wrap(&[LayoutBlock::Paragraph(
             para
         )]));
+    }
+
+    /// One empty row, which is all the two-pass predicate looks at.
+    fn table_block(floating: Option<FloatingTable>) -> LayoutBlock {
+        LayoutBlock::Table(crate::table::TableBlock {
+            structure_id: None,
+            col_widths: vec![100.0],
+            rows: vec![crate::table::TableRow {
+                structure_id: None,
+                cells: Vec::new(),
+                height: 12.0,
+                is_header: false,
+                offset_left: 0.0,
+            }],
+            header_row_indices: Vec::new(),
+            table_width: 100.0,
+            table_indent: 0.0,
+            borders: None,
+            bidi_visual: false,
+            floating: floating.map(Box::new),
+        })
+    }
+
+    fn float_anchored(rel_v: ST_RelativeFromV) -> FloatingTable {
+        FloatingTable {
+            rel_h: ST_RelativeFromH::Margin,
+            off_h: 0.0,
+            align_h: None,
+            rel_v,
+            off_v: 0.0,
+            align_v: None,
+            dist_top: 4.0,
+            dist_bottom: 4.0,
+            dist_left: 9.0,
+            dist_right: 9.0,
+            overlap_allowed: true,
+        }
+    }
+
+    /// The guard for the wrap extensions staying inert on a document with no
+    /// float. `has_paragraph_relative_wrap` gates the second pagination pass,
+    /// and that gate is on the path every sample and every corpus document
+    /// takes. Widening it to see a floating table must not widen it to see an
+    /// ordinary one.
+    #[test]
+    fn a_document_with_no_floating_table_still_paginates_in_one_pass() {
+        assert!(!has_paragraph_relative_wrap(&[
+            LayoutBlock::Paragraph(make_para(3, 14.0)),
+            table_block(None),
+            LayoutBlock::Paragraph(make_para(2, 14.0)),
+        ]));
+
+        // A float measured from the page or a margin resolves to the same place
+        // on every page, so it does not buy a second pass either.
+        assert!(!has_paragraph_relative_wrap(&[table_block(Some(
+            float_anchored(ST_RelativeFromV::Page)
+        ))]));
+        assert!(!has_paragraph_relative_wrap(&[table_block(Some(
+            float_anchored(ST_RelativeFromV::Margin)
+        ))]));
+
+        // A float measured from its own block is the one case that does.
+        assert!(has_paragraph_relative_wrap(&[table_block(Some(
+            float_anchored(ST_RelativeFromV::Paragraph)
+        ))]));
+        assert!(has_paragraph_relative_wrap(&[table_block(Some(
+            float_anchored(ST_RelativeFromV::Line)
+        ))]));
     }
 
     #[test]

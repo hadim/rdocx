@@ -9395,6 +9395,10 @@ Pedro Assumpcao and the rdocx maintainers.
                 # conditional row geometry to F-268, so it no longer owns an
                 # incomplete row.
                 267,
+                # F-268 closed DOCX-035 to complete in S74 once F-268b placed
+                # and wrapped the float, so the parent no longer owns an
+                # incomplete row.
+                268,
                 # F-270 closed DOCX-007 and DOCX-037 to complete in S74, so it
                 # no longer owns an incomplete row.
                 270,

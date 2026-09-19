@@ -31651,3 +31651,296 @@ mod f266b_ruby_and_emphasis_regressions {
         );
     }
 }
+
+mod floating_table_placement_regressions {
+    use rdocx::table::{
+        TableAnchor, TableFloatPosition, TableFloatX, TableFloatY, TableOverlap, TableTextDistance,
+    };
+    use rdocx::{Document, Length};
+
+    /// Letter page, one inch margins, which is what `Document::new` produces.
+    const MARGIN_LEFT: f64 = 72.0;
+    const MARGIN_TOP: f64 = 72.0;
+    const CONTENT_BOTTOM: f64 = 720.0;
+
+    /// A float position with the four from-text distances every case shares.
+    /// 180 twips is 9 points and 80 twips is 4 points.
+    fn float_at(
+        anchor_h: TableAnchor,
+        anchor_v: TableAnchor,
+        x: i32,
+        y: i32,
+    ) -> TableFloatPosition {
+        TableFloatPosition {
+            horizontal_anchor: anchor_h,
+            vertical_anchor: anchor_v,
+            horizontal: TableFloatX::Offset(Length::twips(x)),
+            vertical: TableFloatY::Offset(Length::twips(y)),
+            distance_from_text: TableTextDistance {
+                top: Length::twips(80),
+                right: Length::twips(180),
+                bottom: Length::twips(80),
+                left: Length::twips(180),
+            },
+        }
+    }
+
+    /// A two by two table 100 points wide, labelled so its cells stay
+    /// distinguishable from body text in the placed elements.
+    fn add_float(
+        document: &mut Document,
+        label: &str,
+        position: Option<TableFloatPosition>,
+        overlap: Option<TableOverlap>,
+    ) {
+        let mut table = document.add_table(2, 2);
+        table.set_column_width(0, Length::twips(1000));
+        table.set_column_width(1, Length::twips(1000));
+        table.set_width(Length::twips(2000));
+        table
+            .set_float_position(position)
+            .expect("float position is valid");
+        table.set_overlap(overlap);
+        for row in 0..2 {
+            for column in 0..2 {
+                table
+                    .cell(row, column)
+                    .expect("cell exists")
+                    .set_text(&format!("{label}{row}{column}"));
+            }
+        }
+    }
+
+    fn prose(document: &mut Document, from: usize, to: usize) {
+        for index in from..to {
+            document.add_paragraph(&format!(
+                "Body line {index:02} with enough words to wrap across the measure of the page and show the reservation."
+            ));
+        }
+    }
+
+    fn round(value: f64) -> f64 {
+        (value * 100.0).round() / 100.0
+    }
+
+    fn placed(
+        result: &rdocx_layout::WordLayoutResult,
+        body_index: usize,
+    ) -> Vec<(usize, f64, f64, f64, f64)> {
+        result
+            .body_layout_fragments(body_index)
+            .expect("body index is in range")
+            .iter()
+            .map(|fragment| {
+                (
+                    fragment.physical_page,
+                    round(fragment.x),
+                    round(fragment.y),
+                    round(fragment.width),
+                    round(fragment.height),
+                )
+            })
+            .collect()
+    }
+
+    /// Body line boxes of one page as (baseline, left edge, right edge), with
+    /// the float's own labelled cell text left out.
+    fn body_line_boxes(page: &oxml_layout::PageFrame) -> Vec<(f64, f64, f64)> {
+        let mut lines: Vec<(f64, f64, f64)> = Vec::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let oxml_layout::PositionedElement::Text(run) = element else {
+                return;
+            };
+            let is_cell_label = run.text.len() == 3
+                && run.text.starts_with(['A', 'B', 'M', 'T'])
+                && run.text[1..].chars().all(|glyph| glyph.is_ascii_digit());
+            if run.text.trim().is_empty() || is_cell_label {
+                return;
+            }
+            let baseline = round(run.origin.y);
+            let left = run.origin.x;
+            let right = run.origin.x + run.advances.iter().sum::<f64>();
+            match lines.iter_mut().find(|line| line.0 == baseline) {
+                Some(line) => {
+                    line.1 = line.1.min(left);
+                    line.2 = line.2.max(right);
+                }
+                None => lines.push((baseline, left, right)),
+            }
+        });
+        lines.sort_by(|left, right| left.0.total_cmp(&right.0));
+        lines
+            .into_iter()
+            .map(|(baseline, left, right)| (baseline, round(left), round(right)))
+            .collect()
+    }
+
+    /// The paginator used to advance the cursor row by row for every table, so
+    /// a float that ran past the bottom margin was cut in half across the page
+    /// boundary and had its header row repeated on the continuation.
+    #[test]
+    fn a_floating_table_that_does_not_fit_moves_whole_to_the_next_page() {
+        // Six rows, with the first marked as a repeating header. An inline
+        // table this tall splits at the page boundary and repeats that header
+        // on the continuation, which is exactly what a float must not do.
+        let build = |position: Option<TableFloatPosition>| {
+            let mut document = Document::new();
+            prose(&mut document, 0, 30);
+            {
+                let mut table = document.add_table(6, 2);
+                table.set_column_width(0, Length::twips(1000));
+                table.set_column_width(1, Length::twips(1000));
+                table.set_width(Length::twips(2000));
+                table
+                    .set_float_position(position)
+                    .expect("float position is valid");
+                table.row(0).expect("header row").set_header();
+                for row in 0..6 {
+                    for column in 0..2 {
+                        table
+                            .cell(row, column)
+                            .expect("cell exists")
+                            .set_text(&format!("T{row}{column}"));
+                    }
+                }
+            }
+            prose(&mut document, 30, 34);
+            document.layout_deterministic().expect("document lays out")
+        };
+
+        let inline = build(None);
+        assert!(
+            placed(&inline, 30).len() > 1,
+            "an inline table this tall is expected to split, which is what the float must not do"
+        );
+
+        let result = build(Some(float_at(TableAnchor::Text, TableAnchor::Text, 0, 0)));
+        assert_eq!(result.layout.pages.len(), 2);
+
+        // One fragment, on the second page, at its full six-row height. A
+        // split float would report two fragments, and a repeated header row
+        // would make the continuation taller than the rows it carries.
+        assert_eq!(placed(&result, 30), [(2, 72.0, 72.0, 100.0, 119.23)]);
+
+        // The prose that follows shares the second page with the float and
+        // flows beside it rather than under it, which is what tells the float
+        // apart from a table that simply moved to the next page.
+        let second = body_line_boxes(&result.layout.pages[1]);
+        assert_eq!(second[0].1, 181.0, "the float did not push the text aside");
+
+        // Nothing the float placed crosses the bottom margin of either page.
+        for page in &result.layout.pages {
+            for (baseline, ..) in body_line_boxes(page) {
+                assert!(
+                    baseline < CONTENT_BOTTOM,
+                    "line at {baseline} ran past the margin"
+                );
+            }
+        }
+    }
+
+    /// A `w:vertAnchor="text"` float has no vertical position until the flow
+    /// places the block that carries it, so the first pass cannot offer one to
+    /// the text above it. The paginator records where the first pass put it and
+    /// the second offers that, which is the whole of the fixed point.
+    #[test]
+    fn a_text_anchored_float_converges_in_the_existing_two_passes() {
+        let build = || {
+            let mut document = Document::new();
+            prose(&mut document, 0, 3);
+            document.add_paragraph("A short neighbour line.");
+            add_float(
+                &mut document,
+                "T",
+                Some(float_at(TableAnchor::Text, TableAnchor::Text, 0, -400)),
+                None,
+            );
+            prose(&mut document, 4, 8);
+            document.layout_deterministic().expect("document lays out")
+        };
+
+        let result = build();
+        // The float sits 20 points above its own block, which is where the
+        // flow left it. The second pass reflowed the line above it without
+        // moving it, so the rect the first pass recorded still holds.
+        assert_eq!(placed(&result, 4), [(1, 72.0, 131.48, 100.0, 39.74)]);
+
+        // The neighbour above the float is the one the second pass reflowed.
+        let boxes = body_line_boxes(&result.layout.pages[0]);
+        assert_eq!(
+            boxes[3],
+            (139.86, 181.0, 283.23),
+            "the line above a text-anchored float was not pushed aside"
+        );
+        assert_eq!(boxes[2].1, MARGIN_LEFT, "the line clear of the float moved");
+
+        // Two runs of the same document agree, so the two passes settle rather
+        // than leaving the geometry dependent on run order.
+        let again = build();
+        assert_eq!(placed(&again, 4), placed(&result, 4));
+        assert_eq!(body_line_boxes(&again.layout.pages[0]), boxes);
+    }
+
+    /// `lookahead_wraps` saw only `para.anchored`, so a float anchored to a
+    /// later block never pushed the text above it aside.
+    #[test]
+    fn a_paragraph_before_a_floating_table_is_pushed_aside_by_it() {
+        let boxes_for = |position: Option<TableFloatPosition>| {
+            let mut document = Document::new();
+            prose(&mut document, 0, 2);
+            add_float(&mut document, "M", position, None);
+            prose(&mut document, 2, 6);
+            let result = document.layout_deterministic().expect("document lays out");
+            body_line_boxes(&result.layout.pages[0])
+        };
+
+        let float = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
+        let wrapped = boxes_for(Some(float));
+        assert_eq!(wrapped[0], (80.25, 181.0, 525.39));
+        assert_eq!(wrapped[1], (92.12, 181.0, 277.95));
+
+        // The same table in the flow leaves the measure alone, which is what
+        // makes the assertion above about the float and not about the table.
+        let inline = boxes_for(None);
+        assert_eq!(inline[0].1, MARGIN_LEFT);
+        assert_eq!(inline[1].1, MARGIN_LEFT);
+    }
+
+    /// `w:tblOverlap` is a rule between floating tables, resolved within one
+    /// page. Facing-page and section-scoped resolution stays out of scope,
+    /// because no reviewed geometry exercises it.
+    #[test]
+    fn two_floats_that_forbid_overlap_stack_instead_of_intersecting() {
+        let origins = |overlap: Option<TableOverlap>| {
+            let mut document = Document::new();
+            prose(&mut document, 0, 2);
+            add_float(
+                &mut document,
+                "A",
+                Some(float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0)),
+                overlap,
+            );
+            add_float(
+                &mut document,
+                "B",
+                Some(float_at(TableAnchor::Margin, TableAnchor::Margin, 200, 200)),
+                overlap,
+            );
+            prose(&mut document, 2, 6);
+            let result = document.layout_deterministic().expect("document lays out");
+            (placed(&result, 2), placed(&result, 3))
+        };
+
+        // The first float keeps its anchor. The second drops to the bottom of
+        // the first one's keep-out band, which is 72 plus the 39.74 point
+        // table plus the 4 point bottom clearance, plus its own 4 point top.
+        let (first, second) = origins(Some(TableOverlap::Never));
+        assert_eq!(first, [(1, MARGIN_LEFT, MARGIN_TOP, 100.0, 39.74)]);
+        assert_eq!(second, [(1, 82.0, 119.74, 100.0, 39.74)]);
+
+        // Two floats that both allow the overlap are left intersecting.
+        let (first, second) = origins(None);
+        assert_eq!(first, [(1, MARGIN_LEFT, MARGIN_TOP, 100.0, 39.74)]);
+        assert_eq!(second, [(1, 82.0, 82.0, 100.0, 39.74)]);
+    }
+}
