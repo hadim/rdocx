@@ -480,6 +480,8 @@ defended.
 | F-265 | S74 | L | 5 | 1 | 2026-09-19 | Typed sixteen run children and closed three theme-attribute data-loss paths, deferring the visual effect render to F-312 |
 | F-270 | S74 | L | 5 | 1 | 2026-09-19 | Modeled the remaining settings behind one order table and made web settings a modeled part |
 | F-264 | S74 | L | 5 | 1 | 2026-09-19 | Typed nine paragraph children and shipped the full paragraph facade, with border retention and w:bidi as cross-story contracts |
+| F-266b | S74 | L | 5 | 1 | 2026-09-19 | Modeled ruby as typed paragraph content over a base-run span and projected emphasis marks into layout |
+| F-268b | S74 | M | 3 | 1 | 2026-09-19 | Placed floating tables through the existing wrap machinery and found the gate that kept floats off the two-pass path, closing DOCX-035 |
 | F-266a | S74 | L | 5 | 1 | 2026-09-19 | Gave Hangul and Kana script identity, made w:rFonts resolve per slot, and bundled the three deterministic subsets the golden gate needs |
 | F-268a | S74 | L | 5 | 1 | 2026-09-19 | Modeled the advanced table grammar and made gridBefore, gridAfter and tblLayout mean something, closing DOCX-034 |
 | F-X132 | S74 | S | 1 | 1 | 2026-09-19 | Stopped a redundant namespace declaration making its element an owner, clearing the second F-X128 regression on the Word corpus |

@@ -15656,6 +15656,92 @@ S74 stories hit it after this one. Box composite members from the start.
 DOCX-030 stays partial and its owner moved to F-311, which owns positioned
 frame placement.
 
+### F-266b, Ruby and emphasis marks
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** `w:ruby` as typed paragraph content with its phonetic and
+base lines, and the layout projection for `w:em` emphasis marks. Text
+extraction returns the base text only, so search, selection and redaction do
+not double-count the guide.
+
+**Non-obvious choices.** `CT_Ruby` holds its base line as a half-open span over
+`CT_P::runs` rather than owning a `Vec<CT_R>`. The plan's shape would have kept
+the base text out of the paragraph's run list, and every text projection the
+plan itself requires would then have needed its own ruby case. The span is what
+`w:hyperlink` already does for the same problem. `CT_RubyPr` carries its own
+raw bucket so an unmodelled `w:rubyPr` child is written back inside the element
+it came from.
+
+**Scope that shrank for a good reason.** Work group C reduced to its render
+projection, because F-265 had already landed `CT_RPr::emphasis_mark`, `ST_Em`,
+the schema slot, the producer-token carrier and the facade pair.
+
+**Five defects caught in review, not by a user.** A raw child or equation at the
+first base-run boundary was dropped from layout. A hand-built span past the run
+list panicked on a slice. `paragraph_fingerprint` could not distinguish an
+annotated paragraph from an unannotated one, so a stale cached block could be
+served. And two span-desync defects: `split_run` with `insert_unwrapped_run`,
+and `remap_complex_field_boundaries`, both shift every recorded run boundary
+and neither knew about ruby spans, so a split or a complex-field collapse
+before an annotation left it wrapping the neighbouring run.
+
+**Spec sections touched.** The four files the plan listed.
+
+**Tests.** `ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order`
+is the gate, proven by making an emphasis mark draw nothing. It asserts
+F-266a's digest is unmoved in the same module, so a sibling cannot disturb it
+silently.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** An annotated span is one unbreakable inline
+item, so a ruby never breaks inside its base and a marked run leaves the rich
+shaping path. Both limits are recorded rather than closed.
+
+### F-268b, Floating table placement and wrap
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** M, estimated 3 days, actual 1 day
+
+**What was built.** Floating table lowering and placement through the wrap
+machinery the flow engine already owns, so `w:tblpPr` stops being an authored
+property with no effect. The anchor vocabulary maps one for one onto the
+existing relative-from types, so no new anchor concept was introduced. Float
+against float resolves within one page.
+
+**The thing the plan did not anticipate.** `document_has_wrapping_drawing`
+gates the entire two-pass path, and a document whose only obstacle is a float
+was taking the single-pass restart route. The wrap resolution this story
+depends on would never have run, and text above a text-anchored float would
+never have been pushed aside. The engine now asks the table lowering whether a
+table floats, which also removed a second copy of that rule.
+
+**A defect caught in review.** The look-ahead offered a float at its unresolved
+anchor while placement then dropped it below a float it may not overlap, so
+text above reserved space for a float that landed elsewhere. Fixed by running
+the same settlement in the look-ahead.
+
+**Spec sections touched.** The four files the plan listed.
+
+**Tests.** `floating_tables_match_reviewed_word_page_geometry_and_pagination`
+is the gate, proven by reverting the three layout sources and watching the
+float return to the flow. `a_document_with_no_floating_table_still_paginates_in_one_pass`
+guards the one genuinely new failure mode, since the gating predicate sits on a
+path every sample uses.
+
+**Hash harness.** Unchanged, 49 of 49, and the golden pixel manifest 7 of 7
+verified through the pinned rasteriser on staged copies, because that harness
+cannot run from a worker worktree.
+
+**Notes for future sessions.** DOCX-035 closes here. The reciprocal half, a
+table that does not float still taking the full measure beside one, plus
+facing-page and section-scoped float resolution, are recorded as boundaries in
+the rendering spec rather than left as an open owner.
+
 ### F-266a, Script identity and font slot resolution
 
 **Sprint.** S74
