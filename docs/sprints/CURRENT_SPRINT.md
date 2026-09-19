@@ -54,7 +54,7 @@ evidence.
 | F-X127 | Collapse adjacent page break requests | S | done | - |
 | F-X128 | Preserve Word paragraph and revision identities | M | done | - |
 | F-X129 | Tolerate unmatched notes placeholders | S | done | - |
-| F-X130 | Show package depth, footprint, and speed | L | pending | - |
+| F-X130 | Show package depth, footprint, and speed | L | in-progress | codex |
 | F-X131 | Retain only the namespace declarations a root attribute uses | S | done | - |
 | F-X132 | Match a retained namespace owner by structure, not by identity | S | done | - |
 

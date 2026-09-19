@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 54 | 12 | 0 | 42 |
-| X, Cross-cutting (opportunistic)            | 143 | 137 | 0 | 2  |
-| **Total** | **468** | **399** | **0** | **65** |
+| X, Cross-cutting (opportunistic)            | 143 | 137 | 1 | 1  |
+| **Total** | **468** | **399** | **1** | **64** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -683,7 +683,7 @@ regenerated, never hand-edited.
 | F-X127 | Collapse adjacent page break requests | S74 | S | done |
 | F-X128 | Preserve Word paragraph and revision identities | S74 | M | done |
 | F-X129 | Tolerate unmatched notes placeholders | S74 | S | done |
-| F-X130 | Show package depth, footprint, and speed | S74 | L | pending |
+| F-X130 | Show package depth, footprint, and speed | S74 | L | in-progress |
 | F-X131 | Retain only the namespace declarations a root attribute uses | S74 | S | done |
 | F-X132 | Match a retained namespace owner by structure, not by identity | S74 | S | done |
 | F-X133 | Stop rebinding a canonical prefix on every retained element | S75 | S | pending |
