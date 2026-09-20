@@ -1,5 +1,6 @@
 //! Text content elements: `CT_P` (paragraph), `CT_R` (run), `CT_Text`.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
@@ -15,9 +16,165 @@ use crate::numbering::{namespace_bindings, parse_scoped_ppr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::{CT_Revision, RevisionKind};
+use crate::ruby::CT_Ruby;
 use crate::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 
 static NEXT_FIELD_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
+
+const ROOT_ATTRIBUTES_ELEMENT: &[u8] = b"rdocxRootAttributes";
+const ROOT_ATTRIBUTES_POSITION: usize = usize::MAX;
+const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
+
+fn namespace_declaration(name: &[u8]) -> bool {
+    name == b"xmlns" || name.starts_with(b"xmlns:")
+}
+
+fn root_attribute_namespace(name: &[u8], bindings: &[(String, String)]) -> Result<Option<String>> {
+    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+        return Ok(None);
+    };
+    let prefix = &name[..separator];
+    if prefix == b"xml" {
+        return Ok(Some("http://www.w3.org/XML/1998/namespace".to_owned()));
+    }
+    bindings
+        .iter()
+        .find(|(candidate, _)| candidate.as_bytes() == prefix)
+        .map(|(_, namespace)| Some(namespace.clone()))
+        .ok_or_else(|| {
+            OxmlError::InvalidValue(format!(
+                "root attribute prefix `{}` is unbound",
+                String::from_utf8_lossy(prefix)
+            ))
+        })
+}
+
+pub(crate) fn capture_root_attribute_record(
+    start: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<Option<Vec<u8>>> {
+    let bindings = namespace_bindings(prefixes);
+    let mut attributes = Vec::new();
+    let mut expanded = HashSet::new();
+    let mut used_prefixes = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
+            .into_owned();
+        // A namespace declaration is not retained for its own sake. The loop
+        // below re-declares exactly the prefixes these attributes use, and the
+        // alias machinery declares the rest on the elements that use them, so
+        // recording a declaration here would emit it twice.
+        if namespace_declaration(name) {
+            continue;
+        }
+        let namespace = root_attribute_namespace(name, &bindings)?;
+        let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
+        if !expanded.insert((namespace, local.to_vec())) {
+            return Err(OxmlError::InvalidValue(format!(
+                "duplicate expanded root attribute `{}`",
+                String::from_utf8_lossy(local)
+            )));
+        }
+        if let Some(separator) = name.iter().position(|byte| *byte == b':')
+            && let prefix = &name[..separator]
+            && prefix != b"xml"
+            && !used_prefixes.iter().any(|candidate| candidate == prefix)
+        {
+            used_prefixes.push(prefix.to_vec());
+        }
+        attributes.push((std::str::from_utf8(name)?.to_owned(), value));
+    }
+    if attributes.is_empty() {
+        return Ok(None);
+    }
+
+    let mut record = BytesStart::new(std::str::from_utf8(ROOT_ATTRIBUTES_ELEMENT)?);
+    for (name, value) in &attributes {
+        record.push_attribute((name.as_str(), value.as_str()));
+    }
+    for prefix in used_prefixes {
+        let declaration = format!("xmlns:{}", String::from_utf8_lossy(&prefix));
+        let namespace = bindings
+            .iter()
+            .find(|(candidate, _)| candidate.as_bytes() == prefix)
+            .map(|(_, namespace)| namespace.as_str())
+            .ok_or_else(|| {
+                OxmlError::InvalidValue(format!(
+                    "root attribute prefix `{}` is unbound",
+                    String::from_utf8_lossy(&prefix)
+                ))
+            })?;
+        record.push_attribute((declaration.as_str(), namespace));
+    }
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(Event::Empty(record))?;
+    Ok(Some(writer.into_inner()))
+}
+
+#[doc(hidden)]
+pub fn is_root_attribute_record(raw: &[u8]) -> bool {
+    raw.starts_with(b"<rdocxRootAttributes")
+}
+
+pub(crate) fn push_root_attribute_record(
+    target: &mut BytesStart<'_>,
+    raw: &[u8],
+    replaced: Option<(&str, &str)>,
+) -> Result<()> {
+    let mut reader = NsReader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let element = loop {
+        match reader.read_resolved_event_into(&mut buffer)? {
+            (_, Event::Empty(element)) if element.name().as_ref() == ROOT_ATTRIBUTES_ELEMENT => {
+                break element.into_owned();
+            }
+            (_, Event::Eof) => {
+                return Err(OxmlError::InvalidValue(
+                    "invalid retained root-attribute record".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    };
+    let existing = target
+        .attributes()
+        .filter_map(|attribute| attribute.ok())
+        .map(|attribute| attribute.key.as_ref().to_vec())
+        .collect::<HashSet<_>>();
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        if existing.contains(name) {
+            continue;
+        }
+        // `w14` is bound by the part root that owns the element, the same
+        // assumption the authored `w14:paraId` write already makes. Rebinding
+        // it here would make a reopened save differ from the save it came
+        // from, purely by a declaration that changes nothing.
+        if name == b"xmlns:w14" && attribute.value.as_ref() == W14_NS.as_bytes() {
+            continue;
+        }
+        if !namespace_declaration(name)
+            && let Some((namespace, local)) = replaced
+        {
+            let (resolved, resolved_local) = reader.resolver().resolve_attribute(attribute.key);
+            if resolved_local.as_ref() == local.as_bytes()
+                && matches!(resolved, ResolveResult::Bound(Namespace(uri)) if uri == namespace.as_bytes())
+            {
+                continue;
+            }
+        }
+        let name = std::str::from_utf8(name)?;
+        let value =
+            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?;
+        target.push_attribute((name, value.as_ref()));
+    }
+    Ok(())
+}
 
 /// `CT_Text` — The text content of a run, with optional xml:space="preserve".
 #[derive(Debug, Clone, PartialEq)]
@@ -550,6 +707,253 @@ pub enum RunContent {
         /// Number of raw run children that precede this reference.
         raw_before: usize,
     },
+    /// A symbol character from a specific font (`<w:sym w:font="..." w:char="..."/>`).
+    Symbol {
+        /// The font the code point is looked up in.
+        font: String,
+        /// The code point, written back as four upper-case hex digits.
+        char_code: u16,
+    },
+    /// One of the Word special characters that carries no text of its own.
+    SpecialCharacter(SpecialCharacter),
+}
+
+/// A Word special character run child.
+///
+/// The four share one placement contract, so they share one `RunContent`
+/// variant rather than taking one each across the ten files that match on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecialCharacter {
+    /// `<w:cr/>`, a carriage return that breaks the line.
+    CarriageReturn,
+    /// `<w:noBreakHyphen/>`, a hyphen that is not a break opportunity.
+    NoBreakHyphen,
+    /// `<w:softHyphen/>`, a hyphen that renders only at a line break.
+    SoftHyphen,
+    /// `<w:ptab/>`, an absolutely positioned tab.
+    PositionalTab {
+        alignment: ST_PTabAlignment,
+        relative_to: ST_PTabRelativeTo,
+        leader: ST_PTabLeader,
+    },
+}
+
+/// `ST_PTabAlignment` — how content aligns against a positional tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ST_PTabAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+/// `ST_PTabRelativeTo` — what a positional tab position is measured from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ST_PTabRelativeTo {
+    Margin,
+    Indent,
+}
+
+/// `ST_PTabLeader` — the leader drawn across a positional tab gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ST_PTabLeader {
+    None,
+    Dot,
+    Hyphen,
+    Underscore,
+    MiddleDot,
+}
+
+impl ST_PTabAlignment {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "left" => Some(ST_PTabAlignment::Left),
+            "center" => Some(ST_PTabAlignment::Center),
+            "right" => Some(ST_PTabAlignment::Right),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ST_PTabAlignment::Left => "left",
+            ST_PTabAlignment::Center => "center",
+            ST_PTabAlignment::Right => "right",
+        }
+    }
+}
+
+impl ST_PTabRelativeTo {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "margin" => Some(ST_PTabRelativeTo::Margin),
+            "indent" => Some(ST_PTabRelativeTo::Indent),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ST_PTabRelativeTo::Margin => "margin",
+            ST_PTabRelativeTo::Indent => "indent",
+        }
+    }
+}
+
+impl ST_PTabLeader {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(ST_PTabLeader::None),
+            "dot" => Some(ST_PTabLeader::Dot),
+            "hyphen" => Some(ST_PTabLeader::Hyphen),
+            "underscore" => Some(ST_PTabLeader::Underscore),
+            "middleDot" => Some(ST_PTabLeader::MiddleDot),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ST_PTabLeader::None => "none",
+            ST_PTabLeader::Dot => "dot",
+            ST_PTabLeader::Hyphen => "hyphen",
+            ST_PTabLeader::Underscore => "underscore",
+            ST_PTabLeader::MiddleDot => "middleDot",
+        }
+    }
+}
+
+/// Read `<w:sym/>` as typed content.
+///
+/// A symbol whose `w:char` is not four hex digits, or that carries an
+/// attribute outside the modeled pair, stays raw so nothing is lost.
+fn parse_symbol(e: &BytesStart<'_>, prefixes: &[String]) -> Result<Option<RunContent>> {
+    let mut font = None;
+    let mut char_code = None;
+    for attribute in e.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        let value = std::str::from_utf8(&attribute.value)?;
+        if is_word_attribute(key, b"font", prefixes) {
+            font = Some(value.to_owned());
+        } else if is_word_attribute(key, b"char", prefixes) {
+            if value.len() != 4 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Ok(None);
+            }
+            char_code = u16::from_str_radix(value, 16).ok();
+        } else if !key.starts_with(b"xmlns") {
+            return Ok(None);
+        }
+    }
+    Ok(match (font, char_code) {
+        (Some(font), Some(char_code)) => Some(RunContent::Symbol { font, char_code }),
+        _ => None,
+    })
+}
+
+/// Read `<w:ptab/>` as typed content.
+///
+/// All three attributes are required by the schema, so a positional tab
+/// missing one, or carrying a token outside the inventory, stays raw.
+fn parse_positional_tab(e: &BytesStart<'_>, prefixes: &[String]) -> Result<Option<RunContent>> {
+    let mut alignment = None;
+    let mut relative_to = None;
+    let mut leader = None;
+    for attribute in e.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        let value = std::str::from_utf8(&attribute.value)?;
+        if is_word_attribute(key, b"alignment", prefixes) {
+            alignment = ST_PTabAlignment::from_str(value);
+        } else if is_word_attribute(key, b"relativeTo", prefixes) {
+            relative_to = ST_PTabRelativeTo::from_str(value);
+        } else if is_word_attribute(key, b"leader", prefixes) {
+            leader = ST_PTabLeader::from_str(value);
+        } else if !key.starts_with(b"xmlns") {
+            return Ok(None);
+        }
+    }
+    Ok(match (alignment, relative_to, leader) {
+        (Some(alignment), Some(relative_to), Some(leader)) => Some(RunContent::SpecialCharacter(
+            SpecialCharacter::PositionalTab {
+                alignment,
+                relative_to,
+                leader,
+            },
+        )),
+        _ => None,
+    })
+}
+
+/// Read `<w:cr/>`, `<w:noBreakHyphen/>` and `<w:softHyphen/>` as typed content.
+///
+/// These are `CT_Empty`, so an element carrying any attribute other than a
+/// namespace declaration stays raw.
+fn parse_empty_special_character(
+    e: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<Option<RunContent>> {
+    let name = e.name();
+    let character = if is_word_element(name.as_ref(), b"cr", prefixes) {
+        SpecialCharacter::CarriageReturn
+    } else if is_word_element(name.as_ref(), b"noBreakHyphen", prefixes) {
+        SpecialCharacter::NoBreakHyphen
+    } else if is_word_element(name.as_ref(), b"softHyphen", prefixes) {
+        SpecialCharacter::SoftHyphen
+    } else {
+        return Ok(None);
+    };
+    for attribute in e.attributes() {
+        if !attribute?.key.as_ref().starts_with(b"xmlns") {
+            return Ok(None);
+        }
+    }
+    Ok(Some(RunContent::SpecialCharacter(character)))
+}
+
+/// Read the run children F-265 typed, or `None` to keep the element raw.
+fn parse_typed_special_run_child(
+    e: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<Option<RunContent>> {
+    if is_word_element(e.name().as_ref(), b"sym", prefixes) {
+        parse_symbol(e, prefixes)
+    } else if is_word_element(e.name().as_ref(), b"ptab", prefixes) {
+        parse_positional_tab(e, prefixes)
+    } else {
+        parse_empty_special_character(e, prefixes)
+    }
+}
+
+fn write_special_character<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    character: SpecialCharacter,
+) -> Result<()> {
+    match character {
+        SpecialCharacter::CarriageReturn => {
+            writer.write_event(Event::Empty(BytesStart::new("w:cr")))?;
+        }
+        SpecialCharacter::NoBreakHyphen => {
+            writer.write_event(Event::Empty(BytesStart::new("w:noBreakHyphen")))?;
+        }
+        SpecialCharacter::SoftHyphen => {
+            writer.write_event(Event::Empty(BytesStart::new("w:softHyphen")))?;
+        }
+        SpecialCharacter::PositionalTab {
+            alignment,
+            relative_to,
+            leader,
+        } => {
+            let mut e = BytesStart::new("w:ptab");
+            e.push_attribute(("w:alignment", alignment.as_str()));
+            e.push_attribute(("w:relativeTo", relative_to.as_str()));
+            e.push_attribute(("w:leader", leader.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+    }
+    Ok(())
 }
 
 /// A typed comment range boundary at a run insertion point.
@@ -701,7 +1105,9 @@ pub struct CT_R {
 
 const RAW_LEGACY_HORIZONTAL_RULE_FLAG: usize = 1usize << (usize::BITS - 1);
 const RAW_ALTERNATE_CONTENT_DRAWING_FLAG: usize = 1usize << (usize::BITS - 2);
-const RAW_CHILD_FLAGS: usize = RAW_LEGACY_HORIZONTAL_RULE_FLAG | RAW_ALTERNATE_CONTENT_DRAWING_FLAG;
+const RAW_ROOT_ATTRIBUTES_FLAG: usize = 1usize << (usize::BITS - 3);
+const RAW_CHILD_FLAGS: usize =
+    RAW_LEGACY_HORIZONTAL_RULE_FLAG | RAW_ALTERNATE_CONTENT_DRAWING_FLAG | RAW_ROOT_ATTRIBUTES_FLAG;
 const RAW_CHILD_POSITION_MASK: usize = !RAW_CHILD_FLAGS;
 const VML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:vml";
 const OFFICE_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:office";
@@ -875,6 +1281,21 @@ impl CT_R {
         }
     }
 
+    pub(crate) fn from_empty_root(root: &BytesStart<'_>, word_prefixes: &[String]) -> Result<Self> {
+        let mut run = Self {
+            properties: None,
+            content: Vec::new(),
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        };
+        if let Some(record) = capture_root_attribute_record(root, word_prefixes)? {
+            run.extra_xml.push(record);
+            run.extra_xml_positions.push(RAW_ROOT_ATTRIBUTES_FLAG);
+        }
+        Ok(run)
+    }
+
     /// Decode a raw-child boundary stored in `extra_xml_positions`.
     #[doc(hidden)]
     pub fn raw_child_position(encoded: usize) -> usize {
@@ -885,6 +1306,12 @@ impl CT_R {
     #[doc(hidden)]
     pub fn raw_child_is_legacy_horizontal_rule(encoded: usize) -> bool {
         encoded & RAW_LEGACY_HORIZONTAL_RULE_FLAG != 0
+    }
+
+    /// Report whether a raw carrier retains attributes from the run root.
+    #[doc(hidden)]
+    pub fn raw_child_is_root_attributes(encoded: usize) -> bool {
+        encoded & RAW_ROOT_ATTRIBUTES_FLAG != 0
     }
 
     fn raw_child_has_alternate_content_drawing(encoded: usize) -> bool {
@@ -933,6 +1360,11 @@ impl CT_R {
             RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
             | RunContent::CommentReference { .. } => "",
+            // A symbol is font-encoded rather than Unicode, and the special
+            // characters carry no text, so neither contributes to extraction.
+            RunContent::Symbol { .. } => "",
+            RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn) => "\n",
+            RunContent::SpecialCharacter(_) => "",
         }
     }
 
@@ -946,7 +1378,9 @@ impl CT_R {
             | RunContent::Field(_)
             | RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
-            | RunContent::CommentReference { .. } => "",
+            | RunContent::CommentReference { .. }
+            | RunContent::Symbol { .. }
+            | RunContent::SpecialCharacter(_) => "",
         }
     }
 
@@ -1122,6 +1556,14 @@ impl CT_R {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_root(reader, word_prefixes, None)
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_root(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        root: Option<&BytesStart<'_>>,
+    ) -> Result<Self> {
         let mut properties = None;
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1259,6 +1701,9 @@ impl CT_R {
                             raw_before: extra_xml.len(),
                         });
                         modeled_children += 1;
+                    } else if let Some(typed) = parse_typed_special_run_child(e, &prefixes)? {
+                        content.push(typed);
+                        modeled_children += 1;
                     } else if !is_word_element(name.as_ref(), b"rPr", &prefixes) {
                         // Capture unknown empty child elements (e.g.
                         // w:commentReference) as raw XML, mirroring the
@@ -1284,6 +1729,15 @@ impl CT_R {
             buf.clear();
         }
 
+        if let Some(record) = root
+            .map(|root| capture_root_attribute_record(root, word_prefixes))
+            .transpose()?
+            .flatten()
+        {
+            extra_xml.push(record);
+            extra_xml_positions.push(RAW_ROOT_ATTRIBUTES_FLAG);
+        }
+
         Ok(CT_R {
             properties,
             content,
@@ -1305,6 +1759,11 @@ impl CT_R {
         let mut run = BytesStart::new("w:r");
         if foreign_word_namespace.is_some() {
             run.push_attribute(("xmlns:w", crate::namespace::W_NS));
+        }
+        for (position, raw) in self.extra_xml_positions.iter().zip(&self.extra_xml) {
+            if Self::raw_child_is_root_attributes(*position) {
+                push_root_attribute_record(&mut run, raw, None)?;
+            }
         }
         writer.write_event(Event::Start(run))?;
 
@@ -1372,6 +1831,15 @@ impl CT_R {
                     e.push_attribute(("w:id", buf.format(*id)));
                     writer.write_event(Event::Empty(e))?;
                 }
+                RunContent::Symbol { font, char_code } => {
+                    let mut e = BytesStart::new("w:sym");
+                    e.push_attribute(("w:font", font.as_str()));
+                    e.push_attribute(("w:char", format!("{char_code:04X}").as_str()));
+                    writer.write_event(Event::Empty(e))?;
+                }
+                RunContent::SpecialCharacter(character) => {
+                    write_special_character(writer, *character)?;
+                }
                 RunContent::CommentReference { id, raw_before } => {
                     if !ordered_raw {
                         for raw in self
@@ -1399,6 +1867,9 @@ impl CT_R {
         // Write captured unknown child elements
         if !ordered_raw {
             for raw in self.extra_xml.iter().skip(raw_written) {
+                if is_root_attribute_record(raw) {
+                    continue;
+                }
                 write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
             }
         }
@@ -1415,7 +1886,9 @@ fn write_run_raw_boundary<W: std::io::Write>(
     foreign_word_namespace: Option<&str>,
 ) -> Result<()> {
     for (position, raw) in run.extra_xml_positions.iter().zip(&run.extra_xml) {
-        if CT_R::raw_child_position(*position) == boundary {
+        if !CT_R::raw_child_is_root_attributes(*position)
+            && CT_R::raw_child_position(*position) == boundary
+        {
             write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
         }
     }
@@ -1502,7 +1975,7 @@ fn field_run(field: Field, properties: Option<CT_RPr>) -> CT_R {
     }
 }
 
-fn parse_run_raw(raw: &[u8], word_prefixes: &[String]) -> Result<CT_R> {
+pub(crate) fn parse_run_raw(raw: &[u8], word_prefixes: &[String]) -> Result<CT_R> {
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -1510,7 +1983,7 @@ fn parse_run_raw(raw: &[u8], word_prefixes: &[String]) -> Result<CT_R> {
         match reader.read_event_into(&mut buffer)? {
             Event::Start(start) if matches_local_name(start.name().as_ref(), b"r") => {
                 let prefixes = word_prefixes_at(&start, word_prefixes)?;
-                return CT_R::from_xml_with_prefixes(&mut reader, &prefixes);
+                return CT_R::from_xml_with_prefixes_and_root(&mut reader, &prefixes, Some(&start));
             }
             Event::Eof => {
                 return Err(OxmlError::MissingElement("w:r".to_owned()));
@@ -2589,6 +3062,7 @@ struct ComplexFieldProjection<'a> {
     content_controls: &'a mut [(usize, usize, usize, CT_Sdt)],
     revisions: &'a mut [(usize, usize, CT_Revision)],
     hyperlinks: &'a mut [HyperlinkSpan],
+    rubies: &'a mut [CT_Ruby],
     word_prefixes: &'a [String],
 }
 
@@ -2602,6 +3076,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
         content_controls,
         revisions,
         hyperlinks,
+        rubies,
         word_prefixes,
     } = projection;
     if runs.len() != run_sources.len() {
@@ -2797,6 +3272,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                 content_controls,
                 revisions,
                 hyperlinks,
+                rubies,
             },
         );
     }
@@ -2894,6 +3370,7 @@ struct ComplexFieldBoundariesMut<'a> {
     content_controls: &'a mut [(usize, usize, usize, CT_Sdt)],
     revisions: &'a mut [(usize, usize, CT_Revision)],
     hyperlinks: &'a mut [HyperlinkSpan],
+    rubies: &'a mut [CT_Ruby],
 }
 
 fn remap_complex_field_boundaries(
@@ -2909,6 +3386,7 @@ fn remap_complex_field_boundaries(
         content_controls,
         revisions,
         hyperlinks,
+        rubies,
     } = boundaries;
     let source_count = end - start + 1;
     let remap = |at: &mut usize| {
@@ -2923,7 +3401,9 @@ fn remap_complex_field_boundaries(
         }
     };
     for (at, _) in extra_xml {
-        remap(at);
+        if *at != ROOT_ATTRIBUTES_POSITION {
+            remap(at);
+        }
     }
     for marker in comment_ranges {
         match marker {
@@ -2950,6 +3430,10 @@ fn remap_complex_field_boundaries(
     }
     for (at, _, _) in revisions {
         remap(at);
+    }
+    for ruby in rubies {
+        remap(&mut ruby.base_start);
+        remap(&mut ruby.base_end);
     }
     for hyperlink in hyperlinks {
         let old_start = hyperlink.run_start;
@@ -2999,6 +3483,13 @@ pub struct CT_P {
     pub revisions: Vec<(usize, usize, CT_Revision)>,
     /// Typed OfficeMath projections keyed by `(run boundary, raw child slot)`.
     pub equations: Vec<(usize, usize, OfficeMath)>,
+    /// Ruby phonetic guides over half-open spans of [`Self::runs`].
+    ///
+    /// The base runs are ordinary paragraph runs, so text extraction, search
+    /// and redaction see them without knowing about ruby. The phonetic runs
+    /// stay inside the annotation, which is what keeps them out of every
+    /// text projection.
+    pub rubies: Vec<CT_Ruby>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -3397,7 +3888,22 @@ impl CT_P {
             content_controls: Vec::new(),
             revisions: Vec::new(),
             equations: Vec::new(),
+            rubies: Vec::new(),
         }
+    }
+
+    /// Report whether one raw paragraph carrier retains root attributes.
+    #[doc(hidden)]
+    pub fn raw_is_root_attributes(position: usize, raw: &[u8]) -> bool {
+        position == ROOT_ATTRIBUTES_POSITION && is_root_attribute_record(raw)
+    }
+
+    pub(crate) fn from_empty_root(root: &BytesStart<'_>, word_prefixes: &[String]) -> Result<Self> {
+        let mut paragraph = Self::new();
+        if let Some(record) = capture_root_attribute_record(root, word_prefixes)? {
+            paragraph.extra_xml.push((ROOT_ATTRIBUTES_POSITION, record));
+        }
+        Ok(paragraph)
     }
 
     /// Get the combined text of all runs in this paragraph.
@@ -3648,6 +4154,7 @@ impl CT_P {
             let new_index = suffix.filter(|_| *at > run_index).unwrap_or(*prefix);
             *slot = hyperlink_revision_slot(new_index);
         }
+        self.shift_ruby_spans_for_insert(run_index);
         self.runs.insert(run_index, run);
         self.refresh_bookmark_projection()
     }
@@ -3708,6 +4215,7 @@ impl CT_P {
                 hyperlink.run_end += 1;
             }
         }
+        self.shift_ruby_spans_for_insert(inserted);
         self.runs.insert(inserted, tail);
         if self.refresh_bookmark_projection() {
             Ok(inserted)
@@ -3720,6 +4228,22 @@ impl CT_P {
     ///
     /// Hyperlink spans are left to the caller, which decides whether the new
     /// run joins or splits them.
+    /// Move every ruby span across one run inserted at `inserted`.
+    ///
+    /// A span that starts at or after the insertion point moves whole, and a
+    /// span that already contains the point grows by one run, which is the
+    /// rule `w:hyperlink` spans follow beside this call.
+    fn shift_ruby_spans_for_insert(&mut self, inserted: usize) {
+        for ruby in &mut self.rubies {
+            if ruby.base_start >= inserted {
+                ruby.base_start += 1;
+                ruby.base_end += 1;
+            } else if ruby.base_end >= inserted {
+                ruby.base_end += 1;
+            }
+        }
+    }
+
     fn shift_run_boundaries_from(&mut self, run_index: usize) {
         for marker in &mut self.comment_ranges {
             match marker {
@@ -3748,7 +4272,7 @@ impl CT_P {
             }
         }
         for (position, _) in &mut self.extra_xml {
-            if *position >= run_index {
+            if *position != ROOT_ATTRIBUTES_POSITION && *position >= run_index {
                 *position += 1;
             }
         }
@@ -3824,7 +4348,10 @@ impl CT_P {
             })
             .collect::<Vec<_>>();
         let mut raw_counts = vec![0usize; old_run_count + 1];
-        for (position, _) in &self.extra_xml {
+        for (position, raw) in &self.extra_xml {
+            if Self::raw_is_root_attributes(*position, raw) {
+                continue;
+            }
             raw_counts[(*position).min(old_run_count)] += 1;
         }
         let mut raw_prefixes = vec![0usize; old_run_count + 1];
@@ -3932,7 +4459,10 @@ impl CT_P {
                     raw_prefixes[old_boundary] + (*raw_before).min(raw_counts[old_boundary]);
             }
         }
-        for (position, _) in &mut self.extra_xml {
+        for (position, raw) in &mut self.extra_xml {
+            if Self::raw_is_root_attributes(*position, raw) {
+                continue;
+            }
             *position = boundary_map[(*position).min(old_run_count)];
         }
         for (position, raw_before, _) in &mut self.equations {
@@ -4138,12 +4668,16 @@ impl CT_P {
                     if !is_word_element(element.name().as_ref(), b"p", &prefixes) {
                         return Err(OxmlError::MissingElement("w:p root".to_owned()));
                     }
-                    return Self::from_xml_with_prefixes(&mut reader, &prefixes);
+                    return Self::from_xml_with_prefixes_and_root(
+                        &mut reader,
+                        &prefixes,
+                        Some(&element),
+                    );
                 }
                 Event::Empty(element) => {
                     let prefixes = word_prefixes_at(&element, &[])?;
                     if is_word_element(element.name().as_ref(), b"p", &prefixes) {
-                        return Ok(Self::new());
+                        return Self::from_empty_root(&element, &prefixes);
                     }
                     return Err(OxmlError::MissingElement("w:p root".to_owned()));
                 }
@@ -4170,12 +4704,16 @@ impl CT_P {
                     if !is_word_element(element.name().as_ref(), b"p", &prefixes) {
                         return Err(OxmlError::MissingElement("w:p root".to_owned()));
                     }
-                    break Self::from_xml_with_prefixes(&mut reader, &prefixes)?;
+                    break Self::from_xml_with_prefixes_and_root(
+                        &mut reader,
+                        &prefixes,
+                        Some(&element),
+                    )?;
                 }
                 Event::Empty(element) => {
                     let prefixes = word_prefixes_at(&element, inherited_word_prefixes)?;
                     if is_word_element(element.name().as_ref(), b"p", &prefixes) {
-                        break Self::new();
+                        break Self::from_empty_root(&element, &prefixes)?;
                     }
                     return Err(OxmlError::MissingElement("w:p root".to_owned()));
                 }
@@ -4193,6 +4731,14 @@ impl CT_P {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_root(reader, word_prefixes, None)
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_root(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        root: Option<&BytesStart<'_>>,
+    ) -> Result<Self> {
         reader.config_mut().trim_text(false);
         let mut properties = None;
         let mut runs = Vec::new();
@@ -4203,6 +4749,7 @@ impl CT_P {
         let mut extra_xml = Vec::new();
         let mut content_controls = Vec::new();
         let mut revisions = Vec::new();
+        let mut rubies = Vec::new();
         let mut projected_run_count = 0usize;
         let mut tracked_run_count = 0usize;
         let mut buf = Vec::new();
@@ -4304,6 +4851,19 @@ impl CT_P {
                             if preserved_raw_before.is_some() {
                                 extra_xml.push((run_start, raw));
                             }
+                        }
+                    } else if is_word_element(name.as_ref(), b"ruby", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some((mut ruby, base_runs)) = CT_Ruby::from_raw(&raw, &prefixes)? {
+                            ruby.base_start = runs.len();
+                            ruby.base_end = runs.len() + base_runs.len();
+                            projected_run_count += base_runs.len();
+                            tracked_run_count += base_runs.len();
+                            run_sources.extend(base_runs.iter().map(|_| None));
+                            runs.extend(base_runs);
+                            rubies.push(ruby);
+                        } else {
+                            extra_xml.push((runs.len(), raw));
                         }
                     } else if is_word_element(name.as_ref(), b"fldSimple", &prefixes) {
                         let raw = capture_element(reader, e)?;
@@ -4493,6 +5053,7 @@ impl CT_P {
             content_controls: &mut content_controls,
             revisions: &mut revisions,
             hyperlinks: &mut hyperlinks,
+            rubies: &mut rubies,
             word_prefixes,
         })?;
         extra_xml.retain(|(_, raw)| !is_xml_whitespace(raw));
@@ -4517,6 +5078,14 @@ impl CT_P {
             }
         }
 
+        if let Some(record) = root
+            .map(|root| capture_root_attribute_record(root, word_prefixes))
+            .transpose()?
+            .flatten()
+        {
+            extra_xml.push((ROOT_ATTRIBUTES_POSITION, record));
+        }
+
         Ok(CT_P {
             properties,
             runs,
@@ -4527,6 +5096,7 @@ impl CT_P {
             content_controls,
             revisions,
             equations,
+            rubies,
         })
     }
 
@@ -4555,6 +5125,11 @@ impl CT_P {
         }
 
         let mut start = BytesStart::new("w:p");
+        for (position, raw) in &self.extra_xml {
+            if Self::raw_is_root_attributes(*position, raw) {
+                push_root_attribute_record(&mut start, raw, para_id.map(|_| (W14_NS, "paraId")))?;
+            }
+        }
         if let Some(para_id) = para_id {
             start.push_attribute(("w14:paraId", para_id));
         }
@@ -4574,9 +5149,19 @@ impl CT_P {
         }
 
         let mut current_hyperlink: Option<usize> = None;
+        let mut current_ruby: Option<usize> = None;
         let mut written_field_owner = None;
         for (run_idx, run) in self.runs.iter().enumerate() {
             let in_hl = hyperlink_runs.get(&run_idx).copied();
+
+            // A ruby annotation wraps its base runs, so it closes before any
+            // paragraph boundary content that sits between two runs.
+            if let Some(ruby_index) = current_ruby
+                && self.rubies[ruby_index].base_end == run_idx
+            {
+                self.rubies[ruby_index].write_end(writer)?;
+                current_ruby = None;
+            }
 
             // Paragraph boundary content is a sibling of the hyperlink.
             if current_hyperlink.is_some() && current_hyperlink != in_hl {
@@ -4709,6 +5294,16 @@ impl CT_P {
 
             written_field_owner = None;
 
+            if current_ruby.is_none()
+                && let Some(ruby_index) = self
+                    .rubies
+                    .iter()
+                    .position(|ruby| ruby.base_start == run_idx && ruby.base_end > run_idx)
+            {
+                self.rubies[ruby_index].write_start(writer)?;
+                current_ruby = Some(ruby_index);
+            }
+
             if let Some(hyperlink_index) = current_hyperlink {
                 run.to_xml_with_word_override(
                     writer,
@@ -4717,6 +5312,10 @@ impl CT_P {
             } else {
                 run.to_xml(writer)?;
             }
+        }
+
+        if let Some(ruby_index) = current_ruby {
+            self.rubies[ruby_index].write_end(writer)?;
         }
 
         // Close any remaining open hyperlink
@@ -8050,6 +8649,73 @@ mod tests {
         let p = parse_paragraph(r#"<w:r><w:t>Hello World</w:t></w:r>"#);
         assert_eq!(p.text(), "Hello World");
         assert_eq!(p.runs.len(), 1);
+    }
+
+    #[test]
+    fn paragraph_root_attributes_reject_alias_duplicates_and_authored_id_wins() {
+        let duplicate = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:b="http://schemas.microsoft.com/office/word/2010/wordml" a:paraId="11111111" b:paraId="22222222"/>"#;
+        let error = CT_P::from_xml_fragment(duplicate).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate expanded root attribute")
+        );
+
+        let source = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:i="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:x="urn:producer" i:paraId="11111111" i:textId="22222222" x:keep="yes"/>"#;
+        let paragraph = CT_P::from_xml_fragment(source).unwrap();
+        let mut output = Vec::new();
+        paragraph
+            .to_xml_with_para_id(&mut Writer::new(&mut output), Some("AAAAAAAA"))
+            .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches(":paraId=").count(), 1, "{output}");
+        assert!(output.contains(r#"w14:paraId="AAAAAAAA""#), "{output}");
+        assert!(output.contains(r#"i:textId="22222222""#), "{output}");
+        assert!(output.contains(r#"x:keep="yes""#), "{output}");
+    }
+
+    #[test]
+    fn a_retained_root_attribute_keeps_the_declaration_its_own_prefix_needs() {
+        let source = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:i="http://schemas.microsoft.com/office/word/2010/wordml" i:paraId="11111111"/>"#;
+        let paragraph = CT_P::from_xml_fragment(source).unwrap();
+        let mut output = Vec::new();
+        paragraph.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(r#"i:paraId="11111111""#), "{output}");
+        assert!(
+            output.contains(&format!(r#"xmlns:i="{W14_NS}""#)),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn a_reopened_paragraph_identity_does_not_rebind_the_prefix_its_part_root_owns() {
+        // A paragraph written with a bare `w14:paraId` and reopened used to
+        // come back carrying its own `xmlns:w14`, so saving the reopened
+        // document produced different bytes from the save it was read from.
+        let w_ns = crate::namespace::W_NS;
+        let source =
+            format!(r#"<w:p xmlns:w="{w_ns}" xmlns:w14="{W14_NS}" w14:paraId="00000001"/>"#);
+        let paragraph = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+        let mut output = Vec::new();
+        paragraph.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(r#"w14:paraId="00000001""#), "{output}");
+        assert!(
+            !output.contains("xmlns:w14"),
+            "the paragraph rebound a prefix its part root already owns: {output}"
+        );
+    }
+
+    #[test]
+    fn a_root_with_only_namespace_declarations_records_nothing() {
+        let start = BytesStart::from_content(
+            r#"w:sectPr xmlns:sa="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:sx="urn:section""#,
+            "w:sectPr".len(),
+        );
+        let record =
+            capture_root_attribute_record(&start, &["w".to_owned()]).expect("capture succeeds");
+        assert!(record.is_none(), "{record:?}");
     }
 
     #[test]
@@ -11405,6 +12071,90 @@ mod tests {
             })
         );
         assert_eq!(serialized_paragraph(&paragraph), before);
+    }
+
+    #[test]
+    fn symbols_and_special_characters_reopen_in_source_order() {
+        let paragraph = parse_paragraph(concat!(
+            r#"<w:r><w:t>a</w:t><w:sym w:font="Wingdings" w:char="F0FC"/><w:cr/>"#,
+            r#"<w:noBreakHyphen/><w:tab/><w:softHyphen/>"#,
+            r#"<w:ptab w:alignment="right" w:relativeTo="margin" w:leader="dot"/>"#,
+            r#"<w:lastRenderedPageBreak/><w:br/><w:t>b</w:t></w:r>"#,
+        ));
+        let content = &paragraph.runs[0].content;
+        assert_eq!(
+            content[1],
+            RunContent::Symbol {
+                font: "Wingdings".to_owned(),
+                char_code: 0xF0FC,
+            }
+        );
+        assert_eq!(
+            content[2],
+            RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn)
+        );
+        assert_eq!(
+            content[3],
+            RunContent::SpecialCharacter(SpecialCharacter::NoBreakHyphen)
+        );
+        assert_eq!(content[4], RunContent::Tab);
+        assert_eq!(
+            content[5],
+            RunContent::SpecialCharacter(SpecialCharacter::SoftHyphen)
+        );
+        assert_eq!(
+            content[6],
+            RunContent::SpecialCharacter(SpecialCharacter::PositionalTab {
+                alignment: ST_PTabAlignment::Right,
+                relative_to: ST_PTabRelativeTo::Margin,
+                leader: ST_PTabLeader::Dot,
+            })
+        );
+
+        let output = serialized_paragraph(&paragraph);
+        let ordered = [
+            "<w:t>a</w:t>",
+            r#"<w:sym w:font="Wingdings" w:char="F0FC"/>"#,
+            "<w:cr/>",
+            "<w:noBreakHyphen/>",
+            "<w:tab/>",
+            "<w:softHyphen/>",
+            r#"<w:ptab w:alignment="right" w:relativeTo="margin" w:leader="dot"/>"#,
+            "<w:lastRenderedPageBreak/>",
+            "<w:br/>",
+            "<w:t>b</w:t>",
+        ]
+        .map(|needle| {
+            output
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {output}"))
+        });
+        assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]), "{output}");
+    }
+
+    #[test]
+    fn a_special_character_outside_the_modeled_shape_stays_raw() {
+        let paragraph = parse_paragraph(concat!(
+            r#"<w:r><w:sym w:font="Wingdings" w:char="zzzz"/>"#,
+            r#"<w:sym w:font="Wingdings"/>"#,
+            r#"<w:ptab w:alignment="right" w:leader="dot"/>"#,
+            r#"<w:cr w:producerFlag="1"/></w:r>"#,
+        ));
+        assert!(paragraph.runs[0].content.is_empty());
+        assert_eq!(paragraph.runs[0].extra_xml.len(), 4);
+
+        let output = serialized_paragraph(&paragraph);
+        for retained in [
+            r#"w:char="zzzz""#,
+            r#"<w:sym w:font="Wingdings"/>"#,
+            r#"<w:ptab w:alignment="right" w:leader="dot"/>"#,
+            r#"<w:cr w:producerFlag="1"/>"#,
+        ] {
+            assert!(
+                output.contains(retained),
+                "{retained} missing from {output}"
+            );
+        }
     }
 
     #[test]

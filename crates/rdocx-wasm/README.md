@@ -11,6 +11,8 @@ without a server.
 - Add paragraphs, headings, bold paragraphs, and tables.
 - Extract text, count paragraphs, and replace literal placeholders.
 - Export DOCX, deterministic PDF, HTML, HTML fragments, and Markdown.
+- Package round trips retain parts and safe unmodelled XML that the focused
+  JavaScript facade does not expose for editing.
 
 ## Use it when
 

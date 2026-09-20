@@ -2564,18 +2564,35 @@ strict and transitional validation, public authoring, mutation, save-reopen,
 deterministic layout and rendering, accessibility, package preservation, and
 binding-parity checks without Word repair.
 
+**Tracked human action**: Word GUI capture is not available on the development
+machine, so the "without Word repair" confirmation is performed by hand at this
+gate and recorded as performed or not performed. No automated story test
+depends on it, and no gate skips in its absence.
+
 ### F-264, Complete paragraph property authoring (L)
 Expose the full supported paragraph-property model through public setters and
 readers, including logical indentation, automatic spacing, borders, shading,
 tabs, pagination, frames, outline, direction, and paragraph-mark properties.
+The paragraph grammar owns `w:divId` and its paragraph accessor, while F-270
+owns the matching `CT_WebSettings` projection. It also owns ordered attribute
+retention on `CT_BorderEdge`, which F-269 consumes for page borders.
+Positioned frame placement is layout work this story does not build, so the
+`DOCX-030` layout and render columns stay partial.
 **Depends on**: F-253.
-**Test gate**: round-trip. Every public-authored paragraph property reopens as
-modeled content and preserves unrelated producer XML.
+**Test gate**: round-trip.
+`every_public_paragraph_property_reopens_and_preserves_unrelated_xml` proves
+every public-authored paragraph property reopens as modeled content and
+preserves unrelated producer XML.
 
 ### F-265, Complete run property and inline authoring (L)
 Expose full run fonts, theme references, colors, complex-script formatting,
 shading, effects, language, symbols, special characters, and ordered inline
 content. Explicit-font replacement has a documented theme-clearing policy.
+The story also owns the `w:rFonts`, `w:color`, and `w:shd` theme-attribute
+sweep, and it gives `rdocx_oxml::theme::apply_tint_shade` its first production
+caller without changing its arithmetic. Stroke, relief, character-border,
+kerning, and fitted-text rendering is layout work this story does not build, so
+the `DOCX-032` layout and render columns stay partial.
 **Depends on**: F-260.
 **Test gate**: differential. Effective run formatting and inline ordering match
 the pinned Word reference across save, reopen, and render.
@@ -2587,6 +2604,78 @@ phonetic, emphasis-mark, character-grid, and locale-sensitive text behavior.
 **Test gate**: golden. Mixed Arabic, Hebrew, Korean, Japanese, and Latin pages
 match the pinned deterministic geometry and reading order.
 
+F-266 is split into the three implementation stories below. The parent closes
+only after every child closes. The split was taken in the S74 consolidated
+design round, because the six work groups separate cleanly and the bundled
+font decision belongs to the first child alone.
+
+### F-266a, Script identity and font slot resolution (L)
+Hangul and Kana script identity, `w:rFonts` script-slot font resolution, the
+East Asian and complex-script theme references, and the bundled deterministic
+Hebrew, Korean, and Japanese subset faces.
+**Depends on**: F-264, F-265.
+**Test gate**: golden.
+`mixed_script_page_matches_the_pinned_geometry_and_reading_order` pins the
+mixed Arabic, Hebrew, Korean, Japanese, and Latin page geometry and reading
+order in deterministic font mode.
+
+Two boundaries are recorded rather than closed here. Shaping does not cross a
+`w:r` boundary, so one Arabic word split across two runs loses its joining
+forms, because Word multilingual reassembly requires every shaped span to stay
+inside the inline item it came from. Lifting that is a redesign of the
+reassembly contract and belongs to its own story. Separately, a paragraph on
+the rich shaping path cannot enter the paragraph block cache, which now
+includes Korean alongside Arabic, Hebrew, and CJK.
+
+### F-266b, Ruby and emphasis marks (L)
+`w:ruby` typed paragraph content with its base and phonetic lines, and `w:em`
+emphasis marks projected into layout.
+**Depends on**: F-266a.
+**Test gate**: golden.
+`ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order` pins the
+ruby and emphasis page and asserts the F-266a digest is unmoved.
+
+`w:ruby` models `w:rubyPr`, `w:rt` and `w:rubyBase` in
+`crates/rdocx-oxml/src/ruby.rs`, reusing `CT_R` for both lines rather than
+introducing a second run grammar. The base runs live in the paragraph's own run
+list behind a recorded span, so text extraction, search and redaction see the
+base and never the phonetic line. `w:em` was already modeled by F-265, so this
+story adds its render projection alone.
+
+Two limits are recorded rather than closed here. An annotated span is one
+unbreakable inline item, so a ruby never breaks inside its base and an
+emphasis-marked run breaks only at the whitespace it was split on. A marked run
+also leaves the rich shaping path, which costs nothing for the scripts `w:em`
+applies to and would cost a slice of every glyph cluster to avoid.
+
+### F-266c, Character grid and vertical text (L)
+`w:eastAsianLayout`, `w:docGrid`, the East Asian paragraph toggles, and the
+`w:textDirection` render projection for vertical cell and section text.
+**Depends on**: F-266a, F-269.
+**Test gate**: golden.
+`grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order` pins
+the vertical and character-grid page and asserts the earlier digests are
+unmoved.
+
+**Delivered**: `CT_SectPr` gains a typed `w:docGrid` at its own `xsd:sequence`
+slot, and `w:printerSettings` moves to the slot after it so the producer
+children that shared the old raw slot still round-trip byte for byte. The
+section grid reaches paragraph and table layout as a threaded value and a cache
+key, so a gridded and an ungridded section can never share a cached block.
+`lines`, `linesAndChars` and `snapToChars` put line advance on `w:linePitch`,
+the last two add `w:charSpace` to every character advance, and `default` stays
+off the new arithmetic entirely. `w:eastAsianLayout`, modeled by F-265, gains
+its render projection: `w:combine` compresses the run into one base-character
+advance inside the `w:combineBrackets` pair, `w:vert` rotates it 90 degrees
+within the line, and `w:vertCompress` narrows the rotated run to one advance.
+`w:tcPr/w:textDirection` and `w:sectPr/w:textDirection` both lower onto a
+same-centre transposed box wrapped in a rotated `Group`, and a rotated cell
+contributes the transposed box's measure to its row height. The seven East
+Asian paragraph toggles F-264 left raw-preserved are typed on `CT_PPr` with a
+public authoring surface, and `w:snapToGrid` gates the grid. The six
+line-breaking policy toggles carry no break-opportunity projection, which is
+recorded on the DOCX-033 row.
+
 ### F-267, Complete table style and conditional formatting authoring (L)
 Create and mutate table styles, conditional regions, band sizes, table look,
 row and cell conditional selectors, and their paragraph, run, table, and cell
@@ -2594,6 +2683,25 @@ property layers.
 **Depends on**: F-246, F-257, F-258.
 **Test gate**: differential. Every conditional region resolves and renders like
 the pinned Word-authored table.
+**Delivered**: `CT_TblStylePr` gains its `w:rPr` and `w:trPr` layers and a
+closed `TableStyleRegion` whose declaration order is Word's priority order,
+`CT_Style` gains its base `w:trPr` and `w:tcPr`, `CT_TblPr` gains
+`w:tblStyleRowBandSize` and `w:tblStyleColBandSize`, and `CT_PPr` gains the
+`w:cnfStyle` F-264 handed over raw-preserved. Resolution now flattens the
+`basedOn` chain per region before region precedence applies, gives the
+horizontal band the higher priority, counts bands by the resolved band size
+after the header row or first column, and threads a table-style run layer into
+`resolve_run_properties`. The facade gains the typed region parameter, the run
+and row layers, per-region removal, a typed read side, `clear_look`, checked
+band sizes, a `set_look` that writes the legacy bitmask beside the booleans,
+and a paragraph conditional selector. The conditional `w:trPr` is modeled and
+round-tripped, and its row geometry moves to F-268a with the DOCX-034 layout
+and render columns, which the F-268 parent owns in the capability matrix.
+**Tracked human action**: Word GUI capture is not available on the development
+machine, so confirming that Word reopens an authored thirteen-region table
+without offering to repair it is performed by hand at the Milestone 24
+end-of-milestone gate above and recorded as performed or not performed. No
+automated story test depends on it, and no gate skips in its absence.
 
 ### F-268, Floating and advanced table layout (L)
 Author floating table positioning, overlap, bidirectional visual order, complete
@@ -2602,6 +2710,64 @@ width modes, autofit, captions, descriptions, and advanced row-grid behavior.
 **Test gate**: golden. Fixed, autofit, nested, and floating tables match the
 reviewed Word page geometry and pagination.
 
+F-268 is split into the two implementation stories below. The parent closes
+only after both children close. The split was taken in the S74 consolidated
+design round, to separate the authoring and geometry work from the paginator
+float, which is the part that touches the shared obstacle machinery.
+
+### F-268a, Advanced table authoring and geometry (L)
+The `w:tblpPr`, `w:tblOverlap`, `w:bidiVisual`, `w:tblCellSpacing`,
+`w:tblCaption`, and `w:tblDescription` grammar, the row `w:wBefore` and
+`w:wAfter` offsets, the public authoring surface, autofit column widths, and
+bidirectional visual column order. It also owns applying a conditional region's
+`w:trPr` at layout, which F-267 modeled and round-tripped without applying, and
+with it the remaining DOCX-034 layout and render columns.
+**Depends on**: F-267.
+**Test gate**: golden.
+`fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages` pins the
+page count, per-row origins, and column widths for a fixed-grid, an autofit,
+and a nested table in deterministic font mode.
+**Delivered**: `CT_TblPr` gains `w:tblpPr` as a typed `CT_TblPPr`, plus
+`w:tblOverlap`, `w:bidiVisual`, `w:tblCellSpacing`, `w:tblCaption`, and
+`w:tblDescription`, and `CT_TrPr` gains `w:wBefore`, `w:wAfter`, a row
+`w:tblCellSpacing`, and `w:hidden`, all at their existing schema slots. The
+three new enums are `ST_TblAnchor`, `ST_YAlign`, and `ST_TblOverlap`, and
+`w:tblpXSpec` reuses `AnchorAlignH`. The facade gains ten checked setters and
+their readers, and `has_unmodeled_properties` narrows by exactly those names.
+Layout gains `TableBlock::bidi_visual`, `TableRow::offset_left`, and
+`autofit_column_widths`, which engages only for an autofit or absent layout
+mode with an auto or absent width. `w:gridBefore`, `w:gridAfter`, `w:wBefore`,
+`w:wAfter`, and `w:tblCellSpacing` now change geometry, and a conditional
+region's `w:trPr` resolves into row height, header repetition, and row grid
+offsets, which closes the DOCX-034 layout and render columns. Floating
+placement stays with F-268b, so `w:tblpPr` round-trips and a floating table
+still renders in the flow.
+
+### F-268b, Floating table placement and wrap (M)
+Floating table lowering, `place_floating_table`, the wrap and `ResolvedWraps`
+integration, and float against float resolution within one page.
+**Depends on**: F-268a.
+**Test gate**: golden.
+`floating_tables_match_reviewed_word_page_geometry_and_pagination` pins the
+float origins, page count, and the wrapped line boxes beside a margin-anchored,
+a page-anchored, and a text-anchored float.
+**Delivered**: `TableBlock` gains `floating`, a boxed `FloatingTable` lowered
+from the `CT_TblPPr` F-268a modeled onto the drawing anchor frames, so
+`resolve_anchor_h` and `resolve_anchor_v` take it unchanged. The paginator's
+table arm branches on it, and `Pager::place_floating_table` resolves the rect,
+renders every row at that origin, records the body fragments, pushes one square
+`PlacedWrap` carrying the four from-text distances, and never advances
+`cursor_y`. `has_paragraph_relative_wrap` and `lookahead_wraps` now see a
+floating table, so the text above a float is pushed aside and a `text`-anchored
+float settles across the existing two passes. `document_has_wrapping_drawing`
+sees one too, which is what routes a float document onto the two-pass path
+rather than the single-pass restart path. A float that does not fit moves whole
+to the next page, never splits, and never repeats a header row, and
+`w:tblOverlap` resolves float against float within one page. The reciprocal
+half, a non-floating table narrowing beside a float, and `w:cantSplit` row
+splitting stay named follow-ups. No sample floats, so all 49 hash entries and
+the seven-entry golden pixel manifest are unchanged.
+
 ### F-269, Complete section page semantics (L)
 Add page borders, line numbering, variable-width columns, separators, vertical
 page alignment, mirrored margins, book-fold settings, paper source, and section
@@ -2609,6 +2775,46 @@ footnote and endnote configuration.
 **Depends on**: F-250, F-251.
 **Test gate**: differential. Every supported section property survives
 round-trip and changes only its declared layout behavior.
+**Delivered**: `CT_PageBorders`, `CT_LineNumber`, `CT_PaperSource` and the
+shared `CT_NoteProperties` join `CT_SectPr` beside typed `w:vAlign` and
+`w:textDirection`, so `w:footnotePr`, `w:endnotePr`, `w:paperSrc`,
+`w:pgBorders`, `w:lnNumType`, `w:vAlign` and `w:textDirection` leave
+`extra_xml` while the retained children keep their slots through a new
+sub-slot. The central defect is closed: `Section::set_columns` wrote `w:cols`
+that `sect_pr_to_geometry` never read, and column tracks now reach pagination
+with a separator rule, while the single-column path bypasses the track
+arithmetic so all 49 hash entries stay unchanged. Page borders, margin line
+numbering excluded from the PDF reading order, vertical page alignment and
+mirrored margins all render. `ST_VerticalJc` gains `Both` and
+`#[non_exhaustive]`, which is a breaking change to `rdocx-oxml`. DOCX-036 stays
+`partial` and its remaining owner is F-274.
+
+### F-269a, Word GUI confirmation for section page semantics (S)
+Record the Word-authored oracle for columns, page borders, line numbering,
+vertical alignment and mirrored margins. F-269 could not: Word GUI automation
+is not available on the machine that produced it, so the capture path landed as
+the `#[ignore]` test `capture_f269_word_section_evidence` instead.
+**Depends on**: F-269.
+**Test gate**: differential. The capture asserts the installed Word build
+before it records anything, and the recorded set becomes a pinned oracle.
+
+### F-269b, True vertical distribution for section `w:vAlign="both"` (S)
+`both` preserves its source value, lays out as `top` and emits one diagnostic
+per section. Distributing the body band's paragraphs across the unused vertical
+measure is the remaining work.
+**Depends on**: F-269.
+**Test gate**: integration. A `both` section distributes its blocks and emits
+no diagnostic, while `top`, `center` and `bottom` are unchanged.
+
+### F-269c, Column balancing and per-track line breaking (M)
+Two gaps left open deliberately by F-269. Word balances column heights at a
+continuous section break, and this workspace fills tracks left to right without
+balancing. Word also breaks each track to its own measure, and this workspace
+breaks a whole section to the first track's measure, which only differs when
+`w:equalWidth` is `0` with tracks of different widths.
+**Depends on**: F-269.
+**Test gate**: differential. A balanced continuous break and an unequal track
+list both match the pinned LibreOffice render.
 
 ### F-270, Complete settings and web settings authoring (L)
 Model and author the remaining modern document settings, compatibility options,
@@ -2617,6 +2823,14 @@ and web settings with typed removal and diagnostics.
 **Depends on**: F-244.
 **Test gate**: round-trip. A public-authored settings package reports no
 unmodeled supported children and preserves unknown extensions byte for byte.
+**Delivered**: `SUPPORTED_SETTINGS` closes the thirty-one top-level names over
+one `SETTINGS_ORDER` table, `CompatibilityOption` covers the complete closed
+`CT_Compat` on-off set, `MailMerge` authors thirteen members at their own schema
+positions, `SettingsDiagnostic` separates duplicated from malformed occurrences,
+and `crates/rdocx-oxml/src/web_settings.rs` owns `w:webSettings` with a
+read-only `div_ids` projection. `w:defaultTabStop` now reaches
+`oxml-layout::LineBreakParams::default_tab_interval_pt`. DOCX-007 and DOCX-037
+are `complete`.
 
 ### F-271, Uniform rich header and footer editing (L)
 Complete all valid header and footer content, fields, controls, annotations,
@@ -2916,6 +3130,26 @@ markup compatibility before publication.
 **Depends on**: F-X077, F-308.
 **Test gate**: differential. The complete generated corpus passes the strict
 validator and pinned Word no-repair check, and one mutation per rule fails.
+
+### F-311, Positioned paragraph frame placement (M)
+Lay out and render the `w:framePr` positioned paragraph frame, including its
+anchors, wrap mode, drop cap and the text that flows around it. F-264 models
+and authors the whole property, so this story is layout and rendering only.
+**Depends on**: F-264.
+**Test gate**: golden. A page holding a margin-anchored frame, a page-anchored
+frame and a drop cap matches the pinned deterministic geometry, and the
+surrounding text wraps where Word wraps it.
+
+### F-312, Run visual effect render projection (L)
+Render the run effects F-265 models but does not paint: `w:outline` stroke-only
+glyphs, `w:shadow` and `w:emboss` and `w:imprint` relief, the `w:bdr` character
+border box, `w:kern` gating by size, and `w:fitText` horizontal segment
+scaling. Needs new segment state in `oxml-layout` and the matching PDF backend
+work, which is why F-265 stopped at the model.
+**Depends on**: F-265.
+**Test gate**: golden. One deterministic page carrying every effect matches its
+pinned geometry, and a run with no effect is byte identical to the same run
+before this story.
 
 ### F-310, Determinism, resource limits, bindings, and stability gate (L)
 Close M24 with byte determinism, explicit memory and time bounds, cancellation,
@@ -5530,6 +5764,217 @@ unchanged stable 0.14.0 family and finishes with `py-rpptx-v0.12.1`.
 0.12.1 version carriers and dependency pins, the revised four-tag S73 contract,
 CRLF acceptance for packaged text, and rejection of changed text or weakened
 archive validation.
+
+### F-X123, Accept producer TOC style variants (S)
+
+Rebuild TOC fields whose custom-style list ends in one producer-added comma.
+Resolve duplicate style identifiers deterministically for TOC discovery without
+weakening the strict public style-graph validator used by style mutations.
+Report each duplicate choice while retaining the package's complete style XML.
+
+**Depends on**: F-X114.
+**GitHub issues**: <https://github.com/tensorbee/rdocx/issues/124> and
+<https://github.com/tensorbee/rdocx/issues/125>.
+**Test gate**: regression.
+`toc_rebuild_accepts_trailing_style_separator_and_duplicate_style_ids` proves
+both producer variants, deterministic first-definition lookup, diagnostics,
+entry generation, save and reopen, and unchanged strict mutation validation.
+
+### F-X124, Make content cloning linear and explicit (M)
+
+Clone one direct body child with bounded linear package work rather than
+repeated whole-story discovery and reopen cycles. Preserve transactional
+identity freshening, relationship scope, and stale-handle behavior. Python
+type errors name `source` and `destination` and state that the latter is a
+direct body index. Source and destination resolve from one owned story
+inventory, and direct-content scans reserve section-property inspection for
+preserved nodes.
+
+**Depends on**: F-X106a, F-X116.
+**GitHub issues**: <https://github.com/tensorbee/rdocx/issues/126> and
+<https://github.com/tensorbee/rdocx/issues/132>.
+**Test gate**: regression.
+`clone_content_scales_linearly_and_names_invalid_arguments` proves bounded
+growth over source-built body sizes, unchanged cloned content and identities,
+and exact Python errors for the two reversed-signature cases.
+
+### F-X125, Compare table grid changes (M)
+
+Represent a changed table grid as one tracked table deletion followed by one
+tracked table insertion when a cell-level revision cannot reproduce both
+grids. Acceptance yields the edited table and rejection yields the original,
+while surrounding paragraphs and unchanged tables retain normal comparison.
+The established row-marker representation removes the unused table shell
+during revision resolution, so no new block wrapper grammar is introduced.
+
+**Depends on**: F-X065, F-X097.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/127>.
+**Test gate**: regression.
+`comparison_tracks_changed_table_grids_as_table_replacement` covers gained,
+lost, and resized columns, exact acceptance and rejection, revision inventory,
+schema order, save and reopen, and unchanged row and cell comparison.
+
+### F-X126, Preserve drawings through comparison acceptance (M)
+
+Close required drawing bindings on the inline or anchor root in comparison-only
+story projections while preserving the source ownership used by package
+serialization. Text-only edits around unchanged body, header, and footer
+drawings pass the acceptance and rejection postconditions without hiding a
+real drawing change or changing story-local relationship ownership.
+
+**Depends on**: F-X097, F-X102.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/128>.
+**Test gate**: regression.
+`text_only_comparison_with_body_header_and_footer_drawings_accepts_exactly`
+uses source-built root-owned and run-owned namespace variants across run, word,
+and character comparison. It proves exact acceptance and rejection, byte-exact
+self-comparison, scoped relationships and media, normalized raw drawing
+payload, complex-field survival, and changed-drawing sensitivity.
+
+### F-X127, Collapse adjacent page break requests (S)
+
+Treat a paragraph-level `pageBreakBefore` immediately after a run-level page
+break as one page transition. Do not collapse either request across intervening
+visible content, paragraph shading or borders, revision marks, drawing-clear
+offsets, tables, section transitions, columns, or non-page breaks.
+
+**Depends on**: F-X101.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/129>.
+**Test gate**: differential.
+`adjacent_run_and_paragraph_page_breaks_share_one_transition` proves two pages
+for the combined case, unchanged single-break controls, separation boundaries,
+and the pinned LibreOffice page and text result in deterministic font mode.
+
+### F-X128, Preserve Word paragraph and revision identities (M)
+
+Retain namespace-aware root attributes on modeled paragraphs, runs, and
+section properties, including `w14:paraId`, `w14:textId`, and every `w:rsid*`
+value. Serialize them in deterministic source order, preserve foreign and
+unknown attributes, and keep authored identity allocation separate from this
+lossless reader correction.
+
+**Depends on**: F-X115.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/130>.
+**Test gate**: round-trip.
+`paragraph_run_and_section_identity_attributes_survive_noop_save` proves exact
+modeled and foreign root attributes across save and reopen, aliases, edits,
+public item filtering, schema order, and deterministic bytes. Focused unit
+coverage rejects alias duplicates and pins authored `paraId` precedence.
+
+### F-X129, Tolerate unmatched notes placeholders (S)
+
+Ignore a notes-slide placeholder whose complete placeholder key has no notes
+master match. Continue overlaying every matched placeholder and rendering
+non-placeholder notes content. Keep ambiguous or multiply matched placeholders
+as hard failures and return one ordered diagnostic for each skipped overlay.
+
+**Depends on**: F-X118.
+**GitHub issue**: <https://github.com/tensorbee/rdocx/issues/131>.
+**Test gate**: differential.
+`notes_pdf_skips_only_unmatched_slide_placeholder_overlays` source-builds the
+Google Slides index variant and proves unchanged matched output, exact notes
+text and geometry, and package-byte preservation. Its focused unit matrix
+proves source-ordered diagnostics, ambiguity rejection, and the required
+slide-image failure.
+
+### F-X130, Show package depth, footprint, and speed (L)
+
+Strengthen the root and all 26 crate-local READMEs after the S74 authoring
+surface is complete. Each page must explain the depth that matters to its own
+consumer, lead with concrete implemented outcomes, and connect specialist
+crates to the complete Rust, CLI, Python, and browser families. The `rdocx-py`
+and `rpptx-py` pages remain the long descriptions published on PyPI and must
+make their native engine, typed API, local execution, rendering, review, and
+package-preservation advantages immediately visible.
+
+Add reproducible, dated evidence for package footprint and speed where the
+measurement applies. Rust crate archive sizes, CLI release assets, Python wheel
+and source archive sizes, installed footprint, large-document layout and PDF
+throughput, and any Python boundary measurements must name the exact version,
+platform, build mode, input, command, and statistic. Every uniqueness statement
+must be bounded to a named, dated set of reviewed official sources. Do not make
+an unqualified claim about every library, or compare timings produced by
+different workloads or environments.
+
+Extend the existing README validator and its mutation tests so capability,
+comparison, size, and performance evidence cannot drift from the command that
+produced it. All Rust examples still compile, Python and shell snippets still
+match the installed surfaces, local links resolve, and every published crate,
+wheel, source archive, and CLI bundle carries the intended README text.
+
+**Depends on**: F-X089, F-264, F-265, F-266, F-267, F-268, F-269, F-270.
+**Test gate**: regression.
+`readme_depth_footprint_and_speed_claims_are_evidence_backed` proves the exact
+27-page inventory, complete family and Python depth summaries, bounded official
+comparisons, reproducible measurement provenance, checked examples, and
+byte-identical packaged long descriptions.
+
+**Tracked human action**: Python wheel and source-distribution sizes remain
+absent until the six-platform `wheels.yml` job records them for the
+`rdocx-py` and `rpptx-py` pages. The installed Python site-packages footprint
+and Python boundary timing remain absent until each reviewed wheel is measured
+with its pinned interpreter. CLI release archive sizes remain absent until the
+selected-family `publish.yml` tag job records all six assets for the matching
+CLI page. WASM bundle sizes remain absent until the pinned wasm-pack and
+wasm-opt jobs produce the reviewed browser artifacts for the two WASM pages.
+These are release or human measurements, not values a native workspace test
+can reproduce, so F-X130 publishes no placeholder number for them.
+
+### F-X131, Retain only the namespace declarations a root attribute uses (S)
+
+F-X128 retains producer root attributes on `CT_P`, `CT_R`, and `CT_SectPr`, but
+`capture_root_attribute_record` records every namespace declaration on the
+source element, including declarations no retained attribute uses. The existing
+alias machinery already materializes a binding onto each element that needs one,
+so a declaration used only by a child is emitted twice, once on the modeled root
+and once on the child. Retain a declaration only when a retained attribute uses
+its prefix.
+**Depends on**: F-X128.
+**Test gate**: regression.
+`a_section_root_retains_no_namespace_declaration_its_attributes_do_not_use`
+proves the redundant declaration is gone, that a declaration a retained
+attribute does use is still written, and that expanded-name precedence still
+resolves.
+
+### F-X132, Match a retained namespace owner by structure, not by identity (S)
+
+F-X128 gave `CT_R` and `CT_P` root-attribute retention and F-X131 keeps the
+declaration a retained attribute's prefix needs, so every retained paragraph
+and run is written with a `w` binding that the document root already owns.
+`prepare_staged_package` flushes the document part before
+`canonicalize_drawing_ids` reads it back, so
+`nested_modeled_namespace_owners` in `crates/rdocx/src/document.rs` sees those
+redundant declarations and treats each retained element as a nested namespace
+owner. Two runs that agree on every retained fact then own each other's
+declaration equally, and `replay_nested_namespace_declarations` fails closed
+with `cannot identify retained 'r' nested namespace owner after mutation`.
+A declaration that rebinds
+a prefix to the URI already in scope resolves no name differently, so it owns
+no namespace and must not make an element an owner.
+**Depends on**: F-X128, F-X131.
+**Test gate**: regression.
+`accepting_revisions_still_saves_when_runs_carry_revision_identities` proves a
+redlined document whose runs carry `w:rsid` identities accepts, saves, reopens
+and keeps every identity attribute, while a genuinely rebinding declaration on
+two indistinguishable owners still fails closed.
+
+### F-X133, Stop rebinding a canonical prefix on every retained element (S)
+
+F-X131 stops `push_root_attribute_record` writing the canonical `w14` binding
+onto its target, because the part root already owns it, but the canonical `w`
+binding is still written. F-X128 retains producer root attributes on every
+paragraph and run, and F-X131's `used_prefixes` loop keeps the `w` declaration
+those attributes use, so a plain save emits `xmlns:w` on every retained
+paragraph and run. On `corpus/docx/redlined_no_footer.docx` that is 888
+declarations and grows the part from 387397 bytes to 578815, about 49 percent,
+none of which resolves a name differently. Extend the skip to every canonical
+prefix the part root already declares.
+**Depends on**: F-X131, F-X132.
+**Test gate**: regression.
+`a_retained_element_does_not_rebind_a_prefix_its_part_root_declares` proves a
+plain save of a document carrying producer root attributes emits no redundant
+canonical declaration, that the retained attributes still round-trip, and that
+a genuinely new binding is still written.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

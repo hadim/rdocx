@@ -367,13 +367,30 @@ profiles select package identity without manufacturing executable content.
 Python, WASM, and CLI construction continues through `Document::new()` and
 therefore receives the compatible DOCX default without a new selector surface.
 
-Native Rust re-exports `StyleType`. `StyleBuilder` authors paragraph,
-character, and table styles with inheritance, reciprocal links, next styles,
-UI flags, base properties, and conditional table regions. `add_style` is
+Native Rust re-exports `StyleType`, `TableStyleRegion` and
+`ConditionalTableStyle`. `StyleBuilder` authors paragraph, character, and table
+styles with inheritance, reciprocal links, next styles, UI flags, base
+properties including a table style's own row and cell properties, and
+conditional table regions carrying all five property layers. `add_style` is
 fallible in the pre-1.0 API. `set_style`, `remove_style`,
 `set_default_style`, and `validate_style_graph` use the same `Result` boundary.
 Builder clear operations remove optional links, UI metadata, base properties,
-and conditional regions during a staged update.
+and conditional regions during a staged update, and
+`remove_conditional_table_style` removes exactly one region while its siblings
+survive. `Style::conditional_table_styles` returns typed
+`ConditionalTableStyle` values rather than the OXML region type, so a caller
+can name the return value without taking on schema order.
+`StyleBuilder::conditional_table_style` takes a `TableStyleRegion` in place of
+the earlier `&str`, which makes an invalid region unrepresentable. That is a
+breaking change within the 0.x series, landing in the unreleased 0.14.0. Every
+string the earlier form accepted is expressible as a variant, so the typed form
+replaces it rather than sitting beside it.
+`Table::set_look` writes the six booleans and the equivalent legacy `w:val`
+bitmask together, `Table::clear_look` removes the selection, and the checked
+`set_row_band_size` and `set_column_band_size` reject a band of no rows or
+columns. `Paragraph::set_conditional_formatting` and
+`Paragraph::conditional_formatting` select conditional regions through the same
+`TableConditionalFormatting` shape a row and a cell already use.
 Python, WASM, and CLI retain style package and render behavior without new
 style mutation entry points.
 
@@ -457,7 +474,10 @@ Successful structural mutations stale handles once, successful replacements
 stale them only when their count is nonzero, and every rejected operation
 leaves package bytes and handle revisions unchanged. The native and Python
 changes are additive pre-1.0 surfaces scheduled for `rdocx` 0.14.0. WASM and
-CLI gain no corresponding surface.
+CLI gain no corresponding surface. Python resolves clone and move source and
+destination locations from one owned story inventory. A rejected clone names
+`source` when it is not a Paragraph or Table handle and names `destination` as
+a direct body index when it is not an integer.
 
 Native Rust also exposes owned `DocumentFragment` and non-exhaustive
 `FragmentConflictPolicy` values. `DocumentFragment::from_range` captures a
@@ -1047,6 +1067,25 @@ while formatting setters retain the complete ordered content sequence. These
 methods are additive on the pre-1.0 native Rust facade. Python, WASM, and CLI
 gain no implicit surface.
 
+`add_symbol` keeps that meaning. `add_symbol_char(font, char_code)` is the
+separate method that produces `w:sym`, and `add_special_character` produces
+`w:cr`, `w:noBreakHyphen`, `w:softHyphen`, and `w:ptab`. `RunItemRef` gains
+`Symbol`, `SpecialCharacter`, and the read-only `LastRenderedPageBreak`, which
+has no authoring counterpart because the element is a producer hint.
+
+The same handle authors every `EG_RPrBase` member. `set_slot_font` and
+`set_slot_theme_font` take a `RunFontSlot`, and each sets one form and clears
+the other for that slot alone. `set_font_hint` is independent and no font
+operation clears it. `set_color_theme` authors the theme colour with its tint
+and shade and leaves `w:val` as the literal Word caches beside it. Two shipped
+setters change behaviour as a correction rather than a deprecation.
+`set_font` and `set_font_value` write all four script slots and now clear all
+four theme attributes, and `set_color_value` clears the theme colour, tint, and
+shade. Before this, Word resolved the theme attribute the caller had left in
+place and the authored value silently did nothing. `rdocx::RunProperties` is a
+re-export of `CT_RPr`, so its added public members are a pre-1.0 minor source
+break on the native facade. Python, WASM, and CLI gain no method.
+
 The low-level `rdocx-layout::TableCell` payload is source-ordered
 `Vec<CellBlock>`, with the present paragraph and recursive table variants. The
 additional merge-span and cell-margin fields expose renderer input rather than
@@ -1289,6 +1328,20 @@ context stays in one internal projection used by numbering, style, body,
 table-cell, header, footer, footnote, and endnote readers, so `CT_PPr` does not
 expose a partially contextual parser. Established aliased and default
 WordprocessingML inputs remain accepted outside numbering.
+
+The Word table facade gains an additive advanced-geometry surface. `Table`
+gains checked `set_float_position`, `set_overlap`, `set_bidi_visual`,
+`set_cell_spacing`, `set_caption`, and `set_description`. `Row` gains checked
+`set_width_before`, `set_width_after`, `set_cell_spacing`, and `set_hidden`.
+`TableRef` and `RowRef` gain the matching readers. Each checked setter
+validates before publication, so an invalid value leaves the document bytes
+unchanged. The public types are `TableFloatPosition`, `TableAnchor`,
+`TableFloatX`, `TableFloatY`, `TableTextDistance`, and `TableOverlap`, and the
+two alignment payloads reuse the existing `DrawingHorizontalAlignment` and
+`DrawingVerticalAlignment` because the vocabularies are identical. The lowered
+`TableBlock` gains `bidi_visual` and `TableRow` gains `offset_left`, which are
+additive fields on pre-1.0 native Rust projections rather than new binding
+surface. Python, WASM, and CLI consumers gain no advanced table surface here.
 
 ## Native PowerPoint collaboration and navigation
 

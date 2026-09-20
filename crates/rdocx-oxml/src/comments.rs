@@ -165,7 +165,11 @@ fn parse_comment(
                         b"paraId",
                         &child_w14_prefixes,
                     )?);
-                    paragraphs.push(CT_P::from_xml_with_prefixes(reader, &child_prefixes)?);
+                    paragraphs.push(CT_P::from_xml_with_prefixes_and_root(
+                        reader,
+                        &child_prefixes,
+                        Some(element),
+                    )?);
                 } else {
                     extra_xml.push((paragraphs.len(), capture_element(reader, element)?));
                 }
@@ -179,7 +183,7 @@ fn parse_comment(
                         b"paraId",
                         &child_w14_prefixes,
                     )?);
-                    paragraphs.push(CT_P::new());
+                    paragraphs.push(CT_P::from_empty_root(element, &child_prefixes)?);
                 } else {
                     extra_xml.push((paragraphs.len(), capture_empty_element(element)?));
                 }

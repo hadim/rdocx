@@ -8,8 +8,11 @@ supports comments, speaker notes, and deterministic rendering. It works
 directly with OOXML packages and does not require Microsoft PowerPoint,
 LibreOffice, a conversion service, or a Java or .NET runtime.
 
-The package uses the Rust `rpptx` presentation engine and ships with a default
-presentation template for from-scratch deck creation.
+The package runs the Rust `rpptx` presentation engine locally, exposes a typed
+Python API, and ships a default template for from-scratch deck creation. It
+renders slides and speaker notes without a remote service, supports review
+through notes and modern comment threads, and preserves safe package content
+outside the focused Python editing surface.
 
 ## Installation
 
@@ -50,6 +53,8 @@ with open("review.pdf", "wb") as output:
 - Deterministic PDF and PNG output for slides and speaker notes.
 - Speaker-note text plus modern comment authors, threads, replies, and ordered
   comment movement.
+- Master, layout, placeholder, theme, shape, chart, media, and relationship
+  state remains inside the native presentation engine during package edits.
 - Read speaker-note text and inspect or mutate modern comment threads.
 - Python collections with negative indexes, slices, iteration, and explicit
   stale-handle errors after structural changes.

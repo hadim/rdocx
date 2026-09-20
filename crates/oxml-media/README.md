@@ -9,6 +9,16 @@ collision-free package part names without dependencies.
 - Native sizing for PNG, JPEG, GIF, BMP, and WebP.
 - Parameter-free MIME token validation and sequential media naming.
 - Limited MP3, RIFF WAVE, and ISO base media signature checks.
+- Truncation-safe probes, explicit DPI fallback, and collision-free numbering
+  keep media decisions deterministic before a package is mutated.
+
+## Measured footprint and speed
+
+The archive row is regenerated from the package that carries this README.
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: oxml-media | 12,252 compressed bytes, 50,992 member bytes, 6 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-media` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 

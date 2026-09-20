@@ -267,12 +267,12 @@ include = [
 ```
 
 The dedicated package CI job compares `cargo package -p oxml-layout --list`
-against all 24 TTFs, the four family licence files, the Caladea and Noto
-notices. The manifest also includes the Simplified Chinese subset record. The
-job then runs verified packaging without `--no-verify` and rejects a missing
-archive or one larger than the crates.io 10 MiB limit. `oxml-layout` is a
-published 0.1.2 package, while the release workflow remains the authority for
-every later publication.
+against all 27 TTFs, the four family licence files, the Caladea and Noto
+notices. The manifest also includes the Simplified Chinese, Hebrew, Korean and
+Japanese subset records. The job then runs verified packaging without
+`--no-verify` and rejects a missing archive or one larger than the crates.io
+10 MiB limit. `oxml-layout` is a published 0.1.2 package, while the release
+workflow remains the authority for every later publication.
 
 The external PowerPoint and Word corpora remain outside every published crate
 under the ignored `corpus/` directory. Their tracked manifests pin immutable
@@ -464,13 +464,17 @@ target archive names. Python tags use their separate wheel workflow and never
 carry these executable assets.
 
 The generated archives remain subject to the crates.io 10 MiB ceiling.
-`oxml-layout` contains all 24 bundled fonts and their required legal files, and
+`oxml-layout` contains all 27 bundled fonts and their required legal files, and
 `rpptx` contains `assets/default.pptx`. No binding or WASM package is in either
 crates.io allowlist.
 
 The deterministic inventory includes official Noto Sans Arabic, Devanagari,
-and Thai fonts plus a FontTools-reproducible Noto Sans Simplified Chinese
-subset for the approved fixture repertoire. The source and output hashes,
+and Thai fonts plus four FontTools-reproducible subsets, Noto Sans Simplified
+Chinese, Hebrew, Korean and Japanese, each carrying only its approved fixture
+repertoire. A subset covers the fixtures the rendering gates draw and nothing
+more, so bundling Korean and Japanese costs tens of kilobytes instead of the
+several megabytes a full family weighs. The two upstream sources measured
+9.6 MB and 10.4 MB when they were retrieved. The source and output hashes,
 subset command, licence, and notice ship with `oxml-layout`. Package checks
 verify that inventory and keep the archive below the same 10 MiB ceiling.
 
@@ -699,6 +703,12 @@ generation-isolated peak heap allocations. Workflow mutation coverage rejects
 removing or weakening any part of this invocation and rejects swallowed
 failures.
 
+The same constants bound the four dated README speed rows. The root,
+`rdocx-layout`, `oxml-pdf`, and `rdocx-py` pages repeat those rows exactly.
+The validator reads the four regression constants and rejects a published
+throughput guarantee above its floor or an allocation guarantee below its
+ceiling.
+
 **Workspace package READMEs in the docs job.** Every one of the 27 workspace
 packages explicitly declares one distinct README. The root file is the
 high-level `rdocx` guide. It has exactly three compiling Rust examples and a
@@ -711,6 +721,15 @@ three implemented capabilities before direct-use guidance, neighbouring
 package boundaries, publication status, and an example suited to the actual
 consumer surface. The three deprecated shims direct new consumers to
 `oxml-opc`, `oxml-pdf`, and `oxml-chart`.
+
+Measurement evidence stays outside the alternatives table. Every measurement
+row supplies an exact value, version, platform, build mode, input, command,
+statistic, and date. The root and 22 publishable crate pages record their
+re-derived `.crate` archive footprint. Speed rows appear only on the four pages
+whose consumers can reproduce the large-document gate. Python wheel and source
+distribution sizes, installed Python footprint, CLI release archive sizes,
+WASM bundle sizes, and Python boundary timings stay absent until their pinned
+release or human workflow records them.
 
 After the workspace documentation build, `scripts/readme_doctests.py` checks
 the exact 27-package inventory, validates Rust, shell, Python, and JavaScript
@@ -729,8 +748,18 @@ them to rustdoc with the repository edition, dependency search path, matching
 external crate bindings, and warnings denied.
 The same runner is part of canonical non-fast verification. It creates each of
 the 22 publishable archives, requires exactly one packaged README, and
-byte-compares it with the declared source. Version, tag, publication, and
-release-family metadata remain unchanged.
+byte-compares it with the declared source. It re-derives compressed size, tar
+member bytes, and tar member count. Cargo's generated
+`.cargo_vcs_info.json` is normalized to a fixed-length clean revision for the
+exact member-byte total. The compressed archive may differ from the recorded
+observation by at most 64 bytes under the pinned toolchain, or grow by at most
+that allowance elsewhere, because the generated commit hash and dirty marker
+are not package payload. The `--record-measurements` mode prints the exact
+Markdown rows for review. The default validator binds those rows to Cargo
+metadata, the pinned toolchain, the 10 MiB ceiling, their approved pages, and
+the performance constants. It also rejects incomplete provenance, deferred
+placeholder numbers, and unbounded superlatives across the 27-page family.
+Version, tag, publication, and release-family metadata remain unchanged.
 
 **A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
 uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM

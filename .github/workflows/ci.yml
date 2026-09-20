@@ -566,6 +566,9 @@ jobs:
             fonts/LiberationSerif-Regular.ttf \
             fonts/NotoSansArabic.ttf \
             fonts/NotoSansDevanagari.ttf \
+            fonts/NotoSansHebrew-F266a-subset.ttf \
+            fonts/NotoSansJP-F266a-subset.ttf \
+            fonts/NotoSansKR-F266a-subset.ttf \
             fonts/NotoSansSC-FX058-subset.ttf \
             fonts/NotoSansThai.ttf)"
           diff -u \

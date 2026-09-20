@@ -11,18 +11,22 @@ use rdocx_oxml::text::Field;
 
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
-use rdocx_oxml::document::{BodyContent, CT_Document, CT_SectPr};
+use rdocx_oxml::document::{
+    BodyContent, CT_DocGrid, CT_Document, CT_SectPr, ST_DocGrid, ST_LineNumberRestart,
+    ST_PageBorderDisplay, ST_PageBorderOffset, ST_PageBorderZOrder,
+};
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::{HdrFtrType, VmlWatermark};
 use rdocx_oxml::numbering::ST_LvlSuffix;
-use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
+use rdocx_oxml::properties::{CT_EastAsianLayout, CT_PPr, CT_RPr, CT_Shd, ST_Em};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
+use rdocx_oxml::ruby::{CT_Ruby, ST_RubyAlign};
 use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc};
 use rdocx_oxml::text::{
     BookmarkMarker, BreakType, CT_P, CT_R, FieldArgument, FieldInstruction, RunContent,
-    hyperlink_revision_index,
+    SpecialCharacter, hyperlink_revision_index,
 };
 
 use crate::block::{
@@ -32,16 +36,19 @@ use crate::block::{
 use crate::convert;
 use crate::input::{LayoutInput, MediaRegistry, RevisionView};
 use crate::notes::NoteRegistry;
-use crate::paginator::{self, HeaderFooterContent, HeaderFooterSemantics, PageGeometry};
+use crate::paginator::{
+    self, ColumnTrack, HeaderFooterContent, HeaderFooterSemantics, LineNumbering, PageBorderFrame,
+    PageGeometry,
+};
 use crate::style_resolver::{self, NumberingState, ResolvedNumbering};
 use crate::table;
 use crate::{WordBodyLayoutFragment, WordSourcePath, WordStory};
 use oxml_layout::{
     Color, Diagnostic, DocumentMetadata, DocumentStructure, FieldKind, FieldSource, FontId,
     FontManager, GlyphRun, GroupElement, InlineItem, LayoutError, LayoutResult, LineItem, NoteRef,
-    NoteStream, PageFrame, Point, PositionedElement, Rect, Result, SourceNodeId, SourceSpan,
-    StructureId, StructureNode, StructureRole, TextDirection, TextSegment, Transform, Underline,
-    break_into_lines, break_multilingual_into_lines,
+    NoteStream, PageFrame, Point, PositionedElement, Rect, Result, ShapedText, SourceNodeId,
+    SourceSpan, StructureId, StructureNode, StructureRole, TextDirection, TextSegment, Transform,
+    Underline, break_into_lines, break_multilingual_into_lines,
 };
 
 #[derive(Clone)]
@@ -708,10 +715,13 @@ fn projected_content_char_starts(run: &CT_R) -> Vec<usize> {
             RunContent::Field(field) => field
                 .projected_text()
                 .map_or(0, |text| text.chars().count()),
+            RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn) => 1,
             RunContent::Drawing(_)
             | RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
-            | RunContent::CommentReference { .. } => 0,
+            | RunContent::CommentReference { .. }
+            | RunContent::Symbol { .. }
+            | RunContent::SpecialCharacter(_) => 0,
         };
     }
     debug_assert_eq!(char_offset, run.text().chars().count());
@@ -760,7 +770,9 @@ fn run_has_visible_content(run: &CT_R) -> bool {
         | RunContent::Drawing(_)
         | RunContent::Field(_)
         | RunContent::FootnoteRef { .. }
-        | RunContent::EndnoteRef { .. } => true,
+        | RunContent::EndnoteRef { .. }
+        | RunContent::Symbol { .. }
+        | RunContent::SpecialCharacter(_) => true,
     })
 }
 
@@ -904,6 +916,9 @@ pub struct Engine {
 struct ReusableEngineContext {
     revision_view: RevisionView,
     automatic_hyphenation: bool,
+    mirror_margins: bool,
+    gutter_at_top: bool,
+    default_tab_stop: Option<rdocx_oxml::units::Twips>,
     math_properties: Option<rdocx_oxml::math::MathProperties>,
     has_wrapping_drawing: bool,
     styles: CT_Styles,
@@ -996,6 +1011,9 @@ impl ReusableEngineContext {
         Self {
             revision_view: input.revision_view,
             automatic_hyphenation: input.automatic_hyphenation,
+            mirror_margins: input.mirror_margins,
+            gutter_at_top: input.gutter_at_top,
+            default_tab_stop: input.default_tab_stop,
             math_properties: input.math_properties.clone(),
             has_wrapping_drawing,
             styles: input.styles.clone(),
@@ -1068,6 +1086,9 @@ impl ReusableEngineContext {
             .chain(input.document.body.sect_pr.iter()));
         self.revision_view == input.revision_view
             && self.automatic_hyphenation == input.automatic_hyphenation
+            && self.mirror_margins == input.mirror_margins
+            && self.gutter_at_top == input.gutter_at_top
+            && self.default_tab_stop == input.default_tab_stop
             && self.math_properties == input.math_properties
             && self.has_wrapping_drawing == has_wrapping_drawing
             && self.styles == input.styles
@@ -1092,6 +1113,12 @@ struct ParagraphCacheKey {
     paragraph: CT_P,
     content_width_bits: u64,
     revision_view: RevisionView,
+    /// The section character grid the block was broken against.
+    ///
+    /// A gridded and an ungridded section give the same paragraph different
+    /// line advance, so a cache keyed without this would serve one section's
+    /// blocks to the other.
+    doc_grid: Option<CT_DocGrid>,
 }
 
 struct ParagraphCacheEntry {
@@ -1110,6 +1137,8 @@ struct TableCacheKey {
     content_width_bits: u64,
     revision_view: RevisionView,
     with_provenance: bool,
+    /// The section character grid, for the reason `ParagraphCacheKey` states.
+    doc_grid: Option<CT_DocGrid>,
 }
 
 struct TableCacheEntry {
@@ -1652,8 +1681,22 @@ impl Engine {
         let media = scoped_media.as_ref().unwrap_or(&media);
         let mut numbering = NumberingState::new();
         let mut diagnostics = Vec::new();
+        // Caller-width measurement loads what whole-document layout loads, so
+        // it reads the body section's grid rather than measuring ungridded. A
+        // related story measures ungridded, because that is what header,
+        // footer and note layout does with the same content.
+        let doc_grid = if related_story_scope.is_none() {
+            input
+                .document
+                .body
+                .sect_pr
+                .as_ref()
+                .and_then(|sect_pr| sect_pr.doc_grid.as_deref())
+        } else {
+            None
+        };
         let height = match content {
-            BodyContent::Paragraph(paragraph) => layout_paragraph(
+            BodyContent::Paragraph(paragraph) => layout_paragraph_with_grid(
                 paragraph,
                 available_width,
                 &input.styles,
@@ -1662,6 +1705,7 @@ impl Engine {
                 &mut self.font_manager,
                 &mut numbering,
                 &mut diagnostics,
+                doc_grid,
             )?
             .total_height(),
             BodyContent::Table(table) => crate::table::layout_table(
@@ -1673,6 +1717,7 @@ impl Engine {
                 &mut self.font_manager,
                 &mut numbering,
                 &mut diagnostics,
+                doc_grid,
             )?
             .total_height(),
             BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
@@ -1953,13 +1998,14 @@ impl Engine {
                     });
                     let mut block = self.layout_body_paragraph(
                         para,
-                        geometry.content_width(),
+                        geometry.body_measure(),
                         styles,
                         input,
                         &media,
                         &mut num_state,
                         &mut diagnostics,
                         source,
+                        sect_pr_for_layout.doc_grid.as_deref(),
                     )?;
 
                     // Detect heading style for outline generation
@@ -2004,7 +2050,12 @@ impl Engine {
 
                     // If this paragraph has sect_pr, it ends a section
                     if let Some(sect_pr) = para_sect_pr {
-                        let geometry = sect_pr_to_geometry(&sect_pr);
+                        let geometry = section_page_geometry(
+                            &sect_pr,
+                            input,
+                            &mut self.font_manager,
+                            &mut diagnostics,
+                        );
                         let header_footer = layout_header_footer(
                             self,
                             &sect_pr,
@@ -2040,7 +2091,7 @@ impl Engine {
 
                     let mut table_block = self.layout_body_table(
                         tbl,
-                        geometry.content_width(),
+                        geometry.body_measure(),
                         styles,
                         input,
                         &media,
@@ -2049,6 +2100,7 @@ impl Engine {
                         sources,
                         &WordStory::Document,
                         &path,
+                        sect_pr_for_layout.doc_grid.as_deref(),
                     )?;
                     if sources.is_some() {
                         table_block.set_body_index(path[0]);
@@ -2059,7 +2111,12 @@ impl Engine {
         }
 
         // Remaining blocks belong to the final section
-        let final_geometry = sect_pr_to_geometry(&final_sect_pr);
+        let final_geometry = section_page_geometry(
+            &final_sect_pr,
+            input,
+            &mut self.font_manager,
+            &mut diagnostics,
+        );
         let final_hf = layout_header_footer(
             self,
             &final_sect_pr,
@@ -2077,7 +2134,7 @@ impl Engine {
             });
         sections.push(paginator::SharedSection {
             blocks: current_blocks,
-            geometry: final_geometry,
+            geometry: final_geometry.clone(),
             header_footer: final_hf,
             header_footer_semantics: final_hf_semantics,
             title_pg: final_title_pg,
@@ -2281,12 +2338,16 @@ impl Engine {
                         &mut recorded.pages,
                         &references,
                         &notes,
-                        final_geometry,
+                        final_geometry.clone(),
                         checkpoint.page_count,
                         checkpoint.next_header_page_number,
                     );
                 } else {
-                    paginator::append_endnote_pages(&mut recorded.pages, &notes, final_geometry);
+                    paginator::append_endnote_pages(
+                        &mut recorded.pages,
+                        &notes,
+                        final_geometry.clone(),
+                    );
                 }
             }
             for page in &mut recorded.pages {
@@ -2396,7 +2457,7 @@ impl Engine {
             }
             // Endnotes read at the end of the document, so they follow the last
             // body page rather than sitting at the foot of their reference's page.
-            paginator::append_endnote_pages(&mut pagination.pages, &notes, final_geometry);
+            paginator::append_endnote_pages(&mut pagination.pages, &notes, final_geometry.clone());
             apply_page_background(&mut pagination.pages, input);
             for page in &mut pagination.pages {
                 mark_remaining_artifacts(&mut page.elements);
@@ -2726,6 +2787,7 @@ impl Engine {
         numbering: &mut NumberingState,
         diagnostics: &mut Vec<Diagnostic>,
         source_node: Option<SourceNodeId>,
+        doc_grid: Option<&CT_DocGrid>,
     ) -> Result<SharedLayoutBlock> {
         if !paragraph_is_cache_safe(paragraph, styles) {
             // Traversal-sensitive content can change generated state consumed
@@ -2742,6 +2804,7 @@ impl Engine {
                 numbering,
                 diagnostics,
                 source_node,
+                doc_grid,
             )?;
             return Ok(SharedLayoutBlock::Owned {
                 block: Box::new(LayoutBlock::Paragraph(block)),
@@ -2760,6 +2823,7 @@ impl Engine {
                     && entry.key.paragraph == *paragraph
                     && entry.key.content_width_bits == content_width.to_bits()
                     && entry.key.revision_view == input.revision_view
+                    && entry.key.doc_grid.as_ref() == doc_grid
             })
         {
             diagnostics.extend(entry.diagnostics.iter().cloned());
@@ -2789,6 +2853,7 @@ impl Engine {
             numbering,
             diagnostics,
             Some(CACHE_SOURCE_NODE),
+            doc_grid,
         );
         let font_trace = self.font_manager.finish_paragraph_font_trace();
         let (mut block, reflow_direction) = block_result?;
@@ -2809,6 +2874,7 @@ impl Engine {
                     paragraph: paragraph.clone(),
                     content_width_bits: content_width.to_bits(),
                     revision_view: input.revision_view,
+                    doc_grid: doc_grid.cloned(),
                 },
                 block: Arc::clone(&block),
                 diagnostics: cached_diagnostics,
@@ -2848,6 +2914,7 @@ impl Engine {
         sources: Option<&SourceRegistry>,
         story: &WordStory,
         path: &[usize],
+        doc_grid: Option<&CT_DocGrid>,
     ) -> Result<SharedLayoutBlock> {
         if !table_is_cache_safe(table, styles) {
             self.paragraph_cache_reads_enabled = false;
@@ -2863,6 +2930,7 @@ impl Engine {
                 sources,
                 story,
                 path,
+                doc_grid,
             )
             .map(|(block, semantics)| SharedLayoutBlock::Table {
                 block: Arc::new(block),
@@ -2880,6 +2948,7 @@ impl Engine {
                     && entry.key.content_width_bits == content_width.to_bits()
                     && entry.key.revision_view == input.revision_view
                     && entry.key.with_provenance == sources.is_some()
+                    && entry.key.doc_grid.as_ref() == doc_grid
             })
         {
             diagnostics.extend(entry.diagnostics.iter().cloned());
@@ -2914,6 +2983,7 @@ impl Engine {
             sources,
             story,
             path,
+            doc_grid,
         );
         let font_trace = self.font_manager.finish_paragraph_font_trace();
         let (mut block, semantics) = block_result?;
@@ -2927,6 +2997,7 @@ impl Engine {
                 content_width_bits: content_width.to_bits(),
                 revision_view: input.revision_view,
                 with_provenance: sources.is_some(),
+                doc_grid: doc_grid.cloned(),
             };
             let bytes = table_cache_entry_bytes(
                 &key,
@@ -3526,7 +3597,13 @@ fn raw_xml_start_attribute<'a>(mut input: &'a [u8], expected: &[u8]) -> Option<&
 }
 
 fn header_footer_section_is_cache_safe(section: &CT_SectPr) -> bool {
-    section.change.is_none() && section.extra_xml.is_empty()
+    section.change.is_none()
+        && section.extra_xml.len() == section.extra_xml_positions.len()
+        && section
+            .extra_xml
+            .iter()
+            .zip(&section.extra_xml_positions)
+            .all(|(raw, position)| CT_SectPr::raw_position_is_root_attributes(position, raw))
 }
 
 fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
@@ -3694,6 +3771,19 @@ fn table_semantics_retained_bytes(semantics: &TableSemantics) -> usize {
     bytes
 }
 
+/// Heap bytes held by a retained ordered attribute vector.
+fn attribute_pairs_bytes(values: &[(String, String)]) -> usize {
+    values
+        .len()
+        .saturating_mul(std::mem::size_of::<(String, String)>())
+        .saturating_add(
+            values
+                .iter()
+                .map(|(name, value)| name.capacity().saturating_add(value.capacity()))
+                .fold(0usize, usize::saturating_add),
+        )
+}
+
 fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
     fn option_string_bytes(value: &Option<String>) -> usize {
         value.as_ref().map_or(0, String::capacity)
@@ -3718,6 +3808,9 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
             &properties.font_cs,
             &properties.font_ascii_theme,
             &properties.font_hansi_theme,
+            &properties.font_east_asia_theme,
+            &properties.font_cs_theme,
+            &properties.font_hint,
             &properties.color,
             &properties.color_theme,
             &properties.vert_align,
@@ -3725,7 +3818,14 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
         .into_iter()
         .map(option_string_bytes)
         .fold(0usize, usize::saturating_add)
-        .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+        .saturating_add(attribute_pairs_bytes(&properties.font_extra_attributes))
+        .saturating_add(attribute_pairs_bytes(&properties.color_extra_attributes))
+        .saturating_add(
+            properties
+                .shading
+                .as_ref()
+                .map_or(0, |shading| shading_bytes(shading)),
+        )
         .saturating_add(
             properties
                 .revision_markers
@@ -3746,6 +3846,9 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
             .capacity()
             .saturating_add(option_string_bytes(&shading.color))
             .saturating_add(option_string_bytes(&shading.fill))
+            .saturating_add(option_string_bytes(&shading.theme_color))
+            .saturating_add(option_string_bytes(&shading.theme_fill))
+            .saturating_add(attribute_pairs_bytes(&shading.extra_attributes))
     }
     fn paragraph_border_bytes(borders: &CT_PBdr) -> usize {
         [
@@ -3768,14 +3871,19 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
                 properties
                     .borders
                     .as_ref()
-                    .map_or(0, paragraph_border_bytes),
+                    .map_or(0, |borders| paragraph_border_bytes(borders)),
             )
             .saturating_add(properties.tabs.as_ref().map_or(0, |tabs| {
                 tabs.tabs
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CT_TabStop>())
             }))
-            .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+            .saturating_add(
+                properties
+                    .shading
+                    .as_ref()
+                    .map_or(0, |shading| shading_bytes(shading)),
+            )
             .saturating_add(properties.rpr.as_ref().map_or(0, run_properties_bytes))
             .saturating_add(raw_vectors_bytes(&properties.numbering_revision_xml))
             .saturating_add(raw_vectors_bytes(&properties.revision_xml))
@@ -3800,13 +3908,15 @@ fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
                                     RunContent::Text(text) | RunContent::DeletedText(text) => {
                                         text.text.capacity()
                                     }
+                                    RunContent::Symbol { font, .. } => font.capacity(),
                                     RunContent::Tab
                                     | RunContent::Break(_)
                                     | RunContent::Drawing(_)
                                     | RunContent::Field(_)
                                     | RunContent::FootnoteRef { .. }
                                     | RunContent::EndnoteRef { .. }
-                                    | RunContent::CommentReference { .. } => 0,
+                                    | RunContent::CommentReference { .. }
+                                    | RunContent::SpecialCharacter(_) => 0,
                                 })
                                 .fold(0usize, usize::saturating_add),
                         )
@@ -3882,6 +3992,9 @@ fn table_key_retained_bytes(table: &CT_Tbl) -> usize {
             .capacity()
             .saturating_add(option_string_bytes(&shading.color))
             .saturating_add(option_string_bytes(&shading.fill))
+            .saturating_add(option_string_bytes(&shading.theme_color))
+            .saturating_add(option_string_bytes(&shading.theme_fill))
+            .saturating_add(attribute_pairs_bytes(&shading.extra_attributes))
     }
     fn table_border_bytes(borders: &rdocx_oxml::table::CT_TblBorders) -> usize {
         [
@@ -4599,7 +4712,8 @@ fn header_footer_cache_entry_bytes(
                 .iter()
                 .map(Vec::capacity)
                 .fold(0usize, usize::saturating_add),
-        );
+        )
+        .saturating_add(section_child_retained_bytes(&key.section));
     let paragraph_raw_capacity = key
         .part
         .paragraphs
@@ -4733,6 +4847,9 @@ fn paragraph_cache_entry_bytes(
             .capacity()
             .saturating_add(option_string_bytes(&shading.color))
             .saturating_add(option_string_bytes(&shading.fill))
+            .saturating_add(option_string_bytes(&shading.theme_color))
+            .saturating_add(option_string_bytes(&shading.theme_fill))
+            .saturating_add(attribute_pairs_bytes(&shading.extra_attributes))
     }
     fn run_properties_bytes(properties: &CT_RPr) -> usize {
         [
@@ -4743,6 +4860,9 @@ fn paragraph_cache_entry_bytes(
             &properties.font_cs,
             &properties.font_ascii_theme,
             &properties.font_hansi_theme,
+            &properties.font_east_asia_theme,
+            &properties.font_cs_theme,
+            &properties.font_hint,
             &properties.color,
             &properties.color_theme,
             &properties.vert_align,
@@ -4750,7 +4870,14 @@ fn paragraph_cache_entry_bytes(
         .into_iter()
         .map(option_string_bytes)
         .fold(0usize, usize::saturating_add)
-        .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+        .saturating_add(attribute_pairs_bytes(&properties.font_extra_attributes))
+        .saturating_add(attribute_pairs_bytes(&properties.color_extra_attributes))
+        .saturating_add(
+            properties
+                .shading
+                .as_ref()
+                .map_or(0, |shading| shading_bytes(shading)),
+        )
     }
     fn border_bytes(borders: &CT_PBdr) -> usize {
         [
@@ -4772,13 +4899,23 @@ fn paragraph_cache_entry_bytes(
     fn paragraph_properties_bytes(properties: &CT_PPr) -> usize {
         option_string_bytes(&properties.style_id)
             .saturating_add(option_string_bytes(&properties.line_rule))
-            .saturating_add(properties.borders.as_ref().map_or(0, border_bytes))
+            .saturating_add(
+                properties
+                    .borders
+                    .as_ref()
+                    .map_or(0, |borders| border_bytes(borders)),
+            )
             .saturating_add(properties.tabs.as_ref().map_or(0, |tabs| {
                 tabs.tabs
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CT_TabStop>())
             }))
-            .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+            .saturating_add(
+                properties
+                    .shading
+                    .as_ref()
+                    .map_or(0, |shading| shading_bytes(shading)),
+            )
             .saturating_add(properties.rpr.as_ref().map_or(0, run_properties_bytes))
     }
     fn paragraph_key_bytes(paragraph: &CT_P) -> usize {
@@ -4949,6 +5086,18 @@ fn paragraph_fingerprint(paragraph: &CT_P) -> u64 {
     let mut fingerprint = StableFingerprint::new();
     fingerprint.write_usize(paragraph.runs.len());
     fingerprint.write_tag(u8::from(paragraph.properties.is_some()));
+    // A ruby annotation changes the painted page without changing any run,
+    // so a paragraph that carries one must not collide with the same runs
+    // unannotated. Nothing is written when there is none, which keeps every
+    // existing fingerprint where it was.
+    for ruby in &paragraph.rubies {
+        fingerprint.write_tag(7);
+        fingerprint.write_usize(ruby.base_start);
+        fingerprint.write_usize(ruby.base_end);
+        for run in &ruby.ruby_text {
+            fingerprint.write_bytes(run.text().as_bytes());
+        }
+    }
     for run in &paragraph.runs {
         fingerprint.write_tag(u8::from(run.properties.is_some()));
         fingerprint.write_usize(run.content.len());
@@ -4971,6 +5120,20 @@ fn paragraph_fingerprint(paragraph: &CT_P) -> u64 {
                         BreakType::Line => 0,
                         BreakType::Page => 1,
                         BreakType::Column => 2,
+                    });
+                }
+                RunContent::Symbol { font, char_code } => {
+                    fingerprint.write_tag(5);
+                    fingerprint.write_bytes(font.as_bytes());
+                    fingerprint.write_usize(usize::from(*char_code));
+                }
+                RunContent::SpecialCharacter(character) => {
+                    fingerprint.write_tag(6);
+                    fingerprint.write_tag(match character {
+                        SpecialCharacter::CarriageReturn => 0,
+                        SpecialCharacter::NoBreakHyphen => 1,
+                        SpecialCharacter::SoftHyphen => 2,
+                        SpecialCharacter::PositionalTab { .. } => 3,
                     });
                 }
                 RunContent::Drawing(_)
@@ -5588,6 +5751,36 @@ pub fn layout_paragraph(
     )
 }
 
+/// Lay out one paragraph on a section character grid.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn layout_paragraph_with_grid(
+    para: &CT_P,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    doc_grid: Option<&CT_DocGrid>,
+) -> Result<ParagraphBlock> {
+    layout_paragraph_with_source_and_table(
+        para,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        None,
+        None,
+        None,
+        None,
+        doc_grid,
+    )
+}
+
 pub(crate) fn layout_paragraph_with_source(
     para: &CT_P,
     available_width: f64,
@@ -5611,6 +5804,8 @@ pub(crate) fn layout_paragraph_with_source(
         source_node,
         None,
         None,
+        None,
+        None,
     )
 }
 
@@ -5625,6 +5820,7 @@ pub(crate) fn layout_paragraph_with_source_and_direction(
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(ParagraphBlock, TextDirection)> {
     let mut direction = TextDirection::Auto;
     let block = layout_paragraph_with_source_and_table(
@@ -5638,7 +5834,9 @@ pub(crate) fn layout_paragraph_with_source_and_direction(
         diagnostics,
         source_node,
         None,
+        None,
         Some(&mut direction),
+        doc_grid,
     )?;
     Ok((block, direction))
 }
@@ -5655,6 +5853,8 @@ pub(crate) fn layout_paragraph_with_source_in_table(
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
+    table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(ParagraphBlock, TextDirection)> {
     let mut direction = TextDirection::Auto;
     let block = layout_paragraph_with_source_and_table(
@@ -5668,7 +5868,9 @@ pub(crate) fn layout_paragraph_with_source_in_table(
         diagnostics,
         source_node,
         table_properties,
+        table_run_properties,
         Some(&mut direction),
+        doc_grid,
     )?;
     Ok((block, direction))
 }
@@ -5685,7 +5887,9 @@ fn layout_paragraph_with_source_and_table(
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
+    table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
     reflow_direction_out: Option<&mut TextDirection>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<ParagraphBlock> {
     // Resolve paragraph properties
     let para_style_id = para.properties.as_ref().and_then(|p| p.style_id.as_deref());
@@ -5735,6 +5939,21 @@ fn layout_paragraph_with_source_and_table(
     let automatic_hyphenation =
         input.automatic_hyphenation && effective_ppr.suppress_auto_hyphens != Some(true);
 
+    // The section character grid, gated by the paragraph's own `w:snapToGrid`.
+    // A `default` grid, and an absent one, leave both values at their
+    // ungridded form, so an ungridded paragraph takes the branch it always
+    // took with no new arithmetic on it.
+    let doc_grid = doc_grid.filter(|_| effective_ppr.snap_to_grid != Some(false));
+    let grid_char_space_pt = doc_grid
+        .filter(|grid| grid.grid_type.is_some_and(ST_DocGrid::snaps_characters))
+        .and_then(|grid| grid.char_space)
+        .map_or(0.0, |space| rdocx_oxml::units::Twips(space).to_pt());
+    let grid_line_pitch_pt = doc_grid
+        .filter(|grid| grid.grid_type.is_some_and(ST_DocGrid::snaps_lines))
+        .and_then(|grid| grid.line_pitch)
+        .map(|pitch| pitch.to_pt())
+        .filter(|pitch| *pitch > 0.0);
+
     // Parse shading color
     let shading = effective_ppr
         .shading
@@ -5776,10 +5995,15 @@ fn layout_paragraph_with_source_and_table(
             // Shape the marker text
             let marker_rpr = marker.marker_rpr;
             let marker_font_size = marker_rpr.sz.map(|hp| hp.to_pt()).unwrap_or_else(|| {
-                style_resolver::resolve_run_properties(para_style_id, None, styles)
-                    .sz
-                    .map(|hp| hp.to_pt())
-                    .unwrap_or(11.0)
+                style_resolver::resolve_run_properties(
+                    para_style_id,
+                    None,
+                    styles,
+                    table_run_properties,
+                )
+                .sz
+                .map(|hp| hp.to_pt())
+                .unwrap_or(11.0)
             });
             let marker_bold = marker_rpr.bold.unwrap_or(false);
             let marker_italic = marker_rpr.italic.unwrap_or(false);
@@ -5903,6 +6127,7 @@ fn layout_paragraph_with_source_and_table(
         let projected_run_start = projection_char_offset;
         projection_char_offset += run.text().chars().count();
         push_targeted_bookmark_markers(&mut inline_items, para, projected_index, input, fm)?;
+
         let current_hyperlink_url = projected
             .ordinary_run_index
             .and_then(|run_index| run_hyperlink_url.get(&run_index).cloned())
@@ -5916,8 +6141,12 @@ fn layout_paragraph_with_source_and_table(
 
         let run_style_id = run.properties.as_ref().and_then(|p| p.style_id.as_deref());
 
-        let resolved_rpr =
-            style_resolver::resolve_run_properties(para_style_id, run_style_id, styles);
+        let resolved_rpr = style_resolver::resolve_run_properties(
+            para_style_id,
+            run_style_id,
+            styles,
+            table_run_properties,
+        );
 
         // Merge direct run properties
         let mut effective_rpr = resolved_rpr;
@@ -5939,6 +6168,34 @@ fn layout_paragraph_with_source_and_table(
             diagnostics,
         )?;
 
+        // A ruby annotation owns its base runs, so the span is laid out once
+        // at its first run and the rest of the span is skipped rather than
+        // painted a second time on the ordinary run path.
+        if let Some(run_index) = projected.ordinary_run_index
+            && let Some(ruby) = para
+                .rubies
+                .iter()
+                .find(|ruby| ruby.base_range().contains(&run_index))
+        {
+            if ruby.base_start == run_index
+                && let Some(base_runs) = para.runs.get(ruby.base_range())
+                && let Some(item) = ruby_inline_item(
+                    ruby,
+                    base_runs,
+                    &AnnotationContext {
+                        styles,
+                        input,
+                        para_style_id,
+                        table_run_properties,
+                    },
+                    fm,
+                )?
+            {
+                inline_items.push(item);
+            }
+            continue;
+        }
+
         // Skip hidden text
         if effective_rpr.vanish == Some(true) {
             continue;
@@ -5949,7 +6206,12 @@ fn layout_paragraph_with_source_and_table(
         let italic = effective_rpr.italic.unwrap_or(false);
 
         // Resolve font family: theme font takes priority when no explicit font is set
-        let font_family = resolve_font_family(&effective_rpr, input.theme.as_ref());
+        let run_text = run.text();
+        let font_family = resolve_font_family(
+            &effective_rpr,
+            input.theme.as_ref(),
+            word_font_slot_for_text(&run_text, effective_rpr.font_hint.as_deref()),
+        );
 
         // Resolve color: theme color takes priority over literal color value
         let color = resolve_run_color(&effective_rpr, input.theme.as_ref());
@@ -5991,8 +6253,7 @@ fn layout_paragraph_with_source_and_table(
 
         // Resolved against the run's own text, so a family without glyphs for
         // this script is replaced by one that has them.
-        let font_id =
-            fm.resolve_font_for_text(font_family.as_deref(), bold, italic, &run.text())?;
+        let font_id = fm.resolve_font_for_text(font_family.as_deref(), bold, italic, &run_text)?;
         let metrics = fm.metrics(font_id, font_size)?;
 
         let content_char_starts = projected_content_char_starts(run);
@@ -6010,7 +6271,6 @@ fn layout_paragraph_with_source_and_table(
                         continue;
                     }
 
-                    let mut shaped = fm.shape_text(font_id, &text, font_size)?;
                     let source = if text == ct_text.text {
                         source_node.and_then(|node| {
                             let char_start = u32::try_from(content_char_start).ok()?;
@@ -6027,9 +6287,53 @@ fn layout_paragraph_with_source_and_table(
                         None
                     };
 
-                    // Apply character spacing from run properties (in twips)
-                    if let Some(spacing) = effective_rpr.spacing {
-                        let extra = spacing.to_pt();
+                    let annotation_base = AnnotationBase {
+                        font_id,
+                        font_size,
+                        color,
+                        bold,
+                        italic,
+                        baseline_offset,
+                        spacing: word_character_advance_pt(&effective_rpr, grid_char_space_pt),
+                        underline,
+                        strike,
+                        dstrike,
+                        highlight,
+                        font_family: font_family.as_deref(),
+                    };
+
+                    if let Some(layout) = effective_rpr.east_asian_layout.as_deref()
+                        && push_east_asian_layout_text(
+                            &mut inline_items,
+                            fm,
+                            layout,
+                            &text,
+                            &annotation_base,
+                            source,
+                        )?
+                    {
+                        continue;
+                    }
+
+                    if let Some(ref mark) = effective_rpr.emphasis_mark
+                        && push_emphasis_marked_text(
+                            &mut inline_items,
+                            fm,
+                            diagnostics,
+                            mark,
+                            &text,
+                            &annotation_base,
+                        )?
+                    {
+                        continue;
+                    }
+
+                    let mut shaped = fm.shape_text(font_id, &text, font_size)?;
+
+                    // Apply character spacing from run properties, plus the
+                    // section character grid when one is in force.
+                    let extra = word_character_advance_pt(&effective_rpr, grid_char_space_pt);
+                    if extra != 0.0 {
                         for advance in &mut shaped.advances {
                             *advance += extra;
                         }
@@ -6069,7 +6373,7 @@ fn layout_paragraph_with_source_and_table(
                             language_east_asia: effective_rpr.language_east_asia.clone(),
                             language_bidi: effective_rpr.language_bidi.clone(),
                             direction: word_text_direction(effective_rpr.rtl),
-                            spacing: effective_rpr.spacing.map_or(0.0, |value| value.to_pt()),
+                            spacing: word_character_advance_pt(&effective_rpr, grid_char_space_pt),
                         },
                     );
                     if automatic_hyphenation && let Some(language) = effective_rpr.language.as_ref()
@@ -6212,6 +6516,7 @@ fn layout_paragraph_with_source_and_table(
                                 para_style_id,
                                 segment_style_id,
                                 styles,
+                                table_run_properties,
                             )
                         } else {
                             effective_rpr.clone()
@@ -6226,8 +6531,11 @@ fn layout_paragraph_with_source_and_table(
                             segment_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0);
                         let segment_bold = segment_rpr.bold.unwrap_or(false);
                         let segment_italic = segment_rpr.italic.unwrap_or(false);
-                        let segment_font_family =
-                            resolve_font_family(&segment_rpr, input.theme.as_ref());
+                        let segment_font_family = resolve_font_family(
+                            &segment_rpr,
+                            input.theme.as_ref(),
+                            word_font_slot_for_text(value, segment_rpr.font_hint.as_deref()),
+                        );
                         let segment_color = resolve_run_color(&segment_rpr, input.theme.as_ref());
                         let segment_underline = if projected.force_underline {
                             Some(Underline::Single)
@@ -6285,8 +6593,9 @@ fn layout_paragraph_with_source_and_table(
                                 }
                                 let mut shaped =
                                     fm.shape_text(segment_font_id, &text, segment_font_size)?;
-                                if let Some(spacing) = segment_rpr.spacing {
-                                    let extra = spacing.to_pt();
+                                let extra =
+                                    word_character_advance_pt(&segment_rpr, grid_char_space_pt);
+                                if extra != 0.0 {
                                     for advance in &mut shaped.advances {
                                         *advance += extra;
                                     }
@@ -6300,9 +6609,10 @@ fn layout_paragraph_with_source_and_table(
                                         language_east_asia: segment_rpr.language_east_asia.clone(),
                                         language_bidi: segment_rpr.language_bidi.clone(),
                                         direction: word_text_direction(segment_rpr.rtl),
-                                        spacing: segment_rpr
-                                            .spacing
-                                            .map_or(0.0, |value| value.to_pt()),
+                                        spacing: word_character_advance_pt(
+                                            &segment_rpr,
+                                            grid_char_space_pt,
+                                        ),
                                     },
                                 );
                                 inline_items.push(InlineItem::Text(TextSegment {
@@ -6379,12 +6689,98 @@ fn layout_paragraph_with_source_and_table(
                         note: Some(NoteRef { stream, id: *id }),
                     }));
                 }
+                RunContent::Symbol { font, char_code } => {
+                    // The code point is the symbol font's own, typically in
+                    // the F020 to F0FF private-use block Word writes. Font
+                    // resolution runs against that text so a family without
+                    // the glyph is replaced by one that has it.
+                    let Some(symbol) = char::from_u32(u32::from(*char_code)) else {
+                        continue;
+                    };
+                    let text = symbol.to_string();
+                    let symbol_font_id =
+                        fm.resolve_font_for_text(Some(font.as_str()), bold, italic, &text)?;
+                    let symbol_metrics = fm.metrics(symbol_font_id, font_size)?;
+                    let shaped = fm.shape_text(symbol_font_id, &text, font_size)?;
+                    inline_items.push(InlineItem::Text(TextSegment {
+                        text,
+                        direction: TextDirection::Auto,
+                        source: None,
+                        font_id: symbol_font_id,
+                        font_size,
+                        glyph_ids: shaped.glyph_ids,
+                        advances: shaped.advances,
+                        width: shaped.width,
+                        ascent: symbol_metrics.ascent,
+                        descent: symbol_metrics.descent,
+                        line_gap: 0.0,
+                        color,
+                        bold,
+                        italic,
+                        underline,
+                        strike,
+                        dstrike,
+                        highlight,
+                        baseline_offset,
+                        hyperlink_url: current_hyperlink_url.clone(),
+                        field_kind: None,
+                        field_source: None,
+                        note: None,
+                    }));
+                }
+                RunContent::SpecialCharacter(character) => match character {
+                    SpecialCharacter::CarriageReturn => {
+                        inline_items.push(InlineItem::LineBreak);
+                    }
+                    SpecialCharacter::NoBreakHyphen => {
+                        // U+2011 carries Unicode line-break class GL, so the
+                        // hyphen is drawn without becoming a break
+                        // opportunity. A plain U+002D would become one.
+                        let text = "\u{2011}".to_owned();
+                        let shaped = fm.shape_text(font_id, &text, font_size)?;
+                        inline_items.push(InlineItem::Text(TextSegment {
+                            text,
+                            direction: TextDirection::Auto,
+                            source: None,
+                            font_id,
+                            font_size,
+                            glyph_ids: shaped.glyph_ids,
+                            advances: shaped.advances,
+                            width: shaped.width,
+                            ascent: metrics.ascent,
+                            descent: metrics.descent,
+                            line_gap: 0.0,
+                            color,
+                            bold,
+                            italic,
+                            underline,
+                            strike,
+                            dstrike,
+                            highlight,
+                            baseline_offset,
+                            hyperlink_url: current_hyperlink_url.clone(),
+                            field_kind: None,
+                            field_source: None,
+                            note: None,
+                        }));
+                    }
+                    // A soft hyphen is drawn only on the line it breaks, and
+                    // the line breaker has no discretionary-break input, so it
+                    // is round-tripped without a render projection.
+                    SpecialCharacter::SoftHyphen => {}
+                    // The absolute position is a paragraph-relative tab stop
+                    // the tab resolver already places.
+                    SpecialCharacter::PositionalTab { .. } => {
+                        inline_items.push(InlineItem::Tab);
+                    }
+                },
                 RunContent::CommentReference { .. } => {}
             }
         }
     }
 
-    let mut equation_rpr = style_resolver::resolve_run_properties(para_style_id, None, styles);
+    let mut equation_rpr =
+        style_resolver::resolve_run_properties(para_style_id, None, styles, table_run_properties);
     if let Some(paragraph_mark_rpr) = direct_ppr.and_then(|ppr| ppr.rpr.as_ref()) {
         equation_rpr.merge_from(paragraph_mark_rpr);
     }
@@ -6406,14 +6802,22 @@ fn layout_paragraph_with_source_and_table(
 
     let attributed_empty_paragraph = inline_items.is_empty();
     if attributed_empty_paragraph {
-        let mut caret_rpr = style_resolver::resolve_run_properties(para_style_id, None, styles);
+        let mut caret_rpr = style_resolver::resolve_run_properties(
+            para_style_id,
+            None,
+            styles,
+            table_run_properties,
+        );
         if let Some(paragraph_mark_rpr) = direct_ppr.and_then(|ppr| ppr.rpr.as_ref()) {
             caret_rpr.merge_from(paragraph_mark_rpr);
         }
         let font_size = caret_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0);
         let bold = caret_rpr.bold.unwrap_or(false);
         let italic = caret_rpr.italic.unwrap_or(false);
-        let font_family = resolve_font_family(&caret_rpr, input.theme.as_ref());
+        // The caret of an empty paragraph draws no character, so it has no
+        // slot of its own and keeps the ASCII one it has always used.
+        let font_family =
+            resolve_font_family(&caret_rpr, input.theme.as_ref(), WordFontSlot::Ascii);
         let font_id = fm.resolve_font_for_metrics(font_family.as_deref(), bold, italic)?;
         let metrics = fm.metrics(font_id, font_size)?;
         inline_items.push(InlineItem::Text(TextSegment {
@@ -6475,7 +6879,8 @@ fn layout_paragraph_with_source_and_table(
     let jc = convert::alignment_for_direction(effective_ppr.jc, layout_direction);
 
     // Line breaking
-    let mut line_params = convert::line_break_params(&effective_ppr, available_width);
+    let mut line_params =
+        convert::line_break_params(&effective_ppr, available_width, input.default_tab_stop);
     line_params.ind_left = ind_left;
     line_params.ind_right = ind_right;
     line_params.jc = jc;
@@ -6486,7 +6891,7 @@ fn layout_paragraph_with_source_and_table(
             .is_none()
     {
         let mut lines = break_into_lines(&[], &line_params, fm)?;
-        convert::restore_word_line_heights(&mut lines, &effective_ppr);
+        convert::restore_word_line_heights(&mut lines, &effective_ppr, grid_line_pitch_pt);
         lines.pop()
     } else {
         None
@@ -6518,7 +6923,7 @@ fn layout_paragraph_with_source_and_table(
     } else {
         break_into_lines(&inline_items, &line_params, fm)?
     };
-    convert::restore_word_line_heights(&mut lines, &effective_ppr);
+    convert::restore_word_line_heights(&mut lines, &effective_ppr, grid_line_pitch_pt);
     if let (Some(line), Some(legacy)) = (lines.first_mut(), legacy_empty_line) {
         line.ascent = legacy.ascent;
         line.descent = legacy.descent;
@@ -6530,7 +6935,7 @@ fn layout_paragraph_with_source_and_table(
         lines,
         space_before,
         space_after,
-        effective_ppr.borders,
+        effective_ppr.borders.map(|borders| *borders),
         shading,
         ind_left,
         ind_right,
@@ -6551,6 +6956,8 @@ fn layout_paragraph_with_source_and_table(
     result.reflow = Some(Box::new(block::ParagraphReflow {
         items: inline_items,
         params: line_params,
+        grid_line_pitch_pt: grid_line_pitch_pt
+            .filter(|_| effective_ppr.line_rule.as_deref() != Some("exact")),
     }));
     Ok(result)
 }
@@ -6914,11 +7321,25 @@ fn bookmark_text(input: &LayoutInput, name: &str) -> Option<String> {
     Some(parts.join("\n"))
 }
 
-/// Whether any drawing in the document body wraps text around itself.
+/// Whether any drawing or floating table in the document body wraps text
+/// around itself.
 ///
 /// A document without one can never reach the reflow path, so it does not pay
-/// for it.
+/// for it, and it also never needs the second pagination pass.
 fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
+    /// Whether a `w:tblpPr` on the table itself floats it.
+    ///
+    /// The rule belongs to the lowering, so this asks it rather than repeating
+    /// it. Direct properties only: a float declared by a table style is as rare
+    /// as a drawing inside a nested table, and the conservative answer there is
+    /// the same, look no deeper and lose the reflow rather than the table.
+    fn table_floats(table: &rdocx_oxml::table::CT_Tbl) -> bool {
+        table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| crate::table::floating_table(properties).is_some())
+    }
+
     fn paragraph_wraps(para: &CT_P, view: RevisionView) -> bool {
         fn run_wraps(run: &CT_R) -> bool {
             run.content
@@ -6952,20 +7373,23 @@ fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
         .iter()
         .any(|content| match content {
             BodyContent::Paragraph(para) => paragraph_wraps(para, input.revision_view),
-            BodyContent::Table(table) => table
-                .rows
-                .iter()
-                .flat_map(|row| row.cells.iter())
-                .flat_map(|cell| cell.content.iter())
-                .any(|content| match content {
-                    rdocx_oxml::table::CellContent::Paragraph(para) => {
-                        paragraph_wraps(para, input.revision_view)
-                    }
-                    // A drawing inside a nested table is rare enough that the
-                    // conservative answer is to look no deeper.
-                    rdocx_oxml::table::CellContent::Table(_) => false,
-                    rdocx_oxml::table::CellContent::ContentControl(_) => false,
-                }),
+            BodyContent::Table(table) => {
+                table_floats(table)
+                    || table
+                        .rows
+                        .iter()
+                        .flat_map(|row| row.cells.iter())
+                        .flat_map(|cell| cell.content.iter())
+                        .any(|content| match content {
+                            rdocx_oxml::table::CellContent::Paragraph(para) => {
+                                paragraph_wraps(para, input.revision_view)
+                            }
+                            // A drawing inside a nested table is rare enough that
+                            // the conservative answer is to look no deeper.
+                            rdocx_oxml::table::CellContent::Table(_) => false,
+                            rdocx_oxml::table::CellContent::ContentControl(_) => false,
+                        })
+            }
             _ => false,
         })
 }
@@ -7184,9 +7608,102 @@ fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
     }
 }
 
+/// Word's line-number gap when `w:lnNumType` leaves `w:distance` out.
+const AUTOMATIC_LINE_NUMBER_DISTANCE: f64 = 18.0;
+
+/// Bytes the modeled `w:sectPr` children own outside `CT_SectPr` itself.
+///
+/// The note, paper-source, page-border and line-number members are boxed, so
+/// the struct's own size does not account for them, and each of them owns
+/// retained attribute and raw-child storage of its own.
+fn section_child_retained_bytes(section: &CT_SectPr) -> usize {
+    let retained_attributes = |attributes: &Vec<(String, String)>| {
+        attributes
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(String, String)>())
+            .saturating_add(
+                attributes
+                    .iter()
+                    .map(|(name, value)| name.capacity().saturating_add(value.capacity()))
+                    .fold(0usize, usize::saturating_add),
+            )
+    };
+    let note_bytes = |notes: &rdocx_oxml::document::CT_NoteProperties| {
+        std::mem::size_of::<rdocx_oxml::document::CT_NoteProperties>()
+            .saturating_add(
+                [&notes.pos, &notes.num_fmt, &notes.num_restart]
+                    .into_iter()
+                    .map(|value| value.as_ref().map_or(0, String::capacity))
+                    .fold(0usize, usize::saturating_add),
+            )
+            .saturating_add(
+                notes
+                    .extra_xml
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<(usize, Vec<u8>)>()),
+            )
+            .saturating_add(
+                notes
+                    .extra_xml
+                    .iter()
+                    .map(|(_, raw)| raw.capacity())
+                    .fold(0usize, usize::saturating_add),
+            )
+    };
+    let edge_bytes = |edge: &Option<rdocx_oxml::borders::CT_BorderEdge>| {
+        edge.as_ref().map_or(0, |edge| {
+            edge.color
+                .as_ref()
+                .map_or(0, String::capacity)
+                .saturating_add(retained_attributes(&edge.extra_attributes))
+        })
+    };
+
+    let mut bytes = section.text_direction.as_ref().map_or(0, String::capacity);
+    if let Some(notes) = section.footnote_pr.as_deref() {
+        bytes = bytes.saturating_add(note_bytes(notes));
+    }
+    if let Some(notes) = section.endnote_pr.as_deref() {
+        bytes = bytes.saturating_add(note_bytes(notes));
+    }
+    if let Some(source) = section.paper_source.as_deref() {
+        bytes = bytes
+            .saturating_add(std::mem::size_of::<rdocx_oxml::document::CT_PaperSource>())
+            .saturating_add(retained_attributes(&source.extra_attributes));
+    }
+    if let Some(numbering) = section.line_numbers.as_deref() {
+        bytes = bytes
+            .saturating_add(std::mem::size_of::<rdocx_oxml::document::CT_LineNumber>())
+            .saturating_add(retained_attributes(&numbering.extra_attributes));
+    }
+    if let Some(borders) = section.page_borders.as_deref() {
+        bytes = bytes
+            .saturating_add(std::mem::size_of::<rdocx_oxml::document::CT_PageBorders>())
+            .saturating_add(retained_attributes(&borders.extra_attributes))
+            .saturating_add(
+                borders
+                    .extra_xml
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Vec<u8>>()),
+            )
+            .saturating_add(
+                borders
+                    .extra_xml
+                    .iter()
+                    .map(Vec::capacity)
+                    .fold(0usize, usize::saturating_add),
+            )
+            .saturating_add(edge_bytes(&borders.top))
+            .saturating_add(edge_bytes(&borders.left))
+            .saturating_add(edge_bytes(&borders.bottom))
+            .saturating_add(edge_bytes(&borders.right));
+    }
+    bytes
+}
+
 /// Convert section properties to page geometry.
 fn sect_pr_to_geometry(sect_pr: &CT_SectPr) -> PageGeometry {
-    PageGeometry {
+    let geometry = PageGeometry {
         page_width: sect_pr.page_width.map(|t| t.to_pt()).unwrap_or(612.0),
         page_height: sect_pr.page_height.map(|t| t.to_pt()).unwrap_or(792.0),
         margin_top: sect_pr.margin_top.map(|t| t.to_pt()).unwrap_or(72.0),
@@ -7195,7 +7712,166 @@ fn sect_pr_to_geometry(sect_pr: &CT_SectPr) -> PageGeometry {
         margin_left: sect_pr.margin_left.map(|t| t.to_pt()).unwrap_or(72.0),
         header_distance: sect_pr.header_distance.map(|t| t.to_pt()).unwrap_or(36.0),
         footer_distance: sect_pr.footer_distance.map(|t| t.to_pt()).unwrap_or(36.0),
+        columns: Vec::new(),
+        column_separator: false,
+        page_borders: sect_pr_page_borders(sect_pr),
+        line_numbers: sect_pr_line_numbers(sect_pr),
+        vertical_alignment: sect_pr.vertical_alignment,
+        mirror_margins: false,
+        // F-269 authors and preserves `w:sectPr/w:textDirection`. This is the
+        // render projection over it, and it writes nothing back.
+        body_rotation: sect_pr
+            .text_direction
+            .as_deref()
+            .and_then(crate::table::text_direction_rotation),
+    };
+    resolve_column_tracks(sect_pr, geometry)
+}
+
+/// Resolve a section's column tracks onto its geometry.
+///
+/// A section that resolves to one column is returned untouched, so its content
+/// width stays the exact expression it evaluated before columns existed. A
+/// neutral one-track form would reassociate the arithmetic and move every
+/// recorded baseline in the workspace, which is why this bypasses rather than
+/// generalises.
+fn resolve_column_tracks(sect_pr: &CT_SectPr, geometry: PageGeometry) -> PageGeometry {
+    let Some(columns) = sect_pr.columns.as_ref() else {
+        return geometry;
+    };
+    let explicit = columns.equal_width == Some(false) || !columns.columns.is_empty();
+    let widths: Vec<(f64, f64)> = if explicit
+        && columns.columns.len() > 1
+        && columns.columns.iter().all(|column| column.width.is_some())
+    {
+        columns
+            .columns
+            .iter()
+            .map(|column| {
+                (
+                    column.width.map_or(0.0, |value| value.to_pt()),
+                    column.space.map_or(0.0, |value| value.to_pt()),
+                )
+            })
+            .collect()
+    } else {
+        let count = columns.num.unwrap_or(1);
+        if count < 2 {
+            return geometry;
+        }
+        let space = columns.space.map_or(0.0, |value| value.to_pt());
+        let measure = geometry.text_measure();
+        let width = (measure - space * f64::from(count - 1)) / f64::from(count);
+        (0..count).map(|_| (width, space)).collect()
+    };
+
+    if widths.iter().any(|(width, _)| *width <= 0.0) {
+        return geometry;
     }
+
+    let mut tracks = Vec::with_capacity(widths.len());
+    let mut x = geometry.margin_left;
+    for (width, space) in widths {
+        tracks.push(ColumnTrack { x, width });
+        x += width + space;
+    }
+    PageGeometry {
+        column_separator: columns.sep.unwrap_or(false),
+        columns: tracks,
+        ..geometry
+    }
+}
+
+/// Resolve `w:pgBorders` into the frame the paginator draws.
+fn sect_pr_page_borders(sect_pr: &CT_SectPr) -> Option<PageBorderFrame> {
+    let borders = sect_pr.page_borders.as_deref()?;
+    if borders.top.is_none()
+        && borders.left.is_none()
+        && borders.bottom.is_none()
+        && borders.right.is_none()
+    {
+        return None;
+    }
+    Some(PageBorderFrame {
+        display: borders.display.unwrap_or(ST_PageBorderDisplay::AllPages),
+        offset_from: borders.offset_from.unwrap_or(ST_PageBorderOffset::Text),
+        in_front: borders.z_order != Some(ST_PageBorderZOrder::Back),
+        edges: CT_PBdr {
+            top: borders.top.clone(),
+            left: borders.left.clone(),
+            bottom: borders.bottom.clone(),
+            right: borders.right.clone(),
+            between: None,
+            bar: None,
+        },
+    })
+}
+
+/// Resolve `w:lnNumType` into the numbering the paginator draws.
+fn sect_pr_line_numbers(sect_pr: &CT_SectPr) -> Option<LineNumbering> {
+    let numbering = sect_pr.line_numbers.as_deref()?;
+    Some(LineNumbering {
+        count_by: numbering.count_by.unwrap_or(1).max(1),
+        start: numbering.start.unwrap_or(1),
+        distance: numbering
+            .distance
+            .map_or(AUTOMATIC_LINE_NUMBER_DISTANCE, |value| value.to_pt()),
+        restart: numbering.restart.unwrap_or(ST_LineNumberRestart::NewPage),
+        font_id: None,
+    })
+}
+
+/// Page geometry for one whole section, with the state `sect_pr_to_geometry`
+/// cannot reach on its own.
+///
+/// The settings part owns mirrored margins, and the line-number font must be
+/// resolved before pagination because the paginator borrows the font manager
+/// immutably. Both are read only where a section is finished, so a document
+/// that uses neither takes exactly the path it took before.
+fn section_page_geometry(
+    sect_pr: &CT_SectPr,
+    input: &LayoutInput,
+    font_manager: &mut FontManager,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> PageGeometry {
+    let mut geometry = sect_pr_to_geometry(sect_pr);
+    // A vertical section fills one transposed band. Composing it with column
+    // tracks would transpose each track about its own centre while the page
+    // rotates about one, so the tracks are dropped and the fact is recorded
+    // rather than painted wrong.
+    if geometry.body_rotation.is_some() && !geometry.columns.is_empty() {
+        push_unique_diagnostic(
+            diagnostics,
+            "vertical section text is laid out in one column track".to_owned(),
+        );
+        geometry.columns = Vec::new();
+        geometry.column_separator = false;
+    }
+    if geometry.vertical_alignment == Some(ST_VerticalJc::Both) {
+        diagnostics.push(Diagnostic {
+            message: "section vertical alignment both is laid out as top, vertical distribution is not implemented"
+                .to_owned(),
+        });
+    }
+    if input.mirror_margins {
+        geometry.mirror_margins = true;
+        let gutter = sect_pr.gutter.map_or(0.0, |value| value.to_pt());
+        if input.gutter_at_top {
+            geometry.margin_top += gutter;
+        } else {
+            geometry.margin_left += gutter;
+        }
+        // The gutter moved the text measure, so the tracks resolved against
+        // the ungutttered page are stale. Clearing them first keeps a bypass
+        // in the second pass from leaving the first pass's answer behind.
+        geometry.columns = Vec::new();
+        geometry.column_separator = false;
+        geometry = resolve_column_tracks(sect_pr, geometry);
+    }
+    if let Some(line_numbers) = geometry.line_numbers.as_mut() {
+        line_numbers.font_id = font_manager.resolve_font(Some("serif"), false, false).ok();
+    }
+    geometry
 }
 
 fn section_page_number_start(sect_pr: &CT_SectPr) -> Option<usize> {
@@ -7389,7 +8065,8 @@ fn layout_header_footer(
         .any(|reference| reference.hdr_ftr_type == HdrFtrType::Even);
 
     let geometry = sect_pr_to_geometry(sect_pr);
-    let width = geometry.content_width();
+    // Headers and footers span the text measure whatever the body's columns do.
+    let width = geometry.text_measure();
 
     for href in &sect_pr.header_refs {
         let (target_blocks, target_directions, target_watermark) = match href.hdr_ftr_type {
@@ -7421,7 +8098,7 @@ fn layout_header_footer(
                 diagnostics,
                 sources,
                 width,
-                geometry,
+                geometry.clone(),
             )?;
             reference_state.merge_references(&story_num_state);
             engine
@@ -7458,7 +8135,7 @@ fn layout_header_footer(
                 diagnostics,
                 sources,
                 width,
-                geometry,
+                geometry.clone(),
             )?;
             reference_state.merge_references(&story_num_state);
             engine
@@ -7679,6 +8356,9 @@ fn layout_header_footer_variant_uncached(
             num_state,
             diagnostics,
             source,
+            // Headers and footers are page furniture laid out against their
+            // own measure, so the section grid does not reach them.
+            None,
         )?;
         blocks.push(block);
         directions.push(direction);
@@ -7823,35 +8503,934 @@ fn vml_color(value: &str) -> Option<Color> {
         .then(|| Color::from_hex(hex))
 }
 
+/// One of the four `w:rFonts` script slots, as this engine resolves them.
+///
+/// `rdocx::RunFontSlot` is the same four slots on the authoring side, but
+/// `rdocx-layout` sits below `rdocx` and cannot name it. The shape here
+/// deliberately mirrors [`WordLanguageSlot`] next to it, so a reader meets one
+/// pattern rather than two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WordFontSlot {
+    Ascii,
+    HighAnsi,
+    EastAsia,
+    ComplexScript,
+}
+
+/// Word's East Asian codepoint set.
+///
+/// Three tables ask this question, the font slot, the language slot and the
+/// rich-path gate, and asking it three times is how they drifted apart. They
+/// now ask it once. It is a superset of every codepoint `script_for_char`
+/// calls Hangul, Kana or Han, because Word draws whole CJK-adjacent blocks
+/// from `w:eastAsia` that need no complex shaping of their own.
+fn is_east_asian(codepoint: u32) -> bool {
+    matches!(
+        codepoint,
+        // Hangul jamo, including Extended-A and Extended-B, and the
+        // precomposed syllables and halfwidth jamo.
+        0x1100..=0x11ff
+            | 0xa960..=0xa97f
+            | 0xac00..=0xd7ff
+            // CJK radicals, Kangxi radicals and the ideographic description
+            // characters.
+            | 0x2e80..=0x2eff
+            | 0x2f00..=0x2fdf
+            | 0x2ff0..=0x2fff
+            // CJK punctuation, Kana, Bopomofo, Kanbun, the CJK strokes and
+            // the enclosed and compatibility blocks.
+            | 0x3000..=0x33ff
+            // Han, its extension A, the compatibility ideographs and its
+            // supplementary-plane extensions.
+            | 0x3400..=0x9fff
+            | 0xf900..=0xfaff
+            | 0x20000..=0x2fa1f
+            // CJK compatibility forms, small form variants, and the
+            // halfwidth and fullwidth forms.
+            | 0xfe30..=0xfe6f
+            | 0xff00..=0xffef
+    )
+}
+
+/// The `w:rFonts` slot one character resolves through.
+///
+/// The slot boundaries are not the [`word_language_slot`] boundaries. Word
+/// routes Devanagari and Thai through `w:cs` while their language still comes
+/// from `w:lang/@w:val`, which is why these are two tables and not one.
+///
+/// A character whose codepoint settles its own script decides its own slot and
+/// ignores `w:rFonts/@w:hint`. Everything else is Word's ambiguous set, the
+/// punctuation, symbols, digits, Greek and Cyrillic that belong to no script
+/// in particular, and there the hint decides. That is the whole reason the
+/// attribute exists, so a table that classified the ambiguous set by codepoint
+/// would leave the hint inert on exactly the characters it is written for.
+fn word_font_slot(character: char, hint: Option<&str>) -> WordFontSlot {
+    let codepoint = character as u32;
+    match codepoint {
+        // Hebrew, Arabic, Syriac, Thaana and the Arabic presentation forms,
+        // plus the Devanagari and Thai ranges Word also draws from `w:cs`.
+        0x0590..=0x08ff | 0x0900..=0x097f | 0x0e00..=0x0e7f | 0xfb1d..=0xfdff | 0xfe70..=0xfeff => {
+            WordFontSlot::ComplexScript
+        }
+        // Every CJK-adjacent block, which Word draws from `w:eastAsia`.
+        codepoint if is_east_asian(codepoint) => WordFontSlot::EastAsia,
+        // The Latin letters Word draws from `w:ascii`.
+        0x0041..=0x005a | 0x0061..=0x007a => WordFontSlot::Ascii,
+        // The Latin supplement and extensions, the IPA extensions and
+        // spacing modifier letters, Latin Extended-D and the Latin ligatures,
+        // which Word draws from `w:hAnsi`. The IPA and modifier blocks are
+        // Latin script by Unicode even though this workspace's shaping table
+        // stops at U+024F, so their slot is not in doubt either.
+        0x00c0..=0x02ff | 0x1e00..=0x1eff | 0xa720..=0xa7ff | 0xfb00..=0xfb1c => {
+            WordFontSlot::HighAnsi
+        }
+        // Word's ambiguous set. Only here does `w:hint` decide, and without
+        // one the seven-bit range keeps `w:ascii` and everything above it
+        // takes `w:hAnsi`, which is what each did before slots existed.
+        _ => match hint {
+            Some("eastAsia") => WordFontSlot::EastAsia,
+            Some("cs") => WordFontSlot::ComplexScript,
+            _ if codepoint <= 0x007f => WordFontSlot::Ascii,
+            _ => WordFontSlot::HighAnsi,
+        },
+    }
+}
+
+/// The `w:rFonts` slot a whole run resolves through.
+///
+/// One family is resolved per run, because `resolve_font_for_text` already
+/// picks one face for the run's entire text and replaces it wholesale when it
+/// cannot draw the run.
+///
+/// Only an alphabetic character claims a slot. Spaces, digits and punctuation
+/// take whatever the letters take, so they do not decide it while a letter is
+/// present. A run with no letter at all has nothing to follow, so its own
+/// characters decide instead, which is how a run of East Asian punctuation or
+/// fullwidth digits reaches `w:eastAsia`. A run of exactly that shape is
+/// ordinary in Japanese and Chinese prose, because Word splits runs at
+/// formatting, proofing and revision boundaries.
+///
+/// Both passes take the same consensus rule, so a run's answer never turns on
+/// which character the author typed first. Any disagreement resolves to
+/// `w:ascii`, because preferring either side would be wrong for the other and
+/// `w:ascii` is what such a run resolved through before any slot existed. A
+/// run of ASCII therefore resolves exactly as it always has.
+///
+/// The second pass drops its `w:ascii` candidates before counting them, since
+/// `w:ascii` is also the answer a disagreement gives, so counting them would
+/// make every run of ideographic punctuation around a space answer `w:ascii`
+/// twice over.
+fn word_font_slot_for_text(text: &str, hint: Option<&str>) -> WordFontSlot {
+    /// The one slot every candidate agrees on, `Ascii` if they disagree, or
+    /// None if there was no candidate. Generic over the iterator because it is
+    /// called with two different ones just below.
+    fn consensus(slots: impl Iterator<Item = WordFontSlot>) -> Option<WordFontSlot> {
+        let mut claimed: Option<WordFontSlot> = None;
+        for slot in slots {
+            match claimed {
+                None => claimed = Some(slot),
+                Some(existing) if existing == slot => {}
+                Some(_) => return Some(WordFontSlot::Ascii),
+            }
+        }
+        claimed
+    }
+
+    if let Some(slot) = consensus(
+        text.chars()
+            .filter(|character| character.is_alphabetic())
+            .map(|character| word_font_slot(character, hint)),
+    ) {
+        return slot;
+    }
+
+    // `w:ascii` candidates are dropped rather than counted, because `w:ascii`
+    // is also the answer a disagreement gives, so counting them would make
+    // every mixed run of punctuation answer `w:ascii` twice over.
+    consensus(
+        text.chars()
+            .map(|character| word_font_slot(character, hint))
+            .filter(|slot| *slot != WordFontSlot::Ascii),
+    )
+    .unwrap_or(WordFontSlot::Ascii)
+}
+
+/// The explicit `w:rFonts` family for one slot.
+///
+/// Word falls back to the `w:ascii` family when the slot the character wants
+/// is absent, which is also what keeps an `ascii`-only run resolving the way
+/// it always has.
+fn word_font_for_slot(
+    rpr: &rdocx_oxml::properties::CT_RPr,
+    theme: Option<&rdocx_oxml::theme::Theme>,
+    slot: WordFontSlot,
+) -> Option<String> {
+    // Explicit font name takes priority over the theme attribute beside it.
+    //
+    // Word prefers the theme attribute when a producer presents both for one
+    // slot, so this is a deliberate divergence, pre-declared under rule 5 of
+    // .claude/skills/differential-testing.md. A document authored through this
+    // facade never presents both for one slot, because setting either form
+    // clears the other, so the divergence is reachable only on a producer
+    // document the caller never edited. Leaving those bytes as written is what
+    // the no-op save contract requires.
+    let explicit = match slot {
+        WordFontSlot::Ascii => &rpr.font_ascii,
+        WordFontSlot::HighAnsi => &rpr.font_hansi,
+        WordFontSlot::EastAsia => &rpr.font_east_asia,
+        WordFontSlot::ComplexScript => &rpr.font_cs,
+    };
+    if explicit.is_some() {
+        return explicit.clone();
+    }
+
+    // Each slot reads its own theme attribute. Reading `w:asciiTheme` for
+    // every slot made `w:eastAsiaTheme` and `w:cstheme` inert and collapsed
+    // majorEastAsia, minorEastAsia, majorBidi and minorBidi onto whatever the
+    // ASCII slot named.
+    let theme_ref = match slot {
+        WordFontSlot::Ascii => &rpr.font_ascii_theme,
+        WordFontSlot::HighAnsi => &rpr.font_hansi_theme,
+        WordFontSlot::EastAsia => &rpr.font_east_asia_theme,
+        WordFontSlot::ComplexScript => &rpr.font_cs_theme,
+    }
+    .as_deref()?;
+    let theme = theme?;
+    match theme_ref {
+        // These four name the theme's `a:latin` typeface, which is the one
+        // `rdocx_oxml::theme::Theme` carries.
+        "majorAscii" | "majorHAnsi" => theme.major_font.as_deref(),
+        "minorAscii" | "minorHAnsi" => theme.minor_font.as_deref(),
+        // majorEastAsia, minorEastAsia, majorBidi and minorBidi name the
+        // theme's `a:ea` and `a:cs` typefaces. `Theme` models neither, so
+        // there is no entry to read and the answer here is None, which falls
+        // through to the run's own `w:ascii` family. Word behaves the same
+        // way, since `a:cs` is empty in every stock Office theme.
+        //
+        // Declining *here* is what stops a Latin face, which usually cannot
+        // draw the text, outranking the family the author named.
+        // `resolve_font_family` answers with that face only after both slots
+        // have declined, where there is nothing else left to answer with.
+        _ => None,
+    }
+    .map(str::to_owned)
+}
+
 /// Resolve the effective font family for a run, considering theme fonts.
 ///
-/// Priority: explicit font_ascii > theme font > None (use default).
+/// Five steps, in order. The slot's explicit family, the slot's theme font,
+/// then the same two for the `w:ascii` slot, then the Latin typeface for a
+/// non-Latin theme reference as a last resort, then None so the default
+/// applies.
+///
+/// The character's own slot is resolved completely before the `w:ascii`
+/// fallback, because returning the explicit `w:ascii` family first would leave
+/// `w:eastAsiaTheme` and `w:cstheme` exactly as inert as they were before they
+/// were read at all.
+///
+/// The last resort exists because `majorEastAsia`, `minorEastAsia`,
+/// `majorBidi` and `minorBidi` decline inside a slot, and a run whose only
+/// font property is one of those four would otherwise lose its theme typeface
+/// entirely. Declining inside the slot and answering outside it is what makes
+/// the Latin face reachable without ever letting it outrank a family the
+/// author named.
 fn resolve_font_family(
     rpr: &rdocx_oxml::properties::CT_RPr,
     theme: Option<&rdocx_oxml::theme::Theme>,
+    slot: WordFontSlot,
 ) -> Option<String> {
-    // Explicit font name takes priority
-    if rpr.font_ascii.is_some() {
-        return rpr.font_ascii.clone();
+    if let Some(family) = word_font_for_slot(rpr, theme, slot)
+        .or_else(|| word_font_for_slot(rpr, theme, WordFontSlot::Ascii))
+    {
+        return Some(family);
     }
 
-    // Resolve theme font reference
-    if let (Some(theme_ref), Some(theme)) = (&rpr.font_ascii_theme, theme) {
-        let font = match theme_ref.as_str() {
-            "majorAscii" | "majorHAnsi" | "majorBidi" | "majorEastAsia" => {
-                theme.major_font.as_deref()
+    // Last resort. The four non-Latin references decline above so they can
+    // never outrank a family the author named, but a run whose only font
+    // property is one of them has nothing else to fall back to, and the Latin
+    // typeface is a better answer for it than the engine default. This is
+    // reachable only from a producer document, since Word writes those four
+    // on `w:eastAsiaTheme` and `w:cstheme` where the run's own `w:ascii`
+    // family answers first.
+    let theme = theme?;
+    let reference = match slot {
+        WordFontSlot::Ascii => &rpr.font_ascii_theme,
+        WordFontSlot::HighAnsi => &rpr.font_hansi_theme,
+        WordFontSlot::EastAsia => &rpr.font_east_asia_theme,
+        WordFontSlot::ComplexScript => &rpr.font_cs_theme,
+    }
+    .as_deref()
+    .or(rpr.font_ascii_theme.as_deref())?;
+    match reference {
+        "majorEastAsia" | "majorBidi" => theme.major_font.as_deref(),
+        "minorEastAsia" | "minorBidi" => theme.minor_font.as_deref(),
+        _ => None,
+    }
+    .map(str::to_owned)
+}
+
+/// East Asian annotation, the shared geometry behind `w:em` and `w:ruby`.
+///
+/// Both place a second, smaller line against a base line without changing
+/// the base advance, so both are measured as one `InlineItem::Group` whose
+/// width is the base width and whose ascent already includes the annotation.
+/// `item_metrics` turns that ascent into line height, which is how a marked
+/// or annotated line becomes taller and reaches the paginator.
+///
+/// The mark and phonetic glyphs are painted inside the group rather than
+/// carried on the text segment, because a segment field would have to be
+/// sliced in step with glyph clusters at every line break and under bidi
+/// reordering, which is exactly the case count the structural rules reject.
+/// The cost is that the annotated text is one unbreakable item, so an
+/// emphasis-marked run is split at whitespace first to keep its break
+/// opportunities.
+const EMPHASIS_MARK_SCALE: f64 = 0.5;
+
+/// The glyph Word draws for one `w:em` value, and whether it sits above the
+/// base characters rather than below them.
+fn emphasis_mark_glyph(mark: &ST_Em) -> Option<(char, bool)> {
+    match mark {
+        // U+2022 BULLET for the solid dot Word draws above the character,
+        // U+FE45 SESAME DOT for the comma mark, U+25CB WHITE CIRCLE for the
+        // open circle. `underDot` is the same solid dot below the base line.
+        ST_Em::Dot => Some(('\u{2022}', true)),
+        ST_Em::Comma => Some(('\u{FE45}', true)),
+        ST_Em::Circle => Some(('\u{25CB}', true)),
+        ST_Em::UnderDot => Some(('\u{2022}', false)),
+        // `none` draws nothing, and a producer token outside the inventory
+        // names a mark this renderer has no glyph for.
+        ST_Em::None | ST_Em::Other(_) => None,
+    }
+}
+
+/// Split text into maximal whitespace and non-whitespace chunks.
+fn emphasis_chunks(text: &str) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let mut current = None;
+    for (index, character) in text.char_indices() {
+        let is_space = character.is_whitespace();
+        match current {
+            Some(previous) if previous == is_space => {}
+            Some(_) => {
+                chunks.push(&text[start..index]);
+                start = index;
             }
-            "minorAscii" | "minorHAnsi" | "minorBidi" | "minorEastAsia" => {
-                theme.minor_font.as_deref()
-            }
-            _ => None,
+            None => start = index,
+        }
+        current = Some(is_space);
+    }
+    if start < text.len() {
+        chunks.push(&text[start..]);
+    }
+    chunks
+}
+
+/// The bracket pair `w:combineBrackets` names, drawn around a combined run.
+///
+/// The ASCII pair is deliberate. Every bundled face carries it, so a combined
+/// run draws the same brackets on every host, which a fullwidth pair present
+/// in only some East Asian faces would not.
+fn combine_bracket_pair(brackets: Option<&str>) -> (&'static str, &'static str) {
+    match brackets {
+        Some("round") => ("(", ")"),
+        Some("square") => ("[", "]"),
+        Some("angle") => ("<", ">"),
+        Some("curly") => ("{", "}"),
+        _ => ("", ""),
+    }
+}
+
+/// Lay one run out under `w:eastAsianLayout`, or report that it does not apply.
+///
+/// `w:combine` compresses the run into one base-character advance inside the
+/// bracket pair `w:combineBrackets` names. `w:vert` rotates the run 90 degrees
+/// within its line, and `w:vertCompress` narrows the rotated run to one base
+/// advance. A run that sets neither returns `false` and takes the ordinary
+/// path. A run that sets this and `w:em` takes this, because combining and
+/// rotating change the run's advance while an emphasis mark decorates it.
+#[allow(clippy::too_many_arguments)]
+fn push_east_asian_layout_text(
+    inline_items: &mut Vec<InlineItem>,
+    fm: &mut FontManager,
+    layout: &CT_EastAsianLayout,
+    text: &str,
+    base: &AnnotationBase<'_>,
+    source: Option<SourceSpan>,
+) -> Result<bool> {
+    let combine = layout.combine == Some(true);
+    let vert = layout.vert == Some(true);
+    if !combine && !vert {
+        return Ok(false);
+    }
+    let metrics = fm.metrics(base.font_id, base.font_size)?;
+    let ascent = metrics.ascent.max(0.0);
+    let descent = metrics.descent.max(0.0);
+    let mut shaped = fm.shape_text(base.font_id, text, base.font_size)?;
+    if base.spacing != 0.0 {
+        for advance in &mut shaped.advances {
+            *advance += base.spacing;
+        }
+        shaped.width += base.spacing * shaped.advances.len() as f64;
+    }
+    if shaped.width <= 0.0 {
+        return Ok(false);
+    }
+
+    // One base-character advance is one em of the run's own size, which is
+    // the character cell `w:combine` fits a run into and the advance
+    // `w:vertCompress` narrows a rotated run to. It is deliberately not the
+    // run's first shaped advance: shaping returns visual order, so a
+    // right-to-left run's first advance is its logically last character, and a
+    // run that begins with a space would collapse into the space.
+    let base_advance = base.font_size;
+
+    let raise = base.baseline_offset;
+    let group_ascent = ascent + raise.max(0.0);
+    let group_descent = descent + (-raise).max(0.0);
+    let baseline = group_ascent - raise;
+    let glyph_run = |x: f64, y: f64, shaped: &ShapedText, text: &str| {
+        PositionedElement::Text(GlyphRun {
+            origin: Point { x, y },
+            font_id: base.font_id,
+            font_size: base.font_size,
+            glyph_ids: shaped.glyph_ids.clone(),
+            advances: shaped.advances.clone(),
+            text: text.to_owned(),
+            source,
+            color: base.color,
+            bold: base.bold,
+            italic: base.italic,
+            field_kind: None,
+            field_source: None,
+            note: None,
+        })
+    };
+
+    if combine {
+        let cell = base_advance;
+        let (open, close) = combine_bracket_pair(layout.combine_brackets.as_deref());
+        let open_shaped = match open.is_empty() {
+            true => None,
+            false => Some(fm.shape_text(base.font_id, open, base.font_size)?),
         };
-        if let Some(f) = font {
-            return Some(f.to_string());
+        let close_shaped = match close.is_empty() {
+            true => None,
+            false => Some(fm.shape_text(base.font_id, close, base.font_size)?),
+        };
+        let open_width = open_shaped.as_ref().map_or(0.0, |shaped| shaped.width);
+        let close_width = close_shaped.as_ref().map_or(0.0, |shaped| shaped.width);
+        let width = open_width + cell + close_width;
+        let mut children = Vec::new();
+        if let Some(highlight) = base.highlight {
+            children.push(PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width,
+                    height: group_ascent + group_descent,
+                },
+                color: highlight,
+            });
+        }
+        if let Some(ref open_shaped) = open_shaped {
+            children.push(glyph_run(0.0, baseline, open_shaped, open));
+        }
+        children.push(PositionedElement::Group(GroupElement {
+            transform: Transform {
+                a: cell / shaped.width,
+                e: open_width,
+                ..Transform::IDENTITY
+            },
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: vec![glyph_run(0.0, baseline, &shaped, text)],
+        }));
+        if let Some(ref close_shaped) = close_shaped {
+            children.push(glyph_run(open_width + cell, baseline, close_shaped, close));
+        }
+        push_annotation_decorations(&mut children, base, baseline, width, ascent, descent);
+        inline_items.push(InlineItem::Group {
+            width,
+            height: group_ascent + group_descent,
+            baseline: Some(group_ascent),
+            group: GroupElement {
+                transform: Transform::IDENTITY,
+                clip: None,
+                opacity: 1.0,
+                effects: Vec::new(),
+                children,
+            },
+        });
+        return Ok(true);
+    }
+
+    // `w:vert`. The run is laid out horizontally and rotated 90 degrees, so
+    // its own line height becomes the advance it takes along the line and its
+    // text length becomes the height it needs.
+    let thickness = group_ascent + group_descent;
+    if thickness <= 0.0 {
+        return Ok(false);
+    }
+    // A compressed run is narrowed to one base-character advance, and never
+    // widened, because compression may only take space away.
+    let compressed = layout.vert_compress == Some(true) && base_advance < thickness;
+    let width = if compressed { base_advance } else { thickness };
+    let mut children = Vec::new();
+    if let Some(highlight) = base.highlight {
+        children.push(PositionedElement::FilledRect {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: shaped.width,
+                height: thickness,
+            },
+            color: highlight,
+        });
+    }
+    children.push(glyph_run(0.0, baseline, &shaped, text));
+    push_annotation_decorations(&mut children, base, baseline, shaped.width, ascent, descent);
+    // Rotate about the group origin, then bring the rotated box back into
+    // positive x, then narrow it when `w:vertCompress` asked for that.
+    let mut transform = Transform::rotate_about(90.0, 0.0, 0.0).then(Transform {
+        e: thickness,
+        ..Transform::IDENTITY
+    });
+    if compressed {
+        transform = transform.then(Transform {
+            a: width / thickness,
+            ..Transform::IDENTITY
+        });
+    }
+    inline_items.push(InlineItem::Group {
+        width,
+        height: shaped.width,
+        baseline: None,
+        group: GroupElement {
+            transform,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children,
+        },
+    });
+    Ok(true)
+}
+
+/// The base run style an annotation draws against.
+struct AnnotationBase<'a> {
+    font_id: FontId,
+    font_size: f64,
+    color: Color,
+    bold: bool,
+    italic: bool,
+    baseline_offset: f64,
+    spacing: f64,
+    underline: Option<Underline>,
+    strike: bool,
+    dstrike: bool,
+    highlight: Option<Color>,
+    font_family: Option<&'a str>,
+}
+
+/// Record a diagnostic once, matching the media registry's dedupe by message.
+pub(crate) fn push_unique_diagnostic(diagnostics: &mut Vec<Diagnostic>, message: String) {
+    if !diagnostics.iter().any(|entry| entry.message == message) {
+        diagnostics.push(Diagnostic { message });
+    }
+}
+
+/// Draw the decorations a `TextSegment` would have carried, in group-local
+/// coordinates against a baseline at `baseline`.
+fn push_annotation_decorations(
+    children: &mut Vec<PositionedElement>,
+    base: &AnnotationBase<'_>,
+    baseline: f64,
+    width: f64,
+    ascent: f64,
+    descent: f64,
+) {
+    let line_at = |y: f64, thickness: f64, children: &mut Vec<PositionedElement>| {
+        children.push(PositionedElement::Line {
+            start: Point { x: 0.0, y },
+            end: Point { x: width, y },
+            width: thickness,
+            color: base.color,
+            dash_pattern: None,
+        });
+    };
+    if let Some(style) = base.underline {
+        let underline_y = baseline + descent * 0.3;
+        let thickness = match style {
+            Underline::Thick => base.font_size / 12.0,
+            Underline::Double => base.font_size / 24.0,
+            _ => base.font_size / 18.0,
+        };
+        line_at(underline_y, thickness, children);
+        if style == Underline::Double {
+            line_at(underline_y + thickness * 2.5, thickness, children);
         }
     }
+    let thickness = base.font_size / 24.0;
+    let strike_y = baseline - ascent * 0.3;
+    if base.strike {
+        line_at(strike_y, thickness, children);
+    }
+    if base.dstrike {
+        let gap = thickness * 2.0;
+        line_at(strike_y - gap / 2.0, thickness, children);
+        line_at(strike_y + gap / 2.0, thickness, children);
+    }
+}
 
-    None
+/// Project one emphasis-marked text run into inline items.
+///
+/// Reports `false` when the mark cannot be drawn, which leaves the caller on
+/// the ordinary text path so the base text is painted unchanged. An
+/// undrawable mark codepoint records a diagnostic and paints nothing, which
+/// is the policy the uncovered-character path already follows.
+fn push_emphasis_marked_text(
+    inline_items: &mut Vec<InlineItem>,
+    fm: &mut FontManager,
+    diagnostics: &mut Vec<Diagnostic>,
+    mark: &ST_Em,
+    text: &str,
+    base: &AnnotationBase<'_>,
+) -> Result<bool> {
+    let Some((glyph, above)) = emphasis_mark_glyph(mark) else {
+        return Ok(false);
+    };
+    let mark_text = glyph.to_string();
+    let mark_size = base.font_size * EMPHASIS_MARK_SCALE;
+    let mark_font =
+        fm.resolve_font_for_text(base.font_family, base.bold, base.italic, &mark_text)?;
+    let mark_shaped = fm.shape_text(mark_font, &mark_text, mark_size)?;
+    if mark_shaped.glyph_ids.is_empty() || mark_shaped.glyph_ids.contains(&0) {
+        push_unique_diagnostic(
+            diagnostics,
+            format!(
+                "emphasis mark {} has no glyph in the resolved font and is not painted",
+                mark.as_str()
+            ),
+        );
+        return Ok(false);
+    }
+    let mark_metrics = fm.metrics(mark_font, mark_size)?;
+    let metrics = fm.metrics(base.font_id, base.font_size)?;
+    let ascent = metrics.ascent.max(0.0);
+    let descent = metrics.descent.max(0.0);
+    let mark_ascent = mark_metrics.ascent.max(0.0);
+    let mark_descent = mark_metrics.descent.max(0.0);
+    let mark_height = mark_ascent + mark_descent;
+
+    let raise = base.baseline_offset;
+    let group_ascent = if above { ascent + mark_height } else { ascent } + raise.max(0.0);
+    let group_descent = if above {
+        descent
+    } else {
+        descent + mark_height
+    } + (-raise).max(0.0);
+    let baseline = group_ascent - raise;
+    let mark_baseline = if above {
+        baseline - ascent - mark_descent
+    } else {
+        baseline + descent + mark_ascent
+    };
+
+    for chunk in emphasis_chunks(text) {
+        let mut shaped = fm.shape_text(base.font_id, chunk, base.font_size)?;
+        if base.spacing != 0.0 {
+            for advance in &mut shaped.advances {
+                *advance += base.spacing;
+            }
+            shaped.width += base.spacing * shaped.advances.len() as f64;
+        }
+        let characters = chunk.chars().collect::<Vec<_>>();
+        let mut children = Vec::new();
+        if let Some(highlight) = base.highlight {
+            children.push(PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: shaped.width,
+                    height: group_ascent + group_descent,
+                },
+                color: highlight,
+            });
+        }
+        children.push(PositionedElement::Text(GlyphRun {
+            origin: Point {
+                x: 0.0,
+                y: baseline,
+            },
+            font_id: base.font_id,
+            font_size: base.font_size,
+            glyph_ids: shaped.glyph_ids.clone(),
+            advances: shaped.advances.clone(),
+            text: chunk.to_owned(),
+            source: None,
+            color: base.color,
+            bold: base.bold,
+            italic: base.italic,
+            field_kind: None,
+            field_source: None,
+            note: None,
+        }));
+        push_annotation_decorations(&mut children, base, baseline, shaped.width, ascent, descent);
+
+        // One mark per base character. Glyphs and characters correspond one
+        // to one for the scripts `w:em` applies to, and when shaping has
+        // merged them the marks fall back to an even share of the chunk so
+        // the count still matches the characters.
+        let advances = if shaped.advances.len() == characters.len() {
+            shaped.advances.clone()
+        } else if characters.is_empty() {
+            Vec::new()
+        } else {
+            vec![shaped.width / characters.len() as f64; characters.len()]
+        };
+        let mut x = 0.0;
+        for (character, advance) in characters.iter().zip(&advances) {
+            if !character.is_whitespace() {
+                children.push(PositionedElement::Text(GlyphRun {
+                    origin: Point {
+                        x: x + (advance - mark_shaped.width) / 2.0,
+                        y: mark_baseline,
+                    },
+                    font_id: mark_font,
+                    font_size: mark_size,
+                    glyph_ids: mark_shaped.glyph_ids.clone(),
+                    advances: mark_shaped.advances.clone(),
+                    text: mark_text.clone(),
+                    source: None,
+                    color: base.color,
+                    bold: false,
+                    italic: false,
+                    field_kind: None,
+                    field_source: None,
+                    note: None,
+                }));
+            }
+            x += advance;
+        }
+
+        inline_items.push(InlineItem::Group {
+            width: shaped.width,
+            height: group_ascent + group_descent,
+            baseline: Some(group_ascent),
+            group: GroupElement {
+                transform: Transform::IDENTITY,
+                clip: None,
+                opacity: 1.0,
+                effects: Vec::new(),
+                children,
+            },
+        });
+    }
+    Ok(true)
+}
+
+/// One measured annotation line, with its glyph runs laid out from x = 0 on
+/// a baseline at y = 0.
+struct AnnotationLine {
+    width: f64,
+    ascent: f64,
+    descent: f64,
+    /// The size the first painted run resolved to, which is what a ruby
+    /// annotation halves when `w:hps` is absent.
+    primary_font_size: f64,
+    runs: Vec<GlyphRun>,
+}
+
+/// The paragraph context an annotation resolves its runs against.
+struct AnnotationContext<'a> {
+    styles: &'a CT_Styles,
+    input: &'a LayoutInput,
+    para_style_id: Option<&'a str>,
+    table_run_properties: Option<&'a CT_RPr>,
+}
+
+/// Shape a sequence of runs onto one baseline.
+///
+/// `size_override` is the size `w:hps` and `w:hpsBaseText` fix for the whole
+/// line, which is why it wins over the run's own `w:sz`.
+fn measure_annotation_line(
+    runs: &[CT_R],
+    context: &AnnotationContext<'_>,
+    fm: &mut FontManager,
+    size_override: Option<f64>,
+) -> Result<AnnotationLine> {
+    let mut line = AnnotationLine {
+        width: 0.0,
+        ascent: 0.0,
+        descent: 0.0,
+        primary_font_size: size_override.unwrap_or(0.0),
+        runs: Vec::new(),
+    };
+    for run in runs {
+        let run_style_id = run.properties.as_ref().and_then(|p| p.style_id.as_deref());
+        let mut effective_rpr = style_resolver::resolve_run_properties(
+            context.para_style_id,
+            run_style_id,
+            context.styles,
+            context.table_run_properties,
+        );
+        if let Some(ref direct_rpr) = run.properties {
+            effective_rpr.merge_from(direct_rpr);
+        }
+        if effective_rpr.vanish == Some(true) {
+            continue;
+        }
+        let text = run.text();
+        if text.is_empty() {
+            continue;
+        }
+        let font_size =
+            size_override.unwrap_or_else(|| effective_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0));
+        let bold = effective_rpr.bold.unwrap_or(false);
+        let italic = effective_rpr.italic.unwrap_or(false);
+        let family = resolve_font_family(
+            &effective_rpr,
+            context.input.theme.as_ref(),
+            word_font_slot_for_text(&text, effective_rpr.font_hint.as_deref()),
+        );
+        let font_id = fm.resolve_font_for_text(family.as_deref(), bold, italic, &text)?;
+        let shaped = fm.shape_text(font_id, &text, font_size)?;
+        let metrics = fm.metrics(font_id, font_size)?;
+        if line.runs.is_empty() {
+            line.primary_font_size = font_size;
+        }
+        line.ascent = line.ascent.max(metrics.ascent.max(0.0));
+        line.descent = line.descent.max(metrics.descent.max(0.0));
+        line.runs.push(GlyphRun {
+            origin: Point {
+                x: line.width,
+                y: 0.0,
+            },
+            font_id,
+            font_size,
+            glyph_ids: shaped.glyph_ids,
+            advances: shaped.advances,
+            text,
+            source: None,
+            color: resolve_run_color(&effective_rpr, context.input.theme.as_ref()),
+            bold,
+            italic,
+            field_kind: None,
+            field_source: None,
+            note: None,
+        });
+        line.width += shaped.width;
+    }
+    Ok(line)
+}
+
+/// Distribute a phonetic line over the base width per `w:rubyAlign`.
+///
+/// The two distribute modes widen the gaps between phonetic glyphs, which is
+/// what the mode names describe, so they act on the glyph advances rather
+/// than on the line origin the other modes move.
+fn distribute_ruby_line(line: &mut AnnotationLine, align: Option<&ST_RubyAlign>, width: f64) {
+    let slack = width - line.width;
+    if slack <= 0.0 {
+        return;
+    }
+    let glyphs = line
+        .runs
+        .iter()
+        .map(|run| run.advances.len())
+        .sum::<usize>();
+    let (start, gap) = match align.unwrap_or(&ST_RubyAlign::Center) {
+        ST_RubyAlign::Left => (0.0, 0.0),
+        ST_RubyAlign::Right | ST_RubyAlign::RightVertical => (slack, 0.0),
+        ST_RubyAlign::DistributeLetter if glyphs > 1 => (0.0, slack / (glyphs - 1) as f64),
+        ST_RubyAlign::DistributeSpace if glyphs > 0 => {
+            let gap = slack / (glyphs + 1) as f64;
+            (gap, gap)
+        }
+        // Centre is the fallback for the remaining tokens, including a
+        // producer value this renderer has no distribution rule for.
+        _ => (slack / 2.0, 0.0),
+    };
+    let mut x = start;
+    let mut remaining = glyphs;
+    for run in &mut line.runs {
+        run.origin.x = x;
+        for advance in &mut run.advances {
+            remaining -= 1;
+            if remaining > 0 {
+                *advance += gap;
+            }
+            x += *advance;
+        }
+    }
+    line.width = width;
+}
+
+/// Project one ruby annotation into an inline item.
+///
+/// The base line and the phonetic line are measured independently, the
+/// phonetic line is placed above the base at `w:hpsRaise` in the `w:hps`
+/// size, and the annotation's ascent carries both, which is what makes a
+/// ruby-bearing line taller for the paginator.
+fn ruby_inline_item(
+    ruby: &CT_Ruby,
+    base_runs: &[CT_R],
+    context: &AnnotationContext<'_>,
+    fm: &mut FontManager,
+) -> Result<Option<InlineItem>> {
+    let properties = ruby.properties.as_ref();
+    let base_override = properties
+        .and_then(|properties| properties.hps_base_text)
+        .map(|size| size.to_pt());
+    let mut base = measure_annotation_line(base_runs, context, fm, base_override)?;
+    if base.runs.is_empty() {
+        return Ok(None);
+    }
+    let phonetic_size = properties
+        .and_then(|properties| properties.hps)
+        .map(|size| size.to_pt())
+        .unwrap_or(base.primary_font_size / 2.0);
+    let mut phonetic = measure_annotation_line(&ruby.ruby_text, context, fm, Some(phonetic_size))?;
+
+    let width = base.width.max(phonetic.width);
+    let raise = properties
+        .and_then(|properties| properties.hps_raise)
+        .map(|size| size.to_pt())
+        .unwrap_or(base.ascent + phonetic.descent);
+    let group_ascent = base.ascent.max(raise + phonetic.ascent);
+    let group_descent = base.descent;
+
+    distribute_ruby_line(&mut base, Some(&ST_RubyAlign::Center), width);
+    distribute_ruby_line(
+        &mut phonetic,
+        properties.and_then(|properties| properties.align.as_ref()),
+        width,
+    );
+
+    let mut children = Vec::new();
+    for mut run in base.runs {
+        run.origin.y = group_ascent;
+        children.push(PositionedElement::Text(run));
+    }
+    for mut run in phonetic.runs {
+        run.origin.y = group_ascent - raise;
+        children.push(PositionedElement::Text(run));
+    }
+
+    Ok(Some(InlineItem::Group {
+        width,
+        height: group_ascent + group_descent,
+        baseline: Some(group_ascent),
+        group: GroupElement {
+            transform: Transform::IDENTITY,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children,
+        },
+    }))
 }
 
 /// Resolve the effective color for a run, considering theme colors.
@@ -7866,6 +9445,18 @@ fn resolve_run_color(
         && let Some(theme) = theme
         && let Some(hex) = theme.colors.get(theme_name)
     {
+        // `w:themeTint` and `w:themeShade` are Word's 0-255 byte convention,
+        // which is exactly what `rdocx_oxml::theme::apply_tint_shade` takes.
+        // Its arithmetic is Word's, deliberately not the spec-correct
+        // DrawingML one, and it is called unchanged. See
+        // docs/hld/05-drawingml-model.md, "Do not touch the Word path".
+        if rpr.color_theme_tint.is_some() || rpr.color_theme_shade.is_some() {
+            return Color::from_hex(&rdocx_oxml::theme::apply_tint_shade(
+                hex,
+                rpr.color_theme_tint,
+                rpr.color_theme_shade,
+            ));
+        }
         return Color::from_hex(hex);
     }
 
@@ -7877,7 +9468,7 @@ fn resolve_run_color(
         .unwrap_or(Color::BLACK)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WordLanguageSlot {
     Direct,
     EastAsia,
@@ -7887,8 +9478,25 @@ enum WordLanguageSlot {
 fn word_language_slot(character: char) -> Option<WordLanguageSlot> {
     match character as u32 {
         0x0590..=0x08ff | 0xfb1d..=0xfdff | 0xfe70..=0xfeff => Some(WordLanguageSlot::Bidi),
-        0x3000..=0x30ff | 0x3400..=0x9fff | 0xf900..=0xfaff => Some(WordLanguageSlot::EastAsia),
-        0x0041..=0x024f | 0x0900..=0x097f | 0x0e00..=0x0e7f | 0x1e00..=0x1eff => {
+        // A character East Asian to one table and absent from this one would
+        // be attached to whichever slot preceded it, and at the start of a
+        // run that is the direct slot, so it would silently take
+        // `w:lang/@w:val` where Word takes `@w:eastAsia`.
+        codepoint if is_east_asian(codepoint) => Some(WordLanguageSlot::EastAsia),
+        // The Latin letters, including the IPA extensions, which are letters
+        // in their own right.
+        //
+        // This stops short of the spacing modifier letters and modifier
+        // symbols at 0x02b0..=0x02ff, which `word_font_slot` does claim for
+        // `w:hAnsi`. The two tables have different residual cases, so
+        // mirroring a boundary between them is the wrong operation. `None`
+        // here means inherit, and `word_language_ranges` leaves an unclaimed
+        // character inside the range it fell in, which is what a modifier
+        // should do. Claiming them would split a Bopomofo syllable from its
+        // tone mark, since `U+02C7`, `U+02CA`, `U+02CB` and `U+02D9` all live
+        // there, and hand the mark `w:lang/@w:val` where Word keeps the
+        // syllable's `@w:eastAsia`.
+        0x0041..=0x02af | 0x0900..=0x097f | 0x0e00..=0x0e7f | 0x1e00..=0x1eff => {
             Some(WordLanguageSlot::Direct)
         }
         _ => None,
@@ -7906,6 +9514,20 @@ fn word_language_for_slot(style: &WordMultilingualStyle, slot: WordLanguageSlot)
             .language_bidi
             .clone()
             .or_else(|| style.language.clone()),
+    }
+}
+
+/// The advance one character adds beyond its own glyph advance.
+///
+/// `w:spacing` is the run's own character spacing. A `linesAndChars` or
+/// `snapToChars` section grid adds `w:charSpace` on top of it, and a run that
+/// opts out with `w:snapToGrid w:val="0"` keeps only its own spacing.
+fn word_character_advance_pt(rpr: &CT_RPr, grid_char_space_pt: f64) -> f64 {
+    let spacing = rpr.spacing.map_or(0.0, |value| value.to_pt());
+    if rpr.snap_to_grid == Some(false) {
+        spacing
+    } else {
+        spacing + grid_char_space_pt
     }
 }
 
@@ -7980,19 +9602,32 @@ fn word_multilingual_segment_slice(
     Ok(slice)
 }
 
+/// Whether this text needs the rich shaping path rather than the legacy one.
+///
+/// The East Asian half is the same shared set the font and language tables
+/// use, so no character is East Asian to one of the three and invisible to
+/// another. The rest is every range `script_for_char` gives a non-Latin
+/// script identity, which is why Hangul is here at all. Without it Korean
+/// text never reached the shaper, and giving Hangul a script identity one
+/// layer down would have changed nothing.
+///
+/// A paragraph that lands on this path leaves the paragraph block cache, since
+/// `inline_bytes` cannot bound the retained size of a rich inline item and
+/// scores it `usize::MAX`. That has always been true of Arabic, Hebrew and
+/// CJK, and is now true of Korean.
 fn needs_word_multilingual_layout(text: &str) -> bool {
     text.chars().any(|character| {
-        matches!(
-            character as u32,
-            0x0590..=0x08ff
-                | 0x0900..=0x097f
-                | 0x0e00..=0x0e7f
-                | 0x3000..=0x30ff
-                | 0x3400..=0x9fff
-                | 0xf900..=0xfaff
-                | 0xfb1d..=0xfdff
-                | 0xfe70..=0xfeff
-        )
+        let codepoint = character as u32;
+        is_east_asian(codepoint)
+            || matches!(
+                codepoint,
+                0x0590..=0x08ff
+                    | 0x0900..=0x097f
+                    | 0x0e00..=0x0e7f
+                    | 0xa8e0..=0xa8ff
+                    | 0xfb1d..=0xfdff
+                    | 0xfe70..=0xfeff
+            )
     })
 }
 
@@ -9154,6 +10789,9 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -9745,6 +11383,7 @@ mod tests {
             &mut fonts,
             &mut numbering,
             &mut diagnostics,
+            None,
             None,
         )
         .expect("field-only paragraph lays out");
@@ -11291,12 +12930,19 @@ mod tests {
         assert_eq!(engine.paragraph_cache_counts(), (699, 701));
     }
 
+    /// A long body of cacheable paragraphs interleaved with safe tables.
+    ///
+    /// The text is deliberately Latin. A paragraph carrying a complex script
+    /// takes the rich multilingual path, whose inline items `inline_bytes`
+    /// scores as `usize::MAX` because their retained size cannot be bounded,
+    /// so such a paragraph is never admitted to the block cache and cannot
+    /// exercise the reuse these tests exist to prove.
     fn mixed_editor_input() -> LayoutInput {
         let mut input = make_input_with_text("");
         input.document.body.content.clear();
         for index in 0..700 {
             let mut paragraph = CT_P::new();
-            paragraph.add_run(&format!("편집 paragraph {index:03} stable line"));
+            paragraph.add_run(&format!("edited paragraph {index:03} stable line"));
             input.document.body.add_paragraph(paragraph);
             if index % 50 == 49 {
                 input
@@ -11334,7 +12980,7 @@ mod tests {
         assert_eq!(engine.hot_path_work_counts(), (0, 0));
 
         mixed_editor_paragraph_mut(&mut input, 350).runs[0].content = vec![RunContent::Text(
-            rdocx_oxml::text::CT_Text::new("편집 paragraph 350 changed line"),
+            rdocx_oxml::text::CT_Text::new("edited paragraph 350 changed line"),
         )];
         let warm = engine.layout(&input).expect("mixed warm layout");
         let fresh = Engine::new_deterministic()
@@ -12382,6 +14028,7 @@ mod tests {
                 None,
                 &WordStory::Document,
                 &[0],
+                None,
             )
             .expect("real table container lays out");
         let SharedLayoutBlock::Table { semantics, .. } = shared else {
@@ -14609,6 +16256,7 @@ mod tests {
                     paragraph,
                     content_width_bits: PageGeometry::default().content_width().to_bits(),
                     revision_view: RevisionView::Accepted,
+                    doc_grid: None,
                 },
                 block: template.block.clone(),
                 diagnostics: template.diagnostics.clone(),
@@ -14687,6 +16335,7 @@ mod tests {
         block.reflow = Some(Box::new(block::ParagraphReflow {
             items: vec![InlineItem::Text(retained)],
             params: oxml_layout::LineBreakParams::default(),
+            grid_line_pitch_pt: None,
         }));
         let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
             panic!("body paragraph");
@@ -14702,6 +16351,7 @@ mod tests {
                 paragraph: paragraph.clone(),
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
                 revision_view: RevisionView::Accepted,
+                doc_grid: None,
             },
             block: Arc::new(block),
             diagnostics: Vec::new(),
@@ -14806,6 +16456,7 @@ mod tests {
                 paragraph,
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
                 revision_view: RevisionView::Accepted,
+                doc_grid: None,
             },
             block,
             diagnostics: Vec::new(),
@@ -15425,6 +17076,9 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -15530,6 +17184,7 @@ mod tests {
             is_first_row,
             is_last_row: !is_first_row,
             v_align: None,
+            rotation: None,
         };
         let table = table::TableBlock {
             structure_id: None,
@@ -15540,18 +17195,22 @@ mod tests {
                     cells: vec![cell(true)],
                     height: 12.0,
                     is_header: true,
+                    offset_left: 0.0,
                 },
                 table::TableRow {
                     structure_id: None,
                     cells: vec![cell(false)],
                     height: 12.0,
                     is_header: false,
+                    offset_left: 0.0,
                 },
             ],
             header_row_indices: vec![0],
             table_width: 100.0,
             table_indent: 0.0,
             borders: None,
+            bidi_visual: false,
+            floating: None,
         };
         let mut sections = [paginator::Section {
             blocks: vec![
@@ -15939,6 +17598,9 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16002,6 +17664,9 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16083,6 +17748,9 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16260,6 +17928,9 @@ mod tests {
             LayoutInput {
                 revision_view: crate::input::RevisionView::Accepted,
                 automatic_hyphenation: false,
+                mirror_margins: false,
+                gutter_at_top: false,
+                default_tab_stop: None,
                 math_properties: None,
                 document: doc,
                 styles: CT_Styles::new_default(),
@@ -16389,6 +18060,9 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16682,6 +18356,9 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16826,6 +18503,9 @@ mod tests {
             LayoutInput {
                 revision_view: crate::input::RevisionView::Accepted,
                 automatic_hyphenation: false,
+                mirror_margins: false,
+                gutter_at_top: false,
+                default_tab_stop: None,
                 math_properties: None,
                 document: doc,
                 styles: CT_Styles::new_default(),
@@ -16954,6 +18634,9 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17284,6 +18967,9 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17368,6 +19054,9 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17472,6 +19161,9 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17668,6 +19360,9 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -18373,5 +20068,579 @@ mod tests {
             .expect("fresh sourced layout");
         let fresh = fresh_engine.take_body_fragments();
         assert_eq!(warm, fresh);
+    }
+
+    #[test]
+    fn korean_text_takes_the_east_asian_language_slot() {
+        for character in ['안', '녕', '\u{1100}', '\u{3131}', '\u{d7a3}'] {
+            assert_eq!(
+                word_language_slot(character),
+                Some(WordLanguageSlot::EastAsia),
+                "{character:?} is East Asian"
+            );
+        }
+        // The answers that already existed must not move.
+        for character in ['あ', 'ン', '中', '\u{f900}'] {
+            assert_eq!(
+                word_language_slot(character),
+                Some(WordLanguageSlot::EastAsia),
+                "{character:?} stays East Asian"
+            );
+        }
+        for character in ['ש', 'ع'] {
+            assert_eq!(word_language_slot(character), Some(WordLanguageSlot::Bidi));
+        }
+        for character in ['A', 'क', 'ก'] {
+            assert_eq!(
+                word_language_slot(character),
+                Some(WordLanguageSlot::Direct)
+            );
+        }
+    }
+
+    /// A modifier must not break the language run it modifies.
+    ///
+    /// `word_language_slot` returning `None` means inherit, and
+    /// `word_language_ranges` leaves an unclaimed character inside the range
+    /// it fell in. Returning `Some(Direct)` instead starts a new range. So the
+    /// boundary between the two is load bearing in a way the font table has no
+    /// equivalent of, since that table has no inherit answer at all, and
+    /// mirroring its boundary onto this one is the wrong operation. This test
+    /// states the boundary so it cannot move again without saying so.
+    #[test]
+    fn a_latin_letter_takes_the_direct_language_slot_and_a_modifier_inherits() {
+        // IPA extensions are letters in their own right and take the direct
+        // slot.
+        for codepoint in 0x0250..=0x02af_u32 {
+            let character = char::from_u32(codepoint).expect("BMP scalar");
+            assert_eq!(
+                word_language_slot(character),
+                Some(WordLanguageSlot::Direct),
+                "U+{codepoint:04X} is a letter"
+            );
+        }
+
+        // Spacing modifier letters and modifier symbols carry no language of
+        // their own, so they inherit.
+        for codepoint in 0x02b0..=0x02ff_u32 {
+            let character = char::from_u32(codepoint).expect("BMP scalar");
+            assert_eq!(
+                word_language_slot(character),
+                None,
+                "U+{codepoint:04X} is a modifier and must inherit"
+            );
+        }
+
+        // The case that makes it matter. A Bopomofo syllable and its tone mark
+        // are one East Asian language range, not a syllable plus a stray
+        // direct range whose text is shaped as its own slice.
+        let text = "\u{3105}\u{02cb}";
+        let ranges = word_language_ranges(text);
+        assert_eq!(ranges.len(), 1, "{ranges:?}");
+        assert_eq!(ranges[0].0, 0);
+        assert_eq!(ranges[0].1, text.len());
+        assert_eq!(ranges[0].2, WordLanguageSlot::EastAsia);
+    }
+
+    fn slot_fonts() -> rdocx_oxml::properties::CT_RPr {
+        rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("AsciiFace".to_owned()),
+            font_hansi: Some("HighAnsiFace".to_owned()),
+            font_east_asia: Some("EastAsiaFace".to_owned()),
+            font_cs: Some("ComplexFace".to_owned()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn run_fonts_resolve_from_the_matching_script_slot() {
+        let rpr = slot_fonts();
+        for (character, expected) in [
+            ('A', "AsciiFace"),
+            ('\u{2014}', "HighAnsiFace"),
+            ('É', "HighAnsiFace"),
+            ('안', "EastAsiaFace"),
+            ('こ', "EastAsiaFace"),
+            ('中', "EastAsiaFace"),
+            ('ש', "ComplexFace"),
+            ('ع', "ComplexFace"),
+            ('क', "ComplexFace"),
+            ('ก', "ComplexFace"),
+        ] {
+            let slot = word_font_slot(character, None);
+            assert_eq!(
+                resolve_font_family(&rpr, None, slot).as_deref(),
+                Some(expected),
+                "{character:?} resolves through its own slot"
+            );
+        }
+
+        // An absent slot falls back to the ASCII family, which is both what
+        // Word does and what keeps an ascii-only run resolving as it always
+        // has.
+        let ascii_only = rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("AsciiFace".to_owned()),
+            ..Default::default()
+        };
+        for character in ['A', '\u{2014}', '안', 'ש'] {
+            let slot = word_font_slot(character, None);
+            assert_eq!(
+                resolve_font_family(&ascii_only, None, slot).as_deref(),
+                Some("AsciiFace"),
+                "{character:?} falls back to the ascii family"
+            );
+        }
+    }
+
+    #[test]
+    fn a_font_hint_decides_only_the_ambiguous_slot() {
+        let rpr = slot_fonts();
+
+        // Word's ambiguous set is what its own table calls Common, the
+        // punctuation, symbols, digits, Greek and Cyrillic that belong to no
+        // script. These are the characters `w:hint` exists for, so a table
+        // that classified them by codepoint would leave the attribute inert
+        // on exactly the text a real document writes it for.
+        for ambiguous in [
+            '\u{2014}', '\u{2022}', '\u{2026}', '\u{24ff}', '\u{25a0}', '\u{03b1}', '\u{0410}',
+            '7', '\u{0085}',
+        ] {
+            assert_eq!(
+                word_font_slot(ambiguous, Some("eastAsia")),
+                WordFontSlot::EastAsia,
+                "{ambiguous:?} follows an eastAsia hint"
+            );
+            assert_eq!(
+                word_font_slot(ambiguous, Some("cs")),
+                WordFontSlot::ComplexScript,
+                "{ambiguous:?} follows a cs hint"
+            );
+        }
+        assert_eq!(
+            resolve_font_family(&rpr, None, word_font_slot('\u{2014}', Some("eastAsia")))
+                .as_deref(),
+            Some("EastAsiaFace")
+        );
+
+        // Without a hint the seven-bit range keeps `w:ascii` and everything
+        // above it takes `w:hAnsi`, which is what each took before slots
+        // existed.
+        assert_eq!(word_font_slot('7', None), WordFontSlot::Ascii);
+        assert_eq!(word_font_slot('\u{2014}', None), WordFontSlot::HighAnsi);
+
+        // A character whose codepoint settles its own script ignores the hint
+        // entirely.
+        for settled in ['A', 'z', '\u{00e9}', '안', 'こ', '世', 'ש', 'ع', 'क', 'ก'] {
+            for hint in [None, Some("eastAsia"), Some("cs"), Some("default")] {
+                assert_eq!(
+                    word_font_slot(settled, hint),
+                    word_font_slot(settled, None),
+                    "{settled:?} settles its own slot, so {hint:?} must not move it"
+                );
+            }
+        }
+    }
+
+    /// The four non-Latin theme references must never outrank the family the
+    /// author named.
+    ///
+    /// The plan asked for `majorEastAsia`, `minorEastAsia`, `majorBidi` and
+    /// `minorBidi` to read their own theme entry rather than collapsing onto
+    /// the ASCII theme font. They now read their own `w:rFonts` attribute,
+    /// but the entry those attributes name is the theme's `a:ea` and `a:cs`
+    /// typeface, and `rdocx_oxml::theme::Theme` carries only `a:latin`.
+    /// Modelling those two is a parser change this story's risk routing
+    /// excludes.
+    ///
+    /// So the four decline inside a slot, and a run that also names a family
+    /// keeps that family. They answer with the Latin typeface only as a last
+    /// resort, after every slot has declined, so a run whose sole font
+    /// property is one of the four still resolves to a face rather than
+    /// dropping to the engine default. Both halves are asserted below,
+    /// because either one alone is a defect a previous pass found.
+    #[test]
+    fn east_asia_and_bidi_theme_references_never_outrank_the_family_the_author_named() {
+        let theme = rdocx_oxml::theme::Theme {
+            colors: Default::default(),
+            major_font: Some("MajorFace".to_owned()),
+            minor_font: Some("MinorFace".to_owned()),
+        };
+
+        // Word's own docDefaults shape: the body font on ascii and hAnsi, the
+        // heading font on eastAsia and cs.
+        let rpr = rdocx_oxml::properties::CT_RPr {
+            font_ascii_theme: Some("minorHAnsi".to_owned()),
+            font_hansi_theme: Some("minorHAnsi".to_owned()),
+            font_east_asia_theme: Some("majorEastAsia".to_owned()),
+            font_cs_theme: Some("majorBidi".to_owned()),
+            ..Default::default()
+        };
+        for (character, expected) in [
+            ('A', "MinorFace"),
+            ('\u{00e9}', "MinorFace"),
+            // These four decline and fall through to the ascii slot, which
+            // here resolves to the Latin minor typeface. What matters is that
+            // they do not answer `MajorFace`, the Latin heading typeface,
+            // which has nothing to do with `a:ea` or `a:cs`.
+            ('안', "MinorFace"),
+            ('こ', "MinorFace"),
+            ('ש', "MinorFace"),
+            ('ع', "MinorFace"),
+        ] {
+            let slot = word_font_slot(character, None);
+            assert_eq!(
+                resolve_font_family(&rpr, Some(&theme), slot).as_deref(),
+                Some(expected),
+                "{character:?} must not be drawn with a typeface its theme reference never named"
+            );
+        }
+
+        // The ascii and hAnsi references do name `a:latin`, so they resolve,
+        // and each reads its own attribute rather than the ascii one.
+        let split = rdocx_oxml::properties::CT_RPr {
+            font_ascii_theme: Some("majorAscii".to_owned()),
+            font_hansi_theme: Some("minorHAnsi".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_font_family(&split, Some(&theme), WordFontSlot::Ascii).as_deref(),
+            Some("MajorFace")
+        );
+        assert_eq!(
+            resolve_font_family(&split, Some(&theme), WordFontSlot::HighAnsi).as_deref(),
+            Some("MinorFace")
+        );
+
+        // A slot with no theme attribute of its own still falls back to
+        // `w:asciiTheme`, which is what a document carrying only that
+        // attribute has always relied on.
+        let ascii_theme_only = rdocx_oxml::properties::CT_RPr {
+            font_ascii_theme: Some("minorHAnsi".to_owned()),
+            ..Default::default()
+        };
+        for slot in [
+            WordFontSlot::Ascii,
+            WordFontSlot::HighAnsi,
+            WordFontSlot::EastAsia,
+            WordFontSlot::ComplexScript,
+        ] {
+            assert_eq!(
+                resolve_font_family(&ascii_theme_only, Some(&theme), slot).as_deref(),
+                Some("MinorFace"),
+                "{slot:?} falls back to the ascii theme attribute"
+            );
+        }
+
+        // The character's own slot is resolved completely, explicit family
+        // then that slot's theme attribute, before the ascii fallback. An
+        // explicit family the author named must never be beaten by a theme
+        // reference that resolves to nothing.
+        let explicit_beside_slot_themes = rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("Noto Sans Arabic".to_owned()),
+            font_east_asia_theme: Some("majorEastAsia".to_owned()),
+            font_cs_theme: Some("minorBidi".to_owned()),
+            ..Default::default()
+        };
+        for slot in [
+            WordFontSlot::Ascii,
+            WordFontSlot::HighAnsi,
+            WordFontSlot::EastAsia,
+            WordFontSlot::ComplexScript,
+        ] {
+            assert_eq!(
+                resolve_font_family(&explicit_beside_slot_themes, Some(&theme), slot).as_deref(),
+                Some("Noto Sans Arabic"),
+                "{slot:?} keeps the family the author named"
+            );
+        }
+
+        // A slot theme reference that does resolve still outranks the ascii
+        // fallback, which is what stops `w:hAnsiTheme` being inert.
+        let hansi_theme_beside_ascii_family = rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("AsciiFace".to_owned()),
+            font_hansi_theme: Some("majorHAnsi".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_font_family(
+                &hansi_theme_beside_ascii_family,
+                Some(&theme),
+                WordFontSlot::HighAnsi
+            )
+            .as_deref(),
+            Some("MajorFace")
+        );
+
+        // A run whose only font property is a non-Latin reference has nothing
+        // to fall through to, so the Latin typeface is still the answer as a
+        // last resort. `ST_Theme` admits all eight values in all four
+        // attributes, so this is schema-valid even though Word never writes
+        // it, and declining outright would silently change the face on a
+        // document that rendered correctly before.
+        for (reference, expected) in [
+            ("majorEastAsia", "MajorFace"),
+            ("minorEastAsia", "MinorFace"),
+            ("majorBidi", "MajorFace"),
+            ("minorBidi", "MinorFace"),
+        ] {
+            let only_reference = rdocx_oxml::properties::CT_RPr {
+                font_ascii_theme: Some(reference.to_owned()),
+                ..Default::default()
+            };
+            assert_eq!(
+                resolve_font_family(&only_reference, Some(&theme), WordFontSlot::Ascii).as_deref(),
+                Some(expected),
+                "{reference} alone still resolves to a face"
+            );
+        }
+
+        // The last resort must stay a last resort. An explicit family still
+        // wins, which is the whole point of the four declining above.
+        let non_latin_reference_beside_family = rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("Noto Sans Arabic".to_owned()),
+            font_cs_theme: Some("minorBidi".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_font_family(
+                &non_latin_reference_beside_family,
+                Some(&theme),
+                WordFontSlot::ComplexScript
+            )
+            .as_deref(),
+            Some("Noto Sans Arabic")
+        );
+    }
+
+    /// Every table that asks whether a character is East Asian must give the
+    /// same answer.
+    ///
+    /// The font slot, the language slot and the rich-path gate all ask it.
+    /// They are not the same table as the language slot's other arms, because
+    /// Word draws Devanagari and Thai from `w:cs` while their language still
+    /// comes from `w:lang/@w:val`. That freedom does not extend to disagreeing
+    /// about East Asian text. A character East Asian to one and unclaimed by
+    /// another is attached to the preceding slot, which at the start of a run
+    /// is the direct slot, so it silently takes the wrong language.
+    #[test]
+    fn every_east_asian_codepoint_agrees_across_all_three_tables() {
+        // Stated here independently of the shared set under test, so a range
+        // added to `is_east_asian` and forgotten in a caller fails, and so
+        // does a range dropped from `is_east_asian` itself.
+        const EAST_ASIAN: &[std::ops::RangeInclusive<u32>] = &[
+            0x1100..=0x11ff,   // Hangul jamo
+            0x2e80..=0x2eff,   // CJK radicals supplement
+            0x2f00..=0x2fdf,   // Kangxi radicals
+            0x2ff0..=0x2fff,   // Ideographic description characters
+            0x3000..=0x303f,   // CJK symbols and punctuation
+            0x3040..=0x309f,   // Hiragana
+            0x30a0..=0x30ff,   // Katakana
+            0x3100..=0x312f,   // Bopomofo
+            0x3130..=0x318f,   // Hangul compatibility jamo
+            0x3190..=0x31ef,   // Kanbun, Bopomofo extended, CJK strokes
+            0x31f0..=0x31ff,   // Katakana phonetic extensions
+            0x3200..=0x33ff,   // Enclosed CJK and CJK compatibility
+            0x3400..=0x4dbf,   // CJK unified ideographs extension A
+            0x4dc0..=0x4dff,   // Yijing hexagram symbols
+            0x4e00..=0x9fff,   // CJK unified ideographs
+            0xa960..=0xa97f,   // Hangul jamo extended A
+            0xac00..=0xd7ff,   // Hangul syllables and jamo extended B
+            0xf900..=0xfaff,   // CJK compatibility ideographs
+            0xfe30..=0xfe4f,   // CJK compatibility forms
+            0xfe50..=0xfe6f,   // Small form variants
+            0xff00..=0xffef,   // Halfwidth and fullwidth forms
+            0x20000..=0x2fa1f, // CJK unified ideographs extension B and later
+        ];
+
+        let declared = |codepoint: u32| EAST_ASIAN.iter().any(|range| range.contains(&codepoint));
+
+        for codepoint in 0..=0x10ffff_u32 {
+            let Some(character) = char::from_u32(codepoint) else {
+                continue;
+            };
+            let expected = declared(codepoint);
+            assert_eq!(
+                is_east_asian(codepoint),
+                expected,
+                "U+{codepoint:04X} disagrees with the declared East Asian set"
+            );
+            assert_eq!(
+                word_font_slot(character, None) == WordFontSlot::EastAsia,
+                expected,
+                "U+{codepoint:04X} disagrees with the font slot table"
+            );
+            assert_eq!(
+                word_language_slot(character) == Some(WordLanguageSlot::EastAsia),
+                expected,
+                "U+{codepoint:04X} disagrees with the language slot table"
+            );
+            if expected {
+                assert!(
+                    needs_word_multilingual_layout(&character.to_string()),
+                    "U+{codepoint:04X} is East Asian and must reach the shaper"
+                );
+            }
+        }
+
+        // The rich-path gate is the union of the shared set with every range
+        // `script_for_char` gives a non-Latin identity, so it also admits the
+        // complex scripts that are not East Asian.
+        for character in ['\u{05d0}', '\u{0627}', '\u{0915}', '\u{0e01}', '\u{a8e0}'] {
+            assert!(
+                needs_word_multilingual_layout(&character.to_string()),
+                "{character:?} is a complex script and must reach the shaper"
+            );
+        }
+        assert!(!needs_word_multilingual_layout("plain latin 2026"));
+    }
+
+    /// A complex-script paragraph cannot enter the paragraph block cache.
+    ///
+    /// `inline_bytes` scores `InlineItem::MultilingualText` as `usize::MAX`
+    /// because its retained size cannot be bounded, and the surrounding sum
+    /// saturates, so the entry is refused. That has always been true of
+    /// Arabic, Hebrew and CJK. Korean joined them when Hangul was admitted to
+    /// `needs_word_multilingual_layout`, which is a real behaviour change for
+    /// every existing Korean document and is asserted here rather than left
+    /// to be rediscovered.
+    #[test]
+    fn a_complex_script_paragraph_is_never_admitted_to_the_paragraph_block_cache() {
+        let cache_counts = |text: &str| {
+            let mut input = make_input_with_text("");
+            input.document.body.content.clear();
+            for index in 0..8 {
+                let mut paragraph = CT_P::new();
+                paragraph.add_run(&format!("{text} {index:03}"));
+                input.document.body.add_paragraph(paragraph);
+            }
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine.layout(&input).expect("cold layout");
+            engine.layout(&input).expect("warm layout");
+            engine.paragraph_cache_counts()
+        };
+
+        assert_eq!(
+            cache_counts("latin paragraph"),
+            (8, 8),
+            "a Latin paragraph is cacheable and the warm pass reuses it"
+        );
+
+        for complex in ["안녕하세요", "こんにちは", "שלום", "العربية", "你好"]
+        {
+            assert_eq!(
+                cache_counts(complex),
+                (0, 16),
+                "{complex} takes the rich path, which the block cache refuses"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_resolves_one_slot_and_a_run_that_disagrees_keeps_the_ascii_one() {
+        assert_eq!(
+            word_font_slot_for_text("Hello, world.", None),
+            WordFontSlot::Ascii
+        );
+        assert_eq!(
+            word_font_slot_for_text("안녕하세요", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text("שלום", None),
+            WordFontSlot::ComplexScript
+        );
+        assert_eq!(word_font_slot_for_text("", None), WordFontSlot::Ascii);
+
+        // Spaces, digits and punctuation take whatever the rest of the run
+        // takes, so they must not decide it.
+        assert_eq!(
+            word_font_slot_for_text("こんにちは、カタカナ世界", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{05e9}\u{05dc}\u{05d5}\u{05dd}, 2026", None),
+            WordFontSlot::ComplexScript
+        );
+
+        // A run with no letter at all has nothing for its punctuation to
+        // follow, so the remaining characters decide. Word draws East Asian
+        // punctuation and fullwidth digits from `w:eastAsia`, and a run of
+        // exactly that shape is ordinary wherever Word split the run at a
+        // formatting boundary.
+        assert_eq!(
+            word_font_slot_for_text("\u{3001}\u{3002} \u{300c}\u{300d}", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{ff12}\u{ff10}\u{ff12}\u{ff16}", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(word_font_slot_for_text("2026", None), WordFontSlot::Ascii);
+        assert_eq!(word_font_slot_for_text("- , .", None), WordFontSlot::Ascii);
+
+        // A letter still outranks the punctuation beside it.
+        assert_eq!(
+            word_font_slot_for_text("\u{3001}\u{3002} Latin", None),
+            WordFontSlot::Ascii
+        );
+
+        // The no-letter pass takes the same consensus rule the letter pass
+        // takes, so the answer never turns on which character came first.
+        // U+3001 is East Asian and U+2014 is high ANSI, and neither ordering
+        // may pick a winner.
+        assert_eq!(
+            word_font_slot_for_text("\u{3001}\u{2014}", None),
+            WordFontSlot::Ascii
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{2014}\u{3001}", None),
+            WordFontSlot::Ascii
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{3001}\u{3001}", None),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{2014}\u{2014}", None),
+            WordFontSlot::HighAnsi
+        );
+        // A run of Latin-1 punctuation alone takes w:hAnsi, which is what
+        // Word does and which falls back to the w:ascii family when no
+        // w:hAnsi family is named.
+        assert_eq!(
+            word_font_slot_for_text("\u{00ab}\u{00bb}", None),
+            WordFontSlot::HighAnsi
+        );
+
+        // S4 of the pass 3 review. The hint must reach the run-level answer,
+        // not only the per-character one.
+        assert_eq!(
+            word_font_slot_for_text("2026", Some("eastAsia")),
+            WordFontSlot::EastAsia
+        );
+        assert_eq!(
+            word_font_slot_for_text(", ", Some("cs")),
+            WordFontSlot::ComplexScript
+        );
+        // A run whose letters settle their own slot ignores the hint.
+        assert_eq!(
+            word_font_slot_for_text("Latin", Some("eastAsia")),
+            WordFontSlot::Ascii
+        );
+
+        // A run whose alphabetic characters disagree keeps the ascii slot.
+        // Only one family is resolved per run, so preferring either half
+        // would be wrong for the other, and Word would draw the two halves
+        // from two different slots. Resolving such a run through w:eastAsia
+        // would newly break the Latin half, which is the normal shape of East
+        // Asian prose.
+        assert_eq!(
+            word_font_slot_for_text("Hello 世界", None),
+            WordFontSlot::Ascii
+        );
+        assert_eq!(
+            word_font_slot_for_text("\u{05e9}\u{05dc}\u{05d5}\u{05dd} world", None),
+            WordFontSlot::Ascii
+        );
     }
 }

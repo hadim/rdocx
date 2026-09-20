@@ -1,9 +1,12 @@
 //! Run — a contiguous stretch of text with uniform formatting.
 
+use rdocx_oxml::borders::CT_BorderEdge;
 use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
-use rdocx_oxml::properties::{CT_RPr, CT_Shd};
+use rdocx_oxml::properties::{
+    CT_EastAsianLayout, CT_FitText, CT_RPr, CT_Shd, ST_Em, ST_TextEffect,
+};
 use rdocx_oxml::shared::{ST_HighlightColor, ST_Underline};
-use rdocx_oxml::text::{BreakType, CT_R, CT_Text, Field, RunContent};
+use rdocx_oxml::text::{BreakType, CT_R, CT_Text, Field, RunContent, SpecialCharacter};
 use rdocx_oxml::units::{HalfPoint, Twips};
 
 use crate::{Error, Length, Result};
@@ -46,6 +49,57 @@ pub enum FieldKind {
     Simple,
     /// A `w:fldChar` begin/separate/end sequence.
     Complex,
+}
+
+/// One of the four `w:rFonts` script slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunFontSlot {
+    /// `w:ascii` and `w:asciiTheme`.
+    Ascii,
+    /// `w:hAnsi` and `w:hAnsiTheme`.
+    HighAnsi,
+    /// `w:eastAsia` and `w:eastAsiaTheme`.
+    EastAsia,
+    /// `w:cs` and `w:cstheme`.
+    ComplexScript,
+}
+
+impl RunFontSlot {
+    fn explicit_mut(self, rpr: &mut CT_RPr) -> &mut Option<String> {
+        match self {
+            RunFontSlot::Ascii => &mut rpr.font_ascii,
+            RunFontSlot::HighAnsi => &mut rpr.font_hansi,
+            RunFontSlot::EastAsia => &mut rpr.font_east_asia,
+            RunFontSlot::ComplexScript => &mut rpr.font_cs,
+        }
+    }
+
+    fn theme_mut(self, rpr: &mut CT_RPr) -> &mut Option<String> {
+        match self {
+            RunFontSlot::Ascii => &mut rpr.font_ascii_theme,
+            RunFontSlot::HighAnsi => &mut rpr.font_hansi_theme,
+            RunFontSlot::EastAsia => &mut rpr.font_east_asia_theme,
+            RunFontSlot::ComplexScript => &mut rpr.font_cs_theme,
+        }
+    }
+
+    fn explicit(self, rpr: &CT_RPr) -> Option<&str> {
+        match self {
+            RunFontSlot::Ascii => rpr.font_ascii.as_deref(),
+            RunFontSlot::HighAnsi => rpr.font_hansi.as_deref(),
+            RunFontSlot::EastAsia => rpr.font_east_asia.as_deref(),
+            RunFontSlot::ComplexScript => rpr.font_cs.as_deref(),
+        }
+    }
+
+    fn theme(self, rpr: &CT_RPr) -> Option<&str> {
+        match self {
+            RunFontSlot::Ascii => rpr.font_ascii_theme.as_deref(),
+            RunFontSlot::HighAnsi => rpr.font_hansi_theme.as_deref(),
+            RunFontSlot::EastAsia => rpr.font_east_asia_theme.as_deref(),
+            RunFontSlot::ComplexScript => rpr.font_cs_theme.as_deref(),
+        }
+    }
 }
 
 /// Resolved or direct run properties returned by the reader API.
@@ -290,6 +344,15 @@ pub enum RunItemRef<'a> {
     CommentReference(i32),
     /// An unambiguous legacy VML horizontal rule.
     LegacyHorizontalRule(LegacyHorizontalRuleRef<'a>),
+    /// A symbol character and the font its code point is looked up in.
+    Symbol { font: &'a str, char_code: u16 },
+    /// One of the Word special characters that carries no text of its own.
+    SpecialCharacter(SpecialCharacter),
+    /// A producer hint recording where Word last broke a page.
+    ///
+    /// Read only. It is never authored, and it stays in positioned raw
+    /// capture so a no-op save writes back exactly what was read.
+    LastRenderedPageBreak(&'a [u8]),
     /// A preserved run child that rdocx does not model.
     UnsupportedXml(&'a [u8]),
 }
@@ -297,9 +360,34 @@ pub enum RunItemRef<'a> {
 fn classify_raw_run_item(raw_xml: &[u8], encoded_position: Option<usize>) -> RunItemRef<'_> {
     if encoded_position.is_some_and(CT_R::raw_child_is_legacy_horizontal_rule) {
         RunItemRef::LegacyHorizontalRule(LegacyHorizontalRuleRef { raw_xml })
+    } else if raw_is_last_rendered_page_break(raw_xml) {
+        RunItemRef::LastRenderedPageBreak(raw_xml)
     } else {
         RunItemRef::UnsupportedXml(raw_xml)
     }
+}
+
+/// Whether a preserved run child is `<w:lastRenderedPageBreak/>`.
+///
+/// Matched on the local name, because the captured subtree does not always
+/// carry the binding that named its prefix. The element is a producer hint
+/// with no attributes and no other element in any Word-adjacent namespace
+/// shares the name.
+fn raw_is_last_rendered_page_break(raw_xml: &[u8]) -> bool {
+    const NAME: &[u8] = b"lastRenderedPageBreak";
+    let Some(body) = raw_xml.strip_prefix(b"<") else {
+        return false;
+    };
+    let end = body
+        .iter()
+        .position(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | b'/' | b'>'))
+        .unwrap_or(body.len());
+    let qualified = &body[..end];
+    let local = qualified
+        .rsplit(|byte| *byte == b':')
+        .next()
+        .unwrap_or(qualified);
+    local == NAME
 }
 
 /// Underline style for runs.
@@ -555,6 +643,12 @@ impl<'a> Run<'a> {
     }
 
     /// Set or clear the direct font name.
+    ///
+    /// This writes all four `w:rFonts` script slots, and it now also clears
+    /// all four theme attributes. Word resolves a theme attribute in
+    /// preference to the explicit name beside it, so leaving them meant the
+    /// caller's font silently did nothing on a theme-fonted run. Use
+    /// [`Run::set_slot_font`] to change one slot.
     pub fn set_font_value(&mut self, name: Option<&str>) {
         if name.is_none() && self.inner.properties.is_none() {
             return;
@@ -564,6 +658,44 @@ impl<'a> Run<'a> {
         rpr.font_hansi = name.map(str::to_owned);
         rpr.font_east_asia = name.map(str::to_owned);
         rpr.font_cs = name.map(str::to_owned);
+        rpr.font_ascii_theme = None;
+        rpr.font_hansi_theme = None;
+        rpr.font_east_asia_theme = None;
+        rpr.font_cs_theme = None;
+    }
+
+    /// Set or clear the explicit font for one script slot.
+    ///
+    /// Clears that slot's theme attribute and touches no other slot.
+    /// `w:hint` is independent and is never cleared here.
+    pub fn set_slot_font(&mut self, slot: RunFontSlot, name: Option<&str>) {
+        if name.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        let rpr = self.ensure_rpr();
+        *slot.explicit_mut(rpr) = name.map(str::to_owned);
+        *slot.theme_mut(rpr) = None;
+    }
+
+    /// Set or clear the theme font for one script slot.
+    ///
+    /// Clears that slot's explicit attribute, mirroring
+    /// [`Run::set_slot_font`].
+    pub fn set_slot_theme_font(&mut self, slot: RunFontSlot, theme: Option<&str>) {
+        if theme.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        let rpr = self.ensure_rpr();
+        *slot.theme_mut(rpr) = theme.map(str::to_owned);
+        *slot.explicit_mut(rpr) = None;
+    }
+
+    /// Set or clear `w:rFonts/@w:hint`, the slot hint for ambiguous characters.
+    pub fn set_font_hint(&mut self, hint: Option<&str>) {
+        if hint.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().font_hint = hint.map(str::to_owned);
     }
 
     /// Set the run language used by language-aware text layout.
@@ -597,11 +729,36 @@ impl<'a> Run<'a> {
     }
 
     /// Set or clear the direct text color.
+    ///
+    /// An explicit colour replaces the theme reference, so this clears
+    /// `w:themeColor`, `w:themeTint` and `w:themeShade` for the same reason
+    /// [`Run::set_font_value`] clears the theme fonts. Use
+    /// [`Run::set_color_theme`] to author the reference instead.
     pub fn set_color_value(&mut self, hex: Option<&str>) {
         if hex.is_none() && self.inner.properties.is_none() {
             return;
         }
-        self.ensure_rpr().color = hex.map(str::to_owned);
+        let rpr = self.ensure_rpr();
+        rpr.color = hex.map(str::to_owned);
+        rpr.color_theme = None;
+        rpr.color_theme_tint = None;
+        rpr.color_theme_shade = None;
+    }
+
+    /// Set or clear the theme colour reference, with its tint and shade.
+    ///
+    /// `w:val` is left as Word writes it, the literal Word cached beside the
+    /// reference, rather than being replaced by a value this run has no theme
+    /// to compute. Clearing the reference clears its tint and shade too,
+    /// because Word has nothing to apply them to without it.
+    pub fn set_color_theme(&mut self, theme: Option<&str>, tint: Option<u8>, shade: Option<u8>) {
+        if theme.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        let rpr = self.ensure_rpr();
+        rpr.color_theme = theme.map(str::to_owned);
+        rpr.color_theme_tint = theme.and(tint);
+        rpr.color_theme_shade = theme.and(shade);
     }
 
     /// Set highlight color as a hex fill value.
@@ -612,11 +769,12 @@ impl<'a> Run<'a> {
 
     /// Set highlight color in place.
     pub fn set_highlight(&mut self, color: &str) {
-        self.ensure_rpr().shading = Some(CT_Shd {
+        self.ensure_rpr().shading = Some(Box::new(CT_Shd {
             val: "clear".to_string(),
             color: Some("auto".to_string()),
             fill: Some(color.to_string()),
-        });
+            ..Default::default()
+        }));
     }
 
     /// Set or clear the named Word highlight in place.
@@ -790,6 +948,174 @@ impl<'a> Run<'a> {
         self.ensure_rpr().style_id = style_id.map(str::to_owned);
     }
 
+    /// Append a `w:sym` symbol character at the current end of this run.
+    ///
+    /// `char_code` is the symbol font's own code point, which Word writes as
+    /// four hex digits and usually places in the F020 to F0FF private-use
+    /// block. This is separate from [`Run::add_symbol`], which stores one
+    /// Unicode scalar as ordinary text.
+    pub fn add_symbol_char(&mut self, font: &str, char_code: u16) {
+        self.inner.append_content(RunContent::Symbol {
+            font: font.to_owned(),
+            char_code,
+        });
+    }
+
+    /// Append one Word special character at the current end of this run.
+    pub fn add_special_character(&mut self, character: SpecialCharacter) {
+        self.inner
+            .append_content(RunContent::SpecialCharacter(character));
+    }
+
+    /// Set or clear `w:rtl`, the character-level right-to-left direction.
+    pub fn set_rtl_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.rtl);
+    }
+
+    /// Set or clear `w:cs`, the complex-script formatting toggle.
+    pub fn set_complex_script_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.complex_script);
+    }
+
+    /// Set or clear `w:bCs`, complex-script bold.
+    pub fn set_bold_cs_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.bold_cs);
+    }
+
+    /// Set or clear `w:iCs`, complex-script italic.
+    pub fn set_italic_cs_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.italic_cs);
+    }
+
+    /// Set or clear `w:szCs`, the complex-script font size in points.
+    pub fn set_size_cs_value(&mut self, pt: Option<f64>) {
+        if pt.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().sz_cs = pt.map(HalfPoint::from_pt);
+    }
+
+    /// Set or clear `w:lang/@w:eastAsia`, the East Asian run language.
+    pub fn set_language_east_asia_value(&mut self, language: Option<&str>) {
+        if language.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().language_east_asia = language.map(str::to_owned);
+    }
+
+    /// Set or clear `w:lang/@w:bidi`, the complex-script run language.
+    pub fn set_language_bidi_value(&mut self, language: Option<&str>) {
+        if language.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().language_bidi = language.map(str::to_owned);
+    }
+
+    /// Set or clear `w:outline`, stroke-only glyphs.
+    pub fn set_outline_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.outline);
+    }
+
+    /// Set or clear `w:shadow`, a drop shadow behind the glyphs.
+    pub fn set_shadow_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.shadow);
+    }
+
+    /// Set or clear `w:emboss`, raised relief.
+    pub fn set_emboss_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.emboss);
+    }
+
+    /// Set or clear `w:imprint`, sunken relief.
+    pub fn set_imprint_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.imprint);
+    }
+
+    /// Set or clear `w:noProof`, excluding the run from proofing.
+    pub fn set_no_proof_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.no_proof);
+    }
+
+    /// Set or clear `w:snapToGrid`, snapping the run to the character grid.
+    pub fn set_snap_to_grid_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.snap_to_grid);
+    }
+
+    /// Set or clear `w:webHidden`, hiding the run in web view only.
+    pub fn set_web_hidden_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.web_hidden);
+    }
+
+    /// Set or clear `w:specVanish`, vanish at the end of a numbered paragraph.
+    pub fn set_spec_vanish_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.spec_vanish);
+    }
+
+    /// Set or clear `w:oMath`, marking the run as Office Math.
+    pub fn set_office_math_value(&mut self, val: Option<bool>) {
+        self.set_toggle(val, |rpr| &mut rpr.office_math);
+    }
+
+    /// Set or clear `w:kern`, the kerning threshold in points.
+    pub fn set_kern_value(&mut self, pt: Option<f64>) {
+        if pt.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().kern = pt.map(HalfPoint::from_pt);
+    }
+
+    /// Set or clear `w:effect`, the animated text effect.
+    pub fn set_effect_value(&mut self, effect: Option<ST_TextEffect>) {
+        if effect.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().effect = effect;
+    }
+
+    /// Set or clear `w:em`, the East Asian emphasis mark.
+    pub fn set_emphasis_mark_value(&mut self, mark: Option<ST_Em>) {
+        if mark.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().emphasis_mark = mark;
+    }
+
+    /// Set or clear `w:bdr`, the character border.
+    pub fn set_character_border_value(&mut self, border: Option<CT_BorderEdge>) {
+        if border.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().border = border.map(Box::new);
+    }
+
+    /// Set or clear `w:fitText`, the fitted segment width.
+    pub fn set_fit_text_value(&mut self, fit_text: Option<CT_FitText>) {
+        if fit_text.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().fit_text = fit_text.map(Box::new);
+    }
+
+    /// Set or clear `w:eastAsianLayout`, the East Asian run layout.
+    pub fn set_east_asian_layout_value(&mut self, layout: Option<CT_EastAsianLayout>) {
+        if layout.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().east_asian_layout = layout.map(Box::new);
+    }
+
+    /// Set or clear one direct run toggle, leaving an absent `w:rPr` absent.
+    fn set_toggle(
+        &mut self,
+        val: Option<bool>,
+        slot: impl FnOnce(&mut CT_RPr) -> &mut Option<bool>,
+    ) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        *slot(self.ensure_rpr()) = val;
+    }
+
     fn ensure_rpr(&mut self) -> &mut CT_RPr {
         self.inner.ensure_properties()
     }
@@ -817,7 +1143,10 @@ impl<'a> RunRef<'a> {
                     .extra_xml_positions
                     .iter()
                     .zip(&self.inner.extra_xml)
-                    .filter(|(position, _)| CT_R::raw_child_position(**position) == 0)
+                    .filter(|(position, _)| {
+                        !CT_R::raw_child_is_root_attributes(**position)
+                            && CT_R::raw_child_position(**position) == 0
+                    })
                     .map(|(position, raw)| classify_raw_run_item(raw, Some(*position))),
             );
         }
@@ -829,7 +1158,10 @@ impl<'a> RunRef<'a> {
                         .extra_xml_positions
                         .iter()
                         .zip(&self.inner.extra_xml)
-                        .filter(|(position, _)| CT_R::raw_child_position(**position) == boundary)
+                        .filter(|(position, _)| {
+                            !CT_R::raw_child_is_root_attributes(**position)
+                                && CT_R::raw_child_position(**position) == boundary
+                        })
                         .map(|(position, raw)| classify_raw_run_item(raw, Some(*position))),
                 );
             }
@@ -850,6 +1182,13 @@ impl<'a> RunRef<'a> {
                     RunContent::FootnoteRef { id } => RunItemRef::FootnoteReference(*id),
                     RunContent::EndnoteRef { id } => RunItemRef::EndnoteReference(*id),
                     RunContent::CommentReference { id, .. } => RunItemRef::CommentReference(*id),
+                    RunContent::Symbol { font, char_code } => RunItemRef::Symbol {
+                        font: font.as_str(),
+                        char_code: *char_code,
+                    },
+                    RunContent::SpecialCharacter(character) => {
+                        RunItemRef::SpecialCharacter(*character)
+                    }
                 });
             }
         }
@@ -858,6 +1197,7 @@ impl<'a> RunRef<'a> {
                 self.inner
                     .extra_xml
                     .iter()
+                    .filter(|raw| !rdocx_oxml::text::is_root_attribute_record(raw))
                     .map(|raw| classify_raw_run_item(raw, None)),
             );
         }
@@ -1018,6 +1358,157 @@ impl<'a> RunRef<'a> {
             .properties
             .as_ref()
             .and_then(|rpr| rpr.style_id.as_deref())
+    }
+
+    /// The explicit font for one `w:rFonts` script slot, if set.
+    pub fn slot_font(&self, slot: RunFontSlot) -> Option<&str> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|rpr| slot.explicit(rpr))
+    }
+
+    /// The theme font for one `w:rFonts` script slot, if set.
+    pub fn slot_theme_font(&self, slot: RunFontSlot) -> Option<&str> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|rpr| slot.theme(rpr))
+    }
+
+    /// `w:rFonts/@w:hint`, if set.
+    pub fn font_hint(&self) -> Option<&str> {
+        self.property(|rpr| rpr.font_hint.as_deref())
+    }
+
+    /// `w:color/@w:themeColor`, if set.
+    pub fn color_theme(&self) -> Option<&str> {
+        self.property(|rpr| rpr.color_theme.as_deref())
+    }
+
+    /// `w:color/@w:themeTint`, if set.
+    pub fn color_theme_tint(&self) -> Option<u8> {
+        self.property(|rpr| rpr.color_theme_tint)
+    }
+
+    /// `w:color/@w:themeShade`, if set.
+    pub fn color_theme_shade(&self) -> Option<u8> {
+        self.property(|rpr| rpr.color_theme_shade)
+    }
+
+    /// Direct `w:rtl`, if set.
+    pub fn rtl_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.rtl)
+    }
+
+    /// Direct `w:cs`, if set.
+    pub fn complex_script_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.complex_script)
+    }
+
+    /// Direct `w:bCs`, if set.
+    pub fn bold_cs_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.bold_cs)
+    }
+
+    /// Direct `w:iCs`, if set.
+    pub fn italic_cs_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.italic_cs)
+    }
+
+    /// Direct `w:szCs` in points, if set.
+    pub fn size_cs(&self) -> Option<f64> {
+        self.property(|rpr| rpr.sz_cs).map(|size| size.to_pt())
+    }
+
+    /// Direct `w:lang/@w:eastAsia`, if set.
+    pub fn language_east_asia(&self) -> Option<&str> {
+        self.property(|rpr| rpr.language_east_asia.as_deref())
+    }
+
+    /// Direct `w:lang/@w:bidi`, if set.
+    pub fn language_bidi(&self) -> Option<&str> {
+        self.property(|rpr| rpr.language_bidi.as_deref())
+    }
+
+    /// Direct `w:outline`, if set.
+    pub fn outline_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.outline)
+    }
+
+    /// Direct `w:shadow`, if set.
+    pub fn shadow_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.shadow)
+    }
+
+    /// Direct `w:emboss`, if set.
+    pub fn emboss_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.emboss)
+    }
+
+    /// Direct `w:imprint`, if set.
+    pub fn imprint_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.imprint)
+    }
+
+    /// Direct `w:noProof`, if set.
+    pub fn no_proof_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.no_proof)
+    }
+
+    /// Direct `w:snapToGrid`, if set.
+    pub fn snap_to_grid_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.snap_to_grid)
+    }
+
+    /// Direct `w:webHidden`, if set.
+    pub fn web_hidden_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.web_hidden)
+    }
+
+    /// Direct `w:specVanish`, if set.
+    pub fn spec_vanish_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.spec_vanish)
+    }
+
+    /// Direct `w:oMath`, if set.
+    pub fn office_math_value(&self) -> Option<bool> {
+        self.property(|rpr| rpr.office_math)
+    }
+
+    /// Direct `w:kern` in points, if set.
+    pub fn kern(&self) -> Option<f64> {
+        self.property(|rpr| rpr.kern).map(|kern| kern.to_pt())
+    }
+
+    /// Direct `w:effect`, if set.
+    pub fn effect(&self) -> Option<&ST_TextEffect> {
+        self.property(|rpr| rpr.effect.as_ref())
+    }
+
+    /// Direct `w:em`, if set.
+    pub fn emphasis_mark(&self) -> Option<&ST_Em> {
+        self.property(|rpr| rpr.emphasis_mark.as_ref())
+    }
+
+    /// Direct `w:bdr`, if set.
+    pub fn character_border(&self) -> Option<&CT_BorderEdge> {
+        self.property(|rpr| rpr.border.as_deref())
+    }
+
+    /// Direct `w:fitText`, if set.
+    pub fn fit_text(&self) -> Option<&CT_FitText> {
+        self.property(|rpr| rpr.fit_text.as_deref())
+    }
+
+    /// Direct `w:eastAsianLayout`, if set.
+    pub fn east_asian_layout(&self) -> Option<&CT_EastAsianLayout> {
+        self.property(|rpr| rpr.east_asian_layout.as_deref())
+    }
+
+    /// Read one direct run property, or `None` when the run has no `w:rPr`.
+    fn property<T>(&self, read: impl FnOnce(&'a CT_RPr) -> Option<T>) -> Option<T> {
+        read(self.inner.properties.as_ref()?)
     }
 }
 

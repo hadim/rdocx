@@ -1,10 +1,13 @@
 //! Table layout: column widths, cell content, merge handling.
 
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
+use rdocx_oxml::document::CT_DocGrid;
+use rdocx_oxml::drawing::{AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV};
 use rdocx_oxml::shared::ST_Jc;
-use rdocx_oxml::styles::CT_Styles;
+use rdocx_oxml::styles::{CT_Styles, TableStyleRegion};
 use rdocx_oxml::table::{
-    CT_Row, CT_Tbl, CT_TblBorders, CT_TblGrid, CT_TblPr, CT_Tc, ST_VerticalJc, VMerge,
+    CT_Row, CT_Tbl, CT_TblBorders, CT_TblGrid, CT_TblPPr, CT_TblPr, CT_TblWidth, CT_Tc, CT_TrPr,
+    ST_TblAnchor, ST_TblOverlap, ST_VerticalJc, ST_YAlign, VMerge,
 };
 
 use crate::WordStory;
@@ -105,6 +108,96 @@ fn collect_control_cells<'a>(
     }
 }
 
+/// Where a floating table sits, lowered from `w:tblpPr` onto the anchor frames
+/// the paginator already resolves for a floating drawing.
+///
+/// This is deliberately the positioning half of `AnchoredDrawing`, field for
+/// field, so `resolve_anchor_h` and `resolve_anchor_v` take it without a
+/// signature change. The content half does not apply, because the content is
+/// the table's own rows.
+#[derive(Debug, Clone)]
+pub struct FloatingTable {
+    /// Frame the horizontal offset is measured from.
+    pub rel_h: ST_RelativeFromH,
+    /// Horizontal offset in points.
+    pub off_h: f64,
+    /// Horizontal alignment, used instead of the offset when present.
+    pub align_h: Option<AnchorAlignH>,
+    /// Frame the vertical offset is measured from.
+    pub rel_v: ST_RelativeFromV,
+    /// Vertical offset in points.
+    pub off_v: f64,
+    /// Vertical alignment, used instead of the offset when present.
+    pub align_v: Option<AnchorAlignV>,
+    /// Clearance kept between the table and the text flowing around it, in
+    /// points.
+    pub dist_top: f64,
+    pub dist_bottom: f64,
+    pub dist_left: f64,
+    pub dist_right: f64,
+    /// Whether `w:tblOverlap` lets this float overlap another one.
+    pub overlap_allowed: bool,
+}
+
+/// Map `w:horzAnchor` onto the horizontal frame a drawing anchor names.
+///
+/// Three of the eight variants are reachable, because `ST_TblAnchor` spells
+/// only three. An absent anchor reads as `margin`, which is Word's default.
+fn floating_frame_h(anchor: Option<ST_TblAnchor>) -> ST_RelativeFromH {
+    match anchor {
+        Some(ST_TblAnchor::Page) => ST_RelativeFromH::Page,
+        Some(ST_TblAnchor::Text) => ST_RelativeFromH::Column,
+        Some(ST_TblAnchor::Margin) | None => ST_RelativeFromH::Margin,
+    }
+}
+
+/// Map `w:vertAnchor` onto the vertical frame a drawing anchor names.
+fn floating_frame_v(anchor: Option<ST_TblAnchor>) -> ST_RelativeFromV {
+    match anchor {
+        Some(ST_TblAnchor::Page) => ST_RelativeFromV::Page,
+        Some(ST_TblAnchor::Text) => ST_RelativeFromV::Paragraph,
+        Some(ST_TblAnchor::Margin) | None => ST_RelativeFromV::Margin,
+    }
+}
+
+/// Lower the resolved table properties onto a float, when they declare one.
+///
+/// `tblpYSpec="inline"` is how `w:tblpPr` spells "not floating", and an absent
+/// `w:tblpPr` means the same, so both leave the table in the flow. This is the
+/// one place that decides whether a table floats, so the engine asks it rather
+/// than repeating the rule.
+pub(crate) fn floating_table(properties: &CT_TblPr) -> Option<FloatingTable> {
+    let position: &CT_TblPPr = properties.float_position.as_deref()?;
+    if position.tbl_p_y_spec == Some(ST_YAlign::Inline) {
+        return None;
+    }
+    let align_v = match position.tbl_p_y_spec {
+        Some(ST_YAlign::Top) => Some(AnchorAlignV::Top),
+        Some(ST_YAlign::Center) => Some(AnchorAlignV::Center),
+        Some(ST_YAlign::Bottom) => Some(AnchorAlignV::Bottom),
+        Some(ST_YAlign::Inside) => Some(AnchorAlignV::Inside),
+        Some(ST_YAlign::Outside) => Some(AnchorAlignV::Outside),
+        Some(ST_YAlign::Inline) | None => None,
+    };
+    // An absent measurement is zero, which is the schema default for each of
+    // these attributes and what the public reader already reports.
+    let points =
+        |value: Option<rdocx_oxml::Twips>| value.map_or(0.0, |twips| twips.0 as f64 / 20.0);
+    Some(FloatingTable {
+        rel_h: floating_frame_h(position.horz_anchor),
+        off_h: points(position.tbl_p_x),
+        align_h: position.tbl_p_x_spec,
+        rel_v: floating_frame_v(position.vert_anchor),
+        off_v: points(position.tbl_p_y),
+        align_v,
+        dist_top: points(position.top_from_text),
+        dist_bottom: points(position.bottom_from_text),
+        dist_left: points(position.left_from_text),
+        dist_right: points(position.right_from_text),
+        overlap_allowed: properties.overlap != Some(ST_TblOverlap::Never),
+    })
+}
+
 /// A laid-out table.
 #[derive(Debug, Clone)]
 pub struct TableBlock {
@@ -122,6 +215,18 @@ pub struct TableBlock {
     pub table_indent: f64,
     /// Table-level borders (used as fallback for cell borders).
     pub borders: Option<CT_TblBorders>,
+    /// Whether `w:bidiVisual` reverses visual column placement.
+    ///
+    /// Only the painting order is reversed. `col_widths` and every cell's
+    /// `col_index` stay logical, which is what keeps cell ownership, the
+    /// structure tree and the body fragments in reading order.
+    pub bidi_visual: bool,
+    /// Where `w:tblpPr` floats this table, or `None` for a table in the flow.
+    ///
+    /// Boxed, like the `CT_TblPPr` it is lowered from, so a table stays cheap
+    /// on the stack. Test threads build whole documents by value against a
+    /// 2 MiB ceiling, and `TableBlock` nests inside itself through `CellBlock`.
+    pub floating: Option<Box<FloatingTable>>,
 }
 
 impl TableBlock {
@@ -147,6 +252,12 @@ pub struct TableRow {
     pub height: f64,
     /// Whether this row is a header row.
     pub is_header: bool,
+    /// Distance in points from the table origin to this row's first painted
+    /// cell, resolved from the row's omitted grid columns and their width.
+    ///
+    /// A bidirectional row measures the omission on its own leading side,
+    /// which is the trailing side of the logical grid.
+    pub offset_left: f64,
 }
 
 /// One source-ordered block inside a table cell.
@@ -211,6 +322,60 @@ pub struct TableCell {
     pub is_last_row: bool,
     /// Vertical alignment of content within the cell.
     pub v_align: Option<ST_VerticalJc>,
+    /// Degrees the cell's content box rotates for `w:tcPr/w:textDirection`.
+    ///
+    /// `None` is the ordinary horizontal cell, which takes the placement
+    /// arithmetic it always had with no group wrapper.
+    pub rotation: Option<f64>,
+}
+
+/// The diagnostic an upright stacked East Asian direction records.
+///
+/// Upright stacking is out of scope and stays visible as rotated text, which
+/// is the fallback `docs/hld/08-rendering-spec.md` already documents for the
+/// DrawingML shape path, so the product says one thing about it.
+pub(crate) const UPRIGHT_STACK_DIAGNOSTIC: &str =
+    "east Asian vertical text rendered as rotated vertical text";
+
+/// The rotation in degrees a `w:textDirection` value projects onto.
+///
+/// `lrTb` and any unmodelled value return `None`, which is today's horizontal
+/// path. `tbRl` and `tbRlV` rotate 90 degrees, and `btLr`, `lrTbV` and
+/// `tbLrV` rotate -90.
+pub(crate) fn text_direction_rotation(value: &str) -> Option<f64> {
+    match value {
+        "tbRl" | "tbRlV" => Some(90.0),
+        "btLr" | "lrTbV" | "tbLrV" => Some(-90.0),
+        _ => None,
+    }
+}
+
+/// The rotation one cell's `w:tcPr/w:textDirection` projects onto.
+pub(crate) fn cell_rotation(cell: &CT_Tc) -> Option<f64> {
+    cell.properties
+        .as_ref()
+        .and_then(|properties| properties.text_direction.as_deref())
+        .and_then(text_direction_rotation)
+}
+
+/// Whether a `w:textDirection` value asks for upright stacked East Asian text.
+pub(crate) fn text_direction_stacks_upright(value: &str) -> bool {
+    matches!(value, "lrTbV" | "tbRlV" | "tbLrV")
+}
+
+/// The same-centre transposed content box a rotated cell is laid out in.
+///
+/// Width and height swap about the box centre, so rotating the laid-out
+/// result about that same centre lands it back inside the cell.
+pub(crate) fn transposed_box(x: f64, y: f64, width: f64, height: f64) -> (f64, f64, f64, f64) {
+    let center_x = x + width / 2.0;
+    let center_y = y + height / 2.0;
+    (
+        center_x - height / 2.0,
+        center_y - width / 2.0,
+        height,
+        width,
+    )
 }
 
 /// Lay out a table into a TableBlock.
@@ -223,6 +388,7 @@ pub fn layout_table(
     fm: &mut FontManager,
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<TableBlock> {
     layout_table_inner(
         tbl,
@@ -236,6 +402,7 @@ pub fn layout_table(
         None,
         &WordStory::Document,
         &[],
+        doc_grid,
     )
     .map(|(block, _)| block)
 }
@@ -252,6 +419,7 @@ pub(crate) fn layout_table_with_provenance(
     sources: Option<&SourceRegistry>,
     story: &WordStory,
     path: &[usize],
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(TableBlock, TableSemantics)> {
     layout_table_inner(
         tbl,
@@ -265,9 +433,11 @@ pub(crate) fn layout_table_with_provenance(
         sources,
         story,
         path,
+        doc_grid,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layout_table_inner(
     tbl: &CT_Tbl,
     available_width: f64,
@@ -280,6 +450,7 @@ fn layout_table_inner(
     sources: Option<&SourceRegistry>,
     story: &WordStory,
     path: &[usize],
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(TableBlock, TableSemantics)> {
     let direct_width = tbl
         .properties
@@ -291,6 +462,14 @@ fn layout_table_inner(
         .is_some_and(|properties| properties.jc.is_some());
     let mut resolved_table = tbl.clone();
     let mut resolved_properties = resolve_base_table_properties(tbl, styles);
+    // The authored width type, captured before the direct width is dropped
+    // below. Autofit engages against what the author declared, and a direct
+    // `w:tblW` is authored even though the declared grid, not the width,
+    // drives the ordinary path.
+    let authored_width_type = resolved_properties
+        .width
+        .as_ref()
+        .map(|width| width.width_type.clone());
     if direct_width {
         resolved_properties.width = None;
     }
@@ -300,8 +479,33 @@ fn layout_table_inner(
     resolved_table.properties = Some(resolved_properties);
     let tbl = &resolved_table;
     let source_rows = layout_table_rows(tbl, path);
-    // 1. Compute column widths
-    let col_widths = compute_column_widths(tbl.grid.as_ref(), available_width, tbl, path);
+    let bidi_visual = tbl
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.bidi_visual)
+        .unwrap_or(false);
+    let floating = tbl
+        .properties
+        .as_ref()
+        .and_then(floating_table)
+        .map(Box::new);
+    // 1. Compute column widths. Content-driven autofit engages only for an
+    //    auto or absent width with an autofit or absent layout mode.
+    let col_widths = match autofit_column_widths(
+        tbl,
+        authored_width_type.as_deref(),
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        path,
+        doc_grid,
+    )? {
+        Some(widths) => widths,
+        None => compute_column_widths(tbl.grid.as_ref(), available_width, tbl, path),
+    };
     let table_width: f64 = col_widths.iter().sum();
 
     // Table indent
@@ -361,6 +565,17 @@ fn layout_table_inner(
         .and_then(|m| m.bottom)
         .map(|t| t.to_pt())
         .unwrap_or(0.0);
+    // A percentage cell gap is a percentage of the table, not of the caller's
+    // width, and a gap with no length resolves to none.
+    let table_cell_spacing = tbl
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.cell_spacing.as_ref())
+        .map(|spacing| {
+            table_width_to_pt(Some(spacing), table_width)
+                .unwrap_or(0.0)
+                .max(0.0)
+        });
 
     let num_rows = source_rows.len();
     let mut header_row_indices = Vec::new();
@@ -369,18 +584,51 @@ fn layout_table_inner(
     let mut exact_rows = Vec::new();
 
     for (row_idx, (row, row_path)) in source_rows.iter().enumerate() {
-        let is_header = row
-            .properties
-            .as_ref()
-            .and_then(|p| p.header)
-            .unwrap_or(false);
+        let row_properties =
+            resolve_row_properties(tbl, styles, row, row_idx, num_rows, col_widths.len().max(1));
+        let is_header = row_properties.header.unwrap_or(false);
         if is_header {
             header_row_indices.push(row_idx);
         }
 
+        // The row's own gap wins over the table's, and each cell carries half
+        // of it so adjacent content boxes are one whole gap apart.
+        let row_cell_spacing = row_properties
+            .cell_spacing
+            .as_ref()
+            .map(|spacing| {
+                table_width_to_pt(Some(spacing), table_width)
+                    .unwrap_or(0.0)
+                    .max(0.0)
+            })
+            .or(table_cell_spacing)
+            .unwrap_or(0.0);
+        let half_spacing = row_cell_spacing / 2.0;
+        let cell_margin_left = cell_margin_left + half_spacing;
+        let cell_margin_right = cell_margin_right + half_spacing;
+        let cell_margin_top = cell_margin_top + half_spacing;
+        let cell_margin_bottom = cell_margin_bottom + half_spacing;
+
+        // Omitted edge columns move the row's own origin. The table origin,
+        // the table width and every other row stay where they are.
+        let grid_before = (row_properties.grid_before.unwrap_or(0) as usize).min(col_widths.len());
+        let grid_after = (row_properties.grid_after.unwrap_or(0) as usize)
+            .min(col_widths.len().saturating_sub(grid_before));
+        let omitted_before = table_width_to_pt(row_properties.width_before.as_ref(), table_width)
+            .unwrap_or_else(|| col_widths.iter().take(grid_before).sum())
+            .max(0.0);
+        let omitted_after = table_width_to_pt(row_properties.width_after.as_ref(), table_width)
+            .unwrap_or_else(|| col_widths.iter().rev().take(grid_after).sum())
+            .max(0.0);
+        let offset_left = if bidi_visual {
+            omitted_after
+        } else {
+            omitted_before
+        };
+
         let mut cells = Vec::new();
         let mut cell_semantics = Vec::new();
-        let mut col_index = 0usize;
+        let mut col_index = grid_before;
 
         let source_cells = layout_row_cells(row, row_path);
         for (cell, cell_path) in &source_cells {
@@ -406,12 +654,7 @@ fn layout_table_inner(
                 col_index,
                 num_rows,
                 col_widths.len(),
-                row.properties
-                    .as_ref()
-                    .and_then(|properties| properties.cnf_style.as_deref()),
-                cell.properties
-                    .as_ref()
-                    .and_then(|properties| properties.cnf_style.as_deref()),
+                &cell_conditional_selectors(row, cell),
             );
 
             // Direct cell borders overlay table-style region borders.
@@ -435,13 +678,42 @@ fn layout_table_inner(
 
             let content_width = (cell_width - cell_margin_left - cell_margin_right).max(0.0);
 
+            // A rotated cell lays its content out in a same-centre transposed
+            // box, so the measure runs along the cell's height rather than its
+            // width. The painted box is the cell's height less its left and
+            // right margins, because those margins sit across the transposed
+            // box, so the measure subtracts the same pair. A row that declares
+            // a height gives the measure exactly. An auto-height row grows to
+            // the text, so the cell lays out unwrapped and the row becomes the
+            // length it produced, which is then the measure the paginator
+            // paints into.
+            let cell_direction = cell
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.text_direction.as_deref());
+            let rotation = cell_rotation(cell);
+            if cell_direction.is_some_and(text_direction_stacks_upright) {
+                crate::engine::push_unique_diagnostic(
+                    diagnostics,
+                    UPRIGHT_STACK_DIAGNOSTIC.to_owned(),
+                );
+            }
+            let declared_height = row_properties.height.map(|h| h.to_pt()).unwrap_or(0.0);
+            let layout_width = match rotation {
+                Some(_) if declared_height > 0.0 => {
+                    (declared_height - cell_margin_left - cell_margin_right).max(1.0)
+                }
+                Some(_) => VERTICAL_AUTO_MEASURE,
+                None => content_width,
+            };
+
             // Layout cell content (paragraphs and nested tables)
             let (blocks, block_semantics) = if is_vmerge_continue {
                 (Vec::new(), Vec::new())
             } else {
                 layout_cell_content(
                     &cell.content,
-                    content_width,
+                    layout_width,
                     styles,
                     input,
                     media,
@@ -452,12 +724,22 @@ fn layout_table_inner(
                     story,
                     cell_path,
                     style_cell.paragraph_properties.as_ref(),
+                    style_cell.run_properties.as_ref(),
+                    doc_grid,
                 )?
             };
 
-            let content_height: f64 = blocks.iter().map(CellBlock::total_height).sum::<f64>()
-                + cell_margin_top
-                + cell_margin_bottom;
+            // A rotated cell contributes the transposed box's measure to the
+            // row, because its line direction runs down the cell. The left and
+            // right margins are added back, so the row height the paginator
+            // then strips them from is exactly the measure this laid out at.
+            let content_height: f64 = if rotation.is_some() && !is_vmerge_continue {
+                measured_content_width(&blocks) + cell_margin_left + cell_margin_right
+            } else {
+                blocks.iter().map(CellBlock::total_height).sum::<f64>()
+                    + cell_margin_top
+                    + cell_margin_bottom
+            };
 
             let v_align = cell.properties.as_ref().and_then(|p| p.v_align);
 
@@ -482,6 +764,7 @@ fn layout_table_inner(
                 is_first_row: row_idx == 0,
                 is_last_row: row_idx == num_rows - 1,
                 v_align,
+                rotation,
             });
             cell_semantics.push(CellSemantics {
                 blocks: block_semantics,
@@ -495,18 +778,9 @@ fn layout_table_inner(
             .filter(|cell| !cell.starts_vmerge)
             .map(|cell| cell.height)
             .fold(0.0f64, f64::max);
-        let specified_height = row
-            .properties
-            .as_ref()
-            .and_then(|p| p.height)
-            .map(|h| h.to_pt())
-            .unwrap_or(0.0);
-        let exact = row
-            .properties
-            .as_ref()
-            .and_then(|properties| properties.height_rule.as_deref())
-            == Some("exact")
-            && specified_height > 0.0;
+        let specified_height = row_properties.height.map(|h| h.to_pt()).unwrap_or(0.0);
+        let exact =
+            row_properties.height_rule.as_deref() == Some("exact") && specified_height > 0.0;
         exact_rows.push(exact);
         for cell in &mut cells {
             cell.clip_content = exact && !cell.is_vmerge_continue;
@@ -522,6 +796,7 @@ fn layout_table_inner(
             cells,
             height: row_height,
             is_header,
+            offset_left,
         });
         row_semantics.push(RowSemantics {
             cells: cell_semantics,
@@ -602,6 +877,8 @@ fn layout_table_inner(
             table_width,
             table_indent,
             borders: table_borders,
+            bidi_visual,
+            floating,
         },
         TableSemantics {
             rows: row_semantics,
@@ -644,9 +921,174 @@ fn resolve_base_table_properties(table: &CT_Tbl, styles: &CT_Styles) -> CT_TblPr
     resolved
 }
 
+/// Resolve one row's effective properties base-first.
+///
+/// The table style's base `w:trPr` applies first, then every conditional
+/// region that scopes a whole row, in the same ascending priority the cell
+/// layers use, then the row's own direct properties.
+fn resolve_row_properties(
+    table: &CT_Tbl,
+    styles: &CT_Styles,
+    row: &CT_Row,
+    row_index: usize,
+    row_count: usize,
+    column_count: usize,
+) -> CT_TrPr {
+    let mut resolved = CT_TrPr::default();
+    if let Some(mut style_id) = table
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.style_id.as_deref())
+        .or_else(|| {
+            styles
+                .get_default(rdocx_oxml::styles::StyleType::Table)
+                .map(|style| style.style_id.as_str())
+        })
+    {
+        // Most derived first, so `rev()` below applies from the base outwards.
+        let mut chain = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        while visited.insert(style_id) {
+            let Some(style) = styles.get_by_id(style_id) else {
+                break;
+            };
+            chain.push(style);
+            let Some(base) = style.based_on.as_deref() else {
+                break;
+            };
+            style_id = base;
+        }
+        for style in chain.iter().rev() {
+            if let Some(properties) = &style.table_row_properties {
+                overlay_row_properties(&mut resolved, properties);
+            }
+        }
+        let selectors = row
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.cnf_style.as_deref())
+            .map(|value| vec![value])
+            .unwrap_or_default();
+        for region in applicable_table_regions(
+            table,
+            row_index,
+            0,
+            row_count,
+            column_count,
+            band_size(
+                table
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.row_band_size),
+            ),
+            1,
+            &selectors,
+        )
+        .into_iter()
+        .filter(|region| region_scopes_a_whole_row(*region))
+        {
+            for style in chain.iter().rev() {
+                for conditional in style
+                    .conditional_table_styles
+                    .iter()
+                    .filter(|conditional| conditional.region == Some(region))
+                {
+                    if let Some(properties) = &conditional.row_properties {
+                        overlay_row_properties(&mut resolved, properties);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(direct) = row.properties.as_ref() {
+        overlay_row_properties(&mut resolved, direct);
+    }
+    resolved
+}
+
+/// Whether a conditional region applies to every cell of a row.
+///
+/// A column or corner region formats part of a row, so its `w:trPr` cannot
+/// decide that row's height or grid offsets.
+fn region_scopes_a_whole_row(region: TableStyleRegion) -> bool {
+    matches!(
+        region,
+        TableStyleRegion::WholeTable
+            | TableStyleRegion::Band1Horz
+            | TableStyleRegion::Band2Horz
+            | TableStyleRegion::FirstRow
+            | TableStyleRegion::LastRow
+    )
+}
+
+/// Absent means one row or column per band, which is what Word assumes.
+fn band_size(size: Option<u32>) -> usize {
+    size.unwrap_or(1).max(1) as usize
+}
+
+fn overlay_row_properties(target: &mut CT_TrPr, source: &CT_TrPr) {
+    if source.height.is_some() {
+        target.height = source.height;
+    }
+    if source.height_rule.is_some() {
+        target.height_rule.clone_from(&source.height_rule);
+    }
+    if source.header.is_some() {
+        target.header = source.header;
+    }
+    if source.jc.is_some() {
+        target.jc = source.jc;
+    }
+    if source.grid_before.is_some() {
+        target.grid_before = source.grid_before;
+    }
+    if source.grid_after.is_some() {
+        target.grid_after = source.grid_after;
+    }
+    if source.width_before.is_some() {
+        target.width_before.clone_from(&source.width_before);
+    }
+    if source.width_after.is_some() {
+        target.width_after.clone_from(&source.width_after);
+    }
+    if source.cell_spacing.is_some() {
+        target.cell_spacing.clone_from(&source.cell_spacing);
+    }
+    if source.hidden.is_some() {
+        target.hidden = source.hidden;
+    }
+    if source.cant_split.is_some() {
+        target.cant_split = source.cant_split;
+    }
+    if source.cnf_style.is_some() {
+        target.cnf_style.clone_from(&source.cnf_style);
+    }
+}
+
+/// Resolve a table measurement onto points, or `None` when the spelling
+/// carries no length, which is `auto` or `nil`.
+///
+/// `percentage_base` is what a `pct` measurement is a percentage of. That is
+/// the caller's width for a table width and the table's own width for a row
+/// or cell measurement inside it.
+fn table_width_to_pt(width: Option<&CT_TblWidth>, percentage_base: f64) -> Option<f64> {
+    let width = width?;
+    match width.width_type.as_str() {
+        "dxa" => Some(width.w as f64 / 20.0),
+        "pct" => Some(percentage_base * width.w as f64 / 5000.0),
+        _ => None,
+    }
+}
+
 fn overlay_table_properties(target: &mut CT_TblPr, source: &CT_TblPr) {
     if source.style_id.is_some() {
         target.style_id.clone_from(&source.style_id);
+    }
+    if source.row_band_size.is_some() {
+        target.row_band_size = source.row_band_size;
+    }
+    if source.column_band_size.is_some() {
+        target.column_band_size = source.column_band_size;
     }
     if source.width.is_some() {
         target.width.clone_from(&source.width);
@@ -674,6 +1116,18 @@ fn overlay_table_properties(target: &mut CT_TblPr, source: &CT_TblPr) {
     }
     if source.layout.is_some() {
         target.layout.clone_from(&source.layout);
+    }
+    if source.float_position.is_some() {
+        target.float_position.clone_from(&source.float_position);
+    }
+    if source.overlap.is_some() {
+        target.overlap = source.overlap;
+    }
+    if source.bidi_visual.is_some() {
+        target.bidi_visual = source.bidi_visual;
+    }
+    if source.cell_spacing.is_some() {
+        target.cell_spacing.clone_from(&source.cell_spacing);
     }
     if source.indent.is_some() {
         target.indent.clone_from(&source.indent);
@@ -705,6 +1159,286 @@ fn overlay_table_properties(target: &mut CT_TblPr, source: &CT_TblPr) {
             target.no_v_band = look.no_v_band;
         }
     }
+}
+
+/// The line-length measure an auto-height rotated cell lays out against.
+///
+/// A rotated cell's line direction runs down the cell, so its measure is the
+/// row height. An auto-height row has no height until its content produces
+/// one, and Word grows such a row to the text rather than wrapping it, so the
+/// cell lays out against a measure only a forced break ends a line inside.
+/// Measuring it against the column width instead would wrap on the stacking
+/// axis, and the stack would then be taller than the column is wide.
+const VERTICAL_AUTO_MEASURE: f64 = AUTOFIT_MAX_TRIAL_WIDTH;
+
+/// The trial width a maximum content measurement is taken against.
+///
+/// Wide enough that only a forced break ends a line, so the longest line is
+/// the paragraph's natural width.
+const AUTOFIT_MAX_TRIAL_WIDTH: f64 = 10_000.0;
+
+/// The trial width a minimum content measurement is taken against.
+///
+/// One point, so every breakable opportunity is taken and the longest line is
+/// the longest unbreakable run of text.
+const AUTOFIT_MIN_TRIAL_WIDTH: f64 = 1.0;
+
+/// Compute content-driven column widths, or `None` when autofit does not
+/// engage and the declared grid stands.
+///
+/// Autofit engages only when the effective `w:tblLayout` is autofit or absent
+/// **and** the effective `w:tblW` type is `auto` or absent. That is narrower
+/// than the literal ECMA default, which applies autofit whenever
+/// `w:tblLayout` is absent. The narrowing is deliberate: it keeps an authored
+/// `dxa` or `pct` table on the declared grid, so adopting the wider predicate
+/// stays a separate reviewed change rather than a side effect of this one.
+///
+/// Measurement runs the production cell path twice, once at a wide trial
+/// width for the maximum content width and once at a minimal trial width for
+/// the minimum. It consumes a clone of the numbering state and discards its
+/// diagnostics, because the production pass that follows emits both for real.
+fn autofit_column_widths(
+    tbl: &CT_Tbl,
+    authored_width_type: Option<&str>,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &NumberingState,
+    path: &[usize],
+    doc_grid: Option<&CT_DocGrid>,
+) -> Result<Option<Vec<f64>>> {
+    let properties = tbl.properties.as_ref();
+    // ECMA makes autofit the default when `w:tblLayout` is absent, but this
+    // engagement is deliberately narrower and requires the element. An absent
+    // layout is the shape almost every producer writes, 131 of the 141 tables
+    // in the Word corpus, and treating it as autofit changes the reference
+    // page count that `scripts/docx_authoring_conformance.py --private-required`
+    // pins. Adopting the literal default is its own story with its own
+    // reviewed geometry delta.
+    let autofit_layout = matches!(
+        properties.and_then(|properties| properties.layout.as_deref()),
+        Some("autofit")
+    );
+    let auto_width = !matches!(authored_width_type, Some(kind) if kind != "auto");
+    if !autofit_layout || !auto_width || available_width <= 0.0 {
+        return Ok(None);
+    }
+
+    let source_rows = layout_table_rows(tbl, path);
+    let column_count = tbl
+        .grid
+        .as_ref()
+        .map(|grid| grid.columns.len())
+        .filter(|count| *count > 0)
+        .or_else(|| {
+            source_rows.first().map(|(row, row_path)| {
+                layout_row_cells(row, row_path)
+                    .iter()
+                    .map(|(cell, _)| {
+                        cell.properties
+                            .as_ref()
+                            .and_then(|properties| properties.grid_span)
+                            .unwrap_or(1) as usize
+                    })
+                    .sum::<usize>()
+            })
+        })
+        .filter(|count| *count > 0)
+        .unwrap_or(0);
+    if column_count == 0 {
+        return Ok(None);
+    }
+
+    let default_cell_margin = properties.and_then(|properties| properties.cell_margin.as_ref());
+    let horizontal_margin = default_cell_margin
+        .and_then(|margin| margin.left)
+        .map_or(5.4, |value| value.to_pt())
+        + default_cell_margin
+            .and_then(|margin| margin.right)
+            .map_or(5.4, |value| value.to_pt());
+
+    let mut minima = vec![0.0f64; column_count];
+    let mut maxima = vec![0.0f64; column_count];
+    let row_count = source_rows.len();
+    for (row_index, (row, row_path)) in source_rows.iter().enumerate() {
+        // Resolved, not direct, so measurement assigns cells to the same grid
+        // columns the production pass will.
+        let mut col_index =
+            (resolve_row_properties(tbl, styles, row, row_index, row_count, column_count)
+                .grid_before
+                .unwrap_or(0) as usize)
+                .min(column_count);
+        for (cell, cell_path) in &layout_row_cells(row, row_path) {
+            let grid_span = cell
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.grid_span)
+                .unwrap_or(1)
+                .max(1) as usize;
+            let end = (col_index + grid_span).min(column_count);
+            if col_index >= end {
+                col_index = end;
+                continue;
+            }
+            let style_cell = resolve_table_style_cell(
+                tbl,
+                styles,
+                row_index,
+                col_index,
+                row_count,
+                column_count,
+                &cell_conditional_selectors(row, cell),
+            );
+            let (minimum, mut maximum) = match declared_nested_grid_width(cell) {
+                // Laying a nested table out at two trial widths would make it
+                // autofit twice as well, so a table nested `n` deep would cost
+                // three to the `n`. Its declared grid is the answer here, and
+                // the production pass below still measures it for real.
+                Some(declared) => {
+                    let width = declared.min(available_width).max(0.0) + horizontal_margin;
+                    (width, width)
+                }
+                None => {
+                    // A rotated cell is measured in its transposed box, so the
+                    // width it needs is the stacked height of its lines, not
+                    // their length. Its line length belongs to the row height.
+                    let rotated = cell_rotation(cell).is_some();
+                    let mut measure = |trial_width: f64| -> Result<f64> {
+                        let mut measurement_state = num_state.clone();
+                        let mut measurement_diagnostics = Vec::new();
+                        let (blocks, _) = layout_cell_content(
+                            &cell.content,
+                            trial_width,
+                            styles,
+                            input,
+                            media,
+                            fm,
+                            &mut measurement_state,
+                            &mut measurement_diagnostics,
+                            None,
+                            &WordStory::Document,
+                            cell_path,
+                            style_cell.paragraph_properties.as_ref(),
+                            style_cell.run_properties.as_ref(),
+                            doc_grid,
+                        )?;
+                        Ok(if rotated {
+                            blocks.iter().map(CellBlock::total_height).sum::<f64>()
+                        } else {
+                            measured_content_width(&blocks)
+                        })
+                    };
+                    if rotated {
+                        // The stacked height runs the other way to a content
+                        // width across the two trials: a one-point trial puts
+                        // one word on every line and makes the stack as tall
+                        // as it can be. Measuring a rotated cell at the narrow
+                        // trial would hand its minimum the largest number it
+                        // can produce, so it is measured once, at the width
+                        // its lines will actually have.
+                        let width = measure(AUTOFIT_MAX_TRIAL_WIDTH)?.max(0.0) + horizontal_margin;
+                        (width, width)
+                    } else {
+                        let minimum =
+                            measure(AUTOFIT_MIN_TRIAL_WIDTH)?.max(0.0) + horizontal_margin;
+                        let maximum =
+                            measure(AUTOFIT_MAX_TRIAL_WIDTH)?.max(0.0) + horizontal_margin;
+                        (minimum, maximum)
+                    }
+                }
+            };
+            maximum = maximum.max(minimum);
+            // A cell's own preferred width narrows the maximum, but never
+            // below what the content needs to render its longest word.
+            if let Some(preferred) = table_width_to_pt(
+                cell.properties
+                    .as_ref()
+                    .and_then(|properties| properties.width.as_ref()),
+                available_width,
+            ) {
+                maximum = preferred.clamp(minimum, maximum);
+            }
+            let span = (end - col_index) as f64;
+            for column in col_index..end {
+                minima[column] = minima[column].max(minimum / span);
+                maxima[column] = maxima[column].max(maximum / span);
+            }
+            col_index = end;
+        }
+    }
+
+    for column in 0..column_count {
+        maxima[column] = maxima[column].max(minima[column]);
+    }
+    let total_min: f64 = minima.iter().sum();
+    let total_max: f64 = maxima.iter().sum();
+    if total_max < 0.01 {
+        // Nothing measurable, so the declared grid is a better answer than a
+        // table of zero-width columns.
+        return Ok(None);
+    }
+    let widths = if total_max <= available_width {
+        maxima
+    } else if total_min >= available_width {
+        let scale = available_width / total_min;
+        minima.iter().map(|width| width * scale).collect()
+    } else {
+        let slack = (available_width - total_min) / (total_max - total_min);
+        minima
+            .iter()
+            .zip(&maxima)
+            .map(|(minimum, maximum)| minimum + (maximum - minimum) * slack)
+            .collect()
+    };
+    Ok(Some(widths))
+}
+
+/// The widest declared grid among the tables nested directly in one cell, or
+/// `None` when the cell holds no nested table.
+///
+/// This is what keeps autofit measurement linear in nesting depth. It is the
+/// declared grid rather than a measured width, so a nested table's own
+/// content does not widen the column that holds it.
+fn declared_nested_grid_width(cell: &CT_Tc) -> Option<f64> {
+    cell.content
+        .iter()
+        .filter_map(|item| match item {
+            rdocx_oxml::table::CellContent::Table(nested) => Some(
+                nested
+                    .grid
+                    .as_ref()
+                    .map(|grid| {
+                        grid.columns
+                            .iter()
+                            .map(|column| column.width.to_pt())
+                            .sum::<f64>()
+                    })
+                    .unwrap_or(0.0),
+            ),
+            _ => None,
+        })
+        .reduce(f64::max)
+}
+
+/// The widest single line any block in a measured cell produced.
+fn measured_content_width(blocks: &[CellBlock]) -> f64 {
+    blocks
+        .iter()
+        .map(|block| match block {
+            CellBlock::Paragraph(paragraph) => {
+                paragraph.indent_left
+                    + paragraph.indent_right
+                    + paragraph
+                        .lines
+                        .iter()
+                        .map(|line| line.width)
+                        .fold(0.0f64, f64::max)
+            }
+            CellBlock::Table(table) => table.table_indent + table.table_width,
+        })
+        .fold(0.0f64, f64::max)
 }
 
 /// Compute column widths from CT_TblGrid, shrinking to the available width if
@@ -784,6 +1518,8 @@ fn layout_cell_content(
     story: &WordStory,
     cell_path: &[usize],
     table_style_ppr: Option<&rdocx_oxml::properties::CT_PPr>,
+    table_style_rpr: Option<&rdocx_oxml::properties::CT_RPr>,
+    doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(Vec<CellBlock>, Vec<CellBlockSemantics>)> {
     use crate::engine;
     use rdocx_oxml::table::CellContent;
@@ -807,6 +1543,8 @@ fn layout_cell_content(
                     diagnostics,
                     source,
                     table_style_ppr,
+                    table_style_rpr,
+                    doc_grid,
                 )?;
                 blocks.push(CellBlock::Paragraph(block));
                 semantics.push(CellBlockSemantics::Paragraph(ParagraphSemantics {
@@ -829,6 +1567,7 @@ fn layout_cell_content(
                     sources,
                     story,
                     &source_path,
+                    doc_grid,
                 )?;
                 blocks.push(CellBlock::Table(nested));
                 semantics.push(CellBlockSemantics::Table(nested_semantics));
@@ -846,6 +1585,8 @@ fn layout_cell_content(
                 story,
                 &source_path,
                 table_style_ppr,
+                table_style_rpr,
+                doc_grid,
                 &mut blocks,
                 &mut semantics,
             )?,
@@ -868,6 +1609,8 @@ fn layout_control_cell_content(
     story: &WordStory,
     path: &[usize],
     table_style_ppr: Option<&rdocx_oxml::properties::CT_PPr>,
+    table_style_rpr: Option<&rdocx_oxml::properties::CT_RPr>,
+    doc_grid: Option<&CT_DocGrid>,
     blocks: &mut Vec<CellBlock>,
     semantics: &mut Vec<CellBlockSemantics>,
 ) -> Result<()> {
@@ -890,6 +1633,8 @@ fn layout_control_cell_content(
                     diagnostics,
                     source,
                     table_style_ppr,
+                    table_style_rpr,
+                    doc_grid,
                 )?;
                 blocks.push(CellBlock::Paragraph(block));
                 semantics.push(CellBlockSemantics::Paragraph(ParagraphSemantics {
@@ -911,6 +1656,7 @@ fn layout_control_cell_content(
                     sources,
                     story,
                     &source_path,
+                    doc_grid,
                 )?;
                 blocks.push(CellBlock::Table(nested));
                 semantics.push(CellBlockSemantics::Table(nested_semantics));
@@ -928,6 +1674,8 @@ fn layout_control_cell_content(
                 story,
                 &source_path,
                 table_style_ppr,
+                table_style_rpr,
+                doc_grid,
                 blocks,
                 semantics,
             )?,
@@ -943,8 +1691,44 @@ fn layout_control_cell_content(
 #[derive(Default)]
 struct ResolvedTableCellStyle {
     paragraph_properties: Option<rdocx_oxml::properties::CT_PPr>,
+    run_properties: Option<rdocx_oxml::properties::CT_RPr>,
     borders: Option<CT_TblBorders>,
     shading: Option<rdocx_oxml::properties::CT_Shd>,
+}
+
+/// The conditional-region selectors that apply to one cell.
+///
+/// Word writes `w:cnfStyle` on the row, on the cell and on every paragraph
+/// inside the cell, and a bit set anywhere selects the region. The cell's own
+/// paragraphs are collected here because a table style resolves once per cell,
+/// before its paragraphs are laid out.
+fn cell_conditional_selectors<'a>(row: &'a CT_Row, cell: &'a CT_Tc) -> Vec<&'a str> {
+    let mut selectors = Vec::new();
+    if let Some(value) = row
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.cnf_style.as_deref())
+    {
+        selectors.push(value);
+    }
+    if let Some(value) = cell
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.cnf_style.as_deref())
+    {
+        selectors.push(value);
+    }
+    for item in &cell.content {
+        if let rdocx_oxml::table::CellContent::Paragraph(paragraph) = item
+            && let Some(value) = paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.cnf_style.as_deref())
+        {
+            selectors.push(value);
+        }
+    }
+    selectors
 }
 
 fn resolve_table_style_cell(
@@ -954,8 +1738,7 @@ fn resolve_table_style_cell(
     column: usize,
     row_count: usize,
     column_count: usize,
-    row_cnf_style: Option<&str>,
-    cell_cnf_style: Option<&str>,
+    selectors: &[&str],
 ) -> ResolvedTableCellStyle {
     let Some(mut style_id) = table
         .properties
@@ -969,6 +1752,7 @@ fn resolve_table_style_cell(
     else {
         return ResolvedTableCellStyle::default();
     };
+    // Most derived first, so `rev()` below applies from the base outwards.
     let mut chain = Vec::new();
     let mut visited = std::collections::HashSet::new();
     while visited.insert(style_id) {
@@ -981,12 +1765,20 @@ fn resolve_table_style_cell(
         };
         style_id = base;
     }
+
     let mut resolved = ResolvedTableCellStyle::default();
-    for style in chain.into_iter().rev() {
+    // The style's own property layers, applied base first.
+    for style in chain.iter().rev() {
         if let Some(properties) = &style.ppr {
             resolved
                 .paragraph_properties
                 .get_or_insert_with(rdocx_oxml::properties::CT_PPr::default)
+                .merge_from(properties);
+        }
+        if let Some(properties) = &style.rpr {
+            resolved
+                .run_properties
+                .get_or_insert_with(rdocx_oxml::properties::CT_RPr::default)
                 .merge_from(properties);
         }
         if let Some(borders) = style
@@ -1003,56 +1795,96 @@ fn resolve_table_style_cell(
         {
             resolved.shading = Some(shading.clone());
         }
-        for region in applicable_table_regions(
-            table,
-            row,
-            column,
-            row_count,
-            column_count,
-            row_cnf_style,
-            cell_cnf_style,
-        ) {
+    }
+
+    // `table` already carries the style chain's table properties, resolved by
+    // `resolve_base_table_properties` before the rows are laid out, so the
+    // band sizes here are the resolved ones.
+    let row_band_size = band_size(
+        table
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.row_band_size),
+    );
+    let column_band_size = band_size(
+        table
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.column_band_size),
+    );
+
+    // Regions apply in ascending priority. The whole `basedOn` chain is
+    // flattened for one region before the next region starts, so a base
+    // style's `firstRow` still beats a derived style's `wholeTable`.
+    for region in applicable_table_regions(
+        table,
+        row,
+        column,
+        row_count,
+        column_count,
+        row_band_size,
+        column_band_size,
+        selectors,
+    ) {
+        for style in chain.iter().rev() {
             for conditional in style
                 .conditional_table_styles
                 .iter()
-                .filter(|conditional| conditional.region == region)
+                .filter(|conditional| conditional.region == Some(region))
             {
-                if let Some(properties) = &conditional.paragraph_properties {
-                    resolved
-                        .paragraph_properties
-                        .get_or_insert_with(rdocx_oxml::properties::CT_PPr::default)
-                        .merge_from(properties);
-                }
-                if let Some(borders) = conditional
-                    .cell_properties
-                    .as_ref()
-                    .and_then(|properties| properties.borders.as_ref())
-                    .or_else(|| {
-                        conditional
-                            .table_properties
-                            .as_ref()
-                            .and_then(|properties| properties.borders.as_ref())
-                    })
-                {
-                    overlay_borders(&mut resolved.borders, borders);
-                }
-                if let Some(shading) = conditional
-                    .cell_properties
-                    .as_ref()
-                    .and_then(|properties| properties.shading.as_ref())
-                    .or_else(|| {
-                        conditional
-                            .table_properties
-                            .as_ref()
-                            .and_then(|properties| properties.shading.as_ref())
-                    })
-                {
-                    resolved.shading = Some(shading.clone());
-                }
+                apply_conditional_region(&mut resolved, conditional);
             }
         }
     }
     resolved
+}
+
+/// Overlay one conditional region's layers onto the resolved cell style.
+///
+/// The region's `w:trPr` is modeled and round-tripped but not applied. Row
+/// geometry from a conditional region belongs to F-268a.
+fn apply_conditional_region(
+    resolved: &mut ResolvedTableCellStyle,
+    conditional: &rdocx_oxml::styles::CT_TblStylePr,
+) {
+    if let Some(properties) = &conditional.paragraph_properties {
+        resolved
+            .paragraph_properties
+            .get_or_insert_with(rdocx_oxml::properties::CT_PPr::default)
+            .merge_from(properties);
+    }
+    if let Some(properties) = &conditional.run_properties {
+        resolved
+            .run_properties
+            .get_or_insert_with(rdocx_oxml::properties::CT_RPr::default)
+            .merge_from(properties);
+    }
+    if let Some(borders) = conditional
+        .cell_properties
+        .as_ref()
+        .and_then(|properties| properties.borders.as_ref())
+        .or_else(|| {
+            conditional
+                .table_properties
+                .as_ref()
+                .and_then(|properties| properties.borders.as_ref())
+        })
+    {
+        overlay_borders(&mut resolved.borders, borders);
+    }
+    if let Some(shading) = conditional
+        .cell_properties
+        .as_ref()
+        .and_then(|properties| properties.shading.as_ref())
+        .or_else(|| {
+            conditional
+                .table_properties
+                .as_ref()
+                .and_then(|properties| properties.shading.as_ref())
+        })
+    {
+        resolved.shading = Some(shading.clone());
+    }
 }
 
 fn applicable_table_regions(
@@ -1061,13 +1893,13 @@ fn applicable_table_regions(
     column: usize,
     row_count: usize,
     column_count: usize,
-    row_cnf_style: Option<&str>,
-    cell_cnf_style: Option<&str>,
-) -> Vec<&'static str> {
+    row_band_size: usize,
+    column_band_size: usize,
+    selectors: &[&str],
+) -> Vec<TableStyleRegion> {
     let cnf = |index: usize| {
-        [row_cnf_style, cell_cnf_style]
-            .into_iter()
-            .flatten()
+        selectors
+            .iter()
             .any(|value| value.as_bytes().get(index) == Some(&b'1'))
     };
     let look = table
@@ -1081,71 +1913,77 @@ fn applicable_table_regions(
                 .map_or(default, |value| value & mask != 0)
         })
     };
-    let first_row =
-        (enabled(look.and_then(|look| look.first_row), 0x20, false) && row == 0) || cnf(0);
+    let heads_rows = enabled(look.and_then(|look| look.first_row), 0x20, false);
+    let heads_columns = enabled(look.and_then(|look| look.first_column), 0x80, false);
+    let first_row = (heads_rows && row == 0) || cnf(0);
     let last_row = (enabled(look.and_then(|look| look.last_row), 0x40, false)
         && row + 1 == row_count)
         || cnf(1);
-    let first_column =
-        (enabled(look.and_then(|look| look.first_column), 0x80, false) && column == 0) || cnf(2);
+    let first_column = (heads_columns && column == 0) || cnf(2);
     let last_column = (enabled(look.and_then(|look| look.last_column), 0x100, false)
         && column + 1 == column_count)
         || cnf(3);
     let no_h_band = enabled(look.and_then(|look| look.no_h_band), 0x200, false);
     let no_v_band = enabled(look.and_then(|look| look.no_v_band), 0x400, false);
 
-    let mut regions = vec!["wholeTable"];
+    let mut regions = vec![TableStyleRegion::WholeTable];
+    // Banding counts whole bands of the resolved size, and starts after the
+    // header row the look designates. The header row itself is in no band.
     if cnf(6) {
-        regions.push("band1Horz");
+        regions.push(TableStyleRegion::Band1Horz);
     } else if cnf(7) {
-        regions.push("band2Horz");
-    } else if !no_h_band {
-        regions.push(if row.is_multiple_of(2) {
-            "band1Horz"
+        regions.push(TableStyleRegion::Band2Horz);
+    } else if !no_h_band && let Some(offset) = row.checked_sub(usize::from(heads_rows)) {
+        regions.push(if (offset / row_band_size).is_multiple_of(2) {
+            TableStyleRegion::Band1Horz
         } else {
-            "band2Horz"
+            TableStyleRegion::Band2Horz
         });
     }
     if cnf(4) {
-        regions.push("band1Vert");
+        regions.push(TableStyleRegion::Band1Vert);
     } else if cnf(5) {
-        regions.push("band2Vert");
-    } else if !no_v_band {
-        regions.push(if column.is_multiple_of(2) {
-            "band1Vert"
+        regions.push(TableStyleRegion::Band2Vert);
+    } else if !no_v_band && let Some(offset) = column.checked_sub(usize::from(heads_columns)) {
+        regions.push(if (offset / column_band_size).is_multiple_of(2) {
+            TableStyleRegion::Band1Vert
         } else {
-            "band2Vert"
+            TableStyleRegion::Band2Vert
         });
     }
     if first_column {
-        regions.push("firstCol");
+        regions.push(TableStyleRegion::FirstCol);
     }
     if last_column {
-        regions.push("lastCol");
+        regions.push(TableStyleRegion::LastCol);
     }
     if first_row {
-        regions.push("firstRow");
+        regions.push(TableStyleRegion::FirstRow);
     }
     if last_row {
-        regions.push("lastRow");
+        regions.push(TableStyleRegion::LastRow);
     }
     if cnf(9) {
-        regions.push("nwCell");
+        regions.push(TableStyleRegion::NwCell);
     } else if cnf(8) {
-        regions.push("neCell");
+        regions.push(TableStyleRegion::NeCell);
     } else if cnf(11) {
-        regions.push("swCell");
+        regions.push(TableStyleRegion::SwCell);
     } else if cnf(10) {
-        regions.push("seCell");
+        regions.push(TableStyleRegion::SeCell);
     } else {
         match (first_row, last_row, first_column, last_column) {
-            (true, _, true, _) => regions.push("nwCell"),
-            (true, _, _, true) => regions.push("neCell"),
-            (_, true, true, _) => regions.push("swCell"),
-            (_, true, _, true) => regions.push("seCell"),
+            (true, _, true, _) => regions.push(TableStyleRegion::NwCell),
+            (true, _, _, true) => regions.push(TableStyleRegion::NeCell),
+            (_, true, true, _) => regions.push(TableStyleRegion::SwCell),
+            (_, true, _, true) => regions.push(TableStyleRegion::SeCell),
             _ => {}
         }
     }
+    // Declaration order is priority order, so sorting is what makes the
+    // precedence a property of the type rather than of the push order above.
+    regions.sort_unstable();
+    regions.dedup();
     regions
 }
 
@@ -1189,6 +2027,9 @@ mod tests {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
@@ -1226,6 +2067,7 @@ mod tests {
             &mut font_manager,
             &mut numbering,
             &mut Vec::new(),
+            None,
         )
         .unwrap()
     }
@@ -1375,6 +2217,9 @@ mod tests {
         let input = crate::input::LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
@@ -1415,6 +2260,7 @@ mod tests {
             &mut fm,
             &mut num_state,
             &mut diagnostics,
+            None,
         );
         assert!(result.is_ok());
         let block = result.unwrap();
@@ -1429,8 +2275,11 @@ mod tests {
         assert!(matches!(cell.blocks[0], CellBlock::Paragraph(_)));
         assert!(matches!(cell.blocks[1], CellBlock::Table(_)));
 
-        // Table width should match available width
-        assert!((block.table_width - 234.0).abs() < 1.0);
+        // This table declares neither a width nor a layout mode. Autofit
+        // engagement requires the `w:tblLayout` element, so the width comes
+        // from the declared grid and never exceeds the caller's width.
+        assert!(block.table_width > 0.0);
+        assert!(block.table_width <= 234.0);
     }
 
     #[test]
@@ -1612,7 +2461,7 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
-        let resolved = resolve_table_style_cell(&CT_Tbl::new(), &styles, 0, 0, 1, 1, None, None);
+        let resolved = resolve_table_style_cell(&CT_Tbl::new(), &styles, 0, 0, 1, 1, &[]);
         assert_eq!(
             resolved
                 .shading

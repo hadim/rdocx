@@ -24,7 +24,10 @@ use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
-use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
+use rdocx_oxml::document::{
+    BodyContent, CT_Column, CT_Columns, CT_DocGrid, CT_Document, CT_LineNumber, CT_NoteProperties,
+    CT_PageBorders, CT_PaperSource, CT_SectPr,
+};
 use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, CT_Anchor, CT_Drawing, CT_Inline, ST_RelativeFromH,
     ST_RelativeFromV, SourceRect, WrapType, drawing_ns,
@@ -40,16 +43,18 @@ use rdocx_oxml::numbering::{
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::revision::CT_Revision;
 use rdocx_oxml::settings::{
-    CT_Settings, CharacterSpacingControl, CompatibilitySetting, DocumentProtection,
-    ThemeFontLanguage,
+    CT_Settings, CharacterSpacingControl, CompatibilityOption, CompatibilitySetting,
+    DocumentProofState, DocumentProtection, DocumentView, DocumentZoom, MailMerge,
+    SettingsDiagnostic, ThemeFontLanguage,
 };
 use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::{CT_Styles, StyleType};
-use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, VMerge};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc, VMerge};
 use rdocx_oxml::text::{
     CT_P, CT_R, RunContent, story_field_instruction_has_name, story_simple_field_is_typed,
 };
 use rdocx_oxml::units::Twips;
+use rdocx_oxml::web_settings::CT_WebSettings;
 
 use oxml_core::custom_properties::{CustomProperties, CustomProperty};
 use rdocx_oxml::core_properties::CoreProperties;
@@ -1558,6 +1563,29 @@ fn namespace_declarations(element: &BytesStart<'_>) -> Result<Vec<(String, Strin
     Ok(declarations)
 }
 
+/// The declarations on `element` that change a binding `inherited` already
+/// holds.
+///
+/// A declaration that rebinds a prefix to the URI already in scope resolves no
+/// name differently from the scope it sits in, so the element owns no
+/// namespace and canonical serialization cannot lose one by dropping it. The
+/// retained root-attribute record materializes exactly such a redundant
+/// binding onto every paragraph and run that keeps a prefixed producer
+/// attribute, and treating those as owners makes identical runs
+/// indistinguishable to the retained-owner matcher.
+fn rebinding_namespace_declarations(
+    element: &BytesStart<'_>,
+    inherited: &[(String, String)],
+) -> Result<Vec<(String, String)>> {
+    let mut declarations = namespace_declarations(element)?;
+    declarations.retain(|(name, value)| {
+        !inherited
+            .iter()
+            .any(|(candidate, bound)| candidate == name && bound == value)
+    });
+    Ok(declarations)
+}
+
 fn root_namespace_declarations(xml: &[u8]) -> Result<Vec<(String, String)>> {
     let mut reader = quick_xml::Reader::from_reader(xml);
     let mut buffer = Vec::new();
@@ -1812,7 +1840,8 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
         match event {
             Event::Start(element) => {
                 let local_name = element.local_name();
-                let mut bindings = scope_stack.last().cloned().unwrap_or_default();
+                let inherited = scope_stack.last().map(Vec::as_slice).unwrap_or_default();
+                let mut bindings = inherited.to_vec();
                 apply_namespace_declarations(&element, &mut bindings)?;
                 if inside_body && is_word && is_modeled_owner(local_name.as_ref()) {
                     let index = spans.len();
@@ -1824,7 +1853,7 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
                             .to_owned(),
                         start,
                         end: 0,
-                        declarations: namespace_declarations(&element)?,
+                        declarations: rebinding_namespace_declarations(&element, inherited)?,
                         bindings: bindings.clone(),
                     });
                     owner_stack.push((depth, index));
@@ -1837,7 +1866,8 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
             }
             Event::Empty(element) => {
                 let local_name = element.local_name();
-                let mut bindings = scope_stack.last().cloned().unwrap_or_default();
+                let inherited = scope_stack.last().map(Vec::as_slice).unwrap_or_default();
+                let mut bindings = inherited.to_vec();
                 apply_namespace_declarations(&element, &mut bindings)?;
                 if inside_body && is_word && is_modeled_owner(local_name.as_ref()) {
                     spans.push(ModeledOwnerSpan {
@@ -1848,7 +1878,7 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
                             .to_owned(),
                         start,
                         end,
-                        declarations: namespace_declarations(&element)?,
+                        declarations: rebinding_namespace_declarations(&element, inherited)?,
                         bindings,
                     });
                 }
@@ -2708,6 +2738,75 @@ impl<'a> SectionRef<'a> {
         ))
     }
 
+    /// Return the explicit column tracks, as `(width, trailing space)` pairs.
+    ///
+    /// `None` when the section has no columns or leaves them equal width, which
+    /// is what `columns` already reports.
+    pub fn column_widths(&self) -> Option<Vec<(Length, Length)>> {
+        let columns = self.inner.columns.as_ref()?;
+        if columns.columns.is_empty() {
+            return None;
+        }
+        Some(
+            columns
+                .columns
+                .iter()
+                .map(|column| {
+                    (
+                        Length::twips(column.width.map_or(0, |value| value.0)),
+                        Length::twips(column.space.map_or(0, |value| value.0)),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// Return whether a rule is drawn between this section's columns.
+    pub fn column_separator(&self) -> Option<bool> {
+        self.inner.columns.as_ref()?.sep
+    }
+
+    /// Borrow this section's footnote configuration.
+    pub fn footnote_properties(&self) -> Option<&'a CT_NoteProperties> {
+        self.inner.footnote_pr.as_deref()
+    }
+
+    /// Borrow this section's endnote configuration.
+    pub fn endnote_properties(&self) -> Option<&'a CT_NoteProperties> {
+        self.inner.endnote_pr.as_deref()
+    }
+
+    /// Return the printer trays feeding the first page and every later page.
+    pub fn paper_source(&self) -> Option<(Option<u32>, Option<u32>)> {
+        let source = self.inner.paper_source.as_deref()?;
+        Some((source.first, source.other))
+    }
+
+    /// Borrow this section's page border frame.
+    pub fn page_borders(&self) -> Option<&'a CT_PageBorders> {
+        self.inner.page_borders.as_deref()
+    }
+
+    /// Borrow this section's margin line numbering.
+    pub fn line_numbers(&self) -> Option<&'a CT_LineNumber> {
+        self.inner.line_numbers.as_deref()
+    }
+
+    /// Return the vertical alignment of the body band within the page.
+    pub fn vertical_alignment(&self) -> Option<ST_VerticalJc> {
+        self.inner.vertical_alignment
+    }
+
+    /// Return this section's `w:textDirection`, exactly as it was authored.
+    pub fn text_direction(&self) -> Option<&'a str> {
+        self.inner.text_direction.as_deref()
+    }
+
+    /// Return this section's `w:docGrid` character grid.
+    pub fn doc_grid(&self) -> Option<&'a CT_DocGrid> {
+        self.inner.doc_grid.as_deref()
+    }
+
     /// Return the explicitly configured page-number restart.
     pub fn page_number_start(&self) -> Option<u32> {
         self.inner.page_number.as_ref()?.start
@@ -2864,6 +2963,178 @@ impl Section<'_> {
         Ok(())
     }
 
+    /// Return the explicit column tracks, as `(width, trailing space)` pairs.
+    pub fn column_widths(&self) -> Option<Vec<(Length, Length)>> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .column_widths()
+    }
+
+    /// Set explicit column tracks of positive width and nonnegative spacing.
+    ///
+    /// Authoring tracks marks the section unequal width, which is what makes
+    /// the resolver read the list rather than divide the text measure.
+    pub fn set_column_widths(&mut self, tracks: &[(Length, Length)]) -> Result<()> {
+        if tracks.is_empty() {
+            return Err(Error::Other(
+                "section column tracks must not be empty".to_owned(),
+            ));
+        }
+        let mut columns = Vec::with_capacity(tracks.len());
+        for (width, space) in tracks {
+            columns.push(CT_Column {
+                width: Some(checked_positive_section_twips(*width, "column width")?),
+                space: Some(checked_nonnegative_section_twips(*space, "column spacing")?),
+            });
+        }
+        let count = u32::try_from(tracks.len())
+            .map_err(|_| Error::Other("section column count exceeds the range".to_owned()))?;
+        let separator = self.inner.columns.as_ref().and_then(|columns| columns.sep);
+        self.inner.columns = Some(CT_Columns {
+            num: Some(count),
+            space: None,
+            equal_width: Some(false),
+            sep: separator,
+            columns,
+        });
+        Ok(())
+    }
+
+    /// Return whether a rule is drawn between this section's columns.
+    pub fn column_separator(&self) -> Option<bool> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .column_separator()
+    }
+
+    /// Configure the rule drawn between this section's columns.
+    pub fn set_column_separator(&mut self, enabled: bool) {
+        match &mut self.inner.columns {
+            Some(columns) => columns.sep = Some(enabled),
+            None => {
+                self.inner.columns = Some(CT_Columns {
+                    sep: Some(enabled),
+                    ..CT_Columns::default()
+                });
+            }
+        }
+    }
+
+    /// Borrow this section's footnote configuration.
+    pub fn footnote_properties(&self) -> Option<&CT_NoteProperties> {
+        self.inner.footnote_pr.as_deref()
+    }
+
+    /// Set this section's footnote configuration.
+    pub fn set_footnote_properties(&mut self, properties: CT_NoteProperties) {
+        self.inner.footnote_pr = Some(Box::new(properties));
+    }
+
+    /// Borrow this section's endnote configuration.
+    pub fn endnote_properties(&self) -> Option<&CT_NoteProperties> {
+        self.inner.endnote_pr.as_deref()
+    }
+
+    /// Set this section's endnote configuration.
+    pub fn set_endnote_properties(&mut self, properties: CT_NoteProperties) {
+        self.inner.endnote_pr = Some(Box::new(properties));
+    }
+
+    /// Return the printer trays feeding the first page and every later page.
+    pub fn paper_source(&self) -> Option<(Option<u32>, Option<u32>)> {
+        SectionRef {
+            ordinal: self.ordinal,
+            is_final: self.is_final,
+            inner: self.inner,
+        }
+        .paper_source()
+    }
+
+    /// Select the printer trays this section prints from.
+    ///
+    /// Tray selection is a print-time choice, so page geometry and page count
+    /// are identical with and without it.
+    pub fn set_paper_source(&mut self, first: Option<u32>, other: Option<u32>) {
+        let retained = self
+            .inner
+            .paper_source
+            .take()
+            .map(|source| source.extra_attributes)
+            .unwrap_or_default();
+        self.inner.paper_source = Some(Box::new(CT_PaperSource {
+            first,
+            other,
+            extra_attributes: retained,
+        }));
+    }
+
+    /// Borrow this section's page border frame.
+    pub fn page_borders(&self) -> Option<&CT_PageBorders> {
+        self.inner.page_borders.as_deref()
+    }
+
+    /// Set this section's page border frame.
+    pub fn set_page_borders(&mut self, borders: CT_PageBorders) {
+        self.inner.page_borders = Some(Box::new(borders));
+    }
+
+    /// Borrow this section's margin line numbering.
+    pub fn line_numbers(&self) -> Option<&CT_LineNumber> {
+        self.inner.line_numbers.as_deref()
+    }
+
+    /// Set this section's margin line numbering.
+    pub fn set_line_numbers(&mut self, numbering: CT_LineNumber) {
+        self.inner.line_numbers = Some(Box::new(numbering));
+    }
+
+    /// Return the vertical alignment of the body band within the page.
+    pub fn vertical_alignment(&self) -> Option<ST_VerticalJc> {
+        self.inner.vertical_alignment
+    }
+
+    /// Set the vertical alignment of the body band within the page.
+    ///
+    /// `ST_VerticalJc::Both` keeps its source value and lays out as `Top`.
+    /// True vertical distribution is a named follow-up.
+    pub fn set_vertical_alignment(&mut self, alignment: ST_VerticalJc) {
+        self.inner.vertical_alignment = Some(alignment);
+    }
+
+    /// Return this section's `w:textDirection`, exactly as it was authored.
+    pub fn text_direction(&self) -> Option<&str> {
+        self.inner.text_direction.as_deref()
+    }
+
+    /// Set this section's `w:textDirection`.
+    ///
+    /// F-269 authors and preserves the value. F-266c owns projecting it onto
+    /// the rendered page, so nothing here changes what is drawn.
+    pub fn set_text_direction(&mut self, direction: &str) {
+        self.inner.text_direction = Some(direction.to_owned());
+    }
+
+    /// Return this section's `w:docGrid` character grid.
+    pub fn doc_grid(&self) -> Option<&CT_DocGrid> {
+        self.inner.doc_grid.as_deref()
+    }
+
+    /// Set or clear this section's `w:docGrid` character grid.
+    ///
+    /// A `default` grid, and an absent one, keep the ordinary line and
+    /// character metrics. `lines`, `linesAndChars` and `snapToChars` put line
+    /// advance on the grid pitch, and the last two put character advance on
+    /// the character space as well.
+    pub fn set_doc_grid(&mut self, grid: Option<CT_DocGrid>) {
+        self.inner.doc_grid = grid.map(Box::new);
+    }
+
     /// Return the explicitly configured page-number restart.
     pub fn page_number_start(&self) -> Option<u32> {
         self.inner.page_number.as_ref()?.start
@@ -2977,6 +3248,14 @@ fn empty_section_properties() -> CT_SectPr {
         section_type: None,
         columns: None,
         page_number: None,
+        footnote_pr: None,
+        endnote_pr: None,
+        paper_source: None,
+        page_borders: None,
+        line_numbers: None,
+        vertical_alignment: None,
+        text_direction: None,
+        doc_grid: None,
         title_pg: None,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
@@ -4510,6 +4789,13 @@ pub struct Document {
     settings_part_name: Option<String>,
     /// Whether this facade instance created an optional settings graph.
     settings_owned: bool,
+    /// Typed web settings loaded through the main document relationship.
+    web_settings: Option<CT_WebSettings>,
+    /// Existing web settings relationship target. No conventional target is
+    /// assumed.
+    web_settings_part_name: Option<String>,
+    /// Whether this facade instance created an optional web settings graph.
+    web_settings_owned: bool,
     /// Typed shared DrawingML theme loaded through the main-document relationship.
     theme: Option<oxml_drawing::theme::CT_OfficeStyleSheet>,
     /// Existing theme relationship target.
@@ -4594,6 +4880,9 @@ const CORE_PROPERTIES_REL_TYPE: &str =
 const SETTINGS_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml";
 const DEFAULT_SETTINGS_PART: &str = "/word/settings.xml";
+const WEB_SETTINGS_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml";
+const DEFAULT_WEB_SETTINGS_PART: &str = "/word/webSettings.xml";
 const FONT_TABLE_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml";
 const EMBEDDED_FONT_CONTENT_TYPE: &str =
@@ -5408,7 +5697,9 @@ fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<
         if !item.direct_owner_child {
             continue;
         }
-        if owner.kind == StoryKind::Body && content_fragment_root_is_section_properties(xml, &item)?
+        if owner.kind == StoryKind::Body
+            && item.kind == StoryItemKind::PreservedNode
+            && content_fragment_root_is_section_properties(xml, &item)?
         {
             continue;
         }
@@ -5420,7 +5711,10 @@ fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<
 fn story_owner_content_end(xml: &[u8], owner: &StoryOwnerSpan) -> Result<usize> {
     if owner.kind == StoryKind::Body {
         for item in scan_story_items(xml, owner)? {
-            if item.direct_owner_child && content_fragment_root_is_section_properties(xml, &item)? {
+            if item.direct_owner_child
+                && item.kind == StoryItemKind::PreservedNode
+                && content_fragment_root_is_section_properties(xml, &item)?
+            {
                 return Ok(item.full.start);
             }
         }
@@ -5486,7 +5780,10 @@ pub(crate) fn package_authoritative_body_fragment(
     if include_final_section_properties {
         let mut section = None;
         for item in scan_story_items(xml, &owner)? {
-            if item.direct_owner_child && content_fragment_root_is_section_properties(xml, &item)? {
+            if item.direct_owner_child
+                && item.kind == StoryItemKind::PreservedNode
+                && content_fragment_root_is_section_properties(xml, &item)?
+            {
                 section = Some(item);
                 break;
             }
@@ -9087,6 +9384,7 @@ fn merge_style_update(
     existing: &rdocx_oxml::styles::CT_Style,
     authored: &mut rdocx_oxml::styles::CT_Style,
     cleared: u16,
+    removed_regions: &[rdocx_oxml::styles::TableStyleRegion],
 ) {
     authored.is_default = existing.is_default;
     if authored.based_on.is_none() && cleared & style::CLEAR_BASED_ON == 0 {
@@ -9146,15 +9444,27 @@ fn merge_style_update(
     }
     authored.table_properties_original = existing.table_properties_original.clone();
     authored.table_properties_xml = existing.table_properties_xml.clone();
+    if authored.table_row_properties.is_none() && cleared & style::CLEAR_TABLE_ROW_PROPERTIES == 0 {
+        authored.table_row_properties = existing.table_row_properties.clone();
+    }
+    if authored.table_cell_properties.is_none() && cleared & style::CLEAR_TABLE_CELL_PROPERTIES == 0
+    {
+        authored.table_cell_properties = existing.table_cell_properties.clone();
+    }
     let authored_regions = std::mem::take(&mut authored.conditional_table_styles);
     let mut merged_regions = if cleared & style::CLEAR_CONDITIONAL_TABLE_STYLES == 0 {
         existing.conditional_table_styles.clone()
     } else {
         Vec::new()
     };
+    merged_regions.retain(|conditional| {
+        conditional
+            .region
+            .is_none_or(|region| !removed_regions.contains(&region))
+    });
     let mut authored_region_names = std::collections::HashSet::new();
     for authored_region in authored_regions {
-        if !authored_region_names.insert(authored_region.region.clone()) {
+        if !authored_region_names.insert(authored_region.region) {
             merged_regions.push(authored_region);
             continue;
         }
@@ -9180,11 +9490,20 @@ fn merge_conditional_table_style(
         let target = updated.paragraph_properties.get_or_insert_default();
         target.merge_from(properties);
     }
+    if let Some(properties) = &authored.run_properties {
+        let target = updated.run_properties.get_or_insert_default();
+        target.merge_from(properties);
+    }
     if let Some(properties) = &authored.table_properties {
         updated.table_properties = Some(merge_table_style_properties(
             updated.table_properties.as_ref(),
             properties,
         ));
+    }
+    if let Some(properties) = &authored.row_properties {
+        // A row layer has no typed merge of its own, so an authored row layer
+        // replaces the existing one outright.
+        updated.row_properties = Some(properties.clone());
     }
     if let Some(properties) = &authored.cell_properties {
         updated.cell_properties = Some(merge_table_cell_style_properties(
@@ -9276,6 +9595,12 @@ fn merge_table_style_properties(
     let mut updated = existing.cloned().unwrap_or_default();
     if authored.style_id.is_some() {
         updated.style_id.clone_from(&authored.style_id);
+    }
+    if authored.row_band_size.is_some() {
+        updated.row_band_size = authored.row_band_size;
+    }
+    if authored.column_band_size.is_some() {
+        updated.column_band_size = authored.column_band_size;
     }
     if authored.width.is_some() {
         updated.width.clone_from(&authored.width);
@@ -9953,6 +10278,11 @@ impl Document {
             settings,
             settings_part_name: compatible.then(|| DEFAULT_SETTINGS_PART.to_owned()),
             settings_owned: false,
+            // A fresh package gains no web settings part. An ordinary save
+            // never creates a part the document did not already have.
+            web_settings: None,
+            web_settings_part_name: None,
+            web_settings_owned: false,
             theme: compatible.then(oxml_drawing::theme::CT_OfficeStyleSheet::office_default),
             theme_part_name: compatible.then(|| DEFAULT_THEME_PART.to_owned()),
             theme_dirty: false,
@@ -10009,6 +10339,9 @@ impl Document {
             settings: self.settings.clone(),
             settings_part_name: self.settings_part_name.clone(),
             settings_owned: self.settings_owned,
+            web_settings: self.web_settings.clone(),
+            web_settings_part_name: self.web_settings_part_name.clone(),
+            web_settings_owned: self.web_settings_owned,
             theme: self.theme.clone(),
             theme_part_name: self.theme_part_name.clone(),
             theme_dirty: self.theme_dirty,
@@ -11270,6 +11603,15 @@ impl Document {
             None => None,
         };
 
+        let web_settings_part_name = resolve_part(rel_types::WEB_SETTINGS);
+        let web_settings = match web_settings_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+        {
+            Some(xml) => Some(CT_WebSettings::from_xml(xml)?),
+            None => None,
+        };
+
         let theme_part_name = resolve_part(rel_types::THEME);
         let theme = match theme_part_name
             .as_deref()
@@ -11390,6 +11732,9 @@ impl Document {
             settings,
             settings_part_name,
             settings_owned: false,
+            web_settings,
+            web_settings_part_name,
+            web_settings_owned: false,
             theme,
             theme_part_name,
             theme_dirty: false,
@@ -11626,6 +11971,8 @@ impl Document {
         let custom_properties_owned = self.custom_properties_owned;
         let settings_owned = self.settings_owned;
         let owned_settings = settings_owned.then(|| self.settings.clone());
+        let web_settings_owned = self.web_settings_owned;
+        let owned_web_settings = web_settings_owned.then(|| self.web_settings.clone());
         let comments_owned = self.comments_owned;
         let comments_extended_owned = self.comments_extended_owned;
         let embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
@@ -11638,6 +11985,10 @@ impl Document {
         reopened.settings_owned = settings_owned;
         if let Some(settings) = owned_settings {
             reopened.settings = settings;
+        }
+        reopened.web_settings_owned = web_settings_owned;
+        if let Some(web_settings) = owned_web_settings {
+            reopened.web_settings = web_settings;
         }
         reopened.comments_owned = comments_owned;
         reopened.comments_extended_owned = comments_extended_owned;
@@ -11741,6 +12092,12 @@ impl Document {
         // the relationship-resolved part they came from.
         if let (Some(settings), Some(part_name)) = (&self.settings, &self.settings_part_name) {
             self.package.set_part(part_name, settings.to_xml()?);
+        }
+
+        if let (Some(web_settings), Some(part_name)) =
+            (&self.web_settings, &self.web_settings_part_name)
+        {
+            self.package.set_part(part_name, web_settings.to_xml()?);
         }
 
         if self.theme_dirty {
@@ -15811,11 +16168,12 @@ impl Document {
         p.runs.push(run);
         if let Some(color) = bg_color {
             p.properties = Some(CT_PPr {
-                shading: Some(CT_Shd {
+                shading: Some(Box::new(CT_Shd {
                     val: "clear".to_string(),
                     color: Some("auto".to_string()),
                     fill: Some(color.to_string()),
-                }),
+                    ..Default::default()
+                })),
                 ..Default::default()
             });
         }
@@ -17079,7 +17437,7 @@ impl Document {
     pub fn add_style(&mut self, builder: StyleBuilder) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.reserve_styles_bundle()?;
-        let (authored, _) = builder.build();
+        let (authored, _, _) = builder.build();
         if candidate.styles.get_by_id(&authored.style_id).is_some() {
             return Err(Error::Other(format!(
                 "style '{}' already exists",
@@ -17115,7 +17473,7 @@ impl Document {
     pub fn set_style(&mut self, builder: StyleBuilder) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.reserve_styles_bundle()?;
-        let (mut authored, cleared) = builder.build();
+        let (mut authored, cleared, removed_regions) = builder.build();
         let index = candidate
             .styles
             .styles
@@ -17132,7 +17490,7 @@ impl Document {
             )));
         }
         let old_link = existing.linked_style.clone();
-        merge_style_update(existing, &mut authored, cleared);
+        merge_style_update(existing, &mut authored, cleared, &removed_regions);
         let existing_numbering = existing
             .ppr
             .as_ref()
@@ -18564,6 +18922,14 @@ impl Document {
         self.settings.as_ref()?.theme_font_language()
     }
 
+    /// Set the default document theme languages.
+    ///
+    /// The getter and remover already existed. The setter completes the pair,
+    /// so a caller can author what it is allowed to take away.
+    pub fn set_theme_font_language(&mut self, value: ThemeFontLanguage) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_theme_font_language(value))
+    }
+
     pub fn remove_theme_font_language(&mut self) -> Result<Option<ThemeFontLanguage>> {
         if self.theme_font_language().is_none() {
             return Ok(None);
@@ -18577,6 +18943,645 @@ impl Document {
         candidate.prune_empty_owned_settings();
         self.commit_staged_mutation(candidate);
         Ok(removed)
+    }
+
+    /// Stage one settings mutation, apply it, and commit it atomically.
+    ///
+    /// Every typed settings member routes through here, which keeps part
+    /// allocation, relationship allocation and layout invalidation in one
+    /// place instead of once per accessor.
+    fn stage_settings_mutation(
+        &mut self,
+        apply: impl FnOnce(&mut CT_Settings) -> std::result::Result<(), rdocx_oxml::OxmlError>,
+    ) -> Result<()> {
+        let mut candidate = self.settings_mutation_candidate()?;
+        apply(candidate.settings.get_or_insert_with(CT_Settings::new))?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove one typed settings member and prune an empty owned part.
+    fn stage_settings_removal<T>(
+        &mut self,
+        apply: impl FnOnce(&mut CT_Settings) -> std::result::Result<Option<T>, rdocx_oxml::OxmlError>,
+    ) -> Result<Option<T>> {
+        if self.settings.is_none() {
+            return Ok(None);
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        let removed = apply(
+            candidate
+                .settings
+                .as_mut()
+                .expect("settings candidate retains its model"),
+        )?;
+        candidate.prune_empty_owned_settings();
+        self.commit_staged_mutation(candidate);
+        Ok(removed)
+    }
+
+    /// Stage one web settings mutation, applying it to a part created on
+    /// demand.
+    fn stage_web_settings_mutation(
+        &mut self,
+        apply: impl FnOnce(&mut CT_WebSettings) -> std::result::Result<(), rdocx_oxml::OxmlError>,
+    ) -> Result<()> {
+        let mut candidate = self.web_settings_mutation_candidate()?;
+        apply(
+            candidate
+                .web_settings
+                .get_or_insert_with(CT_WebSettings::new),
+        )?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove one typed web settings member and prune an empty owned part.
+    fn stage_web_settings_removal<T>(
+        &mut self,
+        apply: impl FnOnce(&mut CT_WebSettings) -> std::result::Result<Option<T>, rdocx_oxml::OxmlError>,
+    ) -> Result<Option<T>> {
+        if self.web_settings.is_none() {
+            return Ok(None);
+        }
+        let mut candidate = self.web_settings_mutation_candidate()?;
+        let removed = apply(
+            candidate
+                .web_settings
+                .as_mut()
+                .expect("web settings candidate retains its model"),
+        )?;
+        candidate.prune_empty_owned_web_settings();
+        self.commit_staged_mutation(candidate);
+        Ok(removed)
+    }
+
+    /// Report every supported settings child the typed model could not own.
+    ///
+    /// A package authored entirely through this facade reports nothing.
+    pub fn settings_diagnostics(&self) -> &[SettingsDiagnostic] {
+        self.settings
+            .as_ref()
+            .map_or(&[][..], CT_Settings::diagnostics)
+    }
+
+    /// Report every supported web settings child the typed model could not own.
+    pub fn web_settings_diagnostics(&self) -> &[SettingsDiagnostic] {
+        self.web_settings
+            .as_ref()
+            .map_or(&[][..], CT_WebSettings::diagnostics)
+    }
+
+    /// Report every HTML division the web settings part declares.
+    ///
+    /// A `w:divId` on a paragraph resolves only when its value appears here.
+    pub fn web_division_ids(&self) -> Vec<u32> {
+        self.web_settings
+            .as_ref()
+            .map(CT_WebSettings::div_ids)
+            .unwrap_or_default()
+    }
+
+    /// Record caller-supplied document-protection metadata verbatim.
+    ///
+    /// Password derivation is an explicit non-goal. Nothing here computes a
+    /// hash, chooses a salt or picks a spin count.
+    pub fn set_document_protection(&mut self, value: DocumentProtection) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_document_protection(value))
+    }
+
+    /// Remove document-protection metadata.
+    pub fn remove_document_protection(&mut self) -> Result<Option<DocumentProtection>> {
+        self.stage_settings_removal(CT_Settings::remove_document_protection)
+    }
+
+    /// Return the bounded mail-merge configuration from the settings part.
+    ///
+    /// The name carries the `_settings` suffix because `mail_merge` already
+    /// names the field-merge operation on this type.
+    pub fn mail_merge_settings(&self) -> Option<&MailMerge> {
+        self.settings.as_ref()?.mail_merge()
+    }
+
+    /// Replace the modeled mail-merge members at their schema positions.
+    pub fn set_mail_merge_settings(&mut self, value: MailMerge) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_mail_merge(value))
+    }
+
+    /// Remove every modeled mail-merge member.
+    pub fn remove_mail_merge_settings(&mut self) -> Result<Option<MailMerge>> {
+        self.stage_settings_removal(CT_Settings::remove_mail_merge)
+    }
+
+    /// Return every modeled `w:compat` toggle option in schema order.
+    pub fn compatibility_options(&self) -> &[(CompatibilityOption, bool)] {
+        self.settings
+            .as_ref()
+            .map_or(&[][..], CT_Settings::compatibility_options)
+    }
+
+    /// Return one `w:compat` toggle option.
+    pub fn compatibility_option(&self, option: CompatibilityOption) -> Option<bool> {
+        self.settings.as_ref()?.compatibility_option(option)
+    }
+
+    /// Set one `w:compat` toggle option at its schema position.
+    pub fn set_compatibility_option(
+        &mut self,
+        option: CompatibilityOption,
+        enabled: bool,
+    ) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_compatibility_option(option, enabled))
+    }
+
+    /// Remove one `w:compat` toggle option.
+    pub fn remove_compatibility_option(
+        &mut self,
+        option: CompatibilityOption,
+    ) -> Result<Option<bool>> {
+        self.stage_settings_removal(|settings| settings.remove_compatibility_option(option))
+    }
+
+    /// Remove the document automatic-hyphenation toggle.
+    pub fn remove_auto_hyphenation(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_automatic_hyphenation)
+    }
+
+    /// Remove distinct even-page header and footer story selection.
+    pub fn remove_even_and_odd_headers(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_even_and_odd_headers)
+    }
+
+    /// Remove document-wide OfficeMath defaults.
+    pub fn remove_math_properties(&mut self) -> Result<Option<MathProperties>> {
+        self.stage_settings_removal(CT_Settings::remove_math_properties)
+    }
+
+    /// Return the document view Word opens with from the settings part.
+    pub fn view(&self) -> Option<DocumentView> {
+        self.settings.as_ref()?.view()
+    }
+
+    /// Set the document view Word opens with in the relationship-resolved settings part.
+    pub fn set_view(&mut self, value: DocumentView) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_view(value))
+    }
+
+    /// Remove the document view Word opens with, pruning an empty part this facade created.
+    pub fn remove_view(&mut self) -> Result<Option<DocumentView>> {
+        self.stage_settings_removal(CT_Settings::remove_view)
+    }
+
+    /// Return the magnification preset and percentage from the settings part.
+    pub fn zoom(&self) -> Option<DocumentZoom> {
+        self.settings.as_ref()?.zoom()
+    }
+
+    /// Set the magnification preset and percentage in the relationship-resolved settings part.
+    pub fn set_zoom(&mut self, value: DocumentZoom) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_zoom(value))
+    }
+
+    /// Remove the magnification preset and percentage, pruning an empty part this facade created.
+    pub fn remove_zoom(&mut self) -> Result<Option<DocumentZoom>> {
+        self.stage_settings_removal(CT_Settings::remove_zoom)
+    }
+
+    /// Return the `w:removePersonalInformation` toggle from the settings part.
+    pub fn remove_personal_information(&self) -> Option<bool> {
+        self.settings.as_ref()?.remove_personal_information()
+    }
+
+    /// Set the `w:removePersonalInformation` toggle in the relationship-resolved settings part.
+    pub fn set_remove_personal_information(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_remove_personal_information(value))
+    }
+
+    /// Remove the `w:removePersonalInformation` toggle, pruning an empty part this facade created.
+    pub fn remove_remove_personal_information(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_remove_personal_information)
+    }
+
+    /// Return the `w:removeDateAndTime` toggle from the settings part.
+    pub fn remove_date_and_time(&self) -> Option<bool> {
+        self.settings.as_ref()?.remove_date_and_time()
+    }
+
+    /// Set the `w:removeDateAndTime` toggle in the relationship-resolved settings part.
+    pub fn set_remove_date_and_time(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_remove_date_and_time(value))
+    }
+
+    /// Remove the `w:removeDateAndTime` toggle, pruning an empty part this facade created.
+    pub fn remove_remove_date_and_time(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_remove_date_and_time)
+    }
+
+    /// Return the `w:mirrorMargins` toggle from the settings part.
+    pub fn mirror_margins(&self) -> Option<bool> {
+        self.settings.as_ref()?.mirror_margins()
+    }
+
+    /// Set the `w:mirrorMargins` toggle in the relationship-resolved settings part.
+    pub fn set_mirror_margins(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_mirror_margins(value))
+    }
+
+    /// Remove the `w:mirrorMargins` toggle, pruning an empty part this facade created.
+    pub fn remove_mirror_margins(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_mirror_margins)
+    }
+
+    /// Return the `w:gutterAtTop` toggle from the settings part.
+    pub fn gutter_at_top(&self) -> Option<bool> {
+        self.settings.as_ref()?.gutter_at_top()
+    }
+
+    /// Set the `w:gutterAtTop` toggle in the relationship-resolved settings part.
+    pub fn set_gutter_at_top(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_gutter_at_top(value))
+    }
+
+    /// Remove the `w:gutterAtTop` toggle, pruning an empty part this facade created.
+    pub fn remove_gutter_at_top(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_gutter_at_top)
+    }
+
+    /// Return the spelling and grammar proofing state from the settings part.
+    pub fn proof_state(&self) -> Option<DocumentProofState> {
+        self.settings.as_ref()?.proof_state()
+    }
+
+    /// Set the spelling and grammar proofing state in the relationship-resolved settings part.
+    pub fn set_proof_state(&mut self, value: DocumentProofState) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_proof_state(value))
+    }
+
+    /// Remove the spelling and grammar proofing state, pruning an empty part this facade created.
+    pub fn remove_proof_state(&mut self) -> Result<Option<DocumentProofState>> {
+        self.stage_settings_removal(CT_Settings::remove_proof_state)
+    }
+
+    /// Return the `w:linkStyles` toggle from the settings part.
+    pub fn link_styles(&self) -> Option<bool> {
+        self.settings.as_ref()?.link_styles()
+    }
+
+    /// Set the `w:linkStyles` toggle in the relationship-resolved settings part.
+    pub fn set_link_styles(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_link_styles(value))
+    }
+
+    /// Remove the `w:linkStyles` toggle, pruning an empty part this facade created.
+    pub fn remove_link_styles(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_link_styles)
+    }
+
+    /// Return the `w:trackRevisions` toggle from the settings part.
+    pub fn track_revisions(&self) -> Option<bool> {
+        self.settings.as_ref()?.track_revisions()
+    }
+
+    /// Set the `w:trackRevisions` toggle in the relationship-resolved settings part.
+    pub fn set_track_revisions(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_track_revisions(value))
+    }
+
+    /// Remove the `w:trackRevisions` toggle, pruning an empty part this facade created.
+    pub fn remove_track_revisions(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_track_revisions)
+    }
+
+    /// Return the `w:doNotTrackMoves` toggle from the settings part.
+    pub fn do_not_track_moves(&self) -> Option<bool> {
+        self.settings.as_ref()?.do_not_track_moves()
+    }
+
+    /// Set the `w:doNotTrackMoves` toggle in the relationship-resolved settings part.
+    pub fn set_do_not_track_moves(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_do_not_track_moves(value))
+    }
+
+    /// Remove the `w:doNotTrackMoves` toggle, pruning an empty part this facade created.
+    pub fn remove_do_not_track_moves(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_do_not_track_moves)
+    }
+
+    /// Return the `w:doNotTrackFormatting` toggle from the settings part.
+    pub fn do_not_track_formatting(&self) -> Option<bool> {
+        self.settings.as_ref()?.do_not_track_formatting()
+    }
+
+    /// Set the `w:doNotTrackFormatting` toggle in the relationship-resolved settings part.
+    pub fn set_do_not_track_formatting(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_do_not_track_formatting(value))
+    }
+
+    /// Remove the `w:doNotTrackFormatting` toggle, pruning an empty part this facade created.
+    pub fn remove_do_not_track_formatting(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_do_not_track_formatting)
+    }
+
+    /// Return the maximum count of consecutive hyphenated lines from the settings part.
+    pub fn consecutive_hyphen_limit(&self) -> Option<i32> {
+        self.settings.as_ref()?.consecutive_hyphen_limit()
+    }
+
+    /// Set the maximum count of consecutive hyphenated lines in the relationship-resolved settings part.
+    pub fn set_consecutive_hyphen_limit(&mut self, value: i32) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_consecutive_hyphen_limit(value))
+    }
+
+    /// Remove the maximum count of consecutive hyphenated lines, pruning an empty part this facade created.
+    pub fn remove_consecutive_hyphen_limit(&mut self) -> Result<Option<i32>> {
+        self.stage_settings_removal(CT_Settings::remove_consecutive_hyphen_limit)
+    }
+
+    /// Return the hyphenation zone width from the settings part.
+    pub fn hyphenation_zone(&self) -> Option<oxml_core::Twips> {
+        self.settings.as_ref()?.hyphenation_zone()
+    }
+
+    /// Set the hyphenation zone width in the relationship-resolved settings part.
+    pub fn set_hyphenation_zone(&mut self, value: oxml_core::Twips) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_hyphenation_zone(value))
+    }
+
+    /// Remove the hyphenation zone width, pruning an empty part this facade created.
+    pub fn remove_hyphenation_zone(&mut self) -> Result<Option<oxml_core::Twips>> {
+        self.stage_settings_removal(CT_Settings::remove_hyphenation_zone)
+    }
+
+    /// Return the `w:doNotHyphenateCaps` toggle from the settings part.
+    pub fn do_not_hyphenate_caps(&self) -> Option<bool> {
+        self.settings.as_ref()?.do_not_hyphenate_caps()
+    }
+
+    /// Set the `w:doNotHyphenateCaps` toggle in the relationship-resolved settings part.
+    pub fn set_do_not_hyphenate_caps(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_do_not_hyphenate_caps(value))
+    }
+
+    /// Remove the `w:doNotHyphenateCaps` toggle, pruning an empty part this facade created.
+    pub fn remove_do_not_hyphenate_caps(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_do_not_hyphenate_caps)
+    }
+
+    /// Return the default table style identifier from the settings part.
+    pub fn default_table_style(&self) -> Option<&str> {
+        self.settings.as_ref()?.default_table_style()
+    }
+
+    /// Set the default table style identifier in the relationship-resolved settings part.
+    pub fn set_default_table_style(&mut self, value: &str) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_default_table_style(value.to_owned()))
+    }
+
+    /// Remove the default table style identifier, pruning an empty part this facade created.
+    pub fn remove_default_table_style(&mut self) -> Result<Option<String>> {
+        self.stage_settings_removal(CT_Settings::remove_default_table_style)
+    }
+
+    /// Return the `w:bookFoldRevPrinting` toggle from the settings part.
+    pub fn book_fold_rev_printing(&self) -> Option<bool> {
+        self.settings.as_ref()?.book_fold_rev_printing()
+    }
+
+    /// Set the `w:bookFoldRevPrinting` toggle in the relationship-resolved settings part.
+    pub fn set_book_fold_rev_printing(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_book_fold_rev_printing(value))
+    }
+
+    /// Remove the `w:bookFoldRevPrinting` toggle, pruning an empty part this facade created.
+    pub fn remove_book_fold_rev_printing(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_book_fold_rev_printing)
+    }
+
+    /// Return the `w:bookFoldPrinting` toggle from the settings part.
+    pub fn book_fold_printing(&self) -> Option<bool> {
+        self.settings.as_ref()?.book_fold_printing()
+    }
+
+    /// Set the `w:bookFoldPrinting` toggle in the relationship-resolved settings part.
+    pub fn set_book_fold_printing(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_book_fold_printing(value))
+    }
+
+    /// Remove the `w:bookFoldPrinting` toggle, pruning an empty part this facade created.
+    pub fn remove_book_fold_printing(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_book_fold_printing)
+    }
+
+    /// Return the signed sheet count per book-fold booklet from the settings part.
+    pub fn book_fold_printing_sheets(&self) -> Option<i32> {
+        self.settings.as_ref()?.book_fold_printing_sheets()
+    }
+
+    /// Set the signed sheet count per book-fold booklet in the relationship-resolved settings part.
+    pub fn set_book_fold_printing_sheets(&mut self, value: i32) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_book_fold_printing_sheets(value))
+    }
+
+    /// Remove the signed sheet count per book-fold booklet, pruning an empty part this facade created.
+    pub fn remove_book_fold_printing_sheets(&mut self) -> Result<Option<i32>> {
+        self.stage_settings_removal(CT_Settings::remove_book_fold_printing_sheets)
+    }
+
+    /// Return the decimal separator Word uses in fields from the settings part.
+    pub fn decimal_symbol(&self) -> Option<&str> {
+        self.settings.as_ref()?.decimal_symbol()
+    }
+
+    /// Set the decimal separator Word uses in fields in the relationship-resolved settings part.
+    pub fn set_decimal_symbol(&mut self, value: &str) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_decimal_symbol(value.to_owned()))
+    }
+
+    /// Remove the decimal separator Word uses in fields, pruning an empty part this facade created.
+    pub fn remove_decimal_symbol(&mut self) -> Result<Option<String>> {
+        self.stage_settings_removal(CT_Settings::remove_decimal_symbol)
+    }
+
+    /// Return the list separator Word uses in fields from the settings part.
+    pub fn list_separator(&self) -> Option<&str> {
+        self.settings.as_ref()?.list_separator()
+    }
+
+    /// Set the list separator Word uses in fields in the relationship-resolved settings part.
+    pub fn set_list_separator(&mut self, value: &str) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_list_separator(value.to_owned()))
+    }
+
+    /// Remove the list separator Word uses in fields, pruning an empty part this facade created.
+    pub fn remove_list_separator(&mut self) -> Result<Option<String>> {
+        self.stage_settings_removal(CT_Settings::remove_list_separator)
+    }
+
+    /// Return the character encoding Word writes web pages with from the web settings part.
+    pub fn web_encoding(&self) -> Option<&str> {
+        self.web_settings.as_ref()?.encoding()
+    }
+
+    /// Set the character encoding Word writes web pages with in the relationship-resolved web settings part.
+    pub fn set_web_encoding(&mut self, value: &str) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_encoding(value.to_owned()))
+    }
+
+    /// Remove the character encoding Word writes web pages with, pruning an empty part this facade created.
+    pub fn remove_web_encoding(&mut self) -> Result<Option<String>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_encoding)
+    }
+
+    /// Return the `w:optimizeForBrowser` toggle from the web settings part.
+    pub fn web_optimize_for_browser(&self) -> Option<bool> {
+        self.web_settings.as_ref()?.optimize_for_browser()
+    }
+
+    /// Set the `w:optimizeForBrowser` toggle in the relationship-resolved web settings part.
+    pub fn set_web_optimize_for_browser(&mut self, value: bool) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_optimize_for_browser(value))
+    }
+
+    /// Remove the `w:optimizeForBrowser` toggle, pruning an empty part this facade created.
+    pub fn remove_web_optimize_for_browser(&mut self) -> Result<Option<bool>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_optimize_for_browser)
+    }
+
+    /// Return the `w:relyOnVML` toggle from the web settings part.
+    pub fn web_rely_on_vml(&self) -> Option<bool> {
+        self.web_settings.as_ref()?.rely_on_vml()
+    }
+
+    /// Set the `w:relyOnVML` toggle in the relationship-resolved web settings part.
+    pub fn set_web_rely_on_vml(&mut self, value: bool) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_rely_on_vml(value))
+    }
+
+    /// Remove the `w:relyOnVML` toggle, pruning an empty part this facade created.
+    pub fn remove_web_rely_on_vml(&mut self) -> Result<Option<bool>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_rely_on_vml)
+    }
+
+    /// Return the `w:allowPNG` toggle from the web settings part.
+    pub fn web_allow_png(&self) -> Option<bool> {
+        self.web_settings.as_ref()?.allow_png()
+    }
+
+    /// Set the `w:allowPNG` toggle in the relationship-resolved web settings part.
+    pub fn set_web_allow_png(&mut self, value: bool) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_allow_png(value))
+    }
+
+    /// Remove the `w:allowPNG` toggle, pruning an empty part this facade created.
+    pub fn remove_web_allow_png(&mut self) -> Result<Option<bool>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_allow_png)
+    }
+
+    /// Return the `w:doNotRelyOnCSS` toggle from the web settings part.
+    pub fn web_do_not_rely_on_css(&self) -> Option<bool> {
+        self.web_settings.as_ref()?.do_not_rely_on_css()
+    }
+
+    /// Set the `w:doNotRelyOnCSS` toggle in the relationship-resolved web settings part.
+    pub fn set_web_do_not_rely_on_css(&mut self, value: bool) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_do_not_rely_on_css(value))
+    }
+
+    /// Remove the `w:doNotRelyOnCSS` toggle, pruning an empty part this facade created.
+    pub fn remove_web_do_not_rely_on_css(&mut self) -> Result<Option<bool>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_do_not_rely_on_css)
+    }
+
+    /// Return the `w:doNotSaveAsSingleFile` toggle from the web settings part.
+    pub fn web_do_not_save_as_single_file(&self) -> Option<bool> {
+        self.web_settings.as_ref()?.do_not_save_as_single_file()
+    }
+
+    /// Set the `w:doNotSaveAsSingleFile` toggle in the relationship-resolved web settings part.
+    pub fn set_web_do_not_save_as_single_file(&mut self, value: bool) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_do_not_save_as_single_file(value))
+    }
+
+    /// Remove the `w:doNotSaveAsSingleFile` toggle, pruning an empty part this facade created.
+    pub fn remove_web_do_not_save_as_single_file(&mut self) -> Result<Option<bool>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_do_not_save_as_single_file)
+    }
+
+    /// Return the `w:doNotOrganizeInFolder` toggle from the web settings part.
+    pub fn web_do_not_organize_in_folder(&self) -> Option<bool> {
+        self.web_settings.as_ref()?.do_not_organize_in_folder()
+    }
+
+    /// Set the `w:doNotOrganizeInFolder` toggle in the relationship-resolved web settings part.
+    pub fn set_web_do_not_organize_in_folder(&mut self, value: bool) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_do_not_organize_in_folder(value))
+    }
+
+    /// Remove the `w:doNotOrganizeInFolder` toggle, pruning an empty part this facade created.
+    pub fn remove_web_do_not_organize_in_folder(&mut self) -> Result<Option<bool>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_do_not_organize_in_folder)
+    }
+
+    /// Return the `w:doNotUseLongFileNames` toggle from the web settings part.
+    pub fn web_do_not_use_long_file_names(&self) -> Option<bool> {
+        self.web_settings.as_ref()?.do_not_use_long_file_names()
+    }
+
+    /// Set the `w:doNotUseLongFileNames` toggle in the relationship-resolved web settings part.
+    pub fn set_web_do_not_use_long_file_names(&mut self, value: bool) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_do_not_use_long_file_names(value))
+    }
+
+    /// Remove the `w:doNotUseLongFileNames` toggle, pruning an empty part this facade created.
+    pub fn remove_web_do_not_use_long_file_names(&mut self) -> Result<Option<bool>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_do_not_use_long_file_names)
+    }
+
+    /// Return the target pixel density for exported web pages from the web settings part.
+    pub fn web_pixels_per_inch(&self) -> Option<i32> {
+        self.web_settings.as_ref()?.pixels_per_inch()
+    }
+
+    /// Set the target pixel density for exported web pages in the relationship-resolved web settings part.
+    pub fn set_web_pixels_per_inch(&mut self, value: i32) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_pixels_per_inch(value))
+    }
+
+    /// Remove the target pixel density for exported web pages, pruning an empty part this facade created.
+    pub fn remove_web_pixels_per_inch(&mut self) -> Result<Option<i32>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_pixels_per_inch)
+    }
+
+    /// Return the target screen size, such as `800x600` from the web settings part.
+    pub fn web_target_screen_size(&self) -> Option<&str> {
+        self.web_settings.as_ref()?.target_screen_size()
+    }
+
+    /// Set the target screen size, such as `800x600` in the relationship-resolved web settings part.
+    pub fn set_web_target_screen_size(&mut self, value: &str) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| {
+            settings.set_target_screen_size(value.to_owned())
+        })
+    }
+
+    /// Remove the target screen size, such as `800x600`, pruning an empty part this facade created.
+    pub fn remove_web_target_screen_size(&mut self) -> Result<Option<String>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_target_screen_size)
+    }
+
+    /// Return the `w:saveSmartTagsAsXml` toggle from the web settings part.
+    pub fn web_save_smart_tags_as_xml(&self) -> Option<bool> {
+        self.web_settings.as_ref()?.save_smart_tags_as_xml()
+    }
+
+    /// Set the `w:saveSmartTagsAsXml` toggle in the relationship-resolved web settings part.
+    pub fn set_web_save_smart_tags_as_xml(&mut self, value: bool) -> Result<()> {
+        self.stage_web_settings_mutation(|settings| settings.set_save_smart_tags_as_xml(value))
+    }
+
+    /// Remove the `w:saveSmartTagsAsXml` toggle, pruning an empty part this facade created.
+    pub fn remove_web_save_smart_tags_as_xml(&mut self) -> Result<Option<bool>> {
+        self.stage_web_settings_removal(CT_WebSettings::remove_save_smart_tags_as_xml)
     }
 
     /// Return the relationship-resolved DrawingML theme.
@@ -19062,6 +20067,69 @@ impl Document {
                 Error::Other(format!("settings relationship allocation failed: {error}"))
             })?;
         Ok(candidate)
+    }
+
+    fn web_settings_mutation_candidate(&self) -> Result<Self> {
+        let mut candidate = self.clone_for_staging();
+        let created = candidate.web_settings_part_name.is_none();
+        candidate
+            .identifiers
+            .observe_package_graph(&candidate.package)?;
+        let part_name = match &candidate.web_settings_part_name {
+            Some(part_name) => part_name.clone(),
+            None => candidate
+                .identifiers
+                .reserve_preferred_part_name(DEFAULT_WEB_SETTINGS_PART)?,
+        };
+        candidate.web_settings_part_name = Some(part_name.clone());
+        candidate.web_settings_owned |= created;
+        candidate
+            .ensure_part_relationship_checked(
+                &part_name,
+                rel_types::WEB_SETTINGS,
+                WEB_SETTINGS_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!(
+                    "web settings relationship allocation failed: {error}"
+                ))
+            })?;
+        Ok(candidate)
+    }
+
+    fn prune_empty_owned_web_settings(&mut self) {
+        if !self.web_settings_owned
+            || !self
+                .web_settings
+                .as_ref()
+                .is_some_and(CT_WebSettings::is_empty)
+        {
+            return;
+        }
+        let Some(part_name) = self.web_settings_part_name.take() else {
+            return;
+        };
+        let owner = self.doc_part_name.clone();
+        let mut removed_ids = Vec::new();
+        if let Some(relationships) = self.package.get_part_rels_mut(&owner) {
+            relationships.items.retain(|relationship| {
+                let remove = relationship.rel_type == rel_types::WEB_SETTINGS
+                    && relationship_is_internal(relationship)
+                    && OpcPackage::resolve_rel_target(&owner, &relationship.target) == part_name;
+                if remove {
+                    removed_ids.push(relationship.id.clone());
+                }
+                !remove
+            });
+        }
+        self.identifiers
+            .retire_authored_story_relationships(&owner, removed_ids);
+        self.package.remove_part(&part_name);
+        self.package.remove_part_rels(&part_name);
+        self.package.content_types.remove_override(&part_name);
+        self.identifiers.retire_authored_part(&part_name);
+        self.web_settings = None;
+        self.web_settings_owned = false;
     }
 
     fn prune_empty_owned_settings(&mut self) {
@@ -21254,6 +22322,20 @@ impl Document {
                 .settings
                 .as_ref()
                 .is_some_and(CT_Settings::automatic_hyphenation),
+            default_tab_stop: self
+                .settings
+                .as_ref()
+                .and_then(CT_Settings::default_tab_stop),
+            mirror_margins: self
+                .settings
+                .as_ref()
+                .and_then(CT_Settings::mirror_margins)
+                .unwrap_or(false),
+            gutter_at_top: self
+                .settings
+                .as_ref()
+                .and_then(CT_Settings::gutter_at_top)
+                .unwrap_or(false),
             math_properties: self
                 .settings
                 .as_ref()
@@ -21988,6 +23070,9 @@ fn section_has_layout(properties: &CT_SectPr) -> bool {
         || properties.footer_distance.is_some()
         || properties.section_type.is_some()
         || properties.columns.is_some()
+        || properties.page_borders.is_some()
+        || properties.line_numbers.is_some()
+        || properties.vertical_alignment.is_some()
         || properties.title_pg.is_some()
 }
 

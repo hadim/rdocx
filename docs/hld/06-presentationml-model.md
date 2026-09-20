@@ -677,6 +677,12 @@ different indices. Both are separate code paths.
 layout or master directly and are never cloned onto a new slide, because cloning
 them produces duplicate footers.
 
+Notes-page composition overlays a notes-slide placeholder only when its full
+key resolves against the notes master. An unmatched notes-slide overlay is
+ignored with one source-ordered diagnostic. Matched overlays, ordinary notes
+shapes, and the required slide-image placeholder retain their existing
+ownership rules. Ambiguous and multiply matched placeholders remain errors.
+
 ## Preservation strategy
 
 This is the scope control for a format that is otherwise unbounded.

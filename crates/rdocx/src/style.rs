@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
-use rdocx_oxml::styles::{CT_Style, CT_Styles, CT_TblStylePr, StyleType};
-use rdocx_oxml::table::{CT_TblPr, CT_TcPr};
+use rdocx_oxml::styles::{CT_Style, CT_Styles, CT_TblStylePr, StyleType, TableStyleRegion};
+use rdocx_oxml::table::{CT_TblPr, CT_TcPr, CT_TrPr};
 
 use crate::{Error, Result};
 
@@ -94,9 +94,27 @@ impl<'a> Style<'a> {
         self.inner.table_properties.as_ref()
     }
 
+    /// The style's base table row properties.
+    pub fn table_row_properties(&self) -> Option<&CT_TrPr> {
+        self.inner.table_row_properties.as_deref()
+    }
+
+    /// The style's base table cell properties.
+    pub fn table_cell_properties(&self) -> Option<&CT_TcPr> {
+        self.inner.table_cell_properties.as_deref()
+    }
+
     /// Conditional table regions in source order.
-    pub fn conditional_table_styles(&self) -> &[CT_TblStylePr] {
-        &self.inner.conditional_table_styles
+    ///
+    /// A region whose `w:type` this workspace does not recognise reports
+    /// `None` from [`ConditionalTableStyle::region`]. It round-trips from its
+    /// preserved bytes and takes no part in resolution.
+    pub fn conditional_table_styles(&self) -> Vec<ConditionalTableStyle<'a>> {
+        self.inner
+            .conditional_table_styles
+            .iter()
+            .map(|inner| ConditionalTableStyle { inner })
+            .collect()
     }
 
     /// Whether this is the default style for its type.
@@ -105,10 +123,50 @@ impl<'a> Style<'a> {
     }
 }
 
+/// One conditional table-style region read back through the facade.
+pub struct ConditionalTableStyle<'a> {
+    inner: &'a CT_TblStylePr,
+}
+
+impl<'a> ConditionalTableStyle<'a> {
+    /// The region this layer formats, or `None` for an unrecognised `w:type`.
+    pub fn region(&self) -> Option<TableStyleRegion> {
+        self.inner.region
+    }
+
+    /// The region's paragraph properties.
+    pub fn paragraph_properties(&self) -> Option<&'a CT_PPr> {
+        self.inner.paragraph_properties.as_ref()
+    }
+
+    /// The region's run properties.
+    pub fn run_properties(&self) -> Option<&'a CT_RPr> {
+        self.inner.run_properties.as_deref()
+    }
+
+    /// The region's table properties.
+    pub fn table_properties(&self) -> Option<&'a CT_TblPr> {
+        self.inner.table_properties.as_ref()
+    }
+
+    /// The region's row properties.
+    ///
+    /// Modeled and round-tripped. Its layout application belongs to F-268a.
+    pub fn row_properties(&self) -> Option<&'a CT_TrPr> {
+        self.inner.row_properties.as_deref()
+    }
+
+    /// The region's cell properties.
+    pub fn cell_properties(&self) -> Option<&'a CT_TcPr> {
+        self.inner.cell_properties.as_ref()
+    }
+}
+
 /// Builder for creating a new paragraph style.
 pub struct StyleBuilder {
     style: CT_Style,
     cleared: u16,
+    removed_regions: Vec<TableStyleRegion>,
 }
 
 pub(crate) const CLEAR_BASED_ON: u16 = 1 << 0;
@@ -125,6 +183,8 @@ pub(crate) const CLEAR_PARAGRAPH_PROPERTIES: u16 = 1 << 10;
 pub(crate) const CLEAR_RUN_PROPERTIES: u16 = 1 << 11;
 pub(crate) const CLEAR_TABLE_PROPERTIES: u16 = 1 << 12;
 pub(crate) const CLEAR_CONDITIONAL_TABLE_STYLES: u16 = 1 << 13;
+pub(crate) const CLEAR_TABLE_ROW_PROPERTIES: u16 = 1 << 14;
+pub(crate) const CLEAR_TABLE_CELL_PROPERTIES: u16 = 1 << 15;
 
 impl StyleBuilder {
     /// Create a new paragraph style builder.
@@ -150,12 +210,15 @@ impl StyleBuilder {
                 table_properties: None,
                 table_properties_original: None,
                 table_properties_xml: None,
+                table_row_properties: None,
+                table_cell_properties: None,
                 conditional_table_styles: Vec::new(),
                 extra_attributes: Vec::new(),
                 modeled_xml: Vec::new(),
                 extra_xml: Vec::new(),
             },
             cleared: 0,
+            removed_regions: Vec::new(),
         }
     }
 
@@ -182,12 +245,15 @@ impl StyleBuilder {
                 table_properties: None,
                 table_properties_original: None,
                 table_properties_xml: None,
+                table_row_properties: None,
+                table_cell_properties: None,
                 conditional_table_styles: Vec::new(),
                 extra_attributes: Vec::new(),
                 modeled_xml: Vec::new(),
                 extra_xml: Vec::new(),
             },
             cleared: 0,
+            removed_regions: Vec::new(),
         }
     }
 
@@ -380,6 +446,34 @@ impl StyleBuilder {
         self
     }
 
+    /// Set base table row properties for a table style.
+    pub fn table_row_properties(mut self, properties: CT_TrPr) -> Self {
+        self.style.table_row_properties = Some(Box::new(properties));
+        self.cleared &= !CLEAR_TABLE_ROW_PROPERTIES;
+        self
+    }
+
+    /// Remove all base table row properties during an update.
+    pub fn clear_table_row_properties(mut self) -> Self {
+        self.style.table_row_properties = None;
+        self.cleared |= CLEAR_TABLE_ROW_PROPERTIES;
+        self
+    }
+
+    /// Set base table cell properties for a table style.
+    pub fn table_cell_properties(mut self, properties: CT_TcPr) -> Self {
+        self.style.table_cell_properties = Some(Box::new(properties));
+        self.cleared &= !CLEAR_TABLE_CELL_PROPERTIES;
+        self
+    }
+
+    /// Remove all base table cell properties during an update.
+    pub fn clear_table_cell_properties(mut self) -> Self {
+        self.style.table_cell_properties = None;
+        self.cleared |= CLEAR_TABLE_CELL_PROPERTIES;
+        self
+    }
+
     /// Remove all conditional table regions during an update.
     pub fn clear_conditional_table_styles(mut self) -> Self {
         self.style.conditional_table_styles.clear();
@@ -387,18 +481,40 @@ impl StyleBuilder {
         self
     }
 
+    /// Remove one conditional table region during an update.
+    ///
+    /// Every other region survives, which is what separates this from
+    /// [`StyleBuilder::clear_conditional_table_styles`].
+    pub fn remove_conditional_table_style(mut self, region: TableStyleRegion) -> Self {
+        self.style
+            .conditional_table_styles
+            .retain(|conditional| conditional.region != Some(region));
+        if !self.removed_regions.contains(&region) {
+            self.removed_regions.push(region);
+        }
+        self
+    }
+
     /// Add one conditional table style region in source order.
+    ///
+    /// The row layer is modeled and round-tripped. Its layout application
+    /// belongs to F-268a.
     pub fn conditional_table_style(
         mut self,
-        region: &str,
+        region: TableStyleRegion,
         paragraph_properties: Option<CT_PPr>,
+        run_properties: Option<CT_RPr>,
         table_properties: Option<CT_TblPr>,
+        row_properties: Option<CT_TrPr>,
         cell_properties: Option<CT_TcPr>,
     ) -> Self {
+        self.removed_regions.retain(|removed| *removed != region);
         self.style.conditional_table_styles.push(CT_TblStylePr {
-            region: region.to_string(),
+            region: Some(region),
             paragraph_properties,
+            run_properties: run_properties.map(Box::new),
             table_properties,
+            row_properties: row_properties.map(Box::new),
             cell_properties,
             extra_attributes: Vec::new(),
             raw_xml: Vec::new(),
@@ -407,8 +523,8 @@ impl StyleBuilder {
     }
 
     /// Build the style (consumed by Document::add_style).
-    pub(crate) fn build(self) -> (CT_Style, u16) {
-        (self.style, self.cleared)
+    pub(crate) fn build(self) -> (CT_Style, u16, Vec<TableStyleRegion>) {
+        (self.style, self.cleared, self.removed_regions)
     }
 }
 
@@ -453,7 +569,10 @@ pub(crate) fn validate_style_graph(styles: &CT_Styles) -> Result<()> {
             )));
         }
         if style.style_type != StyleType::Table
-            && (style.table_properties.is_some() || !style.conditional_table_styles.is_empty())
+            && (style.table_properties.is_some()
+                || style.table_row_properties.is_some()
+                || style.table_cell_properties.is_some()
+                || !style.conditional_table_styles.is_empty())
         {
             return Err(style_graph_error(format!(
                 "{} style '{}' cannot contain table properties",
@@ -461,33 +580,21 @@ pub(crate) fn validate_style_graph(styles: &CT_Styles) -> Result<()> {
                 style.style_id
             )));
         }
+        // Region validity is unrepresentable rather than checked. An
+        // unrecognised `w:type` parses as `None`, round-trips from its
+        // preserved bytes and is never a reason to refuse a file Word wrote,
+        // so only recognised regions take part in the duplicate check.
         let mut conditional_regions = HashSet::new();
-        for conditional in &style.conditional_table_styles {
-            if !matches!(
-                conditional.region.as_str(),
-                "wholeTable"
-                    | "firstRow"
-                    | "lastRow"
-                    | "firstCol"
-                    | "lastCol"
-                    | "band1Vert"
-                    | "band2Vert"
-                    | "band1Horz"
-                    | "band2Horz"
-                    | "neCell"
-                    | "nwCell"
-                    | "seCell"
-                    | "swCell"
-            ) {
-                return Err(style_graph_error(format!(
-                    "table style '{}' has invalid conditional region '{}'",
-                    style.style_id, conditional.region
-                )));
-            }
-            if !conditional_regions.insert(conditional.region.as_str()) {
+        for region in style
+            .conditional_table_styles
+            .iter()
+            .filter_map(|conditional| conditional.region)
+        {
+            if !conditional_regions.insert(region) {
                 return Err(style_graph_error(format!(
                     "table style '{}' repeats conditional region '{}'",
-                    style.style_id, conditional.region
+                    style.style_id,
+                    region.to_str()
                 )));
             }
         }
@@ -724,6 +831,8 @@ mod tests {
             table_properties: None,
             table_properties_original: None,
             table_properties_xml: None,
+            table_row_properties: None,
+            table_cell_properties: None,
             conditional_table_styles: Vec::new(),
             extra_attributes: Vec::new(),
             modeled_xml: Vec::new(),
@@ -775,6 +884,47 @@ mod tests {
         assert_eq!(rpr.bold, Some(true));
         // Color from Heading2
         assert_eq!(rpr.color, Some("2E74B5".to_string()));
+    }
+
+    #[test]
+    fn new_paragraph_properties_inherit_through_the_style_chain() {
+        use rdocx_oxml::properties::CT_FramePr;
+
+        let mut styles = test_styles();
+        let defaults = styles
+            .doc_defaults
+            .as_mut()
+            .expect("docDefaults")
+            .ppr
+            .get_or_insert_with(CT_PPr::default);
+        defaults.suppress_line_numbers = Some(true);
+        defaults.text_alignment = Some("baseline".to_owned());
+        for style in &mut styles.styles {
+            let ppr = style.ppr.get_or_insert_with(CT_PPr::default);
+            if style.style_id == "Heading1" {
+                ppr.contextual_spacing = Some(true);
+                ppr.text_direction = Some("tbRlV".to_owned());
+                ppr.text_alignment = Some("center".to_owned());
+                ppr.frame = Some(Box::new(CT_FramePr {
+                    w: Some(Twips(2880)),
+                    ..Default::default()
+                }));
+                ppr.div_id = Some(4);
+            }
+            if style.style_id == "Heading2" {
+                ppr.mirror_indents = Some(true);
+                ppr.text_direction = Some("lrTb".to_owned());
+            }
+        }
+
+        let ppr = resolve_paragraph_properties(Some("Heading2"), &styles);
+        assert_eq!(ppr.suppress_line_numbers, Some(true));
+        assert_eq!(ppr.contextual_spacing, Some(true));
+        assert_eq!(ppr.mirror_indents, Some(true));
+        assert_eq!(ppr.text_alignment.as_deref(), Some("center"));
+        assert_eq!(ppr.text_direction.as_deref(), Some("lrTb"));
+        assert_eq!(ppr.frame.and_then(|frame| frame.w), Some(Twips(2880)));
+        assert_eq!(ppr.div_id, Some(4));
     }
 
     #[test]

@@ -39,9 +39,9 @@ regenerated, never hand-edited.
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
-| M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 132 | 128 | 0 | 0  |
-| **Total** | **450** | **378** | **0** | **68** |
+| M24, Modern DOCX authoring completeness        | 54 | 12 | 0 | 42 |
+| X, Cross-cutting (opportunistic)            | 143 | 138 | 0 | 1  |
+| **Total** | **468** | **400** | **0** | **64** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -483,13 +483,18 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M24 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-264 | Complete paragraph property authoring | S74 | L | pending |
-| F-265 | Complete run property and inline authoring | S74 | L | pending |
-| F-266 | International and vertical typography | S74 | L | pending |
-| F-267 | Complete table style and conditional formatting authoring | S74 | L | pending |
-| F-268 | Floating and advanced table layout | S74 | L | pending |
-| F-269 | Complete section page semantics | S74 | L | pending |
-| F-270 | Complete settings and web settings authoring | S74 | L | pending |
+| F-264 | Complete paragraph property authoring | S74 | L | done |
+| F-265 | Complete run property and inline authoring | S74 | L | done |
+| F-266 | International and vertical typography | S74 | L | done |
+| F-266a | Script identity and font slot resolution | S74 | L | done |
+| F-266b | Ruby and emphasis marks | S74 | L | done |
+| F-266c | Character grid and vertical text | S74 | L | done |
+| F-267 | Complete table style and conditional formatting authoring | S74 | L | done |
+| F-268 | Floating and advanced table layout | S74 | L | done |
+| F-268a | Advanced table authoring and geometry | S74 | L | done |
+| F-268b | Floating table placement and wrap | S74 | M | done |
+| F-269 | Complete section page semantics | S74 | L | done |
+| F-270 | Complete settings and web settings authoring | S74 | L | done |
 | F-271 | Uniform rich header and footer editing | S75 | L | pending |
 | F-272 | Rich footnote authoring | S75 | L | pending |
 | F-273 | Rich endnote authoring | S75 | L | pending |
@@ -530,6 +535,8 @@ regenerated, never hand-edited.
 | F-308 | Fully modeled and losslessness diagnostics | S80 | L | pending |
 | F-309 | Strict, transitional, and repair-free conformance | S80 | L | pending |
 | F-310 | Determinism, resource limits, bindings, and stability gate | S80 | L | pending |
+| F-311 | Positioned paragraph frame placement | S80 | M | pending |
+| F-312 | Run visual effect render projection | S80 | L | pending |
 <!-- AUTOGEN:backlog-M24 END -->
 
 ### X, Cross-cutting
@@ -669,4 +676,15 @@ regenerated, never hand-edited.
 | F-X120 | Accept fractional DOCX line spacing values | S73 | S | done |
 | F-X121 | Adopt PR 123 authored line-chart portability | S73 | S | done |
 | F-X122 | Recover the immutable rpptx 0.12.0 release attempt | S73 | M | done |
+| F-X123 | Accept producer TOC style variants | S74 | S | done |
+| F-X124 | Make content cloning linear and explicit | S74 | M | done |
+| F-X125 | Compare table grid changes | S74 | M | done |
+| F-X126 | Preserve drawings through comparison acceptance | S74 | M | done |
+| F-X127 | Collapse adjacent page break requests | S74 | S | done |
+| F-X128 | Preserve Word paragraph and revision identities | S74 | M | done |
+| F-X129 | Tolerate unmatched notes placeholders | S74 | S | done |
+| F-X130 | Show package depth, footprint, and speed | S74 | L | done |
+| F-X131 | Retain only the namespace declarations a root attribute uses | S74 | S | done |
+| F-X132 | Match a retained namespace owner by structure, not by identity | S74 | S | done |
+| F-X133 | Stop rebinding a canonical prefix on every retained element | S75 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

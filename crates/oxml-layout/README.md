@@ -9,6 +9,16 @@ raster rendering.
 - Transforms, paints, effects, links, outlines, and logical structure.
 - Font discovery, shaping, metrics, and deterministic bundled fonts.
 - Multilingual line breaking, bidirectional text, tabs, and inline items.
+- Recursive groups, marked content, transforms, source ranges, and logical
+  structure give downstream backends one complete positioned-page contract.
+
+## Measured footprint and speed
+
+The archive row is regenerated from the complete published package that carries this README.
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: oxml-layout | 4,623,324 compressed bytes, 9,227,483 member bytes, 51 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-layout` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 

@@ -6719,7 +6719,12 @@ fn render_notes_pages(package: &OpcPackage) -> Result<LayoutResult> {
             &notes_master,
             notes.as_ref(),
         )?;
-        let common = compose_notes_common(&page_master, page_notes.as_ref(), slide_index + 1)?;
+        let common = compose_notes_common(
+            &page_master,
+            page_notes.as_ref(),
+            slide_index + 1,
+            &mut diagnostics,
+        )?;
         let preview = assembly.layout.pages[slide_index].as_ref();
         let mut page = render_export_surface(
             &export_package,
@@ -7043,6 +7048,7 @@ fn compose_notes_common(
     master: &CT_NotesMaster,
     notes: Option<&CT_NotesSlide>,
     slide_number: usize,
+    diagnostics: &mut Vec<oxml_layout::Diagnostic>,
 ) -> Result<CT_CommonSlideData> {
     let mut common = master.common_slide_data.clone();
     if let Some(notes) = notes {
@@ -7057,15 +7063,14 @@ fn compose_notes_common(
             &overlays,
             &mut consumed,
         )?;
-        if let Some((unmatched, _)) = overlays
-            .iter()
-            .enumerate()
-            .find(|(index, _)| !consumed.contains(index))
-            .map(|(_, overlay)| overlay)
-        {
-            return Err(render_failure(format!(
-                "notes slide placeholder {unmatched:?} has no matching notes-master placeholder"
-            )));
+        for (index, (unmatched, _)) in overlays.iter().enumerate() {
+            if !consumed.contains(&index) {
+                diagnostics.push(oxml_layout::Diagnostic {
+                    message: format!(
+                        "notes slide placeholder {unmatched:?} has no matching notes-master placeholder and was skipped"
+                    ),
+                });
+            }
         }
         for child in &notes.common_slide_data.shape_tree.children {
             if child_export_placeholder(child).is_none() {
@@ -8829,6 +8834,76 @@ mod write_tests {
         bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
         bytes.extend_from_slice(&[0; 4]);
         bytes
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn notes_placeholder_skip_diagnostics_are_ordered_and_hard_failures_remain() {
+        const P: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+        const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        let scaffold = r#"<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>"#;
+        let shape = |id: u32, kind: &str, index: u32| {
+            format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="placeholder"/><p:cNvSpPr/><p:nvPr><p:ph type="{kind}" idx="{index}"/></p:nvPr></p:nvSpPr><p:spPr/></p:sp>"#
+            )
+        };
+        let build_master = |include_slide_image: bool| {
+            let slide_image = if include_slide_image {
+                shape(2, "sldImg", 2)
+            } else {
+                String::new()
+            };
+            CT_NotesMaster::from_xml(
+                format!(
+                    r#"<p:notesMaster xmlns:p="{P}" xmlns:a="{A}"><p:cSld><p:spTree>{scaffold}{slide_image}{}</p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/></p:notesMaster>"#,
+                    shape(3, "sldNum", 5),
+                )
+                .as_bytes(),
+            )
+            .unwrap()
+        };
+        let notes = |overlays: &[(u32, &str, u32)]| {
+            let overlays = overlays
+                .iter()
+                .map(|(id, kind, index)| shape(*id, kind, *index))
+                .collect::<String>();
+            CT_NotesSlide::from_xml(
+                format!(
+                    r#"<p:notes xmlns:p="{P}" xmlns:a="{A}"><p:cSld><p:spTree>{scaffold}{overlays}</p:spTree></p:cSld></p:notes>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap()
+        };
+
+        let master = build_master(true);
+        let unmatched = notes(&[(4, "sldNum", 12), (5, "ftr", 13)]);
+        let mut diagnostics = Vec::new();
+        compose_notes_common(&master, Some(&unmatched), 1, &mut diagnostics).unwrap();
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "notes slide placeholder PlaceholderKey { ph_type: SlideNumber, idx: Some(12) } has no matching notes-master placeholder and was skipped",
+                "notes slide placeholder PlaceholderKey { ph_type: Footer, idx: Some(13) } has no matching notes-master placeholder and was skipped",
+            ]
+        );
+
+        let ambiguous = notes(&[(4, "sldNum", 12), (5, "sldNum", 12)]);
+        assert!(
+            compose_notes_common(&master, Some(&ambiguous), 1, &mut Vec::new())
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous placeholder")
+        );
+        assert!(
+            compose_notes_common(&build_master(false), None, 1, &mut Vec::new())
+                .unwrap_err()
+                .to_string()
+                .contains("expected exactly one")
+        );
     }
 
     #[cfg(feature = "render")]

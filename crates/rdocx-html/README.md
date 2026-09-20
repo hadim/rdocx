@@ -10,6 +10,14 @@ from semantic Word content without running pagination.
 - Markdown conversion from the same semantic input.
 - Style, numbering, link, and image projection through `HtmlInput`.
 - A flow-output path with no page-layout or fixed-output dependency.
+- Semantic tables, lists, hyperlinks, images, fields, and run formatting lower
+  through one owned input model for both complete and fragment output.
+
+## Measured footprint and speed
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: rdocx-html | 15,486 compressed bytes, 63,894 member bytes, 11 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx-html` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 

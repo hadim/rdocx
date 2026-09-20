@@ -21,7 +21,7 @@ possible without an Office installation or conversion service.
 | Workflow | Implemented result |
 |---|---|
 | DOCX | Create, open, edit, validate, and save complete packages, with encryption and signing through opt-in features |
-| Rich authoring | Paragraphs, runs, tables, styles, numbering, fields, forms, equations, drawings, comments, and metadata |
+| Rich authoring | Complete paragraph and run properties, multilingual and vertical typography, conditional and floating tables, section page semantics, settings, styles, numbering, fields, forms, equations, drawings, comments, and metadata |
 | Preservation | Retain unknown safe producer XML byte for byte when it is not modelled |
 | Native layout | Resolve Word flow content into positioned pages with bundled, system, embedded, or caller-provided fonts |
 | Fixed output | PDF, PDF/A, PNG, JPEG, TIFF, and SVG |
@@ -31,6 +31,19 @@ possible without an Office installation or conversion service.
 Most applications need only `rdocx`. Specialist crates expose the OPC,
 WordprocessingML, layout, HTML, and fixed-output layers for applications that
 already own one of those boundaries.
+
+## Measured footprint and speed
+
+Archive size is regenerated from tracked package contents. The performance
+rows are the enforced release-mode bounds plus one dated observation.
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: rdocx | 1,076,425 compressed bytes, 6,419,062 member bytes, 36 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
+| Large-document layout throughput | minimum 250 pages/s, observed 31,019.1 pages/s | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 one-page paragraphs with deterministic fonts | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | pages per wall-clock second | 2026-09-19 |
+| Large-document layout peak allocation | maximum 64 MiB, observed 29.03 MiB | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 one-page paragraphs with deterministic fonts | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | peak live allocation | 2026-09-19 |
+| Large-document PDF throughput | minimum 1,000 pages/s, observed 60,058.0 pages/s | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 deterministic layout pages | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | pages per wall-clock second | 2026-09-19 |
+| Large-document PDF peak allocation | maximum 16 MiB, observed 1.73 MiB | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 deterministic layout pages | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | peak live allocation | 2026-09-19 |
 
 ## Examples
 

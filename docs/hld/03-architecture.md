@@ -430,6 +430,44 @@ and every unmodelled property remain in their original schema slots. The
 and run properties from the final direct, style, and numbering identities. It
 does not maintain a second reader model.
 
+`CT_PPr` types the complete authored paragraph-property set. Text frame
+placement, line-number suppression, document-grid right indentation, contextual
+spacing, mirrored indentation, frame overlap suppression, text flow, vertical
+character alignment, text box tight wrap, and the web-settings division all
+have typed members beside the borders, shading, tabs, indentation, spacing, and
+paragraph-mark state that were already modeled. Every remaining `w:pPr` child
+keeps its original schema slot. A newly typed toggle retains its source element
+as an attribute carrier, so an attribute the model does not own survives being
+modeled. `CT_FramePr` and `CT_BorderEdge` retain their unmodelled attributes in
+source order and replay them ahead of the modeled ones. `CT_PPr` stores its
+frame and its borders behind a `Box`, which keeps the value small enough for
+recursive callers that carry paragraph properties on the stack.
+
+`CT_RPr` types the complete `EG_RPrBase` sequence. Outline, shadow, emboss,
+imprint, proofing suppression, grid snapping, web-only hiding, kerning, the
+animated text effect, the character border, fitted text, the complex-script
+toggle, the emphasis mark, East Asian run layout, numbered-paragraph vanish,
+and the Office Math flag all have typed members beside the fonts, sizes,
+colour, shading, language, and direction state that were already modeled.
+`w:rFonts` owns all four explicit script slots, all four theme slots, and
+`w:hint`, and `w:color` owns its theme colour, tint, and shade, so nothing on
+either element is dropped on save. `CT_Shd` owns the same six theme attributes
+for run, paragraph, and table shading. Like `CT_FramePr` and `CT_BorderEdge`,
+each of these retains its unmodelled attributes in source order and replays
+them ahead of the modeled ones. `CT_RPr` stores its character border, its
+fitted-text and East Asian layout members, its shading, and its property change
+behind a `Box`, and `CT_PPr` boxes its shading for the same reason, so the
+grown model still fits the stack budget the F-084 precedent set.
+
+Ordered run content types `w:sym` and, behind one `SpecialCharacter` value,
+`w:cr`, `w:noBreakHyphen`, `w:softHyphen`, and `w:ptab`. One variant for the
+four keeps the number of cases every consumer must match on flat.
+`w:lastRenderedPageBreak` is a producer hint, so it stays in positioned raw
+capture with a read-only classification and no authoring surface. A symbol
+whose code point is not four hex digits, a positional tab missing one of its
+three required attributes, and an empty special character carrying an attribute
+all stay raw rather than losing bytes to a partial projection.
+
 The low-level text reader decodes visible `w:t` and `w:delText` content
 fallibly and rejects malformed encoded values instead of publishing partial
 text. The numbering grammar types the complete standard `w:numFmt` token set
@@ -512,6 +550,39 @@ sole serialization source, so root attributes, schema order, unmodelled
 children, and unsupported or malformed protection and variable elements
 survive unchanged. Invalid elements are preserved but are not reported through
 the typed projections.
+
+`SUPPORTED_SETTINGS` closes that model. It names, in `xsd:sequence` order, the
+thirty-one top-level `w:settings` children the typed model owns, and the nested
+supported names are `compat/compatSetting`, every `CompatibilityOption` local
+name under `compat`, `docVars/docVar` and the bounded `mailMerge` members. One
+`SETTINGS_ORDER` table drives both schema-position insertion and that closed
+set, so a new member is added in one place rather than three. Every other
+child, including `attachedTemplate`, `rsids`, the drawing-grid family and every
+`w14:` or `w15:` extension, stays preservation-only and is never a diagnostic.
+`CT_Settings::diagnostics` reports each supported child the model could not own,
+as `Duplicated` when more than one occurrence exists and as `Malformed` when a
+single occurrence did not parse. A package authored entirely through the public
+surface reports nothing, which is what makes "no unmodeled supported children"
+decidable rather than open-ended. Removal refuses a duplicated or malformed
+member instead of reinterpreting one of several conflicting occurrences.
+
+Document-protection authoring records caller-supplied metadata verbatim.
+Deriving a hash from a password, choosing a salt and picking a spin count are
+explicit non-goals, so nothing in this path introduces fresh cryptographic
+randomness.
+
+The web settings model owns the separate `w:webSettings` root with the same
+source-preserving architecture. `w:frameset` and `w:divs` stay
+preservation-only, because the first carries relationship targets and the
+second is a nested tree no story asked for. `CT_WebSettings::div_ids` projects
+the retained `w:divs` subtree read-only, so a caller can tell whether a
+`w:divId` resolves to a division the part declares without opening HTML
+division authoring.
+
+The document `w:defaultTabStop` reaches layout. `LayoutInput::default_tab_stop`
+carries it into `oxml-layout::LineBreakParams::default_tab_interval_pt`, whose
+`36.0` default is the exact literal it replaced, so a document that says
+nothing keeps Word's half-inch implicit tab grid.
 
 The comments model owns typed comment entries and the three body anchor forms.
 Comment bodies retain ordered paragraphs, producer attributes, and unmodelled
@@ -1088,6 +1159,16 @@ consuming builders for formatting so calls chain, `&mut self` methods for adding
 content that return a nested handle, and index-based `Option`-returning
 accessors that never panic.
 
+`Paragraph` follows that idiom for the whole paragraph-property surface. Each
+property has a consuming builder, an in-place setter, and a `_value` form that
+takes an `Option` and removes the direct value, and every index accessor for a
+tab stop or a border edge returns an `Option`. `Paragraph::mark` returns a
+nested `ParagraphMark` handle over the paragraph mark's own run properties
+rather than adding a prefixed method per mark property. `ParagraphFrame` is the
+checked mirror of `w:framePr` and converts through the pinned truncating twip
+constructors. Relative frame alignment, the frame height rule, and any producer
+attribute are not mirrored and survive a facade write unchanged.
+
 The native Word facade creates a complete Word-compatible DOCX graph by
 default. `WordCreationProfile` separates package completeness from the four
 `WordPackageClass` identities, so native callers can select DOCX, DOCM, DOTX,
@@ -1110,7 +1191,10 @@ property removal, and whole-part removal all run on a staged document clone so
 the part, package relationship, content type, and typed model publish together.
 An empty custom-properties part is pruned only when the current facade created
 it. Settings mutations use the same staged boundary and keep the existing
-relationship-resolved target.
+relationship-resolved target. Web settings mutations reuse that boundary and
+allocate a collision-safe part only on the first authored value, and the part,
+its relationship and its content-type override are pruned together when the
+last value is removed from a part this facade created.
 
 Container-neutral Word story editing also belongs to the `rdocx` facade.
 Concrete `StoryKind`, `StoryId`, `ContentLocation`, `StoryItemKind`, and

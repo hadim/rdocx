@@ -14,6 +14,38 @@ exactly one as its test gate.
 | `golden` | Byte or pixel comparison against a recorded baseline | the hash harness |
 | `differential` | Compared against an external oracle | LibreOffice for renders, python-docx and python-pptx for the bindings |
 
+The complete run-property and inline story compares against the recorded
+WordprocessingML for `EG_RPrBase` rather than a fresh Word save, because Word
+GUI capture is not available on the development machine. The no-repair
+confirmation is a tracked human action under the Milestone 24 end-of-milestone
+gate, and no automated test skips without it. One disagreement is recorded as
+deliberate under rule 5 of `.claude/skills/differential-testing.md`. Word
+resolves the theme attribute when a producer `w:rFonts` presents both an
+explicit and a theme font for one slot, and rdocx resolves the explicit name.
+The facade clears one form when the other is set, so the divergence is
+reachable only on a producer document the caller never edited, where leaving
+the bytes as written is what the no-op save contract requires.
+`explicit_font_priority_divergence_from_word_is_deliberate` asserts our side so
+a later change cannot drop the decision silently.
+
+The table style and conditional formatting story compares against a pinned
+`w:tblStylePr` reference tree built as source XML, for the same reason. Word
+GUI capture is not available on the development machine, so confirming that
+Word reopens the authored package without offering to repair it is a tracked
+human action under the Milestone 24 end-of-milestone gate rather than an
+automated gate. The raster half of
+`every_conditional_table_region_matches_word` converts the same package with
+the pinned LibreOffice 26.2.5.2 build in an isolated profile and rasterizes
+both sides with the pinned pdftoppm 26.01.0 at 150 dpi in deterministic font
+mode. One disagreement is recorded as deliberate under rule 5 of
+`.claude/skills/differential-testing.md`. ECMA-376 orders the conditional
+regions with the vertical bands before the horizontal bands and a later region
+overriding an earlier one, so the horizontal band outranks the vertical band.
+Word resolves it that way and this workspace follows Word. LibreOffice
+26.2.5.2 inverts it and paints the vertical band. The test asserts both sides
+of the divergence, so neither our resolution nor a future oracle change can
+move without failing.
+
 The existing repository convention is preserved: **no binary fixture files.**
 Fixtures are constructed in code, including hand-assembled PNG and JPEG headers
 with precomputed CRCs. It keeps the `.crate` payload small and the diffs
@@ -380,6 +412,12 @@ section fallback, structural tabs, safe default geometry under extreme parsed
 values, and exact preservation of an unrelated unmodelled style child. The
 normalized differential records are pinned to Microsoft Word 16.113 build
 16.113.26091433 on macOS with the `fx114-toc-entry-records-v1` contract.
+The producer-variant regression
+`toc_rebuild_accepts_trailing_style_separator_and_duplicate_style_ids`
+combines a final empty custom-style component with a duplicate `Normal` style.
+It requires two rebuilt entries, one ordered diagnostic, both style definitions
+after save and reopen, and unchanged strict failure from the public style-graph
+validator. Unit controls retain stored display for interior empty components.
 The Word-default instruction case retains argument-free `TOC \\z`, rebuilds
 through an existing content-control payload, and saves and reopens the result.
 A mixed simple and unsupported complex TOC case asserts exact diagnostic text
@@ -793,6 +831,13 @@ rejected, saved, and reopened views. The legacy/default compatibility test
 keeps `Document::compare` byte-identical to default options. No sample invokes
 comparison, so the 49-entry hash harness remains unchanged.
 
+`comparison_tracks_changed_table_grids_as_table_replacement` source-builds
+tables that gain a column, lose a column, and resize both columns. Each tracked
+document saves and reopens with deletion before insertion. Acceptance compares
+cleanly with the edited table and rejection compares cleanly with the original.
+The surrounding comparison matrix retains focused row, cell, and table
+property revisions when the active grid is unchanged.
+
 Drawing preservation coverage keeps inline and anchored drawings in changed
 main-story and header owners. It checks exact wrapper bytes, local prefix
 bindings, extended `docPr` payloads, relationship targets, media bytes, and
@@ -803,6 +848,14 @@ package changes.
 Inherited-binding coverage adds story-root and outer-drawing declarations plus
 an unrelated typed edit before comparison. It checks dirty staging, complex
 fields, sibling fields sharing one physical run, and both revision outcomes.
+`text_only_comparison_with_body_header_and_footer_drawings_accepts_exactly`
+moves the `wp` binding from each story root to its drawing run while making six
+body edits and one footer edit beside a complex PAGE field. Run, word, and
+character comparison must accept and reject to exact visible text, retain the
+body, header, and footer relationship targets and media bytes, and preserve raw
+drawing payload after declaration placement normalization. Self-comparison is
+a byte-exact no-op, while a changed `docPr` identity remains visible to both
+revision outcomes.
 
 Terminal paragraph comparison coverage inserts at the start, middle, and end
 of the main story, including one, two, and three appended paragraphs. It proves
@@ -874,6 +927,36 @@ entity-decoded settings, unsupported colour and media diagnostics, atomic
 rejection, and margin-relative centering. No sample authors a watermark, so the
 49-entry hash harness remains unchanged.
 
+The advanced table geometry golden gate is
+`fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`. It
+builds one document in code holding a fixed-grid table, an auto-width autofit
+table, and a nested table, lays it out in deterministic font mode, and pins the
+page count together with the origin, width, and height of every painted cell,
+which is where the per-row origins and the resolved column widths are visible.
+Focused tests cover the `w:tblpPr` attribute matrix under an alias prefix, the
+autofit engagement predicate, minimum-plus-slack distribution, bidirectional
+column reversal against logical cell order, row grid offsets, a conditional
+region's row height reaching layout, and checked-setter rejection. No standard
+sample authors a floating, bidirectional, spaced, or auto-width table, and the
+engagement predicate keeps every authored `dxa` and `pct` table on the declared
+grid, so all 49 hash entries remain unchanged.
+
+The floating table golden gate is
+`floating_tables_match_reviewed_word_page_geometry_and_pagination`. It builds
+one document in code holding a margin-anchored, a page-anchored, and a
+text-anchored float, lays it out in deterministic font mode, and pins the page
+count, the three float origins, and the line boxes of the text inside each
+float's keep-out band. Focused tests cover the anchor frame mapping and the
+inline spelling, a float taking its origin from the anchor rather than the
+indent, a float that does not fit moving whole to the next page without
+repeating a header row, the two-pass convergence of a text-anchored float, the
+look-ahead that pushes the text above a float aside, and float against float
+resolution for `w:tblOverlap`. The named guard that the wrap extensions stay
+inert is `a_document_with_no_floating_table_still_paginates_in_one_pass`, which
+holds the two-pass predicate false for an ordinary table and for a float framed
+by the page or a margin. No standard sample authors a floating table, so all 49
+hash entries remain unchanged.
+
 The M23 drawing gate is `m23_drawings_text_boxes_and_watermarks_match_word`.
 It authors cropped inline and floating pictures, every wrap family, rotated and
 vertical text boxes, compatibility fallbacks, and section-selected watermarks
@@ -887,6 +970,31 @@ with Poppler 26.01.0, while LibreOffice 26.2.5.2 provides the portable reopen
 and visual inspection. The Word 16.112.4 structure record is reviewed
 statically when GUI automation is unavailable. No sample opts into the new
 options, so all 49 hash entries remain unchanged.
+
+The M24 section page-semantics gate is
+`section_page_semantics_match_pinned_libreoffice_render`. It source-builds one
+document carrying two columns with a rule, a page border, line numbering and
+mirrored margins, renders it through the deterministic font manager, converts
+the same package with LibreOffice 26.2.5.2, and rasterises both at 150 DPI with
+`pdftoppm` 26.01.0. The comparison is the horizontal ink blocks of the page
+interior, which are the line-number band, each column track and the rule
+between them, and each block edge must agree within six pixels, or 2.9 points.
+Global-window luminance structural similarity is reported and floored at 0.15
+as a collapse guard rather than a similarity claim, because over a page of 11
+point prose it measures glyph rasterization far more than layout: the measured
+agreement is 0.21 while the same page against a blank sheet scores 0.02.
+
+**Word GUI automation is not available on the machine that produced this
+gate**, so no Word-authored pinned record set was recorded for it. The Word
+confirmation lands instead as the mandatory `#[ignore]` capture test
+`capture_f269_word_section_evidence`, which asserts the installed Word build
+before it records anything and is never part of the automated gate, plus a
+named follow-up in `docs/hld/14-development-backlog.md`. That is the same
+pattern every other GUI-only evidence path in this document uses. F-251's
+`pdftotext` and `pdfinfo` 26.09.0 pins are left exactly as they are. The only
+two tests that invoke those binaries are `#[ignore]`d regeneration helpers, so
+nothing fails today, and re-pinning them to the installed 26.01.0 would
+invalidate recorded evidence no human here can re-capture.
 
 The Word glyph-provenance regression resolves every attributed run through its
 result-local `WordSourcePath` and requires the selected paragraph's exact
@@ -1277,6 +1385,127 @@ The SHA-bound PowerPoint artifact is
 `7525e9a088c5fbf58fa1ed98cdfa0ec2fabf998662112ced7a6b6521f2c4edfc`.
 The recorded crop result is `750x450 differing=0`.
 
+## The mixed-script geometry golden gate
+
+`mixed_script_page_matches_the_pinned_geometry_and_reading_order` builds one
+page through the public facade with Arabic, Hebrew, Korean, Japanese, Latin,
+and one Kanji paragraph, each setting its font through the `w:rFonts` slot
+Word uses for it, and lays it out with `FontManager::new_deterministic`. The
+digest is taken over a canonical serialisation of every painted run in paint
+order, carrying its font family, point size, origin, logical text, glyph ids,
+and advances, and for a rich run also its direction, script, bidi embedding
+level, both offset axes, and its cluster ranges.
+
+The recorded digest is
+`516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402`.
+
+The Kanji paragraph is what makes slot resolution load bearing in the gate. It
+names `Noto Sans SC` on `w:ascii` and `Noto Sans JP` on `w:eastAsia`, and both
+faces cover its text, so coverage fallback cannot choose between them. Every
+other paragraph has exactly one bundled face that covers it, so those prove
+script identity, reading order, and geometry rather than slot resolution.
+
+The gate is a geometry digest and not a pinned-oracle raster, because every
+property under test is stated exactly by the layout result. A rasteriser would
+add an external dependency and prove less. The serialisation is host-stable
+because the pipeline is f64 throughout with no FMA contraction, the shaper is
+pure Rust, and every face is bundled, so each coordinate is an integer font
+unit scaled by one multiply and summed in a fixed order. Printing four decimal
+places is not what makes it stable. It is a guard band that keeps an ordinary
+representation difference away from the printed digits, and it is applied to a
+value whose sign of zero has been normalised first, because a negative zero
+would otherwise print a leading minus and move the digest for no geometric
+reason. Reading order, script identity, resolved family, and bidi embedding
+level are asserted separately and readably before the digest, so a failure
+names the property that broke rather than only reporting that a hash moved.
+Logical order is asserted as exact reassembly per source paragraph, not as
+containment, so a dropped span fails.
+
+Adjacent regressions prove that a right-to-left paragraph keeps logical order
+in its rich runs, its cluster ranges, its SVG text, and its round-trip XML,
+that Arabic shaping applies contextual joining forms inside one run against a
+zero-width non-joiner control, that a numbering marker stays on the leading
+right-hand edge of a right-to-left paragraph, and that East Asian text reads
+`w:eastAsia` rather than `w:ascii` where both named families cover the text.
+
+Korean text now reaches the rich shaping path, and a paragraph on that path
+cannot enter the paragraph block cache, because the retained size of a rich
+inline item cannot be bounded. That has always been true of Arabic, Hebrew,
+and CJK. `a_complex_script_paragraph_is_never_admitted_to_the_paragraph_block_cache`
+asserts it for all five rather than leaving it to be rediscovered, and the
+incremental relayout tests use Latin fixtures so they still measure reuse.
+
+## The ruby and emphasis geometry golden gate
+
+`ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order` builds
+one page through the public facade carrying a ruby-annotated Japanese word, an
+emphasis-marked Japanese run, an emphasis-marked Korean run, an
+emphasis-marked Latin run, and a Latin control, and lays it out with
+`FontManager::new_deterministic`. It reuses the canonical serialisation the
+mixed-script gate records, which walks the element tree rather than the top
+level, so the runs inside an annotation group reach the digest with everything
+else.
+
+The recorded digest is
+`b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6`.
+
+The same test lays out the mixed-script page again and asserts
+`516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402` is unmoved,
+so a change that quietly moved the sibling story's baseline fails here rather
+than at the next re-record.
+
+Before the digest the test asserts the properties one at a time, so a failure
+names what broke. The base line is painted before its phonetic line, both
+emphasis glyph inventories appear once per non-space base character, and the
+saved document's paragraph text carries the ruby base and never the phonetic
+line.
+
+The gate is a geometry digest and not a pinned-oracle raster, for the reasons
+the mixed-script section gives. Nothing here needs a rasteriser.
+
+Adjacent regressions prove that paragraph text extraction returns the ruby base
+alone, that redaction still steps over `w:ruby` now that it is modelled, that a
+run split before an annotation carries the span with it rather than leaving it
+on the neighbouring run, and that a marked run advances exactly as far as an
+unmarked one.
+
+## The grid and vertical geometry golden gate
+
+`grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order` builds
+one page through the public facade carrying a `linesAndChars` gridded Japanese
+paragraph, a combined run inside round brackets, a table with a `tbRl` cell and
+a `btLr` cell on either side of an `lrTb` control, and a Latin control, and
+lays it out with `FontManager::new_deterministic`.
+
+Its serialisation is the mixed-script one with the accumulated group transform
+added. A rotation never reaches a glyph run's own origin, because the run keeps
+group-local coordinates and the rotation lives on the group above it, so a
+digest over origins alone would pass with every rotation removed. Recording the
+six transform coefficients is what makes this gate prove the subject it exists
+for.
+
+The recorded digest is
+`cb3043d53719f5dd9e16b61a001aff8c8827c19f96536972d4a17b9a626d2164`.
+
+The same test lays out both sibling pages again and asserts
+`516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402` and
+`b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6` are unmoved,
+so this story cannot move either recorded baseline while recording its own.
+
+Before the digest the test asserts the properties one at a time. Both rotated
+cells paint their text and reach the page through a transform, the horizontal
+control reaches it untransformed, and the reopened document returns its
+paragraphs and its cells in grid order, because rotation and combining are
+painting concerns and the saved bytes stay logical.
+
+The gate is a geometry digest and not a pinned-oracle raster, for the reasons
+the mixed-script section gives. Nothing here needs a rasteriser.
+
+Adjacent regressions prove that a `default` grid produces geometry identical to
+no grid at all, that adding a rotated neighbour does not move a horizontal
+cell, and that a rotated cell's text is still extracted, rendered to SVG and
+saved in logical order.
+
 ## The deck corpus
 
 Fifty real `.pptx` files are stored outside the published crates and fetched by
@@ -1355,9 +1584,12 @@ Eight gates run against it:
    preservation. Relationship negatives cover missing, external, duplicate,
    wrong-type, malformed, and equal-id cross-scope cases. Placeholder cases
    prove index-first and type-fallback matching, ambiguity rejection, and
-   unmatched rejection. The geometry unit gate covers exact targets, clipping,
-   five rules, and rejection of a 1.01-point displacement. The 49-entry render
-   hash manifest remains unchanged.
+   source-ordered diagnostics for skipped unmatched notes-slide overlays. The
+   source-built Google Slides index variant must produce the same notes PDF and
+   PNG as its matched control while retaining the hard-failure cases. The
+   geometry unit gate covers exact targets, clipping, five rules, and rejection
+   of a 1.01-point displacement. The 49-entry render hash manifest remains
+   unchanged.
 
 The notes-owner regression removes both reverse slide relationships from the
 same source-built control and requires byte-identical deterministic notes PDF.
@@ -1563,6 +1795,31 @@ positioned foreign run child, proves the raw bytes stay on their original side
 of the field boundary, and proves an invalid field instruction is atomic. The
 reopened document must render through deterministic bundled fonts.
 
+The Word paragraph-property round-trip gate is
+`every_public_paragraph_property_reopens_and_preserves_unrelated_xml`. It opens
+a source-built document whose `w:pPr` carries unmodelled children at four
+schema slots, authors every paragraph property through `Paragraph`, saves,
+reopens, and reads each value back through `ParagraphRef`. The retained
+children must survive byte identical. Focused unit coverage proves the frame
+attribute round trip, the schema sequence of the newly typed children among
+retained raw siblings, the attribute carrier of each newly typed toggle,
+prefix-tolerant reads with a foreign same-local element left unmodelled, the
+border edge attribute retention that section page borders consume, and style
+inheritance for the new members. Integration coverage authors, reads, and
+clears each border edge, each tab stop by index, and the paragraph mark, and
+pins the accepted outline-level range.
+
+The Word owner-attribute round-trip gate is
+`paragraph_run_and_section_identity_attributes_survive_noop_save`. It
+source-builds paragraph, run, and section-property roots with aliased modern
+identities, revision-session values, foreign attributes, and an unqualified
+attribute. Save, reopen, typed text mutation, and another save retain the exact
+values, source attribute order, child schema order, and deterministic package
+bytes. Focused unit coverage rejects duplicate expanded names and proves that
+authored `paraId` replaces only its expanded-name match. The public run-shape
+regression prevents the internal retention record from changing the existing
+`CT_R` struct literal surface.
+
 The run-level page-break differential gate authors both the break-only
 paragraph written by python-docx and a break between two pieces of text. Its
 source-built record pins Microsoft Word 16.104 build 16.104.25121423, the
@@ -1574,7 +1831,11 @@ regression proves one split paragraph produces ordered body fragments on two
 physical pages, resolves PAGE, NUMPAGES, and PAGEREF from that sequence, emits
 two deterministic PNG pages, and reports two pages from the deterministic PDF
 through pinned Poppler. No binary fixture or runtime oracle dependency enters
-the published crates.
+the published crates. The adjacent-break differential pins the reporter's
+LibreOffice Writer 26.2.5.2 page and text result for a trailing run page break
+followed by `pageBreakBefore`. Single-break controls remain two pages. Focused
+paginator controls retain separate transitions across intervening content,
+visible continuation formatting, line breaks, and column breaks.
 
 The contributor reader-fact regression combines strict document and body
 boundaries, first section properties, missing revision authors, empty simple
@@ -1594,6 +1855,12 @@ empty, self-closing, and body section-property boundaries. The content-control
 matrix covers expanded-name aliases, schema order, retained private slots,
 direct nested block controls, opaque foreign subtrees, and exact XML 1.0
 whitespace and character-reference handling without panics.
+
+`clone_content_scales_linearly_and_names_invalid_arguments` builds 50- and
+100-paragraph packages without an external producer. It bounds the doubled
+clone workload, verifies the cloned text, and pins the source-handle and
+destination-index type errors. The surrounding clone regressions retain fresh
+identities, relationship scope, stale handles, and byte-identical rollback.
 
 The ordered section round-trip gate is
 `ordered_section_mutations_preserve_independent_story_references`. It creates
@@ -1836,6 +2103,28 @@ foreign subtrees before, inside, and after modeled settings. They assert exact
 foreign subtree bytes after mutation and assert the schema order of default tab
 stop, character spacing control, compatibility settings, document variables,
 and theme font language.
+
+`public_authored_settings_package_reports_no_unmodeled_supported_children` is
+the closed-set gate. It authors every supported settings and web settings member
+through the public `Document` surface, saves, reopens, and asserts that both
+diagnostic lists are empty and that foreign subtrees placed before, inside
+`w:compat`, inside `w:mailMerge`, after the last child, and inside
+`w:webSettings` are byte identical.
+`settings_children_serialize_in_schema_sequence_order` authors members in
+reverse schema order and proves the `xsd:sequence` result at the settings,
+`w:compat`, `w:mailMerge` and `w:webSettings` levels.
+`supported_settings_is_a_strict_subsequence_of_the_order_table`,
+`every_supported_name_is_projected_by_from_xml`,
+`duplicate_and_malformed_supported_children_report_diagnostics`,
+`unsupported_settings_children_are_never_diagnostics` and
+`compatibility_option_covers_the_complete_compat_on_off_set` keep the constant,
+the parser and the diagnostics from drifting apart.
+`web_settings_part_is_created_on_demand_and_pruned_when_empty` and
+`fresh_package_profiles_gain_no_web_settings_part` hold the packaging rule that
+an ordinary save adds nothing.
+`document_default_tab_stop_drives_implicit_tab_positions` runs in deterministic
+font mode and pins both the document interval and the exact `36.0` point
+fallback.
 
 `update_fields_on_open_is_typed_optional_and_schema_ordered` adds absent, bare
 true, explicit false, namespace alias, foreign lookalike, set, clear, remove,
@@ -2515,6 +2804,14 @@ official evidence for rdocx, python-docx, docx-rs, docx4j, and Aspose.Words.
 `ND` means not documented in that evidence, and no row makes a volatile
 performance, popularity, price, or footprint claim.
 
+Every published measurement uses a fixed nine-column table that names the
+value, version, platform, build mode, input, command, statistic, and date. The
+root plus all 22 publishable crate pages carry their re-derived `.crate`
+archive footprint. Exactly the root, `rdocx-layout`, `oxml-pdf`, and
+`rdocx-py` pages also carry the four large-document layout and PDF rows. The
+rows state the enforced floor or ceiling and one dated observation. A row
+shared by several pages is byte-identical on each page.
+
 Each crate-local document leads with an outcome and at least three implemented
 capabilities, then states direct-use guidance, adjacent package relationships,
 publication status, and a concrete Rust, CLI, Python, or JavaScript example.
@@ -2548,7 +2845,19 @@ byte-compares their single packaged README with the declared source. Archive
 creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
-docs job and canonical non-fast verification call this same runner.
+docs job and canonical non-fast verification call this same runner. The
+archive gate re-derives compressed bytes, member bytes, and member count. It
+normalizes Cargo's generated `.cargo_vcs_info.json` to a fixed-length clean
+revision before requiring exact source-determined member values. Compressed
+size must stay within 64 bytes of the recorded observation under the pinned
+toolchain, may grow by no more than the same allowance on another toolchain,
+and always remains subject to the 10 MiB ceiling. The allowance covers the
+generated commit hash and dirty marker, not tracked source growth.
+`--record-measurements` prints the derived archive rows and the approved speed
+rows in their exact Markdown form. Mutation coverage rejects incomplete or
+stale provenance, row-to-page drift, a speed guarantee beyond its code gate,
+an untracked deferred measurement, and unbounded superlatives across all 27
+pages.
 The stable 0.14.0 carrier regression pins all ten inherited version carriers,
 the `rdocx` Python project version, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
@@ -2712,6 +3021,13 @@ or below 64 MiB and at or above 250 pages per second, and PDF rendering at or
 below 16 MiB additional peak and at or above 1,000 pages per second. Workflow
 mutation tests reject a missing, unlocked, debug, non-ignored, non-exact,
 parallel, or failure-swallowing invocation.
+
+The dated macOS 26.6.2 observation on an Apple M5 Max with rustc 1.97.1 uses
+that exact release-mode invocation with one test thread. It records 31,019.1
+layout pages per second at a 29.03 MiB peak and 60,058.0 PDF pages per second at
+a 1.73 MiB additional peak. These values are observations. The lower throughput
+floors and higher allocation ceilings remain the portable guarantees enforced
+in CI.
 
 ## What CI runs
 

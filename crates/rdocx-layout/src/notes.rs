@@ -184,6 +184,10 @@ impl NoteRegistry {
                             num_state,
                             diagnostics,
                             source,
+                            // Note text is page furniture at the bottom
+                            // margin, laid out against its own measure, so
+                            // the section grid does not reach it.
+                            None,
                         )?;
                         let first = lines.len();
                         if block.has_visible_revision && !block.lines.is_empty() {
@@ -305,6 +309,9 @@ mod tests {
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document::new(),
             styles: CT_Styles::new_default(),

@@ -126,7 +126,10 @@ is unchanged and complete. Content-control fragments validate the complete
 serialized block grammar by expanded name, including retained root slots and
 raw direct Word children. Foreign raw subtrees stay opaque. Invalid locations,
 relationships, identities, XML, and reopen results discard the staged
-candidate without changing the live document.
+candidate without changing the live document. Direct body inventory recognizes
+section properties only among preserved nodes, so ordinary paragraphs and
+tables do not repeat namespace-prefix scans. One clone still performs one
+identity-freshening pass and one complete staged reopen.
 
 HTML fragment insertion uses the same transaction. `HtmlImageResource` maps an
 exact source string to caller-owned bytes and a filename. Data-URI images are
@@ -316,6 +319,7 @@ CORE_PROPERTIES, THUMBNAIL, DIGITAL_SIGNATURE_ORIGIN, DIGITAL_SIGNATURE
 EXTENDED_PROPERTIES   // docProps/app.xml
 CUSTOM_PROPERTIES     // docProps/custom.xml
 COMMENTS              // Word comments part
+WEB_SETTINGS          // Word web settings part
 GLOSSARY_DOCUMENT     // Word glossary document part
 DIAGRAM_DATA, DIAGRAM_LAYOUT, DIAGRAM_QUICK_STYLE, DIAGRAM_COLORS
 DIAGRAM_DRAWING       // Microsoft 2007 cached diagram drawing
@@ -416,6 +420,25 @@ rewriting the raw subtree bytes. Prefix aliases, nested shadows, and ordinary
 namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
+
+Modeled paragraph, run, and section-property owners retain every ordered root
+attribute, including producer identity, revision-session, foreign, and
+unqualified attributes. Retention uses the existing raw-preservation carriers
+without exposing the attribute record as child XML. Expanded names govern
+duplicate rejection and authored paragraph identity precedence, so an authored
+`paraId` replaces only the retained attribute with the same namespace and
+local name. Typed child mutation leaves all other retained root attributes in
+source order.
+
+Retention covers attributes, not namespace bindings. A declaration is recorded
+only when a retained attribute uses its prefix, because the alias machinery
+already materializes a binding onto every element that needs one, and recording
+a declaration a child carries for itself would emit it twice. A root carrying
+nothing but declarations retains no record at all. On the way back out, the
+canonical `w14` binding is not copied onto the written element, since the part
+root that owns the element already declares it and the authored identity write
+makes the same assumption. Together these keep a reopened save byte identical
+to the save it was read from.
 
 An unknown default namespace declared on the document root is classified by
 its effective lexical scope before canonical serialization. An unused root
@@ -541,6 +564,28 @@ does not allocate a settings graph. Duplicate or malformed producer forms remain
 unmodelled and byte-identical, and their mutation returns an error rather than
 collapsing ownership. Every facade change uses the staged settings candidate,
 including collision-safe part and relationship allocation, before commit.
+
+The bounded surface closes over the thirty-one top-level names in
+`SUPPORTED_SETTINGS`, the complete `CT_Compat` on-off family, and the thirteen
+authored `w:mailMerge` members. Mail-merge members are written one at a time at
+their own schema positions, because `w:dataSource`, `w:headerSource` and
+`w:odso` sit among them and stay preservation-only. Every typed member has a
+paired remover that deletes only its own occurrence, and removal of a
+duplicated or malformed member returns an error and changes no byte. Reads
+accept in-scope Word aliases, and a same-local-name element in a foreign
+namespace is never taken as the modeled child.
+
+The Word facade resolves an existing web settings part through the main
+document's `WEB_SETTINGS` relationship and retains the normalized target
+instead of assuming `/word/webSettings.xml`. A document without that
+relationship gains no web settings part, relationship, or content-type override
+during an ordinary save, and the fresh Word-compatible profiles keep their exact
+existing part inventory. The first authored value allocates a collision-safe
+part through the same staged boundary, and removing the last value prunes the
+part, its relationship, and its override when this facade created them.
+`w:frameset` and `w:divs` are preservation-only. A read-only division-identifier
+projection over the retained `w:divs` subtree reports whether a paragraph
+`w:divId` resolves.
 
 The font-table reader accepts any in-scope Word and relationship namespace
 prefixes. It models font names, alternate names, family, pitch, and the four
@@ -974,6 +1019,21 @@ empty `tblGridChange` remains unmodelled in its original slot. Serialization
 writes active columns first and the modeled historical change after them in
 schema order.
 
+A table style's conditional regions project all five `CT_TblStylePr` layers.
+`w:pPr`, `w:rPr`, `w:tblPr`, `w:trPr` and `w:tcPr` are modeled and serialized
+in that schema sequence, and a region whose five layers are unchanged since
+parsing serializes back as its original bytes, unmodelled children and foreign
+attributes included. `w:type` is projected to a closed region enum. A value the
+workspace does not recognize projects as absent, round-trips from its preserved
+bytes, and is never a reason to refuse the file. A style's own base `w:trPr`
+and `w:tcPr` are modeled at their schema ranks beside its `w:tblPr`.
+`w:tblStyleRowBandSize` and `w:tblStyleColBandSize` are modeled at their
+`w:tblPr` schema slots and are counts rather than measurements, so no unit
+conversion applies. `w:cnfStyle` on `w:pPr` is modeled at its schema slot
+between `w:divId` and `w:rPr`, and the source element is retained as an
+attribute carrier so the per-region attribute form of `CT_Cnf` survives being
+modeled.
+
 The native table facade authors auto, fixed-twip, and percentage widths through
 one typed width mode. Checked physical measurements must be nonnegative and fit
 the signed twip representation after the repository's pinned truncating unit
@@ -1015,6 +1075,74 @@ their exact schema slots. Changed modeled children use canonical `w` prefixes
 and row or cell `xsd:sequence`, while unrelated row, cell, and border extension
 bytes remain exact. Checked nested tables are nonempty and retain the required
 trailing cell paragraph.
+
+Paragraph property readers select every modeled `w:pPr` child and attribute by
+its bound WordprocessingML namespace, and a foreign same-local child stays
+unmodelled in its own schema slot. Serialization writes canonical values with
+fixed `w` attributes at each child's `xsd:sequence` position and replays every
+retained raw child at its recorded slot and occurrence. `w:framePr` and each
+border edge write their retained attributes before the modeled ones, so typing
+those elements drops no producer attribute and keeps the retained ones in
+source order. A modeled toggle whose source element carried an attribute the
+model does not own replays that element in place of the canonical form, which
+keeps a parse and save of an untouched paragraph byte identical.
+
+Run property readers follow the same contract over the complete `EG_RPrBase`
+sequence. `w:rFonts`, `w:color`, `w:bdr`, `w:fitText`, `w:eastAsianLayout`, and
+`w:shd` write their retained attributes before the modeled ones, so typing
+those elements drops no producer attribute. The one normalisation is
+`ST_UcharHexNumber`. `w:themeTint`, `w:themeShade`, `w:themeFillTint`, and
+`w:themeFillShade` hold a byte, so they are re-serialized as the two upper-case
+hex digits Word writes, and a value that is not two hex digits is retained
+verbatim through the element's ordered attribute vector instead.
+
+Run content readers type `w:sym` and the four special characters in their
+source positions among text, tabs, breaks, drawings, and fields. A `w:sym`
+whose `w:char` is not four hex digits, a `w:ptab` missing one of its three
+required attributes, and a `w:cr`, `w:noBreakHyphen`, or `w:softHyphen`
+carrying any attribute stay in positioned raw capture, because a partial
+projection would drop bytes a no-op save must return.
+
+`w:ruby` is a paragraph-content sibling of `w:r` rather than a run child. The
+paragraph reader accepts any prefix bound to the WordprocessingML namespace on
+`w:ruby`, `w:rubyPr`, `w:rt` and `w:rubyBase`, including a binding declared on
+the `w:ruby` element itself, and the writer emits the fixed `w` prefix at each
+child's `xsd:sequence` position. The base runs are spliced into the paragraph's
+own run list and the annotation records the half-open span they occupy, which
+is what `w:hyperlink` already does, so every run index the paragraph maintains
+across a split, an insertion, or a complex-field collapse moves the span with
+it. The phonetic runs stay inside the annotation.
+
+The typed ruby model admits only what it can write back exactly. A `w:ruby`
+carrying an attribute, a `w:rt` or `w:rubyBase` child that is not a run,
+non-whitespace character data between children, or an empty base line stays in
+positioned raw capture instead, for the same reason a partial `w:sym`
+projection does. Whitespace between children is this crate's own indentation
+and is read and dropped. Inside `w:rubyPr`, a child outside the six modeled
+ones is retained and written after them, and a modeled child missing its
+required `w:val` is retained rather than normalized into an empty slot, which
+is the rule `w:kern` already follows.
+
+Section property readers select every modeled `w:sectPr` child by its bound
+WordprocessingML namespace and replay each retained raw child at its recorded
+schema slot and sub-slot. The sub-slot is what keeps `xsd:sequence` intact now
+that `w:vAlign` sits between `w:formProt` and `w:noEndnote`,
+`w:textDirection` between `w:titlePg` and `w:bidi`, and `w:docGrid` between
+`w:rtlGutter` and `w:printerSettings`. `w:footnotePr`, `w:endnotePr`,
+`w:paperSrc`, `w:pgBorders`, `w:lnNumType`, `w:vAlign`, `w:textDirection` and
+`w:docGrid` are modeled. `w:formProt`, `w:noEndnote`, `w:bidi`, `w:rtlGutter`
+and `w:printerSettings` stay byte-preserved at their slots, and `w:bidi` and
+`w:rtlGutter` belong to the bidirectional family of F-266. `w:docGrid` reads
+its `w:type`, `w:linePitch` and `w:charSpace` prefix-tolerantly, keeps any
+other attribute in source order, and writes the retained attributes before the
+modeled ones under the fixed `w:` prefix. A value outside `ST_DocGrid`, or a
+pitch or space that is not an integer, is retained as an unmodelled attribute
+rather than typed in part. `w:pgBorders`, `w:paperSrc` and `w:lnNumType` write their retained
+attributes before the modeled ones, exactly as a border edge does. A modeled
+child whose source element carried an attribute the model does not own is
+replayed in place of the canonical form rather than typed in part, which is the
+choice `w:pgSz` already makes and which keeps a parse and save of an untouched
+section byte identical.
 
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
@@ -1131,6 +1259,10 @@ projection removes only the selected comparison facts. Ignored formatting,
 textual whitespace, fields, comments, and story categories retain the original
 bytes. Character and word alignment carries source ownership and raw-child
 boundaries, keeps non-text content atomic, and emits each preserved child once.
+Tables with different active grids use one deleted-table record followed by
+one inserted-table record at the aligned boundary. Row markers carry the
+revision metadata, so acceptance retains only the edited grid and rejection
+retains only the original grid. Equal-grid tables keep row and cell comparison.
 Generated revisions use canonical `w`, `xml`, and `mc` prefixes in schema
 order, while reparse remains prefix tolerant. Source-span patching interleaves
 changed owner bytes with the exact original gaps, preserving unowned
@@ -1148,6 +1280,12 @@ while bindings declared on an outer drawing owner travel with the detached
 wrapper. Dirty typed inputs recover matching package drawing payloads before
 their staged flush. Physical complex-field runs project onto one modeled owner,
 including several sibling fields that share one physical run.
+Comparison-only story projections instead close every required drawing binding
+on the inline or anchor root before equality. Story-root, paragraph, run, and
+drawing-owner declaration placement is therefore equivalent in the comparison
+model without changing package serialization. Retained drawing payload remains
+significant after declaration placement normalization, so a real drawing
+change is still tracked.
 
 Literal redaction also uses the complete package boundary. The Word facade
 flushes a staged clone, removes one non-empty exact literal from relationship-
@@ -1243,6 +1381,12 @@ style is created only when neither form exists. Effective paragraph properties
 decide whether the style already owns a right tab. Style-graph validation and
 styles-part serialization complete inside the staged candidate, so unrelated
 styles and unmodelled style children retain their source bytes.
+One final empty component in a custom-style list is a tolerated producer
+separator. Interior empty names, missing levels, and invalid levels remain
+malformed. TOC discovery resolves duplicate style identifiers from the first
+source definition and reports each duplicated identifier once. Validation of
+that staged TOC view ignores later definitions without deleting or rewriting
+them. Public style mutation retains strict duplicate rejection.
 Old-result exclusion adds a total nested-run order within each accepted
 revision or content-control owner, so fields on opposite sides of a marker in
 one wrapper remain distinguishable. The outer coordinate is the typed

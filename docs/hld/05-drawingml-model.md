@@ -148,6 +148,14 @@ The Word function keeps its name and behaviour, documented as "legacy, matches
 Word's observed behaviour", so nobody unifies them by accident. Correcting it is
 a separate, separately-reviewed change with its own reviewed hash delta.
 
+F-265 gave the Word function its first production caller. `w:color/@w:themeTint`
+and `w:color/@w:themeShade` are the same 0-255 byte convention, so run colour
+resolution passes them straight into `apply_tint_shade` with its existing
+signature. Making it live changed none of its arithmetic, and no call site on
+the Word path reaches `apply_tint_shade_pct` or any other spec-correct entry
+point. A unit test pins the values it computes, so a later correction has to be
+a deliberate change to that test rather than a silent drift.
+
 ## Geometry
 
 Preset and custom geometry share one evaluator, which is the decisive argument

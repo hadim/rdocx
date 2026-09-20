@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from dataclasses import dataclass
+import datetime
 import json
 from pathlib import Path
 import re
@@ -215,6 +216,10 @@ README_REQUIRED_TEXT = {
     REPO_ROOT / "crates/rdocx-py/README.md": (
         "doc.add_paragraph(\"Hello from Python\")",
         'doc.save("hello.docx")',
+        "runs the Rust `rdocx` document engine locally",
+        "presents a typed\nPython API",
+        "Review workflows cover comments, tracked revisions, comparison",
+        "Complete package saves preserve safe producer XML",
     ),
     REPO_ROOT / "crates/rdocx-wasm/README.md": (
         'from "@tensorbee/rdocx-wasm"',
@@ -237,6 +242,10 @@ README_REQUIRED_TEXT = {
         "presentation.to_pdf()",
         "presentation.render_slide_to_png(0)",
         "Read speaker-note text and inspect or mutate modern comment threads.",
+        "runs the Rust `rpptx` presentation engine locally",
+        "exposes a typed\nPython API",
+        "renders slides and speaker notes without a remote service",
+        "preserves safe package content",
     ),
     REPO_ROOT / "crates/rpptx-layout/README.md": ("ScopedMediaIds::default()",),
     REPO_ROOT / "crates/rpptx-oxml/README.md": (
@@ -256,7 +265,7 @@ README_REQUIRED_TEXT = {
 
 ROOT_WORKFLOW_CLAIMS = {
     "DOCX": "Create, open, edit, validate, and save complete packages, with encryption and signing through opt-in features",
-    "Rich authoring": "Paragraphs, runs, tables, styles, numbering, fields, forms, equations, drawings, comments, and metadata",
+    "Rich authoring": "Complete paragraph and run properties, multilingual and vertical typography, conditional and floating tables, section page semantics, settings, styles, numbering, fields, forms, equations, drawings, comments, and metadata",
     "Preservation": "Retain unknown safe producer XML byte for byte when it is not modelled",
     "Native layout": "Resolve Word flow content into positioned pages with bundled, system, embedded, or caller-provided fonts",
     "Fixed output": "PDF, PDF/A, PNG, JPEG, TIFF, and SVG",
@@ -344,6 +353,174 @@ ROOT_UNIQUENESS_CLAIM = (
     "Python, and a browser surface. That statement is bounded to the official\n"
     "evidence set and review date."
 )
+MeasurementRow = tuple[str, str, str, str, str, str, str, str, str]
+MEASUREMENT_COLUMNS = (
+    "Measurement",
+    "Value",
+    "Version",
+    "Platform",
+    "Build mode",
+    "Input",
+    "Command",
+    "Statistic",
+    "Measured on",
+)
+MEASUREMENT_DATE = "2026-09-19"
+MEASUREMENT_PLATFORM = "macOS 26.6.2, Apple M5 Max, arm64"
+ARCHIVE_COMPRESSION_TOLERANCE_BYTES = 64
+ARCHIVE_MEASUREMENTS = {
+    "oxml-chart": (102_042, 659_367, 6),
+    "oxml-cli-support": (6_718, 21_586, 6),
+    "oxml-core": (20_677, 100_124, 15),
+    "oxml-drawing": (159_703, 1_121_577, 24),
+    "oxml-layout": (4_623_324, 9_227_483, 51),
+    "oxml-media": (12_252, 50_992, 6),
+    "oxml-opc": (91_907, 354_453, 12),
+    "oxml-pdf": (66_015, 304_432, 14),
+    "oxml-sml": (12_511, 49_803, 6),
+    "rdocx": (1_076_425, 6_419_062, 36),
+    "rdocx-cli": (33_805, 145_256, 8),
+    "rdocx-html": (15_486, 63_894, 11),
+    "rdocx-layout": (251_566, 1_368_545, 15),
+    "rdocx-opc": (3_655, 9_668, 6),
+    "rdocx-oxml": (367_095, 2_377_391, 32),
+    "rdocx-pdf": (8_111, 26_758, 6),
+    "rpptx": (387_762, 2_018_565, 16),
+    "rpptx-chart": (6_648, 21_136, 6),
+    "rpptx-cli": (27_236, 108_831, 8),
+    "rpptx-layout": (79_109, 458_112, 11),
+    "rpptx-oxml": (152_243, 1_038_449, 20),
+    "rpptx-render": (57_790, 320_838, 8),
+}
+PACKAGE_VERSIONS = {
+    **{name: "0.12.1" for name, _ in LOCAL_PATCHES if not name.startswith("rdocx")},
+    **{name: "0.14.0" for name, _ in LOCAL_PATCHES if name.startswith("rdocx")},
+}
+PERFORMANCE_OBSERVATIONS = {
+    "layout-throughput": "31,019.1 pages/s",
+    "layout-peak": "29.03 MiB",
+    "pdf-throughput": "60,058.0 pages/s",
+    "pdf-peak": "1.73 MiB",
+}
+PERFORMANCE_COMMAND = (
+    "`cargo test -p rdocx --test regression_test --release "
+    "a_thousand_page_document_paginates_and_renders_within_the_declared_limits "
+    "-- --ignored --exact --nocapture --test-threads=1`"
+)
+
+
+def archive_row(package: str) -> MeasurementRow:
+    compressed, members, count = ARCHIVE_MEASUREMENTS[package]
+    return (
+        f"Crates.io archive: {package}",
+        f"{compressed:,} compressed bytes, {members:,} member bytes, {count} members",
+        PACKAGE_VERSIONS[package],
+        MEASUREMENT_PLATFORM,
+        "`cargo package --locked --no-verify`",
+        f"Tracked `{package}` package inventory",
+        "`python3 scripts/readme_doctests.py --record-measurements`",
+        "gzip archive bytes, tar member bytes, tar member count",
+        MEASUREMENT_DATE,
+    )
+
+
+MEASUREMENT_ROWS: dict[str, MeasurementRow] = {
+    **{f"archive:{name}": archive_row(name) for name in ARCHIVE_MEASUREMENTS},
+    "layout-throughput": (
+        "Large-document layout throughput",
+        f"minimum 250 pages/s, observed {PERFORMANCE_OBSERVATIONS['layout-throughput']}",
+        "rdocx 0.14.0",
+        MEASUREMENT_PLATFORM,
+        "release, one test thread",
+        "1,000 one-page paragraphs with deterministic fonts",
+        PERFORMANCE_COMMAND,
+        "pages per wall-clock second",
+        MEASUREMENT_DATE,
+    ),
+    "layout-peak": (
+        "Large-document layout peak allocation",
+        f"maximum 64 MiB, observed {PERFORMANCE_OBSERVATIONS['layout-peak']}",
+        "rdocx 0.14.0",
+        MEASUREMENT_PLATFORM,
+        "release, one test thread",
+        "1,000 one-page paragraphs with deterministic fonts",
+        PERFORMANCE_COMMAND,
+        "peak live allocation",
+        MEASUREMENT_DATE,
+    ),
+    "pdf-throughput": (
+        "Large-document PDF throughput",
+        f"minimum 1,000 pages/s, observed {PERFORMANCE_OBSERVATIONS['pdf-throughput']}",
+        "rdocx 0.14.0",
+        MEASUREMENT_PLATFORM,
+        "release, one test thread",
+        "1,000 deterministic layout pages",
+        PERFORMANCE_COMMAND,
+        "pages per wall-clock second",
+        MEASUREMENT_DATE,
+    ),
+    "pdf-peak": (
+        "Large-document PDF peak allocation",
+        f"maximum 16 MiB, observed {PERFORMANCE_OBSERVATIONS['pdf-peak']}",
+        "rdocx 0.14.0",
+        MEASUREMENT_PLATFORM,
+        "release, one test thread",
+        "1,000 deterministic layout pages",
+        PERFORMANCE_COMMAND,
+        "peak live allocation",
+        MEASUREMENT_DATE,
+    ),
+}
+SPEED_MEASUREMENTS = (
+    "layout-throughput",
+    "layout-peak",
+    "pdf-throughput",
+    "pdf-peak",
+)
+MEASUREMENT_PAGES: dict[Path, tuple[str, ...]] = {
+    **{
+        (REPO_ROOT / "README.md" if name == "rdocx" else REPO_ROOT / path / "README.md"):
+        (f"archive:{name}",)
+        for name, path in LOCAL_PATCHES
+    },
+}
+for measurement_page in (
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "crates/rdocx-layout/README.md",
+    REPO_ROOT / "crates/oxml-pdf/README.md",
+    REPO_ROOT / "crates/rdocx-py/README.md",
+):
+    MEASUREMENT_PAGES[measurement_page] = (
+        *MEASUREMENT_PAGES.get(measurement_page, ()),
+        *SPEED_MEASUREMENTS,
+    )
+MEASUREMENT_TIERS = {
+    **{f"archive:{name}": "rederived" for name in ARCHIVE_MEASUREMENTS},
+    **{measurement_id: "gated" for measurement_id in SPEED_MEASUREMENTS},
+}
+MEASUREMENT_TIER_NAMES = ("rederived", "gated", "recorded")
+UNBOUNDED_MEASUREMENT_CLAIMS = re.compile(
+    r"\b(fastest|smallest|lightest|every library|any other library|all other|"
+    r"industry-leading|unmatched|best-in-class)\b",
+    re.IGNORECASE,
+)
+RELATIVE_MEASUREMENT_CLAIM = re.compile(
+    r"\b(?:faster|smaller) than\b(?P<target>.*?)"
+    r"(?:\.(?=\s|$)|[!?](?=\s|$)|\n|$)",
+    re.IGNORECASE,
+)
+NAMED_COMPARISON_SUBJECT = re.compile(
+    r"`[^`]+`|\[[^]]+\]\([^)]+\)|\b(?:rdocx|rpptx|python-docx|docx-rs|"
+    r"docx4j|Aspose\.Words)\b|\b[vV]?\d+(?:\.\d+)+\b",
+    re.IGNORECASE,
+)
+DEFERRED_MEASUREMENT_MARKERS = (
+    "Python wheel and source-distribution sizes",
+    "installed Python site-packages footprint",
+    "CLI release archive sizes",
+    "WASM bundle sizes",
+    "Python boundary timing",
+)
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^]]+\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 MARKDOWN_IMAGE = re.compile(r"!\[[^]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
@@ -360,6 +537,249 @@ def markdown_section(text: str, heading: str) -> str | None:
         return None
     section = text.split(marker, 1)[1]
     return section.split("\n## ", 1)[0]
+
+
+def measurement_table(text: str) -> tuple[MeasurementRow, ...] | None:
+    section = markdown_section(text, "Measured footprint and speed")
+    if section is None:
+        return None
+    rows: list[MeasurementRow] = []
+    header_seen = False
+    for line in section.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = tuple(cell.strip() for cell in line.strip("|").split("|"))
+        if cells == MEASUREMENT_COLUMNS:
+            header_seen = True
+            continue
+        if cells and all(set(cell) <= {"-", ":"} for cell in cells):
+            continue
+        if len(cells) != len(MEASUREMENT_COLUMNS):
+            return ()
+        rows.append(cells)  # type: ignore[arg-type]
+    return tuple(rows) if header_seen else ()
+
+
+def validate_unbounded_claims(
+    readmes: set[Path], overrides: dict[Path, str] | None = None
+) -> bool:
+    overrides = {} if overrides is None else overrides
+    valid = True
+    for readme in sorted(readmes):
+        text = overrides.get(readme, readme.read_text(encoding="utf-8"))
+        unbounded = UNBOUNDED_MEASUREMENT_CLAIMS.search(text)
+        if unbounded is not None:
+            print(
+                f"README doctest error: {readme} contains unbounded claim "
+                f"{unbounded.group(0)!r}",
+                file=sys.stderr,
+            )
+            valid = False
+        for comparison in RELATIVE_MEASUREMENT_CLAIM.finditer(text):
+            if NAMED_COMPARISON_SUBJECT.search(comparison.group("target")) is None:
+                print(
+                    f"README doctest error: {readme} contains unbounded claim "
+                    f"{comparison.group(0)!r}",
+                    file=sys.stderr,
+                )
+                valid = False
+    return valid
+
+
+def valid_measurement_date(value: str) -> bool:
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def performance_thresholds(source: str | None = None) -> dict[str, float]:
+    if source is None:
+        source = (
+            REPO_ROOT / "crates/rdocx/tests/regression_test.rs"
+        ).read_text(encoding="utf-8")
+    patterns = {
+        "layout-throughput": r"MIN_LAYOUT_PAGES_PER_SECOND: f64 = ([\d_]+(?:\.\d+)?)",
+        "pdf-throughput": r"MIN_PDF_PAGES_PER_SECOND: f64 = ([\d_]+(?:\.\d+)?)",
+        "layout-peak": r"MAX_LAYOUT_PEAK_BYTES: usize = ([\d_]+) \* MIB",
+        "pdf-peak": r"MAX_PDF_PEAK_BYTES: usize = ([\d_]+) \* MIB",
+    }
+    thresholds: dict[str, float] = {}
+    for measurement_id, pattern in patterns.items():
+        match = re.search(pattern, source)
+        if match is None:
+            return {}
+        thresholds[measurement_id] = float(match.group(1).replace("_", ""))
+    return thresholds
+
+
+def validate_speed_bounds(
+    rows: dict[str, MeasurementRow] | None = None,
+    thresholds: dict[str, float] | None = None,
+) -> bool:
+    rows = MEASUREMENT_ROWS if rows is None else rows
+    thresholds = performance_thresholds() if thresholds is None else thresholds
+    valid = True
+    for measurement_id in SPEED_MEASUREMENTS:
+        row = rows.get(measurement_id)
+        if row is None:
+            return False
+        if measurement_id.endswith("throughput"):
+            match = re.match(r"minimum ([\d,]+(?:\.\d+)?) pages/s, observed ", row[1])
+            claim = None if match is None else float(match.group(1).replace(",", ""))
+            bounded = claim is not None and claim <= thresholds.get(measurement_id, -1)
+        else:
+            match = re.match(r"maximum ([\d,]+(?:\.\d+)?) MiB, observed ", row[1])
+            claim = None if match is None else float(match.group(1).replace(",", ""))
+            bounded = claim is not None and claim >= thresholds.get(measurement_id, float("inf"))
+        if not bounded:
+            print(
+                f"README doctest error: {measurement_id} outruns its code gate",
+                file=sys.stderr,
+            )
+            valid = False
+    return valid
+
+
+def expected_measurement_version(
+    measurement_id: str, versions: dict[str, str]
+) -> str | None:
+    if measurement_id.startswith("archive:"):
+        return versions.get(measurement_id.removeprefix("archive:"))
+    version = versions.get("rdocx")
+    return None if version is None else f"rdocx {version}"
+
+
+def validate_measurement_evidence(
+    overrides: dict[Path, str] | None = None,
+    metadata: dict[str, object] | None = None,
+) -> bool:
+    overrides = {} if overrides is None else overrides
+    metadata = cargo_metadata() if metadata is None else metadata
+    packages = None if metadata is None else metadata.get("packages")
+    if not isinstance(packages, list):
+        print(
+            "README doctest error: invalid metadata for measurement evidence",
+            file=sys.stderr,
+        )
+        return False
+    versions = {
+        package.get("name"): package.get("version")
+        for package in packages
+        if isinstance(package, dict)
+        and isinstance(package.get("name"), str)
+        and isinstance(package.get("version"), str)
+    }
+    readmes = {
+        readme
+        for package in packages
+        if isinstance(package, dict)
+        for readme in (package_readme(package),)
+        if readme is not None
+    }
+    valid = validate_unbounded_claims(readmes, overrides)
+    for readme in sorted(readmes):
+        text = overrides.get(readme, readme.read_text(encoding="utf-8"))
+        expected_ids = MEASUREMENT_PAGES.get(readme, ())
+        table = measurement_table(text)
+        if not expected_ids:
+            if table is not None:
+                print(
+                    f"README doctest error: {readme} has an unapproved measurement table",
+                    file=sys.stderr,
+                )
+                valid = False
+            continue
+        if table is None or len(table) != len(expected_ids):
+            print(
+                f"README doctest error: {readme} measurement row count differs "
+                f"from approved ids {expected_ids!r}",
+                file=sys.stderr,
+            )
+            valid = False
+            continue
+        expected_rows = tuple(MEASUREMENT_ROWS[row_id] for row_id in expected_ids)
+        if table != expected_rows:
+            print(
+                f"README doctest error: {readme} measurement rows differ from approved evidence",
+                file=sys.stderr,
+            )
+            valid = False
+        for measurement_id, row in zip(expected_ids, table):
+            if any(not cell for cell in row):
+                print(
+                    f"README doctest error: {readme} has an incomplete measurement row",
+                    file=sys.stderr,
+                )
+                valid = False
+            if not valid_measurement_date(row[8]):
+                print(
+                    f"README doctest error: {readme} has a non-ISO measurement date",
+                    file=sys.stderr,
+                )
+                valid = False
+            expected_version = expected_measurement_version(measurement_id, versions)
+            if expected_version is None or row[2] != expected_version:
+                print(
+                    f"README doctest error: {readme} measurement version is stale",
+                    file=sys.stderr,
+                )
+                valid = False
+
+    thresholds = performance_thresholds()
+    if thresholds != {
+        "layout-throughput": 250.0,
+        "pdf-throughput": 1_000.0,
+        "layout-peak": 64.0,
+        "pdf-peak": 16.0,
+    }:
+        print(
+            "README doctest error: performance gate constants differ from approved bounds",
+            file=sys.stderr,
+        )
+        valid = False
+    if not validate_speed_bounds(thresholds=thresholds):
+        valid = False
+
+    if set(MEASUREMENT_TIERS) != set(MEASUREMENT_ROWS):
+        print("README doctest error: measurement tiers are incomplete", file=sys.stderr)
+        valid = False
+    if set(MEASUREMENT_TIERS.values()) - set(MEASUREMENT_TIER_NAMES):
+        print("README doctest error: unknown measurement tier", file=sys.stderr)
+        valid = False
+    if "recorded" in MEASUREMENT_TIERS.values():
+        print(
+            "README doctest error: deferred recorded measurements must stay absent",
+            file=sys.stderr,
+        )
+        valid = False
+    backlog = (REPO_ROOT / "docs/hld/14-development-backlog.md").read_text(
+        encoding="utf-8"
+    )
+    for marker in DEFERRED_MEASUREMENT_MARKERS:
+        if marker not in backlog:
+            print(
+                f"README doctest error: deferred measurement is untracked: {marker}",
+                file=sys.stderr,
+            )
+            valid = False
+    forbidden_deferred = re.compile(
+        r"\b(wheel|sdist|site-packages|CLI release archive|WASM bundle|"
+        r"Python boundary)\b[^\n|]*\b\d+(?:\.\d+)?\s*(?:bytes?|KiB|MiB|ms|s)\b",
+        re.IGNORECASE,
+    )
+    for readme in sorted(readmes):
+        text = overrides.get(readme, readme.read_text(encoding="utf-8"))
+        if forbidden_deferred.search(text):
+            print(
+                f"README doctest error: {readme} publishes a deferred measurement",
+                file=sys.stderr,
+            )
+            valid = False
+    return valid
 
 
 def capability_matrix(text: str) -> dict[str, str]:
@@ -509,7 +929,7 @@ def validate_crate_narratives(overrides: dict[Path, str] | None = None) -> bool:
         )
         if any(position < 0 for position in positions) or positions != tuple(
             sorted(positions)
-        ) or bullet_count < 3:
+        ) or bullet_count < 5:
             print(
                 f"README doctest error: {readme} lacks the capability-led crate narrative",
                 file=sys.stderr,
@@ -802,12 +1222,12 @@ def validate_local_patches(packages: list[object]) -> bool:
     return True
 
 
-def validate_package_archive(package: dict[str, object], readme: Path) -> bool:
+def build_package_archive(package: dict[str, object]) -> Path | None:
     name = package["name"]
     version = package.get("version")
     if not isinstance(name, str) or not isinstance(version, str):
         print("README doctest error: invalid package identity", file=sys.stderr)
-        return False
+        return None
     command = [
         "cargo",
         "package",
@@ -831,13 +1251,104 @@ def validate_package_archive(package: dict[str, object], readme: Path) -> bool:
     )
     if result.returncode != 0:
         print(result.stderr, file=sys.stderr, end="")
-        return False
+        return None
     archive = REPO_ROOT / f"target/package/{name}-{version}.crate"
     if not archive.is_file():
         print(
             f"README doctest error: missing generated archive {archive}",
             file=sys.stderr,
         )
+        return None
+    return archive
+
+
+def archive_measurement(archive: Path) -> tuple[int, int, int]:
+    with tarfile.open(archive, "r:gz") as package_archive:
+        members = package_archive.getmembers()
+        member_bytes = 0
+        for member in members:
+            if not member.name.endswith("/.cargo_vcs_info.json"):
+                member_bytes += member.size
+                continue
+            extracted = package_archive.extractfile(member)
+            if extracted is None:
+                member_bytes += member.size
+                continue
+            vcs_info = json.loads(extracted.read())
+            git = vcs_info.get("git")
+            if isinstance(git, dict):
+                git.pop("dirty", None)
+                git["sha1"] = "0" * 40
+            member_bytes += len(json.dumps(vcs_info, indent=2).encode())
+    return archive.stat().st_size, member_bytes, len(members)
+
+
+def recorded_archive_measurement(row: MeasurementRow) -> tuple[int, int, int] | None:
+    match = re.fullmatch(
+        r"([\d,]+) compressed bytes, ([\d,]+) member bytes, (\d+) members",
+        row[1],
+    )
+    if match is None:
+        return None
+    return tuple(int(value.replace(",", "")) for value in match.groups())  # type: ignore[return-value]
+
+
+def pinned_rustc_is_active() -> bool:
+    toolchain = tomllib.loads(
+        (REPO_ROOT / "rust-toolchain.toml").read_text(encoding="utf-8")
+    )["toolchain"]["channel"]
+    result = subprocess.run(
+        ["rustc", "--version"],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.startswith(f"rustc {toolchain} ")
+
+
+def validate_archive_measurement(package: str, archive: Path) -> bool:
+    observed = archive_measurement(archive)
+    recorded = recorded_archive_measurement(MEASUREMENT_ROWS[f"archive:{package}"])
+    if recorded is None:
+        print(
+            f"README doctest error: malformed archive measurement for {package}",
+            file=sys.stderr,
+        )
+        return False
+    observed_compressed, observed_members, observed_count = observed
+    recorded_compressed, recorded_members, recorded_count = recorded
+    valid = (
+        observed_members == recorded_members
+        and observed_count == recorded_count
+        and observed_compressed < 10 * 1024 * 1024
+    )
+    if pinned_rustc_is_active():
+        valid = valid and (
+            abs(observed_compressed - recorded_compressed)
+            <= ARCHIVE_COMPRESSION_TOLERANCE_BYTES
+        )
+    else:
+        valid = valid and (
+            observed_compressed
+            <= recorded_compressed + ARCHIVE_COMPRESSION_TOLERANCE_BYTES
+        )
+    if not valid:
+        print(
+            f"README doctest error: {package} archive measurement differs, "
+            f"recorded={recorded!r}, observed={observed!r}",
+            file=sys.stderr,
+        )
+    return valid
+
+
+def validate_package_archive(package: dict[str, object], readme: Path) -> bool:
+    name = package["name"]
+    if not isinstance(name, str):
+        print("README doctest error: invalid package name", file=sys.stderr)
+        return False
+    archive = build_package_archive(package)
+    if archive is None:
         return False
     with tarfile.open(archive, "r:gz") as package_archive:
         readmes = [
@@ -860,7 +1371,7 @@ def validate_package_archive(package: dict[str, object], readme: Path) -> bool:
                 file=sys.stderr,
             )
             return False
-    return True
+    return validate_archive_measurement(name, archive)
 
 
 def validate_inventory() -> bool:
@@ -972,6 +1483,8 @@ def validate_inventory() -> bool:
         valid = False
     if not validate_comparison_evidence(root_readme):
         valid = False
+    if not validate_measurement_evidence(metadata=metadata):
+        valid = False
 
     for readme, required_items in README_REQUIRED_TEXT.items():
         text = readme.read_text(encoding="utf-8")
@@ -996,6 +1509,58 @@ def validate_inventory() -> bool:
             "inventories validated"
         )
     return valid
+
+
+def markdown_measurement_row(row: MeasurementRow) -> str:
+    return "| " + " | ".join(row) + " |"
+
+
+def record_measurements() -> bool:
+    metadata = cargo_metadata()
+    packages = None if metadata is None else metadata.get("packages")
+    if not isinstance(packages, list):
+        print("README doctest error: invalid metadata for recording", file=sys.stderr)
+        return False
+    thresholds = performance_thresholds()
+    if not validate_speed_bounds(thresholds=thresholds):
+        return False
+    versions = {
+        package.get("name"): package.get("version")
+        for package in packages
+        if isinstance(package, dict)
+    }
+    rows: list[MeasurementRow] = []
+    for package in sorted(
+        (
+            package
+            for package in packages
+            if isinstance(package, dict) and package.get("publish") != []
+        ),
+        key=lambda package: str(package.get("name")),
+    ):
+        name = package.get("name")
+        if not isinstance(name, str):
+            return False
+        archive = build_package_archive(package)
+        if archive is None:
+            return False
+        compressed, members, count = archive_measurement(archive)
+        row = list(archive_row(name))
+        row[1] = (
+            f"{compressed:,} compressed bytes, {members:,} member bytes, "
+            f"{count} members"
+        )
+        version = versions.get(name)
+        if not isinstance(version, str):
+            return False
+        row[2] = version
+        rows.append(tuple(row))  # type: ignore[arg-type]
+    rows.extend(MEASUREMENT_ROWS[row_id] for row_id in SPEED_MEASUREMENTS)
+    print("| " + " | ".join(MEASUREMENT_COLUMNS) + " |")
+    print("|" + "|".join("---" for _ in MEASUREMENT_COLUMNS) + "|")
+    for row in rows:
+        print(markdown_measurement_row(row))
+    return True
 
 
 def build_rlibs(package: str, crate_names: tuple[str, ...]) -> dict[str, Path] | None:
@@ -1094,7 +1659,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("readme", nargs="?", type=Path)
     parser.add_argument("--check-official-links", action="store_true")
+    parser.add_argument("--record-measurements", action="store_true")
     args = parser.parse_args()
+    if args.record_measurements:
+        return 0 if record_measurements() else 1
     if args.check_official_links:
         return 0 if check_official_links() else 1
     if args.readme is not None:

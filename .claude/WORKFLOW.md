@@ -26,6 +26,12 @@ Required before completion:
 `/microscope` is not optional and not skippable. Its exit condition is zero
 defects and zero smells, iterating in numbered passes until it reaches that.
 
+Review commands never patch the diff they audit. When an orchestration command
+such as `/run-sprint` invokes a review, the completed review returns control to
+the orchestrator. It may enter a separate remediation phase and launch the next
+independent review pass in the same user invocation. The boundary separates
+review from remediation, not one agent session from the next.
+
 ## Parallel work
 
 One F-ID at a time in one worktree is the normal case. When several independent

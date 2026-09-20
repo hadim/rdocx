@@ -1,6 +1,10 @@
 //! Border and tab stop types for paragraph formatting.
 
+use std::borrow::Cow;
+
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::name::QName;
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::{OxmlError, Result};
@@ -21,6 +25,15 @@ pub struct CT_BorderEdge {
     pub space: Option<u32>,
     /// Border color as hex, e.g. "FF0000"
     pub color: Option<String>,
+    /// Attributes this type does not model, in source order.
+    ///
+    /// `w:shadow`, `w:frame`, `w:themeColor`, `w:themeTint` and `w:themeShade`
+    /// reach a serialized edge through here, as does any producer or foreign
+    /// attribute. Names and values keep their stored spelling, and they are
+    /// written back ahead of the modeled attributes. The value is serialized
+    /// verbatim, so a caller storing one itself is storing attribute-value
+    /// syntax and owns the escaping.
+    pub extra_attributes: Vec<(String, String)>,
 }
 
 impl CT_BorderEdge {
@@ -30,72 +43,69 @@ impl CT_BorderEdge {
             sz: None,
             space: None,
             color: None,
+            extra_attributes: Vec::new(),
         }
     }
 
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
-        let mut val = ST_Border::None;
-        let mut sz = None;
-        let mut space = None;
-        let mut color = None;
+        let mut edge = CT_BorderEdge::new(ST_Border::None);
 
         for attr in e.attributes() {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
             if matches_local_name(key, b"val") {
-                val = ST_Border::from_str(v).unwrap_or(val);
+                edge.val = ST_Border::from_str(v).unwrap_or(edge.val);
             } else if matches_local_name(key, b"sz") {
-                sz = Some(v.parse()?);
+                edge.sz = Some(v.parse()?);
             } else if matches_local_name(key, b"space") {
-                space = Some(v.parse()?);
+                edge.space = Some(v.parse()?);
             } else if matches_local_name(key, b"color") {
-                color = Some(v.to_string());
+                edge.color = Some(v.to_string());
+            } else {
+                edge.extra_attributes
+                    .push((std::str::from_utf8(key)?.to_owned(), v.to_owned()));
             }
         }
 
-        Ok(CT_BorderEdge {
-            val,
-            sz,
-            space,
-            color,
-        })
+        Ok(edge)
     }
 
     pub(crate) fn from_xml_attrs_with_prefixes(
         e: &BytesStart,
         word_prefixes: &[String],
     ) -> Result<Self> {
-        let mut val = ST_Border::None;
-        let mut sz = None;
-        let mut space = None;
-        let mut color = None;
+        let mut edge = CT_BorderEdge::new(ST_Border::None);
 
         for attr in e.attributes() {
             let attr = attr?;
             let key = attr.key.as_ref();
             let value = std::str::from_utf8(&attr.value)?;
             if is_word_attribute(key, b"val", word_prefixes) {
-                val = ST_Border::from_str(value).unwrap_or(val);
+                edge.val = ST_Border::from_str(value).unwrap_or(edge.val);
             } else if is_word_attribute(key, b"sz", word_prefixes) {
-                sz = Some(value.parse()?);
+                edge.sz = Some(value.parse()?);
             } else if is_word_attribute(key, b"space", word_prefixes) {
-                space = Some(value.parse()?);
+                edge.space = Some(value.parse()?);
             } else if is_word_attribute(key, b"color", word_prefixes) {
-                color = Some(value.to_string());
+                edge.color = Some(value.to_string());
+            } else {
+                edge.extra_attributes
+                    .push((std::str::from_utf8(key)?.to_owned(), value.to_owned()));
             }
         }
 
-        Ok(CT_BorderEdge {
-            val,
-            sz,
-            space,
-            color,
-        })
+        Ok(edge)
     }
 
     pub fn write_xml_attrs(&self, e: &mut BytesStart) {
         let mut buf = itoa::Buffer::new();
+        for (name, value) in &self.extra_attributes {
+            e.push_attribute(Attribute {
+                key: QName(name.as_bytes()),
+                value: Cow::Borrowed(value.as_bytes()),
+            });
+        }
         e.push_attribute(("w:val", self.val.to_str()));
         if let Some(sz) = self.sz {
             e.push_attribute(("w:sz", buf.format(sz)));
@@ -433,6 +443,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn border_edge_retains_shadow_frame_and_theme_attributes() {
+        let source = concat!(
+            r#"<w:pBdr><w:top xmlns:ext="urn:producer" w:val="single" w:sz="8""#,
+            r#" w:shadow="1" w:frame="1" w:themeColor="accent1" w:themeTint="66""#,
+            r#" w:themeShade="BF" ext:mark="kept" w:space="1" w:color="4F81BD"/></w:pBdr>"#,
+        );
+        let mut reader = Reader::from_str(source);
+        reader.config_mut().trim_text(true);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"pBdr") => break,
+                Ok(Event::Eof) => panic!("missing pBdr start"),
+                _ => {}
+            }
+            buf.clear();
+        }
+        let borders = CT_PBdr::from_xml(&mut reader).unwrap();
+        let top = borders.top.clone().expect("a typed top edge");
+        assert_eq!(top.val, ST_Border::Single);
+        assert_eq!(top.sz, Some(8));
+        assert_eq!(top.space, Some(1));
+        assert_eq!(top.color.as_deref(), Some("4F81BD"));
+        assert_eq!(
+            top.extra_attributes,
+            vec![
+                ("xmlns:ext".to_owned(), "urn:producer".to_owned()),
+                ("w:shadow".to_owned(), "1".to_owned()),
+                ("w:frame".to_owned(), "1".to_owned()),
+                ("w:themeColor".to_owned(), "accent1".to_owned()),
+                ("w:themeTint".to_owned(), "66".to_owned()),
+                ("w:themeShade".to_owned(), "BF".to_owned()),
+                ("ext:mark".to_owned(), "kept".to_owned()),
+            ]
+        );
+
+        let mut output = Vec::new();
+        borders.to_xml(&mut Writer::new(&mut output)).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            concat!(
+                r#"<w:pBdr><w:top xmlns:ext="urn:producer" w:shadow="1" w:frame="1""#,
+                r#" w:themeColor="accent1" w:themeTint="66" w:themeShade="BF" ext:mark="kept""#,
+                r#" w:val="single" w:sz="8" w:space="1" w:color="4F81BD"/></w:pBdr>"#,
+            )
+        );
+    }
+
+    #[test]
     fn round_trip_borders() {
         let bdr = CT_PBdr {
             top: Some(CT_BorderEdge {
@@ -440,12 +499,14 @@ mod tests {
                 sz: Some(4),
                 space: Some(1),
                 color: Some("000000".to_string()),
+                extra_attributes: Vec::new(),
             }),
             bottom: Some(CT_BorderEdge {
                 val: ST_Border::Double,
                 sz: Some(6),
                 space: Some(2),
                 color: Some("FF0000".to_string()),
+                extra_attributes: Vec::new(),
             }),
             ..Default::default()
         };
@@ -647,6 +708,7 @@ mod tests {
                     sz: Some(8),
                     space: Some(0),
                     color: Some("FF00FF".to_string()),
+                    extra_attributes: Vec::new(),
                 }),
                 ..Default::default()
             };

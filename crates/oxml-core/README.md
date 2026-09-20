@@ -9,6 +9,16 @@ models.
 - Angles and thousandths-of-a-percent values used by OOXML schemas.
 - Core, application, and custom property parsing and writing.
 - XML 1.0 lexical validation, namespace handling, decoding, and raw capture.
+- Unknown property values and subtrees retain their producer bytes while
+  modeled values use schema-aware units and expanded names.
+
+## Measured footprint and speed
+
+The archive row is regenerated from the package that carries this README.
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: oxml-core | 20,677 compressed bytes, 100,124 member bytes, 15 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-core` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 

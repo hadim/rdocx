@@ -103,11 +103,12 @@ fn colours_must_be_hex_to_reach_the_output() {
     let mut run = CT_R::new("shaded");
     run.properties = Some(CT_RPr {
         color: Some("red;} body{display:none} .x{".to_string()),
-        shading: Some(CT_Shd {
+        shading: Some(Box::new(CT_Shd {
             val: "clear".to_string(),
             color: None,
             fill: Some("\"><script>alert(1)</script>".to_string()),
-        }),
+            ..Default::default()
+        })),
         ..Default::default()
     });
     p.runs.push(run);

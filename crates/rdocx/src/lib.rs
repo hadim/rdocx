@@ -99,10 +99,13 @@ pub use oxml_opc::{
 };
 pub use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 pub use paragraph::{
-    Alignment, BorderStyle, HyperlinkItemRef, HyperlinkRef, Paragraph, ParagraphBorderRef,
-    ParagraphItemRef, ParagraphRef, SectionBreak, TabAlignment, TabLeader,
+    Alignment, BorderStyle, DropCap, FrameAnchor, FrameWrap, HyperlinkItemRef, HyperlinkRef,
+    Paragraph, ParagraphBorderEdge, ParagraphBorderRef, ParagraphFrame, ParagraphItemRef,
+    ParagraphMark, ParagraphMarkRef, ParagraphRef, ParagraphTextAlignment, ParagraphTextDirection,
+    SectionBreak, TabAlignment, TabLeader, TabStopRef, TextboxTightWrap,
 };
 pub use rdocx_layout::RevisionView;
+pub use rdocx_oxml::document::{CT_DocGrid, ST_DocGrid};
 pub use rdocx_oxml::header_footer::HdrFtrType;
 pub use rdocx_oxml::math::{
     CT_OMath, CT_OMathPara, FractionType, LimitLocation, MathAccent, MathArgument, MathDelimiter,
@@ -111,25 +114,34 @@ pub use rdocx_oxml::math::{
     MathRadical, MathRun, MathRunProperties, MathScript, MathScriptStyle, MathStyle,
     MathSubSuperscript, MatrixBaseJustification, OfficeMath,
 };
+pub use rdocx_oxml::properties::{CT_EastAsianLayout, CT_FitText, ST_Em, ST_TextEffect};
+pub use rdocx_oxml::ruby::{CT_Ruby, CT_RubyPr, ST_RubyAlign};
 pub use rdocx_oxml::settings::{
-    CharacterSpacingControl, CompatibilitySetting, CryptAlgorithmClass, CryptAlgorithmType,
-    CryptProviderType, DocumentProtection, ProtectionMode, ThemeFontLanguage,
+    CharacterSpacingControl, CompatibilityOption, CompatibilitySetting, CryptAlgorithmClass,
+    CryptAlgorithmType, CryptProviderType, DocumentProofState, DocumentProtection, DocumentView,
+    DocumentZoom, MailMerge, MailMergeDestination, MailMergeDocumentType, ProofState,
+    ProtectionMode, SettingsDiagnostic, SettingsDiagnosticReason, ThemeFontLanguage, ZoomKind,
 };
-pub use rdocx_oxml::styles::StyleType;
-pub use rdocx_oxml::text::{AcceptedRunPath, AcceptedRunPathSegment};
+pub use rdocx_oxml::styles::{StyleType, TableStyleRegion};
+pub use rdocx_oxml::text::{
+    AcceptedRunPath, AcceptedRunPathSegment, ST_PTabAlignment, ST_PTabLeader, ST_PTabRelativeTo,
+    SpecialCharacter,
+};
 pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
 pub use run::{
     BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind, FieldDisplaySegmentRef, FieldKind,
-    FieldRef, LegacyHorizontalRuleRef, Run, RunItemRef, RunProperties, RunRef, UnderlineStyle,
+    FieldRef, LegacyHorizontalRuleRef, Run, RunFontSlot, RunItemRef, RunProperties, RunRef,
+    UnderlineStyle,
 };
-pub use style::{Style, StyleBuilder};
+pub use style::{ConditionalTableStyle, Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};
 pub use table::{
     Cell, CellBorderEdge, CellItemRef, CellRef, CellTextDirection, Row, RowHeight, RowRef, Table,
-    TableBorderEdge, TableBorderRef, TableCellMargins, TableConditionalFormatting, TableLayout,
-    TableLook, TableRef, TableWidth, VMerge, VerticalAlignment,
+    TableAnchor, TableBorderEdge, TableBorderRef, TableCellMargins, TableConditionalFormatting,
+    TableFloatPosition, TableFloatX, TableFloatY, TableLayout, TableLook, TableOverlap, TableRef,
+    TableTextDistance, TableWidth, VMerge, VerticalAlignment,
 };
 
 #[cfg(test)]

@@ -9,6 +9,16 @@ and geometry.
 - Chart XML authoring with an editable embedded workbook.
 - Backend-neutral chart geometry for document-family renderers.
 - Ordered preservation of unmodelled XML around typed edits.
+- Sparse caches, explicit axis bounds, mixed plots, labels, and theme-resolved
+  series paint remain editable without losing unsupported plot payloads.
+
+## Measured footprint and speed
+
+The archive row is regenerated from the package that carries this README.
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: oxml-chart | 102,042 compressed bytes, 659,367 member bytes, 6 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-chart` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 

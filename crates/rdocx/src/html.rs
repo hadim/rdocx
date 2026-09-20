@@ -803,7 +803,13 @@ fn run_mhtml_losses(
 ) -> Result<()> {
     for (index, item) in run.items().enumerate() {
         let message = match item {
-            RunItemRef::Text(_) | RunItemRef::Tab | RunItemRef::Break(_) => continue,
+            RunItemRef::Text(_)
+            | RunItemRef::Tab
+            | RunItemRef::Break(_)
+            | RunItemRef::SpecialCharacter(_) => continue,
+            // A producer hint, not content, so nothing is lost by omitting it.
+            RunItemRef::LastRenderedPageBreak(_) => continue,
+            RunItemRef::Symbol { .. } => "dropped Word symbol character",
             RunItemRef::Drawing(drawing) => match drawing.kind() {
                 DrawingKind::Shape => "dropped Word DrawingML shape",
                 DrawingKind::Other => "dropped unsupported Word drawing",

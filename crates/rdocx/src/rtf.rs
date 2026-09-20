@@ -11,7 +11,7 @@ use rdocx_oxml::numbering::ST_NumberFormat;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblPr, CT_TblWidth, CT_TcPr, CT_TrPr, CellContent};
-use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
 
 use crate::{Alignment, Document, Error, Length, ListLevel, ListNumberFormat, Result};
 
@@ -545,7 +545,10 @@ impl<'a> RtfWriter<'a> {
             self.scan_paragraph_properties(properties, &location);
         }
         let marker_raw_positions = paragraph_marker_raw_positions(paragraph);
-        for (index, _) in &paragraph.extra_xml {
+        for (index, raw) in &paragraph.extra_xml {
+            if CT_P::raw_is_root_attributes(*index, raw) {
+                continue;
+            }
             if marker_raw_positions.contains(index) {
                 continue;
             }
@@ -719,6 +722,9 @@ impl<'a> RtfWriter<'a> {
             self.scan_run_properties(properties, &location);
         }
         for index in &run.extra_xml_positions {
+            if CT_R::raw_child_is_root_attributes(*index) {
+                continue;
+            }
             let index = CT_R::raw_child_position(*index);
             self.diagnose(
                 &format!("{location}/raw[{index}]"),
@@ -1144,6 +1150,28 @@ impl<'a> RtfWriter<'a> {
             }
             RunContent::Tab => {
                 write!(output, "\\tab ")?;
+                Ok(())
+            }
+            RunContent::SpecialCharacter(character) => match character {
+                SpecialCharacter::CarriageReturn => {
+                    write!(output, "\\line ")?;
+                    Ok(())
+                }
+                SpecialCharacter::NoBreakHyphen => {
+                    write!(output, "\\_")?;
+                    Ok(())
+                }
+                SpecialCharacter::SoftHyphen => {
+                    write!(output, "\\-")?;
+                    Ok(())
+                }
+                SpecialCharacter::PositionalTab { .. } => {
+                    write!(output, "\\tab ")?;
+                    Ok(())
+                }
+            },
+            RunContent::Symbol { .. } => {
+                self.diagnose(location, "symbol character was dropped during RTF export");
                 Ok(())
             }
             RunContent::Break(BreakType::Line) => {

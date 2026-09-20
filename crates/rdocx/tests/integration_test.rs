@@ -13,7 +13,7 @@ use rdocx::table::{
 use rdocx::{
     BodyItemRef, BorderStyle, Length, ListLevel, MhtmlDiagnostic, ParagraphRef, RunPosition,
     RunRange, SectionBreak, StoryItemKind, StoryKind, StyleBuilder, TabAlignment, TabLeader,
-    UnderlineStyle,
+    TableStyleRegion, UnderlineStyle,
 };
 use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, WordPackageClass};
 use rdocx_oxml::CT_BorderEdge;
@@ -9719,8 +9719,22 @@ fn invalid_style_graph_never_publishes_a_partial_mutation() {
         document
             .set_style(
                 StyleBuilder::table("DuplicateRegion", "Duplicate Region")
-                    .conditional_table_style("firstRow", None, None, None)
-                    .conditional_table_style("firstRow", None, None, None),
+                    .conditional_table_style(
+                        TableStyleRegion::FirstRow,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None
+                    )
+                    .conditional_table_style(
+                        TableStyleRegion::FirstRow,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None
+                    ),
             )
             .is_err()
     );
@@ -9777,11 +9791,13 @@ fn authored_style_graph_survives_save_and_reopen() {
     let table = reopened.style("CorpusTable").unwrap();
     assert!(table.is_default());
     assert_eq!(table.conditional_table_styles().len(), 1);
-    assert_eq!(table.conditional_table_styles()[0].region, "band1Horz");
+    assert_eq!(
+        table.conditional_table_styles()[0].region(),
+        Some(TableStyleRegion::Band1Horz)
+    );
     assert_eq!(
         table.conditional_table_styles()[0]
-            .cell_properties
-            .as_ref()
+            .cell_properties()
             .and_then(|properties| properties.shading.as_ref())
             .and_then(|shading| shading.fill.as_deref()),
         Some("D9EAF7")
@@ -9843,16 +9859,20 @@ fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
         .set_style(
             StyleBuilder::table("CorpusTable", "Corpus Table")
                 .conditional_table_style(
-                    "band1Horz",
+                    TableStyleRegion::Band1Horz,
                     Some(CT_PPr {
                         space_after: Some(rdocx::Twips(60)),
                         ..CT_PPr::default()
                     }),
                     None,
                     None,
+                    None,
+                    None,
                 )
                 .conditional_table_style(
-                    "firstRow",
+                    TableStyleRegion::FirstRow,
+                    None,
+                    None,
                     None,
                     None,
                     Some(CT_TcPr {
@@ -9860,6 +9880,7 @@ fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
                             val: "clear".to_owned(),
                             color: None,
                             fill: Some("112233".to_owned()),
+                            ..Default::default()
                         }),
                         ..CT_TcPr::default()
                     }),
@@ -9869,20 +9890,18 @@ fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
 
     let table = document.style("CorpusTable").unwrap();
     assert_eq!(table.conditional_table_styles().len(), 2);
-    let band = table
-        .conditional_table_styles()
+    let regions = table.conditional_table_styles();
+    let band = regions
         .iter()
-        .find(|region| region.region == "band1Horz")
+        .find(|region| region.region() == Some(TableStyleRegion::Band1Horz))
         .unwrap();
     assert_eq!(
-        band.paragraph_properties
-            .as_ref()
+        band.paragraph_properties()
             .and_then(|properties| properties.space_after),
         Some(rdocx::Twips(60))
     );
     assert_eq!(
-        band.cell_properties
-            .as_ref()
+        band.cell_properties()
             .and_then(|properties| properties.shading.as_ref())
             .and_then(|shading| shading.fill.as_deref()),
         Some("D9EAF7")
@@ -9892,13 +9911,13 @@ fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
         .set_style(
             StyleBuilder::table("CorpusTable", "Corpus Table")
                 .clear_conditional_table_styles()
-                .conditional_table_style("lastRow", None, None, None),
+                .conditional_table_style(TableStyleRegion::LastRow, None, None, None, None, None),
         )
         .unwrap();
     let table = document.style("CorpusTable").unwrap();
     let regions = table.conditional_table_styles();
     assert_eq!(regions.len(), 1);
-    assert_eq!(regions[0].region, "lastRow");
+    assert_eq!(regions[0].region(), Some(TableStyleRegion::LastRow));
 }
 
 #[test]
@@ -9928,6 +9947,7 @@ fn table_style_updates_merge_nested_borders_and_margins() {
                         sz: Some(16),
                         space: None,
                         color: Some("AABBCC".to_owned()),
+                        extra_attributes: Vec::new(),
                     }),
                     ..CT_TblBorders::default()
                 }),
@@ -10101,11 +10121,14 @@ fn corpus_style_document() -> Document {
                         val: "clear".to_owned(),
                         color: None,
                         fill: Some("F2F2F2".to_owned()),
+                        ..Default::default()
                     }),
                     ..CT_TblPr::default()
                 })
                 .conditional_table_style(
-                    "band1Horz",
+                    TableStyleRegion::Band1Horz,
+                    None,
+                    None,
                     None,
                     None,
                     Some(CT_TcPr {
@@ -10113,6 +10136,7 @@ fn corpus_style_document() -> Document {
                             val: "clear".to_owned(),
                             color: None,
                             fill: Some("D9EAF7".to_owned()),
+                            ..Default::default()
                         }),
                         ..CT_TcPr::default()
                     }),
@@ -15240,5 +15264,6178 @@ mod legacy_forms_and_building_blocks {
                 assert!(document.legacy_form_fields().is_err(), "{target}");
             }
         }
+    }
+}
+
+mod f264_paragraph_property_tests {
+    use super::*;
+    use rdocx::{
+        DropCap, FrameAnchor, FrameWrap, ParagraphBorderEdge, ParagraphFrame,
+        ParagraphTextAlignment, ParagraphTextDirection, TextboxTightWrap,
+    };
+
+    const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    /// Children of `w:pPr` that rdocx does not model, at four schema slots
+    /// around the ones this feature types.
+    const PRODUCER_CHILDREN: [&str; 4] = [
+        "<w:kinsoku/>",
+        "<w:snapToGrid/>",
+        r#"<w:cnfStyle w:val="100000000000"/>"#,
+        r#"<ext:marker xmlns:ext="urn:producer" ext:keep="exact"/>"#,
+    ];
+
+    fn producer_document(paragraph_properties: &str) -> Vec<u8> {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                concat!(
+                    r#"<w:document xmlns:w="{}">"#,
+                    r#"<w:body><w:p><w:pPr>{}</w:pPr><w:r><w:t>framed</w:t></w:r></w:p>"#,
+                    r#"<w:sectPr/></w:body></w:document>"#,
+                ),
+                WORD_NS, paragraph_properties
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
+
+    fn document_xml(bytes: &[u8]) -> String {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+    }
+
+    /// The first `w:pPr` element of the saved body, or the empty string when
+    /// the paragraph carries no properties at all.
+    fn paragraph_properties_xml(bytes: &[u8]) -> String {
+        let xml = document_xml(bytes);
+        let Some(start) = xml.find("<w:pPr>") else {
+            return String::new();
+        };
+        let end = xml.find("</w:pPr>").expect("a w:pPr end tag");
+        xml[start..end].to_owned()
+    }
+
+    fn authored_frame() -> ParagraphFrame {
+        ParagraphFrame {
+            width: Some(Length::twips(2880)),
+            height: Some(Length::twips(1440)),
+            horizontal_space: Some(Length::twips(180)),
+            vertical_space: Some(Length::twips(120)),
+            horizontal_position: Some(Length::twips(720)),
+            vertical_position: Some(Length::twips(360)),
+            horizontal_anchor: Some(FrameAnchor::Margin),
+            vertical_anchor: Some(FrameAnchor::Text),
+            wrap: Some(FrameWrap::Around),
+            drop_cap: Some(DropCap::Drop),
+            drop_cap_lines: Some(3),
+            anchor_lock: Some(true),
+        }
+    }
+
+    #[test]
+    fn every_public_paragraph_property_reopens_and_preserves_unrelated_xml() {
+        let source = producer_document(&PRODUCER_CHILDREN.concat());
+        let mut document = Document::from_bytes(&source).unwrap();
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            paragraph.set_indent_start(Length::twips(720));
+            paragraph.set_indent_end(Length::twips(360));
+            paragraph.set_hanging_indent_value(Some(Length::twips(240)));
+            paragraph.set_mirror_indents(true);
+            paragraph.set_adjust_right_indent(true);
+            paragraph.set_space_before_auto(true);
+            paragraph.set_space_after_auto(false);
+            paragraph.set_contextual_spacing(true);
+            paragraph.set_border(
+                ParagraphBorderEdge::Between,
+                BorderStyle::Dashed,
+                6,
+                "FF0000",
+            );
+            paragraph.set_shading_pattern("pct20", "FFFF00", "auto");
+            paragraph.set_add_tab_stop(TabAlignment::Right, Length::twips(8640));
+            paragraph.set_suppress_line_numbers(true);
+            paragraph.set_suppress_auto_hyphens(true);
+            paragraph.set_frame(authored_frame());
+            paragraph.set_suppress_overlap(true);
+            paragraph.set_textbox_tight_wrap(TextboxTightWrap::FirstAndLastLine);
+            assert!(paragraph.set_outline_level_value(Some(9)));
+            paragraph.set_right_to_left(true);
+            paragraph.set_text_direction(ParagraphTextDirection::TopToBottomRightToLeftVertical);
+            paragraph.set_text_alignment(ParagraphTextAlignment::Center);
+            paragraph.set_div_id_value(Some(11));
+            paragraph.mark().set_bold(true);
+            paragraph.mark().set_color("00FF00");
+        }
+
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraph = reopened.paragraph(0).unwrap();
+        assert_eq!(paragraph.indent_start(), Some(Length::twips(720)));
+        assert_eq!(paragraph.indent_end(), Some(Length::twips(360)));
+        assert_eq!(paragraph.hanging_indent(), Some(Length::twips(240)));
+        assert_eq!(paragraph.mirror_indents_value(), Some(true));
+        assert_eq!(paragraph.adjust_right_indent_value(), Some(true));
+        assert_eq!(paragraph.space_before_auto_value(), Some(true));
+        assert_eq!(paragraph.space_after_auto_value(), Some(false));
+        assert_eq!(paragraph.contextual_spacing_value(), Some(true));
+        let between = paragraph.border(ParagraphBorderEdge::Between).unwrap();
+        assert_eq!(between.style(), "dashed");
+        assert_eq!(between.size_eighths_pt(), Some(6));
+        assert_eq!(between.color(), Some("FF0000"));
+        assert_eq!(paragraph.shading_pattern(), Some("pct20"));
+        assert_eq!(paragraph.shading_fill(), Some("FFFF00"));
+        assert_eq!(paragraph.shading_color(), Some("auto"));
+        let tab = paragraph.tab_stop(0).unwrap();
+        assert_eq!(tab.alignment(), Some(TabAlignment::Right));
+        assert_eq!(tab.position(), Length::twips(8640));
+        assert_eq!(paragraph.suppress_line_numbers_value(), Some(true));
+        assert_eq!(paragraph.suppress_auto_hyphens_value(), Some(true));
+        assert_eq!(paragraph.frame(), Some(authored_frame()));
+        assert_eq!(paragraph.suppress_overlap_value(), Some(true));
+        assert_eq!(
+            paragraph.textbox_tight_wrap(),
+            Some(TextboxTightWrap::FirstAndLastLine)
+        );
+        assert_eq!(paragraph.outline_level(), Some(9));
+        assert_eq!(paragraph.right_to_left_value(), Some(true));
+        assert_eq!(
+            paragraph.text_direction(),
+            Some(ParagraphTextDirection::TopToBottomRightToLeftVertical)
+        );
+        assert_eq!(
+            paragraph.text_alignment(),
+            Some(ParagraphTextAlignment::Center)
+        );
+        assert_eq!(paragraph.div_id(), Some(11));
+        assert_eq!(paragraph.mark().bold_value(), Some(true));
+        assert_eq!(paragraph.mark().color(), Some("00FF00"));
+
+        let xml = document_xml(&bytes);
+        for child in PRODUCER_CHILDREN {
+            assert!(xml.contains(child), "{child} was lost: {xml}");
+        }
+    }
+
+    #[test]
+    fn paragraph_border_edges_author_read_and_clear_individually() {
+        let source = producer_document(
+            r#"<w:pBdr><w:top w:val="single" w:sz="4" w:themeColor="accent1"/></w:pBdr>"#,
+        );
+        let mut document = Document::from_bytes(&source).unwrap();
+        let edges = [
+            ParagraphBorderEdge::Top,
+            ParagraphBorderEdge::Bottom,
+            ParagraphBorderEdge::Left,
+            ParagraphBorderEdge::Right,
+            ParagraphBorderEdge::Between,
+            ParagraphBorderEdge::Bar,
+        ];
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            for (index, edge) in edges.into_iter().enumerate() {
+                paragraph.set_border(edge, BorderStyle::Single, index as u32 + 2, "0000FF");
+            }
+        }
+
+        let bytes = document.to_bytes().unwrap();
+        assert!(
+            document_xml(&bytes).contains(r#"w:themeColor="accent1""#),
+            "an edge mutation dropped a retained attribute"
+        );
+
+        let mut document = Document::from_bytes(&bytes).unwrap();
+        for (index, edge) in edges.into_iter().enumerate() {
+            let paragraph = document.paragraph(0).unwrap();
+            let border = paragraph.border(edge).expect("an authored edge");
+            assert_eq!(border.style(), "single");
+            assert_eq!(border.size_eighths_pt(), Some(index as u32 + 2));
+        }
+
+        document
+            .paragraph_mut(0)
+            .unwrap()
+            .set_border_value(ParagraphBorderEdge::Left, None);
+        let paragraph = document.paragraph(0).unwrap();
+        assert!(paragraph.border(ParagraphBorderEdge::Left).is_none());
+        assert_eq!(paragraph.border_count(), 5);
+
+        document.paragraph_mut(0).unwrap().clear_borders();
+        assert_eq!(document.paragraph(0).unwrap().border_count(), 0);
+        assert!(!document.paragraph(0).unwrap().has_borders());
+    }
+
+    #[test]
+    fn tab_stops_read_mutate_and_remove_by_index() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("tabs");
+            paragraph.set_add_tab_stop(TabAlignment::Left, Length::twips(720));
+            paragraph.set_add_tab_stop_with_leader(
+                TabAlignment::Center,
+                Length::twips(2880),
+                TabLeader::Dot,
+            );
+            paragraph.set_add_tab_stop(TabAlignment::Right, Length::twips(8640));
+            assert!(paragraph.tab_stop(3).is_none());
+            assert!(!paragraph.set_tab_stop(3, TabAlignment::Left, Length::twips(100), None));
+            assert!(!paragraph.remove_tab_stop(3));
+            assert!(paragraph.set_tab_stop(
+                1,
+                TabAlignment::Decimal,
+                Length::twips(4320),
+                Some(TabLeader::Hyphen)
+            ));
+            assert!(paragraph.remove_tab_stop(0));
+        }
+
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraph = reopened.paragraph(0).unwrap();
+        assert_eq!(paragraph.tab_stop_count(), 2);
+        let first = paragraph.tab_stop(0).unwrap();
+        assert_eq!(first.alignment(), Some(TabAlignment::Decimal));
+        assert_eq!(first.position(), Length::twips(4320));
+        assert_eq!(first.leader(), Some(TabLeader::Hyphen));
+        let second = paragraph.tab_stop(1).unwrap();
+        assert_eq!(second.alignment(), Some(TabAlignment::Right));
+        assert_eq!(second.position(), Length::twips(8640));
+        assert!(paragraph.tab_stop(2).is_none());
+
+        let mut document = reopened;
+        document.paragraph_mut(0).unwrap().clear_tab_stops();
+        assert_eq!(document.paragraph(0).unwrap().tab_stop_count(), 0);
+        assert!(document.paragraph(0).unwrap().tab_stop(0).is_none());
+    }
+
+    #[test]
+    fn paragraph_mark_formatting_authors_reads_and_clears() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("marked");
+            let mut mark = paragraph.mark();
+            mark.set_bold(true);
+            mark.set_italic(true);
+            mark.set_underline(true);
+            mark.set_strike(true);
+            mark.set_size(18.0);
+            mark.set_font("Georgia");
+            mark.set_color("112233");
+        }
+
+        let bytes = document.to_bytes().unwrap();
+        assert!(
+            paragraph_properties_xml(&bytes).contains("<w:rPr>"),
+            "the mark properties must live inside w:pPr"
+        );
+
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        {
+            let paragraph = reopened.paragraph(0).unwrap();
+            let mark = paragraph.mark();
+            assert!(mark.is_present());
+            assert_eq!(mark.bold_value(), Some(true));
+            assert_eq!(mark.italic_value(), Some(true));
+            assert_eq!(mark.underline_value(), Some(true));
+            assert_eq!(mark.strike_value(), Some(true));
+            assert_eq!(mark.size(), Some(18.0));
+            assert_eq!(mark.font_name(), Some("Georgia"));
+            assert_eq!(mark.color(), Some("112233"));
+        }
+
+        reopened.paragraph_mut(0).unwrap().clear_mark();
+        assert!(!reopened.paragraph(0).unwrap().mark().is_present());
+        let cleared = reopened.to_bytes().unwrap();
+        assert!(
+            !paragraph_properties_xml(&cleared).contains("<w:rPr>"),
+            "clear_mark must remove the element"
+        );
+        assert!(
+            !Document::from_bytes(&cleared)
+                .unwrap()
+                .paragraph(0)
+                .unwrap()
+                .mark()
+                .is_present()
+        );
+    }
+
+    #[test]
+    fn outline_level_accepts_zero_through_nine_and_rejects_above() {
+        let mut document = Document::new();
+        document.add_paragraph("outline");
+        for level in 0..=9 {
+            assert!(
+                document
+                    .paragraph_mut(0)
+                    .unwrap()
+                    .set_outline_level_value(Some(level)),
+                "{level}"
+            );
+            assert_eq!(document.paragraph(0).unwrap().outline_level(), Some(level));
+        }
+        for rejected in [10, u32::MAX] {
+            assert!(
+                !document
+                    .paragraph_mut(0)
+                    .unwrap()
+                    .set_outline_level_value(Some(rejected)),
+                "{rejected}"
+            );
+            assert_eq!(document.paragraph(0).unwrap().outline_level(), Some(9));
+        }
+        assert!(
+            document
+                .paragraph_mut(0)
+                .unwrap()
+                .set_outline_level_value(None)
+        );
+        assert_eq!(document.paragraph(0).unwrap().outline_level(), None);
+    }
+}
+
+mod settings_and_web_settings_authoring_tests {
+    use super::*;
+    use rdocx::{
+        CharacterSpacingControl, CompatibilityOption, CompatibilitySetting, CryptAlgorithmClass,
+        CryptAlgorithmType, CryptProviderType, DocumentProofState, DocumentProtection,
+        DocumentView, DocumentZoom, MailMerge, MailMergeDestination, MailMergeDocumentType,
+        ProofState, ProtectionMode, ThemeFontLanguage, Twips, ZoomKind,
+    };
+
+    const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    const WEB_SETTINGS_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml";
+
+    fn mail_merge() -> MailMerge {
+        MailMerge {
+            main_document_type: Some(MailMergeDocumentType::FormLetters),
+            link_to_query: Some(true),
+            data_type: Some("native".to_owned()),
+            connect_string: Some("DSN=Contacts".to_owned()),
+            query: Some("SELECT * FROM People".to_owned()),
+            do_not_suppress_blank_lines: Some(true),
+            destination: Some(MailMergeDestination::Printer),
+            address_field_name: Some("Address".to_owned()),
+            mail_subject: Some("Invitation".to_owned()),
+            mail_as_attachment: Some(false),
+            view_merged_data: Some(true),
+            active_record: Some(3),
+            check_errors: Some(2),
+        }
+    }
+
+    /// Author every supported settings and web settings member.
+    fn author_every_supported_member(document: &mut Document) {
+        document.set_view(DocumentView::Print).unwrap();
+        document
+            .set_zoom(DocumentZoom {
+                kind: Some(ZoomKind::FullPage),
+                percent: Some(120),
+            })
+            .unwrap();
+        document.set_remove_personal_information(true).unwrap();
+        document.set_remove_date_and_time(false).unwrap();
+        document.set_mirror_margins(true).unwrap();
+        document.set_gutter_at_top(true).unwrap();
+        document
+            .set_proof_state(DocumentProofState {
+                spelling: Some(ProofState::Clean),
+                grammar: Some(ProofState::Dirty),
+            })
+            .unwrap();
+        document.set_link_styles(true).unwrap();
+        document.set_mail_merge_settings(mail_merge()).unwrap();
+        document.set_track_revisions(true).unwrap();
+        document.set_do_not_track_moves(true).unwrap();
+        document.set_do_not_track_formatting(false).unwrap();
+        document
+            .set_document_protection(DocumentProtection {
+                mode: ProtectionMode::Forms,
+                enforcement: Some(true),
+                formatting: Some(false),
+                provider_type: Some(CryptProviderType::RsaAes),
+                algorithm_class: Some(CryptAlgorithmClass::Hash),
+                algorithm_type: Some(CryptAlgorithmType::Any),
+                algorithm_sid: Some(4),
+                spin_count: Some(100_000),
+                hash: Some("CALLER-HASH".to_owned()),
+                salt: Some("CALLER-SALT".to_owned()),
+            })
+            .unwrap();
+        document.set_default_tab_stop(Twips(720)).unwrap();
+        document.set_auto_hyphenation(true).unwrap();
+        document.set_consecutive_hyphen_limit(2).unwrap();
+        document.set_hyphenation_zone(Twips(360)).unwrap();
+        document.set_do_not_hyphenate_caps(true).unwrap();
+        document.set_default_table_style("TableNormal").unwrap();
+        document.set_even_and_odd_headers(true).unwrap();
+        document.set_book_fold_rev_printing(true).unwrap();
+        document.set_book_fold_printing(true).unwrap();
+        document.set_book_fold_printing_sheets(4).unwrap();
+        document
+            .set_character_spacing_control(CharacterSpacingControl::DoNotCompress)
+            .unwrap();
+        document.set_update_fields_on_open(Some(true)).unwrap();
+        document
+            .set_compatibility_option(CompatibilityOption::NoTabHangInd, true)
+            .unwrap();
+        document
+            .set_compatibility_option(CompatibilityOption::CachedColBalance, false)
+            .unwrap();
+        document
+            .set_compatibility_setting(
+                "compatibilityMode",
+                "http://schemas.microsoft.com/office/word",
+                "15",
+            )
+            .unwrap();
+        document.set_document_variable("Customer", "Ada").unwrap();
+        document
+            .set_theme_font_language(ThemeFontLanguage {
+                latin: Some("en-US".to_owned()),
+                east_asia: None,
+                bidi: None,
+            })
+            .unwrap();
+        document.set_decimal_symbol(".").unwrap();
+        document.set_list_separator(",").unwrap();
+
+        document.set_web_encoding("utf-8").unwrap();
+        document.set_web_optimize_for_browser(true).unwrap();
+        document.set_web_rely_on_vml(false).unwrap();
+        document.set_web_allow_png(true).unwrap();
+        document.set_web_do_not_rely_on_css(true).unwrap();
+        document.set_web_do_not_save_as_single_file(true).unwrap();
+        document.set_web_do_not_organize_in_folder(true).unwrap();
+        document.set_web_do_not_use_long_file_names(true).unwrap();
+        document.set_web_pixels_per_inch(96).unwrap();
+        document.set_web_target_screen_size("800x600").unwrap();
+        document.set_web_save_smart_tags_as_xml(true).unwrap();
+    }
+
+    fn assert_every_supported_member(document: &Document) {
+        assert_eq!(document.view(), Some(DocumentView::Print));
+        assert_eq!(
+            document.zoom(),
+            Some(DocumentZoom {
+                kind: Some(ZoomKind::FullPage),
+                percent: Some(120),
+            })
+        );
+        assert_eq!(document.remove_personal_information(), Some(true));
+        assert_eq!(document.remove_date_and_time(), Some(false));
+        assert_eq!(document.mirror_margins(), Some(true));
+        assert_eq!(document.gutter_at_top(), Some(true));
+        assert_eq!(
+            document.proof_state(),
+            Some(DocumentProofState {
+                spelling: Some(ProofState::Clean),
+                grammar: Some(ProofState::Dirty),
+            })
+        );
+        assert_eq!(document.link_styles(), Some(true));
+        assert_eq!(document.mail_merge_settings(), Some(&mail_merge()));
+        assert_eq!(document.track_revisions(), Some(true));
+        assert_eq!(document.do_not_track_moves(), Some(true));
+        assert_eq!(document.do_not_track_formatting(), Some(false));
+        let protection = document.document_protection().unwrap();
+        assert_eq!(protection.mode, ProtectionMode::Forms);
+        assert_eq!(protection.hash.as_deref(), Some("CALLER-HASH"));
+        assert_eq!(protection.salt.as_deref(), Some("CALLER-SALT"));
+        assert_eq!(protection.spin_count, Some(100_000));
+        assert_eq!(document.default_tab_stop(), Some(Twips(720)));
+        assert_eq!(document.consecutive_hyphen_limit(), Some(2));
+        assert_eq!(document.hyphenation_zone(), Some(Twips(360)));
+        assert_eq!(document.do_not_hyphenate_caps(), Some(true));
+        assert_eq!(document.default_table_style(), Some("TableNormal"));
+        assert!(document.even_and_odd_headers());
+        assert_eq!(document.book_fold_rev_printing(), Some(true));
+        assert_eq!(document.book_fold_printing(), Some(true));
+        assert_eq!(document.book_fold_printing_sheets(), Some(4));
+        assert_eq!(
+            document.character_spacing_control(),
+            Some(CharacterSpacingControl::DoNotCompress)
+        );
+        assert_eq!(document.update_fields_on_open(), Some(true));
+        assert_eq!(
+            document.compatibility_options(),
+            [
+                (CompatibilityOption::NoTabHangInd, true),
+                (CompatibilityOption::CachedColBalance, false),
+            ]
+        );
+        assert_eq!(
+            document.compatibility_settings(),
+            [CompatibilitySetting {
+                name: "compatibilityMode".to_owned(),
+                uri: "http://schemas.microsoft.com/office/word".to_owned(),
+                value: "15".to_owned(),
+            }]
+        );
+        assert_eq!(document.document_variable("Customer"), Some("Ada"));
+        assert_eq!(
+            document.theme_font_language().unwrap().latin.as_deref(),
+            Some("en-US")
+        );
+        assert_eq!(document.decimal_symbol(), Some("."));
+        assert_eq!(document.list_separator(), Some(","));
+
+        assert_eq!(document.web_encoding(), Some("utf-8"));
+        assert_eq!(document.web_optimize_for_browser(), Some(true));
+        assert_eq!(document.web_rely_on_vml(), Some(false));
+        assert_eq!(document.web_allow_png(), Some(true));
+        assert_eq!(document.web_do_not_rely_on_css(), Some(true));
+        assert_eq!(document.web_do_not_save_as_single_file(), Some(true));
+        assert_eq!(document.web_do_not_organize_in_folder(), Some(true));
+        assert_eq!(document.web_do_not_use_long_file_names(), Some(true));
+        assert_eq!(document.web_pixels_per_inch(), Some(96));
+        assert_eq!(document.web_target_screen_size(), Some("800x600"));
+        assert_eq!(document.web_save_smart_tags_as_xml(), Some(true));
+    }
+
+    fn part_text(bytes: &[u8], part: &str) -> Option<String> {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        package
+            .get_part(part)
+            .map(|xml| String::from_utf8(xml.to_vec()).unwrap())
+    }
+
+    #[test]
+    fn public_authored_settings_package_reports_no_unmodeled_supported_children() {
+        let producer_settings = format!(
+            concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<w:settings xmlns:w="{word}" xmlns:x="urn:producer">"#,
+                r#"<x:ext x:before="1"/>"#,
+                r#"<w:compat><x:ext x:inside-compat="1"/></w:compat>"#,
+                r#"<w:mailMerge><x:ext x:inside-mail-merge="1"/></w:mailMerge>"#,
+                r#"<x:ext x:after="1"/>"#,
+                r#"</w:settings>"#,
+            ),
+            word = WORD_NS,
+        );
+        let producer_web_settings = format!(
+            concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<w:webSettings xmlns:w="{word}" xmlns:x="urn:producer">"#,
+                r#"<x:ext x:inside-web-settings="1"/>"#,
+                r#"</w:webSettings>"#,
+            ),
+            word = WORD_NS,
+        );
+
+        let mut seeded = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        seeded.add_paragraph("Settings corpus");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seeded.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/settings.xml", producer_settings.clone().into_bytes());
+        package.set_part(
+            "/word/webSettings.xml",
+            producer_web_settings.clone().into_bytes(),
+        );
+        package
+            .content_types
+            .add_override("/word/webSettings.xml", WEB_SETTINGS_CONTENT_TYPE);
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::WEB_SETTINGS, "webSettings.xml");
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut buffer).unwrap();
+
+        let mut document = Document::from_bytes(buffer.get_ref()).unwrap();
+        author_every_supported_member(&mut document);
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+
+        assert_every_supported_member(&reopened);
+        assert_eq!(reopened.settings_diagnostics(), &[]);
+        assert_eq!(reopened.web_settings_diagnostics(), &[]);
+
+        let settings = part_text(&bytes, "/word/settings.xml").unwrap();
+        for retained in [
+            r#"<x:ext x:before="1"/>"#,
+            r#"<x:ext x:inside-compat="1"/>"#,
+            r#"<x:ext x:inside-mail-merge="1"/>"#,
+            r#"<x:ext x:after="1"/>"#,
+        ] {
+            assert!(settings.contains(retained), "{settings}");
+        }
+        let web_settings = part_text(&bytes, "/word/webSettings.xml").unwrap();
+        assert!(
+            web_settings.contains(r#"<x:ext x:inside-web-settings="1"/>"#),
+            "{web_settings}"
+        );
+    }
+
+    #[test]
+    fn settings_children_serialize_in_schema_sequence_order() {
+        let mut document = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        // Reverse schema order: the last member is authored first.
+        document.set_list_separator(",").unwrap();
+        document.set_decimal_symbol(".").unwrap();
+        document.set_book_fold_printing_sheets(4).unwrap();
+        document.set_even_and_odd_headers(true).unwrap();
+        document.set_default_tab_stop(Twips(720)).unwrap();
+        document.set_mail_merge_settings(mail_merge()).unwrap();
+        document.set_link_styles(true).unwrap();
+        document.set_mirror_margins(true).unwrap();
+        document.set_view(DocumentView::Print).unwrap();
+        document
+            .set_compatibility_option(CompatibilityOption::CachedColBalance, true)
+            .unwrap();
+        document
+            .set_compatibility_option(CompatibilityOption::NoTabHangInd, true)
+            .unwrap();
+        document.set_web_save_smart_tags_as_xml(true).unwrap();
+        document.set_web_encoding("utf-8").unwrap();
+
+        let bytes = document.to_bytes().unwrap();
+        let settings = part_text(&bytes, "/word/settings.xml").unwrap();
+        let top_level = [
+            "<w:view",
+            "<w:mirrorMargins",
+            "<w:linkStyles",
+            "<w:mailMerge",
+            "<w:defaultTabStop",
+            "<w:evenAndOddHeaders",
+            "<w:bookFoldPrintingSheets",
+            "<w:compat",
+            "<w:decimalSymbol",
+            "<w:listSeparator",
+        ];
+        assert_ordered(&settings, &top_level);
+        assert_ordered(&settings, &["<w:noTabHangInd", "<w:cachedColBalance"]);
+        assert_ordered(
+            &settings,
+            &[
+                "<w:mainDocumentType",
+                "<w:linkToQuery",
+                "<w:dataType",
+                "<w:connectString",
+                "<w:query",
+                "<w:doNotSuppressBlankLines",
+                "<w:destination",
+                "<w:addressFieldName",
+                "<w:mailSubject",
+                "<w:mailAsAttachment",
+                "<w:viewMergedData",
+                "<w:activeRecord",
+                "<w:checkErrors",
+            ],
+        );
+
+        let web_settings = part_text(&bytes, "/word/webSettings.xml").unwrap();
+        assert_ordered(&web_settings, &["<w:encoding", "<w:saveSmartTagsAsXml"]);
+    }
+
+    fn assert_ordered(xml: &str, names: &[&str]) {
+        let mut previous = 0usize;
+        for name in names {
+            let position = xml
+                .find(name)
+                .unwrap_or_else(|| panic!("{name} is missing from {xml}"));
+            assert!(
+                position >= previous,
+                "{name} is out of schema order in {xml}"
+            );
+            previous = position;
+        }
+    }
+
+    #[test]
+    fn web_settings_part_is_created_on_demand_and_pruned_when_empty() {
+        let mut document = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        document.add_paragraph("Web settings on demand");
+
+        let untouched = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(untouched.clone())).unwrap();
+        assert!(package.get_part("/word/webSettings.xml").is_none());
+        assert!(
+            !package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type == rel_types::WEB_SETTINGS)
+        );
+
+        document.set_web_allow_png(true).unwrap();
+        let authored = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(authored)).unwrap();
+        let part_name = package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::WEB_SETTINGS)
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target)
+            })
+            .expect("authored web settings relationship");
+        assert!(package.get_part(&part_name).is_some());
+        assert_eq!(
+            package.content_types.override_for(&part_name),
+            Some(WEB_SETTINGS_CONTENT_TYPE)
+        );
+
+        assert_eq!(document.remove_web_allow_png().unwrap(), Some(true));
+        let pruned = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(pruned)).unwrap();
+        assert!(package.get_part(&part_name).is_none());
+        assert_eq!(package.content_types.override_for(&part_name), None);
+        assert!(
+            !package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type == rel_types::WEB_SETTINGS)
+        );
+    }
+
+    #[test]
+    fn fresh_package_profiles_gain_no_web_settings_part() {
+        for profile in [
+            WordCreationProfile::WordCompatible(WordPackageClass::Document),
+            WordCreationProfile::WordCompatible(WordPackageClass::Template),
+            WordCreationProfile::Minimal(WordPackageClass::Document),
+            WordCreationProfile::Minimal(WordPackageClass::Template),
+        ] {
+            let mut document = Document::new_with_profile(profile);
+            let bytes = document.to_bytes().unwrap();
+            let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+            assert!(
+                package
+                    .parts
+                    .keys()
+                    .all(|name| !name.to_ascii_lowercase().contains("websettings")),
+                "{profile:?} gained a web settings part"
+            );
+            assert!(document.web_settings_diagnostics().is_empty());
+            assert!(document.web_division_ids().is_empty());
+        }
+    }
+
+    #[test]
+    fn web_settings_divisions_are_reported_for_reference_checking() {
+        let producer = format!(
+            concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<w:webSettings xmlns:w="{word}">"#,
+                r#"<w:divs><w:div w:id="11"><w:divsChild><w:div w:id="12"/></w:divsChild></w:div>"#,
+                r#"<w:div w:id="13"/></w:divs>"#,
+                r#"<w:allowPNG/>"#,
+                r#"</w:webSettings>"#,
+            ),
+            word = WORD_NS,
+        );
+        let mut seeded = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        seeded.add_paragraph("Divisions");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seeded.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/webSettings.xml", producer.clone().into_bytes());
+        package
+            .content_types
+            .add_override("/word/webSettings.xml", WEB_SETTINGS_CONTENT_TYPE);
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::WEB_SETTINGS, "webSettings.xml");
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut buffer).unwrap();
+
+        let mut document = Document::from_bytes(buffer.get_ref()).unwrap();
+        assert_eq!(document.web_division_ids(), vec![11, 12, 13]);
+        document.set_web_encoding("utf-8").unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.web_division_ids(), vec![11, 12, 13]);
+        let stored = part_text(&bytes, "/word/webSettings.xml").unwrap();
+        assert!(
+            stored.contains(r#"<w:divs><w:div w:id="11"><w:divsChild><w:div w:id="12"/></w:divsChild></w:div><w:div w:id="13"/></w:divs>"#),
+            "{stored}"
+        );
+
+        let empty = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        assert!(empty.web_division_ids().is_empty());
+    }
+
+    #[test]
+    fn mirror_margins_gutter_at_top_and_book_fold_round_trip() {
+        let producer = format!(
+            concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<w:settings xmlns:w="{word}">"#,
+                r#"<w:saveFormsData/><w:hideSpellingErrors/>"#,
+                r#"<w:evenAndOddHeaders/><w:characterSpacingControl w:val="doNotCompress"/>"#,
+                r#"</w:settings>"#,
+            ),
+            word = WORD_NS,
+        );
+        let mut seeded = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        seeded.add_paragraph("Book fold");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seeded.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/settings.xml", producer.into_bytes());
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut buffer).unwrap();
+
+        let mut document = Document::from_bytes(buffer.get_ref()).unwrap();
+        document.set_mirror_margins(true).unwrap();
+        document.set_gutter_at_top(false).unwrap();
+        document.set_book_fold_rev_printing(true).unwrap();
+        document.set_book_fold_printing(true).unwrap();
+        document.set_book_fold_printing_sheets(8).unwrap();
+
+        let bytes = document.to_bytes().unwrap();
+        let settings = part_text(&bytes, "/word/settings.xml").unwrap();
+        assert_ordered(
+            &settings,
+            &[
+                "<w:saveFormsData",
+                "<w:mirrorMargins",
+                "<w:gutterAtTop",
+                "<w:hideSpellingErrors",
+            ],
+        );
+        assert_ordered(
+            &settings,
+            &[
+                "<w:evenAndOddHeaders",
+                "<w:bookFoldRevPrinting",
+                "<w:bookFoldPrinting",
+                "<w:bookFoldPrintingSheets",
+                "<w:characterSpacingControl",
+            ],
+        );
+
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.mirror_margins(), Some(true));
+        assert_eq!(reopened.gutter_at_top(), Some(false));
+        assert_eq!(reopened.book_fold_rev_printing(), Some(true));
+        assert_eq!(reopened.book_fold_printing(), Some(true));
+        assert_eq!(reopened.book_fold_printing_sheets(), Some(8));
+        assert_eq!(reopened.settings_diagnostics(), &[]);
+
+        assert_eq!(reopened.remove_mirror_margins().unwrap(), Some(true));
+        assert_eq!(reopened.remove_gutter_at_top().unwrap(), Some(false));
+        assert_eq!(
+            reopened.remove_book_fold_rev_printing().unwrap(),
+            Some(true)
+        );
+        assert_eq!(reopened.remove_book_fold_printing().unwrap(), Some(true));
+        assert_eq!(
+            reopened.remove_book_fold_printing_sheets().unwrap(),
+            Some(8)
+        );
+        let cleared = reopened.to_bytes().unwrap();
+        let settings = part_text(&cleared, "/word/settings.xml").unwrap();
+        for absent in [
+            "mirrorMargins",
+            "gutterAtTop",
+            "bookFoldRevPrinting",
+            "bookFoldPrinting",
+        ] {
+            assert!(!settings.contains(absent), "{settings}");
+        }
+        assert!(settings.contains("<w:saveFormsData/>"), "{settings}");
+        assert!(settings.contains("<w:hideSpellingErrors/>"), "{settings}");
+    }
+
+    /// First glyph origin of each text run on page one, in layout order.
+    fn run_origins(document: &Document) -> Vec<(String, f64)> {
+        let layout = document.layout_deterministic().unwrap();
+        let mut origins = Vec::new();
+        oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                origins.push((run.text.clone(), run.origin.x));
+            }
+        });
+        origins
+    }
+
+    #[test]
+    fn document_default_tab_stop_drives_implicit_tab_positions() {
+        let run_start = |default_tab_stop: Option<Twips>, text: &str| -> f64 {
+            let mut document = Document::new_with_profile(WordCreationProfile::WordCompatible(
+                WordPackageClass::Document,
+            ));
+            {
+                let mut paragraph = document.add_paragraph("A");
+                let mut run = paragraph.add_run("");
+                run.add_tab();
+                run.add_text("B");
+            }
+            if let Some(value) = default_tab_stop {
+                document.set_default_tab_stop(value).unwrap();
+            }
+            run_origins(&document)
+                .into_iter()
+                .find(|(run_text, _)| run_text == text)
+                .unwrap_or_else(|| panic!("{text} must be laid out"))
+                .1
+        };
+
+        // Deterministic bundled fonts, so the positions below are exact. The
+        // paragraph declares no tab stop of its own, so the tab resolves
+        // against the document interval alone.
+        assert!((run_start(None, "A") - 72.0).abs() < 0.01);
+
+        // An absent setting reproduces the 36.0 point fallback exactly, and
+        // Word's own half-inch value lands in the same place.
+        let fallback = run_start(None, "B");
+        assert!((fallback - 108.0).abs() < 0.01, "{fallback}");
+        let word_default = run_start(Some(Twips(720)), "B");
+        assert!(
+            (word_default - fallback).abs() < f64::EPSILON,
+            "{word_default}"
+        );
+
+        // A two-inch interval moves the implicit stop onto the wider grid.
+        let two_inch = run_start(Some(Twips(2880)), "B");
+        assert!((two_inch - 180.0).abs() < 0.01, "{two_inch}");
+    }
+}
+
+/// F-265, complete run property and inline authoring.
+///
+/// Every test here reads or authors `w:rPr` children and ordered run content
+/// that F-265 modeled, and proves the bytes outside the typed projection
+/// survive untouched beside them.
+mod f265_run_property_and_inline_tests {
+    use super::*;
+    use rdocx::{
+        RunFontSlot, RunItemRef, ST_PTabAlignment, ST_PTabLeader, ST_PTabRelativeTo,
+        SpecialCharacter,
+    };
+    use rdocx_oxml::properties::{CT_EastAsianLayout, CT_FitText, ST_Em, ST_TextEffect};
+    use rdocx_oxml::shared::ST_Border;
+    use rdocx_oxml::units::Twips;
+
+    const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    /// The oracle for the run-formatting gate.
+    ///
+    /// Microsoft Word GUI capture is not available on this machine, so the
+    /// reference is the recorded WordprocessingML for these properties rather
+    /// than a fresh save. The no-repair confirmation is tracked as a human
+    /// action in `docs/hld/14-development-backlog.md`.
+    const WORD_RUN_REFERENCE: &str = "recorded WordprocessingML, ECMA-376 EG_RPrBase";
+
+    /// Every `EG_RPrBase` child F-265 typed, in schema order, interleaved with
+    /// unmodelled producer siblings at three schema slots.
+    const EVERY_NEW_RUN_PROPERTY: &str = concat!(
+        r#"<w:rFonts w:hint="eastAsia" w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="MS Mincho""#,
+        r#" w:cs="Arial" w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi""#,
+        r#" w:eastAsiaTheme="minorEastAsia" w:cstheme="minorBidi"/>"#,
+        r#"<w:outline/><w:shadow/><w:emboss/><w:imprint/><w:noProof/><w:snapToGrid/>"#,
+        r#"<w:webHidden/>"#,
+        r#"<w:color w:val="4472C4" w:themeColor="accent1" w:themeTint="66" w:themeShade="BF"/>"#,
+        r#"<w:kern w:val="16"/>"#,
+        r#"<w:effect w:val="antsRed"/>"#,
+        r#"<w:bdr w:val="single" w:sz="4" w:space="1" w:color="FF0000"/>"#,
+        r#"<w:shd w:val="pct20" w:color="4472C4" w:themeColor="accent1" w:themeTint="66""#,
+        r#" w:themeShade="BF" w:fill="ED7D31" w:themeFill="accent2" w:themeFillTint="33""#,
+        r#" w:themeFillShade="80"/>"#,
+        r#"<w:fitText w:val="1440" w:id="3"/>"#,
+        r#"<w:rtl/><w:cs/><w:em w:val="dot"/>"#,
+        r#"<w:lang w:val="en-US" w:eastAsia="ja-JP" w:bidi="ar-SA"/>"#,
+        r#"<w:eastAsianLayout w:id="7" w:combine="1" w:combineBrackets="round" w:vert="1""#,
+        r#" w:vertCompress="1"/>"#,
+        r#"<w:specVanish/><w:oMath/>"#,
+    );
+
+    /// Run children that rdocx keeps in positioned raw capture, one before the
+    /// typed sequence, one in the middle of it, one after.
+    const PRODUCER_RUN_PROPERTY_SIBLINGS: [&str; 3] = [
+        r#"<ext:before xmlns:ext="urn:producer" ext:keep="exact"/>"#,
+        r#"<ext:middle xmlns:ext="urn:producer" ext:keep="exact"/>"#,
+        r#"<ext:after xmlns:ext="urn:producer" ext:keep="exact"/>"#,
+    ];
+
+    /// The saved part is indented, so element order is compared with the
+    /// inter-element whitespace removed. Text content is left alone.
+    fn without_layout_whitespace(xml: &str) -> String {
+        let mut output = String::with_capacity(xml.len());
+        let mut rest = xml;
+        while let Some(start) = rest.find('>') {
+            output.push_str(&rest[..=start]);
+            rest = &rest[start + 1..];
+            let trimmed = rest.trim_start_matches([' ', '\n', '\r', '\t']);
+            if trimmed.starts_with('<') {
+                rest = trimmed;
+            }
+        }
+        output.push_str(rest);
+        output
+    }
+
+    fn producer_document(run_properties: &str, run_content: &str) -> Vec<u8> {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                concat!(
+                    r#"<w:document xmlns:w="{}">"#,
+                    r#"<w:body><w:p><w:r><w:rPr>{}</w:rPr>{}</w:r></w:p>"#,
+                    r#"<w:sectPr/></w:body></w:document>"#,
+                ),
+                WORD_NS, run_properties, run_content
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
+
+    fn document_xml(bytes: &[u8]) -> String {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+    }
+
+    /// The first `w:r` element of the saved body, verbatim.
+    fn run_xml(bytes: &[u8]) -> String {
+        let xml = document_xml(bytes);
+        let start = xml.find("<w:r>").unwrap();
+        let end = xml.find("</w:r>").unwrap() + "</w:r>".len();
+        without_layout_whitespace(&xml[start..end])
+    }
+
+    /// The story-level test gate. Every modeled run property and inline item
+    /// read from the pinned Word reference produces the same effective run
+    /// formatting and the same inline order after a save and a reopen, and the
+    /// deterministic render of the reopened document is stable.
+    #[test]
+    fn complete_run_formatting_and_inline_order_match_the_pinned_word_reference() {
+        assert!(WORD_RUN_REFERENCE.contains("EG_RPrBase"));
+        let inline = concat!(
+            r#"<w:t xml:space="preserve">a </w:t>"#,
+            r#"<w:sym w:font="Wingdings" w:char="F0FC"/>"#,
+            r#"<w:cr/><w:noBreakHyphen/><w:tab/><w:softHyphen/>"#,
+            r#"<w:ptab w:alignment="right" w:relativeTo="margin" w:leader="dot"/>"#,
+            r#"<w:lastRenderedPageBreak/><w:br/><w:t>b</w:t>"#,
+        );
+        let source = producer_document(EVERY_NEW_RUN_PROPERTY, inline);
+
+        let mut document = Document::from_bytes(&source).unwrap();
+        let saved = document.to_bytes().unwrap();
+        assert_eq!(run_xml(&saved), run_xml(&source));
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let run = paragraphs[0].runs().next().unwrap();
+        assert_eq!(run.slot_font(RunFontSlot::EastAsia), Some("MS Mincho"));
+        assert_eq!(
+            run.slot_theme_font(RunFontSlot::ComplexScript),
+            Some("minorBidi")
+        );
+        assert_eq!(run.font_hint(), Some("eastAsia"));
+        assert_eq!(run.outline_value(), Some(true));
+        assert_eq!(run.shadow_value(), Some(true));
+        assert_eq!(run.emboss_value(), Some(true));
+        assert_eq!(run.imprint_value(), Some(true));
+        assert_eq!(run.no_proof_value(), Some(true));
+        assert_eq!(run.snap_to_grid_value(), Some(true));
+        assert_eq!(run.web_hidden_value(), Some(true));
+        assert_eq!(run.color(), Some("4472C4"));
+        assert_eq!(run.color_theme(), Some("accent1"));
+        assert_eq!(run.color_theme_tint(), Some(0x66));
+        assert_eq!(run.color_theme_shade(), Some(0xBF));
+        assert_eq!(run.kern(), Some(8.0));
+        assert_eq!(run.effect(), Some(&ST_TextEffect::AntsRed));
+        assert_eq!(
+            run.character_border().map(|border| border.val),
+            Some(ST_Border::Single)
+        );
+        assert_eq!(run.fit_text().map(|fit| fit.val), Some(Twips(1440)));
+        assert_eq!(run.rtl_value(), Some(true));
+        assert_eq!(run.complex_script_value(), Some(true));
+        assert_eq!(run.emphasis_mark(), Some(&ST_Em::Dot));
+        assert_eq!(run.language_east_asia(), Some("ja-JP"));
+        assert_eq!(run.language_bidi(), Some("ar-SA"));
+        assert_eq!(
+            run.east_asian_layout().and_then(|layout| layout.id),
+            Some(7)
+        );
+        assert_eq!(run.spec_vanish_value(), Some(true));
+        assert_eq!(run.office_math_value(), Some(true));
+
+        let items = run.items().collect::<Vec<_>>();
+        assert!(matches!(items[0], RunItemRef::Text("a ")), "{:?}", items[0]);
+        assert!(
+            matches!(
+                items[1],
+                RunItemRef::Symbol {
+                    font: "Wingdings",
+                    char_code: 0xF0FC
+                }
+            ),
+            "{:?}",
+            items[1]
+        );
+        assert!(matches!(
+            items[2],
+            RunItemRef::SpecialCharacter(SpecialCharacter::CarriageReturn)
+        ));
+        assert!(matches!(
+            items[3],
+            RunItemRef::SpecialCharacter(SpecialCharacter::NoBreakHyphen)
+        ));
+        assert!(matches!(items[4], RunItemRef::Tab));
+        assert!(matches!(
+            items[5],
+            RunItemRef::SpecialCharacter(SpecialCharacter::SoftHyphen)
+        ));
+        assert!(matches!(
+            items[6],
+            RunItemRef::SpecialCharacter(SpecialCharacter::PositionalTab {
+                alignment: ST_PTabAlignment::Right,
+                relative_to: ST_PTabRelativeTo::Margin,
+                leader: ST_PTabLeader::Dot,
+            })
+        ));
+        assert!(
+            matches!(items[7], RunItemRef::LastRenderedPageBreak(_)),
+            "{:?}",
+            items[7]
+        );
+        assert!(matches!(
+            items[8],
+            RunItemRef::Break(rdocx::BreakKind::Line)
+        ));
+        assert!(matches!(items[9], RunItemRef::Text("b")));
+        assert_eq!(items.len(), 10);
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let rendered = reopened.to_pdf_deterministic().unwrap();
+        assert_eq!(rendered, reopened.to_pdf_deterministic().unwrap());
+    }
+
+    #[test]
+    fn every_new_run_property_survives_a_no_op_save_beside_untouched_raw_siblings() {
+        let interleaved = format!(
+            "{}{}{}{}{}",
+            PRODUCER_RUN_PROPERTY_SIBLINGS[0],
+            &EVERY_NEW_RUN_PROPERTY[..EVERY_NEW_RUN_PROPERTY.find("<w:kern").unwrap()],
+            PRODUCER_RUN_PROPERTY_SIBLINGS[1],
+            &EVERY_NEW_RUN_PROPERTY[EVERY_NEW_RUN_PROPERTY.find("<w:kern").unwrap()..],
+            PRODUCER_RUN_PROPERTY_SIBLINGS[2],
+        );
+        let source = producer_document(&interleaved, "<w:t>x</w:t>");
+        let mut document = Document::from_bytes(&source).unwrap();
+        let saved = document.to_bytes().unwrap();
+        assert_eq!(run_xml(&saved), run_xml(&source));
+
+        // A run whose only property is one newly modeled child keeps it.
+        for single in [
+            "<w:outline/>",
+            "<w:webHidden/>",
+            r#"<w:kern w:val="18"/>"#,
+            r#"<w:effect w:val="shimmer"/>"#,
+            r#"<w:bdr w:val="double"/>"#,
+            r#"<w:fitText w:val="720"/>"#,
+            "<w:cs/>",
+            r#"<w:em w:val="circle"/>"#,
+            r#"<w:eastAsianLayout w:id="1"/>"#,
+            "<w:specVanish/>",
+            "<w:oMath/>",
+        ] {
+            let source = producer_document(single, "<w:t>x</w:t>");
+            let saved = Document::from_bytes(&source).unwrap().to_bytes().unwrap();
+            assert_eq!(run_xml(&saved), run_xml(&source), "{single}");
+        }
+    }
+
+    #[test]
+    fn symbols_and_special_characters_are_publicly_authored_and_reopen_in_order() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("start");
+            run.add_symbol_char("Wingdings", 0xF0FC);
+            run.add_special_character(SpecialCharacter::CarriageReturn);
+            run.add_special_character(SpecialCharacter::NoBreakHyphen);
+            run.add_special_character(SpecialCharacter::SoftHyphen);
+            run.add_special_character(SpecialCharacter::PositionalTab {
+                alignment: ST_PTabAlignment::Center,
+                relative_to: ST_PTabRelativeTo::Indent,
+                leader: ST_PTabLeader::Underscore,
+            });
+            // The shipped F-260 meaning is unchanged: one Unicode scalar as
+            // ordinary text, not a `w:sym`.
+            run.add_symbol('\u{2713}');
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let xml = document_xml(&saved);
+        let ordered = [
+            "<w:t>start</w:t>",
+            r#"<w:sym w:font="Wingdings" w:char="F0FC"/>"#,
+            "<w:cr/>",
+            "<w:noBreakHyphen/>",
+            "<w:softHyphen/>",
+            r#"<w:ptab w:alignment="center" w:relativeTo="indent" w:leader="underscore"/>"#,
+            "<w:t>\u{2713}</w:t>",
+        ]
+        .map(|needle| {
+            xml.find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {xml}"))
+        });
+        assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]), "{xml}");
+
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(run_xml(&reopened.to_bytes().unwrap()), run_xml(&saved));
+    }
+
+    /// The F-266a contract. Every run property F-266a builds its golden
+    /// fixture from is publicly authored, read back and reopened, with no raw
+    /// XML left in the run.
+    #[test]
+    fn f266a_prerequisite_run_properties_author_and_reopen() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("multiscript");
+            run.set_slot_font(RunFontSlot::Ascii, Some("Arial"));
+            run.set_slot_font(RunFontSlot::HighAnsi, Some("Arial"));
+            run.set_slot_font(RunFontSlot::EastAsia, Some("MS Mincho"));
+            run.set_slot_font(RunFontSlot::ComplexScript, Some("Arial"));
+            run.set_font_hint(Some("eastAsia"));
+            run.set_rtl_value(Some(true));
+            run.set_complex_script_value(Some(true));
+            run.set_language_value(Some("en-US"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+            run.set_language_bidi_value(Some("ar-SA"));
+            run.set_bold_cs_value(Some(true));
+            run.set_italic_cs_value(Some(true));
+            run.set_size_cs_value(Some(14.0));
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let run = paragraphs[0].runs().next().unwrap();
+        assert_eq!(run.slot_font(RunFontSlot::Ascii), Some("Arial"));
+        assert_eq!(run.slot_font(RunFontSlot::HighAnsi), Some("Arial"));
+        assert_eq!(run.slot_font(RunFontSlot::EastAsia), Some("MS Mincho"));
+        assert_eq!(run.slot_font(RunFontSlot::ComplexScript), Some("Arial"));
+        assert_eq!(run.font_hint(), Some("eastAsia"));
+        assert_eq!(run.rtl_value(), Some(true));
+        assert_eq!(run.complex_script_value(), Some(true));
+        assert_eq!(run.language(), Some("en-US"));
+        assert_eq!(run.language_east_asia(), Some("ja-JP"));
+        assert_eq!(run.language_bidi(), Some("ar-SA"));
+        assert_eq!(run.bold_cs_value(), Some(true));
+        assert_eq!(run.italic_cs_value(), Some(true));
+        assert_eq!(run.size_cs(), Some(14.0));
+        assert!(
+            run.items()
+                .all(|item| !matches!(item, RunItemRef::UnsupportedXml(_))),
+            "the F-266a prerequisites must not need raw XML"
+        );
+    }
+
+    #[test]
+    fn every_new_run_property_is_publicly_authored_and_reopens() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("authored");
+            run.set_outline_value(Some(true));
+            run.set_shadow_value(Some(true));
+            run.set_emboss_value(Some(false));
+            run.set_imprint_value(Some(true));
+            run.set_no_proof_value(Some(true));
+            run.set_snap_to_grid_value(Some(false));
+            run.set_web_hidden_value(Some(true));
+            run.set_kern_value(Some(9.0));
+            run.set_effect_value(Some(ST_TextEffect::Shimmer));
+            run.set_character_border_value(Some(CT_BorderEdge::new(ST_Border::Double)));
+            run.set_fit_text_value(Some(CT_FitText {
+                val: Twips(1200),
+                id: Some(5),
+                extra_attributes: Vec::new(),
+            }));
+            run.set_emphasis_mark_value(Some(ST_Em::UnderDot));
+            run.set_east_asian_layout_value(Some(CT_EastAsianLayout {
+                combine: Some(true),
+                ..Default::default()
+            }));
+            run.set_spec_vanish_value(Some(true));
+            run.set_office_math_value(Some(true));
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let run = paragraphs[0].runs().next().unwrap();
+        assert_eq!(run.outline_value(), Some(true));
+        assert_eq!(run.shadow_value(), Some(true));
+        assert_eq!(run.emboss_value(), Some(false));
+        assert_eq!(run.imprint_value(), Some(true));
+        assert_eq!(run.no_proof_value(), Some(true));
+        assert_eq!(run.snap_to_grid_value(), Some(false));
+        assert_eq!(run.web_hidden_value(), Some(true));
+        assert_eq!(run.kern(), Some(9.0));
+        assert_eq!(run.effect(), Some(&ST_TextEffect::Shimmer));
+        assert_eq!(
+            run.character_border().map(|border| border.val),
+            Some(ST_Border::Double)
+        );
+        assert_eq!(run.fit_text().map(|fit| fit.id), Some(Some(5)));
+        assert_eq!(run.emphasis_mark(), Some(&ST_Em::UnderDot));
+        assert_eq!(
+            run.east_asian_layout().and_then(|layout| layout.combine),
+            Some(true)
+        );
+        assert_eq!(run.spec_vanish_value(), Some(true));
+        assert_eq!(run.office_math_value(), Some(true));
+    }
+
+    /// A symbol is font-encoded rather than Unicode, so the ODT, EPUB, RTF,
+    /// HTML and Markdown projections carry no portable spelling for it. Each
+    /// exporter that drops one says so, and the special characters that do
+    /// have a spelling reach the output instead.
+    #[test]
+    fn a_dropped_symbol_is_diagnosed_and_the_special_characters_are_exported() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("before");
+            run.add_symbol_char("Wingdings", 0xF0FC);
+            run.add_special_character(SpecialCharacter::NoBreakHyphen);
+            run.add_special_character(SpecialCharacter::CarriageReturn);
+        }
+
+        let odt = document.to_odt_bytes().unwrap();
+        assert!(
+            odt.diagnostics.iter().any(|diagnostic| diagnostic
+                .message
+                .contains("symbol character was dropped during ODT export")),
+            "{:?}",
+            odt.diagnostics
+        );
+
+        let rtf = document.to_rtf_bytes().unwrap();
+        assert!(
+            rtf.diagnostics.iter().any(|diagnostic| diagnostic
+                .message
+                .contains("symbol character was dropped during RTF export")),
+            "{:?}",
+            rtf.diagnostics
+        );
+        let rtf_text = String::from_utf8_lossy(&rtf.bytes).into_owned();
+        assert!(rtf_text.contains("\\_"), "{rtf_text}");
+        assert!(rtf_text.contains("\\line "), "{rtf_text}");
+    }
+
+    /// `w:themeTint` and `w:themeShade` were dropped on save before F-265, so
+    /// `rdocx_oxml::theme::apply_tint_shade` had no production caller. This
+    /// proves the call is live on the Word render path, with its own Word
+    /// 0-255 arithmetic rather than the spec-correct DrawingML functions.
+    #[test]
+    fn a_theme_colour_tint_and_shade_reach_the_rendered_colour() {
+        fn rendered(colour: &str) -> Vec<u8> {
+            let source = producer_document(colour, "<w:t>tinted</w:t>");
+            let document = Document::from_bytes(&source).unwrap();
+            document
+                .render_page_to_png_deterministic(0, 150.0)
+                .unwrap()
+                .unwrap()
+        }
+
+        let plain = rendered(r#"<w:color w:val="000000" w:themeColor="accent1"/>"#);
+        let tinted =
+            rendered(r#"<w:color w:val="000000" w:themeColor="accent1" w:themeTint="66"/>"#);
+        let shaded =
+            rendered(r#"<w:color w:val="000000" w:themeColor="accent1" w:themeShade="BF"/>"#);
+        assert_ne!(plain, tinted);
+        assert_ne!(plain, shaded);
+        assert_ne!(tinted, shaded);
+    }
+
+    /// `w:effect`, `w:noProof`, `w:webHidden`, `w:specVanish` and `w:oMath`
+    /// are modeled and round-tripped with no visible render projection, which
+    /// is what Word prints. The classification cannot rot into an oversight
+    /// while this holds.
+    #[test]
+    fn non_rendering_run_properties_change_no_pixels() {
+        fn rendered(apply: bool) -> Vec<u8> {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("");
+                let mut run = paragraph.add_run("unchanged pixels");
+                if apply {
+                    run.set_effect_value(Some(ST_TextEffect::Shimmer));
+                    run.set_no_proof_value(Some(true));
+                    run.set_web_hidden_value(Some(true));
+                    run.set_spec_vanish_value(Some(true));
+                    run.set_office_math_value(Some(true));
+                }
+            }
+            document.to_pdf_deterministic().unwrap()
+        }
+
+        assert_eq!(rendered(true), rendered(false));
+    }
+}
+
+/// F-269, section page semantics.
+///
+/// Columns, page borders, line numbering, vertical alignment, mirrored margins
+/// and the round-trip-only section children.
+mod f269_section_page_semantics {
+    use super::*;
+    use rdocx_oxml::document::{
+        CT_LineNumber, CT_NoteProperties, CT_PageBorders, ST_LineNumberRestart,
+        ST_PageBorderDisplay, ST_PageBorderOffset, ST_PageBorderZOrder,
+    };
+    use rdocx_oxml::table::ST_VerticalJc;
+    use rdocx_oxml::units::Twips;
+
+    /// The LibreOffice build this story compares its renders against.
+    const F269_LIBREOFFICE_ORACLE: &str =
+        "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+    /// The rasterizer this story compares its renders through.
+    const F269_PDFTOPPM_ORACLE: &str = "pdftoppm version 26.01.0";
+    /// Rasterization resolution, high enough to separate adjacent column
+    /// tracks and low enough to keep the comparison quick.
+    const F269_RASTER_DPI: f64 = 150.0;
+    /// Structural similarity floor for the page-semantics render.
+    ///
+    /// Global-window luminance SSIM over a page of 11 point prose measures
+    /// glyph rasterization far more than it measures layout, because two
+    /// independent shapers and rasterizers never put the same ink in the same
+    /// pixel. The measured agreement is 0.21 and the same page against a blank
+    /// sheet scores 0.02, so this floor is a collapse guard an order of
+    /// magnitude above a blank render. The layout claim is gated by the ink
+    /// block comparison below, which is what actually answers whether the
+    /// columns, the rule and the numbers landed where LibreOffice put them.
+    const F269_SSIM_FLOOR: f64 = 0.15;
+    /// Pixel tolerance for each ink block edge, at the raster resolution.
+    ///
+    /// Six pixels at 150 DPI is 2.9 points, which covers the glyph edge and
+    /// border stroke differences between two renderers without admitting a
+    /// misplaced column track, whose nearest error is a 36 point gutter.
+    const F269_BLOCK_TOLERANCE_PX: i64 = 6;
+
+    /// Open a document whose `/word/document.xml` is exactly `xml`.
+    fn document_from_xml(xml: &str) -> Document {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/document.xml", xml.as_bytes().to_vec());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    /// The saved `/word/document.xml` of a document.
+    fn saved_document_xml(document: &mut Document) -> String {
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+    }
+
+    /// The `w:sectPr` element of a saved document, without the indentation the
+    /// writer adds between elements.
+    ///
+    /// Indentation is a serialisation decision this workspace owns, so it is
+    /// removed before the comparison rather than baked into the expectation.
+    fn saved_sect_pr(document: &mut Document) -> String {
+        let xml = saved_document_xml(document);
+        let start = xml.find("<w:sectPr").expect("saved section properties");
+        let end = xml.find("</w:sectPr>").expect("saved section end") + "</w:sectPr>".len();
+        let mut out = String::with_capacity(end - start);
+        let mut pending = String::new();
+        for character in xml[start..end].chars() {
+            if character.is_whitespace() && !pending.is_empty() {
+                continue;
+            }
+            if character == '>' {
+                out.push(character);
+                pending.push('>');
+                continue;
+            }
+            if !pending.is_empty() {
+                pending.clear();
+            }
+            out.push(character);
+        }
+        out
+    }
+
+    /// A document whose only body child is a paragraph, followed by `sect_pr`.
+    fn document_with_sect_pr(sect_pr: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p>{sect_pr}</w:body></w:document>"#
+        )
+    }
+
+    /// Left edge of every shaped run on a page, in document order.
+    fn glyph_origins(page: &oxml_layout::PageFrame) -> Vec<f64> {
+        let mut origins = Vec::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && !run.text.trim().is_empty()
+            {
+                origins.push(run.origin.x);
+            }
+        });
+        origins
+    }
+
+    /// Every text run inside marked content that carries no structure.
+    fn artifact_texts(elements: &[oxml_layout::PositionedElement]) -> Vec<(String, f64, f64)> {
+        let mut found = Vec::new();
+        for element in elements {
+            match element {
+                oxml_layout::PositionedElement::MarkedContent {
+                    structure: None,
+                    children,
+                } => {
+                    for child in children {
+                        if let oxml_layout::PositionedElement::Text(run) = child {
+                            found.push((run.text.clone(), run.origin.x, run.origin.y));
+                        }
+                    }
+                }
+                oxml_layout::PositionedElement::MarkedContent {
+                    structure: Some(_),
+                    children,
+                } => found.extend(artifact_texts(children)),
+                oxml_layout::PositionedElement::Group(group) => {
+                    found.extend(artifact_texts(&group.children));
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// Every vertical rule drawn on a page.
+    fn vertical_rules(page: &oxml_layout::PageFrame) -> Vec<f64> {
+        let mut rules = Vec::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Line { start, end, .. } = element
+                && (start.x - end.x).abs() < f64::EPSILON
+                && (end.y - start.y).abs() > 1.0
+            {
+                rules.push(start.x);
+            }
+        });
+        rules
+    }
+
+    /// Fifty short paragraphs, which overflow one column of a Letter page.
+    fn fill_with_paragraphs(document: &mut Document, count: usize) {
+        for index in 0..count {
+            document.add_paragraph(&format!("Line {index:02}"));
+        }
+    }
+
+    /// Positioned elements of every page, as a comparable record.
+    fn page_records(document: &Document) -> Vec<String> {
+        document
+            .layout_deterministic()
+            .unwrap()
+            .layout
+            .pages
+            .iter()
+            .map(|page| format!("{}x{} {:?}", page.width, page.height, page.elements))
+            .collect()
+    }
+
+    #[test]
+    fn every_section_property_survives_noop_save() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:footnotePr><w:pos w:val=\"pageBottom\"/><w:numFmt w:val=\"lowerRoman\"/><w:numStart w:val=\"3\"/><w:numRestart w:val=\"eachPage\"/></w:footnotePr>",
+            "<w:endnotePr><w:pos w:val=\"docEnd\"/><w:numFmt w:val=\"upperLetter\"/><w:numStart w:val=\"2\"/><w:numRestart w:val=\"eachSect\"/></w:endnotePr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:gutter=\"0\" w:header=\"720\" w:footer=\"720\"/>",
+            "<w:paperSrc w:first=\"15\" w:other=\"7\"/>",
+            "<w:pgBorders w:zOrder=\"back\" w:display=\"notFirstPage\" w:offsetFrom=\"page\">",
+            "<w:top w:val=\"single\" w:sz=\"12\" w:space=\"24\" w:color=\"336699\"/>",
+            "<w:left w:val=\"single\" w:sz=\"12\" w:space=\"24\" w:color=\"336699\"/>",
+            "<w:bottom w:val=\"single\" w:sz=\"12\" w:space=\"24\" w:color=\"336699\"/>",
+            "<w:right w:val=\"single\" w:sz=\"12\" w:space=\"24\" w:color=\"336699\"/>",
+            "</w:pgBorders>",
+            "<w:lnNumType w:countBy=\"5\" w:start=\"2\" w:distance=\"360\" w:restart=\"continuous\"/>",
+            "<w:cols w:num=\"2\" w:equalWidth=\"0\" w:sep=\"1\"><w:col w:w=\"4000\" w:space=\"360\"/><w:col w:w=\"4880\"/></w:cols>",
+            "<w:vAlign w:val=\"center\"/>",
+            "<w:titlePg/>",
+            "<w:textDirection w:val=\"lrTb\"/>",
+            "</w:sectPr>",
+        );
+        let mut document = document_from_xml(&document_with_sect_pr(sect_pr));
+
+        let section = document.sections().next().expect("one section");
+        let footnotes = section.footnote_properties().expect("footnote properties");
+        assert_eq!(footnotes.pos.as_deref(), Some("pageBottom"));
+        assert_eq!(footnotes.num_fmt.as_deref(), Some("lowerRoman"));
+        assert_eq!(footnotes.num_start, Some(3));
+        assert_eq!(footnotes.num_restart.as_deref(), Some("eachPage"));
+        let endnotes = section.endnote_properties().expect("endnote properties");
+        assert_eq!(endnotes.pos.as_deref(), Some("docEnd"));
+        assert_eq!(endnotes.num_fmt.as_deref(), Some("upperLetter"));
+        assert_eq!(endnotes.num_start, Some(2));
+        assert_eq!(endnotes.num_restart.as_deref(), Some("eachSect"));
+        assert_eq!(section.paper_source(), Some((Some(15), Some(7))));
+        let borders = section.page_borders().expect("page borders");
+        assert_eq!(borders.z_order, Some(ST_PageBorderZOrder::Back));
+        assert_eq!(borders.display, Some(ST_PageBorderDisplay::NotFirstPage));
+        assert_eq!(borders.offset_from, Some(ST_PageBorderOffset::Page));
+        assert_eq!(borders.top.as_ref().unwrap().space, Some(24));
+        let numbering = section.line_numbers().expect("line numbering");
+        assert_eq!(numbering.count_by, Some(5));
+        assert_eq!(numbering.start, Some(2));
+        assert_eq!(numbering.distance, Some(Twips(360)));
+        assert_eq!(numbering.restart, Some(ST_LineNumberRestart::Continuous));
+        assert_eq!(section.vertical_alignment(), Some(ST_VerticalJc::Center));
+        assert_eq!(section.text_direction(), Some("lrTb"));
+        assert_eq!(
+            section.column_widths(),
+            Some(vec![
+                (Length::twips(4000), Length::twips(360)),
+                (Length::twips(4880), Length::twips(0)),
+            ])
+        );
+        assert_eq!(section.column_separator(), Some(true));
+
+        // The saved section is byte identical, including the xsd:sequence
+        // child order and every retained attribute.
+        assert_eq!(saved_sect_pr(&mut document), sect_pr);
+    }
+
+    #[test]
+    fn unmodeled_section_children_stay_byte_exact() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:footnotePr><w:pos w:val=\"sectEnd\"/></w:footnotePr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:gutter=\"0\" w:header=\"720\" w:footer=\"720\"/>",
+            "<w:paperSrc w:first=\"1\"/>",
+            "<w:lnNumType w:countBy=\"1\"/>",
+            "<w:cols w:num=\"1\" w:space=\"720\"/>",
+            "<w:formProt w:val=\"0\"/>",
+            "<w:vAlign w:val=\"bottom\"/>",
+            "<w:noEndnote w:val=\"1\"/>",
+            "<w:titlePg/>",
+            "<w:textDirection w:val=\"tbRl\"/>",
+            "<w:bidi w:val=\"0\"/>",
+            "<w:rtlGutter w:val=\"0\"/>",
+            "<w:docGrid w:type=\"lines\" w:linePitch=\"360\"/>",
+            "<w:printerSettings r:id=\"rIdPrinter\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/>",
+            "</w:sectPr>",
+        );
+        let mut document = document_from_xml(&document_with_sect_pr(sect_pr));
+        assert_eq!(saved_sect_pr(&mut document), sect_pr);
+    }
+
+    #[test]
+    fn variable_width_columns_parse_and_write_in_schema_order() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:gutter=\"0\" w:header=\"720\" w:footer=\"720\"/>",
+            "<w:cols w:num=\"3\" w:equalWidth=\"0\" w:sep=\"1\"><w:col w:w=\"2000\" w:space=\"180\"/><w:col w:w=\"3000\" w:space=\"180\"/><w:col w:w=\"4000\"/></w:cols>",
+            "</w:sectPr>",
+        );
+        let mut document = document_from_xml(&document_with_sect_pr(sect_pr));
+        assert_eq!(saved_sect_pr(&mut document), sect_pr);
+
+        // Prefix tolerant on read, fixed `w:` on write.
+        let aliased = sect_pr
+            .replace("<w:", "<x:")
+            .replace("</w:", "</x:")
+            .replace(" w:", " x:");
+        let aliased = aliased.replacen(
+            "<x:sectPr",
+            "<x:sectPr xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"",
+            1,
+        );
+        let mut reparsed = document_from_xml(&document_with_sect_pr(&aliased));
+        assert_eq!(saved_sect_pr(&mut reparsed), sect_pr);
+    }
+
+    #[test]
+    fn section_vertical_alignment_retains_its_source_value() {
+        for value in ["top", "center", "both", "bottom"] {
+            let sect_pr = format!(
+                "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:vAlign w:val=\"{value}\"/></w:sectPr>"
+            );
+            let mut document = document_from_xml(&document_with_sect_pr(&sect_pr));
+            assert_eq!(
+                document
+                    .sections()
+                    .next()
+                    .unwrap()
+                    .vertical_alignment()
+                    .map(ST_VerticalJc::to_str),
+                Some(value),
+                "{value} must not collapse"
+            );
+            assert_eq!(saved_sect_pr(&mut document), sect_pr);
+        }
+    }
+
+    /// F-269 authors and preserves `w:sectPr/w:textDirection`. F-266c owns the
+    /// render projection over it, and asserts it in
+    /// `f266c_character_grid_and_vertical_text`, so this test states the
+    /// authoring contract and the round trip alone.
+    #[test]
+    fn section_text_direction_round_trips_as_authored() {
+        let mut document = Document::new();
+        document.add_paragraph("body");
+        document
+            .section_mut(0)
+            .expect("final section")
+            .set_text_direction("tbRl");
+        assert_eq!(
+            document.sections().next().unwrap().text_direction(),
+            Some("tbRl")
+        );
+
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.sections().next().unwrap().text_direction(),
+            Some("tbRl")
+        );
+        assert!(saved_sect_pr(&mut reopened).contains("<w:textDirection w:val=\"tbRl\"/>"));
+    }
+
+    #[test]
+    fn vertical_alignment_both_lays_out_as_top_with_a_diagnostic() {
+        let build = |alignment: Option<ST_VerticalJc>| {
+            let mut document = Document::new();
+            document.add_paragraph("body");
+            if let Some(alignment) = alignment {
+                document
+                    .section_mut(0)
+                    .expect("final section")
+                    .set_vertical_alignment(alignment);
+            }
+            document
+        };
+
+        let top = build(Some(ST_VerticalJc::Top));
+        let both = build(Some(ST_VerticalJc::Both));
+        assert_eq!(page_records(&both), page_records(&top));
+
+        let laid_out = both.layout_deterministic().unwrap();
+        let reported = laid_out
+            .layout
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("vertical alignment both"))
+            .count();
+        assert_eq!(reported, 1, "{:?}", laid_out.layout.diagnostics);
+
+        // The source value survives the diagnostic.
+        let mut both = both;
+        assert_eq!(
+            both.sections().next().unwrap().vertical_alignment(),
+            Some(ST_VerticalJc::Both)
+        );
+        assert!(saved_sect_pr(&mut both).contains("<w:vAlign w:val=\"both\"/>"));
+
+        // A centred section does move, so the comparison above is not vacuous.
+        let centred = build(Some(ST_VerticalJc::Center));
+        assert_ne!(page_records(&centred), page_records(&top));
+    }
+
+    #[test]
+    fn page_border_offset_and_display_attributes_round_trip() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgBorders w:zOrder=\"front\" w:display=\"firstPage\" w:offsetFrom=\"text\">",
+            "<w:top w:shadow=\"1\" w:themeColor=\"accent1\" w:val=\"double\" w:sz=\"18\" w:space=\"1\" w:color=\"auto\"/>",
+            "<w:left w:frame=\"1\" w:val=\"dashed\" w:sz=\"6\" w:space=\"4\"/>",
+            "</w:pgBorders>",
+            "</w:sectPr>",
+        );
+        let mut document = document_from_xml(&document_with_sect_pr(sect_pr));
+        let section = document.sections().next().unwrap();
+        let borders = section.page_borders().unwrap();
+        assert_eq!(borders.z_order, Some(ST_PageBorderZOrder::Front));
+        assert_eq!(borders.display, Some(ST_PageBorderDisplay::FirstPage));
+        assert_eq!(borders.offset_from, Some(ST_PageBorderOffset::Text));
+        assert_eq!(
+            borders.top.as_ref().unwrap().extra_attributes,
+            vec![
+                ("w:shadow".to_owned(), "1".to_owned()),
+                ("w:themeColor".to_owned(), "accent1".to_owned()),
+            ]
+        );
+        assert_eq!(
+            borders.left.as_ref().unwrap().extra_attributes,
+            vec![("w:frame".to_owned(), "1".to_owned())]
+        );
+        assert_eq!(saved_sect_pr(&mut document), sect_pr);
+    }
+
+    #[test]
+    fn variable_width_columns_place_text_in_resolved_tracks() {
+        let build = |separator: bool| {
+            let mut document = Document::new();
+            fill_with_paragraphs(&mut document, 60);
+            {
+                let mut section = document.section_mut(0).expect("final section");
+                section
+                    .set_column_widths(&[
+                        (Length::twips(3600), Length::twips(720)),
+                        (Length::twips(4320), Length::twips(0)),
+                    ])
+                    .unwrap();
+                section.set_column_separator(separator);
+            }
+            document
+        };
+
+        let document = build(true);
+        let laid_out = document.layout_deterministic().unwrap();
+        let page = &laid_out.layout.pages[0];
+        let origins = glyph_origins(page);
+
+        // Track zero starts at the left margin and track one 3600 twips plus
+        // 720 twips of gutter to its right, which is 288 points.
+        let track_zero = 72.0;
+        let track_one = 72.0 + 180.0 + 36.0;
+        assert!(
+            origins.iter().any(|x| (x - track_zero).abs() < 0.01),
+            "{origins:?}"
+        );
+        assert!(
+            origins.iter().any(|x| (x - track_one).abs() < 0.01),
+            "{origins:?}"
+        );
+
+        // Track zero fills before track one, so every run in track one follows
+        // every run in track zero.
+        let first_in_track_one = origins
+            .iter()
+            .position(|x| *x >= track_one)
+            .expect("track one receives text");
+        assert!(
+            origins[..first_in_track_one]
+                .iter()
+                .all(|x| *x >= track_zero && *x < track_one),
+            "{origins:?}"
+        );
+        assert!(
+            origins[first_in_track_one..]
+                .iter()
+                .all(|x| *x >= track_one),
+            "{origins:?}"
+        );
+
+        // The rule sits at the midpoint of the gutter.
+        let rules = vertical_rules(page);
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        assert!((rules[0] - (72.0 + 180.0 + 18.0)).abs() < 0.01, "{rules:?}");
+
+        // No rule without `w:sep`.
+        let plain = build(false);
+        let plain = plain.layout_deterministic().unwrap();
+        assert!(vertical_rules(&plain.layout.pages[0]).is_empty());
+    }
+
+    #[test]
+    fn line_numbering_count_by_and_restart_place_margin_numbers() {
+        let build = |restart: ST_LineNumberRestart| {
+            let mut document = Document::new();
+            fill_with_paragraphs(&mut document, 60);
+            document
+                .section_mut(0)
+                .expect("final section")
+                .set_line_numbers(CT_LineNumber {
+                    count_by: Some(2),
+                    start: Some(1),
+                    distance: Some(Twips(360)),
+                    restart: Some(restart),
+                    extra_attributes: Vec::new(),
+                });
+            document
+        };
+
+        let per_page = build(ST_LineNumberRestart::NewPage);
+        let per_page = per_page.layout_deterministic().unwrap();
+        assert!(per_page.layout.pages.len() >= 2);
+
+        let first = artifact_texts(&per_page.layout.pages[0].elements);
+        assert_eq!(
+            first
+                .iter()
+                .map(|(text, _, _)| text.as_str())
+                .take(3)
+                .collect::<Vec<_>>(),
+            ["2", "4", "6"]
+        );
+        // Right aligned, 360 twips clear of the left margin.
+        for (text, x, _) in &first {
+            assert!(*x < 72.0 - 18.0, "{text} at {x}");
+        }
+        // The numbers are artifacts, so they carry no structure id, which is
+        // what `artifact_texts` selected them by.
+        assert!(!first.is_empty());
+
+        // `newPage` restarts on every page, `continuous` does not.
+        let second_page_new = artifact_texts(&per_page.layout.pages[1].elements);
+        assert_eq!(
+            second_page_new.first().map(|(text, _, _)| text.as_str()),
+            Some("2")
+        );
+        let continuous = build(ST_LineNumberRestart::Continuous);
+        let continuous = continuous.layout_deterministic().unwrap();
+        let second_page_continuous = artifact_texts(&continuous.layout.pages[1].elements);
+        assert_ne!(
+            second_page_continuous
+                .first()
+                .map(|(text, _, _)| text.as_str()),
+            Some("2"),
+            "continuous numbering must not restart"
+        );
+
+        // Continuous numbering runs on without a gap or a repeat across every
+        // page boundary, which is what a body line that was placed but never
+        // counted would break.
+        let sequence = continuous
+            .layout
+            .pages
+            .iter()
+            .flat_map(|page| artifact_texts(&page.elements))
+            .map(|(text, _, _)| text.parse::<u32>().expect("a line number"))
+            .collect::<Vec<_>>();
+        assert!(sequence.len() > 3, "{sequence:?}");
+        assert_eq!(sequence[0], 2);
+        for pair in sequence.windows(2) {
+            assert_eq!(pair[1], pair[0] + 2, "{sequence:?}");
+        }
+    }
+
+    #[test]
+    fn page_border_display_and_z_order_select_where_the_frame_is_drawn() {
+        let build = |display: ST_PageBorderDisplay, z_order: ST_PageBorderZOrder| {
+            let mut document = Document::new();
+            fill_with_paragraphs(&mut document, 120);
+            let mut edge = CT_BorderEdge::new(ST_Border::Single);
+            edge.sz = Some(12);
+            edge.space = Some(24);
+            document
+                .section_mut(0)
+                .expect("final section")
+                .set_page_borders(CT_PageBorders {
+                    display: Some(display),
+                    offset_from: Some(ST_PageBorderOffset::Page),
+                    z_order: Some(z_order),
+                    top: Some(edge.clone()),
+                    left: Some(edge.clone()),
+                    bottom: Some(edge.clone()),
+                    right: Some(edge),
+                    ..CT_PageBorders::default()
+                });
+            document
+        };
+
+        // Pagination wraps loose page furniture in marked content, so the
+        // frame edges are counted through the element walk rather than at the
+        // top level.
+        let frame_lines = |page: &oxml_layout::PageFrame| {
+            let mut count = 0;
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if matches!(element, oxml_layout::PositionedElement::Line { .. }) {
+                    count += 1;
+                }
+            });
+            count
+        };
+
+        for (display, first, later) in [
+            (ST_PageBorderDisplay::AllPages, 4, 4),
+            (ST_PageBorderDisplay::FirstPage, 4, 0),
+            (ST_PageBorderDisplay::NotFirstPage, 0, 4),
+        ] {
+            let document = build(display, ST_PageBorderZOrder::Front);
+            let laid_out = document.layout_deterministic().unwrap();
+            assert!(laid_out.layout.pages.len() >= 2);
+            assert_eq!(
+                frame_lines(&laid_out.layout.pages[0]),
+                first,
+                "{display:?} on the first page"
+            );
+            assert_eq!(
+                frame_lines(&laid_out.layout.pages[1]),
+                later,
+                "{display:?} on a later page"
+            );
+        }
+
+        // `front` draws after the body and `back` draws before it.
+        let position = |z_order: ST_PageBorderZOrder| {
+            let document = build(ST_PageBorderDisplay::AllPages, z_order);
+            let laid_out = document.layout_deterministic().unwrap();
+            let mut first_line = None;
+            let mut first_text = None;
+            let mut index = 0usize;
+            oxml_layout::walk(&laid_out.layout.pages[0].elements, &mut |element, _| {
+                match element {
+                    oxml_layout::PositionedElement::Line { .. } if first_line.is_none() => {
+                        first_line = Some(index);
+                    }
+                    oxml_layout::PositionedElement::Text(_) if first_text.is_none() => {
+                        first_text = Some(index);
+                    }
+                    _ => {}
+                }
+                index += 1;
+            });
+            (
+                first_line.expect("a frame edge"),
+                first_text.expect("body content"),
+            )
+        };
+        let (front_line, front_text) = position(ST_PageBorderZOrder::Front);
+        assert!(front_line > front_text, "{front_line} against {front_text}");
+        let (back_line, back_text) = position(ST_PageBorderZOrder::Back);
+        assert!(back_line < back_text, "{back_line} against {back_text}");
+    }
+
+    #[test]
+    fn mirrored_margins_swap_inside_and_outside_on_even_pages() {
+        let build = |mirrored: bool| {
+            let mut document = Document::new();
+            fill_with_paragraphs(&mut document, 120);
+            document
+                .section_mut(0)
+                .expect("final section")
+                .set_margins(
+                    Length::twips(1440),
+                    Length::twips(1440),
+                    Length::twips(1440),
+                    Length::twips(2880),
+                )
+                .unwrap();
+            if mirrored {
+                document.set_mirror_margins(true).unwrap();
+            }
+            document
+        };
+
+        let mirrored = build(true);
+        let mirrored = mirrored.layout_deterministic().unwrap();
+        assert!(mirrored.layout.pages.len() >= 2);
+        let left_edge = |page: &oxml_layout::PageFrame| {
+            glyph_origins(page)
+                .into_iter()
+                .fold(f64::INFINITY, f64::min)
+        };
+        assert!(
+            (left_edge(&mirrored.layout.pages[0]) - 144.0).abs() < 0.01,
+            "odd page did not keep the inside margin"
+        );
+        assert!(
+            (left_edge(&mirrored.layout.pages[1]) - 72.0).abs() < 0.01,
+            "even page did not mirror"
+        );
+        assert_eq!(mirrored.layout.pages[1].displayed_page_number, 2);
+
+        // Without the setting nothing swaps, so the assertion above is not
+        // reporting a coincidence.
+        let plain = build(false);
+        let plain = plain.layout_deterministic().unwrap();
+        for page in &plain.layout.pages {
+            assert!(
+                (left_edge(page) - 144.0).abs() < 0.01,
+                "page {} moved",
+                page.page_number
+            );
+        }
+    }
+
+    /// The subject document for the render comparison.
+    ///
+    /// Columns with a rule, a page border, line numbering, a centred body band
+    /// and mirrored margins, all authored in code so no binary fixture is
+    /// needed.
+    fn f269_render_subject() -> Document {
+        let mut document = Document::new();
+        for index in 0..60 {
+            document.add_paragraph(&format!(
+                "Section page semantics sample line {index:02} of the column flow."
+            ));
+        }
+        {
+            let mut section = document.section_mut(0).expect("final section");
+            section.set_columns(2, Length::twips(720)).unwrap();
+            section.set_column_separator(true);
+            section.set_line_numbers(CT_LineNumber {
+                count_by: Some(5),
+                start: Some(1),
+                distance: Some(Twips(360)),
+                restart: Some(ST_LineNumberRestart::NewPage),
+                extra_attributes: Vec::new(),
+            });
+            let mut edge = CT_BorderEdge::new(ST_Border::Single);
+            edge.sz = Some(12);
+            edge.space = Some(24);
+            section.set_page_borders(CT_PageBorders {
+                display: Some(ST_PageBorderDisplay::AllPages),
+                offset_from: Some(ST_PageBorderOffset::Page),
+                top: Some(edge.clone()),
+                left: Some(edge.clone()),
+                bottom: Some(edge.clone()),
+                right: Some(edge),
+                ..CT_PageBorders::default()
+            });
+            section.set_vertical_alignment(ST_VerticalJc::Top);
+        }
+        document.set_mirror_margins(true).unwrap();
+        document
+    }
+
+    #[test]
+    fn section_page_semantics_match_pinned_libreoffice_render() {
+        let version = std::process::Command::new("soffice")
+            .arg("--version")
+            .output()
+            .expect("pinned LibreOffice is installed");
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            F269_LIBREOFFICE_ORACLE
+        );
+        let rasterizer = std::process::Command::new("pdftoppm")
+            .arg("-v")
+            .output()
+            .expect("pinned rasterizer is installed");
+        assert!(rasterizer.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&rasterizer.stderr).lines().next(),
+            Some(F269_PDFTOPPM_ORACLE)
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "rdocx-f269-render-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let output = root.join("output");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+
+        let mut document = f269_render_subject();
+        let source = root.join("source.docx");
+        std::fs::write(&source, document.to_bytes().unwrap()).unwrap();
+        let ours = root.join("ours.pdf");
+        std::fs::write(&ours, document.to_pdf_deterministic().unwrap()).unwrap();
+
+        let status = std::process::Command::new("soffice")
+            .arg("--headless")
+            .arg(format!(
+                "-env:UserInstallation=file://{}",
+                profile.display()
+            ))
+            .arg("--convert-to")
+            .arg("pdf:writer_pdf_Export")
+            .arg("--outdir")
+            .arg(&output)
+            .arg(&source)
+            .status()
+            .expect("LibreOffice conversion starts");
+        assert!(status.success());
+        let oracle = output.join("source.pdf");
+
+        let rasterize = |pdf: &std::path::Path, prefix: &str| {
+            let target = root.join(prefix);
+            let rendered = std::process::Command::new("pdftoppm")
+                .args(["-png", "-f", "1", "-l", "1", "-r"])
+                .arg(F269_RASTER_DPI.to_string())
+                .arg(pdf)
+                .arg(&target)
+                .output()
+                .expect("rasterize page one");
+            assert!(
+                rendered.status.success(),
+                "{}",
+                String::from_utf8_lossy(&rendered.stderr)
+            );
+            root.join(format!("{prefix}-1.png"))
+        };
+        let ours_png = rasterize(&ours, "ours");
+        let oracle_png = rasterize(&oracle, "oracle");
+
+        // Two records per raster: the global SSIM, then the horizontal ink
+        // blocks of the page interior. The blocks are the line-number band,
+        // each column track and the rule between them.
+        let script = r#"import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+from golden_png_harness import decode_png
+from pptx_ssim_harness import composite_luminance, structural_similarity
+
+BORDER_INSET = 60
+INK = 200
+MINIMUM_COLUMN_INK = 2
+BLOCK_GAP = 30
+
+first = decode_png(Path(sys.argv[1]))
+second = decode_png(Path(sys.argv[2]))
+width = min(first[0], second[0])
+height = min(first[1], second[1])
+
+def crop(image):
+    image_width, _, rgba = image
+    rows = []
+    for y in range(height):
+        start = (y * image_width) * 4
+        rows.append(rgba[start : start + width * 4])
+    return (width, height, b"".join(rows))
+
+def ink_blocks(image):
+    image_width, image_height, rgba = image
+    luminance = composite_luminance(rgba)
+    inked = []
+    for x in range(BORDER_INSET, image_width - BORDER_INSET):
+        count = sum(
+            1
+            for y in range(BORDER_INSET, image_height - BORDER_INSET)
+            if luminance[y * image_width + x] < INK
+        )
+        if count > MINIMUM_COLUMN_INK:
+            inked.append(x)
+    blocks = []
+    for x in inked:
+        if blocks and x - blocks[-1][1] <= BLOCK_GAP:
+            blocks[-1][1] = x
+        else:
+            blocks.append([x, x])
+    return blocks
+
+print(structural_similarity(crop(first), crop(second)))
+for image in (first, second):
+    print(" ".join(f"{start},{end}" for start, end in ink_blocks(image)))
+"#;
+        let scripts = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts")
+            .canonicalize()
+            .unwrap();
+        let measured = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg(&ours_png)
+            .arg(&oracle_png)
+            .arg(&scripts)
+            .output()
+            .expect("structural similarity runs");
+        assert!(
+            measured.status.success(),
+            "{}",
+            String::from_utf8_lossy(&measured.stderr)
+        );
+        let reported = String::from_utf8_lossy(&measured.stdout);
+        let mut lines = reported.lines();
+        let ssim: f64 = lines
+            .next()
+            .expect("structural similarity line")
+            .trim()
+            .parse()
+            .expect("structural similarity is a number");
+        let parse_blocks = |line: &str| {
+            line.split_whitespace()
+                .map(|block| {
+                    let (start, end) = block.split_once(',').expect("ink block bounds");
+                    (
+                        start.parse::<i64>().expect("ink block start"),
+                        end.parse::<i64>().expect("ink block end"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let ours_blocks = parse_blocks(lines.next().expect("subject ink blocks"));
+        let oracle_blocks = parse_blocks(lines.next().expect("oracle ink blocks"));
+        let _ = std::fs::remove_dir_all(&root);
+
+        println!(
+            "F-269 section page semantics SSIM {ssim}, subject {ours_blocks:?}, oracle {oracle_blocks:?}"
+        );
+        assert!(
+            ssim >= F269_SSIM_FLOOR,
+            "structural similarity {ssim} fell below {F269_SSIM_FLOOR}"
+        );
+
+        // The line-number band, both column tracks and the rule between them.
+        assert_eq!(
+            ours_blocks.len(),
+            4,
+            "expected a number band, two tracks and a rule: {ours_blocks:?}"
+        );
+        assert_eq!(
+            oracle_blocks.len(),
+            ours_blocks.len(),
+            "LibreOffice found different page structure: {oracle_blocks:?}"
+        );
+        for (index, (ours, oracle)) in ours_blocks.iter().zip(&oracle_blocks).enumerate() {
+            assert!(
+                (ours.0 - oracle.0).abs() <= F269_BLOCK_TOLERANCE_PX
+                    && (ours.1 - oracle.1).abs() <= F269_BLOCK_TOLERANCE_PX,
+                "ink block {index} disagrees: {ours:?} against {oracle:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires installed Microsoft Word GUI automation, which this machine does not have"]
+    fn capture_f269_word_section_evidence() {
+        // The mandatory human action recorded as a follow-up in
+        // `docs/hld/14-development-backlog.md`. It asserts the Word build
+        // before it records anything, and it is never part of the gate.
+        let build = std::process::Command::new("plutil")
+            .args([
+                "-extract",
+                "CFBundleShortVersionString",
+                "raw",
+                "/Applications/Microsoft Word.app/Contents/Info.plist",
+            ])
+            .output()
+            .expect("read the installed Word version");
+        assert!(build.status.success());
+        let version = String::from_utf8_lossy(&build.stdout).trim().to_owned();
+        assert!(!version.is_empty(), "Word reports no version");
+
+        let output = std::env::var("RDOCX_F269_WORD_DOCX")
+            .expect("set RDOCX_F269_WORD_DOCX to a temporary output path");
+        let mut document = f269_render_subject();
+        document.save(&output).unwrap();
+        println!("F-269 Word section evidence source: {output} against Word {version}");
+    }
+
+    #[test]
+    fn section_footnote_and_endnote_properties_are_authorable() {
+        let mut document = Document::new();
+        document.add_paragraph("body");
+        {
+            let mut section = document.section_mut(0).expect("final section");
+            section.set_footnote_properties(CT_NoteProperties {
+                pos: Some("beneathText".to_owned()),
+                num_fmt: Some("chicago".to_owned()),
+                num_start: Some(4),
+                num_restart: Some("eachSect".to_owned()),
+                extra_xml: Vec::new(),
+            });
+            section.set_endnote_properties(CT_NoteProperties {
+                pos: Some("sectEnd".to_owned()),
+                ..CT_NoteProperties::default()
+            });
+            section.set_paper_source(Some(4), None);
+            section.set_page_borders(CT_PageBorders {
+                display: Some(ST_PageBorderDisplay::AllPages),
+                top: Some(CT_BorderEdge::new(ST_Border::Single)),
+                ..CT_PageBorders::default()
+            });
+        }
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let section = reopened.sections().next().unwrap();
+        assert_eq!(
+            section
+                .footnote_properties()
+                .unwrap()
+                .num_restart
+                .as_deref(),
+            Some("eachSect")
+        );
+        assert_eq!(
+            section.endnote_properties().unwrap().pos.as_deref(),
+            Some("sectEnd")
+        );
+        assert_eq!(section.paper_source(), Some((Some(4), None)));
+        assert_eq!(
+            section.page_borders().unwrap().display,
+            Some(ST_PageBorderDisplay::AllPages)
+        );
+        let saved = saved_sect_pr(&mut reopened);
+        let footnote = saved.find("<w:footnotePr>").expect("footnotePr written");
+        let endnote = saved.find("<w:endnotePr>").expect("endnotePr written");
+        let paper = saved.find("<w:paperSrc").expect("paperSrc written");
+        let borders = saved.find("<w:pgBorders").expect("pgBorders written");
+        assert!(
+            footnote < endnote && endnote < paper && paper < borders,
+            "{saved}"
+        );
+    }
+}
+
+/// F-267. Table style and conditional formatting authoring.
+mod f267_table_style_conditional_tests {
+    use super::*;
+    use rdocx::table::TableLook;
+    use rdocx_oxml::table::{CT_TblCellMar, CT_TrPr};
+    use rdocx_oxml::units::{HalfPoint, Twips};
+
+    /// The LibreOffice build this story compares its renders against.
+    const F267_LIBREOFFICE_ORACLE: &str =
+        "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+    /// The rasterizer this story compares its renders through.
+    const F267_PDFTOPPM_ORACLE: &str = "pdftoppm version 26.01.0";
+    /// Rasterization resolution, high enough to separate adjacent table rows
+    /// and low enough to keep the comparison quick.
+    const F267_RASTER_DPI: f64 = 150.0;
+
+    /// Word GUI capture is not available on this machine, so the reference is
+    /// the `w:tblStylePr` tree Word writes, pinned here as source XML. The
+    /// structural side of the gate asserts against this tree. The confirmation
+    /// that Word itself reopens the authored package without offering to
+    /// repair it is a tracked human action recorded in
+    /// `docs/hld/14-development-backlog.md`, not a gate this machine can run.
+    const F267_WORD_REFERENCE_REGIONS: &str = concat!(
+        r#"<w:tblStylePr w:type="wholeTable"><w:pPr><w:spacing w:after="10"/></w:pPr><w:rPr><w:sz w:val="20"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="10" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="EEEEEE"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="band1Vert"><w:pPr><w:spacing w:after="11"/></w:pPr><w:rPr><w:sz w:val="21"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="11" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="E1E1F1"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="band2Vert"><w:pPr><w:spacing w:after="12"/></w:pPr><w:rPr><w:sz w:val="22"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="12" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="E2E2F2"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="band1Horz"><w:pPr><w:spacing w:after="13"/></w:pPr><w:rPr><w:sz w:val="23"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="13" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="D1F1D1"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="band2Horz"><w:pPr><w:spacing w:after="14"/></w:pPr><w:rPr><w:sz w:val="24"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="14" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="D2F2D2"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="firstCol"><w:pPr><w:spacing w:after="15"/></w:pPr><w:rPr><w:sz w:val="25"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="15" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="C1C1F1"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="lastCol"><w:pPr><w:spacing w:after="16"/></w:pPr><w:rPr><w:sz w:val="26"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="16" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="C2C2F2"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="firstRow"><w:pPr><w:spacing w:after="17"/></w:pPr><w:rPr><w:sz w:val="27"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="17" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/><w:tblHeader/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="B1F1B1"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="lastRow"><w:pPr><w:spacing w:after="18"/></w:pPr><w:rPr><w:sz w:val="28"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="18" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="B2F2B2"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="nwCell"><w:pPr><w:spacing w:after="19"/></w:pPr><w:rPr><w:sz w:val="29"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="19" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A10000"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="neCell"><w:pPr><w:spacing w:after="20"/></w:pPr><w:rPr><w:sz w:val="30"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="20" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A20000"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="swCell"><w:pPr><w:spacing w:after="21"/></w:pPr><w:rPr><w:sz w:val="31"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="21" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A30000"/></w:tcPr></w:tblStylePr>"#,
+        r#"<w:tblStylePr w:type="seCell"><w:pPr><w:spacing w:after="22"/></w:pPr><w:rPr><w:sz w:val="32"/></w:rPr><w:tblPr><w:tblCellMar><w:top w:w="22" w:type="dxa"/></w:tblCellMar></w:tblPr><w:trPr><w:cantSplit/></w:trPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A40000"/></w:tcPr></w:tblStylePr>"#,
+    );
+
+    /// One region of the pinned reference, in Word's priority order.
+    ///
+    /// The tuple is the region, its `w:spacing w:after`, its `w:sz`, its
+    /// `w:tblCellMar w:top` and its `w:shd w:fill`, which is what the five
+    /// layers of the reference carry.
+    const F267_REGIONS: [(TableStyleRegion, i32, u32, i32, &str); 13] = [
+        (TableStyleRegion::WholeTable, 10, 20, 10, "EEEEEE"),
+        (TableStyleRegion::Band1Vert, 11, 21, 11, "E1E1F1"),
+        (TableStyleRegion::Band2Vert, 12, 22, 12, "E2E2F2"),
+        (TableStyleRegion::Band1Horz, 13, 23, 13, "D1F1D1"),
+        (TableStyleRegion::Band2Horz, 14, 24, 14, "D2F2D2"),
+        (TableStyleRegion::FirstCol, 15, 25, 15, "C1C1F1"),
+        (TableStyleRegion::LastCol, 16, 26, 16, "C2C2F2"),
+        (TableStyleRegion::FirstRow, 17, 27, 17, "B1F1B1"),
+        (TableStyleRegion::LastRow, 18, 28, 18, "B2F2B2"),
+        (TableStyleRegion::NwCell, 19, 29, 19, "A10000"),
+        (TableStyleRegion::NeCell, 20, 30, 20, "A20000"),
+        (TableStyleRegion::SwCell, 21, 31, 21, "A30000"),
+        (TableStyleRegion::SeCell, 22, 32, 22, "A40000"),
+    ];
+
+    fn f267_shading(fill: &str) -> CT_Shd {
+        CT_Shd {
+            val: "clear".to_owned(),
+            color: Some("auto".to_owned()),
+            fill: Some(fill.to_owned()),
+            ..CT_Shd::default()
+        }
+    }
+
+    /// Author the pinned reference's thirteen regions through the facade.
+    fn f267_authored_style() -> StyleBuilder {
+        let mut builder = StyleBuilder::table("RegionGrid", "Region Grid");
+        for (region, after, size, margin, fill) in F267_REGIONS {
+            builder = builder.conditional_table_style(
+                region,
+                Some(CT_PPr {
+                    space_after: Some(Twips(after)),
+                    ..CT_PPr::default()
+                }),
+                Some(CT_RPr {
+                    sz: Some(HalfPoint(size)),
+                    ..CT_RPr::default()
+                }),
+                Some(CT_TblPr {
+                    cell_margin: Some(CT_TblCellMar {
+                        top: Some(Twips(margin)),
+                        ..CT_TblCellMar::default()
+                    }),
+                    ..CT_TblPr::default()
+                }),
+                Some(CT_TrPr {
+                    cant_split: Some(true),
+                    header: (region == TableStyleRegion::FirstRow).then_some(true),
+                    ..CT_TrPr::default()
+                }),
+                Some(CT_TcPr {
+                    shading: Some(f267_shading(fill)),
+                    ..CT_TcPr::default()
+                }),
+            );
+        }
+        builder
+    }
+
+    /// Reopen a package whose `RegionGrid` style is the pinned reference.
+    fn f267_reference_document() -> Document {
+        let mut seed = Document::new();
+        seed.add_style(StyleBuilder::table("RegionGrid", "Region Grid"))
+            .expect("seed table style");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        let injected = styles.replace(
+            r#"<w:name w:val="Region Grid"/>"#,
+            &format!(r#"<w:name w:val="Region Grid"/>{F267_WORD_REFERENCE_REGIONS}"#),
+        );
+        package.set_part("/word/styles.xml", injected.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).expect("the reference reopens")
+    }
+
+    /// The five typed layers of one region, as comparable scalars.
+    type RegionLayers = (
+        Option<TableStyleRegion>,
+        Option<Twips>,
+        Option<HalfPoint>,
+        Option<Twips>,
+        Option<bool>,
+        Option<bool>,
+        Option<String>,
+    );
+
+    fn f267_region_layers(style: &rdocx::Style<'_>) -> Vec<RegionLayers> {
+        style
+            .conditional_table_styles()
+            .iter()
+            .map(|region| {
+                (
+                    region.region(),
+                    region
+                        .paragraph_properties()
+                        .and_then(|properties| properties.space_after),
+                    region.run_properties().and_then(|properties| properties.sz),
+                    region
+                        .table_properties()
+                        .and_then(|properties| properties.cell_margin.as_ref())
+                        .and_then(|margins| margins.top),
+                    region
+                        .row_properties()
+                        .and_then(|properties| properties.cant_split),
+                    region
+                        .row_properties()
+                        .and_then(|properties| properties.header),
+                    region
+                        .cell_properties()
+                        .and_then(|properties| properties.shading.as_ref())
+                        .and_then(|shading| shading.fill.clone()),
+                )
+            })
+            .collect()
+    }
+
+    /// A four by four table selecting every conditional region.
+    fn f267_region_table(style: StyleBuilder) -> Document {
+        let mut document = Document::new();
+        document.add_style(style).expect("region style is valid");
+        let mut table = document.add_table(4, 4);
+        table.set_style("RegionGrid");
+        table.set_look(TableLook {
+            first_row: true,
+            last_row: true,
+            first_column: true,
+            last_column: true,
+            horizontal_banding: true,
+            vertical_banding: true,
+        });
+        for row in 0..4 {
+            for column in 0..4 {
+                table
+                    .row(row)
+                    .unwrap()
+                    .cell(column)
+                    .unwrap()
+                    .set_text(&format!("r{row}c{column}"));
+            }
+        }
+        document
+    }
+
+    /// Flatten grouped and marked page content into drawable elements.
+    fn f267_page_elements(
+        elements: &[oxml_layout::PositionedElement],
+    ) -> Vec<&oxml_layout::PositionedElement> {
+        fn collect<'a>(
+            elements: &'a [oxml_layout::PositionedElement],
+            output: &mut Vec<&'a oxml_layout::PositionedElement>,
+        ) {
+            for element in elements {
+                match element {
+                    oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                        collect(children, output)
+                    }
+                    oxml_layout::PositionedElement::Group(group) => {
+                        collect(&group.children, output)
+                    }
+                    other => output.push(other),
+                }
+            }
+        }
+        let mut output = Vec::new();
+        collect(elements, &mut output);
+        output
+    }
+
+    /// The resolved fill of every cell, in row then column order.
+    fn f267_cell_fills(document: &Document) -> Vec<String> {
+        let layout = document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("deterministic region layout");
+        let mut fills = f267_page_elements(&layout.layout.pages[0].elements)
+            .into_iter()
+            .filter_map(|element| match element {
+                oxml_layout::PositionedElement::FilledRect { rect, color } => Some((
+                    (rect.y * 100.0).round() as i64,
+                    (rect.x * 100.0).round() as i64,
+                    format!(
+                        "{:02X}{:02X}{:02X}",
+                        (color.r * 255.0).round() as u8,
+                        (color.g * 255.0).round() as u8,
+                        (color.b * 255.0).round() as u8
+                    ),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        fills.sort();
+        fills.into_iter().map(|(_, _, fill)| fill).collect()
+    }
+
+    #[test]
+    fn every_conditional_table_region_matches_word() {
+        // 1. The pinned Word-authored tree projects to all five layers.
+        let reference = f267_reference_document();
+        let style = reference.style("RegionGrid").unwrap();
+        let reference_layers = f267_region_layers(&style);
+        assert_eq!(reference_layers.len(), 13);
+        for (index, (region, after, size, margin, fill)) in F267_REGIONS.into_iter().enumerate() {
+            assert_eq!(
+                reference_layers[index],
+                (
+                    Some(region),
+                    Some(Twips(after)),
+                    Some(HalfPoint(size)),
+                    Some(Twips(margin)),
+                    Some(true),
+                    (region == TableStyleRegion::FirstRow).then_some(true),
+                    Some(fill.to_owned()),
+                ),
+                "{}",
+                region.to_str()
+            );
+        }
+
+        // 2. An untouched reference serialises back as its original bytes.
+        let mut reopened = reference;
+        let saved = reopened.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        assert!(styles.contains(F267_WORD_REFERENCE_REGIONS), "{styles}");
+
+        // 3. The authored tree agrees with the reference tree. The comparison
+        //    is over the parsed tree, not the bytes, because attribute order
+        //    and prefix choice are ours to decide.
+        let mut authored = Document::new();
+        authored
+            .add_style(f267_authored_style())
+            .expect("authored regions are valid");
+        let authored = Document::from_bytes(&authored.to_bytes().unwrap()).unwrap();
+        let authored_style = authored.style("RegionGrid").unwrap();
+        assert_eq!(f267_region_layers(&authored_style), reference_layers);
+
+        // 4. The authored `w:tblStylePr` keeps the schema sequence.
+        let mut authored_bytes = authored;
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(authored_bytes.to_bytes().unwrap()))
+                .unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        let first_row = styles
+            .split(r#"<w:tblStylePr w:type="firstRow">"#)
+            .nth(1)
+            .and_then(|tail| tail.split("</w:tblStylePr>").next())
+            .expect("an authored firstRow region");
+        let order = ["<w:pPr>", "<w:rPr>", "<w:tblPr>", "<w:trPr>", "<w:tcPr>"].map(|tag| {
+            first_row
+                .find(tag)
+                .unwrap_or_else(|| panic!("{tag}: {first_row}"))
+        });
+        assert!(
+            order.windows(2).all(|pair| pair[0] < pair[1]),
+            "{first_row}"
+        );
+
+        // 5. Every region resolves onto the cell Word's priority order picks.
+        let resolved = f267_cell_fills(&f267_region_table(f267_authored_style()));
+        assert_eq!(
+            resolved,
+            [
+                // Row 0 is the header row, so no horizontal band applies.
+                "A10000", "B1F1B1", "B1F1B1", "A20000", //
+                // Row 1 is the first banded row, column 0 the first column.
+                "C1C1F1", "D1F1D1", "D1F1D1", "C2C2F2", //
+                // Row 2 is the second banded row.
+                "C1C1F1", "D2F2D2", "D2F2D2", "C2C2F2", //
+                // Row 3 is the last row, whose corners outrank it.
+                "A30000", "B2F2B2", "B2F2B2", "A40000",
+            ]
+            .map(str::to_owned)
+        );
+
+        // The whole-table region is what a table with no edges and no bands
+        // resolves to.
+        let mut plain = Document::new();
+        plain
+            .add_style(f267_authored_style())
+            .expect("region style is valid");
+        let mut table = plain.add_table(1, 1);
+        table.set_style("RegionGrid");
+        table.set_look(TableLook {
+            first_row: false,
+            last_row: false,
+            first_column: false,
+            last_column: false,
+            horizontal_banding: false,
+            vertical_banding: false,
+        });
+        table.row(0).unwrap().cell(0).unwrap().set_text("plain");
+        assert_eq!(f267_cell_fills(&plain), vec!["EEEEEE".to_owned()]);
+
+        // 6. The raster side, against the pinned oracle.
+        f267_assert_render_matches_oracle(f267_region_table(f267_authored_style()));
+    }
+
+    /// Rasterize the styled table through the pinned oracle and compare.
+    fn f267_assert_render_matches_oracle(mut document: Document) {
+        let version = std::process::Command::new("soffice")
+            .arg("--version")
+            .output()
+            .expect("pinned LibreOffice is installed");
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            F267_LIBREOFFICE_ORACLE
+        );
+        let rasterizer = std::process::Command::new("pdftoppm")
+            .arg("-v")
+            .output()
+            .expect("pinned rasterizer is installed");
+        assert!(rasterizer.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&rasterizer.stderr).lines().next(),
+            Some(F267_PDFTOPPM_ORACLE)
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "rdocx-f267-render-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let output = root.join("output");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+
+        let source = root.join("source.docx");
+        std::fs::write(&source, document.to_bytes().unwrap()).unwrap();
+        let ours = root.join("ours.pdf");
+        std::fs::write(&ours, document.to_pdf_deterministic().unwrap()).unwrap();
+
+        let status = std::process::Command::new("soffice")
+            .arg("--headless")
+            .arg(format!(
+                "-env:UserInstallation=file://{}",
+                profile.display()
+            ))
+            .arg("--convert-to")
+            .arg("pdf:writer_pdf_Export")
+            .arg("--outdir")
+            .arg(&output)
+            .arg(&source)
+            .status()
+            .expect("LibreOffice conversion starts");
+        assert!(status.success());
+        let oracle = output.join("source.pdf");
+
+        let rasterize = |pdf: &std::path::Path, prefix: &str| {
+            let target = root.join(prefix);
+            let rendered = std::process::Command::new("pdftoppm")
+                .args(["-png", "-f", "1", "-l", "1", "-r"])
+                .arg(F267_RASTER_DPI.to_string())
+                .arg(pdf)
+                .arg(&target)
+                .output()
+                .expect("rasterize page one");
+            assert!(
+                rendered.status.success(),
+                "{}",
+                String::from_utf8_lossy(&rendered.stderr)
+            );
+            root.join(format!("{prefix}-1.png"))
+        };
+        let ours_png = rasterize(&ours, "ours");
+        let oracle_png = rasterize(&oracle, "oracle");
+
+        // Two records per raster: the global SSIM, then the vertical extent of
+        // every band of shaded rows in the page interior. The bands are what
+        // the conditional regions paint, so agreeing on where they start and
+        // end is the layout claim.
+        let script = r#"import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+from golden_png_harness import decode_png
+from pptx_ssim_harness import composite_luminance, structural_similarity
+
+SHADED = 250
+MINIMUM_ROW_INK = 40
+BLOCK_GAP = 4
+
+first = decode_png(Path(sys.argv[1]))
+second = decode_png(Path(sys.argv[2]))
+width = min(first[0], second[0])
+height = min(first[1], second[1])
+
+def crop(image):
+    image_width, _, rgba = image
+    rows = []
+    for y in range(height):
+        start = (y * image_width) * 4
+        rows.append(rgba[start : start + width * 4])
+    return (width, height, b"".join(rows))
+
+def shaded_rows(image):
+    image_width, image_height, rgba = image
+    luminance = composite_luminance(rgba)
+    inked = []
+    for y in range(image_height):
+        count = sum(
+            1
+            for x in range(image_width)
+            if luminance[y * image_width + x] < SHADED
+        )
+        if count > MINIMUM_ROW_INK:
+            inked.append(y)
+    blocks = []
+    for y in inked:
+        if blocks and y - blocks[-1][1] <= BLOCK_GAP:
+            blocks[-1][1] = y
+        else:
+            blocks.append([y, y])
+    return blocks
+
+print(structural_similarity(crop(first), crop(second)))
+for image in (first, second):
+    print(" ".join(f"{start},{end}" for start, end in shaded_rows(image)))
+for image in (first, second):
+    image_width, image_height, rgba = image
+    counts = {}
+    for index in range(0, len(rgba), 4):
+        pixel = rgba[index : index + 3]
+        counts[bytes(pixel)] = counts.get(bytes(pixel), 0) + 1
+    fills = sorted(
+        (value.hex().upper(), count)
+        for value, count in counts.items()
+        if count >= 200
+    )
+    print(" ".join(f"{name}:{count}" for name, count in fills))
+"#;
+        let scripts = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts")
+            .canonicalize()
+            .unwrap();
+        let measured = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg(&ours_png)
+            .arg(&oracle_png)
+            .arg(&scripts)
+            .output()
+            .expect("structural similarity runs");
+        assert!(
+            measured.status.success(),
+            "{}",
+            String::from_utf8_lossy(&measured.stderr)
+        );
+        let reported = String::from_utf8_lossy(&measured.stdout);
+        let mut lines = reported.lines();
+        let ssim: f64 = lines
+            .next()
+            .expect("structural similarity line")
+            .trim()
+            .parse()
+            .expect("structural similarity is a number");
+        let parse_blocks = |line: &str| {
+            line.split_whitespace()
+                .map(|block| {
+                    let (start, end) = block.split_once(',').expect("shaded block bounds");
+                    (
+                        start.parse::<i64>().expect("shaded block start"),
+                        end.parse::<i64>().expect("shaded block end"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let ours_blocks = parse_blocks(lines.next().expect("our shaded rows"));
+        let oracle_blocks = parse_blocks(lines.next().expect("oracle shaded rows"));
+        let region_fills = F267_REGIONS.map(|(_, _, _, _, fill)| fill);
+        let parse_fills = |line: &str| {
+            let mut fills = line
+                .split_whitespace()
+                .filter_map(|entry| entry.split_once(':').map(|(name, _)| name.to_owned()))
+                .filter(|name| region_fills.contains(&name.as_str()))
+                .collect::<Vec<_>>();
+            fills.sort();
+            fills
+        };
+        let ours_fills = parse_fills(lines.next().expect("our painted fills"));
+        let oracle_fills = parse_fills(lines.next().expect("oracle painted fills"));
+
+        // The page-wide similarity is a collapse guard, not the layout claim.
+        // Two engines never put the same ink in the same pixel, and the
+        // declared band divergence below moves a sixth of the painted area.
+        // The measured agreement is 0.73.
+        assert!(ssim > 0.60, "structural similarity {ssim}");
+
+        // The table paints one contiguous band of shaded rows in both, and
+        // both start it on the same scanline. Where it ends differs, because
+        // the two engines disagree about row height by about three points a
+        // row, which is not what this story changes.
+        assert_eq!(ours_blocks.len(), 1, "{ours_blocks:?}");
+        assert_eq!(oracle_blocks.len(), 1, "{oracle_blocks:?}");
+        assert!(
+            (ours_blocks[0].0 - oracle_blocks[0].0).abs() <= 2,
+            "shaded table start: {ours_blocks:?} against {oracle_blocks:?}"
+        );
+
+        // Ten of the thirteen regions reach a cell in this table. The four
+        // corners, the two row edges and the two column edges resolve
+        // identically in both engines.
+        let shared = [
+            "A10000", "A20000", "A30000", "A40000", "B1F1B1", "B2F2B2", "C1C1F1", "C2C2F2",
+        ];
+        for fill in shared {
+            assert!(ours_fills.contains(&fill.to_owned()), "{ours_fills:?}");
+            assert!(oracle_fills.contains(&fill.to_owned()), "{oracle_fills:?}");
+        }
+
+        // The declared divergence, asserted so a later change cannot drop it
+        // silently. ECMA-376 orders `w:tblStylePr` band1Vert and band2Vert
+        // before band1Horz and band2Horz, and a later region overrides an
+        // earlier one, so the horizontal band outranks the vertical band.
+        // Word resolves it that way and this workspace follows Word.
+        // LibreOffice 26.2.5.2 resolves it the other way and paints the
+        // vertical band. The oracle is wrong here, so the divergence is
+        // recorded rather than followed.
+        assert_eq!(
+            ours_fills,
+            {
+                let mut expected = shared.to_vec();
+                expected.extend(["D1F1D1", "D2F2D2"]);
+                expected.sort();
+                expected.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            },
+            "{F267_LIBREOFFICE_ORACLE}"
+        );
+        assert_eq!(
+            oracle_fills,
+            {
+                let mut expected = shared.to_vec();
+                expected.extend(["E1E1F1", "E2E2F2"]);
+                expected.sort();
+                expected.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            },
+            "{F267_LIBREOFFICE_ORACLE} no longer inverts the band priority"
+        );
+    }
+    #[test]
+    fn conditional_run_properties_reach_resolved_runs() {
+        let mut document = Document::new();
+        document
+            .add_style(
+                StyleBuilder::table("HeaderRun", "Header Run").conditional_table_style(
+                    TableStyleRegion::FirstRow,
+                    None,
+                    Some(CT_RPr {
+                        bold: Some(true),
+                        color: Some("CC0000".to_owned()),
+                        ..CT_RPr::default()
+                    }),
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            .expect("header run style is valid");
+        let mut table = document.add_table(2, 1);
+        table.set_style("HeaderRun");
+        table.set_look(TableLook {
+            first_row: true,
+            last_row: false,
+            first_column: false,
+            last_column: false,
+            horizontal_banding: false,
+            vertical_banding: false,
+        });
+        table.row(0).unwrap().cell(0).unwrap().set_text("head");
+        table.row(1).unwrap().cell(0).unwrap().set_text("body");
+
+        let layout = document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("deterministic run layout");
+        let mut runs = f267_page_elements(&layout.layout.pages[0].elements)
+            .into_iter()
+            .filter_map(|element| match element {
+                oxml_layout::PositionedElement::Text(run) if !run.text.is_empty() => Some((
+                    (run.origin.y * 100.0).round() as i64,
+                    run.text.clone(),
+                    run.bold,
+                    format!(
+                        "{:02X}{:02X}{:02X}",
+                        (run.color.r * 255.0).round() as u8,
+                        (run.color.g * 255.0).round() as u8,
+                        (run.color.b * 255.0).round() as u8
+                    ),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        runs.sort();
+        assert_eq!(
+            runs.iter()
+                .map(|(_, text, bold, color)| (text.as_str(), *bold, color.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("head", true, "CC0000"), ("body", false, "000000"),]
+        );
+    }
+
+    #[test]
+    fn paragraph_cnf_style_selects_conditional_regions() {
+        let mut document = Document::new();
+        document
+            .add_style(
+                StyleBuilder::table("ParagraphCnf", "Paragraph Cnf").conditional_table_style(
+                    TableStyleRegion::FirstRow,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(CT_TcPr {
+                        shading: Some(f267_shading("123456")),
+                        ..CT_TcPr::default()
+                    }),
+                ),
+            )
+            .expect("paragraph selector style is valid");
+        let mut table = document.add_table(2, 1);
+        table.set_style("ParagraphCnf");
+        // No region comes from the look, so only the paragraph selector can
+        // reach the first-row region.
+        table.set_look(TableLook {
+            first_row: false,
+            last_row: false,
+            first_column: false,
+            last_column: false,
+            horizontal_banding: false,
+            vertical_banding: false,
+        });
+        table.row(0).unwrap().cell(0).unwrap().set_text("plain");
+        table.row(1).unwrap().cell(0).unwrap().set_text("selected");
+        table
+            .row(1)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .paragraph_mut(0)
+            .expect("the authored paragraph")
+            .set_conditional_formatting(Some(TableConditionalFormatting {
+                first_row: true,
+                ..TableConditionalFormatting::default()
+            }));
+
+        assert_eq!(f267_cell_fills(&document), vec!["123456".to_owned()]);
+
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let selected = reopened
+            .table(0)
+            .unwrap()
+            .row(1)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .conditional_formatting()
+            .expect("the paragraph selector reopens");
+        assert!(selected.first_row);
+        assert!(!selected.last_row);
+        assert_eq!(f267_cell_fills(&reopened), vec!["123456".to_owned()]);
+    }
+
+    #[test]
+    fn conditional_region_run_and_row_layers_survive_reopen() {
+        let mut document = Document::new();
+        document
+            .add_style(
+                f267_authored_style()
+                    .table_row_properties(CT_TrPr {
+                        cant_split: Some(true),
+                        ..CT_TrPr::default()
+                    })
+                    .table_cell_properties(CT_TcPr {
+                        shading: Some(f267_shading("F0F0F0")),
+                        ..CT_TcPr::default()
+                    })
+                    .table_properties(CT_TblPr {
+                        row_band_size: Some(2),
+                        column_band_size: Some(3),
+                        ..CT_TblPr::default()
+                    }),
+            )
+            .expect("authored regions are valid");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let style = reopened.style("RegionGrid").unwrap();
+
+        // The style's own base row and cell layers reopen beside its regions.
+        assert_eq!(
+            style
+                .table_row_properties()
+                .and_then(|properties| properties.cant_split),
+            Some(true)
+        );
+        assert_eq!(
+            style
+                .table_cell_properties()
+                .and_then(|properties| properties.shading.as_ref())
+                .and_then(|shading| shading.fill.as_deref()),
+            Some("F0F0F0")
+        );
+        let regions = style.conditional_table_styles();
+        assert_eq!(regions.len(), 13);
+        for (index, (region, _, size, _, _)) in F267_REGIONS.into_iter().enumerate() {
+            assert_eq!(regions[index].region(), Some(region));
+            assert_eq!(
+                regions[index].run_properties().and_then(|rpr| rpr.sz),
+                Some(HalfPoint(size)),
+                "{}",
+                region.to_str()
+            );
+            assert_eq!(
+                regions[index]
+                    .row_properties()
+                    .and_then(|trpr| trpr.cant_split),
+                Some(true),
+                "{}",
+                region.to_str()
+            );
+        }
+        assert_eq!(
+            regions[7].row_properties().and_then(|trpr| trpr.header),
+            Some(true)
+        );
+
+        // Every region keeps the `pPr`, `rPr`, `tblPr`, `trPr`, `tcPr`
+        // sequence the schema requires.
+        let mut reopened = reopened;
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+
+        // The style's own base layers sit at their schema ranks, in `w:trPr`
+        // then `w:tcPr` order and before the first region.
+        let definition = styles
+            .split(r#"<w:style w:type="table" w:styleId="RegionGrid">"#)
+            .nth(1)
+            .and_then(|tail| tail.split("</w:style>").next())
+            .unwrap_or_else(|| panic!("{styles}"));
+        let base = ["<w:trPr>", "<w:tcPr>", "<w:tblStylePr "].map(|tag| {
+            definition
+                .find(tag)
+                .unwrap_or_else(|| panic!("{tag}: {definition}"))
+        });
+        assert!(
+            base.windows(2).all(|pair| pair[0] < pair[1]),
+            "{definition}"
+        );
+
+        // Removing one base layer during an update leaves the other.
+        let mut updated = Document::from_bytes(&reopened.to_bytes().unwrap()).unwrap();
+        updated
+            .set_style(
+                StyleBuilder::table("RegionGrid", "Region Grid")
+                    .clear_table_row_properties()
+                    .table_properties(CT_TblPr {
+                        shading: Some(f267_shading("FAFAFA")),
+                        row_band_size: Some(5),
+                        ..CT_TblPr::default()
+                    }),
+            )
+            .expect("one base layer is removable");
+        let style = updated.style("RegionGrid").unwrap();
+        assert_eq!(style.table_row_properties(), None);
+        assert!(style.table_cell_properties().is_some());
+
+        // An updated band size reaches the merged style properties, and the
+        // one the update did not mention keeps its existing value.
+        assert_eq!(
+            style
+                .table_properties()
+                .map(|properties| (properties.row_band_size, properties.column_band_size)),
+            Some((Some(5), Some(3)))
+        );
+        for region in F267_REGIONS.map(|(region, _, _, _, _)| region) {
+            let body = styles
+                .split(&format!(r#"<w:tblStylePr w:type="{}">"#, region.to_str()))
+                .nth(1)
+                .and_then(|tail| tail.split("</w:tblStylePr>").next())
+                .unwrap_or_else(|| panic!("{}: {styles}", region.to_str()));
+            let order = ["<w:pPr>", "<w:rPr>", "<w:tblPr>", "<w:trPr>", "<w:tcPr>"]
+                .map(|tag| body.find(tag).unwrap_or_else(|| panic!("{tag}: {body}")));
+            assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{body}");
+        }
+    }
+
+    #[test]
+    fn paragraph_conditional_selector_survives_reopen() {
+        let mut document = Document::new();
+        let mut paragraph = document.add_paragraph("selector");
+        paragraph.set_div_id_value(Some(7));
+        paragraph.set_conditional_formatting(Some(TableConditionalFormatting {
+            first_row: true,
+            last_row_first_column: true,
+            ..TableConditionalFormatting::default()
+        }));
+        paragraph.mark().set_bold(true);
+
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let body =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        // Schema slot 32, between `w:divId` at 31 and `w:rPr` at 33.
+        let div_id = body.find(r#"<w:divId w:val="7"/>"#).expect("divId");
+        let cnf = body
+            .find(r#"<w:cnfStyle w:val="100000000001"/>"#)
+            .unwrap_or_else(|| panic!("{body}"));
+        let rpr = body.find("<w:rPr>").expect("paragraph mark properties");
+        assert!(div_id < cnf && cnf < rpr, "{body}");
+
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let selector = reopened
+            .paragraph(0)
+            .unwrap()
+            .conditional_formatting()
+            .expect("the selector reopens");
+        assert!(selector.first_row);
+        assert!(selector.last_row_first_column);
+        assert_eq!(reopened.paragraph(0).unwrap().div_id(), Some(7));
+
+        // Unrelated producer XML at the same slot keeps its place.
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let injected = body.replace(
+            r#"<w:cnfStyle w:val="100000000001"/>"#,
+            r#"<x:marker xmlns:x="urn:producer" x:keep="1"/><w:cnfStyle w:val="100000000001" x:extra="kept" xmlns:x="urn:producer"/>"#,
+        );
+        package.set_part("/word/document.xml", injected.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut carried = Document::from_bytes(bytes.get_ref()).expect("producer XML reopens");
+        assert!(
+            carried
+                .paragraph(0)
+                .unwrap()
+                .conditional_formatting()
+                .expect("the selector still projects")
+                .first_row
+        );
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(carried.to_bytes().unwrap())).unwrap();
+        let saved =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        assert!(
+            saved.contains(r#"<x:marker xmlns:x="urn:producer" x:keep="1"/>"#),
+            "{saved}"
+        );
+        assert!(saved.contains(r#"x:extra="kept""#), "{saved}");
+    }
+
+    #[test]
+    fn untouched_conditional_regions_serialize_byte_for_byte() {
+        let region = concat!(
+            r#"<w:tblStylePr w:type="firstRow" x:note="kept" xmlns:x="urn:producer">"#,
+            r#"<w:pPr><w:spacing w:after="40"/></w:pPr>"#,
+            r#"<w:rPr><w:b/></w:rPr>"#,
+            r#"<w:tblPr/>"#,
+            r#"<w:trPr><w:cantSplit/></w:trPr>"#,
+            r#"<w:tcPr><w:shd w:val="clear" w:fill="E8F1F8"/></w:tcPr>"#,
+            r#"<x:unmodelled x:value="kept"/>"#,
+            r#"</w:tblStylePr>"#
+        );
+        let mut seed = Document::new();
+        seed.add_style(StyleBuilder::table("Preserved", "Preserved"))
+            .expect("seed table style");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let styles =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        let injected = styles.replace(
+            r#"<w:name w:val="Preserved"/>"#,
+            &format!(r#"<w:name w:val="Preserved"/>{region}"#),
+        );
+        package.set_part("/word/styles.xml", injected.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+
+        let mut reopened = Document::from_bytes(bytes.get_ref()).expect("the region reopens");
+        let style = reopened.style("Preserved").unwrap();
+        let regions = style.conditional_table_styles();
+        assert_eq!(regions[0].region(), Some(TableStyleRegion::FirstRow));
+        assert_eq!(
+            regions[0].run_properties().and_then(|rpr| rpr.bold),
+            Some(true)
+        );
+        assert_eq!(
+            regions[0].row_properties().and_then(|trpr| trpr.cant_split),
+            Some(true)
+        );
+
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+        let saved =
+            String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+        assert!(saved.contains(region), "{saved}");
+    }
+
+    #[test]
+    fn invalid_band_size_leaves_document_bytes_unchanged() {
+        let mut document = Document::new();
+        document
+            .add_style(StyleBuilder::table("Sized", "Sized"))
+            .expect("table style is valid");
+        let mut table = document.add_table(1, 1);
+        table.set_style("Sized");
+        table.row(0).unwrap().cell(0).unwrap().set_text("x");
+        let before = document.to_bytes().unwrap();
+
+        let mut table = document.table_mut(0).unwrap();
+        assert!(table.set_row_band_size(0).is_err());
+        assert!(table.set_column_band_size(0).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert_eq!(document.table(0).unwrap().row_band_size(), None);
+        assert_eq!(document.table(0).unwrap().column_band_size(), None);
+
+        let mut table = document.table_mut(0).unwrap();
+        table.set_row_band_size(3).unwrap();
+        table.set_column_band_size(2).unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.table(0).unwrap().row_band_size(), Some(3));
+        assert_eq!(reopened.table(0).unwrap().column_band_size(), Some(2));
+
+        let mut cleared = reopened;
+        cleared.table_mut(0).unwrap().clear_band_sizes();
+        assert_eq!(cleared.table(0).unwrap().row_band_size(), None);
+        assert_eq!(cleared.table(0).unwrap().column_band_size(), None);
+    }
+}
+
+/// F-268a, advanced table authoring, content-driven autofit and row geometry.
+mod advanced_table_authoring_and_geometry {
+    use rdocx::table::{
+        TableAnchor, TableFloatPosition, TableFloatX, TableFloatY, TableLayout, TableOverlap,
+        TableTextDistance, TableWidth,
+    };
+    use rdocx::{Document, Length};
+    use rdocx_oxml::table::{
+        CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc,
+    };
+    use rdocx_oxml::units::Twips;
+
+    /// Parse one table out of a minimal document, which is the only public
+    /// entry point that drives `CT_Tbl` from bytes.
+    fn parse_single_table(table_xml: &str) -> CT_Tbl {
+        let source = format!(
+            r#"<w:document xmlns:w="{ns}"><w:body>{table_xml}</w:body></w:document>"#,
+            ns = rdocx_oxml::namespace::W_NS
+        );
+        let document = rdocx_oxml::document::CT_Document::from_xml(source.as_bytes())
+            .expect("document parses");
+        document
+            .body
+            .content
+            .into_iter()
+            .find_map(|item| match item {
+                rdocx_oxml::document::BodyContent::Table(table) => Some(table),
+                _ => None,
+            })
+            .expect("document holds one table")
+    }
+
+    /// Collect every painted cell rectangle, rounded to two decimal places.
+    ///
+    /// Cell shading is what marks a painted cell, so a table whose cells are
+    /// shaded reports one rectangle per cell in paint order.
+    fn collect_cell_rectangles(
+        elements: &[oxml_layout::PositionedElement],
+        output: &mut Vec<(f64, f64, f64, f64)>,
+    ) {
+        let round = |value: f64| (value * 100.0).round() / 100.0;
+        for element in elements {
+            match element {
+                oxml_layout::PositionedElement::FilledRect { rect, .. } => output.push((
+                    round(rect.x),
+                    round(rect.y),
+                    round(rect.width),
+                    round(rect.height),
+                )),
+                oxml_layout::PositionedElement::Group(group) => {
+                    collect_cell_rectangles(&group.children, output)
+                }
+                oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                    collect_cell_rectangles(children, output)
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn sample_float_position() -> TableFloatPosition {
+        TableFloatPosition {
+            horizontal_anchor: TableAnchor::Margin,
+            vertical_anchor: TableAnchor::Page,
+            horizontal: TableFloatX::Offset(Length::twips(720)),
+            vertical: TableFloatY::Offset(Length::twips(-360)),
+            distance_from_text: TableTextDistance {
+                top: Length::twips(80),
+                right: Length::twips(160),
+                bottom: Length::twips(80),
+                left: Length::twips(160),
+            },
+        }
+    }
+
+    fn layout_input(document: rdocx_oxml::document::CT_Document) -> rdocx_layout::LayoutInput {
+        rdocx_layout::LayoutInput {
+            automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
+            math_properties: None,
+            document,
+            styles: rdocx_oxml::styles::CT_Styles::new_default(),
+            numbering: None,
+            headers: std::collections::HashMap::new(),
+            footers: std::collections::HashMap::new(),
+            images: std::collections::HashMap::new(),
+            charts: std::collections::HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
+            core_properties: None,
+            hyperlink_urls: std::collections::HashMap::new(),
+            footnotes: None,
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+            revision_view: rdocx_layout::RevisionView::Accepted,
+        }
+    }
+
+    /// Lay one table out in deterministic font mode at `available_width`.
+    fn lay_out(table: &CT_Tbl, available_width: f64) -> rdocx_layout::table::TableBlock {
+        let input = layout_input(rdocx_oxml::document::CT_Document {
+            body: rdocx_oxml::document::CT_Body {
+                content: Vec::new(),
+                sect_pr: None,
+            },
+            extra_namespaces: Vec::new(),
+            background_xml: None,
+            background_extra_xml: Vec::new(),
+        });
+        let media = rdocx_layout::MediaRegistry::new(&input.images);
+        let mut fonts =
+            oxml_layout::FontManager::new_deterministic().expect("deterministic fonts load");
+        let mut numbering = rdocx_layout::style_resolver::NumberingState::new();
+        let mut diagnostics = Vec::new();
+        rdocx_layout::table::layout_table(
+            table,
+            available_width,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+            None,
+        )
+        .expect("table lays out")
+    }
+
+    /// A two-column table whose cells carry the given text.
+    fn table_with_text(columns: &[i32], rows: &[&[&str]]) -> CT_Tbl {
+        let mut table = CT_Tbl::new();
+        table.grid = Some(CT_TblGrid {
+            columns: columns
+                .iter()
+                .map(|width| CT_TblGridCol {
+                    width: Twips(*width),
+                })
+                .collect(),
+            ..CT_TblGrid::default()
+        });
+        for cells in rows {
+            let mut row = CT_Row::new();
+            for text in cells.iter() {
+                let mut cell = CT_Tc::new();
+                cell.paragraphs_mut()[0].add_run(text);
+                row.cells.push(cell);
+            }
+            table.rows.push(row);
+        }
+        table
+    }
+
+    #[test]
+    fn table_and_row_advanced_properties_survive_reopen() {
+        let mut document = Document::new();
+        {
+            let mut table = document.add_table(2, 2);
+            table
+                .set_float_position(Some(sample_float_position()))
+                .expect("float position is valid");
+            table.set_overlap(Some(TableOverlap::Never));
+            table.set_bidi_visual(Some(true));
+            table
+                .set_cell_spacing(Some(Length::twips(24)))
+                .expect("cell spacing is valid");
+            table
+                // The caption carries a character the attribute writer must
+                // escape rather than emit raw.
+                .set_caption(Some("Totals & targets"))
+                .expect("caption");
+            table
+                .set_description(Some("Region < quarter, by \"total\""))
+                .expect("description");
+            let mut row = table.row(0).expect("first row");
+            row.set_width_before(Some(TableWidth::Fixed(Length::twips(360))))
+                .expect("leading width is valid");
+            row.set_width_after(Some(TableWidth::Percentage(10.0)))
+                .expect("trailing width is valid");
+            row.set_cell_spacing(Some(Length::twips(12)))
+                .expect("row cell spacing is valid");
+            row.set_hidden(Some(true));
+        }
+
+        let bytes = document.to_bytes().expect("document saves");
+        let reopened = Document::from_bytes(&bytes).expect("document reopens");
+        let table = reopened.table(0).expect("table reopens");
+        assert_eq!(table.float_position(), Some(sample_float_position()));
+        assert_eq!(table.overlap(), Some(TableOverlap::Never));
+        assert_eq!(table.bidi_visual(), Some(true));
+        assert_eq!(
+            table.cell_spacing(),
+            Some(TableWidth::Fixed(Length::twips(24)))
+        );
+        assert_eq!(table.caption(), Some("Totals & targets"));
+        assert_eq!(table.description(), Some("Region < quarter, by \"total\""));
+        let row = table.row(0).expect("row reopens");
+        assert_eq!(
+            row.width_before(),
+            Some(TableWidth::Fixed(Length::twips(360)))
+        );
+        assert_eq!(row.width_after(), Some(TableWidth::Percentage(10.0)));
+        assert_eq!(
+            row.cell_spacing(),
+            Some(TableWidth::Fixed(Length::twips(12)))
+        );
+        assert_eq!(row.hidden(), Some(true));
+        assert!(!table.has_unmodeled_properties());
+        assert!(!row.has_unmodeled_properties());
+
+        // The ten new children land in their schema-sequence slots.
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).expect("package opens");
+        let xml = String::from_utf8(
+            package
+                .get_part("/word/document.xml")
+                .expect("document part")
+                .to_vec(),
+        )
+        .expect("document xml is utf8");
+        let at = |needle: &str| {
+            xml.find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {xml}"))
+        };
+        assert!(at("<w:tblpPr") < at("<w:tblOverlap"));
+        assert!(at("<w:tblOverlap") < at("<w:bidiVisual"));
+        assert!(at("<w:bidiVisual") < at("<w:tblW"));
+        assert!(at("<w:tblW") < at("<w:tblCellSpacing"));
+        assert!(at("<w:tblCellSpacing") < at("<w:tblCaption"));
+        assert!(at("<w:tblCaption") < at("<w:tblDescription"));
+        // Free-text values are escaped on the way out and unescaped on the
+        // way back in, unlike the token-valued `w:val` attributes beside them.
+        assert!(
+            xml.contains(r#"<w:tblCaption w:val="Totals &amp; targets"/>"#),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(
+                r#"<w:tblDescription w:val="Region &lt; quarter, by &quot;total&quot;"/>"#
+            ),
+            "{xml}"
+        );
+        assert!(at("<w:wBefore") < at("<w:wAfter"));
+        assert!(at("<w:wAfter") < at("<w:hidden"));
+    }
+
+    #[test]
+    fn tbl_ppr_attribute_matrix_is_prefix_tolerant_and_writes_a_fixed_prefix() {
+        let source = format!(
+            concat!(
+                r#"<x:tbl xmlns:x="{ns}"><x:tblPr><x:tblpPr x:leftFromText="10""#,
+                r#" x:rightFromText="20" x:topFromText="30" x:bottomFromText="40""#,
+                r#" x:horzAnchor="page" x:vertAnchor="text" x:tblpX="120""#,
+                r#" x:tblpXSpec="outside" x:tblpY="240" x:tblpYSpec="inside"/>"#,
+                r#"<x:tblOverlap x:val="overlap"/></x:tblPr>"#,
+                r#"<x:tblGrid><x:gridCol x:w="1000"/></x:tblGrid>"#,
+                r#"<x:tr><x:tc><x:p/></x:tc></x:tr></x:tbl>"#
+            ),
+            ns = rdocx_oxml::namespace::W_NS
+        );
+        let table = parse_single_table(&source);
+        let position = table
+            .properties
+            .as_ref()
+            .expect("table properties")
+            .float_position
+            .as_deref()
+            .expect("float position parses");
+        assert_eq!(position.left_from_text, Some(Twips(10)));
+        assert_eq!(position.right_from_text, Some(Twips(20)));
+        assert_eq!(position.top_from_text, Some(Twips(30)));
+        assert_eq!(position.bottom_from_text, Some(Twips(40)));
+        assert_eq!(
+            position.horz_anchor,
+            Some(rdocx_oxml::table::ST_TblAnchor::Page)
+        );
+        assert_eq!(
+            position.vert_anchor,
+            Some(rdocx_oxml::table::ST_TblAnchor::Text)
+        );
+        assert_eq!(position.tbl_p_x, Some(Twips(120)));
+        assert_eq!(
+            position.tbl_p_x_spec,
+            Some(rdocx_oxml::drawing::AnchorAlignH::Outside)
+        );
+        assert_eq!(position.tbl_p_y, Some(Twips(240)));
+        assert_eq!(
+            position.tbl_p_y_spec,
+            Some(rdocx_oxml::table::ST_YAlign::Inside)
+        );
+
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        table.to_xml(&mut writer).expect("table serialises");
+        let written = String::from_utf8(writer.into_inner()).expect("serialised table is utf8");
+        for attribute in [
+            r#"w:leftFromText="10""#,
+            r#"w:rightFromText="20""#,
+            r#"w:topFromText="30""#,
+            r#"w:bottomFromText="40""#,
+            r#"w:horzAnchor="page""#,
+            r#"w:vertAnchor="text""#,
+            r#"w:tblpXSpec="outside""#,
+            r#"w:tblpX="120""#,
+            r#"w:tblpYSpec="inside""#,
+            r#"w:tblpY="240""#,
+        ] {
+            assert!(written.contains(attribute), "{attribute}: {written}");
+        }
+        assert!(
+            written.contains(r#"<w:tblOverlap w:val="overlap"/>"#),
+            "{written}"
+        );
+
+        // An unrecognised value falls back rather than inventing a position.
+        let unknown = format!(
+            concat!(
+                r#"<w:tbl xmlns:w="{ns}"><w:tblPr>"#,
+                r#"<w:tblpPr w:horzAnchor="elsewhere" w:tblpXSpec="sideways"/>"#,
+                r#"<w:tblOverlap w:val="sometimes"/></w:tblPr>"#,
+                r#"<w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid>"#,
+                r#"<w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#
+            ),
+            ns = rdocx_oxml::namespace::W_NS
+        );
+        let table = parse_single_table(&unknown);
+        let properties = table.properties.as_ref().expect("table properties");
+        let position = properties
+            .float_position
+            .as_deref()
+            .expect("float position");
+        assert_eq!(position.horz_anchor, None);
+        assert_eq!(position.tbl_p_x_spec, None);
+        assert_eq!(properties.overlap, None);
+    }
+
+    #[test]
+    fn autofit_engages_only_for_an_auto_width_autofit_table() {
+        let declared = [Twips(1440), Twips(4320)];
+        let grid_points = |table: &CT_Tbl| -> Vec<f64> {
+            lay_out(table, 360.0)
+                .col_widths
+                .iter()
+                .map(|width| (width * 100.0).round() / 100.0)
+                .collect()
+        };
+        let declared_points = declared
+            .iter()
+            .map(|width| width.to_pt())
+            .collect::<Vec<_>>();
+
+        let mut table = table_with_text(
+            &[declared[0].0, declared[1].0],
+            &[&["Region", "Quarterly revenue for the northern region"]],
+        );
+
+        // Absent width and absent layout mode keeps the declared grid. ECMA
+        // makes autofit the default here, but engagement deliberately requires
+        // the element, because an absent layout is the shape almost every
+        // producer writes and treating it as autofit moves the pinned private
+        // corpus reference page count.
+        assert_eq!(grid_points(&table), declared_points);
+
+        // An explicit fixed layout keeps the declared grid.
+        table.properties = Some(CT_TblPr {
+            layout: Some("fixed".to_owned()),
+            ..CT_TblPr::default()
+        });
+        assert_eq!(grid_points(&table), declared_points);
+
+        // An authored dxa width keeps the declared grid even with autofit.
+        table.properties = Some(CT_TblPr {
+            layout: Some("autofit".to_owned()),
+            width: Some(CT_TblWidth::dxa(5760)),
+            ..CT_TblPr::default()
+        });
+        assert_eq!(grid_points(&table), declared_points);
+
+        // An authored percentage width keeps the declared grid.
+        table.properties = Some(CT_TblPr {
+            width: Some(CT_TblWidth::pct(5000)),
+            ..CT_TblPr::default()
+        });
+        assert_eq!(grid_points(&table), declared_points);
+
+        // An auto width with an autofit layout engages.
+        table.properties = Some(CT_TblPr {
+            layout: Some("autofit".to_owned()),
+            width: Some(CT_TblWidth::auto()),
+            ..CT_TblPr::default()
+        });
+        assert_ne!(grid_points(&table), declared_points);
+    }
+
+    #[test]
+    fn autofit_distributes_available_width_between_measured_minima_and_maxima() {
+        let mut table = table_with_text(
+            &[2880, 2880],
+            &[&[
+                "ID",
+                "A considerably longer heading that cannot fit on one line at this width",
+            ]],
+        );
+        // Engagement requires the element, so this fixture opts in explicitly.
+        table.properties = Some(CT_TblPr {
+            layout: Some("autofit".to_owned()),
+            ..CT_TblPr::default()
+        });
+
+        // Wide enough for every cell's natural width: columns stop at content.
+        let roomy = lay_out(&table, 600.0);
+        assert!(roomy.col_widths[0] < roomy.col_widths[1]);
+        assert!(roomy.table_width < 600.0);
+
+        // Narrow enough to force distribution: the columns fill the caller's
+        // width and the narrow column keeps at least its measured minimum.
+        let tight = lay_out(&table, 200.0);
+        let total: f64 = tight.col_widths.iter().sum();
+        assert!((total - 200.0).abs() < 0.01, "{:?}", tight.col_widths);
+        assert!(tight.col_widths[0] > 0.0);
+        assert!(tight.col_widths[0] < roomy.col_widths[0] + 0.01);
+        assert!(tight.col_widths[1] > tight.col_widths[0]);
+    }
+
+    #[test]
+    fn checked_table_and_row_setters_reject_invalid_values() {
+        let mut document = Document::new();
+        document.add_table(1, 1);
+        let before = document.to_bytes().expect("document saves");
+
+        {
+            let mut table = document.table_mut(0).expect("table");
+            assert!(table.set_cell_spacing(Some(Length::twips(-1))).is_err());
+            assert!(table.set_caption(Some("   ")).is_err());
+            assert!(table.set_description(Some("")).is_err());
+            let mut invalid = sample_float_position();
+            invalid.distance_from_text.top = Length::twips(-1);
+            assert!(table.set_float_position(Some(invalid)).is_err());
+        }
+        {
+            let mut table = document.table_mut(0).expect("table");
+            let mut row = table.row(0).expect("row");
+            assert!(
+                row.set_width_before(Some(TableWidth::Percentage(140.0)))
+                    .is_err()
+            );
+            assert!(
+                row.set_width_after(Some(TableWidth::Fixed(Length::twips(-5))))
+                    .is_err()
+            );
+            assert!(row.set_cell_spacing(Some(Length::twips(-3))).is_err());
+        }
+
+        assert_eq!(document.to_bytes().expect("document saves"), before);
+        let table = document.table(0).expect("table");
+        assert_eq!(table.cell_spacing(), None);
+        assert_eq!(table.caption(), None);
+        assert_eq!(table.description(), None);
+        assert_eq!(table.float_position(), None);
+        let row = table.row(0).expect("row");
+        assert_eq!(row.width_before(), None);
+        assert_eq!(row.width_after(), None);
+        assert_eq!(row.cell_spacing(), None);
+    }
+
+    #[test]
+    fn fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages() {
+        let mut document = Document::new();
+        {
+            let mut fixed = document.add_table(2, 3);
+            fixed.set_layout(TableLayout::Fixed);
+            fixed
+                .set_grid_widths(&[
+                    Length::twips(2880),
+                    Length::twips(2880),
+                    Length::twips(3600),
+                ])
+                .expect("fixed grid widths");
+            for row_index in 0..2 {
+                let mut row = fixed.row(row_index).expect("fixed row");
+                for cell_index in 0..3 {
+                    let mut cell = row.cell(cell_index).expect("fixed cell");
+                    cell.set_text("Fixed");
+                    cell.set_shading("EEEEEE");
+                }
+            }
+        }
+        {
+            let mut autofit = document.add_table(2, 2);
+            autofit
+                .set_width_mode(TableWidth::Auto)
+                .expect("auto width");
+            autofit.set_layout(TableLayout::AutoFit);
+            let texts = [
+                ["ID", "A much longer autofit heading than the first column"],
+                ["7", "Short"],
+            ];
+            for (row_index, row_texts) in texts.iter().enumerate() {
+                let mut row = autofit.row(row_index).expect("autofit row");
+                for (cell_index, text) in row_texts.iter().enumerate() {
+                    let mut cell = row.cell(cell_index).expect("autofit cell");
+                    cell.set_text(text);
+                    cell.set_shading("DDDDDD");
+                }
+            }
+        }
+        {
+            let mut outer = document.add_table(1, 2);
+            outer.set_layout(TableLayout::Fixed);
+            let mut row = outer.row(0).expect("outer row");
+            row.cell(0).expect("outer cell").set_text("Outer");
+            let mut host = row.cell(1).expect("nested host");
+            let mut nested = host.add_table(2, 2);
+            nested.set_layout(TableLayout::Fixed);
+            for nested_row in 0..2 {
+                let mut nested_row = nested.row(nested_row).expect("nested row");
+                for nested_cell in 0..2 {
+                    let mut cell = nested_row.cell(nested_cell).expect("nested cell");
+                    cell.set_text("N");
+                    cell.set_shading("CCCCCC");
+                }
+            }
+        }
+
+        let layout = document.layout_deterministic().expect("document lays out");
+        let mut origins = Vec::new();
+        for page in &layout.layout.pages {
+            collect_cell_rectangles(&page.elements, &mut origins);
+        }
+        assert_eq!(layout.layout.pages.len(), 1);
+        assert_eq!(origins, GOLDEN_TABLE_GEOMETRY);
+    }
+
+    /// Reviewed page geometry for
+    /// `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`,
+    /// as `(x, y, width, height)` in points for every painted cell.
+    ///
+    /// Rows 1 to 6 are the fixed-grid table, which keeps its declared 144,
+    /// 144 and 180 point columns. Rows 7 to 10 are the auto-width autofit
+    /// table, whose narrow `ID` column measures 20.34 points against a 242.28
+    /// point heading column and whose total stops short of the 468 point text
+    /// column because the content fits. Rows 11 to 14 are the nested table,
+    /// which resolves its own grid inside the owning cell content box.
+    const GOLDEN_TABLE_GEOMETRY: &[(f64, f64, f64, f64)] = &[
+        (72.0, 72.0, 144.0, 19.87),
+        (216.0, 72.0, 144.0, 19.87),
+        (360.0, 72.0, 180.0, 19.87),
+        (72.0, 91.87, 144.0, 19.87),
+        (216.0, 91.87, 144.0, 19.87),
+        (360.0, 91.87, 180.0, 19.87),
+        (72.0, 111.74, 20.34, 19.87),
+        (92.34, 111.74, 242.28, 19.87),
+        (72.0, 131.61, 20.34, 19.87),
+        (92.34, 131.61, 242.28, 19.87),
+        (311.4, 172.43, 111.6, 19.87),
+        (423.0, 172.43, 111.6, 19.87),
+        (311.4, 192.3, 111.6, 19.87),
+        (423.0, 192.3, 111.6, 19.87),
+    ];
+}
+
+/// F-266a, script identity and font slot resolution.
+///
+/// The gate is a recorded geometry digest over a deterministic mixed-script
+/// page. It uses no rasteriser and no external oracle, because the properties
+/// under test are glyph identity, glyph positioning, cluster mapping and
+/// painted order, all of which the layout result already states exactly. A
+/// pixel comparison would add an external dependency and prove less.
+mod f266a_mixed_script_typography {
+    use super::*;
+    use oxml_layout::{PositionedElement, TextDirection, TextScript};
+    use rdocx::RunFontSlot;
+    use sha2::{Digest, Sha256};
+
+    const LATIN: &str = "Mixed script page";
+    const ARABIC: &str = "العربية";
+    const HEBREW: &str = "שלום עולם";
+    const KOREAN: &str = "안녕하세요 세계";
+    const JAPANESE: &str = "こんにちは、カタカナ世界";
+    const KANJI: &str = "世界";
+
+    /// The recorded geometry of the mixed-script page.
+    ///
+    /// Re-record only with a stated reason. The digest covers every painted
+    /// run on the page in paint order, with its font family, point size,
+    /// origin, logical text, glyph ids and advances, and for a rich run also
+    /// its direction, script, bidi embedding level, both offset axes and its
+    /// cluster ranges.
+    ///
+    /// The serialisation is host-stable because the pipeline is f64
+    /// throughout with no FMA contraction, the shaper is pure Rust, and every
+    /// face is bundled, so each coordinate is an integer font unit scaled by
+    /// one multiply and summed in a fixed order. Four decimal places is not
+    /// what makes it stable. It is a guard band that keeps an ordinary
+    /// representation difference away from the printed digits, and it is
+    /// applied to a value whose sign of zero has been normalised, because
+    /// `format!("{:.4}", -0.0)` renders `-0.0000`.
+    pub(super) const MIXED_SCRIPT_GEOMETRY_DIGEST: &str =
+        "516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402";
+
+    /// One page holding all five scripts, authored through the public facade.
+    ///
+    /// Every script sets its font through the `w:rFonts` slot Word uses for
+    /// it. The Kanji paragraph is what makes slot resolution load bearing
+    /// here, because `Noto Sans SC` on `w:ascii` and `Noto Sans JP` on
+    /// `w:eastAsia` both cover its text, so coverage fallback cannot choose
+    /// between them and only the slot can. Every other paragraph has exactly
+    /// one bundled face that covers it, so those prove script identity,
+    /// reading order and geometry rather than slot resolution.
+    pub(super) fn mixed_script_document() -> Document {
+        let mut document = Document::new();
+
+        let mut latin = document.add_paragraph("");
+        latin.add_run(LATIN).font("Carlito").language("en-US");
+
+        let mut arabic = document.add_paragraph("").right_to_left(true);
+        {
+            let mut run = arabic.add_run(ARABIC);
+            run.set_slot_font(RunFontSlot::ComplexScript, Some("Noto Sans Arabic"));
+            run.set_rtl_value(Some(true));
+            run.set_complex_script_value(Some(true));
+            run.set_language_bidi_value(Some("ar-SA"));
+        }
+
+        let mut hebrew = document.add_paragraph("").right_to_left(true);
+        {
+            let mut run = hebrew.add_run(HEBREW);
+            run.set_slot_font(RunFontSlot::ComplexScript, Some("Noto Sans Hebrew"));
+            run.set_rtl_value(Some(true));
+            run.set_complex_script_value(Some(true));
+            run.set_language_bidi_value(Some("he-IL"));
+        }
+
+        let mut korean = document.add_paragraph("");
+        {
+            let mut run = korean.add_run(KOREAN);
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans KR"));
+            run.set_language_east_asia_value(Some("ko-KR"));
+        }
+
+        let mut japanese = document.add_paragraph("");
+        {
+            let mut run = japanese.add_run(JAPANESE);
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+        }
+
+        let mut kanji = document.add_paragraph("");
+        {
+            let mut run = kanji.add_run(KANJI);
+            run.set_slot_font(RunFontSlot::Ascii, Some("Noto Sans SC"));
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+        }
+
+        document
+    }
+
+    fn family_of(result: &rdocx_layout::WordLayoutResult, id: oxml_layout::FontId) -> String {
+        result
+            .layout
+            .fonts
+            .iter()
+            .find(|font| font.id == id)
+            .map(|font| font.family.clone())
+            .expect("every painted run names a font in the result font table")
+    }
+
+    /// Every rich run on the page, which is every run that reached the shaper.
+    fn rich_runs(
+        result: &rdocx_layout::WordLayoutResult,
+    ) -> Vec<oxml_layout::MultilingualGlyphRun> {
+        let mut runs = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let PositionedElement::MultilingualText(run) = element {
+                    runs.push(run.clone());
+                }
+            });
+        }
+        runs
+    }
+
+    /// Every legacy run on the page. Text with no complex script stays here,
+    /// which is the path the Latin paragraph takes.
+    fn legacy_runs(result: &rdocx_layout::WordLayoutResult) -> Vec<oxml_layout::GlyphRun> {
+        let mut runs = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let PositionedElement::Text(run) = element {
+                    runs.push(run.clone());
+                }
+            });
+        }
+        runs
+    }
+
+    /// One coordinate, with the sign of zero normalised first.
+    ///
+    /// A shaper that returns `-0.0` for an offset is arithmetically equal to
+    /// one that returns `0.0`, but `format!("{:.4}", -0.0)` renders
+    /// `-0.0000`, which would move the digest for no geometric reason.
+    fn number(value: f64) -> String {
+        format!("{:.4}", if value == 0.0 { 0.0 } else { value })
+    }
+
+    fn numbers(values: &[f64]) -> String {
+        values
+            .iter()
+            .copied()
+            .map(number)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn glyphs(values: &[u16]) -> String {
+        values
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// The canonical serialisation the digest is taken over.
+    pub(super) fn canonical_geometry(result: &rdocx_layout::WordLayoutResult) -> String {
+        let mut lines = Vec::new();
+        for (page_index, page) in result.layout.pages.iter().enumerate() {
+            let mut paint_index = 0usize;
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                let body = match element {
+                    PositionedElement::Text(run) => format!(
+                        "kind=legacy font={} size={} origin={},{} text={} \
+                         glyphs={} adv={}",
+                        family_of(result, run.font_id),
+                        number(run.font_size),
+                        number(run.origin.x),
+                        number(run.origin.y),
+                        run.text,
+                        glyphs(&run.glyph_ids),
+                        numbers(&run.advances),
+                    ),
+                    PositionedElement::MultilingualText(run) => format!(
+                        "kind=rich font={} size={} origin={},{} dir={:?} \
+                         script={:?} bidi={} logical={} text={} glyphs={} \
+                         xadv={} yadv={} xoff={} yoff={} clusters={}",
+                        family_of(result, run.font_id),
+                        number(run.font_size),
+                        number(run.origin.x),
+                        number(run.origin.y),
+                        run.direction,
+                        run.script,
+                        run.bidi_level,
+                        run.logical_index,
+                        run.logical_text,
+                        glyphs(&run.glyph_ids),
+                        numbers(&run.x_advances),
+                        numbers(&run.y_advances),
+                        numbers(&run.x_offsets),
+                        numbers(&run.y_offsets),
+                        run.clusters
+                            .iter()
+                            .map(|cluster| format!(
+                                "{}:{}>{}:{}",
+                                cluster.glyph_start,
+                                cluster.glyph_end,
+                                cluster.char_start,
+                                cluster.char_end
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
+                    _ => return,
+                };
+                lines.push(format!("page={page_index} paint={paint_index} {body}"));
+                paint_index += 1;
+            });
+        }
+        lines.join("\n")
+    }
+
+    pub(super) fn digest(text: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(text.as_bytes());
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn mixed_script_page_matches_the_pinned_geometry_and_reading_order() {
+        let mut document = mixed_script_document();
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic mixed-script layout");
+        assert_eq!(result.layout.pages.len(), 1, "the fixture is one page");
+
+        let rich = rich_runs(&result);
+        let legacy = legacy_runs(&result);
+        assert!(!rich.is_empty(), "the complex scripts reach the shaper");
+
+        // Reading order and identity are asserted one property at a time, so
+        // a failure names the property that broke rather than only reporting
+        // that a hash moved.
+        //
+        // The Latin paragraph has no complex script, so it stays on the
+        // legacy path, which is correct and is asserted separately below.
+        for (script, family) in [
+            (TextScript::Arabic, "Noto Sans Arabic"),
+            (TextScript::Hebrew, "Noto Sans Hebrew"),
+            (TextScript::Hangul, "Noto Sans KR"),
+            (TextScript::Kana, "Noto Sans JP"),
+            (TextScript::Han, "Noto Sans JP"),
+        ] {
+            let script_runs = rich
+                .iter()
+                .filter(|run| run.script == script)
+                .collect::<Vec<_>>();
+            assert!(
+                !script_runs.is_empty(),
+                "{script:?} must reach the page with its own script identity"
+            );
+            for run in &script_runs {
+                assert!(run.is_valid(), "{script:?} run is a complete rich run");
+                assert_eq!(
+                    family_of(&result, run.font_id),
+                    family,
+                    "{script:?} must resolve through its own w:rFonts slot"
+                );
+            }
+        }
+
+        // Logical order is exact, not merely contained. Each source paragraph
+        // reassembles to its whole fixture string when its rich runs are read
+        // back in logical index order, so a dropped or reordered span fails
+        // here and names the paragraph.
+        let mut by_paragraph = std::collections::BTreeMap::<u32, Vec<_>>::new();
+        for run in &rich {
+            let node = run
+                .source
+                .unwrap_or_else(|| panic!("rich run {:?} retains provenance", run.logical_text));
+            by_paragraph.entry(node.node.get()).or_default().push(run);
+        }
+        let mut reassembled = by_paragraph
+            .into_values()
+            .map(|mut runs| {
+                runs.sort_by_key(|run| run.logical_index);
+                runs.iter()
+                    .map(|run| run.logical_text.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        reassembled.sort();
+        let mut expected = vec![
+            ARABIC.to_owned(),
+            HEBREW.to_owned(),
+            KOREAN.to_owned(),
+            JAPANESE.to_owned(),
+            KANJI.to_owned(),
+        ];
+        expected.sort();
+        assert_eq!(
+            reassembled, expected,
+            "every complex-script paragraph reassembles to its whole fixture string"
+        );
+
+        // The Latin paragraph stays on the legacy path with its own family.
+        let latin = legacy
+            .iter()
+            .filter(|run| !run.text.trim().is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            latin
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>(),
+            LATIN,
+            "the Latin paragraph keeps its text and its order"
+        );
+        for run in &latin {
+            assert_eq!(family_of(&result, run.font_id), "Carlito");
+        }
+
+        // The two right-to-left paragraphs carry a right-to-left direction and
+        // an odd bidi embedding level, which is what reordering acts on.
+        for script in [TextScript::Arabic, TextScript::Hebrew] {
+            for run in rich.iter().filter(|run| run.script == script) {
+                assert_eq!(
+                    run.direction,
+                    TextDirection::RightToLeft,
+                    "{script:?} paints right to left"
+                );
+                assert_eq!(
+                    run.bidi_level % 2,
+                    1,
+                    "{script:?} carries an odd bidi embedding level"
+                );
+            }
+        }
+
+        // The East Asian paragraphs must not have been swept into the
+        // right-to-left base direction.
+        for script in [TextScript::Hangul, TextScript::Kana, TextScript::Han] {
+            for run in rich.iter().filter(|run| run.script == script) {
+                assert_eq!(
+                    run.bidi_level % 2,
+                    0,
+                    "{script:?} keeps an even bidi embedding level"
+                );
+            }
+        }
+
+        // Reordering is a painting concern. The saved bytes stay logical.
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let saved = reopened
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>();
+        assert_eq!(saved, vec![LATIN, ARABIC, HEBREW, KOREAN, JAPANESE, KANJI]);
+
+        let geometry = canonical_geometry(&result);
+        assert_eq!(
+            digest(&geometry),
+            MIXED_SCRIPT_GEOMETRY_DIGEST,
+            "mixed-script page geometry moved:\n{geometry}"
+        );
+    }
+}
+
+/// F-266b, ruby phonetic guides and East Asian emphasis marks.
+///
+/// The gate is a recorded geometry digest over a deterministic page carrying
+/// both, taken with the same canonical serialisation F-266a records. It uses
+/// no rasteriser and no external oracle, because what is under test is glyph
+/// identity, placement and painted order, all of which the layout result
+/// already states exactly.
+///
+/// F-266a's digest is asserted unmoved in the same module, so this story
+/// cannot quietly move its sibling's baseline while recording its own.
+mod f266b_ruby_and_emphasis_typography {
+    use super::f266a_mixed_script_typography::{
+        MIXED_SCRIPT_GEOMETRY_DIGEST, canonical_geometry, digest, mixed_script_document,
+    };
+    use super::*;
+    use rdocx::{RunFontSlot, ST_Em, ST_RubyAlign};
+    use rdocx_oxml::units::HalfPoint;
+
+    const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    const RUBY_BASE: &str = "漢字";
+    const RUBY_TEXT: &str = "かんじ";
+    const EMPHASIS_JAPANESE: &str = "強調";
+    const EMPHASIS_KOREAN: &str = "강조";
+    const EMPHASIS_LATIN: &str = "marked words";
+    const LATIN_CONTROL: &str = "Ruby and emphasis page";
+
+    /// The recorded geometry of the ruby and emphasis page.
+    ///
+    /// Re-record only with a stated reason. It covers every painted run on
+    /// the page in paint order, including the runs inside the annotation
+    /// groups, because the canonical serialisation walks the element tree
+    /// rather than the top level. The serialisation is the one F-266a
+    /// documents, and it is host-stable for the same reasons.
+    pub(super) const RUBY_AND_EMPHASIS_GEOMETRY_DIGEST: &str =
+        "b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6";
+
+    /// Wrap producer body XML in a package a `Document` can open.
+    fn producer_document(body: &str) -> Vec<u8> {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body>{body}<w:sectPr/></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
+
+    /// The saved `document.xml` with the writer's layout indentation removed,
+    /// so an assertion states element order rather than pretty printing.
+    fn saved_document_xml(bytes: &[u8]) -> String {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let mut compact = String::with_capacity(xml.len());
+        let mut in_tag = false;
+        let mut pending = String::new();
+        for character in xml.chars() {
+            match character {
+                '<' => {
+                    if !pending.trim().is_empty() {
+                        compact.push_str(&pending);
+                    }
+                    pending.clear();
+                    in_tag = true;
+                    compact.push('<');
+                }
+                '>' => {
+                    in_tag = false;
+                    compact.push('>');
+                }
+                _ if in_tag => compact.push(character),
+                _ => pending.push(character),
+            }
+        }
+        compact.push_str(&pending);
+        compact
+    }
+
+    /// Give one run the East Asian font slot a bundled subset face covers.
+    fn east_asian_run(properties: &mut Option<CT_RPr>, family: &str, language: &str) {
+        let rpr = properties.get_or_insert_with(CT_RPr::default);
+        rpr.font_east_asia = Some(family.to_owned());
+        rpr.language_east_asia = Some(language.to_owned());
+    }
+
+    /// One page carrying ruby-annotated Japanese, emphasis-marked Japanese
+    /// and Korean, and a Latin control, all authored through the facade.
+    pub(super) fn ruby_and_emphasis_document() -> Document {
+        let mut document = Document::new();
+
+        let mut latin = document.add_paragraph("");
+        latin
+            .add_run(LATIN_CONTROL)
+            .font("Carlito")
+            .language("en-US");
+
+        let mut annotated = document.add_paragraph("");
+        {
+            let index = annotated.add_ruby(RUBY_BASE, RUBY_TEXT);
+            {
+                let mut base = annotated
+                    .run_mut(0)
+                    .expect("the base run is a paragraph run");
+                base.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+                base.set_language_east_asia_value(Some("ja-JP"));
+            }
+            let ruby = annotated.ruby_mut(index).expect("the ruby was just added");
+            east_asian_run(&mut ruby.ruby_text[0].properties, "Noto Sans JP", "ja-JP");
+            ruby.properties = Some(rdocx::CT_RubyPr {
+                align: Some(ST_RubyAlign::DistributeSpace),
+                hps: Some(HalfPoint(10)),
+                hps_raise: Some(HalfPoint(24)),
+                hps_base_text: Some(HalfPoint(22)),
+                language: Some("ja-JP".to_owned()),
+                dirty: None,
+                raw_xml: Vec::new(),
+            });
+        }
+
+        for (text, family, language, mark) in [
+            (EMPHASIS_JAPANESE, "Noto Sans JP", "ja-JP", ST_Em::Dot),
+            (EMPHASIS_KOREAN, "Noto Sans KR", "ko-KR", ST_Em::Circle),
+        ] {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run(text);
+            run.set_slot_font(RunFontSlot::EastAsia, Some(family));
+            run.set_language_east_asia_value(Some(language));
+            run.set_emphasis_mark_value(Some(mark));
+        }
+
+        let mut latin_marked = document.add_paragraph("");
+        {
+            let mut run = latin_marked.add_run(EMPHASIS_LATIN);
+            run.set_font("Carlito");
+            run.set_emphasis_mark_value(Some(ST_Em::UnderDot));
+        }
+
+        document
+    }
+
+    /// **The test gate.** The ruby and emphasis page keeps its recorded
+    /// geometry and its reading order, and F-266a's page is unmoved.
+    #[test]
+    fn ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order() {
+        let mut document = ruby_and_emphasis_document();
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic ruby and emphasis layout");
+        assert_eq!(result.layout.pages.len(), 1, "the fixture is one page");
+
+        // Every painted string on the page, in paint order.
+        let mut painted = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                oxml_layout::PositionedElement::Text(run) if !run.text.trim().is_empty() => {
+                    painted.push(run.text.clone());
+                }
+                oxml_layout::PositionedElement::MultilingualText(run)
+                    if !run.logical_text.trim().is_empty() =>
+                {
+                    painted.push(run.logical_text.clone());
+                }
+                _ => {}
+            });
+        }
+
+        // The base line and the phonetic line both reach the page, and the
+        // base comes first because it is the content and the annotation is
+        // painted over it.
+        let base_at = painted
+            .iter()
+            .position(|text| text == RUBY_BASE)
+            .expect("the ruby base line is painted");
+        let phonetic_at = painted
+            .iter()
+            .position(|text| text == RUBY_TEXT)
+            .expect("the ruby phonetic line is painted");
+        assert!(
+            base_at < phonetic_at,
+            "the base line is painted before its annotation: {painted:?}"
+        );
+
+        // Both emphasis-marked strings reach the page with their marks.
+        for text in [EMPHASIS_JAPANESE, EMPHASIS_KOREAN] {
+            assert!(
+                painted.iter().any(|painted| painted == text),
+                "{text} reaches the page: {painted:?}"
+            );
+        }
+        let marks = painted.iter().filter(|text| *text == "\u{2022}").count();
+        assert_eq!(
+            marks,
+            EMPHASIS_JAPANESE.chars().count()
+                + EMPHASIS_LATIN
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .count(),
+            "one solid dot per non-space base character of the two dot-marked runs"
+        );
+        assert_eq!(
+            painted.iter().filter(|text| *text == "\u{25CB}").count(),
+            EMPHASIS_KOREAN.chars().count(),
+            "one open circle per Korean base character"
+        );
+
+        // The phonetic line is an annotation, so the saved bytes and every
+        // text projection carry the base text and nothing else.
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let saved = reopened
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            saved,
+            vec![
+                LATIN_CONTROL,
+                RUBY_BASE,
+                EMPHASIS_JAPANESE,
+                EMPHASIS_KOREAN,
+                EMPHASIS_LATIN,
+            ]
+        );
+
+        let geometry = canonical_geometry(&result);
+        assert_eq!(
+            digest(&geometry),
+            RUBY_AND_EMPHASIS_GEOMETRY_DIGEST,
+            "ruby and emphasis page geometry moved:\n{geometry}"
+        );
+
+        // F-266a's page is measured again here so this story cannot move its
+        // sibling's recorded baseline without failing.
+        let sibling = mixed_script_document()
+            .layout_deterministic()
+            .expect("deterministic mixed-script layout");
+        assert_eq!(
+            digest(&canonical_geometry(&sibling)),
+            MIXED_SCRIPT_GEOMETRY_DIGEST,
+            "F-266a's recorded geometry moved"
+        );
+    }
+
+    /// Every `ST_Em` value authors, saves and reopens typed, and `w:em` lands
+    /// in its `EG_RPrBase` sequence slot between `w:cs` and
+    /// `w:eastAsianLayout`.
+    #[test]
+    fn emphasis_marks_reopen_as_modeled_state() {
+        let marks = [
+            ST_Em::None,
+            ST_Em::Dot,
+            ST_Em::Comma,
+            ST_Em::Circle,
+            ST_Em::UnderDot,
+        ];
+        let mut document = Document::new();
+        for mark in &marks {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("marked");
+            run.set_complex_script_value(Some(true));
+            run.set_emphasis_mark_value(Some(mark.clone()));
+            run.set_east_asian_layout_value(Some(rdocx::CT_EastAsianLayout {
+                vert: Some(true),
+                ..Default::default()
+            }));
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let xml = saved_document_xml(&saved);
+        let cs = xml.find("<w:cs/>").expect("w:cs is written");
+        let em = xml
+            .find(r#"<w:em w:val="none"/>"#)
+            .expect("w:em is written");
+        let layout = xml
+            .find("<w:eastAsianLayout")
+            .expect("w:eastAsianLayout is written");
+        assert!(
+            cs < em && em < layout,
+            "w:em sits between w:cs and w:eastAsianLayout: {xml}"
+        );
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let reopened_marks = paragraphs
+            .iter()
+            .map(|paragraph| {
+                paragraph
+                    .runs()
+                    .next()
+                    .unwrap()
+                    .emphasis_mark()
+                    .unwrap()
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reopened_marks, marks);
+    }
+
+    /// A producer `w:em` naming a token outside the ECMA-376 inventory is
+    /// kept rather than normalised away.
+    #[test]
+    fn a_producer_emphasis_mark_with_unknown_attributes_is_retained_verbatim() {
+        let source = producer_document(concat!(
+            r#"<w:p><w:r><w:rPr><w:em w:val="producerMark"/></w:rPr>"#,
+            r#"<w:t>marked</w:t></w:r></w:p>"#,
+        ));
+        let mut document = Document::from_bytes(&source).unwrap();
+        let saved = document.to_bytes().unwrap();
+        assert!(
+            saved_document_xml(&saved).contains(r#"<w:em w:val="producerMark"/>"#),
+            "the producer token survives the round trip"
+        );
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        assert_eq!(
+            paragraphs[0].runs().next().unwrap().emphasis_mark(),
+            Some(&ST_Em::Other("producerMark".to_owned()))
+        );
+    }
+
+    /// `w:ruby` round-trips typed, in `xsd:sequence` order, and a prefix
+    /// aliased producer ruby writes back with the fixed `w:` prefix.
+    #[test]
+    fn ruby_authors_saves_and_reopens_with_base_and_phonetic_runs() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            paragraph.add_run("before ");
+            let index = paragraph.add_ruby(RUBY_BASE, RUBY_TEXT);
+            paragraph.ruby_mut(index).unwrap().properties = Some(rdocx::CT_RubyPr {
+                align: Some(ST_RubyAlign::Center),
+                hps: Some(HalfPoint(10)),
+                hps_raise: Some(HalfPoint(22)),
+                hps_base_text: Some(HalfPoint(21)),
+                language: Some("ja-JP".to_owned()),
+                dirty: Some(false),
+                raw_xml: Vec::new(),
+            });
+            paragraph.add_run(" after");
+        }
+        let saved = document.to_bytes().unwrap();
+        let xml = saved_document_xml(&saved);
+        assert!(
+            xml.contains(concat!(
+                r#"<w:ruby><w:rubyPr><w:rubyAlign w:val="center"/><w:hps w:val="10"/>"#,
+                r#"<w:hpsRaise w:val="22"/><w:hpsBaseText w:val="21"/><w:lid w:val="ja-JP"/>"#,
+                r#"<w:dirty w:val="false"/></w:rubyPr><w:rt><w:r><w:t>かんじ</w:t></w:r></w:rt>"#,
+                r#"<w:rubyBase><w:r><w:t>漢字</w:t></w:r></w:rubyBase></w:ruby>"#,
+            )),
+            "the ruby writes in schema order with the fixed prefix: {xml}"
+        );
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let ruby = paragraphs[0].ruby(0).expect("the ruby reopens typed");
+        assert_eq!(ruby.ruby_text.len(), 1);
+        assert_eq!(ruby.ruby_text[0].text(), RUBY_TEXT);
+        assert_eq!(ruby.base_range(), 1..2);
+        assert_eq!(
+            ruby.properties.as_ref().and_then(|p| p.hps_raise),
+            Some(HalfPoint(22))
+        );
+        assert_eq!(paragraphs[0].text(), format!("before {RUBY_BASE} after"));
+
+        // The same ruby behind a producer alias reads through that alias and
+        // writes back with the fixed `w:` prefix.
+        let aliased = producer_document(concat!(
+            r#"<w:p><q:ruby xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+            r#"<q:rt><q:r><q:t>かんじ</q:t></q:r></q:rt>"#,
+            r#"<q:rubyBase><q:r><q:t>漢字</q:t></q:r></q:rubyBase></q:ruby></w:p>"#,
+        ));
+        let mut document = Document::from_bytes(&aliased).unwrap();
+        let xml = saved_document_xml(&document.to_bytes().unwrap());
+        assert!(
+            xml.contains(
+                r#"<w:ruby><w:rt><w:r><w:t>かんじ</w:t></w:r></w:rt><w:rubyBase><w:r><w:t>漢字</w:t></w:r></w:rubyBase></w:ruby>"#
+            ),
+            "an aliased producer ruby writes back with the fixed prefix: {xml}"
+        );
+    }
+
+    /// An unmodelled `w:rubyPr` child is preserved rather than dropped.
+    #[test]
+    fn unmodelled_ruby_properties_survive_a_noop_save() {
+        let source = producer_document(concat!(
+            r#"<w:p><w:ruby><w:rubyPr><w:hps w:val="10"/>"#,
+            r#"<w:producerOnly w:val="1"/></w:rubyPr>"#,
+            r#"<w:rt><w:r><w:t>かんじ</w:t></w:r></w:rt>"#,
+            r#"<w:rubyBase><w:r><w:t>漢字</w:t></w:r></w:rubyBase></w:ruby></w:p>"#,
+        ));
+        let mut document = Document::from_bytes(&source).unwrap();
+        let xml = saved_document_xml(&document.to_bytes().unwrap());
+        assert!(
+            xml.contains(r#"<w:producerOnly w:val="1"/>"#),
+            "the unmodelled property child is preserved: {xml}"
+        );
+    }
+
+    /// A ruby line claims the raise and the phonetic size as real height, so
+    /// the paginator sees the taller line and breaks the page on it.
+    #[test]
+    fn a_ruby_line_is_taller_and_paginates_on_its_real_height() {
+        fn page_count(with_ruby: bool, paragraphs: usize) -> usize {
+            let mut document = Document::new();
+            for _ in 0..paragraphs {
+                let mut paragraph = document.add_paragraph("");
+                if with_ruby {
+                    let index = paragraph.add_ruby(RUBY_BASE, RUBY_TEXT);
+                    paragraph.ruby_mut(index).unwrap().properties = Some(rdocx::CT_RubyPr {
+                        hps: Some(HalfPoint(22)),
+                        hps_raise: Some(HalfPoint(120)),
+                        ..Default::default()
+                    });
+                } else {
+                    paragraph.add_run(RUBY_BASE);
+                }
+            }
+            document
+                .layout_deterministic()
+                .expect("deterministic layout")
+                .layout
+                .pages
+                .len()
+        }
+
+        // The plain paragraphs fit one page. The same count with a 60 point
+        // raise does not, which is only true if the raise reached the line.
+        assert_eq!(page_count(false, 30), 1);
+        assert!(
+            page_count(true, 30) > 1,
+            "the raise and the phonetic size reach the line height"
+        );
+    }
+
+    /// A mark codepoint the resolved font cannot draw records a diagnostic
+    /// and paints nothing, leaving the base text untouched.
+    #[test]
+    fn an_undrawable_emphasis_mark_records_a_diagnostic_and_paints_nothing() {
+        fn painted(mark: Option<ST_Em>) -> (Vec<String>, Vec<String>) {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("");
+                let mut run = paragraph.add_run(EMPHASIS_LATIN);
+                run.set_font("Carlito");
+                run.set_emphasis_mark_value(mark);
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic layout");
+            let mut text = Vec::new();
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let oxml_layout::PositionedElement::Text(run) = element
+                        && !run.text.trim().is_empty()
+                    {
+                        text.push(run.text.clone());
+                    }
+                });
+            }
+            (
+                text,
+                result
+                    .layout
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.message.clone())
+                    .collect(),
+            )
+        }
+
+        let (plain, plain_diagnostics) = painted(None);
+        assert!(plain_diagnostics.is_empty(), "{plain_diagnostics:?}");
+        let (marked, diagnostics) = painted(Some(ST_Em::Comma));
+        assert_eq!(
+            marked, plain,
+            "an undrawable mark paints nothing and leaves the base text alone"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|message| message.contains("emphasis mark comma")),
+            "the undrawable mark is diagnosed: {diagnostics:?}"
+        );
+    }
+}
+
+mod floating_table_placement_and_wrap {
+    use rdocx::table::{
+        TableAnchor, TableFloatPosition, TableFloatX, TableFloatY, TableTextDistance,
+    };
+    use rdocx::{Document, Length};
+
+    /// Letter page, one inch margins, which is what `Document::new` produces.
+    const MARGIN_LEFT: f64 = 72.0;
+    const MARGIN_TOP: f64 = 72.0;
+
+    /// A float position with the four from-text distances every case shares.
+    ///
+    /// 180 twips is 9 points and 80 twips is 4 points, so the reserved band is
+    /// readable in the pinned geometry rather than an artefact of rounding.
+    fn float_at(
+        anchor_h: TableAnchor,
+        anchor_v: TableAnchor,
+        x: i32,
+        y: i32,
+    ) -> TableFloatPosition {
+        TableFloatPosition {
+            horizontal_anchor: anchor_h,
+            vertical_anchor: anchor_v,
+            horizontal: TableFloatX::Offset(Length::twips(x)),
+            vertical: TableFloatY::Offset(Length::twips(y)),
+            distance_from_text: TableTextDistance {
+                top: Length::twips(80),
+                right: Length::twips(180),
+                bottom: Length::twips(80),
+                left: Length::twips(180),
+            },
+        }
+    }
+
+    /// A two by two table 100 points wide, labelled so its cells are
+    /// distinguishable from body text in the placed elements.
+    fn add_float(document: &mut Document, label: &str, position: Option<TableFloatPosition>) {
+        let mut table = document.add_table(2, 2);
+        table.set_column_width(0, Length::twips(1000));
+        table.set_column_width(1, Length::twips(1000));
+        table.set_width(Length::twips(2000));
+        table
+            .set_float_position(position)
+            .expect("float position is valid");
+        for row in 0..2 {
+            for column in 0..2 {
+                table
+                    .cell(row, column)
+                    .expect("cell exists")
+                    .set_text(&format!("{label}{row}{column}"));
+            }
+        }
+    }
+
+    fn prose(document: &mut Document, from: usize, to: usize) {
+        for index in from..to {
+            document.add_paragraph(&format!(
+                "Body line {index:02} with enough words to wrap across the measure of the page and show the reservation."
+            ));
+        }
+    }
+
+    fn round(value: f64) -> f64 {
+        (value * 100.0).round() / 100.0
+    }
+
+    /// Where one direct body item landed, rounded, as (page, x, y, w, h).
+    fn placed(
+        result: &rdocx_layout::WordLayoutResult,
+        body_index: usize,
+    ) -> Vec<(usize, f64, f64, f64, f64)> {
+        result
+            .body_layout_fragments(body_index)
+            .expect("body index is in range")
+            .iter()
+            .map(|fragment| {
+                (
+                    fragment.physical_page,
+                    round(fragment.x),
+                    round(fragment.y),
+                    round(fragment.width),
+                    round(fragment.height),
+                )
+            })
+            .collect()
+    }
+
+    /// Body line boxes of one page as (baseline, left edge, right edge).
+    ///
+    /// A float's own cell text is excluded by its label, so what remains is the
+    /// prose that had to flow around it.
+    fn body_line_boxes(page: &oxml_layout::PageFrame) -> Vec<(f64, f64, f64)> {
+        let mut lines: Vec<(f64, f64, f64)> = Vec::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let oxml_layout::PositionedElement::Text(run) = element else {
+                return;
+            };
+            let is_cell_label = run.text.len() == 3
+                && run.text.starts_with(['M', 'P', 'T'])
+                && run.text[1..].chars().all(|glyph| glyph.is_ascii_digit());
+            if run.text.trim().is_empty() || is_cell_label {
+                return;
+            }
+            let baseline = round(run.origin.y);
+            let left = run.origin.x;
+            let right = run.origin.x + run.advances.iter().sum::<f64>();
+            match lines.iter_mut().find(|line| line.0 == baseline) {
+                Some(line) => {
+                    line.1 = line.1.min(left);
+                    line.2 = line.2.max(right);
+                }
+                None => lines.push((baseline, left, right)),
+            }
+        });
+        lines.sort_by(|left, right| left.0.total_cmp(&right.0));
+        lines
+            .into_iter()
+            .map(|(baseline, left, right)| (baseline, round(left), round(right)))
+            .collect()
+    }
+
+    /// The body line boxes whose baseline falls inside one float's keep-out
+    /// band, which is exactly the text that float pushed aside.
+    fn boxes_in_band(page: &oxml_layout::PageFrame, top: f64, bottom: f64) -> Vec<(f64, f64, f64)> {
+        body_line_boxes(page)
+            .into_iter()
+            .filter(|(baseline, ..)| *baseline > top && *baseline < bottom)
+            .collect()
+    }
+
+    /// The reviewed geometry of a page carrying a margin-anchored float, a
+    /// page-anchored float and a text-anchored float.
+    ///
+    /// Recorded in deterministic font mode. The margin float and the text float
+    /// sit on the left, so the lines beside them start at 181 points, which is
+    /// the left margin plus the 100 point table plus its 9 point right
+    /// clearance. The page float sits on the right, so the lines beside it keep
+    /// their left edge and lose their right.
+    #[test]
+    fn floating_tables_match_reviewed_word_page_geometry_and_pagination() {
+        let mut document = Document::new();
+        prose(&mut document, 0, 4);
+        add_float(
+            &mut document,
+            "M",
+            Some(float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0)),
+        );
+        prose(&mut document, 4, 10);
+        add_float(
+            &mut document,
+            "T",
+            Some(float_at(TableAnchor::Text, TableAnchor::Text, 0, 0)),
+        );
+        prose(&mut document, 10, 20);
+        add_float(
+            &mut document,
+            "P",
+            Some(float_at(TableAnchor::Page, TableAnchor::Page, 7200, 9000)),
+        );
+        prose(&mut document, 20, 30);
+
+        let result = document.layout_deterministic().expect("document lays out");
+        assert_eq!(result.layout.pages.len(), 2, "page count moved");
+
+        // Each float sits whole on one page, at the rect its anchor resolves
+        // to, and none of them advanced the flow.
+        assert_eq!(placed(&result, 4), [(1, 72.0, 72.0, 100.0, 39.74)]);
+        assert_eq!(placed(&result, 11), [(1, 72.0, 294.45, 100.0, 39.74)]);
+        assert_eq!(placed(&result, 22), [(1, 360.0, 450.0, 100.0, 39.74)]);
+
+        let first = &result.layout.pages[0];
+        assert_eq!(
+            boxes_in_band(first, 68.0, 115.75),
+            [
+                (80.25, 181.0, 525.39),
+                (92.12, 181.0, 277.95),
+                (111.99, 181.0, 525.39),
+            ],
+            "margin-anchored float geometry moved"
+        );
+        assert_eq!(
+            boxes_in_band(first, 290.45, 338.2),
+            [
+                (302.7, 181.0, 525.39),
+                (314.57, 181.0, 277.95),
+                (334.44, 181.0, 525.39),
+            ],
+            "text-anchored float geometry moved"
+        );
+        assert_eq!(
+            boxes_in_band(first, 446.0, 493.75),
+            [
+                (457.54, 72.0, 241.43),
+                (477.41, 72.0, 343.91),
+                (489.28, 72.0, 241.43),
+            ],
+            "page-anchored float geometry moved"
+        );
+    }
+
+    /// `w:horzAnchor` and `w:vertAnchor` name three frames, and each resolves
+    /// to a different origin. Margin and text coincide horizontally, because
+    /// the text column and the margin start at the same edge, so the vertical
+    /// frame is what separates them.
+    #[test]
+    fn tblp_pr_anchors_map_onto_the_drawing_anchor_frames() {
+        let origin_for = |anchor: TableAnchor| {
+            let mut document = Document::new();
+            document.add_paragraph("One line above the float.");
+            add_float(&mut document, "M", Some(float_at(anchor, anchor, 0, 0)));
+            let result = document.layout_deterministic().expect("document lays out");
+            let fragments = placed(&result, 1);
+            assert_eq!(fragments.len(), 1, "a float occupies one page");
+            (fragments[0].1, fragments[0].2)
+        };
+
+        // The page frame starts at the physical page corner.
+        assert_eq!(origin_for(TableAnchor::Page), (0.0, 0.0));
+        // The margin frame starts at the top left of the text area.
+        assert_eq!(origin_for(TableAnchor::Margin), (MARGIN_LEFT, MARGIN_TOP));
+        // The text frame starts where the floating block itself landed, which
+        // is below the paragraph above it.
+        let (text_x, text_y) = origin_for(TableAnchor::Text);
+        assert_eq!(text_x, MARGIN_LEFT);
+        assert!(
+            text_y > MARGIN_TOP,
+            "a text anchor follows the flow, got {text_y}"
+        );
+
+        // `tblpYSpec="inline"` is how `w:tblpPr` spells "not floating", so the
+        // table keeps the flow position an inline table would have had.
+        let mut document = Document::new();
+        document.add_paragraph("One line above the float.");
+        let mut inline = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
+        inline.vertical = TableFloatY::Inline;
+        add_float(&mut document, "M", Some(inline));
+        let result = document.layout_deterministic().expect("document lays out");
+        assert_eq!(placed(&result, 1), [(1, MARGIN_LEFT, text_y, 100.0, 39.74)]);
+    }
+
+    /// `w:tblpPr` is a position, and a position leaves no room for `w:tblInd`
+    /// to contribute. An inline table with the same indent still takes it.
+    #[test]
+    fn a_floating_table_takes_its_origin_from_the_anchor_not_the_indent() {
+        let indented = |position: Option<TableFloatPosition>| {
+            let mut document = Document::new();
+            document.add_paragraph("One line above the table.");
+            {
+                let mut table = document.add_table(2, 2);
+                table.set_column_width(0, Length::twips(1000));
+                table.set_column_width(1, Length::twips(1000));
+                table.set_width(Length::twips(2000));
+                table.set_indent(Length::twips(1440));
+                table
+                    .set_float_position(position)
+                    .expect("float position is valid");
+            }
+            let result = document.layout_deterministic().expect("document lays out");
+            placed(&result, 1)[0].1
+        };
+
+        let float = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
+        assert_eq!(indented(Some(float)), MARGIN_LEFT);
+        assert_eq!(indented(None), MARGIN_LEFT + 72.0);
+    }
+}
+
+/// F-266c, the East Asian character grid and vertical text.
+///
+/// The gate is a recorded geometry digest over a deterministic page carrying a
+/// gridded Japanese section, a table with rotated and horizontal cells, and a
+/// combined run. It uses no rasteriser and no external oracle, because what is
+/// under test is glyph identity, placement, rotation and painted order, all of
+/// which the layout result already states exactly.
+///
+/// The serialisation this module records is F-266a's with the accumulated
+/// group transform added, because a rotation is invisible in a glyph run's own
+/// group-local origin and this story's whole subject is rotation.
+///
+/// Both sibling digests are asserted unmoved in the same module, so this story
+/// cannot quietly move F-266a's or F-266b's recorded baseline while recording
+/// its own.
+mod f266c_character_grid_and_vertical_text {
+    use super::f266a_mixed_script_typography::{
+        MIXED_SCRIPT_GEOMETRY_DIGEST, canonical_geometry, digest, mixed_script_document,
+    };
+    use super::f266b_ruby_and_emphasis_typography::{
+        RUBY_AND_EMPHASIS_GEOMETRY_DIGEST, ruby_and_emphasis_document,
+    };
+    use super::*;
+    use oxml_layout::{PositionedElement, Transform};
+    use rdocx::table::CellTextDirection;
+    use rdocx::{CT_DocGrid, CT_EastAsianLayout, RunFontSlot, ST_DocGrid, ST_Em};
+    use rdocx_oxml::units::Twips;
+
+    const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    const GRIDDED_JAPANESE: &str = "こんにちは世界";
+    const COMBINED: &str = "世界";
+    const VERTICAL_CELL: &str = "縦書き";
+    const HORIZONTAL_CELL: &str = "Across";
+    const LATIN_CONTROL: &str = "Grid and vertical page";
+    const ROTATED_RUN: &str = "縦書き";
+    /// One character of `ROTATED_RUN`. Shaping splits East Asian text at every
+    /// character, so a whole-string match would find nothing.
+    const ROTATED_GLYPH: &str = "縦";
+
+    /// The recorded geometry of the gridded and vertical page.
+    ///
+    /// Re-record only with a stated reason. It covers every painted run on the
+    /// page in paint order with the properties F-266a's serialisation records,
+    /// and the six coefficients of the transform that maps the run into page
+    /// space, which is what makes a lost or altered rotation fail here.
+    const GRID_AND_VERTICAL_GEOMETRY_DIGEST: &str =
+        "cb3043d53719f5dd9e16b61a001aff8c8827c19f96536972d4a17b9a626d2164";
+
+    /// One coordinate, with the sign of zero normalised, as F-266a documents.
+    fn number(value: f64) -> String {
+        format!("{:.4}", if value == 0.0 { 0.0 } else { value })
+    }
+
+    /// F-266a's canonical serialisation, plus the transform each run carries.
+    fn canonical_rotated_geometry(result: &rdocx_layout::WordLayoutResult) -> String {
+        let mut lines = Vec::new();
+        for (page_index, page) in result.layout.pages.iter().enumerate() {
+            let mut paint_index = 0usize;
+            oxml_layout::walk(&page.elements, &mut |element, transform| {
+                let text = match element {
+                    PositionedElement::Text(run) => run.text.clone(),
+                    PositionedElement::MultilingualText(run) => run.logical_text.clone(),
+                    _ => return,
+                };
+                let origin = match element {
+                    PositionedElement::Text(run) => run.origin,
+                    PositionedElement::MultilingualText(run) => run.origin,
+                    _ => return,
+                };
+                lines.push(format!(
+                    "page={page_index} paint={paint_index} text={text} \
+                     origin={},{} transform={},{},{},{},{},{}",
+                    number(origin.x),
+                    number(origin.y),
+                    number(transform.a),
+                    number(transform.b),
+                    number(transform.c),
+                    number(transform.d),
+                    number(transform.e),
+                    number(transform.f),
+                ));
+                paint_index += 1;
+            });
+        }
+        lines.join("\n")
+    }
+
+    /// Every painted string on the page, in paint order.
+    fn painted(result: &rdocx_layout::WordLayoutResult) -> Vec<String> {
+        let mut painted = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                PositionedElement::Text(run) if !run.text.trim().is_empty() => {
+                    painted.push(run.text.clone());
+                }
+                PositionedElement::MultilingualText(run) if !run.logical_text.trim().is_empty() => {
+                    painted.push(run.logical_text.clone());
+                }
+                _ => {}
+            });
+        }
+        painted
+    }
+
+    /// The page-space x the painted run carrying `text` starts at.
+    ///
+    /// A run placed after another one starts where its predecessor's advance
+    /// ended, so this is how far the run before it reached along the line.
+    fn painted_origin_x(result: &rdocx_layout::WordLayoutResult, text: &str) -> f64 {
+        let mut found = None;
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, transform| {
+                let origin = match element {
+                    PositionedElement::Text(run) if run.text.contains(text) => run.origin,
+                    PositionedElement::MultilingualText(run) if run.logical_text.contains(text) => {
+                        run.origin
+                    }
+                    _ => return,
+                };
+                if found.is_none() {
+                    found = Some(transform.apply(origin).x);
+                }
+            });
+        }
+        found.unwrap_or_else(|| panic!("{text} reaches the page"))
+    }
+
+    /// The transform every painted run carrying `text` reached the page with.
+    fn transforms_for(result: &rdocx_layout::WordLayoutResult, text: &str) -> Vec<Transform> {
+        let mut found = Vec::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, transform| {
+                let matches = match element {
+                    PositionedElement::Text(run) => run.text.contains(text),
+                    PositionedElement::MultilingualText(run) => run.logical_text.contains(text),
+                    _ => false,
+                };
+                if matches {
+                    found.push(*transform);
+                }
+            });
+        }
+        found
+    }
+
+    /// Wrap producer body XML in a package a `Document` can open.
+    fn producer_body(body: &str) -> Vec<u8> {
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body>{body}<w:sectPr/></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
+
+    /// A `linesAndChars` grid, the type that puts both axes on the grid.
+    fn lines_and_chars_grid() -> CT_DocGrid {
+        CT_DocGrid {
+            grid_type: Some(ST_DocGrid::LinesAndChars),
+            line_pitch: Some(Twips(360)),
+            char_space: Some(120),
+            extra_attributes: Vec::new(),
+        }
+    }
+
+    /// One page holding a gridded Japanese section, a table with a rotated
+    /// cell on each side of a horizontal control, a combined run and a Latin
+    /// control, all authored through the public facade.
+    fn grid_and_vertical_document() -> Document {
+        let mut document = Document::new();
+
+        let mut latin = document.add_paragraph("");
+        latin
+            .add_run(LATIN_CONTROL)
+            .font("Carlito")
+            .language("en-US");
+
+        let mut japanese = document.add_paragraph("");
+        {
+            let mut run = japanese.add_run(GRIDDED_JAPANESE);
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+        }
+
+        let mut combined = document.add_paragraph("");
+        {
+            let mut run = combined.add_run(COMBINED);
+            run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+            run.set_language_east_asia_value(Some("ja-JP"));
+            run.set_east_asian_layout_value(Some(CT_EastAsianLayout {
+                combine: Some(true),
+                combine_brackets: Some("round".to_owned()),
+                ..CT_EastAsianLayout::default()
+            }));
+        }
+
+        {
+            let mut table = document.add_table(1, 3);
+            for (column, direction, text) in [
+                (0, CellTextDirection::TopToBottomRightToLeft, VERTICAL_CELL),
+                (
+                    1,
+                    CellTextDirection::LeftToRightTopToBottom,
+                    HORIZONTAL_CELL,
+                ),
+                (2, CellTextDirection::BottomToTopLeftToRight, VERTICAL_CELL),
+            ] {
+                let mut cell = table.cell(0, column).expect("authored cell");
+                cell.set_text_direction(Some(direction));
+                cell.set_text(text);
+                let mut paragraph = cell.paragraph_mut(0).expect("cell paragraph");
+                let mut run = paragraph.run_mut(0).expect("cell run");
+                run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+                run.set_slot_font(RunFontSlot::Ascii, Some("Carlito"));
+            }
+        }
+
+        document
+            .section_mut(0)
+            .expect("final section")
+            .set_doc_grid(Some(lines_and_chars_grid()));
+
+        document
+    }
+
+    /// **The test gate.** The gridded and vertical page keeps its recorded
+    /// geometry and its reading order, and both siblings' pages are unmoved.
+    #[test]
+    fn grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order() {
+        let mut document = grid_and_vertical_document();
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic grid and vertical layout");
+        assert_eq!(result.layout.pages.len(), 1, "the fixture is one page");
+
+        // Shaping splits a run at every break opportunity, so containment is
+        // asserted over the whole painted page rather than one painted run.
+        let painted = painted(&result);
+        let whole = painted.concat();
+        for text in [LATIN_CONTROL, GRIDDED_JAPANESE, HORIZONTAL_CELL] {
+            assert!(whole.contains(text), "{text} reaches the page: {painted:?}");
+        }
+        assert_eq!(
+            whole.matches(VERTICAL_CELL).count(),
+            2,
+            "both rotated cells paint their text: {painted:?}"
+        );
+
+        // The rotated cells reach the page through a rotation, and the
+        // horizontal control does not. Shaping splits the vertical cell's
+        // text at every East Asian break opportunity, so the transforms are
+        // collected on one of its characters rather than the whole string.
+        let rotated = transforms_for(&result, "縦");
+        assert_eq!(
+            rotated.len(),
+            2,
+            "both rotated cells reach the page: {rotated:?}"
+        );
+        for transform in &rotated {
+            assert!(
+                !transform.is_identity(),
+                "a rotated cell carries a transform: {transform:?}"
+            );
+        }
+        let horizontal = transforms_for(&result, HORIZONTAL_CELL);
+        assert_eq!(horizontal.len(), 1, "the horizontal control paints once");
+        for transform in &horizontal {
+            assert!(
+                transform.is_identity(),
+                "the horizontal control keeps the untransformed path: {transform:?}"
+            );
+        }
+
+        // Rotation and combining are painting concerns. The saved bytes stay
+        // logical, and the cell text comes back in grid order.
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened
+                .paragraphs()
+                .iter()
+                .map(|paragraph| paragraph.text())
+                .collect::<Vec<_>>(),
+            vec![LATIN_CONTROL, GRIDDED_JAPANESE, COMBINED]
+        );
+        let tables = reopened.tables();
+        let table = tables.first().expect("the authored table");
+        assert_eq!(
+            (0..3)
+                .map(|column| table.cell(0, column).expect("cell").text())
+                .collect::<Vec<_>>(),
+            vec![VERTICAL_CELL, HORIZONTAL_CELL, VERTICAL_CELL]
+        );
+
+        let geometry = canonical_rotated_geometry(&result);
+        assert_eq!(
+            digest(&geometry),
+            GRID_AND_VERTICAL_GEOMETRY_DIGEST,
+            "grid and vertical page geometry moved:\n{geometry}"
+        );
+
+        // Both siblings' pages are measured again here, so this story cannot
+        // move either recorded baseline without failing.
+        let mixed = mixed_script_document()
+            .layout_deterministic()
+            .expect("deterministic mixed-script layout");
+        assert_eq!(
+            digest(&canonical_geometry(&mixed)),
+            MIXED_SCRIPT_GEOMETRY_DIGEST,
+            "F-266a's recorded geometry moved"
+        );
+        let ruby = ruby_and_emphasis_document()
+            .layout_deterministic()
+            .expect("deterministic ruby and emphasis layout");
+        assert_eq!(
+            digest(&canonical_geometry(&ruby)),
+            RUBY_AND_EMPHASIS_GEOMETRY_DIGEST,
+            "F-266b's recorded geometry moved"
+        );
+    }
+
+    /// `w:docGrid` authors, saves and reopens typed at its `w:sectPr` sequence
+    /// position, and the unrelated producer children stay byte for byte.
+    #[test]
+    fn doc_grid_reopens_on_its_section() {
+        for (grid_type, expected) in [
+            (ST_DocGrid::Default, "default"),
+            (ST_DocGrid::Lines, "lines"),
+            (ST_DocGrid::LinesAndChars, "linesAndChars"),
+            (ST_DocGrid::SnapToChars, "snapToChars"),
+        ] {
+            let mut document = Document::new();
+            document.add_paragraph("body");
+            document
+                .section_mut(0)
+                .expect("final section")
+                .set_doc_grid(Some(CT_DocGrid {
+                    grid_type: Some(grid_type),
+                    line_pitch: Some(Twips(312)),
+                    char_space: Some(179),
+                    extra_attributes: Vec::new(),
+                }));
+
+            let bytes = document.to_bytes().unwrap();
+            let reopened = Document::from_bytes(&bytes).unwrap();
+            let grid = reopened
+                .sections()
+                .next()
+                .unwrap()
+                .doc_grid()
+                .expect("the grid reopens typed")
+                .clone();
+            assert_eq!(grid.grid_type, Some(grid_type));
+            assert_eq!(grid.line_pitch, Some(Twips(312)));
+            assert_eq!(grid.char_space, Some(179));
+
+            let xml = String::from_utf8(
+                OpcPackage::from_reader(std::io::Cursor::new(&bytes))
+                    .unwrap()
+                    .get_part("/word/document.xml")
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(
+                xml.contains(&format!(
+                    "<w:docGrid w:type=\"{expected}\" w:linePitch=\"312\" w:charSpace=\"179\"/>"
+                )),
+                "the fixed `w:` prefix and the attribute order are written: {xml}"
+            );
+            let grid_at = xml.find("<w:docGrid").expect("w:docGrid is written");
+            let sect_end = xml.find("</w:sectPr>").expect("the section closes");
+            assert!(grid_at < sect_end, "w:docGrid sits inside w:sectPr");
+        }
+    }
+
+    /// The whole `w:docGrid` sequence position, including the producer
+    /// children that share its slot, is preserved byte for byte.
+    #[test]
+    fn an_unmodelled_doc_grid_attribute_survives_a_noop_save() {
+        let sect_pr = concat!(
+            "<w:sectPr>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:textDirection w:val=\"tbRl\"/>",
+            "<w:bidi w:val=\"0\"/>",
+            "<w:rtlGutter w:val=\"0\"/>",
+            "<w:docGrid xmlns:x=\"urn:producer\" x:kept=\"grid\" ",
+            "w:type=\"linesAndChars\" w:linePitch=\"360\" w:charSpace=\"120\"/>",
+            "<w:printerSettings r:id=\"rIdPrinter\" ",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/>",
+            "</w:sectPr>",
+        );
+        let source = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p>{sect_pr}</w:body></w:document>"#
+        );
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/document.xml", source.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+
+        let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+        let grid = document
+            .sections()
+            .next()
+            .unwrap()
+            .doc_grid()
+            .expect("the grid is typed")
+            .clone();
+        assert_eq!(grid.grid_type, Some(ST_DocGrid::LinesAndChars));
+        assert_eq!(grid.line_pitch, Some(Twips(360)));
+        assert_eq!(grid.char_space, Some(120));
+        assert_eq!(
+            grid.extra_attributes,
+            vec![
+                ("xmlns:x".to_owned(), "urn:producer".to_owned()),
+                ("x:kept".to_owned(), "grid".to_owned()),
+            ],
+            "the producer attribute the model does not own is retained"
+        );
+
+        let saved = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        // The writer indents between children, so the comparison states child
+        // order and attribute bytes rather than pretty printing.
+        let saved = saved
+            .split('\n')
+            .map(str::trim_start)
+            .collect::<Vec<_>>()
+            .concat();
+        let start = saved.find("<w:sectPr>").expect("the section is written");
+        let end = saved.find("</w:sectPr>").expect("the section closes") + "</w:sectPr>".len();
+        assert_eq!(&saved[start..end], sect_pr);
+    }
+
+    /// `w:eastAsianLayout` round-trips typed, prefix-aliased on read and with
+    /// the fixed `w:` prefix on write.
+    #[test]
+    fn east_asian_layout_reopens_as_modeled_state() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("combined");
+            run.set_east_asian_layout_value(Some(CT_EastAsianLayout {
+                id: Some(7),
+                combine: Some(true),
+                combine_brackets: Some("square".to_owned()),
+                vert: Some(true),
+                vert_compress: Some(true),
+                extra_attributes: Vec::new(),
+            }));
+        }
+        let bytes = document.to_bytes().unwrap();
+        let xml = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(&bytes))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            xml.contains(concat!(
+                "<w:eastAsianLayout w:id=\"7\" w:combine=\"1\" ",
+                "w:combineBrackets=\"square\" w:vert=\"1\" w:vertCompress=\"1\"/>"
+            )),
+            "the fixed prefix and the attribute order are written: {xml}"
+        );
+
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraph = reopened.paragraphs().into_iter().next().unwrap();
+        let run = paragraph.runs().next().expect("the authored run");
+        let layout = run.east_asian_layout().expect("the layout reopens typed");
+        assert_eq!(layout.id, Some(7));
+        assert_eq!(layout.combine, Some(true));
+        assert_eq!(layout.combine_brackets.as_deref(), Some("square"));
+        assert_eq!(layout.vert, Some(true));
+        assert_eq!(layout.vert_compress, Some(true));
+    }
+
+    /// `w:vert` rotates the run inside its line, `w:vertCompress` narrows the
+    /// rotated run to one base advance, and `w:combine` wins when a run asks
+    /// for both. A run carrying `w:em` as well takes the East Asian layout,
+    /// because combining and rotating change the run's advance.
+    #[test]
+    fn a_vertical_run_rotates_inside_its_line_and_compresses_on_request() {
+        let build = |layout: CT_EastAsianLayout, mark: Option<ST_Em>| {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("");
+                {
+                    // A bundled East Asian face, because `w:vertCompress`
+                    // narrows a rotated run to one em and a face whose ascent
+                    // and descent already sum to one em could not show it.
+                    let mut run = paragraph.add_run(ROTATED_RUN);
+                    run.set_slot_font(RunFontSlot::EastAsia, Some("Noto Sans JP"));
+                    run.set_language_east_asia_value(Some("ja-JP"));
+                    run.set_east_asian_layout_value(Some(layout));
+                    if let Some(mark) = mark {
+                        run.set_emphasis_mark_value(Some(mark));
+                    }
+                }
+                // A trailing run starts where the run before it stopped, so
+                // its origin states the advance the East Asian layout took.
+                paragraph.add_run("END").set_font("Carlito");
+            }
+            document
+                .layout_deterministic()
+                .expect("deterministic rotated run layout")
+        };
+
+        // An ordinary run reaches the page untransformed.
+        let plain = build(CT_EastAsianLayout::default(), None);
+        let plain_transforms = transforms_for(&plain, ROTATED_GLYPH);
+        assert!(!plain_transforms.is_empty(), "the plain run paints");
+        assert!(
+            plain_transforms
+                .iter()
+                .all(|transform| transform.is_identity()),
+            "a run with neither combine nor vert keeps the ordinary path"
+        );
+        // A blank document is US Letter with one-inch margins, so the line
+        // starts at 72 points and the advance is measured from there.
+        const LINE_START: f64 = 72.0;
+        let plain_advance = painted_origin_x(&plain, "END") - LINE_START;
+
+        // `w:vert` rotates it 90 degrees within the line.
+        let rotated = build(
+            CT_EastAsianLayout {
+                vert: Some(true),
+                ..CT_EastAsianLayout::default()
+            },
+            None,
+        );
+        let transforms = transforms_for(&rotated, ROTATED_GLYPH);
+        assert_eq!(transforms.len(), 1, "the rotated run paints once");
+        assert!(
+            (transforms[0].b - 1.0).abs() < 1e-9 && (transforms[0].a).abs() < 1e-9,
+            "the run rotates 90 degrees inside its line: {:?}",
+            transforms[0]
+        );
+        // Rotated, the run takes its own line height along the line rather
+        // than its text length, so it advances far less than it did.
+        let rotated_advance = painted_origin_x(&rotated, "END") - LINE_START;
+        assert!(
+            rotated_advance < plain_advance / 2.0,
+            "the rotated run takes its line height along the line, \
+             {rotated_advance} against {plain_advance}"
+        );
+
+        // `w:vertCompress` narrows the rotated run further.
+        let compressed = build(
+            CT_EastAsianLayout {
+                vert: Some(true),
+                vert_compress: Some(true),
+                ..CT_EastAsianLayout::default()
+            },
+            None,
+        );
+        assert!(
+            painted_origin_x(&compressed, "END") - LINE_START < rotated_advance,
+            "vertCompress narrows the rotated run to one base advance"
+        );
+
+        // `w:combine` wins over `w:vert`, and both win over `w:em`.
+        let combined = build(
+            CT_EastAsianLayout {
+                combine: Some(true),
+                vert: Some(true),
+                combine_brackets: Some("round".to_owned()),
+                ..CT_EastAsianLayout::default()
+            },
+            Some(ST_Em::Dot),
+        );
+        let painted = painted(&combined).concat();
+        assert!(
+            painted.contains('('),
+            "the combined run draws its brackets, so combine won: {painted}"
+        );
+        assert!(
+            !painted.contains('\u{2022}'),
+            "the East Asian layout wins over the emphasis mark: {painted}"
+        );
+    }
+
+    /// The seven East Asian paragraph toggles F-264 left raw author, save,
+    /// reopen and remove through the public paragraph surface.
+    #[test]
+    fn the_east_asian_paragraph_toggles_reopen_as_modeled_state() {
+        let mut document = Document::new();
+        {
+            let mut paragraph = document.add_paragraph("gridded");
+            paragraph.set_kinsoku_value(Some(false));
+            paragraph.set_word_wrap_value(Some(false));
+            paragraph.set_overflow_punct_value(Some(false));
+            paragraph.set_top_line_punct_value(Some(true));
+            paragraph.set_auto_space_de_value(Some(false));
+            paragraph.set_auto_space_dn_value(Some(false));
+            paragraph.set_snap_to_grid_value(Some(false));
+        }
+        let bytes = document.to_bytes().unwrap();
+        let xml = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(&bytes))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let order = [
+            "<w:kinsoku",
+            "<w:wordWrap",
+            "<w:overflowPunct",
+            "<w:topLinePunct",
+            "<w:autoSpaceDE",
+            "<w:autoSpaceDN",
+            "<w:snapToGrid",
+        ];
+        let mut previous = 0usize;
+        for element in order {
+            let at = xml
+                .find(element)
+                .unwrap_or_else(|| panic!("{element} is written: {xml}"));
+            assert!(at > previous, "{element} follows its predecessor: {xml}");
+            previous = at;
+        }
+
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraph = reopened.paragraphs().into_iter().next().unwrap();
+        assert_eq!(paragraph.kinsoku_value(), Some(false));
+        assert_eq!(paragraph.word_wrap_value(), Some(false));
+        assert_eq!(paragraph.overflow_punct_value(), Some(false));
+        assert_eq!(paragraph.top_line_punct_value(), Some(true));
+        assert_eq!(paragraph.auto_space_de_value(), Some(false));
+        assert_eq!(paragraph.auto_space_dn_value(), Some(false));
+        assert_eq!(paragraph.snap_to_grid_value(), Some(false));
+
+        let mut removable = Document::from_bytes(&bytes).unwrap();
+        removable
+            .paragraph_mut(0)
+            .expect("the authored paragraph")
+            .set_kinsoku_value(None);
+        let removed = Document::from_bytes(&removable.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            removed
+                .paragraphs()
+                .into_iter()
+                .next()
+                .unwrap()
+                .kinsoku_value(),
+            None
+        );
+    }
+
+    /// A producer spelling of the seven toggles reopens typed and is written
+    /// in the canonical form, and an attribute the model does not own keeps
+    /// the source element as its carrier.
+    #[test]
+    fn a_producer_spelling_of_an_east_asian_toggle_reopens_typed() {
+        let body = concat!(
+            "<w:p><w:pPr>",
+            "<w:kinsoku w:val=\"true\"/>",
+            "<w:wordWrap w:val=\"0\"/>",
+            "<w:overflowPunct w:val=\"off\"/>",
+            "<w:topLinePunct/>",
+            "<w:autoSpaceDE w:val=\"false\"/>",
+            "<w:autoSpaceDN w:val=\"1\"/>",
+            "<w:snapToGrid w:val=\"on\"/>",
+            "</w:pPr><w:r><w:t>body</w:t></w:r></w:p>",
+        );
+        let mut document = Document::from_bytes(&producer_body(body)).unwrap();
+        {
+            let paragraph = document.paragraphs().into_iter().next().unwrap();
+            assert_eq!(paragraph.kinsoku_value(), Some(true));
+            assert_eq!(paragraph.word_wrap_value(), Some(false));
+            assert_eq!(paragraph.overflow_punct_value(), Some(false));
+            assert_eq!(paragraph.top_line_punct_value(), Some(true));
+            assert_eq!(paragraph.auto_space_de_value(), Some(false));
+            assert_eq!(paragraph.auto_space_dn_value(), Some(true));
+            assert_eq!(paragraph.snap_to_grid_value(), Some(true));
+        }
+
+        // A modeled toggle writes the canonical spelling, which is bare for
+        // an on value and `w:val="false"` for an off one, exactly as the
+        // toggles F-264 already modeled do.
+        let saved = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        for expected in [
+            "<w:kinsoku/>",
+            "<w:wordWrap w:val=\"false\"/>",
+            "<w:overflowPunct w:val=\"false\"/>",
+            "<w:topLinePunct/>",
+            "<w:autoSpaceDE w:val=\"false\"/>",
+            "<w:autoSpaceDN/>",
+            "<w:snapToGrid/>",
+        ] {
+            assert!(
+                saved.contains(expected),
+                "{expected} is written canonically: {saved}"
+            );
+        }
+    }
+
+    /// A `w:docGrid` attribute bound on an ancestor keeps its binding, because
+    /// the root declaration that binds it is retained with the root.
+    #[test]
+    fn a_doc_grid_attribute_bound_on_the_root_keeps_its_binding() {
+        let body = concat!(
+            "<w:p><w:r><w:t>body</w:t></w:r></w:p>",
+            "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:docGrid w:type=\"lines\" w:linePitch=\"360\" x:kept=\"grid\"/>",
+            "</w:sectPr>",
+        );
+        let source = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body>{body}</w:body></w:document>"#
+        );
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/document.xml", source.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+
+        let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+        assert_eq!(
+            document
+                .sections()
+                .next()
+                .unwrap()
+                .doc_grid()
+                .expect("the grid is typed")
+                .extra_attributes,
+            vec![("x:kept".to_owned(), "grid".to_owned())]
+        );
+        let saved = String::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            saved.contains("x:kept=\"grid\""),
+            "the retained attribute is written: {saved}"
+        );
+        let root_start = saved.find("<w:document").expect("the root element opens");
+        let root_end = root_start
+            + saved[root_start..]
+                .find('>')
+                .expect("the root element closes");
+        assert!(
+            saved[root_start..root_end].contains("xmlns:x=\"urn:producer\""),
+            "the ancestor binding that scopes it is still on the root: {saved}"
+        );
+    }
+
+    /// Every `w:tcPr/w:textDirection` value projects to the rotation the
+    /// rendering spec names, and upright stacking records its diagnostic.
+    #[test]
+    fn every_supported_cell_text_direction_renders_at_its_rotation() {
+        let expected = [
+            (CellTextDirection::LeftToRightTopToBottom, None, false),
+            (
+                CellTextDirection::TopToBottomRightToLeft,
+                Some(90.0_f64),
+                false,
+            ),
+            (
+                CellTextDirection::BottomToTopLeftToRight,
+                Some(-90.0),
+                false,
+            ),
+            (
+                CellTextDirection::LeftToRightTopToBottomVertical,
+                Some(-90.0),
+                true,
+            ),
+            (
+                CellTextDirection::TopToBottomRightToLeftVertical,
+                Some(90.0),
+                true,
+            ),
+            (
+                CellTextDirection::TopToBottomLeftToRightVertical,
+                Some(-90.0),
+                true,
+            ),
+        ];
+        for (direction, rotation, stacks_upright) in expected {
+            let mut document = Document::new();
+            {
+                let mut table = document.add_table(1, 1);
+                let mut cell = table.cell(0, 0).expect("authored cell");
+                cell.set_text_direction(Some(direction));
+                cell.set_text("Vertical");
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic vertical cell layout");
+            let transforms = transforms_for(&result, "Vertical");
+            assert_eq!(transforms.len(), 1, "the cell paints once: {direction:?}");
+            match rotation {
+                None => assert!(
+                    transforms[0].is_identity(),
+                    "{direction:?} keeps the untransformed path"
+                ),
+                Some(degrees) => {
+                    let (sin, cos) = degrees.to_radians().sin_cos();
+                    assert!(
+                        (transforms[0].a - cos).abs() < 1e-9
+                            && (transforms[0].b - sin).abs() < 1e-9,
+                        "{direction:?} rotates {degrees} degrees: {:?}",
+                        transforms[0]
+                    );
+                }
+            }
+            let diagnostics = result
+                .layout
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                diagnostics.iter().any(|message| message
+                    == "east Asian vertical text rendered as rotated vertical text"),
+                stacks_upright,
+                "{direction:?} records the upright-stacking fallback only when it asks for \
+                 upright stacking: {diagnostics:?}"
+            );
+        }
+    }
+
+    /// A rotated cell's row height comes from the transposed box, so it is the
+    /// text's own length rather than its stacked line height.
+    #[test]
+    fn a_vertical_cell_drives_the_row_height_from_its_transposed_box() {
+        // The row height decides where the block after the table sits, which
+        // is the only public statement of it that survives to the page.
+        let row_height = |direction: CellTextDirection| {
+            let mut document = Document::new();
+            {
+                let mut table = document.add_table(1, 2);
+                let mut cell = table.cell(0, 0).expect("authored cell");
+                cell.set_text_direction(Some(direction));
+                cell.set_text("A much longer stretch of vertical cell text");
+                table.cell(0, 1).expect("control cell").set_text("short");
+            }
+            document.add_paragraph("below");
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic vertical cell layout");
+            let mut below = None;
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Text(run) = element
+                        && run.text.trim() == "below"
+                    {
+                        below = Some(run.origin.y);
+                    }
+                });
+            }
+            below.expect("the block after the table paints")
+        };
+
+        let horizontal = row_height(CellTextDirection::LeftToRightTopToBottom);
+        let vertical = row_height(CellTextDirection::TopToBottomRightToLeft);
+        assert!(
+            vertical > horizontal + 1.0,
+            "the rotated cell grows the row to its text length, {vertical} against {horizontal}"
+        );
+
+        // The height is the transposed box's measure, not merely larger.
+        // Lengthening the rotated cell's single word moves the block after
+        // the table down by exactly the width that word gained, because the
+        // row height is the transposed measure and nothing else. Both numbers
+        // are read from layout, so this states the rule rather than pinning a
+        // recorded value.
+        let vertical_row = |text: &str| {
+            let mut document = Document::new();
+            {
+                let mut table = document.add_table(1, 1);
+                let mut cell = table.cell(0, 0).expect("rotated cell");
+                cell.set_text_direction(Some(CellTextDirection::TopToBottomRightToLeft));
+                cell.set_text(text);
+            }
+            document.add_paragraph("below");
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic vertical cell layout");
+            let mut below = None;
+            let mut width = 0.0f64;
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Text(run) = element {
+                        if run.text.trim() == "below" {
+                            below = Some(run.origin.y);
+                        } else if text.contains(run.text.trim()) && !run.text.trim().is_empty() {
+                            width += run.advances.iter().sum::<f64>();
+                        }
+                    }
+                });
+            }
+            (below.expect("the block after the table paints"), width)
+        };
+
+        let (short_below, short_width) = vertical_row("Narrow");
+        let (long_below, long_width) = vertical_row("NarrowNarrow");
+        assert!(
+            long_width > short_width,
+            "the longer word is wider, {long_width} against {short_width}"
+        );
+        assert!(
+            ((long_below - short_below) - (long_width - short_width)).abs() < 1e-6,
+            "the row grew by exactly the transposed measure the word gained, \
+             {} against {}",
+            long_below - short_below,
+            long_width - short_width
+        );
+    }
+
+    /// Each grid type that snaps line advance does so, and `default` does not.
+    #[test]
+    fn a_gridded_section_snaps_line_advance_to_its_line_pitch() {
+        let advance = |grid: Option<ST_DocGrid>| {
+            let mut document = Document::new();
+            {
+                let mut paragraph = document.add_paragraph("first");
+                paragraph.add_line_break();
+                paragraph.add_run("second");
+            }
+            if let Some(grid_type) = grid {
+                document
+                    .section_mut(0)
+                    .expect("final section")
+                    .set_doc_grid(Some(CT_DocGrid {
+                        grid_type: Some(grid_type),
+                        line_pitch: Some(Twips(720)),
+                        char_space: None,
+                        extra_attributes: Vec::new(),
+                    }));
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("deterministic gridded layout");
+            let mut origins = Vec::new();
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Text(run) = element
+                        && !run.text.trim().is_empty()
+                    {
+                        origins.push(run.origin.y);
+                    }
+                });
+            }
+            assert_eq!(origins.len(), 2, "both lines paint");
+            origins[1] - origins[0]
+        };
+
+        let ungridded = advance(None);
+        assert_eq!(
+            advance(Some(ST_DocGrid::Default)),
+            ungridded,
+            "a default grid keeps the ungridded advance"
+        );
+        assert!(
+            ungridded < 36.0,
+            "the ungridded advance is inside one grid row, so the snap is visible"
+        );
+        // A 720 twip pitch is 36 points, which is more than one line of the
+        // default face, so a snapping grid takes exactly one grid row.
+        for grid_type in [
+            ST_DocGrid::Lines,
+            ST_DocGrid::LinesAndChars,
+            ST_DocGrid::SnapToChars,
+        ] {
+            assert!(
+                (advance(Some(grid_type)) - 36.0).abs() < 1e-9,
+                "{grid_type:?} puts the next baseline on the grid pitch"
+            );
+        }
+    }
+
+    /// The section-level projection reads the property F-269 delivers and
+    /// writes nothing back.
+    #[test]
+    fn section_text_direction_renders_over_the_property_f269_delivers() {
+        let mut plain = Document::new();
+        plain.add_paragraph("body text for the section");
+        let plain_result = plain
+            .layout_deterministic()
+            .expect("deterministic horizontal layout");
+        let plain_transforms = transforms_for(&plain_result, "section");
+        assert_eq!(plain_transforms.len(), 1, "the horizontal body paints once");
+        assert!(
+            plain_transforms
+                .iter()
+                .all(|transform| transform.is_identity()),
+            "a horizontal section keeps the untransformed path"
+        );
+
+        let mut document = Document::new();
+        document.add_paragraph("body text for the section");
+        document
+            .section_mut(0)
+            .expect("final section")
+            .set_text_direction("tbRl");
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic vertical section layout");
+        let transforms = transforms_for(&result, "section");
+        assert_eq!(transforms.len(), 1, "the body paints once");
+        assert!(
+            (transforms[0].b - 1.0).abs() < 1e-9,
+            "the body band rotates 90 degrees: {:?}",
+            transforms[0]
+        );
+
+        // A vertical section fills one band, so a declared column layout is
+        // dropped and the fact is recorded rather than painted wrong.
+        let mut columns = Document::new();
+        columns.add_paragraph("body text for the section");
+        {
+            let mut section = columns.section_mut(0).expect("final section");
+            section.set_text_direction("tbRl");
+            section.set_columns(2, Length::twips(360)).unwrap();
+        }
+        let columns_result = columns
+            .layout_deterministic()
+            .expect("deterministic vertical column layout");
+        assert!(
+            columns_result
+                .layout
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message
+                    == "vertical section text is laid out in one column track"),
+            "the dropped column tracks are recorded: {:?}",
+            columns_result.layout.diagnostics
+        );
+
+        // The projection is read-only. The saved property is exactly what was
+        // authored, and reopening gives it back unchanged.
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.sections().next().unwrap().text_direction(),
+            Some("tbRl")
+        );
+        assert_eq!(
+            reopened
+                .section_mut(0)
+                .expect("final section")
+                .text_direction(),
+            Some("tbRl")
+        );
     }
 }

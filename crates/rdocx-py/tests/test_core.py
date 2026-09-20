@@ -666,6 +666,45 @@ def test_python_indexed_content_mutation_is_counted_and_atomic():
     assert nested_paragraph.text == "nested"
 
 
+def test_clone_content_scales_linearly_and_names_invalid_arguments():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("source")
+    document.add_paragraph("destination")
+
+    with pytest.raises(
+        TypeError, match="source must be a Paragraph or Table handle"
+    ):
+        document.clone_content(0, 1)
+    with pytest.raises(
+        TypeError, match="destination must be a direct body index integer"
+    ):
+        document.clone_content(document.paragraphs[0], document.paragraphs[1])
+
+    def clone_elapsed(paragraph_count, destination):
+        body = "".join(
+            f"<w:p><w:r><w:t>Paragraph {index} with realistic text.</w:t></w:r></w:p>"
+            for index in range(paragraph_count)
+        )
+        candidate = _replace_document_body(rdocx.Document(), body)
+        source = candidate.paragraphs[paragraph_count // 2]
+        expected = source.text
+        started = time.perf_counter()
+        destination_index = (
+            paragraph_count if destination == "end" else paragraph_count // 2 + 1
+        )
+        candidate.clone_content(source, destination_index)
+        elapsed = time.perf_counter() - started
+        assert candidate.paragraphs[destination_index].text == expected
+        return elapsed
+
+    for destination in ("middle", "end"):
+        small = clone_elapsed(50, destination)
+        large = clone_elapsed(100, destination)
+        assert large <= small * 4.0 + 0.05, (destination, small, large)
+
+
 def test_core_text_mutations_survive_bytes_round_trip():
     import rdocx
 

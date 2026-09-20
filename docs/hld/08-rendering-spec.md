@@ -98,6 +98,12 @@ the six fixed one, two, three, four, six, and nine-up grids. Thumbnails preserve
 aspect ratio, clip to their assigned cells, carry a one-point border and slide
 label, and the three-up layout adds five note rules per slide.
 
+Notes-slide placeholder overlays that have no complete-key match on the notes
+master are skipped rather than aborting the page. The renderer reports each
+skipped key in source order. It still fails closed for ambiguous or duplicate
+matching, invalid relationship ownership, and a missing required slide-image
+placeholder.
+
 Raster notes and handout output accepts finite positive DPI up to 600 and
 rejects a decoded output estimate above 256 MiB before allocation. Deterministic
 font mode, shared paint and geometry resolution, PDF assembly, and PNG encoding
@@ -481,7 +487,10 @@ is smaller than the glyph box.
 
 Complex text enters shared layout as one paragraph-wide logical sequence.
 Coverage and script boundaries select deterministic fonts before HarfRust
-receives explicit script, language, and direction. ICU supplies Thai and
+receives explicit script, language, and direction. Script identity separates
+Latin, Arabic, Hebrew, Devanagari, Thai, Han, Hangul, and Kana, because each
+needs its own shaper feature set. Hangul and Kana are never folded into Han,
+which would silently change how existing Han text shapes. ICU supplies Thai and
 complex-script opportunities, shared punctuation rules protect CJK line edges,
 and language-specific Liang dictionaries supply conditional hyphens. Fitting
 never divides a shaping cluster. After fitting, UAX 9 reorders each completed
@@ -492,10 +501,15 @@ explicit DrawingML direction also controls numeric and Latin text on both
 sides of a forced line break.
 
 Word uses the same paragraph-wide rich shaping and line path when a paragraph
-contains Arabic, Devanagari, Thai, or CJK text. The Word projection selects the
-effective direct, bidirectional, or East Asian language value for each run and
-retains exact logical source intervals. Shared shaping still owns script and
-coverage segmentation, clusters, offsets, and line fitting. Exact Word line
+contains Arabic, Hebrew, Devanagari, Thai, Hangul, Kana, or Han text. The Word
+projection selects the effective direct, bidirectional, or East Asian language
+value for each run and retains exact logical source intervals. Hangul takes the
+East Asian language slot, which is where Word puts it, and the language table
+claims every codepoint the script table calls Hangul, Kana, or Han, since a
+character the language table skipped would inherit the preceding slot. A
+paragraph on this path leaves the paragraph block cache, because the retained
+size of a rich inline item cannot be bounded. Shared shaping still owns script
+and coverage segmentation, clusters, offsets, and line fitting. Exact Word line
 spacing places rich text on the Word baseline at 0.8 of the largest run em for
 the line. Automatic spacing and the established Latin-only path retain their
 existing metrics and output bytes. Producer-written fractional paragraph line
@@ -579,6 +593,135 @@ The Wingdings trap is handled before font resolution. `a:buChar` U+F0B7 maps
 to the visible Unicode bullet U+2022 instead of passing through the Wingdings
 to Symbol alias as a private-use codepoint.
 
+A Word `w:sym` carries the symbol font's own code point, usually in the F020 to
+F0FF private-use block. The renderer resolves the font named on the element
+against that one character rather than against the run's family, so the
+existing script-aware fallback replaces a family without the glyph. `w:cr`
+emits a line break. `w:noBreakHyphen` emits U+2011, whose Unicode line-break
+class is GL, so the hyphen is drawn without becoming a break opportunity that
+U+002D would create. `w:ptab` places the following content at the next tab
+position the tab resolver computes. `w:softHyphen` is modeled and round-tripped
+with no render projection, because the line breaker takes no discretionary
+break input. `w:effect`, `w:noProof`, `w:webHidden`, `w:specVanish`, and
+`w:oMath` are modeled, authored, and round-tripped with no visible render
+projection, which matches what Word prints, and a test asserts the absence of a
+pixel change so the classification cannot rot into an oversight.
+
+Run colour resolution applies `w:themeTint` and `w:themeShade` over the
+resolved theme colour through `rdocx_oxml::theme::apply_tint_shade`, unchanged.
+Run font resolution prefers the explicit `w:rFonts` name over the theme
+attribute for the same slot. Word prefers the theme attribute, so this is a
+recorded deliberate divergence, reachable only on a producer document the
+caller never edited, since setting either form through the facade clears the
+other.
+
+Which slot that is comes from the run's own characters. A character whose
+codepoint settles its own script selects one of the four `w:rFonts` slots,
+`w:ascii`, `w:hAnsi`, `w:eastAsia`, or `w:cs`, and ignores
+`w:rFonts/@w:hint`. Every other character belongs to Word's ambiguous set, the
+punctuation, symbols, digits, Greek and Cyrillic that belong to no script in
+particular, and there the hint decides. That is what the attribute is for, so
+classifying the ambiguous set by codepoint would leave it inert on exactly the
+characters a document writes it for. Without a hint the seven-bit range keeps
+`w:ascii` and everything above it takes `w:hAnsi`.
+
+The slot boundaries are not the language-slot boundaries, because Word draws
+Devanagari and Thai from `w:cs` while their language still comes from
+`w:lang/@w:val`. They do agree about East Asian text, and the language table
+claims the same set the font table does, since a character East Asian to one
+and unclaimed by the other would be attached to the preceding slot and take
+the wrong language.
+
+One family is resolved per run, since coverage fallback already replaces one
+face for a whole run. Only an alphabetic character claims a slot, so spaces,
+digits, and punctuation take whatever the rest of the run takes. A run with no
+letter at all has nothing to follow, so its own remaining characters decide
+under the same consensus rule, after the `w:ascii` candidates among them are
+dropped, since `w:ascii` is also what a disagreement gives. That is how a run
+of East Asian punctuation or fullwidth digits reaches `w:eastAsia`.
+
+A run whose alphabetic characters disagree keeps the `w:ascii` slot, because
+preferring either half would be wrong for the other. Word draws the halves
+from two different slots, so this is a known divergence, recorded under rule 5
+of `.claude/skills/differential-testing.md`. It has three costs. A mixed Latin
+and East Asian run keeps the `w:ascii` family for its East Asian half, and
+resolving such a run through `w:eastAsia` instead would trade that for
+breaking the Latin half, which is the more common shape. A run with no letter
+whose remaining characters disagree, an ideographic comma beside an em dash,
+loses `w:eastAsia` for its ideographic half the same way. And `w:hAnsi` is
+reachable only by a run with no ASCII letter in it, since an accented word
+almost always carries unaccented letters too and the two disagree. All three
+costs are bounded by `w:hAnsi` and every other slot falling back to the
+`w:ascii` family, so a run resolves to a named family either way. A run of ASCII
+resolves exactly as it did before slots existed.
+
+Each slot reads its own theme attribute, so `majorEastAsia`, `minorEastAsia`,
+`majorBidi`, and `minorBidi` come from `w:eastAsiaTheme` and `w:cstheme`
+rather than collapsing onto whatever `w:asciiTheme` named. Those four name the
+theme's `a:ea` and `a:cs` typefaces, and the `Theme` model carries only
+`a:latin`, so inside a slot they resolve to nothing and fall through to the
+run's own `w:ascii` family. Answering with the Latin typeface there would be
+worse than declining, because it is a face that usually cannot draw the text
+and it would outrank the family the author named. Word behaves the same way,
+since `a:cs` is empty in every stock Office theme. `majorAscii`, `majorHAnsi`,
+`minorAscii`, and `minorHAnsi` do name `a:latin` and resolve normally, and a
+slot with no theme attribute of its own falls back to `w:asciiTheme`,
+mirroring the explicit fallback.
+
+Declining inside the slot is what keeps the Latin face from outranking a named
+family, not a refusal to use it at all. After both the character's slot and
+the `w:ascii` slot have declined, a run whose only font property is one of the
+four non-Latin references would otherwise lose its theme typeface for the
+engine default, so the Latin typeface is the answer as a last resort. Full
+resolution is therefore five steps: the slot's explicit family, the slot's
+theme font, the same two for the `w:ascii` slot, then that last resort, then
+nothing so the default applies.
+
+`w:outline`, `w:shadow`, `w:emboss`, `w:imprint`, `w:bdr`, `w:kern`, and
+`w:fitText` are modeled, authored, and round-tripped, and their render
+projection is the remaining work on DOCX-032. `w:em`, `w:eastAsianLayout`,
+`w:snapToGrid`, and `w:cs` render under DOCX-033.
+
+**The section character grid.** A `w:sectPr/w:docGrid` of type `lines`,
+`linesAndChars` or `snapToChars` puts line advance on `w:linePitch`, so a line
+takes the whole number of grid rows its natural height needs. The last two
+types also add `w:charSpace` to every advance of a run's own text, on the same
+step that applies the run's own `w:spacing`. A numbering marker, a `w:sym`
+glyph and a `w:noBreakHyphen` keep their own advance, exactly as they already
+do for `w:spacing`, and so does a `w:ruby` annotation line, which is measured
+against its own base rather than against the grid. The `default` type, and an
+absent grid, take the ungridded branch with no new arithmetic on it, which is
+what leaves every existing document's advance untouched. A paragraph that sets
+`w:snapToGrid w:val="0"` leaves the grid, and so does a run that sets it. The
+grid belongs to the section's body flow. Headers, footers and note text are
+page furniture laid out against their own measure and stay off it.
+
+**The East Asian paragraph toggles.** `w:kinsoku` and `w:wordWrap` are modeled
+and authored, and at their default on value the UAX#14 line breaker already
+does what they ask: it refuses to start a line with East Asian closing
+punctuation, refuses to end one with an opening bracket, and breaks a Latin
+word only at a break opportunity. `w:topLinePunct` is modeled and authored and
+defaults to off, which asks for nothing. `w:overflowPunct`,
+`w:autoSpaceDE` and `w:autoSpaceDN` are modeled and authored and their default
+hanging punctuation and inter-script spacing are not applied, which is the
+remaining metric work the DOCX-033 row records.
+
+**`w:eastAsianLayout`.** One base-character advance is one em of the run's own
+size, which is the character cell ECMA's two-lines-in-one fits a run into. It
+is deliberately not the run's first shaped advance, because shaping returns
+visual order and a run that begins with a space would collapse into the space.
+`w:combine` compresses the run into one such advance, inside the bracket pair
+`w:combineBrackets` names, drawn from the ASCII inventory every bundled face
+carries. `w:vert` rotates the run 90 degrees within its line, so the run's own
+line height becomes the advance it takes and its text length becomes the height
+it needs, and `w:vertCompress` narrows that advance to one base character,
+never widening it. A run that sets both this and `w:em` takes this, because
+combining and rotating change the run's advance while an emphasis mark
+decorates it, and `w:combine` wins over `w:vert` when a run sets both. A
+combined or rotated run becomes one annotation group, so it keeps its source
+provenance and loses its hyperlink annotation and note reference, which is the
+limit an emphasis-marked run already carries.
+
 Slide-number fields substitute the one-based `PageFrame` number before text
 shaping and carry `FieldKind::Page` into the emitted glyph run. An untyped field
 that the resolver normalized from an effective `sldNum` placeholder follows the
@@ -594,9 +737,8 @@ an annotation, but their visible text remains in the line.
 
 Table lowering derives cumulative row and column offsets from the resolved
 active grid columns. A preserved historical table-grid change is inspection and
-round-trip metadata and never participates in width calculation. Right-to-left
-tables reverse visual column placement without changing logical cell ownership.
-Cell payloads retain paragraphs and nested tables in source order. A nested
+round-trip metadata and never participates in width calculation. Cell payloads
+retain paragraphs and nested tables in source order. A nested
 table resolves its own active grid, fills, borders, text, provenance, anchors,
 and logical structure inside the owning cell content box.
 
@@ -619,10 +761,117 @@ Each table origin draws its fill before its text. The table's unique border
 segments draw after all cell fills and text so a neighbouring fill cannot cover
 them. Table cells do not use the shape autofit algorithm.
 
+**Vertical Word text.** `w:tcPr/w:textDirection` and `w:sectPr/w:textDirection`
+lower onto the same transposed box and `Group` rotation the shape path uses.
+`lrTb` is the horizontal path, unchanged and with no group. `tbRl` and `tbRlV`
+rotate 90 degrees, and `btLr`, `lrTbV` and `tbLrV` rotate -90. Upright stacked
+East Asian text is out of scope, stays visible as rotated text, and records
+`east Asian vertical text rendered as rotated vertical text`, which is the
+fallback the shape path already documents. A rotated cell lays its content out
+in the transposed box, so the measure runs down the cell. A row that declares a
+height gives that measure exactly. An auto-height row has no height until its
+content produces one, so the cell lays out unwrapped, bounded at ten thousand
+points, and the row becomes the length the text produced. That length, not the
+stacked line height, is what the cell contributes to the row. Measuring an
+auto-height rotated cell at its column width instead would wrap it on the
+stacking axis, and the stack would then be wider than the column. Past the
+bound the stack does grow past the column, the way an over-wide horizontal cell
+overflows its own.
+
+A vertical section transposes the body band about its own centre before the
+flow fills it and rotates the painted band back about that same centre. Margin
+line numbers label body lines and rotate with the band. Headers, footers,
+notes and page borders are placed after the rotation and stay upright, and so
+are a rotated cell's change bar and anchored drawings, which take the cell's
+own upright row band and draw one bar for the whole cell. A vertical section
+fills one band, so its column tracks are dropped and
+`vertical section text is laid out in one column track` is recorded. Composing
+the two would transpose each track about its own centre while the page rotates
+about one, which is a wrong picture rather than a missing one.
+
+Right-to-left tables reverse visual column placement without changing logical
+cell ownership. Both grammars satisfy that sentence. The DrawingML `a:tbl`
+reverses inside the slide renderer. A WordprocessingML `w:bidiVisual` table
+carries the fact on the lowered table block, and the row painter places the
+logically last cell first. The lowered column widths, every cell's grid column,
+the retained semantics and the structure tree stay in reading order, so cell
+ownership, the body fragments and the accessibility contract are unchanged. A
+left-to-right table takes the same placement arithmetic it always did.
+
+A row's omitted leading grid columns move that row alone. The resolved offset
+is `w:wBefore` when present and otherwise the width of the `w:gridBefore`
+columns, measured on the row's own leading side, which is the trailing side of
+the logical grid for a bidirectional table. The table origin, the table width
+and every other row are unchanged, and the row's remaining cells occupy the
+grid columns they actually cover. A resolved `w:tblCellSpacing` adds half its
+width to every cell margin, so adjacent content boxes are one whole gap apart
+and the table edge carries half. A row-level value wins over the table's.
+
+A `w:tblpPr` table is positioned rather than flowed. Its origin comes entirely
+from the resolved anchor, so `w:tblInd` does not contribute, and the flow
+cursor does not advance, so every block after it sits where it would have sat
+without it. `w:horzAnchor` and `w:vertAnchor` lower onto the same anchor frames
+a floating drawing uses, with `margin`, `page` and `text` reading as the margin
+frame, the page frame, and the text column or the anchoring block.
+`w:tblpXSpec` and `w:tblpYSpec` are alignments against that frame and win over
+the offset. `tblpYSpec="inline"` is how the grammar spells not floating, and an
+absent `w:tblpPr` means the same, so both leave the table in the flow.
+
+A float pushes one square keep-out band onto the page, carrying
+`w:leftFromText`, `w:rightFromText`, `w:topFromText` and `w:bottomFromText`.
+Text flows around it through the same reflow the wrapping drawings use, and a
+float anchored to a later block still pushes the text above it aside. A float
+measured from its own block has no vertical position until the flow places that
+block, so the first pagination pass records where it landed and the second
+offers that rect to the text above it. Those are the same two passes a
+paragraph-relative drawing takes, and a document with no float still paginates
+in one. The look-ahead offers a float at the place it settles on the page being
+built, and only a float measured from its own block is re-offered across the
+two passes, so a float that moves to the next page for any other reason leaves
+the text above it holding a band it no longer needs.
+
+A float whose rect runs past the bottom of the body moves whole to the next
+page, which is what Word does. It is never split and it never repeats a header
+row, because it never crosses a page boundary. Only a float measured from its
+own block can move, because a page or margin frame resolves to the same place
+on every page.
+
+`w:tblOverlap` is a rule between floating tables, resolved within one page. Two
+floats that both allow the overlap are left intersecting, and otherwise the
+later one in body order drops below the earlier one's keep-out band.
+Facing-page and section-scoped resolution is not modelled.
+
+Two limits are deliberate. A table that does not float still takes the full
+measure beside a float rather than narrowing its columns inside the keep-out
+band, because that is a re-layout rather than a re-position. `w:cantSplit`
+stays a round-trip and reader fact, because making it meaningful needs row
+splitting for the default case.
+
+A conditional table-style region's `w:trPr` resolves base first, exactly like
+its cell layers. The style's base row properties apply first, then every region
+that scopes a whole row, which is the whole table, the two horizontal bands,
+the first row and the last row, in the same ascending priority, then the row's
+own direct properties. A column or corner region formats part of a row, so its
+row properties cannot decide that row's height or grid offsets.
+
 Word table styles resolve base-first through `basedOn`, then apply table-region
-properties in deterministic whole-table, band, edge, and corner priority.
+properties in deterministic whole-table, band, edge, and corner priority. The
+priority order is whole table, the two vertical bands, the two horizontal
+bands, the column edges, the row edges, then the four corners, and a later
+region overrides an earlier one. The horizontal band therefore outranks the
+vertical band. The `basedOn` chain flattens for one region before the next
+region applies, so a base style's `firstRow` still beats a derived style's
+`wholeTable`. Banding counts whole bands of the resolved
+`w:tblStyleRowBandSize` and `w:tblStyleColBandSize`, defaulting to one, and
+starts after the header row or first column when the table look designates one.
+The header row and first column are in no band.
 Table-style paragraph properties sit between document defaults and paragraph
-styles. Direct table and cell properties remain the final overlay. An explicit
+styles, and table-style run properties sit at the same place in the run chain,
+so a `firstRow` region's `w:rPr` reaches the header row's runs. A conditional
+region's `w:trPr` is modeled and round-tripped but not applied, which is row
+geometry owned by F-268a. Region selection reads the table look together with
+every `w:cnfStyle` on the row, the cell and the cell's paragraphs. Direct table
+and cell properties remain the final overlay. An explicit
 cell `nil` or `none` border yields to a visible table border only on the exact
 outer edge. The same value remains suppressive on an interior edge.
 
@@ -685,6 +934,35 @@ uses a fresh deterministic engine and does not publish pagination state or
 touch facade layout caches.
 
 ### Autofit
+
+Word and PowerPoint autofit are separate algorithms. The Word table-layout
+counterpart comes first.
+
+A Word table takes content-driven column widths only when the effective
+`w:tblLayout` is autofit or absent **and** the effective `w:tblW` type is
+`auto` or absent. That is narrower than the literal ECMA default, which applies
+autofit whenever `w:tblLayout` is absent. The narrowing is deliberate. An
+authored `dxa` or `pct` width keeps the declared grid, so widening the
+predicate stays a separate reviewed change rather than a side effect of
+introducing measurement. The effective width is the authored one, direct or
+inherited, read before the ordinary path drops a direct width in favour of the
+declared grid.
+
+When it engages, each cell is measured twice through the production cell
+content path, once at a wide trial width for its maximum content width and once
+at a one-point trial width for the minimum, which is its longest unbreakable
+run. Measurement consumes a clone of the numbering state and discards its
+diagnostics, because the production pass that follows emits both for real. A
+cell's own `w:tcW` narrows its maximum but never below its measured minimum. A
+spanning cell contributes an equal share to each column it covers. A cell that
+holds a nested table contributes that table's declared grid instead of a
+measured width, because measuring it at two trial widths would make it autofit
+twice as well and a table nested `n` deep would cost three to the `n`. The
+production pass that follows still lays the nested table out for real. If every
+maximum fits, the columns stop at their content. If every minimum already
+exceeds the caller's width, the minima scale down to it. Otherwise each column
+takes its minimum plus its proportional share of the remaining slack. A table
+with nothing measurable keeps its declared grid.
 
 **PowerPoint stores its own computed answer in the file.** Trust it.
 
@@ -1047,10 +1325,15 @@ immediately after a page-marked line when continuation content exists, before
 widow and keep decisions can move that continuation back onto the same page.
 Overflow splitting chooses the earlier of the next page break and the number of
 lines that fit, then applies the same rule recursively. A trailing page break
-has no continuation to move. Line breaks remain line-only, and column breaks
-remain distinguishable without becoming page breaks while layout is
-single-column. Body fragments, page fields, cross-reference targets, PDF, and
-raster output all consume the resulting shared page sequence.
+has no visible continuation to move. Its synthetic empty continuation records
+one page transition for the immediately following block. A paragraph-level
+`pageBreakBefore` on that block consumes the existing transition instead of
+creating an empty page. Intervening blocks, visible continuation formatting,
+line or column breaks, and section boundaries clear or prevent that state.
+Line breaks remain line-only, and column breaks remain distinguishable without
+becoming page breaks while layout is single-column. Body fragments, page
+fields, cross-reference targets, PDF, and raster output all consume the
+resulting shared page sequence.
 
 A tracked paragraph with visible revised content or a property-only revision
 carries a changed marker into pagination. Visible-revision detection follows
@@ -1071,6 +1354,54 @@ section's displayed sequence without changing the one-based physical output
 page identity. `PageFrame::page_number` is physical and
 `PageFrame::displayed_page_number` drives PAGE substitution plus first, even,
 and default header or footer selection.
+
+Columns reach pagination. `sect_pr_to_geometry` resolves one track list per
+section, either equal-width tracks from `w:num` and `w:space` or explicit
+tracks from the `w:col` list when `w:equalWidth` is `0`. **A section that
+resolves to one column bypasses the track arithmetic entirely** and keeps the
+exact content-width expression it evaluated before columns existed, because a
+reassociated `f64` there moves every recorded baseline in the workspace without
+changing anything a reader could see. The body fills track `n` before track
+`n+1`, moves to the next page when the last track overflows, and draws a
+half-point rule at each inter-track midpoint when `w:sep` is set. An explicit
+page break leaves the remaining tracks empty, because a column break is a
+different element and is not modeled. Line breaking uses the first track's
+measure for the whole section, so a section with tracks of different widths
+breaks its later tracks to the first one's measure. Word's column balancing at
+a continuous section break is not implemented, and both are named follow-ups in
+`docs/hld/14-development-backlog.md`.
+
+`w:pgBorders` draws through the shared border-edge renderer. With
+`w:offsetFrom="text"` the rectangle is the margin box and each edge's
+`w:space` pushes it outward, which is what that renderer already does. With
+`w:offsetFrom="page"` the same distance is measured inward from the page edge,
+so the rectangle is inset here and the edges carry no further offset.
+`w:display` selects `allPages`, `firstPage` or `notFirstPage` against the
+section's own first page, and `w:zOrder="back"` draws the frame before every
+other element on the page while the default draws it after.
+
+`w:lnNumType` numbers body lines in the margin. The number is right-aligned
+`w:distance` clear of the track it labels, defaulting to Word's automatic
+quarter inch, shaped at nine points through the deterministic font manager and
+printed at each `w:countBy` multiple. **Line numbers are a page artifact and
+are excluded from the PDF reading order**, wrapped in marked content with no
+structure identity, because they are furniture rather than prose. `newPage`
+restarts on every page, and `newSection` and `continuous` both run on from the
+section's `w:start`.
+
+`w:vAlign` moves the body band after its blocks are placed. `center` and
+`bottom` translate it by half of the unused vertical measure or all of it.
+`top` is the existing behaviour and takes the untouched code path, and so does
+`both`, which preserves its source value, lays out as `top` and emits one
+diagnostic per section. True vertical distribution is a named follow-up.
+
+`w:mirrorMargins` swaps a page's left and right margins on an even **displayed**
+page rather than an even physical one, so a section that restarts its page
+numbering mirrors the sheets a reader sees. The gutter is folded into the
+inside margin, or into the top margin when `w:gutterAtTop` is set, before the
+swap, so one swap puts it on the binding edge of either page. Mirroring does not
+change the text measure, so nothing re-breaks. `w:paperSrc` and the book-fold
+settings reach the model and the package and change no page geometry at all.
 
 A section without a restart continues after the preceding section's displayed
 last page. Appended endnote pages continue after the final body page for fresh
@@ -1135,6 +1466,11 @@ image relationship produces one stable diagnostic and the empty-media
 sentinel. It never falls back to a body image with an equal local identifier.
 The complete relationship identity and resolved part bytes remain part of the
 header and footer cache key.
+
+Comparison-only namespace closure does not change layout relationship scope or
+drawing geometry. Accepted and rejected packages retain body, header, and
+footer image ownership, so layout receives the same relationship-resolved
+drawing after namespace declaration placement is normalized for comparison.
 
 Every public document mutation and mutable-accessor entry point clears both
 completed result caches before changing or exposing content. It preserves the
@@ -1400,6 +1736,36 @@ line breaker contributes the normalized value as ascent and the remaining
 height as descent. Pagination positions that group against the resolved text
 baseline. `None` preserves the original top-aligned group position, including
 existing chart and drawing behavior.
+
+## Word East Asian annotation layout
+
+`w:ruby` and `w:em` both place a second, smaller line against a base line
+without changing the base advance, so both lower to one `InlineItem::Group`
+whose width is the base width and whose normalized baseline already carries the
+annotation. The line breaker turns that baseline into ascent, which is how an
+annotated line becomes taller and reaches the paginator through the existing
+natural-advance path.
+
+A ruby annotation owns a half-open span of its paragraph's runs. Layout
+measures the base line and the phonetic line independently, places the phonetic
+line at the `w:rubyPr/w:hpsRaise` offset above the base baseline in the
+`w:hps` size, and distributes it across the base width per `w:rubyAlign`. The
+two distribute values widen the gaps between phonetic glyphs, while the others
+move the phonetic line's origin. `w:hpsBaseText` fixes the base line size. The
+base line is centred when the phonetic line is the wider of the two. Text
+extraction returns the base line alone, because the phonetic line is an
+annotation rather than content, which is what keeps `ActualText`, SVG text,
+search, redaction, and round-trip XML in logical order.
+
+An emphasis-marked run paints one mark glyph per non-space base character,
+above the glyph box for every value but `underDot`, which paints below it. The
+mark resolves through the same family the base character resolved through. A
+mark codepoint that shapes to `.notdef` records one deduplicated diagnostic and
+paints nothing, leaving the base text exactly as an unmarked run paints it,
+which is the policy the uncovered-character path already follows. Marks never
+change the base advance and never take part in line breaking. The marked text
+is split at whitespace before it is grouped, so a marked run keeps the break
+opportunities it had before the marks were added.
 
 ## The renderer's input
 

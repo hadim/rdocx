@@ -806,6 +806,9 @@ fn line_break_params(
         },
         jc: Some(paragraph_align(paragraph.alignment)),
         wrap,
+        // Slide text has no document-level tab interval, so it keeps the
+        // half-inch default this field replaced.
+        default_tab_interval_pt: 36.0,
     }
 }
 

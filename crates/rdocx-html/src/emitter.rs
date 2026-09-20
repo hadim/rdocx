@@ -8,7 +8,7 @@ use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CellContent, VMerge};
-use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
 
 use crate::css;
 use crate::sanitize::{escape_html, escape_html_attr, safe_url};
@@ -333,6 +333,15 @@ fn emit_run(
                     emit_field_display(out, text, properties);
                 }
             }
+            // A symbol is font-encoded rather than Unicode, so there is no
+            // portable HTML spelling for it.
+            RunContent::Symbol { .. } => {}
+            RunContent::SpecialCharacter(character) => match character {
+                SpecialCharacter::CarriageReturn => out.push_str("<br>"),
+                SpecialCharacter::NoBreakHyphen => out.push_str("&#8209;"),
+                SpecialCharacter::SoftHyphen => out.push_str("&shy;"),
+                SpecialCharacter::PositionalTab { .. } => out.push_str("&emsp;"),
+            },
             RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
             | RunContent::CommentReference { .. } => {}
@@ -504,10 +513,13 @@ fn emit_table(
 
                 // Vertical alignment
                 if let Some(va) = &props.v_align {
+                    // `both` distributes vertically in Word. HTML has no
+                    // equivalent on a cell, and top is what this workspace
+                    // already lays it out as.
                     let css_va = match va {
-                        rdocx_oxml::table::ST_VerticalJc::Top => "top",
                         rdocx_oxml::table::ST_VerticalJc::Center => "middle",
                         rdocx_oxml::table::ST_VerticalJc::Bottom => "bottom",
+                        rdocx_oxml::table::ST_VerticalJc::Top | _ => "top",
                     };
                     td_style.push_str(&format!("vertical-align:{css_va};"));
                 }

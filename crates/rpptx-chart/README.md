@@ -10,6 +10,14 @@ exact re-export of the shared ChartML model and renderer.
 - Exact `oxml-chart` models, validators, and geometry.
 - No duplicate chart implementation or presentation package policy.
 - A direct dependency and import migration path.
+- The shared surface includes typed series, axes, labels, legends, validation,
+  workbook bindings, geometry, and deterministic page-model lowering.
+
+## Measured footprint and speed
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: rpptx-chart | 6,648 compressed bytes, 21,136 member bytes, 6 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx-chart` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 

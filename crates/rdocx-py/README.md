@@ -7,9 +7,11 @@ opening, editing, comparing, laying out, and rendering Word documents. It
 works directly with OOXML packages and does not require Microsoft Word,
 LibreOffice, a conversion service, or a Java or .NET runtime.
 
-The package uses the Rust `rdocx` document engine. Unsupported safe producer
-XML remains available to the package rather than being discarded during an
-ordinary open and save cycle.
+The package runs the Rust `rdocx` document engine locally, presents a typed
+Python API, and needs no remote service for editing, layout, or rendering.
+Review workflows cover comments, tracked revisions, comparison, and table of
+contents rebuilding. Complete package saves preserve safe producer XML and
+parts that the focused Python surface does not model.
 
 ## Installation
 
@@ -42,12 +44,24 @@ with open("report.pdf", "wb") as output:
 - File and byte-based DOCX input and output.
 - Paragraphs, runs, fonts, tables, rows, cells, sections, and styles.
 - Rich headers, footers, related stories, and resolved hyperlinks.
+- Complete paragraph and run formatting, multilingual and vertical typography,
+  conditional and floating tables, section semantics, settings, fields, forms,
+  equations, drawings, comments, and metadata.
 - Tracked comparison, main-body comment threads, revision resolution, and TOC
   rebuilding.
 - Deterministic layout fragments, page geometry, and PDF, PNG, JPEG, and TIFF
   output through the native document engine.
 - Python collections with negative indexes, slices, iteration, and explicit
   stale-handle errors after structural changes.
+
+## Measured footprint and speed
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Large-document layout throughput | minimum 250 pages/s, observed 31,019.1 pages/s | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 one-page paragraphs with deterministic fonts | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | pages per wall-clock second | 2026-09-19 |
+| Large-document layout peak allocation | maximum 64 MiB, observed 29.03 MiB | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 one-page paragraphs with deterministic fonts | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | peak live allocation | 2026-09-19 |
+| Large-document PDF throughput | minimum 1,000 pages/s, observed 60,058.0 pages/s | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 deterministic layout pages | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | pages per wall-clock second | 2026-09-19 |
+| Large-document PDF peak allocation | maximum 16 MiB, observed 1.73 MiB | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 deterministic layout pages | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | peak live allocation | 2026-09-19 |
 
 ## Use it when
 

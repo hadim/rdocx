@@ -24,7 +24,7 @@ use rdocx_oxml::numbering::ST_LvlSuffix;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::shared::{ST_SectionType, ST_TabJc};
-use rdocx_oxml::styles::StyleType;
+use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{
     CT_P, CT_R, CT_Text, Field, FieldArgument, FieldInstruction, RunContent,
@@ -1038,7 +1038,7 @@ impl Document {
             parse_dynamic_toc_fields(&candidate, &document_xml, &toc_spans)?;
         diagnostics.append(&mut dynamic_diagnostics);
         diagnostics.sort_by_key(|(offset, _)| *offset);
-        let diagnostics = diagnostics
+        let mut diagnostics = diagnostics
             .into_iter()
             .map(|(_, diagnostic)| diagnostic)
             .collect::<Vec<_>>();
@@ -1057,6 +1057,7 @@ impl Document {
             &bookmark_state,
             &numbering_layout,
         )?;
+        diagnostics.extend(toc_duplicate_style_diagnostics(&candidate.styles));
         let toc_entry_styles = ensure_toc_entry_styles(&mut candidate, &sources)?;
         candidate.flush_to_package()?;
         let rebuilt_toc_spans = toc_spans
@@ -5758,7 +5759,7 @@ fn ensure_toc_entry_styles(
                     .map(|style| style.style_id.clone())
             })
             .unwrap_or_else(|| {
-                let (style, _) =
+                let (style, _, _) =
                     style::StyleBuilder::paragraph(&canonical_id, &format!("TOC {level}")).build();
                 document.styles.styles.push(style);
                 canonical_id
@@ -5776,8 +5777,31 @@ fn ensure_toc_entry_styles(
             },
         );
     }
-    style::validate_style_graph(&document.styles)?;
+    let mut first_definitions = document.styles.clone();
+    let mut seen = HashSet::new();
+    first_definitions
+        .styles
+        .retain(|style| seen.insert(style.style_id.clone()));
+    style::validate_style_graph(&first_definitions)?;
     Ok(resolved)
+}
+
+fn toc_duplicate_style_diagnostics(styles: &CT_Styles) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut reported = HashSet::new();
+    styles
+        .styles
+        .iter()
+        .filter_map(|style| {
+            if seen.insert(style.style_id.as_str()) || !reported.insert(style.style_id.as_str()) {
+                return None;
+            }
+            Some(format!(
+                "duplicate style ID '{}' used first definition while rebuilding TOC",
+                style.style_id
+            ))
+        })
+        .collect()
 }
 
 fn toc_section_text_width(body: &CT_Body, paragraph_index: usize) -> i32 {
@@ -7950,6 +7974,14 @@ fn empty_section_properties() -> CT_SectPr {
         section_type: None,
         columns: None,
         page_number: None,
+        footnote_pr: None,
+        endnote_pr: None,
+        paper_source: None,
+        page_borders: None,
+        line_numbers: None,
+        vertical_alignment: None,
+        text_direction: None,
+        doc_grid: None,
         title_pg: None,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
@@ -10498,7 +10530,10 @@ fn parse_level_range(value: &str, field: &str) -> std::result::Result<(u8, u8), 
 }
 
 fn parse_custom_styles(value: &str) -> std::result::Result<Vec<(String, u8)>, String> {
-    let parts = value.split(',').collect::<Vec<_>>();
+    let mut parts = value.split(',').collect::<Vec<_>>();
+    if parts.last().is_some_and(|part| part.trim().is_empty()) {
+        parts.pop();
+    }
     if parts.len() % 2 != 0 || parts.is_empty() {
         return Err("TOC custom styles require style and level pairs".to_owned());
     }
@@ -12223,6 +12258,31 @@ mod tests {
                 entry_page_separator: None,
             })
         );
+        let trailing_separator =
+            document_with_fields(&[(r#"TOC \t "Heading 1,1,Appendix,2,""#, "stored toc")]);
+        assert!(matches!(
+            trailing_separator
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()[0]
+                .outcome,
+            FieldOutcome::TableOfContents(TocField {
+                ref custom_styles,
+                ..
+            }) if custom_styles == &[("Heading 1".to_owned(), 1), ("Appendix".to_owned(), 2)]
+        ));
+        for malformed in [
+            r#"TOC \t "Heading 1,,Appendix,2""#,
+            r#"TOC \t "Heading 1,1,,2""#,
+        ] {
+            let malformed = document_with_fields(&[(malformed, "stored toc")]);
+            assert!(matches!(
+                malformed
+                    .evaluate_fields(&FieldEvaluationContext::default())
+                    .unwrap()[0]
+                    .outcome,
+                FieldOutcome::KeepStored { .. }
+            ));
+        }
         let decorated_default = document_with_fields(&[(r"TOC \h", "stored toc")]);
         assert!(matches!(
             decorated_default

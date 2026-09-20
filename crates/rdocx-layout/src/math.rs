@@ -1428,6 +1428,9 @@ mod tests {
         crate::LayoutInput {
             document,
             automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            default_tab_stop: None,
             math_properties: None,
             revision_view: crate::RevisionView::Accepted,
             styles: CT_Styles::new_default(),

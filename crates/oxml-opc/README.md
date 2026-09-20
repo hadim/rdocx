@@ -9,6 +9,16 @@ files.
 - Content type defaults and overrides.
 - Relationship parsing, target resolution, and mutation.
 - Main-document discovery, part navigation, and package preservation.
+- Case-insensitive package identity, atomic save, agile encryption, and XML
+  signature verification cover the container boundary below both facades.
+
+## Measured footprint and speed
+
+The archive row is regenerated from the package that carries this README.
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: oxml-opc | 91,907 compressed bytes, 354,453 member bytes, 12 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-opc` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 

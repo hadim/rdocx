@@ -631,7 +631,11 @@ impl CT_Sdt {
             match reader.read_event_into(&mut buffer)? {
                 Event::Start(start) if matches_local_name(start.name().as_ref(), b"p") => {
                     let prefixes = word_prefixes_at(&start, &self.content_word_prefixes)?;
-                    return Ok(Some(CT_P::from_xml_with_prefixes(&mut reader, &prefixes)?));
+                    return Ok(Some(CT_P::from_xml_with_prefixes_and_root(
+                        &mut reader,
+                        &prefixes,
+                        Some(&start),
+                    )?));
                 }
                 Event::Eof => return Ok(None),
                 _ => {}
@@ -1162,16 +1166,11 @@ fn parse_inline_run(xml: &[u8], inherited: &[String]) -> Result<CT_R> {
         match reader.read_event_into(&mut buffer)? {
             Event::Start(start) if matches_local_name(start.name().as_ref(), b"r") => {
                 let prefixes = word_prefixes_at(&start, inherited)?;
-                return CT_R::from_xml_with_prefixes(&mut reader, &prefixes);
+                return CT_R::from_xml_with_prefixes_and_root(&mut reader, &prefixes, Some(&start));
             }
             Event::Empty(start) if matches_local_name(start.name().as_ref(), b"r") => {
-                return Ok(CT_R {
-                    properties: None,
-                    content: Vec::new(),
-                    extra_xml: Vec::new(),
-                    extra_xml_positions: Vec::new(),
-                    alt_drawings: Vec::new(),
-                });
+                let prefixes = word_prefixes_at(&start, inherited)?;
+                return CT_R::from_empty_root(&start, &prefixes);
             }
             Event::Eof => return Err(OxmlError::MissingElement("inline control run".to_owned())),
             _ => {}
@@ -1224,9 +1223,9 @@ fn parse_content(
                 if owned_word_child.is_some_and(|local| !owner.owns(local)) {
                     content.push(SdtContent::RawXml(capture_element(reader, &child)?));
                 } else if is_word_element(child.name().as_ref(), b"p", &prefixes) {
-                    content.push(SdtContent::Paragraph(CT_P::from_xml_with_prefixes(
-                        reader, &prefixes,
-                    )?));
+                    content.push(SdtContent::Paragraph(
+                        CT_P::from_xml_with_prefixes_and_root(reader, &prefixes, Some(&child))?,
+                    ));
                 } else if is_word_element(child.name().as_ref(), b"tbl", &prefixes) {
                     let owner_bindings = local_namespace_overrides(&child, inherited)?;
                     content.push(SdtContent::Table(
@@ -1293,7 +1292,9 @@ fn parse_content(
                 if owned_word_child.is_some_and(|local| !owner.owns(local)) {
                     content.push(SdtContent::RawXml(capture_empty_element(&child)?));
                 } else if is_word_element(child.name().as_ref(), b"p", &prefixes) {
-                    content.push(SdtContent::Paragraph(CT_P::new()));
+                    content.push(SdtContent::Paragraph(CT_P::from_empty_root(
+                        &child, &prefixes,
+                    )?));
                 } else if is_word_element(child.name().as_ref(), b"tbl", &prefixes) {
                     content.push(SdtContent::Table(CT_Tbl::new()));
                 } else if is_word_element(child.name().as_ref(), b"tr", &prefixes) {

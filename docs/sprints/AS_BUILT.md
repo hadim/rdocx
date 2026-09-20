@@ -15277,3 +15277,987 @@ new shared registry version. A Python release is incomplete until canonical
 PyPI installs, typing, stubs, ownership, and byte-identical GitHub notes all
 verify. Contributor comments are part of the release gate, not optional
 follow-up work.
+
+### F-X123, Accept producer TOC style variants
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** TOC rebuilding now accepts one trailing separator in the
+custom-style switch and resolves duplicate style identifiers from the first
+source definition. It reports each duplicate choice once and retains every
+producer style definition through save and reopen.
+
+**Non-obvious choices.** The tolerant lookup is local to TOC rebuilding. The
+public style-graph validator remains strict for mutations, and interior empty
+custom-style components remain malformed.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx` crate and the changed TOC code at the user's direction. The scoped
+crate suite, focused regressions, formatting, prose, generated-skill drift,
+and hash harness passed. The interrupted workspace-wide test was not treated
+as evidence.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for tolerant
+dynamic TOC discovery, `docs/hld/12-testing-strategy.md`, for the named
+producer-variant regression, and `docs/hld/14-development-backlog.md`, for the
+F-X123 acceptance contract.
+
+**Tests.** `toc_rebuild_accepts_trailing_style_separator_and_duplicate_style_ids`
+proves both reported producer variants, stable diagnostics, preserved source
+styles, and unchanged strict validation. The full `rdocx` crate suite passed
+with the pinned Poppler and LibreOffice oracles.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep producer tolerance at the consuming read
+surface. Do not weaken mutation validation or remove duplicate producer XML to
+make a derived feature succeed.
+
+### F-X124, Make content cloning linear and explicit
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Python clone and move operations now resolve source and
+destination from one owned story inventory. Direct-content scans inspect
+section properties only for preserved nodes. Clone type errors name `source`
+and describe `destination` as a direct body index integer.
+
+**Non-obvious choices.** The mutation still performs complete identity
+freshening and one staged package reopen. No cache was added to live handles,
+and the accepted `(source, destination: int)` Python signature remains
+unchanged.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx` and `rdocx-py` crates and code at the user's direction. The complete
+`rdocx` crate suite passed before the final preserved-node end-boundary guard,
+then the focused native clone regressions and both Python 3.9 and 3.12 clone
+suites passed against the final implementation. Scoped clippy, strict mypy
+2.3.0, stubtest, formatting, prose, generated-skill drift, and the hash harness
+also passed.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for linear
+direct-item discovery, `docs/hld/10-bindings-spec.md`, for one-inventory
+binding resolution and named errors, `docs/hld/12-testing-strategy.md`, for the
+scaling regression, and `docs/hld/14-development-backlog.md`, for the F-X124
+acceptance contract.
+
+**Tests.** `clone_content_scales_linearly_and_names_invalid_arguments` proves
+middle and end insertion scaling, exact cloned text, and both error messages.
+Measured final debug-build clone times were 0.048 seconds at 100 paragraphs,
+0.077 seconds at 200, and 0.146 seconds at 400 for the reported middle
+destination. Six focused native regressions retain fresh identities,
+relationship scope, namespace replay, and atomic rejection.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Use the owned story inventory when more than one
+binding location must be resolved. Keep section-property checks behind the
+preserved-node kind test so ordinary direct children remain linear.
+
+### F-X125, Compare table grid changes
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Document comparison now represents unequal active table
+grids as the original table marked for deletion followed by the edited table
+marked for insertion. This handles gained, lost, and resized columns while
+retaining focused row and cell comparison for equal grids.
+
+**Non-obvious choices.** The implementation reuses the established row-marker
+table representation. Revision resolution already removes the unused table
+shell, so no unsupported block-level wrapper or new grammar was required.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx` comparison and revision code at the user's direction. The named gate,
+29 comparison regressions, the inserted and deleted table-resolution case,
+scoped clippy, formatting, prose, and the hash harness passed.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for the tracked
+replacement representation, `docs/hld/12-testing-strategy.md`, for the grid
+matrix and postconditions, and `docs/hld/14-development-backlog.md`, for the
+F-X125 acceptance contract.
+
+**Tests.** `comparison_tracks_changed_table_grids_as_table_replacement` proves
+column gain, column loss, and width-only changes. It pins deletion before
+insertion, exact author and timestamp metadata, save and reopen, acceptance
+equal to the edited document, and rejection equal to the original.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Use whole-table replacement whenever two active
+grids cannot share one cell-level revision model. Keep equal-grid edits on the
+more focused row and cell path.
+
+### F-X127, Collapse adjacent page break requests
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Pagination now records the transition created by a
+run-level page break at the end of a paragraph and lets an immediately
+following `pageBreakBefore` share it. The one-block state is consumed before
+any later block can inherit it.
+
+**Non-obvious choices.** Collapse is allowed only when the continuation is the
+synthetic empty line after the run break. Intervening content, line and column
+breaks, shading, borders, revision bars, and drawing-clear offsets retain
+separate transitions.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx-layout` and `rdocx` crates and changed pagination code at the user's
+direction. The named gate, focused paginator matrix, existing run-break and PDF
+consumer regressions, scoped clippy, formatting, prose, generated-skill drift,
+and hash harness passed. A workspace-wide test suite was not run.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`, for the one-block
+transition state, `docs/hld/12-testing-strategy.md`, for the pinned reporter
+oracle and boundary controls, and `docs/hld/14-development-backlog.md`, for the
+F-X127 acceptance contract.
+
+**Tests.** `adjacent_run_and_paragraph_page_breaks_share_one_transition` pins
+the LibreOffice Writer 26.2.5.2 page and text result supplied with Issue 129.
+The paginator unit matrix proves single transition sharing and separate pages
+for intervening content, visible continuation formatting, line breaks, and
+column breaks. Existing run-level fragmentation, field, PNG, and pinned
+Poppler PDF coverage remains green.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep adjacency state local to the next block.
+Do not generalize it into suppression of page breaks on empty pages, since
+explicit blank pages remain valid authored content.
+
+### F-267, Complete table style and conditional formatting authoring
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The two conditional property layers the projection dropped,
+`w:rPr` and `w:trPr`, plus a table style's own base row and cell properties and
+the two band sizes. An ordered `TableStyleRegion` enum whose declaration order
+is Word's priority order, a table-style run layer threaded into
+`resolve_run_properties`, typed per-region authoring and removal, and
+`w:cnfStyle` on `w:pPr` handed over by F-264.
+
+**Non-obvious choices.** Three precedence defects were fixed, not worked
+around. The vertical band was overriding the horizontal band because later
+regions overwrote earlier ones and the push order was inverted. A derived
+style's `wholeTable` was beating a base style's `firstRow` because the
+conditional merge ran inside the `basedOn` loop instead of flattening the chain
+per region first. Banding ignored band size and counted from the header row and
+first column rather than skipping them. Precedence is now a property of the
+enum's declaration order, which is why removing a single `sort_unstable` makes
+the gate fail.
+
+**Deviations from the design plan.** Two, both narrowing and both recorded in
+the handoff. Only the run layer joins `ResolvedTableCellStyle`, because no
+checklist item or test covered cell margins, vertical alignment or text
+direction and threading them would be an unverified layout change the harness
+cannot see. `StyleBuilder` gained row and cell property setters the Approach
+did not spell out, without which the newly modeled base layers would be
+read-only and DOCX-034 could not claim Create or Mutate.
+
+**Spec sections touched.** The six files the plan listed.
+
+**Tests.** `every_conditional_table_region_matches_word` is the gate, proven
+reversible. Thirteen tests including the three precedence regressions, each
+named as the failure it prevents.
+
+**Hash harness.** Unchanged, 49 of 49. Both named failure modes were checked
+first, no sample carries a band size and the new run layer is `None` outside a
+styled table.
+
+**Notes for future sessions.** The differential found a real oracle divergence.
+LibreOffice paints the vertical band where Word and this workspace paint the
+horizontal band, which is the inversion this story fixes. Both sides are
+asserted so neither our resolution nor an oracle upgrade can move silently.
+DOCX-034 stays partial because conditional row geometry is applied by F-268a,
+so the row's owner moved to F-268.
+
+### F-269, Complete section page semantics
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The seven `w:sectPr` children that were preserved but
+untyped, and the layout that makes them mean something. Page borders, line
+numbering, variable-width columns with separators, vertical page alignment and
+mirrored margins with gutter reach pagination. Paper source, the book fold trio
+and the section note properties round-trip only.
+
+**Why it matters.** `Section::set_columns` wrote valid XML the layout engine
+never read, while `docs/hld/08-rendering-spec.md` already claimed columns
+reached pagination. That was spec drift rather than an omission, and the claim
+is now true.
+
+**Non-obvious choices.** The single-column path returns the geometry untouched
+rather than evaluating a neutral one-track form. Routing it through generalised
+track arithmetic would reassociate float operations and shift a glyph by an
+ulp, moving all seven page images and all 21 PDF entries with nothing visible
+changing. `a_single_column_section_keeps_its_exact_content_width` holds that
+line and also asserts a two-column section does move, so it cannot pass
+vacuously. Line numbers are a PDF artifact excluded from the reading order,
+which is what a screen reader wants. `w:vAlign="both"` preserves its value,
+lays out as `Top` and emits a diagnostic.
+
+**Deviations from the design plan.** Five `CT_SectPr` members are boxed,
+because growing the struct inline overflowed the 2 MiB test-thread stack in the
+same comparison test that caught F-264. The differential states an SSIM floor
+as a collapse guard rather than a similarity claim, with the layout claim
+carried by an ink block comparison.
+
+**Spec sections touched.** The five files the plan listed.
+
+**Tests.** `section_page_semantics_match_pinned_libreoffice_render` is the
+gate, and it fails with two ink blocks instead of four when column resolution
+is bypassed.
+
+**Hash harness.** Unchanged, 49 of 49, checked at every layer rather than once
+at the end.
+
+**Notes for future sessions.** Line breaking uses the first track's measure for
+a whole section, so unequal tracks break to the first one's measure while
+positioning still uses each track's own geometry. Recorded as F-269c alongside
+column balancing. Word confirmation is F-269a, true vertical distribution is
+F-269b. DOCX-036's owner moved to F-274, which owns the remaining note policy.
+
+### F-265, Complete run property and inline authoring
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The sixteen remaining `EG_RPrBase` children at the slots
+they already owned, the complete `w:rFonts` slot set with `w:hint`, typed
+theme colour with tint and shade, and two ordered inline variants for symbols
+and special characters.
+
+**Why it matters.** Three real data-loss paths were closed. `w:rFonts` was
+dropping `eastAsiaTheme`, `cstheme` and `hint`, `w:color` was dropping
+`themeTint` and `themeShade`, and `CT_Shd` was dropping all six of its theme
+attributes, so a no-op save silently discarded producer theme intent.
+
+**Non-obvious choices.** Explicit font replacement now clears that slot's theme
+attribute, which is a correction rather than a change: the previous call left a
+`w:rFonts` where Word still resolved the theme font and the caller's explicit
+choice did nothing. `apply_tint_shade` goes live for the first time with a
+zero-line diff on `theme.rs`, because it is deliberately naive and correcting
+it during the migration would be indistinguishable from a bug. Ordered inline
+content gained two `RunContent` variants rather than six, because the enum is
+matched in ten files and 137 times in the layout engine alone.
+
+**Deviations from the design plan.** The render projection for `w:outline`,
+`w:shadow`, `w:emboss`, `w:imprint`, `w:bdr`, `w:kern` and `w:fitText` is not
+built. It needs new segment state in `oxml-layout`, a format-neutral crate with
+32 `TextSegment` literals, plus PDF backend work, which is a story of its own.
+What does render is `w:sym`, `w:cr`, `w:noBreakHyphen`, `w:ptab` and the tint
+and shade step. Three existing members were boxed to stay under the stack
+ceiling.
+
+**Spec sections touched.** The eight files the plan listed.
+
+**Tests.** `complete_run_formatting_and_inline_order_match_the_pinned_word_reference`
+is the gate, proven to fail when the `w:themeTint` write is disabled.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The explicit-before-theme font priority diverges
+from Word deliberately and is asserted so the differential finding is
+pre-explained. DOCX-032 stays partial and its owner moved to F-312, which owns
+the render projection.
+
+### F-270, Complete settings and web settings authoring
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** One `SETTINGS_ORDER` table replacing three hand-maintained
+copies, a closed 31-name `SUPPORTED_SETTINGS` constant, diagnostics computed
+once during parse, `w:proofState`, the complete closed `w:compat` on-off set,
+mail merge with in-group ordering, every missing remover, and typed document
+protection. Web settings became a modeled part for the first time, with its own
+module, relationship type and facade wiring.
+
+**Non-obvious choices.** `SUPPORTED_SETTINGS` makes "no unmodeled supported
+child" decidable rather than a judgement, and a unit test proves it is a strict
+subsequence of the order table. Diagnostics let a caller tell absent from
+present but not owned, which the previous silent reset to `None` made
+impossible. A fresh Word-compatible package still gains no web settings part,
+so the authoring conformance member set is unchanged. Document protection
+records caller metadata verbatim and derives no password material, stated as an
+explicit non-goal rather than left as a gap.
+
+**Deviations from the design plan.** `CompatibilityOption::find` is
+prefix-aware rather than taking a local name. The facade mail-merge accessors
+carry a `_settings` suffix because `Document::mail_merge` already names the
+field-merge operation.
+
+**Spec sections touched.** The five files the plan listed.
+
+**Tests.** `public_authored_settings_package_reports_no_unmodeled_supported_children`
+is the gate. It does not merely fail against reverted code, it does not
+compile, because the whole surface is new.
+
+**Hash harness.** Unchanged, 49 of 49. `word/settings.xml` is not a recorded
+part, and the default tab fallback is byte identical to the literal it
+replaced.
+
+**Notes for future sessions.** Two defects were caught in microscope rather
+than by a user: a self-closing group leaked its namespace scope onto following
+siblings, and a self-closing `w:divs` swallowed every later top-level child.
+Both have named regressions. `oxml-layout` needs a pre-1.0 minor bump for the
+new public `LineBreakParams` field.
+
+### F-264, Complete paragraph property authoring
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The nine remaining `w:pPr` children plus `CT_FramePr` and
+`w:divId`, each at the schema slot it already owned, and the full paragraph
+facade: logical indentation, automatic spacing, six border edges, shading,
+indexed tab stops, frames, outline level, direction and the paragraph mark.
+
+**Non-obvious choices.** Two changes are contracts other S74 stories consume.
+`CT_BorderEdge` gained ordered attribute retention covering `w:shadow`,
+`w:frame` and the three theme attributes, which F-269 uses for page borders
+instead of adding a second retaining path. The `w:bidi` setter ships here
+because F-266a needs to build a right-to-left fixture through the public
+facade. `w:divId` is typed here because it is a `w:pPr` child and this was the
+only wave 1 story editing `CT_PPr`, while F-270 owns the web settings half.
+
+**Deviations from the design plan.** `CT_PPr::frame` and `CT_PPr::borders` are
+boxed. Typing the new members inline grew the struct enough to overflow the
+2 MiB test-thread stack in two existing comparison tests, and bisecting showed
+the base was already peaking at 2.03 to 2.06 MiB with effectively no margin.
+`CT_PPr` is now 192 bytes smaller than the base. This follows F-084, which
+boxed for the same reason and explicitly rejected raising `RUST_MIN_STACK`.
+
+**Spec sections touched.** The five files the plan listed.
+
+**Tests.** `every_public_paragraph_property_reopens_and_preserves_unrelated_xml`
+is the gate, proven real by reverting the `w:framePr` write.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The stack ceiling is real and shared. Three more
+S74 stories hit it after this one. Box composite members from the start.
+DOCX-030 stays partial and its owner moved to F-311, which owns positioned
+frame placement.
+
+### F-266b, Ruby and emphasis marks
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** `w:ruby` as typed paragraph content with its phonetic and
+base lines, and the layout projection for `w:em` emphasis marks. Text
+extraction returns the base text only, so search, selection and redaction do
+not double-count the guide.
+
+**Non-obvious choices.** `CT_Ruby` holds its base line as a half-open span over
+`CT_P::runs` rather than owning a `Vec<CT_R>`. The plan's shape would have kept
+the base text out of the paragraph's run list, and every text projection the
+plan itself requires would then have needed its own ruby case. The span is what
+`w:hyperlink` already does for the same problem. `CT_RubyPr` carries its own
+raw bucket so an unmodelled `w:rubyPr` child is written back inside the element
+it came from.
+
+**Scope that shrank for a good reason.** Work group C reduced to its render
+projection, because F-265 had already landed `CT_RPr::emphasis_mark`, `ST_Em`,
+the schema slot, the producer-token carrier and the facade pair.
+
+**Five defects caught in review, not by a user.** A raw child or equation at the
+first base-run boundary was dropped from layout. A hand-built span past the run
+list panicked on a slice. `paragraph_fingerprint` could not distinguish an
+annotated paragraph from an unannotated one, so a stale cached block could be
+served. And two span-desync defects: `split_run` with `insert_unwrapped_run`,
+and `remap_complex_field_boundaries`, both shift every recorded run boundary
+and neither knew about ruby spans, so a split or a complex-field collapse
+before an annotation left it wrapping the neighbouring run.
+
+**Spec sections touched.** The four files the plan listed.
+
+**Tests.** `ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order`
+is the gate, proven by making an emphasis mark draw nothing. It asserts
+F-266a's digest is unmoved in the same module, so a sibling cannot disturb it
+silently.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** An annotated span is one unbreakable inline
+item, so a ruby never breaks inside its base and a marked run leaves the rich
+shaping path. Both limits are recorded rather than closed.
+
+### F-268b, Floating table placement and wrap
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** M, estimated 3 days, actual 1 day
+
+**What was built.** Floating table lowering and placement through the wrap
+machinery the flow engine already owns, so `w:tblpPr` stops being an authored
+property with no effect. The anchor vocabulary maps one for one onto the
+existing relative-from types, so no new anchor concept was introduced. Float
+against float resolves within one page.
+
+**The thing the plan did not anticipate.** `document_has_wrapping_drawing`
+gates the entire two-pass path, and a document whose only obstacle is a float
+was taking the single-pass restart route. The wrap resolution this story
+depends on would never have run, and text above a text-anchored float would
+never have been pushed aside. The engine now asks the table lowering whether a
+table floats, which also removed a second copy of that rule.
+
+**A defect caught in review.** The look-ahead offered a float at its unresolved
+anchor while placement then dropped it below a float it may not overlap, so
+text above reserved space for a float that landed elsewhere. Fixed by running
+the same settlement in the look-ahead.
+
+**Spec sections touched.** The four files the plan listed.
+
+**Tests.** `floating_tables_match_reviewed_word_page_geometry_and_pagination`
+is the gate, proven by reverting the three layout sources and watching the
+float return to the flow. `a_document_with_no_floating_table_still_paginates_in_one_pass`
+guards the one genuinely new failure mode, since the gating predicate sits on a
+path every sample uses.
+
+**Hash harness.** Unchanged, 49 of 49, and the golden pixel manifest 7 of 7
+verified through the pinned rasteriser on staged copies, because that harness
+cannot run from a worker worktree.
+
+**Notes for future sessions.** DOCX-035 closes here. The reciprocal half, a
+table that does not float still taking the full measure beside one, plus
+facing-page and section-scoped float resolution, are recorded as boundaries in
+the rendering spec rather than left as an open owner.
+
+### F-266a, Script identity and font slot resolution
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Hangul and Kana gained their own script identity and
+HarfRust tags, `w:rFonts` now chooses a family per script slot, and the
+deterministic Hebrew, Korean and Japanese subsets the golden gate needs are
+bundled. The shipped font set could not draw three of the five scripts
+DOCX-033 names, so the gate was impossible before this.
+
+**Three things that looked done were inert.** The explicit `w:ascii` family
+outranked a slot's own theme attribute, so `w:eastAsiaTheme` and `w:cstheme`
+never applied through the public facade. `w:hint` was inert for every character
+a document writes it on. `needs_word_multilingual_layout` omitted Hangul
+entirely, so Korean never reached the rich shaping path and adding the script
+variant alone would have changed nothing.
+
+**Non-obvious choices.** The fonts landed as their own commit with nothing else
+in it, and both the hash harness and the golden pixel manifest ran on that
+commit alone and held at 49 of 49 and 7 of 7, which proves no sample was
+already taking a coverage fallback. Each subset carries a `SUBSET` record with
+source and output SHA-256 and the exact `pyftsubset` command, following the
+Simplified Chinese precedent. The archive is 4.41 MiB against the 10 MiB
+ceiling.
+
+**Deviations from the design plan.** Two tests the plan named are not writable
+as written. Shaping does not cross a `w:r` boundary, so Arabic joining is
+locked inside one run against a zero-width non-joiner control and the gap is
+recorded as owed its own F-ID. The `Theme` model parses only `a:latin`, so the
+East Asian and complex-script theme entries the plan named do not exist, and
+creating them is a parser change the plan's own risk routing excludes. The
+plan's font size estimate was also wrong, and the spec now carries the measured
+10.4 MB and 9.6 MB rather than the estimated 5 MB.
+
+**Spec sections touched.** The four files the plan listed, plus `CLAUDE.md`,
+`.github/workflows/ci.yml` and `scripts/test_sprint_workflow.py` for the 24 to
+27 font inventory.
+
+**Tests.** `mixed_script_page_matches_the_pinned_geometry_and_reading_order`
+asserts each script resolves through its own `w:rFonts` slot to its own family,
+so a notdef fallback fails it, and reassembles logical order exactly per
+paragraph. Seven microscope passes to zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49, and the golden pixel manifest unmoved at
+7 of 7.
+
+**Notes for future sessions.** A paragraph on the rich path cannot enter the
+paragraph block cache. That was already true of Arabic, Hebrew and CJK and is
+now true of Korean, so an incremental fixture moved to Latin to keep proving
+the reuse it exists to prove. One family resolves per run, so a run whose
+alphabetic characters disagree keeps `w:ascii` where Word draws from two slots,
+recorded as a deliberate divergence. `scripts/golden_png_harness.py` cannot run
+from a worker worktree, because the pinned `pdftoppm` wrapper bind mounts only
+the canonical repository path.
+
+### F-268a, Advanced table authoring and geometry
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The six `w:tblPr` and four `w:trPr` children that survived
+only as positioned raw XML, their public authoring surface, and the layout that
+makes three previously inert things mean something. `w:gridBefore` and
+`w:gridAfter` were modeled and readable but no layout code referenced them.
+`w:tblLayout` was an opaque string `compute_column_widths` never read, so
+autofit and fixed produced identical geometry. The conditional `w:trPr` that
+F-267 modeled now resolves into row height, header repetition and grid offsets,
+which is what lets DOCX-034 close.
+
+**Non-obvious choices.** Bidirectional order reverses placement in
+`render_table_row` rather than reversing the lowered cell vectors, because
+those vectors carry positional alignment the semantics assigners depend on and
+reversing them moves cell ownership out of reading order.
+
+**Two defects caught in review.** `w:tblCaption` and `w:tblDescription` are the
+first free-text values in this family and were escaped on write but never
+unescaped on read, so an ampersand double-escaped on a second save. The autofit
+maximum added the horizontal cell margin twice when a natural width fell below
+its longest unbreakable run.
+
+**Corrections applied at integration, recorded here rather than hidden.** Two.
+First, autofit engagement was narrowed to require the `w:tblLayout` element.
+The plan stated the narrow rule in its hash harness section and the broad one
+in its approach, and the worker implemented the approach while flagging the
+contradiction rather than deciding alone. Measured both ways, the broad rule
+fails `scripts/docx_authoring_conformance.py --private-required` with a moved
+P3 reference page count, because 131 of the 141 tables in the Word corpus are
+written as `w:tblW type="auto"` with no `w:tblLayout`. Three test expectations
+moved with the contract, including one regression whose name already described
+the narrow rule while its assertion pinned the broad one. Second, the
+integrator's merge resolution for F-266a discarded this story's
+`advanced_table_geometry_regressions` module, five tests, which was restored
+and is now pinned by an arithmetic reconciliation of both test entrypoints.
+
+**Spec sections touched.** The five files the plan listed.
+
+**Tests.** `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`
+is the gate, proven by forcing autofit to return `None` and watching every row
+origin shift. Two microscope passes to zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49, with all four sample facts verified by
+reading the generator rather than assumed, and the golden pixel manifest
+unmoved at 7 of 7.
+
+**Notes for future sessions.** Adopting the literal ECMA autofit default, where
+an absent `w:tblLayout` means autofit, is its own story with its own reviewed
+geometry delta. The SSIM harness covers only `corpus/docx`, five documents, so
+a rendering change can pass it and still fail
+`docx_authoring_conformance.py --private-required`, which covers
+`corpus/private-docx`. Run both.
+
+### F-X132, Match a retained namespace owner by structure, not by identity
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** A namespace declaration that rebinds a prefix to the URI
+already in scope no longer makes its element a namespace owner. It resolves no
+name differently from the scope it sits in, so canonical serialization cannot
+lose anything by dropping it.
+
+**Why it exists.** `scripts/docx_ssim_harness.py --check` failed at its
+acceptor on `corpus/docx/redlined_no_footer.docx`. The document opened,
+`accept_all` accepted 21 revisions, and the save then failed with
+`cannot identify retained 'r' nested namespace owner after mutation`.
+
+The mechanism, confirmed by instrumenting the failure rather than inferred. The
+refusal comes from the arm that fires when an owner is both
+`ambiguous_without_namespace` and `same_namespace_structural_alternate`, which
+returns before any semantic comparison, reached through
+`canonicalize_drawing_ids` rather than the document flush. The owner is a run
+whose only declaration is `xmlns:w`, with two candidates that are byte
+identical to each other. The producer's `word/document.xml` declares `xmlns:w`
+exactly once, on the root. The 888 copies on paragraphs and runs are written by
+our own save, because F-X128 retains the producer root attributes and F-X131's
+`used_prefixes` loop keeps the `w` binding those attributes use. The part is
+then read back and those redundant bindings are read as nested owners. The
+corpus document has two byte-identical runs, each an equally good owner of the
+other's declaration, so the matcher refuses. `accept_all` matters only because
+it marks the document modified, so the save takes the canonical path rather
+than the byte-for-byte one.
+
+An earlier hypothesis, that the `semantic` vector failed because retained
+`w:rsid` values differed between candidates, was measured and disproved. The
+candidates agree on every identity value, so excluding them would have fixed
+nothing and would have deleted the only signal able to tell two otherwise
+identical runs apart. The commit message for this story states that superseded
+hypothesis. This entry is the correct record.
+
+**Bisect.** Source-built probe against the corpus document. `f80b8e14`, the
+sprint base, saves 80237 bytes. `5bad2f26`, immediately before F-X128, saves.
+`976611ee`, F-X128, is where it breaks, and every later commit inherits it.
+This is a second F-X128 regression, alongside the five test failures F-X131
+fixed, and it is not caused by the property split, by F-X131, or by any of the
+five wave 1 to 3 stories.
+
+**Non-obvious choices.** The first direction considered was excluding the
+`w:rsid` family from the semantic comparison, which would have treated the
+symptom. Ownership is the real question, and a redundant declaration is not
+ownership. The ambiguity error was not loosened, so two genuinely different
+candidate owners are still rejected.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md` and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `accepting_revisions_still_saves_when_runs_carry_revision_identities`
+is the gate. It builds a redlined document in source whose runs carry
+identities, accepts, saves and reopens, asserts the identities survive, and
+asserts a genuine semantic difference is still distinguished so the fix cannot
+be a blanket loosening.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The corpus gate is not part of `/verify`, which
+is how both F-X128 regressions reached an integrated sprint branch. Run
+`scripts/docx_ssim_harness.py --check` when a change touches retention,
+namespaces or revision acceptance, and build `rdocx-cli` first or its `cargo
+run` hits a 300 second build timeout that reads like a render hang.
+
+### F-X131, Retain only the namespace declarations a root attribute uses
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Root-attribute retention now records a namespace
+declaration only when a retained attribute uses its prefix, and the write side
+no longer copies the canonical `w14` binding onto the element it restores.
+Together these stop a modeled root rebinding a prefix its surrounding scope
+already owns.
+
+**Why it exists.** Five tests were failing on `sprint/s74` before this story,
+all from F-X128. `every_property_revision_keeps_owner_local_aliases` in
+`rdocx-oxml`, and `intermediate_raw_shadow_is_safe_but_direct_fixed_prefix_use_fails_closed`,
+`unused_fixed_prefix_declarations_do_not_reject_safe_raw_replay`,
+`repeated_saves_are_byte_identical_after_allocation` and
+`typed_comment_flush_preserves_canonical_story_history` in `rdocx`. The failures
+were confirmed at `5d8e68cc` in a clean worktree with its own target directory,
+so they were not stale builds, and they were present on both sides of the
+property grammar split at `f224c3b2`. Two of the five appear only when
+`/private/tmp/rdocx-s73-bin` is first on `PATH`, which is part of why they
+survived integration.
+
+**Non-obvious choices.** The write side was fixed rather than the authored
+side. Making the authored path declare `xmlns:w14` would also have made the two
+paths agree, but it changes authored bytes and therefore breaks
+`WORD_COMMENT_CANDIDATE_SHA256`, which binds the exact file a human opened in
+Word 16.104 to confirm no repair. That evidence cannot be re-obtained in this
+workspace, so authored bytes were left untouched. The record still carries the
+declarations its own resolver needs, so F-X128's expanded-name precedence for
+an authored paragraph identity is unaffected.
+
+**Deviations from the design plan.** The plan described the capture side only.
+The write-side defect was found while running the wider gate and was folded
+into the same story, because it is the same mistake on the other side and
+splitting it would have left the branch red in between. Both the plan and the
+microscope record the addition.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for retention
+covering attributes rather than namespace bindings, and
+`docs/hld/14-development-backlog.md`, for the F-X131 acceptance contract.
+
+**Tests.** `a_section_root_retains_no_namespace_declaration_its_attributes_do_not_use`
+is the gate and was verified to fail against the unfixed capture side.
+`a_reopened_paragraph_identity_does_not_rebind_the_prefix_its_part_root_owns`
+covers the write side. `a_retained_root_attribute_keeps_the_declaration_its_own_prefix_needs`
+and `a_root_with_only_namespace_declarations_records_nothing` pin the capture
+rules. The five previously failing tests pass unedited, and no recorded
+baseline was re-recorded.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Run the gate with `/private/tmp/rdocx-s73-bin`
+first on `PATH`. Without it two different `rdocx` tests fail for an unrelated
+reason and the real failures stay hidden. Retention is for attributes. A
+namespace binding belongs to whatever scope already declares it.
+
+### F-X129, Tolerate unmatched notes placeholders
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Notes-page composition now skips a notes-slide placeholder
+overlay whose complete key has no notes-master match. It continues rendering
+matched overlays and ordinary notes content and records one diagnostic per
+skipped key in source order.
+
+**Non-obvious choices.** Only unmatched overlays are tolerated. Ambiguous and
+duplicate matching, invalid relationship ownership, and a missing required
+slide-image placeholder retain their fail-closed behavior.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rpptx` notes rendering code at the user's direction. The named gate, 15
+notes-focused integration tests, the diagnostic and hard-failure unit matrix,
+scoped clippy, formatting, and the hash harness passed. A workspace-wide test
+suite was not run.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md`, for notes
+placeholder ownership, `docs/hld/08-rendering-spec.md`, for skip and diagnostic
+behavior, `docs/hld/12-testing-strategy.md`, for the source-built gate and hard
+failure controls, and `docs/hld/14-development-backlog.md`, for the F-X129
+acceptance contract.
+
+**Tests.** `notes_pdf_skips_only_unmatched_slide_placeholder_overlays` proves
+the Google Slides index variant produces byte-identical notes PDF and PNG
+output to its matched control, exact page geometry and text, and no package
+mutation. `notes_placeholder_skip_diagnostics_are_ordered_and_hard_failures_remain`
+proves ordered diagnostics, ambiguity rejection, and the required slide-image
+failure.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not generalize this tolerance to relationship
+errors or ambiguous placeholder ownership. Only a complete-key miss is safe to
+skip.
+
+### F-X128, Preserve Word paragraph and revision identities
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Modeled paragraphs, runs, and section properties now retain
+their ordered root attributes across save and reopen. This includes modern
+paragraph identities, revision-session values, foreign attributes, unqualified
+attributes, and the namespace bindings each retained qualified name needs.
+
+**Non-obvious choices.** The implementation stores a private root-attribute
+record in each type's existing raw-preservation carrier. Public paragraph and
+run item views, conversion diagnostics, layout cache decisions, and semantic
+comparison ignore that record. Authored `paraId` replaces only the retained
+attribute with the same expanded name.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx-oxml`, `rdocx-layout`, and `rdocx` crates and changed code at the user's
+direction. The named round-trip and focused unit regressions, public run-shape
+and comparison controls, scoped clippy, formatting, prose, generated-skill
+drift, and hash harness passed. A workspace-wide test suite was not run.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for expanded-name
+root-attribute retention, `docs/hld/12-testing-strategy.md`, for the source-built
+round-trip gate and focused controls, and
+`docs/hld/14-development-backlog.md`, for the F-X128 acceptance contract.
+
+**Tests.** `paragraph_run_and_section_identity_attributes_survive_noop_save`
+proves exact values, source attribute order, child schema order, public item
+filtering, typed text mutation, save and reopen, and deterministic bytes. The
+focused oxml unit rejects alias duplicates and proves authored identity
+precedence. Existing regressions retain the public `CT_R` struct shape and
+table-comparison behavior.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep producer identity retention separate from
+identity generation. Compare and replace typed ownership by expanded name, not
+by lexical prefix.
+
+### F-X126, Preserve drawings through comparison acceptance
+
+**Sprint.** S74
+**Completed.** 2026-09-18
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Comparison-only story projections now close every required
+drawing namespace binding on the inline or anchor root before equality. Moving
+a binding between the story root and a drawing run no longer makes an unchanged
+body, header, or footer drawing appear different. Actual package staging keeps
+the source declaration ownership and story-local relationship scope.
+
+**Non-obvious choices.** Namespace ownership is normalized only in the
+comparison model. Drawing payload remains significant after declaration
+placement normalization, so a changed `docPr` identity is still tracked and
+resolved correctly.
+
+**Deviations from the design plan.** Verification was limited to the impacted
+`rdocx` comparison and story code at the user's direction. The named gate, 30
+comparison regressions, focused inherited-drawing and revision-resolution
+controls, scoped clippy, formatting, prose, generated-skill drift, and the hash
+harness passed. A workspace-wide test suite and a separate render run were not
+performed because no renderer changed.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, for the
+comparison-only ownership normalization, `docs/hld/08-rendering-spec.md`, for
+unchanged story relationship scope, `docs/hld/12-testing-strategy.md`, for the
+multi-story regression, and `docs/hld/14-development-backlog.md`, for the
+F-X126 acceptance contract.
+
+**Tests.**
+`text_only_comparison_with_body_header_and_footer_drawings_accepts_exactly`
+proves exact run, word, and character acceptance and rejection across six body
+edits, one footer edit, a complex PAGE field, and body, header, and footer
+drawings. It checks scoped relationship targets and media bytes, retained raw
+drawing payload after namespace declaration normalization, byte-exact
+self-comparison, and a changed drawing identity control.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep package-preserving namespace ownership and
+comparison-model namespace closure as separate policies. Do not remove drawings
+from equality to work around declaration placement differences.
+
+### F-266c, Character grid and vertical text
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** `w:docGrid` and `w:eastAsianLayout` are typed, publicly
+authorable state. Character and line pitches now affect Word layout, combined
+East Asian runs use one base-character advance, and vertical table-cell and
+section text renders through transposed boxes and rotated layout groups.
+
+**Non-obvious choices.** The `default` grid type stays on the previous geometry
+path. Rotated text preserves logical extraction order, and upright stacked CJK
+uses the already documented visible rotated fallback with a diagnostic. The
+DOCX-033 row is complete because the requested public and rendering surface is
+implemented, while its exact repertoire and default-behaviour limits remain
+stated in that row.
+
+**Deviations from the design plan.** Run-level East Asian state landed on the
+paragraph facade because the internal paragraph model owns effective runs.
+Character-grid pitch also had to survive float-driven paragraph reflow, which
+added the cached reflow projection and its focused regression. The modeled
+`w:overflowPunct`, `w:autoSpaceDE`, and `w:autoSpaceDN` defaults remain explicit
+capability boundaries rather than being claimed as applied layout behavior.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order`
+is the deterministic gate. Round-trip, schema-order, vertical-direction,
+logical-extraction, row-measurement, section-direction, and float-reflow
+regressions cover the parser, facade, layout, and pagination paths. The full
+workspace gate, package dry run, documentation gate, WASM targets, and
+supply-chain check also passed.
+
+**Hash harness.** Unchanged, 49 of 49. The earlier F-266a and F-266b golden
+digests also remained unchanged.
+
+**Notes for future sessions.** Cache-size accounting does not include the small
+retained foreign-attribute strings on a grid key. Upright stacking and the
+three unapplied East Asian defaults are documented boundaries, not hidden
+claims of parity.
+
+### F-266, International and vertical typography
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 0 days after split, actual 0 days
+
+**What was built.** The split parent closed after F-266a, F-266b, and F-266c
+delivered script-aware font selection, deterministic fixture faces, ruby,
+emphasis marks, character grids, and vertical text. DOCX-033 now carries its
+final complete classification and its explicit fidelity boundaries.
+
+**Non-obvious choices.** The parent has no implementation diff or separate
+estimate after the split. Its original scope and delivery effort are recorded
+on the three child F-IDs, whose named golden gates form the parent gate.
+
+**Deviations from the design plan.** None. The approved split and every parent
+checklist item were completed.
+
+**Spec sections touched.** None directly. Each child updated exactly its own
+declared HLD set.
+
+**Tests.** The union of
+`mixed_script_page_matches_the_pinned_geometry_and_reading_order`,
+`ruby_and_emphasis_page_matches_the_pinned_geometry_and_reading_order`, and
+`grid_and_vertical_page_matches_the_pinned_geometry_and_reading_order` passed
+inside the full workspace gate.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Read the three child records for implementation
+detail. This entry is the durable closure record for the split parent only.
+
+### F-268, Floating and advanced table layout
+
+**Sprint.** S74
+**Completed.** 2026-09-19
+**Size.** L, estimated 0 days after split, actual 0 days
+
+**What was built.** The split parent closed after F-268a delivered advanced
+table authoring and geometry and F-268b delivered floating-table placement and
+wrap interaction. DOCX-035 now carries its final complete classification and
+its explicit out-of-scope layout boundaries.
+
+**Non-obvious choices.** The parent has no implementation diff or separate
+estimate after the split. Its original scope and delivery effort are recorded
+on the two child F-IDs, whose named golden gates form the parent gate.
+
+**Deviations from the design plan.** None. Both children closed in dependency
+order and the final capability row was ratified only after the floating path
+landed.
+
+**Spec sections touched.** None directly. Each child updated exactly its own
+declared HLD set.
+
+**Tests.** `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`
+and `floating_tables_match_reviewed_word_page_geometry_and_pagination` passed
+inside the full workspace gate.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Read the two child records for implementation
+detail. This entry is the durable closure record for the split parent only.
+
+### F-X130, Show package depth, footprint, and speed
+
+**Sprint.** S74
+**Completed.** 2026-09-20
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The root and all 26 crate READMEs now describe the final
+S74 authoring depth and carry validated package-footprint evidence. The root,
+`rdocx-layout`, `oxml-pdf`, and `rdocx-py` pages also carry bounded speed
+evidence. Both Python long descriptions use the same native-engine, typed-API,
+local-execution, rendering, review, and package-preservation account as their
+source READMEs. The existing README validator now checks every approved row,
+its dated provenance, the complete page inventory, deferred evidence, and the
+10 MiB archive ceiling.
+
+**Non-obvious choices.** Tier one archive measurements come from the same 22
+archives used by the publication dry run. Clean and dirty Cargo VCS metadata
+is normalized before member-byte comparison because the generated `dirty`
+field is not package content. Gzip output may differ by at most 64 bytes while
+the member total and member count remain exact. Tier two records one pinned
+Apple M5 Max observation. Tier three wheel, installed-footprint, CLI, WASM,
+and Python-boundary figures remain absent and have named backlog follow-ups.
+
+**Deviations from the design plan.** Full verification exposed that Cargo adds
+a `dirty` field to generated `.cargo_vcs_info.json` in a modified worktree.
+The re-derivation gate was refined to remove only that generated field before
+comparing member bytes and to allow a 64-byte compressed-size tolerance. The
+published measurements and the rest of the approved plan did not change.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `test_readme_depth_footprint_and_speed_claims_are_evidence_backed`
+is the named gate. The archive re-derivation, bounded speed, provenance,
+approved-page, deferred-measurement, and superlative mutation tests passed.
+`scripts/readme_doctests.py`, the 22-package publication dry run, the archive
+ceiling check, and the full workspace verification gate also passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not add a measurement unless its producing
+command, date, machine or tool identity, and validation bound can be checked.
+Keep generated Cargo VCS dirtiness out of archive-content comparisons, but do
+not normalize any declared package member.

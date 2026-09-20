@@ -17,6 +17,7 @@ use rdocx_oxml::math::MathProperties;
 use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::theme::Theme;
+use rdocx_oxml::units::Twips;
 
 /// The tracked-revision projection used for Word layout.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -157,6 +158,16 @@ pub struct LayoutInput {
     pub document: CT_Document,
     /// Whether document settings enable automatic hyphenation.
     pub automatic_hyphenation: bool,
+    /// The document `w:defaultTabStop`, which sets the implicit tab interval.
+    ///
+    /// `None` reproduces Word's half-inch default.
+    pub default_tab_stop: Option<Twips>,
+    /// Whether `w:mirrorMargins` makes even displayed pages swap their inside
+    /// and outside margins.
+    pub mirror_margins: bool,
+    /// Whether `w:gutterAtTop` puts the binding allowance on the top edge
+    /// rather than the inside edge. Read only when mirroring is on.
+    pub gutter_at_top: bool,
     /// Document-wide OfficeMath defaults from the settings part.
     pub math_properties: Option<MathProperties>,
     /// The tracked-revision projection to lay out.

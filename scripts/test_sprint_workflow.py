@@ -568,7 +568,7 @@ class SprintWorkflowTests(unittest.TestCase):
             f"fonts/{path.name}"
             for path in sorted((*fonts.glob("LICENSE-*"), *fonts.glob("NOTICE-*")))
         )
-        self.assertEqual(len(expected_fonts), 24)
+        self.assertEqual(len(expected_fonts), 27)
         self.assertEqual(len(expected_legal), 6)
         self.assertEqual(listed_fonts, expected_fonts)
         self.assertEqual(listed_legal, expected_legal)
@@ -1121,6 +1121,9 @@ class SprintWorkflowTests(unittest.TestCase):
         noto_entries = (
             "fonts/NotoSansArabic.ttf",
             "fonts/NotoSansDevanagari.ttf",
+            "fonts/NotoSansHebrew-F266a-subset.ttf",
+            "fonts/NotoSansJP-F266a-subset.ttf",
+            "fonts/NotoSansKR-F266a-subset.ttf",
             "fonts/NotoSansSC-FX058-subset.ttf",
             "fonts/NotoSansThai.ttf",
             "fonts/LICENSE-Noto",
@@ -6175,6 +6178,247 @@ rdocx-layout = "=0.10.1"
         self.assertFalse(readme_doctests.validate_comparison_evidence(broad_uniqueness))
         self.assertFalse(readme_doctests.validate_comparison_evidence(duplicate_evidence))
 
+    def test_readme_depth_footprint_and_speed_claims_are_evidence_backed(
+        self,
+    ) -> None:
+        self.assertTrue(readme_doctests.validate_inventory())
+        self.assertTrue(
+            all(
+                readme_doctests.compile_readme(case)
+                for case in readme_doctests.README_CASES
+            )
+        )
+
+    def test_measurement_rows_match_rederived_archive_footprint(self) -> None:
+        for package in readme_doctests.ARCHIVE_MEASUREMENTS:
+            recorded = readme_doctests.recorded_archive_measurement(
+                readme_doctests.MEASUREMENT_ROWS[f"archive:{package}"]
+            )
+            self.assertIsNotNone(recorded, package)
+            compressed, members, count = recorded
+            self.assertLess(compressed, 10 * 1024 * 1024, package)
+            self.assertGreater(members, 0, package)
+            self.assertGreater(count, 0, package)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive = Path(temp_dir) / "sample.crate"
+            payload = b"measured bytes"
+            with tarfile.open(archive, "w:gz") as package_archive:
+                member = tarfile.TarInfo("sample/payload")
+                member.size = len(payload)
+                package_archive.addfile(member, io.BytesIO(payload))
+            self.assertEqual(
+                readme_doctests.archive_measurement(archive),
+                (archive.stat().st_size, len(payload), 1),
+            )
+            clean_archive = Path(temp_dir) / "clean.crate"
+            dirty_archive = Path(temp_dir) / "dirty.crate"
+            clean_vcs = {
+                "git": {"sha1": "1" * 40},
+                "path_in_vcs": "crates/sample",
+            }
+            dirty_vcs = {
+                "git": {"sha1": "2" * 40, "dirty": True},
+                "path_in_vcs": "crates/sample",
+            }
+            for target, vcs_info in (
+                (clean_archive, clean_vcs),
+                (dirty_archive, dirty_vcs),
+            ):
+                with tarfile.open(target, "w:gz") as package_archive:
+                    vcs_payload = json.dumps(vcs_info, indent=2).encode()
+                    vcs_member = tarfile.TarInfo(
+                        "sample-0.1.0/.cargo_vcs_info.json"
+                    )
+                    vcs_member.size = len(vcs_payload)
+                    package_archive.addfile(vcs_member, io.BytesIO(vcs_payload))
+                    payload_member = tarfile.TarInfo("sample-0.1.0/payload")
+                    payload_member.size = len(payload)
+                    package_archive.addfile(payload_member, io.BytesIO(payload))
+            clean_measurement = readme_doctests.archive_measurement(clean_archive)
+            dirty_measurement = readme_doctests.archive_measurement(dirty_archive)
+            self.assertEqual(clean_measurement[1:], dirty_measurement[1:])
+            self.assertLessEqual(
+                abs(clean_measurement[0] - dirty_measurement[0]),
+                readme_doctests.ARCHIVE_COMPRESSION_TOLERANCE_BYTES,
+            )
+
+    def test_measurement_speed_claims_never_exceed_the_gated_floor(self) -> None:
+        thresholds = readme_doctests.performance_thresholds()
+        self.assertTrue(readme_doctests.validate_speed_bounds(thresholds=thresholds))
+        for measurement_id in readme_doctests.SPEED_MEASUREMENTS:
+            weakened = dict(thresholds)
+            if measurement_id.endswith("throughput"):
+                weakened[measurement_id] = thresholds[measurement_id] - 1
+            else:
+                weakened[measurement_id] = thresholds[measurement_id] + 1
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(
+                    readme_doctests.validate_speed_bounds(thresholds=weakened),
+                    measurement_id,
+                )
+            with (
+                patch.object(
+                    readme_doctests,
+                    "performance_thresholds",
+                    return_value=weakened,
+                ),
+                patch.object(readme_doctests, "build_package_archive") as build,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertFalse(readme_doctests.record_measurements())
+                build.assert_not_called()
+            rows = dict(readme_doctests.MEASUREMENT_ROWS)
+            row = list(rows[measurement_id])
+            if measurement_id.endswith("throughput"):
+                row[1] = re.sub(
+                    r"minimum [\d,]+", "minimum 999,999", row[1], count=1
+                )
+            else:
+                row[1] = re.sub(
+                    r"maximum [\d,]+", "maximum 1", row[1], count=1
+                )
+            rows[measurement_id] = tuple(row)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(
+                    readme_doctests.validate_speed_bounds(
+                        rows=rows, thresholds=thresholds
+                    ),
+                    measurement_id,
+                )
+
+    def test_measurement_rows_require_complete_dated_provenance(self) -> None:
+        metadata = readme_doctests.cargo_metadata()
+        self.assertIsNotNone(metadata)
+        root = workflow.REPO / "README.md"
+        text = root.read_text(encoding="utf-8")
+        mutations = (
+            text.replace("| 2026-09-19 |", "|  |", 1),
+            text.replace("| 2026-09-19 |", "| 19 September 2026 |", 1),
+            text.replace("| 0.14.0 |", "| 9.9.9 |", 1),
+        )
+        self.assertFalse(readme_doctests.valid_measurement_date("2026-99-99"))
+        for mutation in mutations:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(
+                    readme_doctests.validate_measurement_evidence(
+                        {root: mutation}, metadata
+                    )
+                )
+
+    def test_measurement_pages_carry_exactly_their_approved_rows(self) -> None:
+        metadata = readme_doctests.cargo_metadata()
+        self.assertIsNotNone(metadata)
+        root = workflow.REPO / "README.md"
+        root_text = root.read_text(encoding="utf-8")
+        missing = root_text.replace(
+            readme_doctests.markdown_measurement_row(
+                readme_doctests.MEASUREMENT_ROWS["layout-throughput"]
+            )
+            + "\n",
+            "",
+            1,
+        )
+        rdocx_pdf = workflow.REPO / "crates/rdocx-pdf/README.md"
+        extra = rdocx_pdf.read_text(encoding="utf-8").replace(
+            "\n## Use it when",
+            "\n"
+            + readme_doctests.markdown_measurement_row(
+                readme_doctests.MEASUREMENT_ROWS["layout-throughput"]
+            )
+            + "\n\n## Use it when",
+            1,
+        )
+        disagreement = root_text.replace(
+            "observed 31,019.1 pages/s", "observed 31,019.2 pages/s", 1
+        )
+        for overrides in ({root: missing}, {rdocx_pdf: extra}, {root: disagreement}):
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(
+                    readme_doctests.validate_measurement_evidence(overrides, metadata)
+                )
+
+    def test_deferred_measurements_stay_absent_and_tracked(self) -> None:
+        metadata = readme_doctests.cargo_metadata()
+        self.assertIsNotNone(metadata)
+        self.assertNotIn("recorded", readme_doctests.MEASUREMENT_TIERS.values())
+        tiers = dict(readme_doctests.MEASUREMENT_TIERS)
+        tiers["archive:oxml-chart"] = "recorded"
+        with (
+            patch.object(readme_doctests, "MEASUREMENT_TIERS", tiers),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertFalse(
+                readme_doctests.validate_measurement_evidence(metadata=metadata)
+            )
+        markers = (*readme_doctests.DEFERRED_MEASUREMENT_MARKERS, "missing follow-up")
+        with (
+            patch.object(readme_doctests, "DEFERRED_MEASUREMENT_MARKERS", markers),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertFalse(
+                readme_doctests.validate_measurement_evidence(metadata=metadata)
+            )
+        python_readme = workflow.REPO / "crates/rdocx-py/README.md"
+        mutation = python_readme.read_text(encoding="utf-8") + "\nWheel 12 MiB\n"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertFalse(
+                readme_doctests.validate_measurement_evidence(
+                    {python_readme: mutation}, metadata
+                )
+            )
+
+    def test_readme_family_rejects_unbounded_superlatives(self) -> None:
+        metadata = readme_doctests.cargo_metadata()
+        self.assertIsNotNone(metadata)
+        readmes = {
+            readme_doctests.package_readme(package)
+            for package in metadata["packages"]
+            if isinstance(package, dict)
+        }
+        readmes.discard(None)
+        typed_readmes = {readme for readme in readmes if isinstance(readme, Path)}
+        self.assertEqual(len(typed_readmes), 27)
+        self.assertTrue(readme_doctests.validate_unbounded_claims(typed_readmes))
+        banned = (
+            "fastest",
+            "smallest",
+            "lightest",
+            "every library",
+            "any other library",
+            "all other",
+            "industry-leading",
+            "unmatched",
+            "best-in-class",
+            "faster than",
+            "smaller than",
+            "faster than. `rdocx` is named only in the next sentence",
+        )
+        for claim in banned:
+            for readme in typed_readmes:
+                mutation = readme.read_text(encoding="utf-8") + f"\n{claim}\n"
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertFalse(
+                        readme_doctests.validate_unbounded_claims(
+                            typed_readmes, {readme: mutation}
+                        ),
+                        f"{claim}: {readme}",
+                    )
+        for readme in typed_readmes:
+            for comparison in (
+                "Faster than `rdocx` on the named workload.",
+                "Faster than release 0.13 on the named workload.",
+                "Smaller than Aspose.Words on the named workload.",
+            ):
+                mutation = readme.read_text(encoding="utf-8") + f"\n{comparison}\n"
+                self.assertTrue(
+                    readme_doctests.validate_unbounded_claims(
+                        typed_readmes, {readme: mutation}
+                    ),
+                    f"{comparison}: {readme}",
+                )
+        root = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        self.assertIn(readme_doctests.ROOT_UNIQUENESS_CLAIM, root)
+
     def test_stable_release_family_has_lockstep_preparation_metadata(self) -> None:
         stable_packages = (
             "rdocx-opc",
@@ -9097,7 +9341,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertIn("system-fonts", features)
         self.assertNotIn("bundled-fonts", features)
         claimed_font_count = re.findall(r"([0-9]+) bundled TTFs", claude)
-        self.assertEqual(claimed_font_count, ["24"])
+        self.assertEqual(claimed_font_count, ["27"])
         fonts = font_path / "fonts"
         self.assertEqual(len(tuple(fonts.glob("*.ttf"))), int(claimed_font_count[0]))
         for legal_file in (
@@ -9355,7 +9599,7 @@ Pedro Assumpcao and the rdocx maintainers.
         incomplete = {"partial", "unsupported"}
         expected_owners = {
             f"F-{number:03d}"
-            for number in range(244, 311)
+            for number in range(244, 313)
             if number
             not in {
                 244,
@@ -9378,6 +9622,33 @@ Pedro Assumpcao and the rdocx maintainers.
                 261,
                 262,
                 263,
+                # F-264 and F-265 delivered the authoring columns of DOCX-030
+                # and DOCX-032 in S74 and handed the remaining layout and
+                # render work to F-311 and F-312, so neither owns a row now.
+                264,
+                265,
+                # F-269 delivered the section page semantics of DOCX-036 in
+                # S74 and handed the row's remaining note policy to F-274, so
+                # it no longer owns an incomplete row.
+                269,
+                # F-267 completed the table style and conditional formatting
+                # authoring of DOCX-034 in S74 and handed the row's remaining
+                # conditional row geometry to F-268, so it no longer owns an
+                # incomplete row.
+                267,
+                # F-268 closed DOCX-035 to complete in S74 once F-268b placed
+                # and wrapped the float, so the parent no longer owns an
+                # incomplete row.
+                268,
+                # F-266 closed DOCX-033 to complete in S74 once F-266c landed
+                # the character grid and the vertical text projection, so the
+                # parent no longer owns an incomplete row. The row's remaining
+                # fallbacks are recorded in its evidence cell rather than held
+                # open by an owner.
+                266,
+                # F-270 closed DOCX-007 and DOCX-037 to complete in S74, so it
+                # no longer owns an incomplete row.
+                270,
             }
         }
         self.assertEqual(
@@ -9589,10 +9860,14 @@ Pedro Assumpcao and the rdocx maintainers.
             "header_footer": "stories",
             "math": "run",
             "numbering": "numbering",
+            "paragraph_properties": "paragraph",
             "placeholder": "fields",
             "properties": "properties",
             "revision": "collaboration",
+            "ruby": "paragraph",
+            "run_properties": "run",
             "settings": "properties",
+            "web_settings": "properties",
             "styles": "styles",
             "table": "tables",
             "text": "run",

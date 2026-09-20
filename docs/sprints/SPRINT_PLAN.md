@@ -1486,10 +1486,24 @@ run, table, international typography, page, and document-setting authoring.
 | F-268 | Floating and advanced table layout | L |
 | F-269 | Complete section page semantics | L |
 | F-270 | Complete settings and web settings authoring | L |
+| F-X123 | Accept producer TOC style variants | S |
+| F-X124 | Make content cloning linear and explicit | M |
+| F-X125 | Compare table grid changes | M |
+| F-X126 | Preserve drawings through comparison acceptance | M |
+| F-X127 | Collapse adjacent page break requests | S |
+| F-X128 | Preserve Word paragraph and revision identities | M |
+| F-X129 | Tolerate unmatched notes placeholders | S |
+| F-X130 | Show package depth, footprint, and speed | L |
 
 Each model change carries its own parser, writer, public API, and render gate.
 F-266 consumes the completed paragraph and run properties, while F-268 consumes
-the table and conditional-style surface.
+the table and conditional-style surface. F-X123 through F-X129 resolve Issues
+124 through 132 before those planned surfaces expand. Issues 126 and 132 share
+F-X124 because they exercise the same public clone call. Issue 68 is an
+answered roadmap question and requires no implementation story.
+F-X130 follows F-264 through F-270 so all 27 package READMEs and both PyPI long
+descriptions can present the completed S74 surface with reproducible feature,
+footprint, and performance evidence.
 
 #### Sprint S75, Related stories, notes, and fragments
 

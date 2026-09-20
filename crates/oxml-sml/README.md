@@ -9,6 +9,16 @@ chart data.
 - Optional number formats for numeric columns.
 - Spreadsheet limits and finite-number validation.
 - Formula ranges for chart series and deterministic XLSX package writing.
+- Shared-string identity, quoted formulas, number formats, and bounded row
+  counts produce one editable chart workbook without a spreadsheet facade.
+
+## Measured footprint and speed
+
+The archive row is regenerated from the package that carries this README.
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: oxml-sml | 12,511 compressed bytes, 49,803 member bytes, 6 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-sml` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 

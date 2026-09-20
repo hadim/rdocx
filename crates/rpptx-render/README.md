@@ -11,6 +11,14 @@ rendering pipelines.
 - Source-scoped slide, layout, and master relationships.
 - Shapes, text, tables, images, groups, and backgrounds lowered to page frames.
 - Structured diagnostics and `LayoutResult` output for downstream backends.
+- Charts, SmartArt text, hyperlinks, speaker notes, handout composition, and
+  animation snapshots share deterministic font and media resolution.
+
+## Measured footprint and speed
+
+| Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
+|---|---|---|---|---|---|---|---|---|
+| Crates.io archive: rpptx-render | 57,790 compressed bytes, 320,838 member bytes, 8 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx-render` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 

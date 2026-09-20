@@ -211,7 +211,7 @@ bytes remain in the ZIP package.
 | DOCX-004 | package | DOCM, DOTX, and DOTM identity and output selection | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:2064` | - |
 | DOCX-005 | properties | core document properties | Y | Y | Y | Y | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-006 | properties | application and custom properties | Y | Y | Y | Y | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
-| DOCX-007 | properties | document variables, compatibility facts, and defaults | Y | Y | Y | Y | Y | package | P | P | Y | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs` | F-270 |
+| DOCX-007 | properties | document variables, compatibility facts, and defaults | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx-oxml/src/settings.rs`,test:`crates/rdocx/tests/integration_test.rs` | - |
 | DOCX-008 | conformance | public and private authoring conformance gate | Y | Y | NA | NA | Y | all | Y | Y | Y | Y | B | B | Y | complete | implementation:`scripts/docx_authoring_conformance.py:388` | - |
 | DOCX-009 | theme-font | themes and theme selection | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-010 | theme-font | font table and licensed embedded fonts | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
@@ -234,14 +234,14 @@ bytes remain in the ZIP package.
 | DOCX-027 | drawing | M23 pictures, text boxes, and watermarks | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs`,test:`crates/rdocx/tests/integration_test.rs` | - |
 | DOCX-028 | fields | M23 pagination fields and private corpus gate | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/field.rs:872`,test:`crates/rdocx/tests/regression_test.rs:7754`,test:`crates/rdocx/tests/integration_test.rs:2768` | - |
 | DOCX-029 | paragraph | ordinary text, alignment, spacing, indentation, and pagination | Y | Y | Y | Y | Y | body | Y | Y | Y | Y | Y | B | B | complete | implementation:`crates/rdocx/src/paragraph.rs:279` | - |
-| DOCX-030 | paragraph | borders, shading, tabs, frames, direction, and mark properties | P | Y | P | P | P | body | P | P | P | P | B | B | B | partial | boundary:F-264 | F-264 |
+| DOCX-030 | paragraph | borders, shading, tabs, frames, direction, and mark properties | Y | Y | Y | Y | Y | body | P | P | P | Y | B | B | B | partial | implementation:`crates/rdocx/src/paragraph.rs:1583`,boundary:positioned frame placement is the remaining layout work and stays with F-264 | F-311 |
 | DOCX-031 | run | fonts, emphasis, color, language, and ordinary inline content | Y | Y | Y | Y | Y | body | Y | Y | Y | Y | Y | B | B | complete | implementation:`crates/rdocx/src/run.rs:367` | - |
-| DOCX-032 | run | theme fonts, complex script, effects, symbols, and special content | P | Y | P | P | P | body | P | P | P | P | B | B | B | partial | boundary:F-265 | F-265 |
-| DOCX-033 | paragraph | bidirectional, East Asian, vertical, ruby, and phonetic text | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-266 | F-266 |
-| DOCX-034 | tables | table styles and conditional formatting | P | P | P | N | P | all | P | P | P | P | B | B | B | partial | boundary:F-267 | F-267 |
-| DOCX-035 | tables | floating, bidirectional, autofit, and advanced table layout | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-268 | F-268 |
-| DOCX-036 | sections | borders, columns, line numbers, book fold, and note policy | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | boundary:F-269 | F-269 |
-| DOCX-037 | properties | complete settings and web settings authoring | P | P | P | P | P | package | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4318` | F-270 |
+| DOCX-032 | run | theme fonts, complex script, effects, symbols, and special content | Y | Y | Y | Y | Y | body | P | P | P | Y | B | B | B | partial | implementation:`crates/rdocx-oxml/src/run_properties.rs`,implementation:`crates/rdocx/src/run.rs`,boundary:outline, shadow, emboss, imprint, character border, kerning, and fitText have no render projection yet and stay with F-265 | F-312 |
+| DOCX-033 | paragraph | bidirectional, East Asian, vertical, ruby, and phonetic text | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx-oxml/src/ruby.rs`,implementation:`crates/rdocx-oxml/src/run_properties.rs`,implementation:`crates/rdocx-oxml/src/document.rs`,implementation:`crates/rdocx-layout/src/engine.rs`,implementation:`crates/rdocx-layout/src/table.rs`,test:`crates/rdocx/tests/integration_test.rs`,boundary:the bundled Hebrew and Korean and Japanese faces are deterministic subsets of an approved fixture repertoire rather than full families so text outside it still falls back,boundary:upright stacked vertical East Asian text renders as rotated text and records the diagnostic the shape path already documents,boundary:shaping does not cross a `w:r` boundary so one word split across two runs loses its joining forms,boundary:a vertical section fills one band so its column tracks are dropped and the fact is recorded,boundary:`w:kinsoku` and `w:wordWrap` and `w:topLinePunct` are modeled and publicly authorable and their default behaviour is what the UAX#14 line breaker already does,boundary:`w:overflowPunct` and `w:autoSpaceDE` and `w:autoSpaceDN` are modeled and publicly authorable and their default hanging punctuation and inter-script spacing are not applied | - |
+| DOCX-034 | tables | table styles and conditional formatting | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx-oxml/src/styles.rs`,implementation:`crates/rdocx-layout/src/table.rs`,test:`crates/rdocx/tests/integration_test.rs`,test:`crates/rdocx/tests/regression_test.rs` | - |
+| DOCX-035 | tables | floating, bidirectional, autofit, and advanced table layout | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx-oxml/src/table.rs`,implementation:`crates/rdocx/src/table.rs`,implementation:`crates/rdocx-layout/src/table.rs`,implementation:`crates/rdocx-layout/src/paginator.rs`,test:`crates/rdocx/tests/integration_test.rs`,test:`crates/rdocx/tests/regression_test.rs` | - |
+| DOCX-036 | sections | borders, columns, line numbers, book fold, and note policy | Y | Y | Y | N | Y | body | Y | Y | Y | Y | B | B | B | partial | implementation:`crates/rdocx-oxml/src/document.rs`,implementation:`crates/rdocx-layout/src/paginator.rs`,test:`crates/rdocx/tests/integration_test.rs`,boundary:section note policy and typed removal stay with F-274 | F-274 |
+| DOCX-037 | properties | complete settings and web settings authoring | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx-oxml/src/web_settings.rs`,test:`crates/rdocx/tests/integration_test.rs` | - |
 | DOCX-038 | stories | uniform rich header and footer editing | P | P | P | P | P | related | P | P | P | P | B | B | B | partial | boundary:F-271 | F-271 |
 | DOCX-039 | stories | rich footnotes | P | P | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:2738` | F-272 |
 | DOCX-040 | stories | rich endnotes | N | P | N | N | PV | related | P | P | N | P | B | B | B | unsupported | boundary:F-273 | F-273 |
@@ -383,6 +383,13 @@ crate provides that boundary by then, M19 is archived rather than implemented.
   not share the OOXML package, model, preservation, or rendering foundations,
   and adding them would create separate legacy engines rather than deepen the
   current product.
+- **Book-fold sheet imposition.** `w:bookFoldPrinting`,
+  `w:bookFoldPrintingSheets` and `w:bookFoldRevPrinting` are authored, read and
+  preserved, and they change nothing about the rendered document. Book fold
+  arranges finished pages onto printer sheets at print time, and Word leaves
+  the document's own page count and page geometry alone, so this workspace
+  re-imposes nothing either. Round trip plus this statement is the complete
+  answer, not a gap.
 - **Universal Excel service compatibility.** If M19 proceeds, it executes
   worksheet and table-backed pivots, a declared Power Query M and connector
   subset, and an explicitly versioned Office Scripts-compatible API. It

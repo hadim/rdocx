@@ -50,6 +50,8 @@ pub mod rel_types {
         "http://schemas.microsoft.com/office/2007/relationships/media";
     pub const SETTINGS: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings";
+    pub const WEB_SETTINGS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/webSettings";
     pub const FONT_TABLE: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable";
     pub const FONT: &str =
@@ -392,6 +394,7 @@ mod tests {
             rel_types::FOOTER,
             rel_types::IMAGE,
             rel_types::SETTINGS,
+            rel_types::WEB_SETTINGS,
             rel_types::FONT_TABLE,
             rel_types::FONT,
             rel_types::THEME,

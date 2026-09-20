@@ -5,10 +5,10 @@ use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::{OxmlError, Result};
 use crate::namespace::{W_NS, matches_local_name};
-use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
+use crate::numbering::{parse_scoped_ppr, parse_scoped_rpr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
-use crate::table::{CT_TblPr, CT_TcPr};
+use crate::table::{CT_TblPr, CT_TcPr, CT_TrPr};
 
 /// The type of a style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +66,16 @@ pub struct CT_Style {
     pub table_properties_original: Option<CT_TblPr>,
     /// Preserved self-contained bytes for the base table properties.
     pub table_properties_xml: Option<Vec<u8>>,
+    /// Typed projection of the style's base table row properties.
+    ///
+    /// Boxed, like the other composite members added to this family, so a
+    /// style stays cheap on the stack. Test threads build whole documents by
+    /// value against a 2 MiB ceiling.
+    pub table_row_properties: Option<Box<CT_TrPr>>,
+    /// Typed projection of the style's base table cell properties.
+    ///
+    /// Boxed for the same stack-budget reason as `table_row_properties`.
+    pub table_cell_properties: Option<Box<CT_TcPr>>,
     /// Preserved conditional table-style regions and typed projections.
     pub conditional_table_styles: Vec<CT_TblStylePr>,
     /// Unmodeled root attributes and namespace declarations.
@@ -78,12 +88,97 @@ pub struct CT_Style {
     pub extra_xml: Vec<(u8, Vec<u8>)>,
 }
 
+/// One conditional table-style region, in Word's increasing-priority order.
+///
+/// **The declaration order is the resolution order.** Resolution applies
+/// regions in ascending order and a later region overwrites an earlier one, so
+/// moving a variant changes what Word-authored tables render as. The order is
+/// whole table, vertical bands, horizontal bands, column edges, row edges, then
+/// the four corners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TableStyleRegion {
+    WholeTable,
+    Band1Vert,
+    Band2Vert,
+    Band1Horz,
+    Band2Horz,
+    FirstCol,
+    LastCol,
+    FirstRow,
+    LastRow,
+    NwCell,
+    NeCell,
+    SwCell,
+    SeCell,
+}
+
+impl TableStyleRegion {
+    /// Every region, in increasing-priority order.
+    pub const ALL: [TableStyleRegion; 13] = [
+        TableStyleRegion::WholeTable,
+        TableStyleRegion::Band1Vert,
+        TableStyleRegion::Band2Vert,
+        TableStyleRegion::Band1Horz,
+        TableStyleRegion::Band2Horz,
+        TableStyleRegion::FirstCol,
+        TableStyleRegion::LastCol,
+        TableStyleRegion::FirstRow,
+        TableStyleRegion::LastRow,
+        TableStyleRegion::NwCell,
+        TableStyleRegion::NeCell,
+        TableStyleRegion::SwCell,
+        TableStyleRegion::SeCell,
+    ];
+
+    /// The `w:type` value naming this region.
+    pub fn to_str(self) -> &'static str {
+        match self {
+            TableStyleRegion::WholeTable => "wholeTable",
+            TableStyleRegion::Band1Vert => "band1Vert",
+            TableStyleRegion::Band2Vert => "band2Vert",
+            TableStyleRegion::Band1Horz => "band1Horz",
+            TableStyleRegion::Band2Horz => "band2Horz",
+            TableStyleRegion::FirstCol => "firstCol",
+            TableStyleRegion::LastCol => "lastCol",
+            TableStyleRegion::FirstRow => "firstRow",
+            TableStyleRegion::LastRow => "lastRow",
+            TableStyleRegion::NwCell => "nwCell",
+            TableStyleRegion::NeCell => "neCell",
+            TableStyleRegion::SwCell => "swCell",
+            TableStyleRegion::SeCell => "seCell",
+        }
+    }
+
+    /// The region a `w:type` value names, or `None` when it names none.
+    ///
+    /// An unrecognised value is never an error. The region round-trips from
+    /// its preserved bytes and takes no part in resolution.
+    pub fn from_str(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|region| region.to_str() == value)
+    }
+}
+
 /// One conditional table-style region.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_TblStylePr {
-    pub region: String,
+    /// The region this layer formats, or `None` when `w:type` names a region
+    /// this workspace does not recognise. An unrecognised region serialises
+    /// back from [`CT_TblStylePr::raw_xml`] unchanged.
+    pub region: Option<TableStyleRegion>,
     pub paragraph_properties: Option<CT_PPr>,
+    /// Region run properties (`w:rPr`).
+    ///
+    /// Boxed so the five-layer region stays cheap on the stack, following the
+    /// `CT_PPr::borders` precedent.
+    pub run_properties: Option<Box<CT_RPr>>,
     pub table_properties: Option<CT_TblPr>,
+    /// Region row properties (`w:trPr`). Modeled and round-tripped here. Its
+    /// layout application belongs to F-268a.
+    ///
+    /// Boxed for the same stack-budget reason as `run_properties`.
+    pub row_properties: Option<Box<CT_TrPr>>,
     pub cell_properties: Option<CT_TcPr>,
     /// Unmodeled region attributes and namespace declarations.
     #[doc(hidden)]
@@ -139,6 +234,8 @@ impl CT_Style {
         let mut rpr = None;
         let mut table_properties = None;
         let mut table_properties_xml = None;
+        let mut table_row_properties = None;
+        let mut table_cell_properties = None;
         let mut conditional_table_styles = Vec::new();
         let mut modeled_xml = Vec::new();
         let mut extra_xml = Vec::new();
@@ -262,19 +359,30 @@ impl CT_Style {
                         table_properties =
                             Some(parse_style_table_properties(&preserved, &prefixes)?);
                         table_properties_xml = Some(preserved);
+                    } else if is_word_element(ename.as_ref(), b"trPr", &prefixes) {
+                        table_row_properties = Some(Box::new(CT_TrPr::from_xml_with_prefixes(
+                            reader, &prefixes,
+                        )?));
+                    } else if is_word_element(ename.as_ref(), b"tcPr", &prefixes) {
+                        table_cell_properties = Some(Box::new(CT_TcPr::from_xml_with_prefixes(
+                            reader, &prefixes,
+                        )?));
                     } else if is_word_element(ename.as_ref(), b"tblStylePr", &prefixes) {
                         reject_conflicting_style_prefixes(e)?;
                         reject_conflicting_style_bindings(&bindings)?;
-                        let region = get_word_attr(e, b"type", &prefixes)?.unwrap_or_default();
+                        let region = get_word_attr(e, b"type", &prefixes)?
+                            .as_deref()
+                            .and_then(TableStyleRegion::from_str);
                         let raw =
                             make_style_raw_self_contained(&capture_element(reader, e)?, &bindings)?;
-                        let (paragraph_properties, conditional_table_properties, cell_properties) =
-                            parse_conditional_style_properties(&raw, &prefixes)?;
+                        let layers = parse_conditional_style_properties(&raw, &prefixes)?;
                         conditional_table_styles.push(CT_TblStylePr {
                             region,
-                            paragraph_properties,
-                            table_properties: conditional_table_properties,
-                            cell_properties,
+                            paragraph_properties: layers.paragraph_properties,
+                            run_properties: layers.run_properties,
+                            table_properties: layers.table_properties,
+                            row_properties: layers.row_properties,
+                            cell_properties: layers.cell_properties,
                             extra_attributes: raw_style_attributes(
                                 e,
                                 &[b"type"],
@@ -320,6 +428,8 @@ impl CT_Style {
             table_properties: table_properties.clone(),
             table_properties_original: table_properties.clone(),
             table_properties_xml,
+            table_row_properties,
+            table_cell_properties,
             conditional_table_styles,
             extra_attributes,
             modeled_xml,
@@ -426,6 +536,14 @@ impl CT_Style {
             } else {
                 properties.to_xml(writer)?;
             }
+        }
+        write_style_extras(writer, &extras, &mut extra_index, 23)?;
+        if let Some(ref properties) = self.table_row_properties {
+            properties.to_xml(writer)?;
+        }
+        write_style_extras(writer, &extras, &mut extra_index, 24)?;
+        if let Some(ref properties) = self.table_cell_properties {
+            properties.to_xml(writer)?;
         }
         write_style_extras(writer, &extras, &mut extra_index, 25)?;
         for conditional in &self.conditional_table_styles {
@@ -701,6 +819,8 @@ impl CT_Styles {
             table_properties: None,
             table_properties_original: None,
             table_properties_xml: None,
+            table_row_properties: None,
+            table_cell_properties: None,
             conditional_table_styles: Vec::new(),
             extra_attributes: Vec::new(),
             modeled_xml: Vec::new(),
@@ -740,6 +860,8 @@ impl CT_Styles {
             table_properties: None,
             table_properties_original: None,
             table_properties_xml: None,
+            table_row_properties: None,
+            table_cell_properties: None,
             conditional_table_styles: Vec::new(),
             extra_attributes: Vec::new(),
             modeled_xml: Vec::new(),
@@ -1063,36 +1185,63 @@ fn explicit_style_element_has_only_trivia(raw: &[u8]) -> Result<bool> {
     }
 }
 
+/// The five typed property layers a `w:tblStylePr` region carries.
+#[derive(Default)]
+struct ConditionalStyleLayers {
+    paragraph_properties: Option<CT_PPr>,
+    run_properties: Option<Box<CT_RPr>>,
+    table_properties: Option<CT_TblPr>,
+    row_properties: Option<Box<CT_TrPr>>,
+    cell_properties: Option<CT_TcPr>,
+}
+
 fn parse_conditional_style_properties(
     raw: &[u8],
     word_prefixes: &[String],
-) -> Result<(Option<CT_PPr>, Option<CT_TblPr>, Option<CT_TcPr>)> {
+) -> Result<ConditionalStyleLayers> {
     let mut reader = Reader::from_reader(raw);
-    let mut paragraph_properties = None;
-    let mut table_properties = None;
-    let mut cell_properties = None;
+    let mut layers = ConditionalStyleLayers::default();
     let mut buf = Vec::new();
+    let mut depth = 0usize;
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Start(ref start) => {
+                depth += 1;
                 let prefixes = word_prefixes_at(start, word_prefixes)?;
-                if is_word_element(start.name().as_ref(), b"pPr", &prefixes) {
+                if depth != 2 {
+                    // Only the region's own children are layers. Anything
+                    // deeper belongs to a layer or to a preserved subtree.
+                } else if is_word_element(start.name().as_ref(), b"pPr", &prefixes) {
                     let captured = capture_element(&mut reader, start)?;
-                    paragraph_properties = Some(parse_scoped_ppr(&captured, &prefixes)?);
+                    layers.paragraph_properties = Some(parse_scoped_ppr(&captured, &prefixes)?);
+                    depth -= 1;
+                } else if is_word_element(start.name().as_ref(), b"rPr", &prefixes) {
+                    let captured = capture_element(&mut reader, start)?;
+                    layers.run_properties = Some(Box::new(parse_scoped_rpr(&captured, &prefixes)?));
+                    depth -= 1;
                 } else if is_word_element(start.name().as_ref(), b"tblPr", &prefixes) {
-                    table_properties =
+                    layers.table_properties =
                         Some(CT_TblPr::from_xml_with_prefixes(&mut reader, &prefixes)?);
+                    depth -= 1;
+                } else if is_word_element(start.name().as_ref(), b"trPr", &prefixes) {
+                    layers.row_properties = Some(Box::new(CT_TrPr::from_xml_with_prefixes(
+                        &mut reader,
+                        &prefixes,
+                    )?));
+                    depth -= 1;
                 } else if is_word_element(start.name().as_ref(), b"tcPr", &prefixes) {
-                    cell_properties =
+                    layers.cell_properties =
                         Some(CT_TcPr::from_xml_with_prefixes(&mut reader, &prefixes)?);
+                    depth -= 1;
                 }
             }
+            Event::End(_) => depth = depth.saturating_sub(1),
             Event::Eof => break,
             _ => {}
         }
         buf.clear();
     }
-    Ok((paragraph_properties, table_properties, cell_properties))
+    Ok(layers)
 }
 
 fn serialize_conditional_table_style(conditional: &CT_TblStylePr) -> Result<Vec<u8>> {
@@ -1112,11 +1261,18 @@ fn serialize_conditional_table_style(conditional: &CT_TblStylePr) -> Result<Vec<
         }
         buf.clear();
     }
+    let Some(region) = conditional.region else {
+        // An unrecognised `w:type` was never projected, so its preserved bytes
+        // are the only faithful serialisation of it.
+        return Ok(conditional.raw_xml.clone());
+    };
     let original = parse_conditional_style_properties(&conditional.raw_xml, &prefixes)?;
-    if original_region.as_deref() == Some(conditional.region.as_str())
-        && original.0 == conditional.paragraph_properties
-        && original.1 == conditional.table_properties
-        && original.2 == conditional.cell_properties
+    if original_region.as_deref() == Some(region.to_str())
+        && original.paragraph_properties == conditional.paragraph_properties
+        && original.run_properties == conditional.run_properties
+        && original.table_properties == conditional.table_properties
+        && original.row_properties == conditional.row_properties
+        && original.cell_properties == conditional.cell_properties
     {
         return Ok(conditional.raw_xml.clone());
     }
@@ -1127,15 +1283,23 @@ fn serialize_conditional_table_style(conditional: &CT_TblStylePr) -> Result<Vec<
     let mut extra_index = 0;
     let mut writer = Writer::new(Vec::new());
     let mut start = BytesStart::new("w:tblStylePr");
-    start.push_attribute(("w:type", conditional.region.as_str()));
+    start.push_attribute(("w:type", region.to_str()));
     push_style_attributes(&mut start, &conditional.extra_attributes);
     writer.write_event(Event::Start(start))?;
     write_style_extras(&mut writer, &extra_refs, &mut extra_index, 0)?;
     if let Some(properties) = &conditional.paragraph_properties {
         properties.to_xml(&mut writer)?;
     }
+    write_style_extras(&mut writer, &extra_refs, &mut extra_index, 1)?;
+    if let Some(properties) = &conditional.run_properties {
+        properties.to_xml(&mut writer)?;
+    }
     write_style_extras(&mut writer, &extra_refs, &mut extra_index, 2)?;
     if let Some(properties) = &conditional.table_properties {
+        properties.to_xml(&mut writer)?;
+    }
+    write_style_extras(&mut writer, &extra_refs, &mut extra_index, 3)?;
+    if let Some(properties) = &conditional.row_properties {
         properties.to_xml(&mut writer)?;
     }
     write_style_extras(&mut writer, &extra_refs, &mut extra_index, 4)?;
@@ -1163,30 +1327,26 @@ fn preserved_conditional_style_children(raw: &[u8]) -> Result<Vec<(u8, Vec<u8>)>
                 let prefixes = word_prefixes_at(start, &word_prefixes)?;
                 let local = start.local_name();
                 if is_word_element(start.name().as_ref(), local.as_ref(), &prefixes)
-                    && matches!(local.as_ref(), b"pPr" | b"tblPr" | b"tcPr")
+                    && matches!(
+                        local.as_ref(),
+                        b"pPr" | b"rPr" | b"tblPr" | b"trPr" | b"tcPr"
+                    )
                 {
                     reader.read_to_end_into(start.name(), &mut Vec::new())?;
                 } else {
-                    let rank = match local.as_ref() {
-                        b"rPr" => 1,
-                        b"trPr" => 3,
-                        _ => 5,
-                    };
-                    extras.push((rank, capture_element(&mut reader, start)?));
+                    extras.push((5, capture_element(&mut reader, start)?));
                 }
             }
             Event::Empty(ref empty) => {
                 let prefixes = word_prefixes_at(empty, &word_prefixes)?;
                 let local = empty.local_name();
                 if !(is_word_element(empty.name().as_ref(), local.as_ref(), &prefixes)
-                    && matches!(local.as_ref(), b"pPr" | b"tblPr" | b"tcPr"))
+                    && matches!(
+                        local.as_ref(),
+                        b"pPr" | b"rPr" | b"tblPr" | b"trPr" | b"tcPr"
+                    ))
                 {
-                    let rank = match local.as_ref() {
-                        b"rPr" => 1,
-                        b"trPr" => 3,
-                        _ => 5,
-                    };
-                    extras.push((rank, capture_empty_element(empty)?));
+                    extras.push((5, capture_empty_element(empty)?));
                 }
             }
             Event::End(_) | Event::Eof => break,
@@ -1651,7 +1811,10 @@ mod tests {
             Some(8)
         );
         assert_eq!(style.conditional_table_styles.len(), 1);
-        assert_eq!(style.conditional_table_styles[0].region, "firstRow");
+        assert_eq!(
+            style.conditional_table_styles[0].region,
+            Some(TableStyleRegion::FirstRow)
+        );
 
         let serialized = String::from_utf8(styles.to_xml().unwrap()).unwrap();
         assert_eq!(serialized.matches("<q:tblPr").count(), 1);
@@ -1692,7 +1855,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .fill = Some("DDEEFF".to_owned());
-        styles.styles[0].conditional_table_styles[0].region = "lastRow".to_owned();
+        styles.styles[0].conditional_table_styles[0].region = Some(TableStyleRegion::LastRow);
         let changed = String::from_utf8(styles.to_xml().unwrap()).unwrap();
         assert_eq!(changed.matches("DDEEFF").count(), 1);
         assert!(!changed.contains("AABBCC"));
@@ -1707,7 +1870,7 @@ mod tests {
             .expect("typed conditional projection remains valid XML");
         assert_eq!(
             reparsed.styles[0].conditional_table_styles[0].region,
-            "lastRow"
+            Some(TableStyleRegion::LastRow)
         );
         assert_eq!(
             reparsed.styles[0].conditional_table_styles[0]
