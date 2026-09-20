@@ -492,6 +492,7 @@ defended.
 | F-266c | S74 | L | 5 | 1 | 2026-09-19 | Modeled character grids and East Asian run layout, then rendered vertical table and section text with deterministic geometry |
 | F-266 | S74 | L | 0 | 0 | 2026-09-19 | Closed the split typography parent after all three reviewed child gates passed and DOCX-033 reached its final classification |
 | F-268 | S74 | L | 0 | 0 | 2026-09-19 | Closed the split advanced-table parent after both reviewed child gates passed and DOCX-035 reached its final classification |
+| F-X130 | S74 | L | 5 | 1 | 2026-09-20 | Rewrote all 27 package pages around final authoring depth and added reproducible archive footprint and bounded speed evidence |
 
 ## Velocity
 

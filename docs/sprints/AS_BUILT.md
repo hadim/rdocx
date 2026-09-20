@@ -16215,3 +16215,49 @@ inside the full workspace gate.
 
 **Notes for future sessions.** Read the two child records for implementation
 detail. This entry is the durable closure record for the split parent only.
+
+### F-X130, Show package depth, footprint, and speed
+
+**Sprint.** S74
+**Completed.** 2026-09-20
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The root and all 26 crate READMEs now describe the final
+S74 authoring depth and carry validated package-footprint evidence. The root,
+`rdocx-layout`, `oxml-pdf`, and `rdocx-py` pages also carry bounded speed
+evidence. Both Python long descriptions use the same native-engine, typed-API,
+local-execution, rendering, review, and package-preservation account as their
+source READMEs. The existing README validator now checks every approved row,
+its dated provenance, the complete page inventory, deferred evidence, and the
+10 MiB archive ceiling.
+
+**Non-obvious choices.** Tier one archive measurements come from the same 22
+archives used by the publication dry run. Clean and dirty Cargo VCS metadata
+is normalized before member-byte comparison because the generated `dirty`
+field is not package content. Gzip output may differ by at most 64 bytes while
+the member total and member count remain exact. Tier two records one pinned
+Apple M5 Max observation. Tier three wheel, installed-footprint, CLI, WASM,
+and Python-boundary figures remain absent and have named backlog follow-ups.
+
+**Deviations from the design plan.** Full verification exposed that Cargo adds
+a `dirty` field to generated `.cargo_vcs_info.json` in a modified worktree.
+The re-derivation gate was refined to remove only that generated field before
+comparing member bytes and to allow a 64-byte compressed-size tolerance. The
+published measurements and the rest of the approved plan did not change.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `test_readme_depth_footprint_and_speed_claims_are_evidence_backed`
+is the named gate. The archive re-derivation, bounded speed, provenance,
+approved-page, deferred-measurement, and superlative mutation tests passed.
+`scripts/readme_doctests.py`, the 22-package publication dry run, the archive
+ceiling check, and the full workspace verification gate also passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not add a measurement unless its producing
+command, date, machine or tool identity, and validation bound can be checked.
+Keep generated Cargo VCS dirtiness out of archive-content comparisons, but do
+not normalize any declared package member.
