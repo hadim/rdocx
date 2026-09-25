@@ -32481,3 +32481,100 @@ fn story_link_snapshots_match_story_links_when_a_part_binds_word_twice() {
     let items = document.story_items(&header).unwrap();
     assert_eq!(snapshots[0].0, items[0].links().unwrap()[0].text);
 }
+
+mod save_fidelity_regressions {
+    use rdocx::{Document, StyleBuilder};
+    use rdocx_oxml::namespace::W_NS;
+
+    const NIL: &str = r#"w:val="nil""#;
+    const NONE: &str = r#"w:val="none""#;
+
+    /// A fresh Word package with the named parts replaced, opened.
+    fn document_with_parts(parts: &[(&str, String)]) -> Document {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        for (part_name, xml) in parts {
+            package.set_part(part_name, xml.clone().into_bytes());
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(&bytes.into_inner()).unwrap()
+    }
+
+    fn saved_part(document: &mut Document, part_name: &str) -> String {
+        let bytes = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        String::from_utf8(package.get_part(part_name).unwrap().to_vec()).unwrap()
+    }
+
+    /// Paragraph, run, table, cell and page borders plus a paragraph style and
+    /// a table style, every one of them spelled with `token`.
+    fn bordered_document(token: &str) -> Document {
+        let body = format!(
+            concat!(
+                r#"<w:document xmlns:w="{ns}"><w:body>"#,
+                r#"<w:p><w:pPr><w:pBdr><w:top w:val="{t}" w:sz="0" w:space="0"/></w:pBdr></w:pPr>"#,
+                r#"<w:r><w:rPr><w:bdr w:val="{t}"/></w:rPr><w:t>boxed</w:t></w:r></w:p>"#,
+                r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>"#,
+                r#"<w:top w:val="single" w:sz="8"/><w:bottom w:val="single" w:sz="8"/>"#,
+                r#"<w:insideH w:val="{t}"/></w:tblBorders></w:tblPr>"#,
+                r#"<w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>"#,
+                r#"<w:tr><w:tc><w:tcPr><w:tcBorders><w:bottom w:val="{t}" w:sz="0" w:space="0"/>"#,
+                r#"</w:tcBorders></w:tcPr><w:p><w:r><w:t>first</w:t></w:r></w:p></w:tc></w:tr>"#,
+                r#"<w:tr><w:tc><w:p><w:r><w:t>second</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+                r#"<w:sectPr><w:pgBorders><w:top w:val="{t}"/></w:pgBorders></w:sectPr>"#,
+                r#"</w:body></w:document>"#,
+            ),
+            ns = W_NS,
+            t = token,
+        );
+        let styles = format!(
+            concat!(
+                r#"<w:styles xmlns:w="{ns}">"#,
+                r#"<w:style w:type="paragraph" w:styleId="Boxed"><w:name w:val="Boxed"/>"#,
+                r#"<w:pPr><w:pBdr><w:left w:val="{t}"/></w:pBdr></w:pPr></w:style>"#,
+                r#"<w:style w:type="table" w:styleId="Open"><w:name w:val="Open"/>"#,
+                r#"<w:tcPr><w:tcBorders><w:right w:val="{t}"/></w:tcBorders></w:tcPr></w:style>"#,
+                r#"</w:styles>"#,
+            ),
+            ns = W_NS,
+            t = token,
+        );
+        document_with_parts(&[("/word/document.xml", body), ("/word/styles.xml", styles)])
+    }
+
+    #[test]
+    fn nil_borders_are_not_rewritten_as_none_when_their_part_is_serialized() {
+        let mut document = bordered_document("nil");
+        // Both parts change, so both go through the typed serializers.
+        document.add_paragraph("edited");
+        document
+            .add_style(StyleBuilder::paragraph("Added", "Added"))
+            .unwrap();
+
+        let body = saved_part(&mut document, "/word/document.xml");
+        assert!(body.contains("edited"), "{body}");
+        assert_eq!(body.matches(NIL).count(), 5, "{body}");
+        assert_eq!(body.matches(NONE).count(), 0, "{body}");
+        let styles = saved_part(&mut document, "/word/styles.xml");
+        assert!(styles.contains(r#"w:styleId="Added""#), "{styles}");
+        assert_eq!(styles.matches(NIL).count(), 2, "{styles}");
+        assert_eq!(styles.matches(NONE).count(), 0, "{styles}");
+
+        // The spelling is the only difference, and nothing renders differently.
+        let mut none = bordered_document("none");
+        none.add_paragraph("edited");
+        document = bordered_document("nil");
+        document.add_paragraph("edited");
+        assert_eq!(
+            saved_part(&mut none, "/word/document.xml").replace(NONE, NIL),
+            saved_part(&mut document, "/word/document.xml")
+        );
+        assert_eq!(
+            document.render_page_to_png_deterministic(0, 36.0).unwrap(),
+            none.render_page_to_png_deterministic(0, 36.0).unwrap()
+        );
+    }
+}

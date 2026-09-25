@@ -9948,6 +9948,7 @@ fn table_style_updates_merge_nested_borders_and_margins() {
                         space: None,
                         color: Some("AABBCC".to_owned()),
                         extra_attributes: Vec::new(),
+                        nil: false,
                     }),
                     ..CT_TblBorders::default()
                 }),

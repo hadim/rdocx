@@ -1083,7 +1083,9 @@ fixed `w` attributes at each child's `xsd:sequence` position and replays every
 retained raw child at its recorded slot and occurrence. `w:framePr` and each
 border edge write their retained attributes before the modeled ones, so typing
 those elements drops no producer attribute and keeps the retained ones in
-source order. A modeled toggle whose source element carried an attribute the
+source order. A border edge spelled `nil` types as the same no-border style as
+`none` and is written back as `nil`, on paragraph, run, table, cell, and page
+borders alike, while an authored no-border edge writes `none`. A modeled toggle whose source element carried an attribute the
 model does not own replays that element in place of the canonical form, which
 keeps a parse and save of an untouched paragraph byte identical.
 
