@@ -369,6 +369,7 @@ impl Document {
             )?;
             candidate.package.set_part(&story.part_name, tracked_story);
         }
+        let drawing_ids = renumber_repeated_drawing_ids(&mut candidate, &original_stories)?;
         candidate = reopen_staged(candidate)?;
         #[cfg(test)]
         FAIL_AFTER_COMPARISON_STAGING.with(|fail| {
@@ -385,12 +386,24 @@ impl Document {
             &original_stories,
             options,
             &text_box_markers,
+            &drawing_ids,
         )?;
-        let mut edited_package =
-            normalized_package(&edited, &edited_stories, options, &text_box_markers)?;
+        let mut edited_package = normalized_package(
+            &edited,
+            &edited_stories,
+            options,
+            &text_box_markers,
+            &HashMap::new(),
+        )?;
         if story_ignored(options, ComparisonStoryKind::Main) {
-            edited_package.0 =
-                normalized_package(&original, &original_stories, options, &text_box_markers)?.0;
+            edited_package.0 = normalized_package(
+                &original,
+                &original_stories,
+                options,
+                &text_box_markers,
+                &HashMap::new(),
+            )?
+            .0;
         }
         if accepted_body != edited_package {
             return Err(Error::Other(format!(
@@ -403,9 +416,15 @@ impl Document {
             &original_stories,
             options,
             &text_box_markers,
+            &drawing_ids,
         )?;
-        let original_package =
-            normalized_package(&original, &original_stories, options, &text_box_markers)?;
+        let original_package = normalized_package(
+            &original,
+            &original_stories,
+            options,
+            &text_box_markers,
+            &HashMap::new(),
+        )?;
         if rejected_package != original_package {
             return Err(Error::Other(format!(
                 "comparison rejection does not reproduce the original stories: {rejected_package:?} != {original_package:?}"
@@ -1521,6 +1540,112 @@ fn close_drawing_namespaces(
     Ok(output)
 }
 
+/// Give each `wp:docPr` id that a tracked story repeats a fresh id on its later
+/// copies, as Word does for a drawing its redline writes twice. The fresh ids
+/// exceed every drawing id in the compared parts. The returned map sends each
+/// fresh id back to the id it copies.
+fn renumber_repeated_drawing_ids(
+    candidate: &mut Document,
+    stories: &[StoryPart],
+) -> Result<HashMap<u32, u32>> {
+    let mut part_names = vec![candidate.doc_part_name.clone()];
+    part_names.extend(stories.iter().map(|story| story.part_name.clone()));
+    let mut next = 0u32;
+    for part_name in &part_names {
+        let xml = candidate
+            .package
+            .get_part(part_name)
+            .ok_or_else(|| Error::Other(format!("missing compared story {part_name}")))?;
+        rewrite_drawing_ids(xml, |id| {
+            next = next.max(id);
+            None
+        })?;
+    }
+    let mut fresh = HashMap::new();
+    for part_name in &part_names {
+        let xml = candidate
+            .package
+            .get_part(part_name)
+            .ok_or_else(|| Error::Other(format!("missing compared story {part_name}")))?;
+        let mut seen = HashSet::new();
+        let renumbered = rewrite_drawing_ids(xml, |id| {
+            if seen.insert(id) {
+                return None;
+            }
+            next = next.checked_add(1)?;
+            fresh.insert(next, id);
+            Some(next)
+        })?;
+        if renumbered != xml {
+            candidate.package.set_part(part_name, renumbered);
+        }
+    }
+    Ok(fresh)
+}
+
+/// Replace each `wp:docPr` id for which `rewrite` returns a new value, leaving
+/// every other byte in place.
+fn rewrite_drawing_ids(xml: &[u8], mut rewrite: impl FnMut(u32) -> Option<u32>) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut edits = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comparison drawing id scan failed: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element)
+                if element.local_name().as_ref() == b"docPr"
+                    && matches!(
+                        reader.resolver().resolve_element(element.name()).0,
+                        ResolveResult::Bound(value)
+                            if value.as_ref() == rdocx_oxml::drawing::drawing_ns::WP.as_bytes()
+                    ) =>
+            {
+                let content: &[u8] = &element;
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!("comparison drawing id scan failed: {error}"))
+                    })?;
+                    if attribute.key.as_ref() != b"id" {
+                        continue;
+                    }
+                    let Some(replacement) = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .ok()
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .and_then(&mut rewrite)
+                    else {
+                        break;
+                    };
+                    let offset = (attribute.value.as_ptr() as usize)
+                        .checked_sub(content.as_ptr() as usize)
+                        .filter(|offset| offset + attribute.value.len() <= content.len())
+                        .ok_or_else(|| {
+                            Error::Other("drawing id lies outside its opening tag".to_owned())
+                        })?;
+                    let value_start = start + 1 + offset;
+                    edits.push((
+                        value_start..value_start + attribute.value.len(),
+                        replacement.to_string().into_bytes(),
+                    ));
+                    break;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut output = xml.to_vec();
+    for (range, replacement) in edits.into_iter().rev() {
+        output.splice(range, replacement);
+    }
+    Ok(output)
+}
+
 fn comparison_root_namespace_scope(
     xml: &[u8],
 ) -> Result<std::collections::BTreeMap<String, String>> {
@@ -1876,25 +2001,32 @@ fn resolved_package(
     stories: &[StoryPart],
     options: &ComparisonOptions,
     text_box_markers: &TextBoxMarkers,
+    drawing_ids: &HashMap<u32, u32>,
 ) -> Result<NormalizedPackage> {
     let mut resolved = candidate.clone_for_staging();
     resolve(&mut resolved)?;
-    normalized_package(&resolved, stories, options, text_box_markers)
+    normalized_package(&resolved, stories, options, text_box_markers, drawing_ids)
 }
 
+/// Normalize a package's stories, reading each drawing id that
+/// `renumber_repeated_drawing_ids` gave a fresh value as the id it copies.
 fn normalized_package(
     document: &Document,
     stories: &[StoryPart],
     options: &ComparisonOptions,
     text_box_markers: &TextBoxMarkers,
+    drawing_ids: &HashMap<u32, u32>,
 ) -> Result<NormalizedPackage> {
     let mut related = Vec::with_capacity(stories.len());
     for story in stories {
+        let xml = rewrite_drawing_ids(story_xml(document, story)?, |id| {
+            drawing_ids.get(&id).copied()
+        })?;
         related.push((
             story.kind,
             story.part_name.clone(),
             normalized_story_part(
-                story_xml(document, story)?,
+                &xml,
                 story.kind,
                 options,
                 text_box_markers
@@ -1908,7 +2040,8 @@ fn normalized_package(
         .package
         .get_part(&document.doc_part_name)
         .ok_or_else(|| Error::Other(format!("missing main story {}", document.doc_part_name)))?;
-    let source = std::str::from_utf8(source).map_err(utf8_error)?;
+    let source = rewrite_drawing_ids(source, |id| drawing_ids.get(&id).copied())?;
+    let source = std::str::from_utf8(&source).map_err(utf8_error)?;
     let main_source;
     let source = if story_ignored(options, ComparisonStoryKind::TextBox) {
         let (masked, _) = mask_text_box_subtrees(source, "w", &text_box_markers.main)?;

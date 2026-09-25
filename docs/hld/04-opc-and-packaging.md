@@ -1289,7 +1289,10 @@ on the inline or anchor root before equality. Story-root, paragraph, run, and
 drawing-owner declaration placement is therefore equivalent in the comparison
 model without changing package serialization. Retained drawing payload remains
 significant after declaration placement normalization, so a real drawing
-change is still tracked.
+change is still tracked. A drawing that a redline story writes twice, as a
+move or a deletion beside an insertion, keeps its `wp:docPr` id on the first
+copy and gets a fresh id above every compared drawing id on later copies, as
+Word does. Both postconditions read each fresh id as the id it copies.
 
 Literal redaction also uses the complete package boundary. The Word facade
 flushes a staged clone, removes one non-empty exact literal from relationship-

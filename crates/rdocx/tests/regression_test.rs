@@ -17557,6 +17557,136 @@ fn setting_a_property_on_an_empty_paragraph_properties_element_writes_one_owner(
     assert!(saved.contains(r#"<w:jc w:val="center"/>"#), "{saved}");
 }
 
+fn picture_comparison_document(body: &str, header: &str) -> Document {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    let header_id = relationships.add(oxml_opc::relationship::rel_types::HEADER, "header1.xml");
+    relationships.add_with_id(
+        "bodyImage",
+        oxml_opc::relationship::rel_types::IMAGE,
+        "media/body.png",
+    );
+    package
+        .get_or_create_part_rels("/word/header1.xml")
+        .add_with_id(
+            "headerImage",
+            oxml_opc::relationship::rel_types::IMAGE,
+            "media/header.png",
+        );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}<w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
+        )
+        .into_bytes(),
+    );
+    package.set_part(
+        "/word/header1.xml",
+        format!(r#"<w:hdr xmlns:w="{W_NS}">{header}</w:hdr>"#).into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/header1.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    for image in ["/word/media/body.png", "/word/media/header.png"] {
+        package.set_part(image, b"image".to_vec());
+        package.content_types.add_override(image, "image/png");
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+/// The redline writes a picture twice when it trades places with a text
+/// paragraph, moved from and moved to, or when it is resized, deleted beside
+/// inserted. Both copies kept the same `wp:docPr` id, which the package
+/// identifier scan rejects, so comparing the two-paragraph Google Docs pair of
+/// issue 136 failed.
+#[test]
+fn a_picture_written_twice_by_a_comparison_gets_a_fresh_drawing_id() {
+    let text = |properties: &str| {
+        format!(r#"<w:p>{properties}<w:r><w:t>Lorem ipsum dolor sit amet.</w:t></w:r></w:p>"#)
+    };
+    let picture = |relationship_id: &str, extent: &str| {
+        format!(
+            r#"<w:p><w:r>{}</w:r></w:p>"#,
+            f_x093_inline_drawing(relationship_id, "moved")
+                .replace(r#"cx="1""#, &format!(r#"cx="{extent}""#))
+        )
+    };
+    let drawing_ids = |xml: &str| {
+        xml.split(r#"docPr id=""#)
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap().parse::<u32>().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let story = |relationship_id: &str, picture_first: bool, properties: &str, extent: &str| {
+        if picture_first {
+            format!("{}{}", picture(relationship_id, extent), text(properties))
+        } else {
+            format!("{}{}", text(properties), picture(relationship_id, extent))
+        }
+    };
+    for (part, in_header) in [("/word/document.xml", false), ("/word/header1.xml", true)] {
+        let document = |picture_first: bool, properties: &str, extent: &str| {
+            let body = story("bodyImage", picture_first, properties, extent);
+            let header = story("headerImage", picture_first, properties, extent);
+            if in_header {
+                picture_comparison_document(&text(""), &header)
+            } else {
+                picture_comparison_document(&body, &text(""))
+            }
+        };
+        for (original_first, edited_first, edited_properties, edited_extent) in [
+            (true, false, "", "1"),
+            (true, false, "<w:pPr/>", "1"),
+            (false, true, "", "1"),
+            (true, true, "", "2"),
+        ] {
+            let case = format!(
+                "{part}: {original_first} -> {edited_first} {edited_properties} {edited_extent}"
+            );
+            let original = document(original_first, "", "1");
+            let edited = document(edited_first, edited_properties, edited_extent);
+            let mut compared = document(original_first, "", "1");
+            let diagnostics = compared
+                .compare(&edited, "Ada", "2026-09-20T12:00:00Z")
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
+            assert!(diagnostics.is_empty(), "{case}: {diagnostics:?}");
+            let tracked_bytes = compared.to_bytes().unwrap();
+            let tracked = comparison_part_xml(&mut compared, part);
+            let ids = drawing_ids(&tracked);
+            assert!(ids.contains(&11), "{case}: {tracked}");
+            assert_eq!(
+                ids.iter().collect::<HashSet<_>>().len(),
+                ids.len(),
+                "{case}: {tracked}"
+            );
+
+            let mut accepted = Document::from_bytes(&tracked_bytes).unwrap();
+            accepted.accept_all().unwrap();
+            assert!(
+                accepted
+                    .compare(&edited, "postcondition", "2026-09-20T12:01:00Z")
+                    .unwrap()
+                    .is_empty(),
+                "{case}"
+            );
+            let mut rejected = Document::from_bytes(&tracked_bytes).unwrap();
+            rejected.reject_all().unwrap();
+            assert!(
+                rejected
+                    .compare(&original, "postcondition", "2026-09-20T12:01:00Z")
+                    .unwrap()
+                    .is_empty(),
+                "{case}"
+            );
+        }
+    }
+}
+
 #[test]
 fn comparison_replaces_paragraphs_and_tables_before_an_anchor() {
     let paragraph_xml = wrap_word_body(
