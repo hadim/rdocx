@@ -1,5 +1,6 @@
 //! CLI command implementations.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use oxml_cli_support::{
@@ -7,8 +8,8 @@ use oxml_cli_support::{
 };
 use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 use rpptx::{
-    AutofitMode, Presentation, ShapeKind, ShapeRef, SlideRef, TextFrameRef, TextParagraphRef,
-    TextRunRef,
+    AutofitMode, Comment, CommentAuthor, CommentReply, Presentation, ShapeKind, ShapeRef, SlideRef,
+    TextFrameRef, TextParagraphRef, TextRunRef,
 };
 use serde_json::{Value, json};
 
@@ -687,6 +688,275 @@ fn collect_frame_outline(frame: TextFrameRef<'_>, items: &mut Vec<(u8, String)>)
 
 fn normalize_outline_text(text: &str) -> String {
     text.trim().replace(['\r', '\n', '\u{000b}'], " ")
+}
+
+/// Author, text, and creation time of a new comment or reply.
+pub struct CommentInput<'a> {
+    pub author: &'a str,
+    pub initials: Option<&'a str>,
+    pub text: &'a str,
+    pub date: &'a str,
+}
+
+/// One modern comment or reply, flattened in slide and thread order.
+struct CommentEntry<'a> {
+    slide: usize,
+    id: &'a str,
+    parent_id: Option<&'a str>,
+    author_id: &'a str,
+    date: &'a str,
+    status: Option<&'a str>,
+    text: String,
+}
+
+/// Lists modern comments, each followed by its replies, in slide order.
+pub fn comment_list(file: &Path, as_json: bool) -> Result<()> {
+    let presentation = Presentation::open(file)?;
+    let entries = comment_entries(&presentation);
+    if as_json {
+        let records = entries
+            .iter()
+            .map(|entry| {
+                let author = comment_author(&presentation, entry.author_id);
+                json!({
+                    "slide": entry.slide,
+                    "id": entry.id,
+                    "author": author.map(|author| author.name.as_str()),
+                    "initials": author.and_then(|author| author.initials.as_deref()),
+                    "date": entry.date,
+                    "text": entry.text,
+                    "parent_id": entry.parent_id,
+                    "resolved": entry.status == Some("resolved"),
+                    "status": entry.status,
+                })
+            })
+            .collect::<Vec<_>>();
+        return print_json(json!({ "comments": records }));
+    }
+    if entries.is_empty() {
+        println!("(no comments)");
+    }
+    for entry in &entries {
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            entry.slide,
+            entry.id,
+            comment_author(&presentation, entry.author_id).map_or("", |author| &author.name),
+            entry
+                .status
+                .filter(|status| *status != "active")
+                .unwrap_or("open"),
+            entry.text.replace('\n', " ")
+        );
+    }
+    Ok(())
+}
+
+/// Adds one modern comment and publishes the complete presentation atomically.
+pub fn comment_add(
+    file: &Path,
+    slide: usize,
+    input: CommentInput<'_>,
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut presentation = Presentation::open(file)?;
+    if slide == 0 || slide > presentation.len() {
+        return Err(format!(
+            "slide {slide} is out of range for {} slides",
+            presentation.len()
+        )
+        .into());
+    }
+    let author_id = comment_author_id(&mut presentation, input.author, input.initials)?;
+    let id = next_comment_guid(&presentation);
+    let comment = Comment::new(id.as_str(), author_id, input.date, input.text)?;
+    presentation.add_comment(slide - 1, comment)?;
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        "add",
+        json!({ "comment_id": id, "slide": slide }),
+        output,
+    )
+}
+
+/// Adds one reply to a thread and publishes the complete presentation atomically.
+pub fn comment_reply(
+    file: &Path,
+    parent_id: &str,
+    input: CommentInput<'_>,
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut presentation = Presentation::open(file)?;
+    let slide = thread_slide(&presentation, parent_id)?;
+    let author_id = comment_author_id(&mut presentation, input.author, input.initials)?;
+    let id = next_comment_guid(&presentation);
+    let reply = CommentReply::new(id.as_str(), author_id, input.date, input.text)?;
+    presentation.reply_to_comment(slide - 1, parent_id, reply)?;
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        "reply",
+        json!({ "comment_id": id, "parent_id": parent_id, "slide": slide }),
+        output,
+    )
+}
+
+/// Resolves one comment thread and publishes the complete presentation atomically.
+pub fn comment_resolve(file: &Path, id: &str, output: &Path, as_json: bool) -> Result<()> {
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut presentation = Presentation::open(file)?;
+    let slide = thread_slide(&presentation, id)?;
+    presentation.resolve_comment(slide - 1, id)?;
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        "resolve",
+        json!({ "comment_id": id, "slide": slide }),
+        output,
+    )
+}
+
+/// Removes one thread or reply and publishes the complete presentation atomically.
+pub fn comment_remove(file: &Path, id: &str, output: &Path, as_json: bool) -> Result<()> {
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut presentation = Presentation::open(file)?;
+    let (slide, _) = locate_comment(&presentation, id)?;
+    presentation.remove_comment(slide - 1, id)?;
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        "remove",
+        json!({ "comment_id": id, "slide": slide }),
+        output,
+    )
+}
+
+fn comment_entries(presentation: &Presentation) -> Vec<CommentEntry<'_>> {
+    let mut entries = Vec::new();
+    for slide_index in 0..presentation.len() {
+        for comment in presentation.comments(slide_index).unwrap_or_default() {
+            entries.push(CommentEntry {
+                slide: slide_index + 1,
+                id: &comment.id,
+                parent_id: None,
+                author_id: &comment.author_id,
+                date: &comment.created,
+                status: comment.status.as_deref(),
+                text: comment.text(),
+            });
+            for reply in comment.replies() {
+                entries.push(CommentEntry {
+                    slide: slide_index + 1,
+                    id: &reply.id,
+                    parent_id: Some(&comment.id),
+                    author_id: &reply.author_id,
+                    date: &reply.created,
+                    status: reply.status.as_deref(),
+                    text: reply.text(),
+                });
+            }
+        }
+    }
+    entries
+}
+
+fn comment_author<'a>(
+    presentation: &'a Presentation,
+    author_id: &str,
+) -> Option<&'a CommentAuthor> {
+    presentation
+        .comment_authors()
+        .iter()
+        .find(|author| author.id == author_id)
+}
+
+/// Returns the one-based slide and the thread id of the comment or reply `id`.
+fn locate_comment<'a>(
+    presentation: &'a Presentation,
+    id: &str,
+) -> Result<(usize, Option<&'a str>)> {
+    comment_entries(presentation)
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| (entry.slide, entry.parent_id))
+        .ok_or_else(|| format!("comment id {id} does not exist").into())
+}
+
+/// Returns the one-based slide of the thread whose top-level comment is `id`.
+fn thread_slide(presentation: &Presentation, id: &str) -> Result<usize> {
+    match locate_comment(presentation, id)? {
+        (slide, None) => Ok(slide),
+        (_, Some(thread)) => Err(format!("comment id {id} is a reply in thread {thread}").into()),
+    }
+}
+
+/// Returns the id of the author named `name`, adding that author when absent.
+///
+/// A new author records the display name as `userId` and `None` as
+/// `providerId`, as PowerPoint does for an author without an online account.
+fn comment_author_id(
+    presentation: &mut Presentation,
+    name: &str,
+    initials: Option<&str>,
+) -> Result<String> {
+    if let Some(author) = presentation
+        .comment_authors()
+        .iter()
+        .find(|author| author.name == name)
+    {
+        return Ok(author.id.clone());
+    }
+    let id = next_comment_guid(presentation);
+    presentation.add_comment_author(CommentAuthor::new(
+        id.as_str(),
+        name,
+        initials,
+        name,
+        "None",
+    )?)?;
+    Ok(id)
+}
+
+/// Returns the first sequential GUID no comment author, comment, or reply uses.
+///
+/// Sequential ids keep command output reproducible without a clock or a
+/// random source.
+fn next_comment_guid(presentation: &Presentation) -> String {
+    let used = presentation
+        .comment_authors()
+        .iter()
+        .map(|author| author.id.to_ascii_uppercase())
+        .chain(
+            comment_entries(presentation)
+                .into_iter()
+                .map(|entry| entry.id.to_ascii_uppercase()),
+        )
+        .collect::<HashSet<_>>();
+    (1_u64..)
+        .map(|index| format!("{{00000000-0000-4000-8000-{index:012X}}}"))
+        .find(|id| !used.contains(id))
+        .expect("a finite set of used ids leaves a sequential id free")
+}
+
+fn publish_presentation(presentation: &Presentation, output: &Path) -> Result<()> {
+    stage_and_publish(&[(output.to_path_buf(), presentation.to_bytes()?)])
+}
+
+/// Prints a schema-1 operation record, or the action and the output path.
+fn mutation_record(as_json: bool, action: &str, mut record: Value, output: &Path) -> Result<()> {
+    if !as_json {
+        println!("{action}");
+        println!("Written to {}", output.display());
+        return Ok(());
+    }
+    record["action"] = json!(action);
+    record["output"] = json!(output.display().to_string());
+    print_json(record)
 }
 
 fn validate_dpi(dpi: f64) -> Result<()> {

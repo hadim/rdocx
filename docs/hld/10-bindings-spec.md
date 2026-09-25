@@ -1353,11 +1353,13 @@ and RFC 3339 timestamps, and mutation returns the ordinary facade `Result`
 without creating an allocator, clock, trait, generic, or builder.
 
 The additive methods are `comment_authors`, `add_comment_author`, `comments`,
-`add_comment`, `reply_to_comment`, `move_comment`, `move_reply`, `sections`,
-`set_sections`, `notes_header_footer_mut`, and `handout_header_footer_mut`.
-They remain native Rust only. Python, WASM, and CLI consumers gain no
-collaboration or navigation methods and continue to preserve these package
-parts through their existing `Presentation` owner.
+`add_comment`, `reply_to_comment`, `resolve_comment`, `remove_comment`,
+`move_comment`, `move_reply`, `sections`, `set_sections`,
+`notes_header_footer_mut`, and `handout_header_footer_mut`. Python exposes the
+comment snapshots, additions, and moves described with the presentation
+binding, and `rpptx comment` exposes the comment operations described under
+CLIs. WASM consumers gain no collaboration or navigation methods and continue
+to preserve these package parts through their existing `Presentation` owner.
 
 The low-level `rpptx-oxml` model adds the approved `comments` module and
 extends existing presentation, notes, slide, relationship, and content-type
@@ -1823,8 +1825,8 @@ or tag authority.
 ## CLIs
 
 `rpptx-cli` extends the seven-command `rdocx-cli` surface with `inspect`,
-`text`, `convert`, `diff`, `replace`, `validate`, `render`, `thumbnail`, and
-`outline`. It uses clap derive and `serde_json` for `--json`.
+`text`, `convert`, `diff`, `replace`, `validate`, `render`, `thumbnail`,
+`outline`, and `comment`. It uses clap derive and `serde_json` for `--json`.
 
 `inspect` reports the file, slide and layout counts, slide size, core metadata,
 and each slide's identity, hidden state, and shape count. Its JSON form uses the
@@ -1873,6 +1875,23 @@ The structured output reads public facade values only. `ShapeRef` gains
 `rotation` and `placeholder_type`, and `PhType::as_str` and
 `TextUnderline::as_str` become public. These are additive changes to the
 pre-1.0 `rpptx`, `rpptx-oxml`, and `oxml-drawing` crates.
+
+`comment` lists, adds, replies to, resolves, and removes modern PowerPoint
+comments. Legacy comment parts stay preserved and unlisted. `list` shows a
+comment or reply without a status, or with the `active` status, as open, and a
+`resolved` or `closed` one as such. Its JSON carries the `resolved` flag
+beside the raw `status` token. `add` takes a one-based `--slide`. `add` and
+`reply` require an RFC 3339 `--date`, reuse the first author with the given
+name, and otherwise add an author whose `userId` is that name and whose
+`providerId` is `None`. New author, comment, and reply ids are the first
+unused sequential GUIDs, so the output depends on neither a clock nor a random
+source. `resolve` accepts only a thread id. `remove` accepts a thread id,
+which removes its replies, or a reply id. Every mutation requires an explicit
+output, refuses an existing one, and publishes through the shared staged
+output set. Its schema-1 record states the action, comment id, one-based
+slide, and output path. The commands use the additive
+`Presentation::resolve_comment` and `Presentation::remove_comment` facade
+methods, which rest on the new `Comment::remove_reply`.
 
 Shared range parsing, output-path defaulting, and JSON envelope rules live in
 `oxml-cli-support`. Ranges are positive, one-based, comma-separated values and

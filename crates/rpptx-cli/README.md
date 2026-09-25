@@ -12,6 +12,7 @@ replaces text, and produces deterministic fixed output.
   JSON, with speaker notes on request.
 - PDF, PNG, JPEG, and multi-page TIFF conversion.
 - Selected-slide rendering, thumbnails, text diff, replacement, and validation.
+- Modern comment thread listing, addition, replies, resolution, and removal.
 - Scriptable output covers slide order, notes, comments, recursive group
   content, relationship-backed media, and deterministic rendering diagnostics.
 
@@ -36,6 +37,9 @@ cargo install rpptx-cli --version '^0.12.1'
 rpptx inspect deck.pptx --json
 rpptx text deck.pptx --json
 rpptx outline deck.pptx --notes
+rpptx comment add deck.pptx --slide 2 --author Reviewer \
+  --text "Check the figures" --date 2026-09-25T10:00:00Z -o reviewed.pptx
+rpptx comment list reviewed.pptx --json
 rpptx convert deck.pptx --to pdf -o deck.pdf
 rpptx thumbnail deck.pptx -o thumbnail.png
 ```
@@ -62,5 +66,16 @@ levels, and its speaker notes. Notes are the plain text of the notes body, with
 paragraphs and line breaks both written as newlines. `--notes` prints one
 `Notes:` line for each non-empty notes line after a slide's plain text or
 outline. JSON output always carries the notes.
+
+`comment` works on modern PowerPoint comments. Legacy comments stay preserved
+but are not listed. `list` shows each comment and reply as `open`, `resolved`,
+or `closed`, and its JSON carries the `resolved` flag beside the raw `status`
+token. `add --slide` takes a one-based slide number. `add` and `reply` require
+an RFC 3339 `--date`, reuse an existing author with the same name, and add the
+author otherwise. New ids are sequential GUIDs, so the output depends on
+neither a clock nor a random source. `resolve` takes a thread id. `remove`
+takes a thread id, which also removes its replies, or a reply id. Every
+mutation requires `-o/--output`, refuses an existing output, publishes only a
+complete presentation, and supports a schema-1 record through `--json`.
 
 Run `rpptx --help` or `rpptx <command> --help` for the complete command surface.

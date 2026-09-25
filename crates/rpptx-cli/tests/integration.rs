@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use rpptx::{Angle, CT_TextCharacterProperties, Emu, Presentation};
+use rpptx::{Angle, CT_TextCharacterProperties, Comment, CommentAuthor, Emu, Presentation};
 use serde_json::json;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -491,6 +491,7 @@ fn inspect_and_text_report_presentation_order() {
         "render",
         "thumbnail",
         "outline",
+        "comment",
     ] {
         assert!(help.contains(command), "missing command {command}");
     }
@@ -1357,4 +1358,361 @@ fn plain_text_and_outline_print_speaker_notes_only_with_the_notes_flag() {
             "{args:?}"
         );
     }
+}
+
+#[test]
+fn comment_commands_round_trip_one_resolved_thread() {
+    let temp = TempWorkspace::new("comment-round-trip");
+    let input = temp.path.join("input.pptx");
+    let added = temp.path.join("added.pptx");
+    let replied = temp.path.join("replied.pptx");
+    let answered = temp.path.join("answered.pptx");
+    let resolved = temp.path.join("resolved.pptx");
+    let reply_removed = temp.path.join("reply-removed.pptx");
+    let removed = temp.path.join("removed.pptx");
+    write_deck(&input, &["first", "second"]);
+    let input_bytes = fs::read(&input).unwrap();
+    let arg = |path: &Path| path.to_str().unwrap().to_owned();
+    let thread = "{00000000-0000-4000-8000-000000000002}";
+    let bob_reply = "{00000000-0000-4000-8000-000000000004}";
+    let ada_reply = "{00000000-0000-4000-8000-000000000005}";
+    let json_of = |output: Output| -> serde_json::Value {
+        assert!(
+            output.status.success(),
+            "comment command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+
+    let listed = cli(&["comment", "list", &arg(&input)]);
+    assert_eq!(String::from_utf8(listed.stdout).unwrap(), "(no comments)\n");
+    assert_eq!(
+        json_of(cli(&["comment", "list", &arg(&input), "--json"])),
+        json!({ "schema": 1, "comments": [] })
+    );
+
+    let record = json_of(cli(&[
+        "comment",
+        "add",
+        &arg(&input),
+        "--slide",
+        "2",
+        "--author",
+        "Ada",
+        "--initials",
+        "AL",
+        "--text",
+        "Check this",
+        "--date",
+        "2026-09-25T10:00:00Z",
+        "--output",
+        &arg(&added),
+        "--json",
+    ]));
+    assert_eq!(
+        record,
+        json!({
+            "schema": 1,
+            "action": "add",
+            "comment_id": thread,
+            "slide": 2,
+            "output": arg(&added),
+        })
+    );
+
+    let record = json_of(cli(&[
+        "comment",
+        "reply",
+        &arg(&added),
+        "--id",
+        thread,
+        "--author",
+        "Bob",
+        "--text",
+        "Agreed",
+        "--date",
+        "2026-09-25T11:00:00Z",
+        "--output",
+        &arg(&replied),
+        "--json",
+    ]));
+    assert_eq!(
+        record,
+        json!({
+            "schema": 1,
+            "action": "reply",
+            "comment_id": bob_reply,
+            "parent_id": thread,
+            "slide": 2,
+            "output": arg(&replied),
+        })
+    );
+    let answered_output = cli(&[
+        "comment",
+        "reply",
+        &arg(&replied),
+        "--id",
+        thread,
+        "--author",
+        "Ada",
+        "--text",
+        "Thanks",
+        "--date",
+        "2026-09-25T12:00:00Z",
+        "--output",
+        &arg(&answered),
+    ]);
+    assert!(answered_output.status.success());
+    assert_eq!(
+        String::from_utf8(answered_output.stdout).unwrap(),
+        format!("reply\nWritten to {}\n", answered.display())
+    );
+
+    let resolved_output = cli(&[
+        "comment",
+        "resolve",
+        &arg(&answered),
+        "--id",
+        thread,
+        "--output",
+        &arg(&resolved),
+    ]);
+    assert!(resolved_output.status.success());
+    assert_eq!(
+        String::from_utf8(resolved_output.stdout).unwrap(),
+        format!("resolve\nWritten to {}\n", resolved.display())
+    );
+    let presentation = Presentation::open(&resolved).unwrap();
+    assert_eq!(
+        presentation
+            .comment_authors()
+            .iter()
+            .map(|author| (author.name.as_str(), author.initials.as_deref()))
+            .collect::<Vec<_>>(),
+        [("Ada", Some("AL")), ("Bob", None)]
+    );
+    let entry = |id: &str, author: &str, initials: Option<&str>, date: &str, text: &str| {
+        json!({
+            "slide": 2,
+            "id": id,
+            "author": author,
+            "initials": initials,
+            "date": date,
+            "text": text,
+            "parent_id": (id != thread).then_some(thread),
+            "resolved": id == thread,
+            "status": (id == thread).then_some("resolved"),
+        })
+    };
+    assert_eq!(
+        json_of(cli(&["comment", "list", &arg(&resolved), "--json"])),
+        json!({
+            "schema": 1,
+            "comments": [
+                entry(thread, "Ada", Some("AL"), "2026-09-25T10:00:00Z", "Check this"),
+                entry(bob_reply, "Bob", None, "2026-09-25T11:00:00Z", "Agreed"),
+                entry(ada_reply, "Ada", Some("AL"), "2026-09-25T12:00:00Z", "Thanks"),
+            ],
+        })
+    );
+
+    let record = json_of(cli(&[
+        "comment",
+        "remove",
+        &arg(&resolved),
+        "--id",
+        bob_reply,
+        "--output",
+        &arg(&reply_removed),
+        "--json",
+    ]));
+    assert_eq!(
+        record,
+        json!({
+            "schema": 1,
+            "action": "remove",
+            "comment_id": bob_reply,
+            "slide": 2,
+            "output": arg(&reply_removed),
+        })
+    );
+    let listed = cli(&["comment", "list", &arg(&reply_removed)]);
+    assert_eq!(
+        String::from_utf8(listed.stdout).unwrap(),
+        format!("2\t{thread}\tAda\tresolved\tCheck this\n2\t{ada_reply}\tAda\topen\tThanks\n")
+    );
+
+    let removed_output = cli(&[
+        "comment",
+        "remove",
+        &arg(&reply_removed),
+        "--id",
+        thread,
+        "--output",
+        &arg(&removed),
+    ]);
+    assert!(removed_output.status.success());
+    let listed = cli(&["comment", "list", &arg(&removed)]);
+    assert_eq!(String::from_utf8(listed.stdout).unwrap(), "(no comments)\n");
+
+    for output in [
+        &added,
+        &replied,
+        &answered,
+        &resolved,
+        &reply_removed,
+        &removed,
+    ] {
+        let validated = cli(&["validate", &arg(output)]);
+        assert!(
+            validated.status.success(),
+            "validate failed for {}: {}",
+            output.display(),
+            String::from_utf8_lossy(&validated.stderr)
+        );
+    }
+    assert_eq!(fs::read(&input).unwrap(), input_bytes);
+}
+
+#[test]
+fn comment_list_reports_a_closed_thread_as_closed_rather_than_open() {
+    let temp = TempWorkspace::new("comment-closed");
+    let deck = temp.path.join("closed.pptx");
+    let author = "{11111111-1111-1111-1111-111111111111}";
+    let thread = "{22222222-2222-2222-2222-222222222222}";
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    presentation
+        .add_comment_author(CommentAuthor::new(author, "Ada", None, "Ada", "None").unwrap())
+        .unwrap();
+    let mut comment = Comment::new(thread, author, "2026-09-25T10:00:00Z", "Done").unwrap();
+    comment.status = Some("closed".to_owned());
+    presentation.add_comment(0, comment).unwrap();
+    presentation.save(&deck).expect("write closed thread deck");
+
+    let listed = cli(&["comment", "list", deck.to_str().unwrap()]);
+    assert!(listed.status.success());
+    assert_eq!(
+        String::from_utf8(listed.stdout).unwrap(),
+        format!("1\t{thread}\tAda\tclosed\tDone\n")
+    );
+    let listed = cli(&["comment", "list", deck.to_str().unwrap(), "--json"]);
+    assert!(listed.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(value["comments"][0]["status"], "closed");
+    assert_eq!(value["comments"][0]["resolved"], false);
+}
+
+#[test]
+fn comment_mutations_fail_without_creating_output() {
+    let temp = TempWorkspace::new("comment-failures");
+    let input = temp.path.join("input.pptx");
+    let commented = temp.path.join("commented.pptx");
+    let replied = temp.path.join("replied.pptx");
+    let output = temp.path.join("output.pptx");
+    write_deck(&input, &["only slide"]);
+    let thread = "{00000000-0000-4000-8000-000000000002}";
+    let reply = "{00000000-0000-4000-8000-000000000004}";
+    let unknown = "{99999999-9999-9999-9999-999999999999}";
+    let date = "2026-09-25T10:00:00Z";
+    let (input, commented, replied, output_path) = (
+        input.to_str().unwrap(),
+        commented.to_str().unwrap(),
+        replied.to_str().unwrap(),
+        output.to_str().unwrap(),
+    );
+    for args in [
+        vec![
+            "comment", "add", input, "--slide", "1", "--author", "Ada", "--text", "Thread",
+            "--date", date, "--output", commented,
+        ],
+        vec![
+            "comment", "reply", commented, "--id", thread, "--author", "Bob", "--text", "Reply",
+            "--date", date, "--output", replied,
+        ],
+    ] {
+        assert!(cli(&args).status.success(), "{args:?} failed");
+    }
+
+    for (args, message) in [
+        (
+            vec![
+                "add", input, "--slide", "0", "--author", "Ada", "--text", "x", "--date", date,
+            ],
+            "slide 0 is out of range for 1 slides".to_owned(),
+        ),
+        (
+            vec![
+                "add", input, "--slide", "2", "--author", "Ada", "--text", "x", "--date", date,
+            ],
+            "slide 2 is out of range for 1 slides".to_owned(),
+        ),
+        (
+            vec![
+                "add",
+                input,
+                "--slide",
+                "1",
+                "--author",
+                "Ada",
+                "--text",
+                "x",
+                "--date",
+                "yesterday",
+            ],
+            "comment timestamp is not RFC 3339: yesterday".to_owned(),
+        ),
+        (
+            vec![
+                "reply", replied, "--id", unknown, "--author", "Ada", "--text", "x", "--date", date,
+            ],
+            format!("comment id {unknown} does not exist"),
+        ),
+        (
+            vec![
+                "reply", replied, "--id", reply, "--author", "Ada", "--text", "x", "--date", date,
+            ],
+            format!("comment id {reply} is a reply in thread {thread}"),
+        ),
+        (
+            vec!["resolve", replied, "--id", reply],
+            format!("comment id {reply} is a reply in thread {thread}"),
+        ),
+        (
+            vec!["resolve", replied, "--id", unknown],
+            format!("comment id {unknown} does not exist"),
+        ),
+        (
+            vec!["remove", replied, "--id", unknown],
+            format!("comment id {unknown} does not exist"),
+        ),
+    ] {
+        let mut command = vec!["comment"];
+        command.extend(&args);
+        command.extend(["--output", output_path, "--json"]);
+        let result = cli(&command);
+        assert_eq!(result.status.code(), Some(1), "{args:?} succeeded");
+        assert!(result.stdout.is_empty(), "{args:?} printed a record");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(&message),
+            "{args:?} reported {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!output.exists(), "{args:?} created output");
+    }
+
+    fs::write(&output, b"keep me").unwrap();
+    let result = cli(&[
+        "comment",
+        "resolve",
+        replied,
+        "--id",
+        thread,
+        "--output",
+        output_path,
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("output already exists"));
+    assert_eq!(fs::read(&output).unwrap(), b"keep me");
 }

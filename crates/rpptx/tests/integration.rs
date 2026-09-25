@@ -20755,6 +20755,115 @@ fn commented_slide_duplication_is_atomic_and_removal_keeps_comment_ownership_iso
 }
 
 #[test]
+fn resolving_and_removing_modern_comments_is_atomic_and_survives_reopen() {
+    use rpptx::{Comment, CommentAuthor, CommentReply};
+
+    let author_id = "{11111111-1111-1111-1111-111111111111}";
+    let thread_id = "{22222222-2222-2222-2222-222222222222}";
+    let first_reply_id = "{33333333-3333-3333-3333-333333333333}";
+    let second_reply_id = "{44444444-4444-4444-4444-444444444444}";
+    let other_id = "{55555555-5555-5555-5555-555555555555}";
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    presentation
+        .add_comment_author(
+            CommentAuthor::new(author_id, "Ada", None, "ada@example.test", "test").unwrap(),
+        )
+        .unwrap();
+    for (id, text) in [(thread_id, "thread"), (other_id, "other")] {
+        presentation
+            .add_comment(
+                0,
+                Comment::new(id, author_id, "2026-08-29T10:11:12Z", text).unwrap(),
+            )
+            .unwrap();
+    }
+    for (id, text) in [(first_reply_id, "first"), (second_reply_id, "second")] {
+        presentation
+            .reply_to_comment(
+                0,
+                thread_id,
+                CommentReply::new(id, author_id, "2026-08-29T10:12:13Z", text).unwrap(),
+            )
+            .unwrap();
+    }
+
+    let before = presentation.to_bytes().unwrap();
+    for rejected in [
+        presentation.resolve_comment(0, first_reply_id),
+        presentation.resolve_comment(1, thread_id),
+        presentation.remove_comment(0, "{99999999-9999-9999-9999-999999999999}"),
+        presentation.remove_comment(1, thread_id),
+    ] {
+        assert!(matches!(
+            rejected,
+            Err(Error::InvalidPresentationMutation { .. })
+        ));
+    }
+    assert!(matches!(
+        presentation.resolve_comment(2, thread_id),
+        Err(Error::UnknownSlideIndex { index: 2, .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    presentation.resolve_comment(0, thread_id).unwrap();
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    let comments = reopened.comments(0).unwrap();
+    assert_eq!(comments[0].status.as_deref(), Some("resolved"));
+    assert!(
+        comments[0]
+            .replies()
+            .iter()
+            .all(|reply| reply.status.is_none())
+    );
+    assert_eq!(comments[1].status, None);
+
+    presentation.remove_comment(0, first_reply_id).unwrap();
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    let comments = reopened.comments(0).unwrap();
+    assert_eq!(
+        comments
+            .iter()
+            .map(|comment| (comment.text(), comment.replies().len()))
+            .collect::<Vec<_>>(),
+        [("thread".to_owned(), 1), ("other".to_owned(), 0)]
+    );
+    assert_eq!(comments[0].replies()[0].text(), "second");
+
+    presentation.remove_comment(0, thread_id).unwrap();
+    assert!(presentation.remove_comment(0, second_reply_id).is_err());
+    presentation.remove_comment(0, other_id).unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert!(reopened.comments(0).is_some_and(<[_]>::is_empty));
+    let package = open_opc(&bytes, "emptied comment part");
+    // The fixture lists SLIDE_TWO_PART first, so it is slide zero.
+    assert_eq!(
+        package
+            .content_types
+            .content_type_for("/ppt/comments/comment1.xml"),
+        Some(content_types::POWERPOINT_COMMENTS)
+    );
+    assert!(
+        package
+            .get_part_rels(SLIDE_TWO_PART)
+            .unwrap()
+            .items
+            .iter()
+            .any(|relationship| relationship.rel_type == rel_types::POWERPOINT_COMMENTS)
+    );
+    let slide_xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    assert!(slide_xml.contains("commentRel"), "{slide_xml}");
+    let comment_xml = String::from_utf8(
+        package
+            .get_part("/ppt/comments/comment1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(!comment_xml.contains("<p188:cm "), "{comment_xml}");
+}
+
+#[test]
 fn opening_rejects_two_slides_that_share_one_empty_comment_part() {
     let mut package = fixture_package();
     let comment_part = "/custom/comments/shared.xml";

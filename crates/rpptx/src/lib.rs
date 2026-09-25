@@ -1957,6 +1957,63 @@ impl Presentation {
         self.commit_candidate(staged)
     }
 
+    /// Marks one modern comment thread resolved atomically.
+    ///
+    /// The status is stored on the thread's top-level comment, so a reply id
+    /// is rejected as unknown.
+    pub fn resolve_comment(&mut self, slide_index: usize, comment_id: &str) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        let mut staged = self.clone();
+        let unknown = || {
+            invalid_presentation_mutation(
+                "resolve comment",
+                format!("unknown comment id {comment_id}"),
+            )
+        };
+        let comments = staged.slides[slide_index]
+            .comments
+            .as_mut()
+            .ok_or_else(unknown)?;
+        let comment = comments
+            .comments
+            .comments
+            .iter_mut()
+            .find(|comment| comment.id == comment_id)
+            .ok_or_else(unknown)?;
+        comment.status = Some("resolved".to_owned());
+        comments.dirty = true;
+        self.commit_candidate(staged)
+    }
+
+    /// Removes one modern comment with its replies, or one reply, atomically.
+    ///
+    /// The slide keeps its comment part when its last comment is removed.
+    pub fn remove_comment(&mut self, slide_index: usize, comment_id: &str) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        let mut staged = self.clone();
+        let unknown = || {
+            invalid_presentation_mutation(
+                "remove comment",
+                format!("unknown comment id {comment_id}"),
+            )
+        };
+        let comments = staged.slides[slide_index]
+            .comments
+            .as_mut()
+            .ok_or_else(unknown)?;
+        let list = &mut comments.comments.comments;
+        if let Some(index) = list.iter().position(|comment| comment.id == comment_id) {
+            list.remove(index);
+        } else if !list
+            .iter_mut()
+            .any(|comment| comment.remove_reply(comment_id))
+        {
+            return Err(unknown());
+        }
+        comments.dirty = true;
+        self.commit_candidate(staged)
+    }
+
     /// Returns presentation sections in producer order.
     pub fn sections(&self) -> &[Section] {
         self.presentation.sections()
