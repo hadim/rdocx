@@ -22008,3 +22008,150 @@ fn removing_a_shape_detaches_connectors_and_rejects_animated_targets_without_cha
     assert_eq!(reopened.slide(0).unwrap().shapes().len(), 3);
     assert_eq!(first_slide_shape_id(&reopened, 1), group);
 }
+
+#[test]
+fn setting_notes_text_creates_the_notes_slide_and_a_missing_notes_master() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation.set_notes_text(1, "Created note").unwrap();
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    assert_eq!(presentation.slide(0).unwrap().notes_text(), None);
+    assert_eq!(
+        presentation.slide(1).unwrap().notes_text().as_deref(),
+        Some("Created note")
+    );
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "created notes");
+    let notes = String::from_utf8(
+        package
+            .get_part("/ppt/notesSlides/notesSlide1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    for expected in [
+        r#"<p:cNvPr id="2" name="Slide Image Placeholder 1"/>"#,
+        r#"<p:ph type="sldImg" idx="2"/>"#,
+        r#"<p:cNvPr id="3" name="Notes Placeholder 2"/>"#,
+        r#"<p:ph type="body" idx="3" sz="quarter"/>"#,
+        r#"<p:cNvPr id="4" name="Slide Number Placeholder 3"/>"#,
+        r#"<p:ph type="sldNum" idx="5" sz="quarter"/>"#,
+        "<a:masterClrMapping/>",
+        "Created note",
+    ] {
+        assert!(notes.contains(expected), "missing {expected} in {notes}");
+    }
+    assert_eq!(notes.matches("<p:txBody>").count(), 1, "{notes}");
+    assert_eq!(
+        package
+            .content_types
+            .content_type_for("/ppt/notesSlides/notesSlide1.xml"),
+        Some(content_types::NOTES_SLIDE)
+    );
+    let notes_relationships = package
+        .get_part_rels("/ppt/notesSlides/notesSlide1.xml")
+        .unwrap();
+    assert_eq!(
+        notes_relationships
+            .get_by_type(rel_types::NOTES_MASTER)
+            .unwrap()
+            .target,
+        "../notesMasters/notesMaster1.xml"
+    );
+    assert_eq!(
+        notes_relationships
+            .get_by_type(rel_types::SLIDE)
+            .unwrap()
+            .target,
+        "../slides/slide2.xml"
+    );
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened.slide(1).unwrap().notes_text().as_deref(),
+        Some("Created note")
+    );
+    let pdf = reopened.to_notes_pdf_deterministic().unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+
+    presentation.set_notes_text(1, "Edited note").unwrap();
+    let edited = open_opc(&presentation.to_bytes().unwrap(), "edited notes");
+    assert!(
+        edited
+            .get_part("/ppt/notesSlides/notesSlide2.xml")
+            .is_none()
+    );
+    assert_eq!(
+        presentation.slide(1).unwrap().notes_text().as_deref(),
+        Some("Edited note")
+    );
+
+    let mut package = open_opc(
+        &Presentation::new().unwrap().to_bytes().unwrap(),
+        "no notes master",
+    );
+    package.remove_part("/ppt/notesMasters/notesMaster1.xml");
+    package.remove_part_rels("/ppt/notesMasters/notesMaster1.xml");
+    package
+        .content_types
+        .remove_override("/ppt/notesMasters/notesMaster1.xml");
+    package.remove_part("/ppt/theme/theme2.xml");
+    package
+        .content_types
+        .remove_override("/ppt/theme/theme2.xml");
+    package
+        .get_part_rels_mut("/ppt/presentation.xml")
+        .unwrap()
+        .items
+        .retain(|relationship| relationship.rel_type != rel_types::NOTES_MASTER);
+    let mut without_master = open_package(package).unwrap();
+    without_master.add_slide(6).unwrap();
+    assert!(without_master.validate().is_empty());
+    assert!(without_master.to_notes_pdf_deterministic().is_err());
+    without_master.set_notes_text(0, "First note").unwrap();
+    assert!(
+        without_master.validate().is_empty(),
+        "{:?}",
+        without_master.validate()
+    );
+    let bytes = without_master.to_bytes().unwrap();
+    let package = open_opc(&bytes, "created notes master");
+    let master = package
+        .get_part_rels("/ppt/presentation.xml")
+        .unwrap()
+        .get_by_type(rel_types::NOTES_MASTER)
+        .unwrap()
+        .target
+        .clone();
+    assert_eq!(master, "notesMasters/notesMaster1.xml");
+    assert_eq!(
+        package
+            .get_part_rels("/ppt/notesMasters/notesMaster1.xml")
+            .unwrap()
+            .get_by_type(rel_types::THEME)
+            .unwrap()
+            .target,
+        "../theme/theme2.xml"
+    );
+    assert_eq!(
+        package
+            .content_types
+            .content_type_for("/ppt/theme/theme2.xml"),
+        Some(content_types::THEME)
+    );
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened.slide(0).unwrap().notes_text().as_deref(),
+        Some("First note")
+    );
+    assert!(
+        reopened
+            .to_notes_pdf_deterministic()
+            .unwrap()
+            .starts_with(b"%PDF")
+    );
+}

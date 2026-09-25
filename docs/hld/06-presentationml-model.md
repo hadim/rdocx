@@ -85,6 +85,7 @@ Presentation::to_bytes_as(&self, class: PresentationPackageClass) -> Result<Vec<
 Presentation::save_as_package_class(&self, path: impl AsRef<Path>, class: PresentationPackageClass) -> Result<()>;
 Presentation::save_as_show(&self, path: impl AsRef<Path>) -> Result<()>;
 Presentation::slide_layout_index(&self, slide_index: usize) -> Option<usize>;
+Presentation::set_notes_text(&mut self, slide_index: usize, text: &str) -> Result<()>;
 SlideRef::hidden(&self) -> bool;
 SlideRef::has_explicit_background(&self) -> bool;
 SlideRef::background_fill(&self) -> Option<&Fill>;
@@ -99,6 +100,20 @@ layout list the masters reach. `background_fill` reports only a direct
 `p:bgPr` fill, so a theme reference reads as `None`. `clear_background` keeps
 a theme reference, while `remove_background` drops any `p:bg` so the slide
 follows its layout and master.
+
+`SlideMut::set_notes_text` edits an existing notes slide and fails without one.
+`Presentation::set_notes_text` also creates the notes slide when it is absent,
+as python-pptx does. The new part relates to the notes master and back to the
+slide, carries `p:clrMapOvr` with `a:masterClrMapping`, and clones the master
+placeholders whose explicit type is `sldImg`, `body`, or `sldNum`. Each clone
+keeps the master placeholder's type, index, and other attributes, so notes
+rendering overlays it on the master placeholder. Only the body clone carries a
+text body, because a text body on the slide-number clone would replace the
+master's number field. A presentation without a notes master first receives a
+copy of the bundled template's notes master and its theme under fresh part
+names. That path needs `default-template` or `render`, and like python-pptx it
+adds no `p:notesMasterIdLst`. The whole change is staged and publishes only
+after the staged package reopens.
 
 The native facade also owns the ODP conversion boundary. Import creates a fresh
 presentation containing ordered slides, ordinary rectangle shapes and text

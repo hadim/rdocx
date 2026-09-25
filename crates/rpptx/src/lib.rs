@@ -29,6 +29,7 @@ use oxml_drawing::color::ColorMap;
 pub use oxml_drawing::fill::{Fill, NoFill, PatternFill, SolidFill};
 use oxml_drawing::geometry::{Guide, GuideOp, GuideOperand};
 pub use oxml_drawing::line::CT_LineProperties;
+use oxml_drawing::namespace::A_NS;
 use oxml_drawing::shape_props::CT_ShapeProperties;
 #[cfg(feature = "render")]
 use oxml_drawing::table::CT_TableStyleList;
@@ -80,7 +81,7 @@ pub use rpptx_oxml::diagram::{
     DiagramPoint, DiagramPointKind, DiagramRelationshipIds, DiagramShapeStyle,
 };
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
-use rpptx_oxml::namespace::P_NS;
+use rpptx_oxml::namespace::{P_NS, R_NS};
 use rpptx_oxml::notes_parts::{CT_HandoutMaster, CT_NotesMaster, CT_NotesSlide};
 pub use rpptx_oxml::picture::MediaKind;
 use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, PictureMedia};
@@ -2112,6 +2113,187 @@ impl Presentation {
         Ok(())
     }
 
+    /// Replaces one slide's speaker-note text, creating its notes slide when absent.
+    ///
+    /// A new notes slide follows python-pptx: it relates to the notes master
+    /// and the slide, and clones the master's slide image, body and slide
+    /// number placeholders. A presentation without a notes master first
+    /// receives a copy of the bundled template's notes master and its theme,
+    /// which needs the `default-template` or `render` feature.
+    pub fn set_notes_text(&mut self, slide_index: usize, text: &str) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        if self.slides[slide_index].notes.is_some() {
+            return slide_mut(&mut self.slides[slide_index]).set_notes_text(text);
+        }
+        let mut staged = self.clone();
+        staged.add_notes_slide_in_place(slide_index)?;
+        slide_mut(&mut staged.slides[slide_index]).set_notes_text(text)?;
+        self.commit_candidate(staged)
+    }
+
+    fn add_notes_slide_in_place(&mut self, slide_index: usize) -> Result<()> {
+        const OPERATION: &str = "add notes slide";
+        if self.notes_master.is_none() {
+            self.add_default_notes_master_in_place()?;
+        }
+        let (Some(master_part), Some(master)) = (&self.notes_master_part, &self.notes_master)
+        else {
+            return Err(Error::InvalidSlideMutation {
+                operation: OPERATION,
+                message: "presentation has no notes master".to_owned(),
+            });
+        };
+        let mut notes = CT_NotesSlide::from_xml(
+            format!(
+                r#"<p:notes xmlns:a="{A_NS}" xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>"#
+            )
+            .as_bytes(),
+        )
+        .expect("canonical notes slide shell");
+        let tree = &mut notes.common_slide_data.shape_tree;
+        let mut shape_ids = ShapeIdAllocator::scan(tree);
+        for child in &master.common_slide_data.shape_tree.children {
+            let ShapeTreeChild::Shape(shape) = child else {
+                continue;
+            };
+            let Some(placeholder) = &shape.placeholder else {
+                continue;
+            };
+            let label = match placeholder.ph_type {
+                Some(PhType::SlideImage) => "Slide Image Placeholder",
+                Some(PhType::Body) => "Notes Placeholder",
+                Some(PhType::SlideNumber) => "Slide Number Placeholder",
+                _ => continue,
+            };
+            let id = shape_ids.allocate();
+            let mut clone = CT_Shape::new_placeholder(id, placeholder.clone())
+                .map_err(|error| invalid_slide_mutation(OPERATION, error.to_string()))?;
+            clone
+                .set_name(&format!("{label} {}", id - 1))
+                .map_err(|error| invalid_slide_mutation(OPERATION, error.to_string()))?;
+            if placeholder.ph_type != Some(PhType::Body) {
+                clone.text_body = None;
+            }
+            tree.append_child(ShapeTreeChild::Shape(clone));
+        }
+
+        let slide_part = self.slides[slide_index].part_name.clone();
+        let notes_part = MediaNamer::scan(
+            "/ppt/notesSlides",
+            "notesSlide",
+            self.package.parts.keys().map(String::as_str),
+        )
+        .next_part_name("xml");
+        let mut notes_relationships = Relationships::new();
+        notes_relationships.add(
+            rel_types::NOTES_MASTER,
+            &relative_part_target(&notes_part, master_part),
+        );
+        notes_relationships.add(
+            rel_types::SLIDE,
+            &relative_part_target(&notes_part, &slide_part),
+        );
+        let mut slide_relationships = self
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        slide_relationships.add(
+            rel_types::NOTES_SLIDE,
+            &relative_part_target(&slide_part, &notes_part),
+        );
+        let notes_xml = notes
+            .to_xml()
+            .map_err(|error| invalid_slide_mutation(OPERATION, error.to_string()))?;
+        self.package.set_part(&notes_part, notes_xml);
+        self.package.set_part_rels(&notes_part, notes_relationships);
+        self.package.set_part_rels(&slide_part, slide_relationships);
+        self.package
+            .content_types
+            .add_override(&notes_part, content_types::NOTES_SLIDE);
+        self.slides[slide_index].notes = Some(NotesRecord {
+            part_name: notes_part,
+            notes,
+        });
+        Ok(())
+    }
+
+    #[cfg(any(feature = "default-template", feature = "render"))]
+    fn add_default_notes_master_in_place(&mut self) -> Result<()> {
+        let template = Self::from_bytes(DEFAULT_TEMPLATE)?;
+        let (Some(template_master_part), Some(master)) =
+            (template.notes_master_part, template.notes_master)
+        else {
+            return Err(invalid_slide_mutation(
+                "add notes master",
+                "the bundled template has no notes master",
+            ));
+        };
+        let template_theme_part =
+            related_internal_part(&template.package, &template_master_part, rel_types::THEME)?
+                .ok_or_else(|| {
+                    invalid_slide_mutation(
+                        "add notes master",
+                        "the bundled notes master has no theme",
+                    )
+                })?;
+        let master_part = MediaNamer::scan(
+            "/ppt/notesMasters",
+            "notesMaster",
+            self.package.parts.keys().map(String::as_str),
+        )
+        .next_part_name("xml");
+        let theme_part = MediaNamer::scan(
+            "/ppt/theme",
+            "theme",
+            self.package.parts.keys().map(String::as_str),
+        )
+        .next_part_name("xml");
+        self.package.set_part(
+            &master_part,
+            required_part(&template.package, &template_master_part)?.to_vec(),
+        );
+        self.package.set_part(
+            &theme_part,
+            required_part(&template.package, &template_theme_part)?.to_vec(),
+        );
+        let mut master_relationships = Relationships::new();
+        master_relationships.add(
+            rel_types::THEME,
+            &relative_part_target(&master_part, &theme_part),
+        );
+        self.package
+            .set_part_rels(&master_part, master_relationships);
+        self.package
+            .content_types
+            .add_override(&master_part, content_types::NOTES_MASTER);
+        self.package
+            .content_types
+            .add_override(&theme_part, content_types::THEME);
+        let mut presentation_relationships = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .cloned()
+            .unwrap_or_default();
+        presentation_relationships.add(
+            rel_types::NOTES_MASTER,
+            &relative_part_target(&self.presentation_part, &master_part),
+        );
+        self.package
+            .set_part_rels(&self.presentation_part, presentation_relationships);
+        self.notes_master_part = Some(master_part);
+        self.notes_master = Some(master);
+        Ok(())
+    }
+
+    #[cfg(not(any(feature = "default-template", feature = "render")))]
+    fn add_default_notes_master_in_place(&mut self) -> Result<()> {
+        Err(invalid_slide_mutation(
+            "add notes master",
+            "presentation has no notes master and the bundled template is not compiled in",
+        ))
+    }
+
     /// Duplicates one slide immediately after its source.
     pub fn duplicate_slide(&mut self, index: usize) -> Result<SlideRef<'_>> {
         if index >= self.slides.len() {
@@ -3624,6 +3806,13 @@ fn media_picture_shape(slide: &CT_Slide, shape_id: u32) -> Result<&CT_Picture> {
 
 fn invalid_shape_mutation(operation: &'static str, message: impl Into<String>) -> Error {
     Error::InvalidShapeMutation {
+        operation,
+        message: message.into(),
+    }
+}
+
+fn invalid_slide_mutation(operation: &'static str, message: impl Into<String>) -> Error {
+    Error::InvalidSlideMutation {
         operation,
         message: message.into(),
     }
