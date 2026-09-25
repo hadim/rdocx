@@ -32395,3 +32395,51 @@ mod f266c_character_grid_and_vertical_text_regressions {
         );
     }
 }
+
+#[test]
+fn story_link_snapshots_read_link_text_from_prefixes_declared_outside_the_link() {
+    // Each hyperlink's runs use a prefix declared on an ancestor outside the
+    // hyperlink span, or on the hyperlink itself. The package-wide inventory
+    // reads each link from its own span with an inventoried namespace scope,
+    // so it must still agree with the per-story scan that reads from the head
+    // of the part.
+    let body = concat!(
+        r#"<w:p xmlns:ww="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+        r#"<ww:r><ww:t>before </ww:t></ww:r>"#,
+        r#"<w:hyperlink w:anchor="first"><ww:r><ww:t>first link</ww:t></ww:r></w:hyperlink>"#,
+        r#"</w:p>"#,
+        r#"<w:p><w:hyperlink w:anchor="second" xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+        r#"<x:r><x:t>second link</x:t></x:r></w:hyperlink></w:p>"#,
+    );
+    let document = document_with_content_controls(&wrap_word_body(body));
+    let body_story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let project = |links: Vec<(ContentLocation, rdocx::LinkInfo)>| {
+        links
+            .into_iter()
+            .filter(|(location, _)| location.story() == &body_story)
+            .map(|(location, link)| (link.text, link.anchor, location.index_path().to_vec()))
+            .collect::<Vec<_>>()
+    };
+
+    let snapshots = project(document.story_link_snapshots().unwrap());
+
+    assert_eq!(
+        snapshots,
+        project(document.story_links(&body_story).unwrap())
+    );
+    assert_eq!(
+        snapshots
+            .iter()
+            .map(|(text, anchor, _)| (text.as_str(), anchor.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("first link", Some("first")),
+            ("second link", Some("second")),
+        ]
+    );
+}

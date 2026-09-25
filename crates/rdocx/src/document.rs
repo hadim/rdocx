@@ -1158,7 +1158,7 @@ impl<'a> StoryItemRef<'a> {
             .into_iter()
             .map(|link| {
                 self.document
-                    .story_link_info(&self.location.story, source.xml.as_ref(), link)
+                    .story_link_info(&self.location.story, source.xml.as_ref(), link, None)
             })
             .collect()
     }
@@ -13141,6 +13141,7 @@ impl Document {
         story: &StoryId,
         xml: &[u8],
         link: StoryLinkSpan,
+        scope: Option<&BTreeMap<String, String>>,
     ) -> Result<LinkInfo> {
         let text_item = StoryItemSpan {
             kind: StoryItemKind::Paragraph,
@@ -13151,7 +13152,13 @@ impl Document {
             complex_ancestors: Vec::new(),
             sdt_context: None,
         };
-        let text = story_item_text(xml, &text_item)?.unwrap_or_default();
+        // A scope inventoried up front lets the text scan read only the link
+        // span. Without one, the scan starts at the head of the part.
+        let text = match scope {
+            Some(scope) => story_item_text_with_scope(xml, &text_item, scope)?,
+            None => story_item_text(xml, &text_item)?,
+        }
+        .unwrap_or_default();
         let url = link
             .rel_id
             .as_deref()
@@ -13176,7 +13183,7 @@ impl Document {
                 let source_position = link.full.start;
                 let source_end = link.full.end;
                 let owner_width = item.full.end - item.full.start;
-                let info = self.story_link_info(story, source.xml.as_ref(), link)?;
+                let info = self.story_link_info(story, source.xml.as_ref(), link, None)?;
                 links.push((
                     source_position,
                     source_end,
@@ -13235,31 +13242,51 @@ impl Document {
                     .iter()
                     .flat_map(|(_, items)| items.iter().map(|item| item.scan.start)),
             )?;
+            let mut story_spans = Vec::new();
             for (story, items) in inventories {
-                let mut links = Vec::new();
+                let mut spans = Vec::new();
                 for (index, item) in items.into_iter().enumerate() {
                     let scope = item_scopes.get(&item.scan.start).ok_or_else(|| {
                         Error::Other("story item namespace scope was not inventoried".to_owned())
                     })?;
                     for link in scan_story_item_links_with_scope(source.xml.as_ref(), &item, scope)?
                     {
-                        let source_position = link.full.start;
-                        let source_end = link.full.end;
-                        let owner_width = item.full.end - item.full.start;
-                        let info = self.story_link_info(&story, source.xml.as_ref(), link)?;
-                        links.push((
-                            source_position,
-                            source_end,
-                            owner_width,
-                            ContentLocation {
-                                story: story.clone(),
-                                item_kind: item.kind,
-                                index_path: vec![index],
-                                is_end: false,
-                            },
-                            info,
-                        ));
+                        spans.push((index, item.kind, item.full.end - item.full.start, link));
                     }
+                }
+                story_spans.push((story, spans));
+            }
+            // One pass inventories the namespace scope of every link, so each
+            // link's text is read from its own span rather than from the head
+            // of the part, which made the whole inventory quadratic.
+            let link_scopes = story_namespace_scopes_at(
+                source.xml.as_ref(),
+                story_spans
+                    .iter()
+                    .flat_map(|(_, spans)| spans.iter().map(|(_, _, _, link)| link.full.start)),
+            )?;
+            for (story, spans) in story_spans {
+                let mut links = Vec::new();
+                for (index, item_kind, owner_width, link) in spans {
+                    let scope = link_scopes.get(&link.full.start).ok_or_else(|| {
+                        Error::Other("story link namespace scope was not inventoried".to_owned())
+                    })?;
+                    let source_position = link.full.start;
+                    let source_end = link.full.end;
+                    let info =
+                        self.story_link_info(&story, source.xml.as_ref(), link, Some(scope))?;
+                    links.push((
+                        source_position,
+                        source_end,
+                        owner_width,
+                        ContentLocation {
+                            story: story.clone(),
+                            item_kind,
+                            index_path: vec![index],
+                            is_end: false,
+                        },
+                        info,
+                    ));
                 }
                 links.sort_by_key(|(source_position, _, owner_width, _, _)| {
                     (*source_position, *owner_width)
