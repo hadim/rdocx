@@ -29,7 +29,10 @@ the same identity. The first authored spelling remains the serialized key.
 Direct mutation of the public maps remains supported, with deterministic lookup
 if callers create an invalid case conflict. Serialization rejects that conflict
 before writing output. Every loaded package retains unchanged producer
-content-types bytes and element order regardless of enabled features.
+content-types bytes and element order regardless of enabled features. Each
+loaded relationship part likewise keeps its producer bytes while its ordered
+relationships, compared by id, type, target, and target mode, are unchanged.
+Any difference writes the canonical form.
 
 Relationship XML rejects duplicate `Id` values during parsing and before
 serialization. Package serialization validates content-type identity, part

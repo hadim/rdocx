@@ -11160,6 +11160,18 @@ fn ordinary_save_still_canonicalizes_untouched_modelled_notes_parts() {
     );
 }
 
+fn zip_entries(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    (0..archive.len())
+        .map(|index| {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut data = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut data).unwrap();
+            (entry.name().to_owned(), data)
+        })
+        .collect()
+}
+
 fn f124_chart_data() -> ChartData {
     ChartData {
         categories: vec!["North".to_owned(), "South".to_owned(), "West".to_owned()],
@@ -15661,6 +15673,27 @@ fn bundled_template_has_the_documented_part_graph() {
             .windows(b"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}".len())
             .any(|window| window == b"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}")
     );
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn bundled_template_relationship_parts_are_stored_as_the_writer_serializes_them() {
+    // A save keeps an unchanged relationship part byte for byte, so every deck
+    // built from the template carries these parts forward exactly as stored.
+    let asset = workspace_root().join("crates/rpptx/assets/default.pptx");
+    let bytes = fs::read(&asset)
+        .unwrap_or_else(|error| panic!("read bundled template {}: {error}", asset.display()));
+    let relationship_parts = zip_entries(&bytes)
+        .into_iter()
+        .filter(|(name, _)| name.ends_with(".rels"))
+        .collect::<Vec<_>>();
+    assert_eq!(relationship_parts.len(), 15);
+    for (name, xml) in relationship_parts {
+        let serialized = oxml_opc::Relationships::from_xml(&xml)
+            .and_then(|relationships| relationships.to_xml())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(xml == serialized, "{name} is not stored in written form");
+    }
 }
 
 #[test]

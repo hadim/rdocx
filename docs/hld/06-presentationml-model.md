@@ -918,6 +918,11 @@ Contents: 16:9 slide size, one master with the standard colour map and full
 `viewProps`, `tableStyles` defaulted to Medium Style 2 Accent 1, a notes master,
 and **zero slides**.
 
+Its relationship parts are stored exactly as the OPC writer serialises them. A
+save keeps an unchanged relationship part byte for byte, so every deck built
+from the template carries those parts forward as stored, and SHA-bound decks
+such as the M11 candidate keep the bytes their viewer evidence records.
+
 The asset must live under the crate's own directory. A workspace-root `assets/`
 compiles locally but is not included in the published `.crate`.
 
