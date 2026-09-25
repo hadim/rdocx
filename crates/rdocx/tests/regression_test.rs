@@ -17391,6 +17391,79 @@ fn a_new_table_property_owner_does_not_adopt_edited_unmodelled_xml() {
     assert!(!rejected.contains(edited_raw), "{rejected}");
 }
 
+/// Word and Google Docs stamp paragraphs with `w:rsid*` and `w14` identities.
+/// Those retained attributes once sent the paragraph down the path that turns
+/// a property change into a diagnostic, and refuses one that comes with a text
+/// change, so the redline kept the original formatting.
+#[test]
+fn paragraph_identity_attributes_do_not_hide_a_paragraph_property_change() {
+    let original_identity =
+        r#" w14:paraId="1A2B3C4D" w14:textId="0A0B0C0D" w:rsidR="00A1B2C3" w:rsidP="00A1B2C3""#;
+    let edited_identity =
+        r#" w14:paraId="1A2B3C4D" w14:textId="7E7E7E7E" w:rsidR="00A1B2C3" w:rsidP="00D4E5F6""#;
+    let document = |identity: &str, keep_next: &str, text: &str| {
+        document_with_content_controls(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body><w:p{identity}><w:pPr>{keep_next}<w:spacing w:after="120"/></w:pPr><w:r w:rsidR="00A1B2C3"><w:t>{text}</w:t></w:r></w:p><w:p w14:paraId="5E6F7A8B" w:rsidR="00A1B2C3"><w:r><w:t>unchanged</w:t></w:r></w:p></w:body></w:document>"#
+        ))
+    };
+    let original = document(original_identity, "", "kept with next");
+    for (identity, text) in [
+        (original_identity, "kept with next"),
+        (edited_identity, "kept with next, edited"),
+    ] {
+        let edited = document(identity, "<w:keepNext/>", text);
+        let mut compared = document(original_identity, "", "kept with next");
+        let diagnostics = compared
+            .compare(&edited, "Ada", "2026-09-20T12:00:00Z")
+            .unwrap();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let tracked_bytes = compared.to_bytes().unwrap();
+        let tracked = document_xml(&mut compared);
+        assert_eq!(tracked.matches("<w:pPrChange").count(), 1, "{tracked}");
+        assert!(tracked.contains(r#"w14:textId="0A0B0C0D""#), "{tracked}");
+        assert!(!tracked.contains("7E7E7E7E"), "{tracked}");
+        assert!(!tracked.contains("00D4E5F6"), "{tracked}");
+
+        let mut accepted = Document::from_bytes(&tracked_bytes).unwrap();
+        accepted.accept_all().unwrap();
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-09-20T12:01:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(accepted.revisions().is_empty());
+        let mut rejected = Document::from_bytes(&tracked_bytes).unwrap();
+        rejected.reject_all().unwrap();
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-09-20T12:01:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(rejected.revisions().is_empty());
+    }
+
+    let header = |session: &str, keep_next: &str| {
+        document_with_comparison_header(&format!(
+            r#"<w:p w:rsidR="00A1B2C3" w:rsidP="{session}"><w:pPr>{keep_next}<w:spacing w:after="120"/></w:pPr><w:r><w:t>header</w:t></w:r></w:p>"#
+        ))
+    };
+    let mut compared = header("00A1B2C3", "");
+    let diagnostics = compared
+        .compare(
+            &header("00D4E5F6", "<w:keepNext/>"),
+            "Ada",
+            "2026-09-20T12:00:00Z",
+        )
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let tracked = comparison_part_xml(&mut compared, "/word/header1.xml");
+    assert_eq!(tracked.matches("<w:pPrChange").count(), 1, "{tracked}");
+    assert!(tracked.contains(r#"w:rsidP="00A1B2C3""#), "{tracked}");
+    assert!(!tracked.contains("00D4E5F6"), "{tracked}");
+}
+
 #[test]
 fn comparison_replaces_paragraphs_and_tables_before_an_anchor() {
     let paragraph_xml = wrap_word_body(

@@ -2513,8 +2513,8 @@ fn compare_paragraph(
         || !edited.bookmark_markers.is_empty()
         || !original.content_controls.is_empty()
         || !edited.content_controls.is_empty()
-        || !original.extra_xml.is_empty()
-        || !edited.extra_xml.is_empty()
+        || !semantic_paragraph_raw(original).is_empty()
+        || !semantic_paragraph_raw(edited).is_empty()
     {
         return compare_complex_paragraph(
             original,
@@ -2526,7 +2526,7 @@ fn compare_paragraph(
         );
     }
 
-    let mut output = String::from("<w:p>");
+    let mut output = paragraph_start_xml(original)?;
     output.push_str(&paragraph_properties_xml(
         original,
         edited,
@@ -3391,7 +3391,7 @@ fn compare_complex_paragraph(
     if original.hyperlinks != edited.hyperlinks
         || (!metadata.options.ignore_comments && original.comment_ranges != edited.comment_ranges)
         || original.bookmark_markers != edited.bookmark_markers
-        || original.extra_xml != edited.extra_xml
+        || semantic_paragraph_raw(original) != semantic_paragraph_raw(edited)
         || paragraph_control_boundaries(original) != paragraph_control_boundaries(edited)
         || (!metadata.options.ignore_formatting && original.properties != edited.properties)
     {
@@ -5016,11 +5016,7 @@ fn body_signature(content: &BodyContent) -> String {
 
 fn paragraph_signature(paragraph: &CT_P) -> String {
     let numbering = paragraph_numbering(paragraph);
-    let extra_xml = paragraph
-        .extra_xml
-        .iter()
-        .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
-        .collect::<Vec<_>>();
+    let extra_xml = semantic_paragraph_raw(paragraph);
     format!(
         "{numbering:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
         paragraph.runs.iter().map(run_signature).collect::<Vec<_>>(),
@@ -5039,6 +5035,14 @@ fn paragraph_signature(paragraph: &CT_P) -> String {
             ))
             .collect::<Vec<_>>(),
     )
+}
+
+fn semantic_paragraph_raw(paragraph: &CT_P) -> Vec<&(usize, Vec<u8>)> {
+    paragraph
+        .extra_xml
+        .iter()
+        .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
+        .collect()
 }
 
 fn paragraph_numbering(paragraph: &CT_P) -> Option<(Option<u32>, Option<u32>)> {
@@ -5254,11 +5258,7 @@ fn paragraph_signature_with_options(paragraph: &CT_P, options: &ComparisonOption
             )
         })
         .collect::<Vec<_>>();
-    let extra_xml = paragraph
-        .extra_xml
-        .iter()
-        .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
-        .collect::<Vec<_>>();
+    let extra_xml = semantic_paragraph_raw(paragraph);
     format!(
         "{numbering:?}:{runs:?}:{:?}:{comment_ranges:?}:{:?}:{:?}:{:?}",
         hyperlinks,
@@ -5451,6 +5451,26 @@ fn paragraph_xml(paragraph: &CT_P) -> Result<String> {
     let mut bytes = Vec::new();
     paragraph.to_xml(&mut Writer::new(&mut bytes))?;
     String::from_utf8(bytes).map_err(utf8_error)
+}
+
+/// Open a rebuilt paragraph with the original paragraph's root attributes.
+///
+/// The redline is the original package, and its unchanged paragraphs keep
+/// their source bytes, so a compared paragraph keeps the original identities
+/// too. None is taken from the edited side, which could duplicate a
+/// `w14:paraId` that another original paragraph still carries.
+fn paragraph_start_xml(paragraph: &CT_P) -> Result<String> {
+    let mut shell = CT_P::new();
+    shell.extra_xml = paragraph
+        .extra_xml
+        .iter()
+        .filter(|(position, raw)| CT_P::raw_is_root_attributes(*position, raw))
+        .cloned()
+        .collect();
+    if shell.extra_xml.is_empty() {
+        return Ok("<w:p>".to_owned());
+    }
+    owner_start_signature(&paragraph_xml(&shell)?)
 }
 
 fn property_xml(properties: &CT_PPr) -> Result<String> {
