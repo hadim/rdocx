@@ -24280,12 +24280,19 @@ fn ignored_stories_are_excluded_before_revision_checks_and_id_seeding() {
     fn add_main_revision(mut document: Document) -> Document {
         let bytes = document.to_bytes().unwrap();
         let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
-        let main = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec())
-            .unwrap()
-            .replace(
-                "<w:r><w:t>same body</w:t></w:r>",
-                r#"<w:ins w:id="0" w:author="Earlier" w:date="2026-09-03T09:00:00Z"><w:r><w:t>same body</w:t></w:r></w:ins>"#,
-            );
+        let main =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        // The run is found by its text, so the revision lands whatever
+        // indentation the save wrote around it.
+        let text = main.find("<w:t>same body</w:t>").unwrap();
+        let run_start = main[..text].rfind("<w:r>").unwrap();
+        let run_end = text + main[text..].find("</w:r>").unwrap() + "</w:r>".len();
+        let main = format!(
+            r#"{}<w:ins w:id="0" w:author="Earlier" w:date="2026-09-03T09:00:00Z">{}</w:ins>{}"#,
+            &main[..run_start],
+            &main[run_start..run_end],
+            &main[run_end..],
+        );
         package.set_part("/word/document.xml", main.into_bytes());
         let mut output = std::io::Cursor::new(Vec::new());
         package.write_to(&mut output).unwrap();
