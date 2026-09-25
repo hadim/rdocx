@@ -1547,12 +1547,11 @@ Eight gates run against it:
    harness before any PresentationML modelling exists.
 3. **Modelled round-trip** (M8 exit): parse and serialise the presentation,
    slide, layout, master, notes slide, notes master, and theme roots. Reparse
-   each canonical result and compare it structurally. Build the expected
-   package from those exact modelled bytes, retain the original bytes for all
-   unmodelled parts, save through deterministic OPC output, reopen, and compare
-   content types, relationships, part names, part counts, and every part byte
-   against that expectation. The gate requires nonzero corpus coverage for all
-   seven root types.
+   each canonical result and compare it structurally. The gate requires
+   nonzero corpus coverage for all seven root types. A facade save of each
+   untouched deck must then equal the deterministic OPC output of the package
+   it opened byte for byte, so every modelled root, every unmodelled part, and
+   every relationship part keeps its original bytes.
 4. **Timing model round-trip**: every slide, layout, and master timing or
    transition subtree projects the supported model while unsupported siblings
    retain exact bytes. Coverage counters must remain nonzero for every bounded
