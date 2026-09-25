@@ -6,8 +6,10 @@ use oxml_cli_support::{
     StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
 };
 use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
-use rpptx::{Presentation, ShapeRef};
-use serde_json::json;
+use rpptx::{
+    AutofitMode, Presentation, ShapeKind, ShapeRef, TextFrameRef, TextParagraphRef, TextRunRef,
+};
+use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -19,19 +21,24 @@ pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
     let size = presentation.slide_size();
     let core = presentation.core_properties();
-    let slides = presentation
-        .slides()
-        .map(|slide| {
-            json!({
-                "id": slide.id(),
-                "name": slide.name(),
-                "hidden": slide.hidden(),
-                "shapes": slide.shapes().len(),
-            })
-        })
-        .collect::<Vec<_>>();
 
     if as_json {
+        let slides = presentation
+            .slides()
+            .map(|slide| {
+                json!({
+                    "id": slide.id(),
+                    "name": slide.name(),
+                    "hidden": slide.hidden(),
+                    "shapes": slide.shapes().len(),
+                    "shape_details": slide
+                        .shapes()
+                        .enumerate()
+                        .map(|(index, shape)| shape_json(index, shape))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
         let value = json_envelope(json!({
             "file": file.display().to_string(),
             "slides": presentation.len(),
@@ -109,11 +116,180 @@ pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn text(file: &Path) -> Result<()> {
+pub fn text(file: &Path, as_json: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
+    if as_json {
+        let slides = presentation
+            .slides()
+            .enumerate()
+            .map(|(index, slide)| {
+                let mut paragraphs = Vec::new();
+                for (shape_index, shape) in slide.shapes().enumerate() {
+                    let path = [path_segment("shape", shape_index)];
+                    collect_shape_paragraphs(shape, &path, &mut paragraphs);
+                }
+                json!({
+                    "slide": index + 1,
+                    "id": slide.id(),
+                    "paragraphs": paragraphs,
+                })
+            })
+            .collect::<Vec<_>>();
+        return print_json(json!({ "slides": slides }));
+    }
     for slide in presentation.slides() {
         println!("{}", slide.text());
     }
+    Ok(())
+}
+
+fn path_segment(kind: &str, index: usize) -> Value {
+    json!({ "kind": kind, "index": index })
+}
+
+fn collect_shape_paragraphs(shape: ShapeRef<'_>, path: &[Value], output: &mut Vec<Value>) {
+    if let Some(frame) = shape.text_frame() {
+        collect_frame_paragraphs(shape, frame, path, output);
+    }
+    if let Some(table) = shape.table() {
+        for row in 0..table.row_count() {
+            for column in 0..table.column_count() {
+                let Some(cell) = table.cell(row, column) else {
+                    continue;
+                };
+                if let Some(frame) = cell.text_frame() {
+                    let mut cell_path = path.to_vec();
+                    cell_path.push(path_segment("row", row));
+                    cell_path.push(path_segment("cell", column));
+                    collect_frame_paragraphs(shape, frame, &cell_path, output);
+                }
+            }
+        }
+    }
+    for (index, child) in shape.children().enumerate() {
+        let mut child_path = path.to_vec();
+        child_path.push(path_segment("shape", index));
+        collect_shape_paragraphs(child, &child_path, output);
+    }
+}
+
+fn collect_frame_paragraphs(
+    shape: ShapeRef<'_>,
+    frame: TextFrameRef<'_>,
+    path: &[Value],
+    output: &mut Vec<Value>,
+) {
+    for index in 0..frame.paragraph_count() {
+        let Some(paragraph) = frame.paragraph(index) else {
+            continue;
+        };
+        let mut paragraph_path = path.to_vec();
+        paragraph_path.push(path_segment("paragraph", index));
+        let mut value = paragraph_json(paragraph);
+        value["path"] = Value::from(paragraph_path);
+        value["shape_id"] = json!(shape.non_visual_id());
+        output.push(value);
+    }
+}
+
+fn shape_json(index: usize, shape: ShapeRef<'_>) -> Value {
+    let frame = shape.text_frame();
+    json!({
+        "index": index,
+        "id": shape.non_visual_id(),
+        "name": shape.non_visual_name(),
+        "kind": shape_kind_label(shape.kind()),
+        "placeholder": shape.placeholder_idx().map(|idx| json!({
+            "type": shape.placeholder_type(),
+            "idx": idx,
+        })),
+        "position": shape.position().map(|(left, top)| json!({
+            "left_emu": left.0,
+            "top_emu": top.0,
+        })),
+        "size": shape.size().map(|(width, height)| json!({
+            "width_emu": width.0,
+            "height_emu": height.0,
+        })),
+        "rotation_degrees": shape.rotation().map(|rotation| rotation.to_degrees()),
+        "autofit": frame.and_then(|frame| frame.autofit_mode()).map(autofit_label),
+        "paragraphs": frame.map(|frame| {
+            (0..frame.paragraph_count())
+                .filter_map(|index| {
+                    let mut value = paragraph_json(frame.paragraph(index)?);
+                    value["index"] = json!(index);
+                    Some(value)
+                })
+                .collect::<Vec<_>>()
+        }),
+        "table": shape.table().map(|table| json!({
+            "rows": table.row_count(),
+            "columns": table.column_count(),
+        })),
+        "children": shape
+            .children()
+            .enumerate()
+            .map(|(index, child)| shape_json(index, child))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn paragraph_json(paragraph: TextParagraphRef<'_>) -> Value {
+    let runs = (0..paragraph.run_count())
+        .filter_map(|index| {
+            let run = paragraph.run(index)?;
+            Some(json!({
+                "index": index,
+                "text": run.text(),
+                "formatting": run_formatting_json(run),
+            }))
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "level": paragraph.level(),
+        "text": paragraph.text(),
+        "runs": runs,
+    })
+}
+
+fn run_formatting_json(run: TextRunRef<'_>) -> Value {
+    let Some(properties) = run.properties() else {
+        return Value::Null;
+    };
+    json!({
+        "bold": properties.bold,
+        "italic": properties.italic,
+        "underline": properties.underline.map(|underline| underline.as_str()),
+        "font": run.font_name(),
+        "size_points": run.font_size().map(|size| f64::from(size) / 100.0),
+        "color": run.font_color(),
+    })
+}
+
+fn shape_kind_label(kind: ShapeKind) -> &'static str {
+    match kind {
+        ShapeKind::Shape => "shape",
+        ShapeKind::Picture => "picture",
+        ShapeKind::GraphicFrame => "graphic-frame",
+        ShapeKind::Group => "group",
+        ShapeKind::Connector => "connector",
+        ShapeKind::AlternateContent => "alternate-content",
+    }
+}
+
+fn autofit_label(mode: AutofitMode) -> &'static str {
+    match mode {
+        AutofitMode::None => "none",
+        AutofitMode::Normal => "normal",
+        AutofitMode::Shape => "shape",
+    }
+}
+
+fn print_json(payload: Value) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json_envelope(payload)?)?
+    );
     Ok(())
 }
 
@@ -411,8 +587,9 @@ pub fn thumbnail(file: &Path, output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-pub fn outline(file: &Path) -> Result<()> {
+pub fn outline(file: &Path, as_json: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
+    let mut slides = Vec::new();
     for (index, slide) in presentation.slides().enumerate() {
         let title_shape = slide.title();
         let title = normalize_outline_text(
@@ -420,24 +597,43 @@ pub fn outline(file: &Path) -> Result<()> {
                 .and_then(|shape| shape.text())
                 .unwrap_or_default(),
         );
+        let mut items = Vec::new();
+        for shape in slide.shapes() {
+            if title_shape == Some(shape) {
+                continue;
+            }
+            collect_shape_outline(shape, &mut items);
+        }
+        if as_json {
+            slides.push(json!({
+                "slide": index + 1,
+                "id": slide.id(),
+                "title": (!title.is_empty()).then_some(title),
+                "items": items
+                    .into_iter()
+                    .map(|(level, text)| json!({ "level": level, "text": text }))
+                    .collect::<Vec<_>>(),
+            }));
+            continue;
+        }
         if title.is_empty() {
             println!("Slide {}", index + 1);
         } else {
             println!("Slide {}: {title}", index + 1);
         }
-        for shape in slide.shapes() {
-            if title_shape == Some(shape) {
-                continue;
-            }
-            print_shape_outline(shape);
+        for (level, text) in items {
+            println!("{}- {text}", "  ".repeat(level as usize));
         }
+    }
+    if as_json {
+        print_json(json!({ "slides": slides }))?;
     }
     Ok(())
 }
 
-fn print_shape_outline(shape: ShapeRef<'_>) {
+fn collect_shape_outline(shape: ShapeRef<'_>, items: &mut Vec<(u8, String)>) {
     if let Some(frame) = shape.text_frame() {
-        print_frame_outline(frame);
+        collect_frame_outline(frame, items);
     }
     if let Some(table) = shape.table() {
         for row in 0..table.row_count() {
@@ -449,24 +645,24 @@ fn print_shape_outline(shape: ShapeRef<'_>) {
                     continue;
                 }
                 if let Some(frame) = cell.text_frame() {
-                    print_frame_outline(frame);
+                    collect_frame_outline(frame, items);
                 }
             }
         }
     }
     for child in shape.children() {
-        print_shape_outline(child);
+        collect_shape_outline(child, items);
     }
 }
 
-fn print_frame_outline(frame: rpptx::TextFrameRef<'_>) {
+fn collect_frame_outline(frame: TextFrameRef<'_>, items: &mut Vec<(u8, String)>) {
     for index in 0..frame.paragraph_count() {
         let Some(paragraph) = frame.paragraph(index) else {
             continue;
         };
         let text = normalize_outline_text(&paragraph.text());
         if !text.is_empty() {
-            println!("{}- {text}", "  ".repeat(paragraph.level() as usize));
+            items.push((paragraph.level(), text));
         }
     }
 }

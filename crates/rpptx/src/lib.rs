@@ -6314,6 +6314,11 @@ impl<'a> ShapeRef<'a> {
         Some((extent.cx, extent.cy))
     }
 
+    /// Returns the direct clockwise rotation when the shape has a transform.
+    pub fn rotation(&self) -> Option<Angle> {
+        Some(shape_transform(self.child)?.rotation)
+    }
+
     /// Returns the producer-facing non-visual shape id.
     pub fn non_visual_id(&self) -> Option<u32> {
         self.child.non_visual_id()
@@ -6366,6 +6371,17 @@ impl<'a> ShapeRef<'a> {
     /// Returns the OOXML placeholder index when this child is a placeholder.
     pub fn placeholder_idx(&self) -> Option<u32> {
         shape_placeholder(self.child).map(|placeholder| placeholder.idx.unwrap_or(0))
+    }
+
+    /// Returns the explicit placeholder type token, such as `title`.
+    ///
+    /// A placeholder that omits its type returns `None`, as does a child that
+    /// is not a placeholder.
+    pub fn placeholder_type(&self) -> Option<&'a str> {
+        shape_placeholder(self.child)?
+            .ph_type
+            .as_ref()
+            .map(PhType::as_str)
     }
 
     /// Returns the typed table carried by this graphic frame, when present.

@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use rpptx::{CT_TextCharacterProperties, Emu, Presentation};
+use rpptx::{Angle, CT_TextCharacterProperties, Emu, Presentation};
+use serde_json::json;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -209,6 +210,70 @@ fn make_title_field_only(path: &Path) {
     assert!(xml.contains(field));
     package.set_part(&slide_part, xml.into_bytes());
     package.save(path).expect("write field-only title fixture");
+}
+
+/// Writes a title-and-content slide with a rotated, formatted text box, a
+/// table, and an autofit text body, followed by a blank slide.
+fn write_structured_deck(path: &Path) {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation
+        .add_slide(1)
+        .expect("add title and content slide");
+    let title_index = presentation
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .position(|shape| shape.placeholder_type() == Some("title"))
+        .expect("layout supplies a title placeholder");
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(title_index)
+        .unwrap()
+        .set_text("Roadmap")
+        .unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(100_000), Emu(200_000), Emu(3_000_000), Emu(800_000))
+            .unwrap();
+        shape.set_rotation(Angle::from_degrees(45.0)).unwrap();
+        shape.set_text("plain ").unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        frame.paragraph_mut(0).unwrap().add_run("rich").set_properties(
+            CT_TextCharacterProperties::from_xml(
+                br#"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" sz="1800" b="1" i="0" u="sng"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:latin typeface="Carlito"/></a:rPr>"#,
+            )
+            .unwrap(),
+        );
+        let mut nested = frame.add_paragraph();
+        nested.set_text("nested");
+        assert!(nested.set_level(1));
+    }
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut frame = slide
+            .add_table(1, 2, Emu(0), Emu(1_000_000), Emu(2_000_000), Emu(400_000))
+            .unwrap();
+        let mut table = frame.table_mut().unwrap();
+        table.cell_mut(0, 0).unwrap().set_text("A1");
+        table.cell_mut(0, 1).unwrap().set_text("B1");
+    }
+    presentation.add_slide(6).expect("add blank slide");
+    presentation.save(path).expect("write structured deck");
+
+    let mut package = OpcPackage::open(path).expect("open structured deck");
+    let slide_part = "/ppt/slides/slide1.xml";
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+    let marker = xml.find(">plain </a:t>").expect("text box marker");
+    let body = xml[..marker].rfind("<a:bodyPr/>").expect("text box body");
+    let xml = format!(
+        "{}<a:bodyPr><a:normAutofit/></a:bodyPr>{}",
+        &xml[..body],
+        &xml[body + "<a:bodyPr/>".len()..]
+    );
+    package.set_part(slide_part, xml.into_bytes());
+    package.save(path).expect("write autofit text box");
 }
 
 fn corpus_dir() -> PathBuf {
@@ -962,4 +1027,290 @@ fn rpptx_replace_is_guarded_counted_and_includes_notes() {
             .to_string_lossy()
             .ends_with(".tmp")
     }));
+}
+
+#[test]
+fn text_json_anchors_paragraphs_by_typed_shape_paths_with_direct_run_formatting() {
+    let temp = TempWorkspace::new("text-json");
+    let deck = temp.path.join("structured.pptx");
+    write_structured_deck(&deck);
+    let shape = |index: usize| json!({ "kind": "shape", "index": index });
+    let paragraph = |index: usize| json!({ "kind": "paragraph", "index": index });
+    let cell = |index: usize| json!({ "kind": "cell", "index": index });
+    let row = json!({ "kind": "row", "index": 0 });
+    let plain_run = |text: &str| json!([{ "index": 0, "text": text, "formatting": null }]);
+
+    let output = cli(&["text", deck.to_str().unwrap(), "--json"]);
+    assert!(
+        output.status.success(),
+        "text --json failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "slides": [
+                {
+                    "slide": 1,
+                    "id": 256,
+                    "paragraphs": [
+                        {
+                            "path": [shape(0), paragraph(0)],
+                            "shape_id": 2,
+                            "level": 0,
+                            "text": "Roadmap",
+                            "runs": plain_run("Roadmap"),
+                        },
+                        {
+                            "path": [shape(1), paragraph(0)],
+                            "shape_id": 3,
+                            "level": 0,
+                            "text": "",
+                            "runs": [],
+                        },
+                        {
+                            "path": [shape(2), paragraph(0)],
+                            "shape_id": 4,
+                            "level": 0,
+                            "text": "plain rich",
+                            "runs": [
+                                { "index": 0, "text": "plain ", "formatting": null },
+                                {
+                                    "index": 1,
+                                    "text": "rich",
+                                    "formatting": {
+                                        "bold": true,
+                                        "italic": false,
+                                        "underline": "sng",
+                                        "font": "Carlito",
+                                        "size_points": 18.0,
+                                        "color": "FF0000",
+                                    },
+                                },
+                            ],
+                        },
+                        {
+                            "path": [shape(2), paragraph(1)],
+                            "shape_id": 4,
+                            "level": 1,
+                            "text": "nested",
+                            "runs": plain_run("nested"),
+                        },
+                        {
+                            "path": [shape(3), row.clone(), cell(0), paragraph(0)],
+                            "shape_id": 5,
+                            "level": 0,
+                            "text": "A1",
+                            "runs": plain_run("A1"),
+                        },
+                        {
+                            "path": [shape(3), row.clone(), cell(1), paragraph(0)],
+                            "shape_id": 5,
+                            "level": 0,
+                            "text": "B1",
+                            "runs": plain_run("B1"),
+                        },
+                    ],
+                },
+                { "slide": 2, "id": 257, "paragraphs": [] },
+            ],
+        })
+    );
+
+    let grouped = temp.path.join("grouped.pptx");
+    write_outline_deck(&grouped);
+    let output = cli(&["text", grouped.to_str().unwrap(), "--json"]);
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["slides"][0]["paragraphs"].as_array().unwrap().last(),
+        Some(&json!({
+            "path": [shape(3), shape(0), paragraph(0)],
+            "shape_id": 6,
+            "level": 0,
+            "text": "Grouped\u{b}item",
+            "runs": [
+                { "index": 0, "text": "Grouped", "formatting": null },
+                { "index": 1, "text": "item", "formatting": null },
+            ],
+        }))
+    );
+}
+
+#[test]
+fn inspect_json_adds_shape_details_without_changing_existing_slide_keys() {
+    let temp = TempWorkspace::new("inspect-shapes");
+    let deck = temp.path.join("structured.pptx");
+    write_structured_deck(&deck);
+    let paragraph = |index: usize, level: u8, text: &str| {
+        json!({
+            "index": index,
+            "level": level,
+            "text": text,
+            "runs": [{ "index": 0, "text": text, "formatting": null }],
+        })
+    };
+
+    let output = cli(&["inspect", deck.to_str().unwrap(), "--json"]);
+    assert!(
+        output.status.success(),
+        "inspect --json failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["slides"], 2);
+    assert_eq!(
+        value["slide_details"],
+        json!([
+            {
+                "id": 256,
+                "name": null,
+                "hidden": false,
+                "shapes": 4,
+                "shape_details": [
+                    {
+                        "index": 0,
+                        "id": 2,
+                        "name": "Placeholder 2",
+                        "kind": "shape",
+                        "placeholder": { "type": "title", "idx": 0 },
+                        "position": null,
+                        "size": null,
+                        "rotation_degrees": null,
+                        "autofit": null,
+                        "paragraphs": [paragraph(0, 0, "Roadmap")],
+                        "table": null,
+                        "children": [],
+                    },
+                    {
+                        "index": 1,
+                        "id": 3,
+                        "name": "Placeholder 3",
+                        "kind": "shape",
+                        "placeholder": { "type": null, "idx": 1 },
+                        "position": null,
+                        "size": null,
+                        "rotation_degrees": null,
+                        "autofit": null,
+                        "paragraphs": [{ "index": 0, "level": 0, "text": "", "runs": [] }],
+                        "table": null,
+                        "children": [],
+                    },
+                    {
+                        "index": 2,
+                        "id": 4,
+                        "name": "TextBox 4",
+                        "kind": "shape",
+                        "placeholder": null,
+                        "position": { "left_emu": 100_000, "top_emu": 200_000 },
+                        "size": { "width_emu": 3_000_000, "height_emu": 800_000 },
+                        "rotation_degrees": 45.0,
+                        "autofit": "normal",
+                        "paragraphs": [
+                            {
+                                "index": 0,
+                                "level": 0,
+                                "text": "plain rich",
+                                "runs": [
+                                    { "index": 0, "text": "plain ", "formatting": null },
+                                    {
+                                        "index": 1,
+                                        "text": "rich",
+                                        "formatting": {
+                                            "bold": true,
+                                            "italic": false,
+                                            "underline": "sng",
+                                            "font": "Carlito",
+                                            "size_points": 18.0,
+                                            "color": "FF0000",
+                                        },
+                                    },
+                                ],
+                            },
+                            paragraph(1, 1, "nested"),
+                        ],
+                        "table": null,
+                        "children": [],
+                    },
+                    {
+                        "index": 3,
+                        "id": 5,
+                        "name": "Table 5",
+                        "kind": "graphic-frame",
+                        "placeholder": null,
+                        "position": { "left_emu": 0, "top_emu": 1_000_000 },
+                        "size": { "width_emu": 2_000_000, "height_emu": 400_000 },
+                        "rotation_degrees": 0.0,
+                        "autofit": null,
+                        "paragraphs": null,
+                        "table": { "rows": 1, "columns": 2 },
+                        "children": [],
+                    },
+                ],
+            },
+            { "id": 257, "name": null, "hidden": false, "shapes": 0, "shape_details": [] },
+        ])
+    );
+
+    let grouped = temp.path.join("grouped.pptx");
+    write_outline_deck(&grouped);
+    let output = cli(&["inspect", grouped.to_str().unwrap(), "--json"]);
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let shapes = &value["slide_details"][0]["shape_details"];
+    assert_eq!(
+        shapes[1]["placeholder"],
+        json!({ "type": "ctrTitle", "idx": 0 })
+    );
+    assert_eq!(shapes[3]["kind"], "group");
+    assert_eq!(shapes[3]["paragraphs"], serde_json::Value::Null);
+    let children = shapes[3]["children"].as_array().unwrap();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0]["index"], 0);
+    assert_eq!(children[0]["id"], 6);
+    assert_eq!(children[0]["paragraphs"][0]["text"], "Grouped\u{b}item");
+}
+
+#[test]
+fn outline_json_reports_the_plain_outline_titles_and_levels() {
+    let temp = TempWorkspace::new("outline-json");
+    let deck = temp.path.join("structured.pptx");
+    write_structured_deck(&deck);
+
+    let plain = cli(&["outline", deck.to_str().unwrap()]);
+    assert!(plain.status.success());
+    assert_eq!(
+        String::from_utf8(plain.stdout).unwrap(),
+        "Slide 1: Roadmap\n- plain rich\n  - nested\n- A1\n- B1\nSlide 2\n"
+    );
+
+    let output = cli(&["outline", deck.to_str().unwrap(), "--json"]);
+    assert!(
+        output.status.success(),
+        "outline --json failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "slides": [
+                {
+                    "slide": 1,
+                    "id": 256,
+                    "title": "Roadmap",
+                    "items": [
+                        { "level": 0, "text": "plain rich" },
+                        { "level": 1, "text": "nested" },
+                        { "level": 0, "text": "A1" },
+                        { "level": 0, "text": "B1" },
+                    ],
+                },
+                { "slide": 2, "id": 257, "title": null, "items": [] },
+            ],
+        })
+    );
 }

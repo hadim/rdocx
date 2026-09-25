@@ -1828,7 +1828,20 @@ or tag authority.
 
 `inspect` reports the file, slide and layout counts, slide size, core metadata,
 and each slide's identity, hidden state, and shape count. Its JSON form uses the
-shared schema-1 envelope. `text` emits slide text in presentation order.
+shared schema-1 envelope. Beside each slide's shape count, `shape_details`
+lists every immediate shape in z-order with its index, non-visual id and name,
+kind, placeholder type and index, direct position and size in EMU, rotation in
+degrees, direct autofit mode, paragraphs, table size, and children. A
+placeholder that inherits its transform reports null geometry, and a
+placeholder without an explicit type reports a null type. `text` emits slide
+text in presentation order. `text --json` emits schema-1 slides with a one-based
+slide number, the slide id, and paragraphs. Each paragraph carries a typed
+zero-based path of shape, table row, table cell, and paragraph positions, the
+owning shape id, its level, its visible text, and its regular runs. Run
+indexes match `TextParagraphRef::run`, so fields and line breaks appear only
+in the paragraph text, where a line break is U+000B. Run formatting is null
+without direct run properties. Otherwise it contains nullable direct bold,
+italic, underline token, Latin font, point size, and sRGB colour fields.
 `convert` produces deterministic PDF, PNG, JPEG or TIFF output. Multi-slide PNG
 and JPEG output uses one-based filename suffixes and renders one slide at a
 time, while TIFF writes one multi-page stream. `diff` compares slide text with
@@ -1848,7 +1861,14 @@ wide and preserves the rendered page aspect ratio. Its output defaults through
 the shared extension helper. `outline` prints each slide title once, followed
 by non-title text paragraphs in recursive shape z-order. Tables use row-major
 cell order, paragraph levels add two spaces of indentation, empty text is
-omitted, and embedded paragraph breaks become spaces.
+omitted, and embedded paragraph breaks become spaces. `outline --json` reports
+the same title, or null for an untitled slide, and the same items with their
+levels.
+
+The structured output reads public facade values only. `ShapeRef` gains
+`rotation` and `placeholder_type`, and `PhType::as_str` and
+`TextUnderline::as_str` become public. These are additive changes to the
+pre-1.0 `rpptx`, `rpptx-oxml`, and `oxml-drawing` crates.
 
 Shared range parsing, output-path defaulting, and JSON envelope rules live in
 `oxml-cli-support`. Ranges are positive, one-based, comma-separated values and

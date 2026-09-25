@@ -15029,6 +15029,44 @@ fn shape_mutation_setters_survive_save_and_reload() {
 }
 
 #[test]
+fn shape_refs_report_explicit_placeholder_types_and_direct_rotation() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(1).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        slide
+            .add_textbox(Emu(1), Emu(2), Emu(3), Emu(4))
+            .unwrap()
+            .set_rotation(Angle(2_700_000))
+            .unwrap();
+        slide
+            .add_table(1, 1, Emu(0), Emu(0), Emu(100), Emu(100))
+            .unwrap();
+    }
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let shapes = slide
+        .shapes()
+        .map(|shape| {
+            (
+                shape.placeholder_idx(),
+                shape.placeholder_type(),
+                shape.rotation(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shapes,
+        [
+            (Some(0), Some("title"), None),
+            (Some(1), None, None),
+            (None, None, Some(Angle(2_700_000))),
+            (None, None, Some(Angle(0))),
+        ]
+    );
+}
+
+#[test]
 fn shape_mutation_preserves_unmodelled_xml_and_schema_order() {
     let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
     let mut slide = presentation.slide_mut(0).unwrap();
