@@ -133,6 +133,13 @@ pub struct PageGeometry {
     /// The gutter is already folded into the inside margin when this is set,
     /// so the swap alone puts it on the binding edge of either page.
     pub mirror_margins: bool,
+    /// Whether two consecutive paragraphs are separated by the sum of the
+    /// first one's space after and the second one's space before, rather than
+    /// by the larger of the two.
+    ///
+    /// A document setting, carried with the geometry like `mirror_margins`
+    /// because every pagination pass reads the geometry.
+    pub do_not_use_html_paragraph_auto_spacing: bool,
     /// Degrees the section's body band rotates for `w:sectPr/w:textDirection`.
     ///
     /// `None` is the horizontal section, which keeps the band and the
@@ -203,6 +210,7 @@ impl Default for PageGeometry {
             line_numbers: None,
             vertical_alignment: None,
             mirror_margins: false,
+            do_not_use_html_paragraph_auto_spacing: false,
             body_rotation: None,
         }
     }
@@ -861,6 +869,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                     pager.media,
                 );
                 pager.cursor_y += row.height;
+                pager.previous_space_after = 0.0;
                 pager.mark_content();
             }
         }
@@ -968,6 +977,10 @@ struct Pager<'a> {
     /// would let it eat into the height that was reserved, which is enough to
     /// push a note off the page its own reference sits on.
     ink_bottom: f64,
+    /// Space after of the paragraph that ends the flow above the cursor, which
+    /// `cursor_y` already includes. Zero after a table row, because Word
+    /// collapses spacing only between two paragraphs of the same flow.
+    previous_space_after: f64,
     /// Where the previous pass placed each paragraph-relative wrapping drawing.
     /// Empty on the first pass, which is what makes that pass identical to a
     /// single-pass run.
@@ -1031,6 +1044,7 @@ impl<'a> Pager<'a> {
             page_wraps: Vec::new(),
             page_floats: Vec::new(),
             ink_bottom: 0.0,
+            previous_space_after: 0.0,
             resolved_in,
             resolved_out: ResolvedWraps::new(),
             body_fragments: Vec::new(),
@@ -1142,6 +1156,22 @@ impl<'a> Pager<'a> {
 
     fn has_content(&self) -> bool {
         self.has_content_flag
+    }
+
+    /// The space a paragraph adds above itself at the cursor.
+    ///
+    /// Nothing at the top of a page. Word otherwise keeps the larger of the
+    /// previous paragraph's space after and this space before, so only the
+    /// part of `before` that exceeds the space after already below the cursor
+    /// is added, unless the document asks for the two to be summed.
+    fn space_before(&self, before: f64) -> f64 {
+        if self.cursor_y == 0.0 {
+            0.0
+        } else if self.geometry.do_not_use_html_paragraph_auto_spacing {
+            before
+        } else {
+            (before - self.previous_space_after).max(0.0)
+        }
     }
 
     fn consume_trailing_run_page_break_before(&mut self, block_index: usize) -> bool {
@@ -2899,11 +2929,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
     blocks: &[B],
     pager: &mut Pager,
 ) {
-    let space_before = if pager.cursor_y == 0.0 {
-        0.0
-    } else {
-        para.space_before
-    };
+    let space_before = pager.space_before(para.space_before);
 
     // Flow the paragraph around anything floating in its band of the page,
     // before anything is measured. A reflow changes the paragraph's height, so
@@ -3046,12 +3072,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
     }
 
     // Render the paragraph
-    let space = if pager.cursor_y == 0.0 {
-        0.0
-    } else {
-        para.space_before
-    };
-    pager.cursor_y += space;
+    pager.cursor_y += pager.space_before(para.space_before);
 
     if let Some(body_index) = body_index {
         pager.record_body_fragment(
@@ -3116,6 +3137,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
     pager.cursor_y += para.content_height();
     pager.ink_bottom = pager.cursor_y;
     pager.cursor_y += para.space_after;
+    pager.previous_space_after = para.space_after;
     pager.mark_content();
 }
 
@@ -3285,6 +3307,7 @@ fn render_para_split(
     pager.claim_notes(remaining_lines);
     pager.ink_bottom = remaining_height;
     pager.cursor_y = remaining_height + para.space_after;
+    pager.previous_space_after = para.space_after;
     pager.mark_content();
     if ends_with_run_page_break {
         pager.trailing_run_page_break_before = Some(block_idx + 1);
@@ -4373,6 +4396,8 @@ fn render_table_row(
             let block_semantics = cell_semantics.and_then(|cell| cell.blocks.get(block_index));
             match block {
                 crate::table::CellBlock::Paragraph(paragraph) => {
+                    // The space before sits above the lines, as in the body.
+                    content_y += paragraph.space_before;
                     let semantics = match block_semantics {
                         Some(CellBlockSemantics::Paragraph(semantics)) => Some(semantics),
                         _ => None,
@@ -4454,6 +4479,7 @@ fn render_table_row(
                         );
                         change_bar_drawn |= rotated && paragraph.has_visible_revision;
                     }
+                    content_y += paragraph.content_height() + paragraph.space_after;
                 }
                 crate::table::CellBlock::Table(table) => {
                     let semantics = match block_semantics {
@@ -4479,9 +4505,9 @@ fn render_table_row(
                         );
                         nested_y += nested_row.height;
                     }
+                    content_y += table.total_height();
                 }
             }
-            content_y += block.total_height();
         }
         // Rotate the cell's painted content about the box centre, which is
         // the cell centre, so the transposed layout lands back in the cell.

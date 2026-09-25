@@ -22411,6 +22411,14 @@ impl Document {
                 .as_ref()
                 .and_then(CT_Settings::gutter_at_top)
                 .unwrap_or(false),
+            do_not_use_html_paragraph_auto_spacing: self
+                .settings
+                .as_ref()
+                .and_then(|settings| {
+                    settings
+                        .compatibility_option(CompatibilityOption::DoNotUseHTMLParagraphAutoSpacing)
+                })
+                .unwrap_or(false),
             math_properties: self
                 .settings
                 .as_ref()

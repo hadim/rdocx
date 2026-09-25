@@ -18750,6 +18750,7 @@ mod advanced_table_authoring_and_geometry {
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
+            do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             math_properties: None,
             document,

@@ -1592,6 +1592,19 @@ fn layout_cell_content(
             )?,
         }
     }
+    // Two consecutive paragraphs of a cell are one flow, so Word keeps the
+    // larger of their facing spacing there as it does in the body. The space
+    // before is reduced here to what it adds below the space after above it,
+    // which keeps the cell height a plain sum. A nested table breaks the run.
+    if !input.do_not_use_html_paragraph_auto_spacing {
+        for index in 1..blocks.len() {
+            if let [CellBlock::Paragraph(previous), CellBlock::Paragraph(next)] =
+                &mut blocks[index - 1..=index]
+            {
+                next.space_before = (next.space_before - previous.space_after).max(0.0);
+            }
+        }
+    }
     Ok((blocks, semantics))
 }
 
@@ -2029,6 +2042,7 @@ mod tests {
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
+            do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document {
@@ -2219,6 +2233,7 @@ mod tests {
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
+            do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document {

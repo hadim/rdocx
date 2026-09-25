@@ -21161,6 +21161,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
         automatic_hyphenation: false,
         mirror_margins: false,
         gutter_at_top: false,
+        do_not_use_html_paragraph_auto_spacing: false,
         default_tab_stop: None,
         math_properties: None,
         document,
@@ -30672,6 +30673,7 @@ mod advanced_table_geometry_regressions {
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
+            do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document {
@@ -32480,4 +32482,206 @@ fn story_link_snapshots_match_story_links_when_a_part_binds_word_twice() {
     assert_eq!(snapshots, project(document.story_links(&header).unwrap()));
     let items = document.story_items(&header).unwrap();
     assert_eq!(snapshots[0].0, items[0].links().unwrap()[0].text);
+}
+
+mod paragraph_spacing_collapse_regressions {
+    use rdocx::{CompatibilityOption, Document, Length};
+
+    /// One single-line body paragraph on an exact 14 point line, so the gap
+    /// between two of them is their spacing alone and no font enters it.
+    fn add_spaced(document: &mut Document, text: &str, before: f64, after: f64) {
+        let mut paragraph = document.add_paragraph(text);
+        paragraph.set_line_spacing(14.0);
+        paragraph.set_space_before(Length::pt(before));
+        paragraph.set_space_after(Length::pt(after));
+    }
+
+    fn round(value: f64) -> f64 {
+        (value * 100.0).round() / 100.0
+    }
+
+    /// The first fragment of every body item as (page, top of its lines).
+    fn tops(document: &Document) -> Vec<(usize, f64)> {
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        (0..document.content_count())
+            .map(|index| {
+                let fragment = &result
+                    .body_layout_fragments(index)
+                    .expect("body index is in range")[0];
+                (fragment.physical_page, round(fragment.y))
+            })
+            .collect()
+    }
+
+    /// The gap between the lines of each pair of consecutive body items.
+    fn gaps(document: &Document) -> Vec<f64> {
+        tops(document)
+            .windows(2)
+            .map(|pair| round(pair[1].1 - pair[0].1 - 14.0))
+            .collect()
+    }
+
+    /// How many body items start on each page.
+    fn items_per_page(document: &Document) -> Vec<usize> {
+        let mut counts = Vec::new();
+        for (page, _) in tops(document) {
+            if counts.len() < page {
+                counts.resize(page, 0);
+            }
+            counts[page - 1] += 1;
+        }
+        counts
+    }
+
+    /// Word's own probe: the space after of one paragraph and the space
+    /// before of the next, larger on either side in turn.
+    fn boundary_probe() -> Document {
+        let mut document = Document::new();
+        add_spaced(&mut document, "P1", 0.0, 20.0);
+        add_spaced(&mut document, "P2", 10.0, 0.0);
+        add_spaced(&mut document, "P3", 30.0, 5.0);
+        add_spaced(&mut document, "P4", 0.0, 0.0);
+        add_spaced(&mut document, "P5", 12.0, 0.0);
+        document
+    }
+
+    /// The shape of the issue: eighty single-line paragraphs with 6 points
+    /// before and 7 after, which is a table of contents in miniature.
+    fn toc_probe() -> Document {
+        let mut document = Document::new();
+        for index in 0..80 {
+            add_spaced(&mut document, &format!("Entry {index:02}"), 6.0, 7.0);
+        }
+        document
+    }
+
+    fn sum_spacing(document: &mut Document) {
+        document
+            .set_compatibility_option(CompatibilityOption::DoNotUseHTMLParagraphAutoSpacing, true)
+            .expect("the compatibility option is set");
+    }
+
+    /// Layout added the two, which put 24 entries on a page where Word puts
+    /// 31 and spread a table of contents over one more page than Word.
+    #[test]
+    fn consecutive_paragraphs_keep_the_larger_of_space_after_and_space_before() {
+        // Word 16 separates these five paragraphs by 20, 30, 5 and 12 points.
+        assert_eq!(gaps(&boundary_probe()), vec![20.0, 30.0, 5.0, 12.0]);
+        // 31 lines of 14 points and 30 gaps of 7 fill 644 of the 648 points.
+        assert_eq!(items_per_page(&toc_probe()), vec![31, 31, 18]);
+
+        // The compatibility option is the one case where Word adds them.
+        let mut document = boundary_probe();
+        sum_spacing(&mut document);
+        assert_eq!(gaps(&document), vec![30.0, 30.0, 5.0, 12.0]);
+        let mut document = toc_probe();
+        sum_spacing(&mut document);
+        assert_eq!(items_per_page(&document), vec![24, 24, 24, 8]);
+    }
+
+    /// Each painted line of the first page as (text, baseline).
+    fn baselines(document: &Document) -> Vec<(String, f64)> {
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        let mut lines = Vec::new();
+        oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && !run.text.trim().is_empty()
+            {
+                lines.push((run.text.trim().to_owned(), round(run.origin.y)));
+            }
+        });
+        lines
+    }
+
+    fn pitches(lines: &[(String, f64)]) -> Vec<f64> {
+        lines
+            .windows(2)
+            .map(|pair| round(pair[1].1 - pair[0].1))
+            .collect()
+    }
+
+    /// A paragraph, then a one-cell table, then a paragraph. Word adds the
+    /// spacing that meets across each table edge rather than collapsing it.
+    #[test]
+    fn a_table_boundary_adds_the_space_after_and_space_before_that_meet_there() {
+        let mut document = Document::new();
+        add_spaced(&mut document, "above", 0.0, 20.0);
+        {
+            let mut table = document.add_table(1, 1);
+            table.set_cell_margins(
+                Length::pt(0.0),
+                Length::pt(5.0),
+                Length::pt(0.0),
+                Length::pt(5.0),
+            );
+            let mut cell = table.cell(0, 0).expect("cell exists");
+            cell.set_text("inside");
+            let mut paragraph = cell.paragraph_mut(0).expect("cell paragraph");
+            paragraph.set_line_spacing(14.0);
+            paragraph.set_space_before(Length::pt(10.0));
+            paragraph.set_space_after(Length::pt(20.0));
+        }
+        add_spaced(&mut document, "below", 10.0, 0.0);
+
+        let lines = baselines(&document);
+        assert_eq!(
+            lines.iter().map(|line| line.0.as_str()).collect::<Vec<_>>(),
+            ["above", "inside", "below"]
+        );
+        // 14 points of line, then 20 after and 10 before on each side.
+        assert_eq!(pitches(&lines), vec![44.0, 44.0]);
+    }
+
+    /// Three paragraphs in one cell with exact 14 point lines, spaced like the
+    /// Word probe: 20 after, then 10 before and 10 after, then 30 before.
+    fn cell_probe(summed: bool) -> Document {
+        let mut document = Document::new();
+        {
+            let mut table = document.add_table(1, 1);
+            table.set_cell_margins(
+                Length::pt(0.0),
+                Length::pt(5.0),
+                Length::pt(0.0),
+                Length::pt(5.0),
+            );
+            let mut cell = table.cell(0, 0).expect("cell exists");
+            cell.set_text("C1");
+            cell.add_paragraph("C2");
+            cell.add_paragraph("C3");
+            for (index, (before, after)) in [(0.0, 20.0), (10.0, 10.0), (30.0, 0.0)]
+                .into_iter()
+                .enumerate()
+            {
+                let mut paragraph = cell.paragraph_mut(index).expect("cell paragraph");
+                paragraph.set_line_spacing(14.0);
+                paragraph.set_space_before(Length::pt(before));
+                paragraph.set_space_after(Length::pt(after));
+            }
+        }
+        if summed {
+            sum_spacing(&mut document);
+        }
+        document
+    }
+
+    /// Cell paragraphs were drawn at the top of their block with the space
+    /// before below them, and the row summed every facing pair of spacing.
+    #[test]
+    fn consecutive_cell_paragraphs_keep_the_larger_spacing_and_draw_below_their_space_before() {
+        // Word 16 separates the three lines by 20 and 30 points.
+        let document = cell_probe(false);
+        assert_eq!(pitches(&baselines(&document)), vec![34.0, 44.0]);
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        let row = &result.body_layout_fragments(0).expect("the table")[0];
+        assert_eq!(round(row.height), 92.0, "three lines and gaps of 20 and 30");
+
+        // With the compatibility option Word separates them by 30 and 40.
+        assert_eq!(pitches(&baselines(&cell_probe(true))), vec![44.0, 54.0]);
+    }
 }
