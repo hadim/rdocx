@@ -358,6 +358,24 @@ impl OpcPackage {
         self.parts.insert(key, data);
     }
 
+    /// Return whether a stored part already says what a typed model serializes to.
+    ///
+    /// `reserialize` parses a part and serializes the result, which is what the
+    /// stored bytes are written as when nothing changed. When that equals
+    /// `serialized`, no edit reached the part and its stored bytes can stay,
+    /// with their producer formatting, namespace declarations, and unmodelled
+    /// content. An absent part, or bytes that no longer parse, do not match.
+    pub fn part_matches_serialization(
+        &self,
+        part_name: &str,
+        serialized: &[u8],
+        reserialize: impl FnOnce(&[u8]) -> Option<Vec<u8>>,
+    ) -> bool {
+        self.get_part(part_name).is_some_and(|stored| {
+            stored == serialized || reserialize(stored).as_deref() == Some(serialized)
+        })
+    }
+
     /// Remove and return a case-equivalent normalized part.
     pub fn remove_part(&mut self, part_name: &str) -> Option<Vec<u8>> {
         let key = deterministic_part_key(&self.parts, part_name)?.clone();

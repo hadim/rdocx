@@ -48,6 +48,19 @@ including internal theme and other typed edges that have no modeled `r:id`.
 They join deterministic semantic ordering by relationship type and normalized
 target. Unknown and external authored edges retain their target and mode.
 
+**Saves keep untouched parts.** A typed Word part keeps its current package
+bytes when its model serializes exactly as those bytes do after one parse and
+serialization. `OpcPackage::part_matches_serialization` states that rule. The
+comparison always reads the part's current bytes, so bytes an operation wrote
+directly stay when its model agrees with them, and an edit that reaches the
+model always writes the model. A missing part, or bytes that no longer parse,
+never match. Word applies the rule to the body, styles, numbering, comments,
+comments extensions, and the core, application, and custom properties parts,
+next to the retained-source settings, theme, font table, glossary, and footnote
+paths. Unless the save itself repairs identifiers, a no-op Word save therefore
+writes every part and relationship part byte for byte, and an untouched signed
+package keeps a valid signature.
+
 Modern presentation package identity is the main presentation part's exact
 content type. `oxml-opc` names the ordinary presentation, macro-enabled
 presentation, ordinary template, macro-enabled template, ordinary slideshow,

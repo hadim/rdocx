@@ -12111,7 +12111,14 @@ impl Document {
                 Error::Other(format!("styles relationship allocation failed: {error}"))
             })?;
         self.styles_part_name = Some(styles_part.clone());
-        self.package.set_part(&styles_part, styles_xml);
+        if !self
+            .package
+            .part_matches_serialization(&styles_part, &styles_xml, |xml| {
+                CT_Styles::from_xml(xml).ok()?.to_xml().ok()
+            })
+        {
+            self.package.set_part(&styles_part, styles_xml);
+        }
 
         // Serialize numbering definitions if we have any
         if let Some(numbering_xml) = self
@@ -12132,7 +12139,14 @@ impl Document {
                     Error::Other(format!("numbering relationship allocation failed: {error}"))
                 })?;
             self.numbering_part_name = Some(numbering_part.clone());
-            self.package.set_part(&numbering_part, numbering_xml);
+            if !self
+                .package
+                .part_matches_serialization(&numbering_part, &numbering_xml, |xml| {
+                    CT_Numbering::from_xml(xml).ok()?.to_xml().ok()
+                })
+            {
+                self.package.set_part(&numbering_part, numbering_xml);
+            }
         }
 
         // F-155 exposes settings as a read-only projection. Parsed settings
@@ -12184,7 +12198,17 @@ impl Document {
             self.comments_extended_part_name.clone(),
         ) {
             let xml = comments.to_xml()?;
-            self.package.set_part(&part_name, xml);
+            if !self
+                .package
+                .part_matches_serialization(&part_name, &xml, |xml| {
+                    rdocx_oxml::comments_extended::CT_CommentsEx::from_xml(xml)
+                        .ok()?
+                        .to_xml()
+                        .ok()
+                })
+            {
+                self.package.set_part(&part_name, xml);
+            }
             self.ensure_part_relationship_checked(
                 &part_name,
                 crate::comments::COMMENTS_EXTENDED_REL_TYPE,
@@ -12217,7 +12241,14 @@ impl Document {
             .transpose()?
         {
             let core_part = self.reserve_core_properties_bundle()?;
-            self.package.set_part(&core_part, core_xml);
+            if !self
+                .package
+                .part_matches_serialization(&core_part, &core_xml, |xml| {
+                    CoreProperties::from_xml(xml).ok()?.to_xml().ok()
+                })
+            {
+                self.package.set_part(&core_part, core_xml);
+            }
         }
         if let Some(application_xml) = self
             .application_properties
@@ -12226,7 +12257,13 @@ impl Document {
             .transpose()?
         {
             let application_part = self.reserve_application_properties_bundle()?;
-            self.package.set_part(&application_part, application_xml);
+            if !self.package.part_matches_serialization(
+                &application_part,
+                &application_xml,
+                |xml| AppProperties::from_xml(xml).ok()?.to_xml().ok(),
+            ) {
+                self.package.set_part(&application_part, application_xml);
+            }
         }
         if let Some(custom_xml) = self
             .custom_properties
@@ -12235,7 +12272,14 @@ impl Document {
             .transpose()?
         {
             let custom_part = self.reserve_custom_properties_bundle()?;
-            self.package.set_part(&custom_part, custom_xml);
+            if !self
+                .package
+                .part_matches_serialization(&custom_part, &custom_xml, |xml| {
+                    CustomProperties::from_xml(xml).ok()?.to_xml().ok()
+                })
+            {
+                self.package.set_part(&custom_part, custom_xml);
+            }
         }
 
         Ok(())
@@ -12297,14 +12341,23 @@ impl Document {
             && let (Some(comments), Some(part_name)) =
                 (&self.comments, self.comments_part_name.clone())
         {
-            let mut comments = comments.clone();
-            for comment in &mut comments.comments {
-                for paragraph in &mut comment.paragraphs {
-                    close_typed_story_drawing_namespaces(paragraph)?;
+            let serialize = |mut comments: rdocx_oxml::comments::CT_Comments| {
+                for comment in &mut comments.comments {
+                    for paragraph in &mut comment.paragraphs {
+                        close_typed_story_drawing_namespaces(paragraph)?;
+                    }
                 }
+                Ok::<_, Error>(comments.to_xml()?)
+            };
+            let xml = serialize(comments.clone())?;
+            if !self
+                .package
+                .part_matches_serialization(&part_name, &xml, |xml| {
+                    serialize(rdocx_oxml::comments::CT_Comments::from_xml(xml).ok()?).ok()
+                })
+            {
+                self.package.set_part(&part_name, xml);
             }
-            let xml = comments.to_xml()?;
-            self.package.set_part(&part_name, xml);
             self.comments_dirty = false;
             self.ensure_part_relationship_checked(
                 &part_name,
@@ -12324,10 +12377,9 @@ impl Document {
         // byte. A modified document fails closed when canonical serialization
         // could change the meaning or bytes of retained content.
         let existing_document_xml = self.package.get_part(&self.doc_part_name);
-        let typed_document_is_unchanged = existing_document_xml
-            .and_then(|xml| CT_Document::from_xml(xml).ok())
-            .as_ref()
-            == Some(&self.document);
+        let existing_document =
+            existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
+        let typed_document_is_unchanged = existing_document.as_ref() == Some(&self.document);
         let nested_namespace_owners = existing_document_xml
             .map(nested_modeled_namespace_owners)
             .transpose()?
@@ -12339,20 +12391,38 @@ impl Document {
         )
         .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
         let doc_xml = if typed_document_is_unchanged && unsafe_prefix.is_some() {
-            existing_document_xml
-                .expect("compared existing document XML")
-                .to_vec()
+            None
         } else {
             if let Some(prefix) = unsafe_prefix {
                 return Err(Error::Other(format!(
                     "cannot serialize a modified document with a shadowed `{prefix}` namespace"
                 )));
             }
+            // An untouched body serializes exactly as its current bytes would,
+            // so those bytes stay, as they do for every other typed part.
             let serialized = self.document.to_xml()?;
-            replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
+            if self
+                .package
+                .part_matches_serialization(&self.doc_part_name, &serialized, |_| {
+                    existing_document.as_ref()?.to_xml().ok()
+                })
+            {
+                None
+            } else {
+                Some(replay_nested_namespace_declarations(
+                    &serialized,
+                    &nested_namespace_owners,
+                )?)
+            }
         };
-        let namespace_scopes = document_namespace_scopes(&doc_xml)?;
-        self.package.set_part(&self.doc_part_name, doc_xml);
+        if let Some(doc_xml) = doc_xml {
+            self.package.set_part(&self.doc_part_name, doc_xml);
+        }
+        let namespace_scopes = document_namespace_scopes(
+            self.package
+                .get_part(&self.doc_part_name)
+                .ok_or(Error::NoDocumentPart)?,
+        )?;
         self.root_namespace_declarations = namespace_scopes.root_declarations;
         self.body_namespace_declarations = namespace_scopes.body_declarations;
         self.body_namespace_bindings = namespace_scopes.body_bindings;
