@@ -1420,6 +1420,28 @@ no notes or handout methods and continue to preserve the underlying parts. No
 new public surface is added to `rpptx-layout`, `rpptx-render`, or the OXML
 crates. The additive facade API is reviewed through the pre-1.0 release gate.
 
+## Native PowerPoint text layout
+
+The published pre-1.0 `rpptx` facade exposes the concrete `TextFrameLayout`
+value and one render-feature method:
+
+```rust
+Presentation::text_layout_deterministic(&self, width_factor: f64)
+    -> Result<Vec<TextFrameLayout>>;
+```
+
+`TextFrameLayout` carries the zero-based slide index, the optional shape id and
+name, the effective `AutofitMode`, and an `rpptx_render::ShapeTextLayout`. The
+published pre-1.0 `rpptx-render` crate adds the concrete `ShapeTextLayout` and
+`TextLineLayout` values and `layout_shape_text`, which shares its stacking path
+with slide lowering. `08-rendering-spec.md` owns the coordinate, overflow, and
+width factor semantics.
+
+Python, WASM, and CLI consumers gain no text layout method. This is an
+additive semver change for `rpptx` and `rpptx-render`. It adds no production
+dependency, feature flag, trait, dynamic dispatch, generic parameter, or
+builder.
+
 ## Native PowerPoint executable-content inventory
 
 The published pre-1.0 `rpptx` facade exposes concrete `EmbeddedContentKind`,

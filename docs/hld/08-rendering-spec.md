@@ -1029,6 +1029,13 @@ A width factor multiplies the usable width before line breaking and keeps its
 left edge. Autofit runs against the narrower box, so `0.95` answers whether the
 frame still fits when another renderer takes five percent of its width.
 
+`Presentation::text_layout_deterministic` resolves the same staged package and
+deterministic fonts as `to_pdf_deterministic`. It reports each text-bearing
+shape of each slide's own shape tree with its slide index, shape id, name, and
+effective autofit mode. Layout and master shapes, SmartArt, table cells, and
+text bodies that draw no visible character are left out, since an empty
+paragraph taller than a thin divider would otherwise read as overflow.
+
 ## Performance
 
 `Document` keeps normal-font and deterministic `WordLayoutResult` values in
