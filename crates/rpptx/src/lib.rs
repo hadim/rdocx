@@ -23,10 +23,11 @@ pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu};
-use oxml_drawing::color::ColorChoice;
+pub use oxml_drawing::color::ColorChoice;
 #[cfg(feature = "render")]
 use oxml_drawing::color::ColorMap;
-pub use oxml_drawing::fill::Fill;
+pub use oxml_drawing::fill::{Fill, NoFill, PatternFill, SolidFill};
+use oxml_drawing::geometry::{Guide, GuideOp, GuideOperand};
 pub use oxml_drawing::line::CT_LineProperties;
 use oxml_drawing::shape_props::CT_ShapeProperties;
 #[cfg(feature = "render")]
@@ -96,7 +97,9 @@ use rpptx_oxml::shape_tree::{
 use rpptx_oxml::slide_parts::CT_CommonSlideData;
 #[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::ColorMapOverrideKind;
-use rpptx_oxml::slide_parts::{CT_HeaderFooter, CT_Slide, CT_SlideLayout, CT_SlideMaster};
+use rpptx_oxml::slide_parts::{
+    BackgroundRendering, CT_HeaderFooter, CT_Slide, CT_SlideLayout, CT_SlideMaster,
+};
 pub use rpptx_oxml::timing::MediaPlaybackTrigger;
 use rpptx_oxml::timing::{CT_Timing, MediaCommandKind, MediaDisplayPolicy};
 #[cfg(feature = "render")]
@@ -1759,6 +1762,19 @@ impl Presentation {
             .and_then(|record| record.layout.common_slide_data.name.as_deref())
     }
 
+    /// Returns the zero-based index of the layout one slide uses.
+    ///
+    /// The slide's internal layout relationship must target a layout that the
+    /// presentation masters reach.
+    pub fn slide_layout_index(&self, slide_index: usize) -> Option<usize> {
+        let slide_part = &self.slides.get(slide_index)?.part_name;
+        let layout_part =
+            related_internal_part(&self.package, slide_part, rel_types::SLIDE_LAYOUT).ok()??;
+        self.layouts
+            .iter()
+            .position(|layout| layout.part_name.eq_ignore_ascii_case(&layout_part))
+    }
+
     /// Returns modern PowerPoint comment authors in producer order.
     pub fn comment_authors(&self) -> &[CommentAuthor] {
         &self.comment_authors.authors
@@ -3340,6 +3356,13 @@ fn media_picture_shape(slide: &CT_Slide, shape_id: u32) -> Result<&CT_Picture> {
         })
 }
 
+fn invalid_shape_mutation(operation: &'static str, message: impl Into<String>) -> Error {
+    Error::InvalidShapeMutation {
+        operation,
+        message: message.into(),
+    }
+}
+
 fn slide_relationship_ids(slide: &CT_Slide) -> Result<HashSet<String>> {
     let xml = slide
         .to_xml()
@@ -4830,6 +4853,12 @@ impl<'a> SlideMut<'a> {
         self.record.slide.clear_background();
     }
 
+    /// Removes any slide background, direct fill or theme reference, so the
+    /// slide follows its layout and master background.
+    pub fn remove_background(&mut self) {
+        self.record.slide.common_slide_data.background = None;
+    }
+
     /// Replaces speaker-note text while preserving its body placeholder.
     pub fn set_notes_text(&mut self, text: &str) -> Result<()> {
         let notes = self
@@ -5081,6 +5110,21 @@ impl<'a> SlideRef<'a> {
         self.record.slide.has_explicit_background()
     }
 
+    /// Returns the direct `p:bgPr` fill when the slide background has one.
+    pub fn background_fill(&self) -> Option<&'a Fill> {
+        match self
+            .record
+            .slide
+            .common_slide_data
+            .background
+            .as_ref()?
+            .rendering()
+        {
+            BackgroundRendering::Properties(fill) => fill.as_deref(),
+            BackgroundRendering::Reference { .. } | BackgroundRendering::Unsupported(_) => None,
+        }
+    }
+
     /// Returns one immediate z-order child by zero-based index.
     pub fn shape(&self, index: usize) -> Option<ShapeRef<'a>> {
         self.record
@@ -5157,6 +5201,23 @@ pub enum AutofitMode {
     None,
     Normal,
     Shape,
+}
+
+/// The python-pptx `MSO_SHAPE_TYPE` classification of one shape-tree child.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShapeType {
+    AutoShape,
+    Chart,
+    EmbeddedOleObject,
+    Freeform,
+    Group,
+    Line,
+    LinkedOleObject,
+    Media,
+    Picture,
+    Placeholder,
+    Table,
+    TextBox,
 }
 
 /// A borrowed shape-tree child.
@@ -6296,10 +6357,148 @@ fn shape_transform(child: &ShapeTreeChild) -> Option<&CT_Transform2D> {
     }
 }
 
+fn literal_guide_value(guide: &Guide) -> Option<f64> {
+    match (&guide.op, guide.args.as_slice()) {
+        (GuideOp::Val, [GuideOperand::Literal(value)]) => Some(*value),
+        _ => None,
+    }
+}
+
+fn shape_properties(child: &ShapeTreeChild) -> Option<&CT_ShapeProperties> {
+    match child {
+        ShapeTreeChild::Shape(shape) => Some(&shape.shape_properties),
+        ShapeTreeChild::Picture(picture) => Some(&picture.shape_properties),
+        ShapeTreeChild::Connector(connector) => Some(&connector.shape_properties),
+        ShapeTreeChild::GraphicFrame(_)
+        | ShapeTreeChild::GroupShape(_)
+        | ShapeTreeChild::AlternateContent(_) => None,
+    }
+}
+
 impl<'a> ShapeRef<'a> {
     /// Returns the child's normalized structural kind.
     pub fn kind(&self) -> ShapeKind {
         shape_kind(self.child)
+    }
+
+    /// Classifies the child the way python-pptx `shape_type` does.
+    ///
+    /// Only an ordinary shape reports `Placeholder`: python-pptx classifies a
+    /// picture placeholder as a picture and a graphic-frame placeholder by its
+    /// payload. Only video counts as `Media`, so an audio picture is a
+    /// `Picture`. `None` covers a shape without geometry, SmartArt and other
+    /// graphic payloads, and alternate content without a chart choice.
+    pub fn shape_type(&self) -> Option<ShapeType> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => {
+                if shape.placeholder.is_some() {
+                    Some(ShapeType::Placeholder)
+                } else if shape.shape_properties.custom_geometry.is_some() {
+                    Some(ShapeType::Freeform)
+                } else if shape.is_textbox() {
+                    Some(ShapeType::TextBox)
+                } else if shape.shape_properties.preset_geometry.is_some() {
+                    Some(ShapeType::AutoShape)
+                } else {
+                    None
+                }
+            }
+            ShapeTreeChild::Picture(picture) => Some(
+                if picture
+                    .media
+                    .as_ref()
+                    .is_some_and(|media| media.kind == MediaKind::Video)
+                {
+                    ShapeType::Media
+                } else {
+                    ShapeType::Picture
+                },
+            ),
+            ShapeTreeChild::GraphicFrame(frame) => match frame.graphic_data.payload() {
+                GraphicDataPayload::Table(_) => Some(ShapeType::Table),
+                GraphicDataPayload::Chart(_) => Some(ShapeType::Chart),
+                GraphicDataPayload::Ole { .. } => {
+                    if frame.graphic_data.is_embedded_ole_object() == Some(true) {
+                        Some(ShapeType::EmbeddedOleObject)
+                    } else {
+                        Some(ShapeType::LinkedOleObject)
+                    }
+                }
+                GraphicDataPayload::SmartArt(_) | GraphicDataPayload::Other(_) => None,
+            },
+            ShapeTreeChild::GroupShape(_) => Some(ShapeType::Group),
+            ShapeTreeChild::Connector(_) => Some(ShapeType::Line),
+            ShapeTreeChild::AlternateContent(alternate) => {
+                alternate.chart_choice().map(|_| ShapeType::Chart)
+            }
+        }
+    }
+
+    /// Returns the effective preset adjustments of an ordinary shape.
+    ///
+    /// Like python-pptx, the preset definition's defaults come in definition
+    /// order and a literal `val` guide in the shape's own `a:avLst` replaces
+    /// the default of the same name. Values are raw guide values, where
+    /// 100000 means 1.0. Other shape kinds and custom geometry have none.
+    pub fn adjustments(&self) -> Result<Vec<(String, f64)>> {
+        let ShapeTreeChild::Shape(shape) = self.child else {
+            return Ok(Vec::new());
+        };
+        let Some(geometry) = &shape.shape_properties.preset_geometry else {
+            return Ok(Vec::new());
+        };
+        let defaults = geometry
+            .default_adjust_values()
+            .map_err(|error| invalid_shape_mutation("read adjustments", error.to_string()))?;
+        Ok(defaults
+            .into_iter()
+            .filter_map(|default| {
+                let value = literal_guide_value(
+                    geometry
+                        .adjust_values()
+                        .iter()
+                        .find(|guide| guide.name == default.name)
+                        .unwrap_or(&default),
+                )
+                .or_else(|| literal_guide_value(&default))?;
+                Some((default.name, value))
+            })
+            .collect())
+    }
+
+    /// Returns the direct clockwise rotation, or `None` without a transform.
+    pub fn rotation(&self) -> Option<Angle> {
+        shape_transform(self.child).map(|transform| transform.rotation)
+    }
+
+    /// Returns the direct fill of a shape, picture, or connector.
+    pub fn fill(&self) -> Option<&'a Fill> {
+        shape_properties(self.child)?.fill.as_ref()
+    }
+
+    /// Returns the direct line of a shape, picture, or connector.
+    pub fn line(&self) -> Option<&'a CT_LineProperties> {
+        shape_properties(self.child)?.line.as_ref()
+    }
+
+    /// Serialises the child as a self-contained element.
+    ///
+    /// Typed children declare the `p`, `a`, `r` and `mc` prefixes they use.
+    /// Alternate content is returned verbatim and may rely on prefixes that
+    /// only the slide root declares.
+    pub fn xml(&self) -> Result<Vec<u8>> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => shape.to_xml(),
+            ShapeTreeChild::Picture(picture) => picture.to_xml(),
+            ShapeTreeChild::GraphicFrame(frame) => frame.to_xml(),
+            ShapeTreeChild::GroupShape(group) => group.to_xml(),
+            ShapeTreeChild::Connector(connector) => connector.to_xml(),
+            ShapeTreeChild::AlternateContent(alternate) => Ok(alternate.raw_xml().to_vec()),
+        }
+        .map_err(|error| Error::InvalidShapeMutation {
+            operation: "serialize shape",
+            message: error.to_string(),
+        })
     }
 
     /// Returns the direct shape offset in EMU.

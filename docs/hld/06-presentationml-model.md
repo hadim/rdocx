@@ -84,12 +84,21 @@ Presentation::package_class(&self) -> Result<PresentationPackageClass>;
 Presentation::to_bytes_as(&self, class: PresentationPackageClass) -> Result<Vec<u8>>;
 Presentation::save_as_package_class(&self, path: impl AsRef<Path>, class: PresentationPackageClass) -> Result<()>;
 Presentation::save_as_show(&self, path: impl AsRef<Path>) -> Result<()>;
+Presentation::slide_layout_index(&self, slide_index: usize) -> Option<usize>;
 SlideRef::hidden(&self) -> bool;
 SlideRef::has_explicit_background(&self) -> bool;
+SlideRef::background_fill(&self) -> Option<&Fill>;
 SlideMut::set_hidden(&mut self, hidden: bool);
 SlideMut::set_background(&mut self, fill: Fill) -> Result<()>;
 SlideMut::clear_background(&mut self);
+SlideMut::remove_background(&mut self);
 ```
+
+`slide_layout_index` follows the slide's internal layout relationship to the
+layout list the masters reach. `background_fill` reports only a direct
+`p:bgPr` fill, so a theme reference reads as `None`. `clear_background` keeps
+a theme reference, while `remove_background` drops any `p:bg` so the slide
+follows its layout and master.
 
 The native facade also owns the ODP conversion boundary. Import creates a fresh
 presentation containing ordered slides, ordinary rectangle shapes and text
@@ -235,6 +244,42 @@ row-major cell text with tabs between cells and newlines between rows. Other
 shape kinds have no direct text. `ShapeRef` equality is node identity. Two
 handles compare equal only when they borrow the same underlying shape-tree
 child, rather than when separate shapes happen to contain equal XML.
+
+`ShapeRef` also reads the classification and direct formatting the Python
+binding exposes:
+
+```rust
+pub enum ShapeType {
+    AutoShape, Chart, EmbeddedOleObject, Freeform, Group, Line,
+    LinkedOleObject, Media, Picture, Placeholder, Table, TextBox,
+}
+ShapeRef::shape_type(&self) -> Option<ShapeType>;
+ShapeRef::rotation(&self) -> Option<Angle>;
+ShapeRef::fill(&self) -> Option<&Fill>;
+ShapeRef::line(&self) -> Option<&CT_LineProperties>;
+ShapeRef::adjustments(&self) -> Result<Vec<(String, f64)>>;
+ShapeRef::xml(&self) -> Result<Vec<u8>>;
+```
+
+`shape_type` follows python-pptx 1.0.2. An ordinary shape is a placeholder,
+then a freeform with custom geometry, then a text box when
+`p:cNvSpPr/@txBox` is true, then an auto shape with preset geometry, else
+unclassified. A picture is media only for video, so audio and picture
+placeholders stay pictures. A graphic frame is a table, a chart, or an OLE
+object, embedded when the last `p:oleObj` has a `p:embed` child and linked
+otherwise, while SmartArt and other payloads stay unclassified. Groups are
+groups, connectors are lines, and alternate content is a chart only through
+its chart choice. Graphic-frame placeholders are classified by payload, as in
+python-pptx.
+
+`rotation` is `None` without a transform. `fill` and `line` read the direct
+shape properties of ordinary shapes, pictures, and connectors. `adjustments`
+returns the preset definition's defaults in definition order, each replaced by
+a literal `val` guide of the same name in the shape's own `a:avLst`. Only
+ordinary shapes with preset geometry have adjustments. `xml` serializes a
+typed child on its own with the prefixes it uses declared. Alternate content
+returns its preserved bytes, which may rely on prefixes only the slide root
+declares.
 
 `slide_mut(index)` exposes a borrowed `SlideMut` handle. Its `shape(index)`
 method retains read access, while `shape_mut(index)` returns a `ShapeMut` for an

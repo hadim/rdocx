@@ -21296,3 +21296,292 @@ for filename in sys.argv[1:]:
                 f"{bounds[2] / 12700:.3f}\t{bounds[3] / 12700:.3f}\t{escape(shape_text(shape))}"
             )
 "#;
+
+fn with_first_slide_children(
+    presentation: &Presentation,
+    children: &str,
+    relationships: &[(&str, &str, &str)],
+) -> Presentation {
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "slide children fixture");
+    let slide_part = "/ppt/slides/slide1.xml";
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+    let xml = xml.replacen("</p:spTree>", &format!("{children}</p:spTree>"), 1);
+    package.set_part(slide_part, xml.into_bytes());
+    let slide_relationships = package.get_or_create_part_rels(slide_part);
+    for (id, relationship_type, target) in relationships {
+        slide_relationships.add_with_id(id, relationship_type, target);
+    }
+    open_package(package).unwrap()
+}
+
+fn with_renumbered_shape_id(xml: &[u8], from: u32, to: u32) -> String {
+    String::from_utf8(xml.to_vec()).unwrap().replacen(
+        &format!(r#"<p:cNvPr id="{from}""#),
+        &format!(r#"<p:cNvPr id="{to}""#),
+        1,
+    )
+}
+
+fn add_python_pptx_media(presentation: &mut Presentation, kind: MediaKind) {
+    let poster = valid_one_pixel_png();
+    let (bytes, filename, content_type) = match kind {
+        MediaKind::Audio => (b"ID3shapes-audio".as_slice(), "sound.mp3", "audio/mpeg"),
+        MediaKind::Video => (
+            b"\0\0\0\x18ftypisom-shapes-video".as_slice(),
+            "movie.mp4",
+            "video/mp4",
+        ),
+    };
+    presentation
+        .add_media(
+            0,
+            kind,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes,
+                filename,
+                content_type,
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(10),
+            Emu(10),
+            Emu(300),
+            Emu(200),
+            MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+}
+
+#[test]
+fn shape_type_classifies_every_shape_tree_child_like_python_pptx() {
+    use rpptx::ShapeType;
+
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        slide.add_textbox(Emu(1), Emu(1), Emu(10), Emu(10)).unwrap();
+        slide
+            .add_shape("roundRect", Emu(1), Emu(1), Emu(10), Emu(10))
+            .unwrap();
+        slide
+            .add_table(1, 1, Emu(1), Emu(1), Emu(100), Emu(100))
+            .unwrap();
+        slide
+            .add_connector(ConnectorType::Elbow, Emu(1), Emu(1), Emu(10), Emu(10))
+            .unwrap();
+        slide.add_group_shape().unwrap();
+    }
+    presentation
+        .add_picture(
+            0,
+            &valid_one_pixel_png(),
+            "pixel.png",
+            Emu(1),
+            Emu(1),
+            None,
+            None,
+        )
+        .unwrap();
+    presentation
+        .add_chart(
+            0,
+            ChartKind::Bar,
+            Emu(1),
+            Emu(2),
+            Emu(300),
+            Emu(400),
+            &f124_chart_data(),
+        )
+        .unwrap();
+    add_python_pptx_media(&mut presentation, MediaKind::Video);
+    add_python_pptx_media(&mut presentation, MediaKind::Audio);
+    let slide = presentation.slide(0).unwrap();
+    let picture_xml = String::from_utf8(slide.shape(7).unwrap().xml().unwrap()).unwrap();
+    let embed = picture_xml
+        .split(r#"r:embed=""#)
+        .nth(1)
+        .and_then(|tail| tail.split('"').next())
+        .unwrap()
+        .to_owned();
+    let chart_id = slide.shape(8).unwrap().non_visual_id().unwrap();
+    let chart_choice =
+        with_renumbered_shape_id(&slide.shape(8).unwrap().xml().unwrap(), chart_id, 99);
+    let ole = |id: u32, body: &str| {
+        format!(
+            r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{id}" name="OLE {id}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole">{body}</a:graphicData></a:graphic></p:graphicFrame>"#
+        )
+    };
+    let children = [
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="90" name="Freeform"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="10" y="10"/></a:lnTo></a:path></a:pathLst></a:custGeom></p:spPr></p:sp>"#.to_owned(),
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="91" name="Spelled"/><p:cNvSpPr txBox="true"/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#.to_owned(),
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="92" name="Bare"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#.to_owned(),
+        ole(93, r#"<p:oleObj r:id="ole-embedded" name="embedded"><p:embed/></p:oleObj>"#),
+        ole(94, r#"<p:oleObj r:id="ole-linked" name="linked"><p:link updateAutomatic="1"/></p:oleObj>"#),
+        ole(95, &format!(r#"<mc:AlternateContent xmlns:mc="{MC_NS}"><mc:Choice Requires="v"><p:oleObj r:id="ole-embedded" name="choice"><p:embed/></p:oleObj></mc:Choice><mc:Fallback><p:oleObj r:id="ole-linked" name="fallback"><p:link/></p:oleObj></mc:Fallback></mc:AlternateContent>"#)),
+        r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="96" name="Other"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm><a:graphic><a:graphicData uri="urn:rpptx:other"><x:payload xmlns:x="urn:rpptx:other"/></a:graphicData></a:graphic></p:graphicFrame>"#.to_owned(),
+        format!(r#"<p:pic><p:nvPicPr><p:cNvPr id="97" name="Picture Placeholder"/><p:cNvPicPr/><p:nvPr><p:ph type="pic" idx="13"/></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="{embed}"/></p:blipFill><p:spPr/></p:pic>"#),
+        format!(r#"<mc:AlternateContent xmlns:mc="{MC_NS}"><mc:Choice xmlns:c14="http://schemas.microsoft.com/office/drawing/2007/8/2/chart" Requires="c14">{chart_choice}</mc:Choice><mc:Fallback/></mc:AlternateContent>"#),
+    ]
+    .concat();
+    let presentation = with_first_slide_children(
+        &presentation,
+        &children,
+        &[
+            (
+                "ole-embedded",
+                rel_types::OLE_OBJECT,
+                "../embeddings/opaque.bin",
+            ),
+            (
+                "ole-linked",
+                rel_types::OLE_OBJECT,
+                "../embeddings/opaque.bin",
+            ),
+        ],
+    );
+    let types = presentation
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .map(|shape| shape.shape_type())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        types,
+        [
+            Some(ShapeType::Placeholder),
+            Some(ShapeType::Placeholder),
+            Some(ShapeType::TextBox),
+            Some(ShapeType::AutoShape),
+            Some(ShapeType::Table),
+            Some(ShapeType::Line),
+            Some(ShapeType::Group),
+            Some(ShapeType::Picture),
+            Some(ShapeType::Chart),
+            Some(ShapeType::Media),
+            Some(ShapeType::Picture),
+            Some(ShapeType::Freeform),
+            Some(ShapeType::TextBox),
+            None,
+            Some(ShapeType::EmbeddedOleObject),
+            Some(ShapeType::LinkedOleObject),
+            Some(ShapeType::LinkedOleObject),
+            None,
+            Some(ShapeType::Picture),
+            Some(ShapeType::Chart),
+        ]
+    );
+}
+
+#[test]
+fn shape_reads_report_rotation_fill_line_and_self_contained_xml() {
+    use rpptx::{ColorChoice, RgbColor, SolidFill};
+
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_shape("rect", Emu(10), Emu(20), Emu(30), Emu(40))
+            .unwrap();
+        shape.set_rotation(Angle(5_400_000)).unwrap();
+        let mut solid = SolidFill::default();
+        solid.color = Some(ColorChoice::srgb(RgbColor::new(1, 2, 3)));
+        shape.set_fill(Fill::Solid(solid)).unwrap();
+        let mut line = CT_LineProperties::default();
+        line.width = Some(12_700);
+        shape.set_line(line).unwrap();
+        slide.add_group_shape().unwrap();
+        slide
+            .add_table(1, 1, Emu(1), Emu(1), Emu(100), Emu(100))
+            .unwrap();
+        slide.add_textbox(Emu(1), Emu(1), Emu(10), Emu(10)).unwrap();
+    }
+    let slide = presentation.slide(0).unwrap();
+    let shape = slide.shape(0).unwrap();
+    assert_eq!(shape.rotation(), Some(Angle(5_400_000)));
+    assert!(matches!(
+        shape.fill(),
+        Some(Fill::Solid(fill)) if fill.color == Some(ColorChoice::srgb(RgbColor::new(1, 2, 3)))
+    ));
+    assert_eq!(shape.line().and_then(|line| line.width), Some(12_700));
+    let xml = String::from_utf8(shape.xml().unwrap()).unwrap();
+    assert!(xml.starts_with("<p:sp "), "{xml}");
+    assert!(xml.contains(&format!(r#"xmlns:p="{P_NS}""#)));
+    assert!(xml.contains(&format!(r#"xmlns:a="{A_NS}""#)));
+    assert!(xml.contains(r#"rot="5400000""#));
+    assert!(xml.contains(r#"<a:srgbClr val="010203"/>"#));
+    rpptx_oxml::shape_tree::CT_Shape::from_xml(xml.as_bytes()).unwrap();
+
+    let group = slide.shape(1).unwrap();
+    assert_eq!(
+        (group.rotation(), group.fill(), group.line()),
+        (None, None, None)
+    );
+    assert!(
+        String::from_utf8(group.xml().unwrap())
+            .unwrap()
+            .starts_with("<p:grpSp ")
+    );
+    let table = slide.shape(2).unwrap();
+    assert_eq!(table.rotation(), Some(Angle(0)));
+    assert_eq!((table.fill(), table.line()), (None, None));
+    let table_xml = table.xml().unwrap();
+    rpptx_oxml::graphic_frame::CT_GraphicFrame::from_xml(&table_xml).unwrap();
+    let textbox = slide.shape(3).unwrap();
+    assert!(matches!(textbox.fill(), Some(Fill::NoFill(_))));
+    assert_eq!(textbox.line(), None);
+}
+
+#[test]
+fn adjustments_start_from_preset_defaults_and_follow_explicit_values() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        slide
+            .add_shape("roundRect", Emu(1), Emu(1), Emu(10), Emu(10))
+            .unwrap();
+        slide
+            .add_shape("rightArrow", Emu(1), Emu(1), Emu(10), Emu(10))
+            .unwrap()
+            .set_adjust_value("adj2", 25_000.0)
+            .unwrap();
+        slide
+            .add_shape("rect", Emu(1), Emu(1), Emu(10), Emu(10))
+            .unwrap();
+        slide
+            .add_connector(ConnectorType::Straight, Emu(1), Emu(1), Emu(10), Emu(10))
+            .unwrap();
+    }
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let adjustments = |index| slide.shape(index).unwrap().adjustments().unwrap();
+    assert_eq!(adjustments(0), [("adj".to_owned(), 16_667.0)]);
+    assert_eq!(
+        adjustments(1),
+        [("adj1".to_owned(), 50_000.0), ("adj2".to_owned(), 25_000.0)]
+    );
+    assert!(adjustments(2).is_empty());
+    assert!(adjustments(3).is_empty());
+}
+
+#[test]
+fn slide_layout_index_follows_the_slide_layout_relationship() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(3).unwrap();
+    presentation.add_slide(0).unwrap();
+    presentation.add_slide(10).unwrap();
+    assert_eq!(presentation.slide_layout_index(0), Some(3));
+    assert_eq!(presentation.slide_layout_index(1), Some(0));
+    assert_eq!(presentation.slide_layout_index(2), Some(10));
+    assert_eq!(presentation.slide_layout_index(3), None);
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.slide_layout_index(0), Some(3));
+    assert_eq!(
+        reopened.layout_name(reopened.slide_layout_index(1).unwrap()),
+        presentation.layout_name(0)
+    );
+}
