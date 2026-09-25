@@ -604,10 +604,6 @@ fn layout_table_inner(
             .or(table_cell_spacing)
             .unwrap_or(0.0);
         let half_spacing = row_cell_spacing / 2.0;
-        let cell_margin_left = cell_margin_left + half_spacing;
-        let cell_margin_right = cell_margin_right + half_spacing;
-        let cell_margin_top = cell_margin_top + half_spacing;
-        let cell_margin_bottom = cell_margin_bottom + half_spacing;
 
         // Omitted edge columns move the row's own origin. The table origin,
         // the table width and every other row stay where they are.
@@ -670,6 +666,19 @@ fn layout_table_inner(
                 .and_then(|shd| shd.fill.as_ref())
                 .filter(|f| f.as_str() != "auto")
                 .map(|f| Color::from_hex(f));
+
+            // A cell's own `w:tcMar` replaces the table's margins edge by edge.
+            let own_margin = cell
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.cell_margin.as_ref());
+            let margin = |own: Option<rdocx_oxml::Twips>, table: f64| {
+                own.map_or(table, |twips| twips.to_pt()) + half_spacing
+            };
+            let cell_margin_left = margin(own_margin.and_then(|m| m.left), cell_margin_left);
+            let cell_margin_right = margin(own_margin.and_then(|m| m.right), cell_margin_right);
+            let cell_margin_top = margin(own_margin.and_then(|m| m.top), cell_margin_top);
+            let cell_margin_bottom = margin(own_margin.and_then(|m| m.bottom), cell_margin_bottom);
 
             // Calculate cell width from spanned columns
             let cell_width: f64 = (col_index..col_index + grid_span as usize)

@@ -32685,3 +32685,137 @@ mod paragraph_spacing_collapse_regressions {
         assert_eq!(pitches(&baselines(&cell_probe(true))), vec![44.0, 54.0]);
     }
 }
+
+mod table_row_border_and_margin_regressions {
+    use rdocx::table::Table;
+    use rdocx::{Document, Length};
+
+    fn round(value: f64) -> f64 {
+        (value * 100.0).round() / 100.0
+    }
+
+    /// A five-row table of two 4680 twip columns, as in the Word probes: one
+    /// exact 14 point line per cell, no vertical cell margin, 5 points left
+    /// and right. A paragraph on the same kind of line follows it.
+    fn probe(configure: impl FnOnce(&mut Table)) -> Document {
+        let mut document = Document::new();
+        {
+            let mut table = document.add_table(5, 2);
+            table.set_cell_margins(
+                Length::pt(0.0),
+                Length::pt(5.0),
+                Length::pt(0.0),
+                Length::pt(5.0),
+            );
+            for row in 0..5 {
+                for column in 0..2 {
+                    let mut cell = table.cell(row, column).expect("cell exists");
+                    cell.set_text(&format!("R{row}{column}"));
+                    let mut paragraph = cell.paragraph_mut(0).expect("cell paragraph");
+                    paragraph.set_line_spacing(14.0);
+                    paragraph.set_space_before(Length::pt(0.0));
+                    paragraph.set_space_after(Length::pt(0.0));
+                }
+            }
+            configure(&mut table);
+        }
+        let mut next = document.add_paragraph("NEXT");
+        next.set_line_spacing(14.0);
+        next.set_space_before(Length::pt(0.0));
+        next.set_space_after(Length::pt(0.0));
+        document
+    }
+
+    /// Baseline and left edge of each painted line of the first page.
+    fn lines(document: &Document) -> Vec<(String, f64, f64)> {
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        let mut lines = Vec::new();
+        oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && !run.text.trim().is_empty()
+            {
+                lines.push((
+                    run.text.trim().to_owned(),
+                    round(run.origin.y),
+                    round(run.origin.x),
+                ));
+            }
+        });
+        lines
+    }
+
+    /// How far the first row's line sits below where a borderless table puts
+    /// it, then the distance from each first-column line to the next and from
+    /// the last row to the paragraph after the table.
+    fn row_geometry(document: &Document) -> (f64, Vec<f64>) {
+        let baselines = |document: &Document| {
+            lines(document)
+                .into_iter()
+                .filter(|(text, ..)| text.ends_with('0') || text == "NEXT")
+                .map(|(_, baseline, _)| baseline)
+                .collect::<Vec<_>>()
+        };
+        let plain = baselines(&probe(|_| {}));
+        let placed = baselines(document);
+        assert_eq!(placed.len(), 6, "five rows and the paragraph after them");
+        let pitches = placed
+            .windows(2)
+            .map(|pair| round(pair[1] - pair[0]))
+            .collect();
+        (round(placed[0] - plain[0]), pitches)
+    }
+
+    /// Layout read only the table's `w:tblCellMar` and ignored a cell's own
+    /// `w:tcMar`, which Google Docs writes on every cell.
+    #[test]
+    fn per_cell_margins_override_the_table_cell_margins() {
+        let cell_margins = |top: f64, left: f64, table_vertical: f64| {
+            move |table: &mut Table| {
+                table.set_cell_margins(
+                    Length::pt(table_vertical),
+                    Length::pt(5.0),
+                    Length::pt(table_vertical),
+                    Length::pt(5.0),
+                );
+                for row in 0..5 {
+                    for column in 0..2 {
+                        table
+                            .cell(row, column)
+                            .expect("cell exists")
+                            .set_margins_checked(
+                                Length::pt(top),
+                                Length::pt(5.0),
+                                Length::pt(top),
+                                Length::pt(left),
+                            )
+                            .expect("margins are valid");
+                    }
+                }
+            }
+        };
+        // 5 points on every side of every cell over a table default of none.
+        assert_eq!(
+            row_geometry(&probe(cell_margins(5.0, 5.0, 0.0))),
+            (5.0, vec![24.0, 24.0, 24.0, 24.0, 19.0])
+        );
+        // No vertical cell margin over a table default of 5 points.
+        assert_eq!(
+            row_geometry(&probe(cell_margins(0.0, 5.0, 5.0))),
+            (0.0, vec![14.0; 5])
+        );
+        // The left margin moves the text and the table default does not.
+        let left_edge = |document: &Document| {
+            lines(document)
+                .into_iter()
+                .find(|(text, ..)| text == "R00")
+                .expect("the first cell paints")
+                .2
+        };
+        assert_eq!(
+            round(left_edge(&probe(cell_margins(0.0, 15.0, 0.0))) - left_edge(&probe(|_| {}))),
+            10.0
+        );
+    }
+}

@@ -748,7 +748,8 @@ row span and suppresses physical horizontal edges inside that span. Ordinary
 cells establish row minima. Merge content grows the last non-exact row in its
 span only when the complete content needs more room. Exact rows stay pinned
 and clip overflow, while minimum rows may grow. Resolved cell margins define
-the local text and drawing content box.
+the local text and drawing content box. A cell's own `w:tcMar` replaces the
+table's `w:tblCellMar` edge by edge.
 
 Borders are physical row or column segments rather than four strokes per cell.
 The renderer maps every logical cell edge onto those segments and emits each
