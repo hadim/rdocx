@@ -17,7 +17,7 @@ use super::bullet::TextBullet;
 const MAX_TEXT_MARGIN: i32 = 51_206_400;
 const MAX_TEXT_POINT: i32 = 400_000;
 const MAX_TEXT_SPACING_POINT: i32 = 158_400;
-const MAX_TRANSITIONAL_SPACING_PERCENT: i32 = 201_169;
+const MAX_TRANSITIONAL_SPACING_PERCENT: i32 = 13_200_000;
 
 /// Whether source text explicitly requested XML whitespace preservation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -745,7 +745,13 @@ impl CT_TextCharacterProperties {
             validate_baseline(value)?;
             start.push_attribute(("baseline", value));
         }
-        push_raw_attributes(&mut start, &self.raw_attributes);
+        for (name, value) in &self.raw_attributes {
+            // A typed capitalisation replaces a preserved `cap="small"`.
+            if name == "cap" && self.all_caps.is_some() {
+                continue;
+            }
+            start.push_attribute((name.as_str(), value.as_str()));
+        }
 
         let has_modelled_children = self.fill.is_some()
             || self.latin.is_some()
@@ -1052,6 +1058,38 @@ impl CT_TextParagraphProperties {
         &self.raw_children
     }
 
+    /// Returns whether the paragraph keeps a preserved `a:buBlip` picture bullet.
+    pub fn has_picture_bullet(&self) -> bool {
+        (0..=10).any(|boundary| {
+            self.raw_children
+                .at(boundary)
+                .any(|raw| raw_local_name(raw) == b"buBlip")
+        })
+    }
+
+    /// Replaces the direct bullet.
+    ///
+    /// Each bullet group holds one member, so a colour, size, font, or choice
+    /// set here removes its preserved `a:buClrTx`, `a:buSzTx`, `a:buFontTx`,
+    /// or `a:buBlip` alternative. Clearing the bullet removes all four.
+    pub fn set_bullet(&mut self, bullet: Option<TextBullet>) {
+        let replaces = |name: &[u8]| {
+            let Some(bullet) = bullet.as_ref() else {
+                return matches!(name, b"buClrTx" | b"buSzTx" | b"buFontTx" | b"buBlip");
+            };
+            match name {
+                b"buClrTx" => bullet.color.is_some(),
+                b"buSzTx" => bullet.size.is_some(),
+                b"buFontTx" => bullet.font.is_some(),
+                b"buBlip" => bullet.choice.is_some(),
+                _ => false,
+            }
+        };
+        self.raw_children
+            .retain(|raw| !replaces(raw_local_name(raw)));
+        self.bullet = bullet;
+    }
+
     /// Serialises a complete paragraph-property fragment.
     pub fn to_xml(&self) -> Result<Vec<u8>> {
         let mut writer = Writer::new(Vec::new());
@@ -1074,6 +1112,16 @@ fn paragraph_property_slot(name: &[u8]) -> Option<usize> {
         b"extLst" => Some(10),
         _ => None,
     }
+}
+
+/// Returns the local name of a captured raw element.
+fn raw_local_name(raw: &[u8]) -> &[u8] {
+    let tag = raw.strip_prefix(b"<").unwrap_or(raw);
+    let end = tag
+        .iter()
+        .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+        .unwrap_or(tag.len());
+    local_name(&tag[..end])
 }
 
 fn is_paragraph_property_tag(name: &[u8]) -> bool {
@@ -1961,7 +2009,10 @@ mod tests {
     };
     use crate::color::ColorChoice;
     use crate::text::CT_TextBody;
-    use crate::text::{TextAutoNumberScheme, TextBulletChoice, TextBulletSizeValue};
+    use crate::text::{
+        TextAutoNumberScheme, TextBullet, TextBulletCharacter, TextBulletChoice,
+        TextBulletSizeValue,
+    };
 
     #[test]
     fn drawingml_rtl_attribute_becomes_typed_without_reordering_unknown_content() {
@@ -2092,6 +2143,73 @@ mod tests {
         let mut writer = quick_xml::Writer::new(Vec::new());
         small.write_xml(&mut writer, "a:rPr").unwrap();
         assert_eq!(writer.into_inner(), br#"<a:rPr cap="small"/>"#);
+    }
+
+    #[test]
+    fn setting_all_caps_over_preserved_small_caps_writes_one_cap_attribute() {
+        let mut properties =
+            CT_TextCharacterProperties::from_xml(br#"<q:rPr cap="small" lang="en-US"/>"#).unwrap();
+        properties.all_caps = Some(true);
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        properties.write_xml(&mut writer, "a:rPr").unwrap();
+        let written = writer.into_inner();
+        assert_eq!(written, br#"<a:rPr cap="all" lang="en-US"/>"#);
+        assert_eq!(
+            CT_TextCharacterProperties::from_xml(&written)
+                .unwrap()
+                .all_caps,
+            Some(true)
+        );
+
+        properties.all_caps = None;
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        properties.write_xml(&mut writer, "a:rPr").unwrap();
+        assert_eq!(writer.into_inner(), br#"<a:rPr cap="small" lang="en-US"/>"#);
+    }
+
+    #[test]
+    fn spacing_percentages_above_two_lines_parse_up_to_the_schema_maximum() {
+        let xml = br#"<q:pPr><q:lnSpc><q:spcPct val="250000"/></q:lnSpc><q:spcBef><q:spcPct val="13200000"/></q:spcBef></q:pPr>"#;
+        let properties = CT_TextParagraphProperties::from_xml(xml).unwrap();
+        assert_eq!(
+            properties.line_spacing,
+            Some(TextSpacing::Percent("250000".to_owned()))
+        );
+        assert_eq!(
+            properties.space_before,
+            Some(TextSpacing::Percent("13200000".to_owned()))
+        );
+        assert_eq!(
+            properties.to_xml().unwrap(),
+            br#"<a:pPr><a:lnSpc><a:spcPct val="250000"/></a:lnSpc><a:spcBef><a:spcPct val="13200000"/></a:spcBef></a:pPr>"#
+        );
+    }
+
+    #[test]
+    fn setting_a_bullet_part_removes_the_preserved_alternative_it_replaces() {
+        let mut properties = CT_TextParagraphProperties::from_xml(
+            br#"<q:pPr><q:buClrTx/><q:buSzTx/><q:buFontTx/><q:buBlip><q:blip x:embed="rId9"/></q:buBlip><q:tabLst/></q:pPr>"#,
+        )
+        .unwrap();
+        assert!(properties.has_picture_bullet());
+
+        properties.set_bullet(Some(TextBullet {
+            choice: Some(TextBulletChoice::Character(
+                TextBulletCharacter::new("*").unwrap(),
+            )),
+            ..TextBullet::default()
+        }));
+        assert!(!properties.has_picture_bullet());
+        assert_eq!(
+            properties.to_xml().unwrap(),
+            br#"<a:pPr><q:buClrTx/><q:buSzTx/><q:buFontTx/><a:buChar char="*"/><q:tabLst/></a:pPr>"#
+        );
+
+        properties.set_bullet(None);
+        assert_eq!(
+            properties.to_xml().unwrap(),
+            br#"<a:pPr><q:tabLst/></a:pPr>"#
+        );
     }
 
     #[test]
@@ -2268,7 +2386,7 @@ mod tests {
             br#"<q:pPr algn="middle"/>"#,
             br#"<q:pPr><q:lnSpc/></q:pPr>"#,
             br#"<q:pPr><q:lnSpc><q:spcPts val="158401"/></q:lnSpc></q:pPr>"#,
-            br#"<q:pPr><q:lnSpc><q:spcPct val="201170"/></q:lnSpc></q:pPr>"#,
+            br#"<q:pPr><q:lnSpc><q:spcPct val="13200001"/></q:lnSpc></q:pPr>"#,
             br#"<q:rPr sz="99"/>"#,
             br#"<q:rPr b="yes"/>"#,
             br#"<q:rPr u="triple"/>"#,

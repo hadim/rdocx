@@ -414,7 +414,10 @@ impl CT_TextBodyProperties {
             *boundary = (*boundary).max(2);
             return Ok(());
         }
-        self.raw_children.push(*boundary, raw);
+        // A known child keeps its schema slot, so an autofit choice added
+        // after parsing is still written before a preserved scene or extension.
+        let slot = raw_boundary_after(name).saturating_sub(1);
+        self.raw_children.push((*boundary).max(slot), raw);
         *boundary = (*boundary).max(raw_boundary_after(name));
         Ok(())
     }
@@ -721,6 +724,24 @@ mod tests {
             .to_xml()
             .unwrap();
         assert_eq!(written, br#"<a:bodyPr><x:before/><q:prstTxWarp prst="textPlain"><x:warp/></q:prstTxWarp><x:beforeFit/><a:normAutofit fontScale="62500"/><x:afterFit/><q:scene3d><x:scene/></q:scene3d><x:afterScene/><q:sp3d><x:shape/></q:sp3d><x:after3d/><q:extLst><x:ext/></q:extLst><x:afterExt/></a:bodyPr>"#);
+    }
+
+    #[test]
+    fn an_added_autofit_is_written_before_preserved_scene_and_extension_children() {
+        let mut properties = CT_TextBodyProperties::from_xml(
+            br#"<q:bodyPr><x:first/><q:scene3d><x:scene/></q:scene3d><q:flatTx/><q:extLst><x:ext/></q:extLst></q:bodyPr>"#,
+        )
+        .unwrap();
+        properties.autofit = Some(TextAutofit::ShapeAutofit);
+        let written = properties.to_xml().unwrap();
+        assert_eq!(
+            written,
+            br#"<a:bodyPr><x:first/><a:spAutoFit/><q:scene3d><x:scene/></q:scene3d><q:flatTx/><q:extLst><x:ext/></q:extLst></a:bodyPr>"#
+        );
+        assert_eq!(
+            CT_TextBodyProperties::from_xml(&written).unwrap(),
+            properties
+        );
     }
 
     #[test]
