@@ -4375,12 +4375,15 @@ fn render_table_row(
             .iter()
             .map(crate::table::CellBlock::total_height)
             .sum::<f64>();
-        // A rotated cell is laid out in a same-centre transposed box and the
-        // result is rotated back over the cell. A horizontal cell's box is the
-        // cell itself, so it keeps the arithmetic it always had.
+        // The content sits between the horizontal border bands the row
+        // height includes. A rotated cell is laid out in a same-centre
+        // transposed box and the result is rotated back over the cell. A
+        // horizontal cell's box is the cell itself less those bands.
+        let band_y = row_y + cell.border_band_top;
+        let band_height = (paint_height - cell.border_band_top - cell.border_band_bottom).max(0.0);
         let (box_x, box_y, box_width, box_height) = match cell.rotation {
-            Some(_) => crate::table::transposed_box(cell_x, row_y, cell.width, paint_height),
-            None => (cell_x, row_y, cell.width, paint_height),
+            Some(_) => crate::table::transposed_box(cell_x, band_y, cell.width, band_height),
+            None => (cell_x, band_y, cell.width, band_height),
         };
         let v_offset = match cell.v_align {
             Some(rdocx_oxml::table::ST_VerticalJc::Center) => {
@@ -4446,8 +4449,8 @@ fn render_table_row(
                     // geometry it already built instead of cloning it.
                     let (furniture_y, furniture_height) = if rotated {
                         (
-                            row_y - geometry.margin_top + cell.margin_top,
-                            (paint_height - cell.margin_top - cell.margin_bottom).max(0.0),
+                            band_y - geometry.margin_top + cell.margin_top,
+                            (band_height - cell.margin_top - cell.margin_bottom).max(0.0),
                         )
                     } else {
                         (content_y, paragraph.content_height())
@@ -4515,7 +4518,7 @@ fn render_table_row(
             let transform = Transform::rotate_about(
                 degrees,
                 cell_x + cell.width / 2.0,
-                row_y + paint_height / 2.0,
+                band_y + band_height / 2.0,
             );
             let rotate = |source: &mut Vec<PositionedElement>, start: usize| {
                 let children = source.split_off(start);
@@ -4630,14 +4633,7 @@ fn render_cell_borders(
                     table_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>,
                     outer_edge: bool|
      -> Option<BorderEdge> {
-        let edge = match cell_edge {
-            Some(edge) if edge.val == ST_Border::None && outer_edge => table_edge?,
-            Some(edge) => edge,
-            None => table_edge?,
-        };
-        if edge.val == ST_Border::None {
-            return None;
-        }
+        let edge = crate::table::resolved_cell_edge(cell_edge, table_edge, outer_edge)?;
         let thickness = edge.sz.unwrap_or(4) as f64 / 8.0; // sz is in 1/8 pt
         let color = edge
             .color
@@ -4657,11 +4653,17 @@ fn render_cell_borders(
             b.inside_h.as_ref()
         }
     });
+    // A horizontal border fills the band below the row boundary it sits on,
+    // which the row heights reserve, rather than straddling the boundary.
     let cell_top = cell_borders.as_ref().and_then(|b| b.top.as_ref());
     if let Some((thickness, color, dash_pattern)) = get_edge(cell_top, table_top, is_first_row) {
+        let line_y = y + thickness / 2.0;
         elements.push(PositionedElement::Line {
-            start: Point { x, y },
-            end: Point { x: x + w, y },
+            start: Point { x, y: line_y },
+            end: Point {
+                x: x + w,
+                y: line_y,
+            },
             width: thickness,
             color,
             dash_pattern,
@@ -4679,9 +4681,19 @@ fn render_cell_borders(
     let cell_bottom = cell_borders.as_ref().and_then(|b| b.bottom.as_ref());
     if let Some((thickness, color, dash_pattern)) = get_edge(cell_bottom, table_bottom, is_last_row)
     {
+        // The table's bottom band is the last row's own, so its line sits
+        // inside the row. Any other bottom edge is in the next row's band.
+        let line_y = if is_last_row {
+            y + h - thickness / 2.0
+        } else {
+            y + h + thickness / 2.0
+        };
         elements.push(PositionedElement::Line {
-            start: Point { x, y: y + h },
-            end: Point { x: x + w, y: y + h },
+            start: Point { x, y: line_y },
+            end: Point {
+                x: x + w,
+                y: line_y,
+            },
             width: thickness,
             color,
             dash_pattern,
@@ -6897,6 +6909,8 @@ mod tests {
                 margin_right: 0.0,
                 margin_top: 0.0,
                 margin_bottom: 0.0,
+                border_band_top: 0.0,
+                border_band_bottom: 0.0,
                 is_first_row: true,
                 is_last_row: true,
                 v_align: None,

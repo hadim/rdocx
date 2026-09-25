@@ -17189,6 +17189,8 @@ mod tests {
             margin_right: 0.0,
             margin_top: 0.0,
             margin_bottom: 0.0,
+            border_band_top: 0.0,
+            border_band_bottom: 0.0,
             is_first_row,
             is_last_row: !is_first_row,
             v_align: None,

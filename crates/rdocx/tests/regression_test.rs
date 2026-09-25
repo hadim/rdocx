@@ -21652,14 +21652,17 @@ fn dense_form_matches_reviewed_one_page_geometry() {
             .iter()
             .any(|(start, end)| (start.x, start.y, end.x, end.y) == (x1, y1, x2, y2))
     };
+    // Horizontal borders fill the band below their row boundary, and the
+    // bands are part of the row heights, so the nested table starts below
+    // the 1 point band of its row and the last row carries the bottom one.
     assert_eq!(table_lines.len(), 26, "table geometry: {table_lines:?}");
-    assert!(has_line(72.0, 70.0, 306.0, 70.0));
+    assert!(has_line(72.0, 70.5, 306.0, 70.5));
     assert!(has_line(72.0, 70.0, 72.0, 109.0));
-    assert!(!has_line(72.0, 91.0, 306.0, 91.0));
-    assert!(has_line(72.0, 109.0, 306.0, 109.0));
-    assert!(has_line(311.4, 91.0, 421.4, 91.0));
-    assert!(has_line(421.4, 103.0, 531.4, 103.0));
-    assert!(has_line(306.0, 127.0, 540.0, 127.0));
+    assert!(!has_line(72.0, 91.5, 306.0, 91.5));
+    assert!(has_line(72.0, 109.5, 306.0, 109.5));
+    assert!(has_line(311.4, 92.375, 421.4, 92.375));
+    assert!(has_line(421.4, 105.125, 531.4, 105.125));
+    assert!(has_line(306.0, 128.5, 540.0, 128.5));
 
     let pdf = document.to_pdf_deterministic().expect("dense form PDF");
     assert!(pdf.starts_with(b"%PDF-"));
@@ -21692,13 +21695,15 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         .chunks_exact(4)
         .filter(|pixel| *pixel == [255, 215, 215, 255])
         .count();
-    assert_eq!(checksum, 0x2319_bcbe_502e_4fe8);
-    assert_eq!(non_white_pixels, 32_221);
+    assert_eq!(checksum, 0xc38a_0cf8_9243_98d1);
+    assert_eq!(non_white_pixels, 32_429);
     assert_eq!(
         behind_pixels, 0,
         "page-behind stamp is covered by cell shading"
     );
-    assert_eq!(foreground_pixels, 1_682);
+    // The 58 pixel wide stamp moved 1 point down with the border band above
+    // its row, which leaves 28 whole pixel rows at 96 dpi rather than 29.
+    assert_eq!(foreground_pixels, 1_624);
 }
 
 #[test]
@@ -32687,8 +32692,8 @@ mod paragraph_spacing_collapse_regressions {
 }
 
 mod table_row_border_and_margin_regressions {
-    use rdocx::table::Table;
-    use rdocx::{Document, Length};
+    use rdocx::table::{CellBorderEdge, RowHeight, Table, TableBorderEdge};
+    use rdocx::{BorderStyle, Document, Length};
 
     fn round(value: f64) -> f64 {
         (value * 100.0).round() / 100.0
@@ -32765,6 +32770,157 @@ mod table_row_border_and_margin_regressions {
             .map(|pair| round(pair[1] - pair[0]))
             .collect();
         (round(placed[0] - plain[0]), pitches)
+    }
+
+    fn all_borders(style: BorderStyle, eighths: u32) -> impl FnOnce(&mut Table) {
+        move |table: &mut Table| table.set_borders(style, eighths, "000000")
+    }
+
+    /// Word 16 measurements. Layout drew horizontal borders over the rows
+    /// without reserving any height for them, so every bordered row was
+    /// shorter than Word's by the border width, about a point per row for a
+    /// Google Docs export, which moved table page breaks a row later.
+    #[test]
+    fn horizontal_table_borders_take_their_width_between_rows() {
+        assert_eq!(row_geometry(&probe(|_| {})), (0.0, vec![14.0; 5]));
+        // A 1 point border above every row and below the last one.
+        assert_eq!(
+            row_geometry(&probe(all_borders(BorderStyle::Single, 8))),
+            (1.0, vec![15.0; 5])
+        );
+        assert_eq!(
+            row_geometry(&probe(all_borders(BorderStyle::Single, 24))),
+            (3.0, vec![17.0; 5])
+        );
+        // A double border is two lines and their gap, three widths in all.
+        assert_eq!(
+            row_geometry(&probe(all_borders(BorderStyle::Double, 4))),
+            (1.5, vec![15.5; 5])
+        );
+        // Top 6, inside 1, bottom 3: each band is the edge on that boundary.
+        let mixed = probe(|table| {
+            for (edge, eighths) in [
+                (TableBorderEdge::Top, 48),
+                (TableBorderEdge::InsideHorizontal, 8),
+                (TableBorderEdge::Bottom, 24),
+            ] {
+                table
+                    .set_border_checked(edge, BorderStyle::Single, eighths, "000000")
+                    .expect("border is valid");
+            }
+        });
+        assert_eq!(
+            row_geometry(&mixed),
+            (6.0, vec![15.0, 15.0, 15.0, 15.0, 17.0])
+        );
+        // Inside borders alone leave the top of the table and its end alone.
+        let inside = probe(|table| {
+            table
+                .set_border_checked(
+                    TableBorderEdge::InsideHorizontal,
+                    BorderStyle::Single,
+                    24,
+                    "000000",
+                )
+                .expect("border is valid");
+        });
+        assert_eq!(
+            row_geometry(&inside),
+            (0.0, vec![17.0, 17.0, 17.0, 17.0, 14.0])
+        );
+    }
+
+    /// The borders straddled each row boundary, so half of every line was
+    /// painted over the row above it.
+    #[test]
+    fn horizontal_table_borders_paint_inside_the_band_they_reserve() {
+        let document = probe(all_borders(BorderStyle::Single, 24));
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        let table = &result.body_layout_fragments(0).expect("the table")[0];
+        assert_eq!(
+            round(table.height),
+            88.0,
+            "five rows of 17 and a 3 point bottom"
+        );
+        let mut centres = Vec::new();
+        oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Line {
+                start, end, width, ..
+            } = element
+                && start.y == end.y
+            {
+                assert_eq!(*width, 3.0);
+                centres.push(round(start.y - table.y));
+            }
+        });
+        centres.sort_by(f64::total_cmp);
+        centres.dedup();
+        // Each 3 point line fills the band below a row boundary, and the
+        // table's bottom line fills the last 3 points of the table.
+        assert_eq!(centres, vec![1.5, 18.5, 35.5, 52.5, 69.5, 86.5]);
+    }
+
+    #[test]
+    fn a_cell_border_widens_only_the_row_boundary_it_sits_on() {
+        let cell_edge = |edge: CellBorderEdge, eighths: u32| {
+            move |table: &mut Table| {
+                table
+                    .cell(1, 0)
+                    .expect("cell exists")
+                    .set_border_checked(edge, BorderStyle::Single, eighths, "000000")
+                    .expect("border is valid");
+            }
+        };
+        // A 3 point top on one cell of the second row.
+        assert_eq!(
+            row_geometry(&probe(cell_edge(CellBorderEdge::Top, 24))),
+            (0.0, vec![17.0, 14.0, 14.0, 14.0, 14.0])
+        );
+        // A 3 point bottom on the same cell.
+        assert_eq!(
+            row_geometry(&probe(cell_edge(CellBorderEdge::Bottom, 24))),
+            (0.0, vec![14.0, 17.0, 14.0, 14.0, 14.0])
+        );
+        // Over 1 point table borders, the widest edge on a boundary wins.
+        let widest = probe(|table| {
+            table.set_borders(BorderStyle::Single, 8, "000000");
+            cell_edge(CellBorderEdge::Top, 48)(table);
+        });
+        assert_eq!(
+            row_geometry(&widest),
+            (1.0, vec![20.0, 15.0, 15.0, 15.0, 15.0])
+        );
+    }
+
+    #[test]
+    fn exact_row_heights_include_the_border_above_and_minimum_heights_exclude_it() {
+        let heights = |height: RowHeight| {
+            move |table: &mut Table| {
+                table.set_borders(BorderStyle::Single, 24, "000000");
+                for row in 0..5 {
+                    table
+                        .row(row)
+                        .expect("row exists")
+                        .set_height_checked(height)
+                        .expect("height is valid");
+                }
+            }
+        };
+        // Exact 20 points: the 3 point band is inside the 20, and the table's
+        // bottom border still follows the last row.
+        let (shift, pitches) = row_geometry(&probe(heights(RowHeight::Exact(Length::pt(20.0)))));
+        assert_eq!(pitches, vec![20.0, 20.0, 20.0, 20.0, 20.0]);
+        let (exact_shift, _) = row_geometry(&probe(|table| {
+            table.set_borders(BorderStyle::Single, 24, "000000")
+        }));
+        assert_eq!(shift, exact_shift, "the content starts below the band");
+        // At least 30 points: the minimum is for the content, the band is added.
+        assert_eq!(
+            row_geometry(&probe(heights(RowHeight::AtLeast(Length::pt(30.0))))).1[..4],
+            [33.0, 33.0, 33.0, 33.0]
+        );
     }
 
     /// Layout read only the table's `w:tblCellMar` and ignored a cell's own

@@ -751,6 +751,18 @@ and clip overflow, while minimum rows may grow. Resolved cell margins define
 the local text and drawing content box. A cell's own `w:tcMar` replaces the
 table's `w:tblCellMar` edge by edge.
 
+A horizontal border takes its own height between two rows, as it does in Word,
+rather than being drawn over their content. The band above a row is the widest
+resolved edge on that boundary, from the bottom edges of the row above and the
+top edges of the row below, so a shared border counts once. The table's top
+border is the first row's band, and its bottom border is a band the last row
+adds below its content. A vertical merge has no edge where it continues. A
+border is `w:sz` eighths of a point, and a `double` border counts three times
+that, two lines and their gap. An automatic or minimum row height gains its
+band above, and an exact height already includes it. Content starts below the
+band and each horizontal line fills the band below its boundary. Vertical
+borders do not shift the table or its content.
+
 Borders are physical row or column segments rather than four strokes per cell.
 The renderer maps every logical cell edge onto those segments and emits each
 segment once. An adjacent-edge conflict selects the higher style-region
