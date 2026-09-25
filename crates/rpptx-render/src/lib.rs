@@ -14,7 +14,7 @@ use rpptx_layout::{
     CropRect, ResolvedBackground, ResolvedContent, ResolvedGeometry, ResolvedImage,
     ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize,
     ResolvedRectAlignment, ResolvedShape, ResolvedSlide, ResolvedSlideTextDirections,
-    ResolvedTable, ResolvedTableBorder, ResolvedTileFlip, ResolvedTilePlacement,
+    ResolvedTable, ResolvedTableBorder, ResolvedTextBody, ResolvedTileFlip, ResolvedTilePlacement,
     ScopedHyperlinkTargets,
 };
 use rpptx_oxml::notes_parts::CT_NotesSlide;
@@ -205,6 +205,43 @@ pub struct RenderInput {
     pub metadata: Option<DocumentMetadata>,
 }
 
+/// One shape's text as the slide renderer lays it out, in points.
+///
+/// Rectangles are in slide coordinates for the shape's unrotated frame, which
+/// moves with the shape's centre through any parent groups. Vertical text is
+/// reported in its reading frame, the content box turned a quarter turn about
+/// its centre, so `height` compares with `usable.height` in every direction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShapeTextLayout {
+    /// The shape's frame.
+    pub frame: Rect,
+    /// The text rectangle minus insets, scaled by the width factor, where lines wrap.
+    pub usable: Rect,
+    /// The normal-autofit font scale the renderer applied, or `1.0`.
+    pub font_scale: f64,
+    /// The height of the laid-out text, paragraph spacing included.
+    pub height: f64,
+    /// Whether the text misses `usable` by the test normal autofit applies.
+    pub overflow: bool,
+    /// Every laid-out line in paragraph order, after anchoring.
+    pub lines: Vec<TextLineLayout>,
+}
+
+/// One laid-out line of shape text, in points.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextLineLayout {
+    /// The zero-based paragraph the line belongs to.
+    pub paragraph_index: usize,
+    /// The drawn run and field text, without the bullet marker.
+    pub text: String,
+    /// The drawn extent of the line, bullet included, and its line height.
+    pub bounds: Rect,
+    /// The baseline's vertical position.
+    pub baseline: f64,
+    /// The largest run size on the line after autofit scaling.
+    pub font_size: f64,
+}
+
 /// Lower every resolved slide to one fixed-size page in presentation order.
 pub fn layout_presentation(input: &RenderInput) -> Result<LayoutResult, RenderInputError> {
     let mut font_manager = FontManager::new();
@@ -304,6 +341,66 @@ pub fn layout_slide(input: &RenderInput, index: usize) -> Result<PageFrame, Rend
     let mut font_manager = FontManager::new();
     font_manager.load_additional_fonts(&input.fonts);
     layout_slide_with_fonts(input, index, &mut font_manager)
+}
+
+/// Lays out one resolved shape's text exactly as slide lowering draws it.
+///
+/// `text` is the shape's own `ResolvedContent::Text` body and `text_directions`
+/// the shape's entry in the resolver's paragraph directions. `page_number` is
+/// the one-based number that slide-number fields show. `width_factor` scales
+/// the usable width before line breaking and keeps its left edge. Lowering
+/// passes `1.0`, so that factor reproduces the drawn lines.
+pub fn layout_shape_text(
+    shape: &ResolvedShape,
+    text: &ResolvedTextBody,
+    font_manager: &mut FontManager,
+    page_number: usize,
+    text_directions: &[Vec<oxml_layout::TextDirection>],
+    width_factor: f64,
+) -> Result<ShapeTextLayout, RenderInputError> {
+    let (usable, _, stacked) = stack_shape_text(
+        shape,
+        text,
+        font_manager,
+        page_number,
+        text_directions,
+        width_factor,
+    )?;
+    let centre = Point {
+        x: shape.bounds.x + shape.bounds.width / 2.0,
+        y: shape.bounds.y + shape.bounds.height / 2.0,
+    };
+    let placed = shape.group_transform.apply(centre);
+    let origin = Point {
+        x: shape.bounds.x + (placed.x - centre.x),
+        y: shape.bounds.y + (placed.y - centre.y),
+    };
+    let on_slide = |rect: Rect| Rect {
+        x: origin.x + rect.x,
+        y: origin.y + rect.y,
+        ..rect
+    };
+    Ok(ShapeTextLayout {
+        frame: Rect {
+            x: origin.x,
+            y: origin.y,
+            width: shape.bounds.width,
+            height: shape.bounds.height,
+        },
+        usable: on_slide(usable),
+        font_scale: stacked.font_scale,
+        height: stacked.height,
+        overflow: !stacked.fits(usable),
+        lines: stacked
+            .lines
+            .into_iter()
+            .map(|line| TextLineLayout {
+                bounds: on_slide(line.bounds),
+                baseline: origin.y + line.baseline,
+                ..line
+            })
+            .collect(),
+    })
 }
 
 fn layout_slide_with_fonts(
@@ -490,23 +587,14 @@ fn lower_shape(
             children.extend(lower_picture(input, shape, &paths, image)?)
         }
         ResolvedContent::Text(text_body) => {
-            let content_box = text::content_box(shape, text_body);
-            let (content_box, text_transform) =
-                text::oriented_content_box(content_box, text_body.vertical);
-            let paragraph_directions = text_directions
-                .and_then(|directions| directions.first())
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            let stacked = text::stack_text_for_page_with_directions(
-                font_manager,
-                content_box,
+            let (_, text_transform, stacked) = stack_shape_text(
+                shape,
                 text_body,
+                font_manager,
                 page_number,
-                paragraph_directions,
-            )
-            .map_err(|error| RenderInputError::TextLayout {
-                detail: error.to_string(),
-            })?;
+                text_directions.unwrap_or(&[]),
+                1.0,
+            )?;
             debug_assert!(stacked.width.is_finite() && stacked.height.is_finite());
             text_children = if let Some(transform) = text_transform {
                 vec![PositionedElement::Group(GroupElement {
@@ -573,6 +661,33 @@ fn lower_shape(
         effects: shape.shadow.iter().cloned().collect(),
         children,
     }))
+}
+
+/// Stacks a shape's text in its oriented content box, the one path that both
+/// lowering and [`layout_shape_text`] take.
+fn stack_shape_text(
+    shape: &ResolvedShape,
+    text_body: &ResolvedTextBody,
+    font_manager: &mut FontManager,
+    page_number: usize,
+    text_directions: &[Vec<oxml_layout::TextDirection>],
+    width_factor: f64,
+) -> Result<(Rect, Option<Transform>, text::StackedText), RenderInputError> {
+    let (mut content_box, text_transform) =
+        text::oriented_content_box(text::content_box(shape, text_body), text_body.vertical);
+    content_box.width *= width_factor;
+    let paragraph_directions = text_directions.first().map(Vec::as_slice).unwrap_or(&[]);
+    let stacked = text::stack_text_for_page_with_directions(
+        font_manager,
+        content_box,
+        text_body,
+        page_number,
+        paragraph_directions,
+    )
+    .map_err(|error| RenderInputError::TextLayout {
+        detail: error.to_string(),
+    })?;
+    Ok((content_box, text_transform, stacked))
 }
 
 fn lower_table(
