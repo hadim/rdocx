@@ -3804,11 +3804,13 @@ fn paragraph_properties_xml(
             )
         })
         .unwrap_or_default();
-    if current.numbering_revision_xml != original_numbering_xml
-        || current.numbering_revision_xml_positions != original_numbering_positions
-        || current.numbering_revision_position != original_numbering_position
-        || current.revision_xml != original_revision_xml
-        || current.revision_xml_positions != original_revision_positions
+    let absent = CT_PPr::default();
+    let edited_properties = edited.properties.as_ref().unwrap_or(&absent);
+    if edited_properties.numbering_revision_xml != original_numbering_xml
+        || edited_properties.numbering_revision_xml_positions != original_numbering_positions
+        || edited_properties.numbering_revision_position != original_numbering_position
+        || edited_properties.revision_xml != original_revision_xml
+        || edited_properties.revision_xml_positions != original_revision_positions
     {
         formatting_diagnostic(diagnostics, location.to_owned());
     }
@@ -4116,6 +4118,15 @@ fn table_properties_xml(
     }
     let original_modeled = modeled_table_properties(original);
     let edited_modeled = modeled_table_properties(edited);
+    let unmodeled = |properties: &CT_TblPr| {
+        (
+            properties.extra_xml.clone(),
+            properties.revision_xml.clone(),
+        )
+    };
+    if original.map(unmodeled).unwrap_or_default() != edited.map(unmodeled).unwrap_or_default() {
+        formatting_diagnostic(diagnostics, location.to_owned());
+    }
     if original_modeled == edited_modeled {
         return original
             .map(table_property_xml)
@@ -4124,17 +4135,7 @@ fn table_properties_xml(
     }
     let mut current = edited.cloned().unwrap_or_default();
     current.change = None;
-    let (original_extra_xml, original_revision_xml) = original
-        .map(|properties| {
-            (
-                properties.extra_xml.clone(),
-                properties.revision_xml.clone(),
-            )
-        })
-        .unwrap_or_default();
-    if current.extra_xml != original_extra_xml || current.revision_xml != original_revision_xml {
-        formatting_diagnostic(diagnostics, location.to_owned());
-    }
+    let (original_extra_xml, original_revision_xml) = original.map(unmodeled).unwrap_or_default();
     current.extra_xml = original_extra_xml;
     current.revision_xml = original_revision_xml;
     let previous = original_modeled
@@ -5653,7 +5654,6 @@ fn paragraph_formatting(paragraph: &CT_P) -> Option<CT_PPr> {
         properties.numbering_revision_xml_positions.clear();
         properties.numbering_revision_position = None;
         properties.change = None;
-        properties.revision_xml.clear();
         nonempty_paragraph_properties(properties)
     })
 }

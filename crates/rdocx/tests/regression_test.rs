@@ -17687,6 +17687,75 @@ fn a_picture_written_twice_by_a_comparison_gets_a_fresh_drawing_id() {
     }
 }
 
+/// Paragraph and table properties that the comparison does not model were
+/// dropped with success whenever the modeled properties matched, so a changed
+/// or removed producer element vanished from the redline without a word.
+#[test]
+fn an_unmodelled_property_change_is_reported_instead_of_dropped() {
+    let paragraph = |extension: &str, bookmark: &str| {
+        format!(
+            r#"<w:p><w:pPr xmlns:x="urn:producer"><w:jc w:val="center"/>{extension}</w:pPr>{bookmark}<w:r><w:t>same</w:t></w:r></w:p>"#
+        )
+    };
+    let table = |extension: &str| {
+        format!(
+            r#"<w:tbl><w:tblPr xmlns:x="urn:producer"><w:tblW w:w="0" w:type="auto"/>{extension}</w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#
+        )
+    };
+    let bookmark = r#"<w:bookmarkStart w:id="0" w:name="kept"/><w:bookmarkEnd w:id="0"/>"#;
+    let kept = r#"<x:ext x:val="kept"/>"#;
+    for (original, edited, location) in [
+        (
+            paragraph(kept, ""),
+            paragraph(r#"<x:ext x:val="edited"/>"#, ""),
+            "body/paragraph[0]",
+        ),
+        (paragraph(kept, ""), paragraph("", ""), "body/paragraph[0]"),
+        (
+            paragraph(kept, bookmark),
+            paragraph(r#"<w:bogus w:val="edited"/>"#, bookmark),
+            "body/paragraph[0]",
+        ),
+        (
+            table(kept),
+            table(r#"<x:ext x:val="edited"/>"#),
+            "body/table[0]",
+        ),
+    ] {
+        let mut compared = document_with_content_controls(&wrap_word_body(&original));
+        let diagnostics = compared
+            .compare(
+                &document_with_content_controls(&wrap_word_body(&edited)),
+                "Ada",
+                "2026-09-20T12:00:00Z",
+            )
+            .unwrap();
+        assert_eq!(
+            diagnostics,
+            vec![rdocx::ComparisonDiagnostic {
+                location: location.to_owned(),
+                message: "formatting differs and the original formatting was retained".to_owned(),
+            }],
+            "{original} -> {edited}"
+        );
+        assert!(compared.revisions().is_empty(), "{original} -> {edited}");
+        let tracked = document_xml(&mut compared);
+        assert!(tracked.contains(r#"x:val="kept""#), "{tracked}");
+    }
+
+    let mut compared = document_with_comparison_header(&paragraph(kept, ""));
+    let diagnostics = compared
+        .compare(
+            &document_with_comparison_header(&paragraph("", "")),
+            "Ada",
+            "2026-09-20T12:00:00Z",
+        )
+        .unwrap();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let tracked = comparison_part_xml(&mut compared, "/word/header1.xml");
+    assert!(tracked.contains(r#"x:val="kept""#), "{tracked}");
+}
+
 #[test]
 fn comparison_replaces_paragraphs_and_tables_before_an_anchor() {
     let paragraph_xml = wrap_word_body(

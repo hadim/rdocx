@@ -1266,7 +1266,9 @@ one inserted-table record at the aligned boundary. Row markers carry the
 revision metadata, so acceptance retains only the edited grid and rejection
 retains only the original grid. Equal-grid tables keep row and cell comparison.
 An empty paragraph-property element or paragraph mark compares like an absent
-one.
+one. A differing unmodelled paragraph or table property child keeps its
+original bytes and yields a formatting diagnostic, even when the modeled
+properties match.
 Generated revisions use canonical `w`, `xml`, and `mc` prefixes in schema
 order, while reparse remains prefix tolerant. Source-span patching interleaves
 changed owner bytes with the exact original gaps, preserving unowned
