@@ -407,7 +407,8 @@ impl Document {
         }
         if accepted_body != edited_package {
             return Err(Error::Other(format!(
-                "comparison acceptance does not reproduce the edited stories: {accepted_body:?} != {edited_package:?}"
+                "comparison acceptance does not reproduce the edited stories: {}",
+                first_story_difference(&accepted_body, &edited_package)
             )));
         }
         let rejected_package = resolved_package(
@@ -427,7 +428,8 @@ impl Document {
         )?;
         if rejected_package != original_package {
             return Err(Error::Other(format!(
-                "comparison rejection does not reproduce the original stories: {rejected_package:?} != {original_package:?}"
+                "comparison rejection does not reproduce the original stories: {}",
+                first_story_difference(&rejected_package, &original_package)
             )));
         }
 
@@ -1955,6 +1957,55 @@ pub(crate) fn reopen_staged(candidate: Document) -> Result<Document> {
 }
 
 type NormalizedPackage = (Vec<String>, Vec<(ComparisonStoryKind, String, Vec<String>)>);
+
+/// Name the first story item where two normalized packages differ, with a
+/// short excerpt of each side around the first differing character. A story
+/// item can hold a whole drawing, so the items themselves are never printed.
+fn first_story_difference(actual: &NormalizedPackage, expected: &NormalizedPackage) -> String {
+    let mut stories = vec![("body".to_owned(), &actual.0, &expected.0)];
+    for ((kind, part_name, actual), (_, _, expected)) in actual.1.iter().zip(&expected.1) {
+        stories.push((format!("{} {part_name}", kind.label()), actual, expected));
+    }
+    for (story, actual, expected) in stories {
+        let Some(index) = (0..actual.len().max(expected.len()))
+            .find(|index| actual.get(*index) != expected.get(*index))
+        else {
+            continue;
+        };
+        let (Some(actual), Some(expected)) = (actual.get(index), expected.get(index)) else {
+            return format!(
+                "{story} item count {} differs from {}",
+                actual.len(),
+                expected.len()
+            );
+        };
+        let at = actual
+            .chars()
+            .zip(expected.chars())
+            .take_while(|(left, right)| left == right)
+            .count();
+        let excerpt = |item: &str| {
+            let start = at.saturating_sub(24);
+            let excerpt = item.chars().skip(start).take(64).collect::<String>();
+            let more = item.chars().count() > start + 64;
+            format!(
+                "{}{excerpt:?}{}",
+                if start > 0 { "..." } else { "" },
+                if more { "..." } else { "" }
+            )
+        };
+        return format!(
+            "{story} item {index} differs at character {at}: {} != {}",
+            excerpt(actual),
+            excerpt(expected)
+        );
+    }
+    format!(
+        "related story count {} differs from {}",
+        actual.1.len(),
+        expected.1.len()
+    )
+}
 
 fn comparison_text_box_markers(
     original: &Document,
@@ -6152,8 +6203,9 @@ fn utf8_error(error: impl std::fmt::Display) -> Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING,
-        attributed_run_units, story_document, word_fragments,
+        ComparisonGranularity, ComparisonOptions, ComparisonStoryKind,
+        FAIL_AFTER_COMPARISON_STAGING, attributed_run_units, first_story_difference,
+        story_document, word_fragments,
     };
     use crate::Document;
     use rdocx_oxml::document::BodyContent;
@@ -6183,6 +6235,41 @@ mod tests {
         assert_eq!(
             ComparisonOptions::default().granularity,
             ComparisonGranularity::Run
+        );
+    }
+
+    /// A failed postcondition printed both normalized packages whole, about
+    /// 20 000 characters for one picture, without naming the story or item.
+    #[test]
+    fn a_failed_postcondition_names_the_story_and_item_in_a_bounded_message() {
+        let drawing = format!("p:Drawing({})", "7, ".repeat(6_000));
+        let header = (
+            ComparisonStoryKind::Header,
+            "/word/header1.xml".to_owned(),
+            vec!["p:header".to_owned()],
+        );
+        let accepted = (
+            vec!["p:same".to_owned(), format!("{drawing}:[]:[]")],
+            vec![header.clone()],
+        );
+        let edited = (
+            vec!["p:same".to_owned(), format!("{drawing}:[(0, <w:pPr/>)]:[]")],
+            vec![header],
+        );
+        let message = first_story_difference(&accepted, &edited);
+        assert!(
+            message.starts_with("body item 1 differs at character 18013: "),
+            "{message}"
+        );
+        assert!(message.contains("<w:pPr/>"), "{message}");
+        assert!(message.len() < 240, "{message}");
+
+        let mut longer = accepted.clone();
+        longer.1[0].2.push(drawing.clone());
+        let message = first_story_difference(&accepted, &longer);
+        assert_eq!(
+            message,
+            "header /word/header1.xml item count 1 differs from 2"
         );
     }
 
