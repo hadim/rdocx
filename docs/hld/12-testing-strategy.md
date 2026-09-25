@@ -2698,6 +2698,13 @@ readers, and directly compares the normalized rpptx-authored and
 python-pptx-authored records. It never compares package bytes and the oracle is
 not a runtime dependency.
 
+The rpptx text-property gate `test_text_properties_agree_with_python_pptx_in_both_directions`
+writes text frame, paragraph, and run font values with each library and reads
+them back with the other. `test_text_enums_match_python_pptx_member_values_and_xml_tokens`
+pins every exported text enum member to its python-pptx 1.0.2 value and to the
+XML token python-pptx writes for it. Both skip when the oracle is absent, like
+the Getting Started rider.
+
 The rpptx extension gate
 `presentation_render_comments_and_notes_match_native_snapshots` compares the
 single-slide convenience with the ordered all-slide result, checks complete PDF
