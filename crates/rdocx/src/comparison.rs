@@ -3393,7 +3393,11 @@ fn compare_complex_paragraph(
         || original.bookmark_markers != edited.bookmark_markers
         || semantic_paragraph_raw(original) != semantic_paragraph_raw(edited)
         || paragraph_control_boundaries(original) != paragraph_control_boundaries(edited)
-        || (!metadata.options.ignore_formatting && original.properties != edited.properties)
+        || (!metadata.options.ignore_formatting
+            && paragraph_properties_differ(
+                original.properties.as_ref(),
+                edited.properties.as_ref(),
+            ))
     {
         return Err(Error::Other(format!(
             "comparison cannot revise paragraph boundary structures at {location}"
@@ -3635,7 +3639,7 @@ fn paragraph_properties_xml(
 }
 
 fn modeled_paragraph_properties(properties: Option<&CT_PPr>) -> Option<CT_PPr> {
-    properties.cloned().map(|mut properties| {
+    properties.cloned().and_then(|mut properties| {
         properties.sect_pr = None;
         properties.num_ilvl_raw = None;
         properties.num_id_raw = None;
@@ -3646,8 +3650,26 @@ fn modeled_paragraph_properties(properties: Option<&CT_PPr>) -> Option<CT_PPr> {
         properties.change = None;
         properties.revision_xml.clear();
         properties.revision_xml_positions.clear();
-        properties
+        nonempty_paragraph_properties(properties)
     })
+}
+
+/// An empty `w:pPr` or paragraph-mark `w:rPr` carries no formatting, so it
+/// compares like an absent one.
+fn nonempty_paragraph_properties(mut properties: CT_PPr) -> Option<CT_PPr> {
+    if properties
+        .rpr
+        .as_ref()
+        .is_some_and(|mark| *mark == rdocx_oxml::properties::CT_RPr::default())
+    {
+        properties.rpr = None;
+    }
+    (properties != CT_PPr::default()).then_some(properties)
+}
+
+fn paragraph_properties_differ(original: Option<&CT_PPr>, edited: Option<&CT_PPr>) -> bool {
+    original.cloned().and_then(nonempty_paragraph_properties)
+        != edited.cloned().and_then(nonempty_paragraph_properties)
 }
 
 fn section_properties_xml(
@@ -5415,7 +5437,7 @@ fn control_content_signature_with_options(
 }
 
 fn paragraph_formatting(paragraph: &CT_P) -> Option<CT_PPr> {
-    paragraph.properties.clone().map(|mut properties| {
+    paragraph.properties.clone().and_then(|mut properties| {
         properties.num_id = None;
         properties.num_ilvl = None;
         properties.num_id_raw = None;
@@ -5426,7 +5448,7 @@ fn paragraph_formatting(paragraph: &CT_P) -> Option<CT_PPr> {
         properties.numbering_revision_position = None;
         properties.change = None;
         properties.revision_xml.clear();
-        properties
+        nonempty_paragraph_properties(properties)
     })
 }
 

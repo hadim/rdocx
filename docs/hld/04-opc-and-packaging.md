@@ -95,9 +95,11 @@ and one namespace-correct `body` child, rejects truncation, duplicate roots,
 foreign lookalikes, and non-whitespace content outside that root, and retains
 the first body `sectPr`. Later section owners remain opaque rather than
 disappearing. Self-closing paragraphs, tables, and cells are modeled as empty
-typed owners. Start-and-end forms are modeled only when their complete
-attributes and content satisfy the same grammar. Otherwise their exact
-namespace-complete subtree remains opaque. Header and footer references
+typed owners. An attribute-free self-closing paragraph-property element or
+paragraph mark is modeled like its start-and-end form, while an attributed one
+stays raw with its exact attributes. Start-and-end forms are modeled only when
+their complete attributes and content satisfy the same grammar. Otherwise their
+exact namespace-complete subtree remains opaque. Header and footer references
 recognize `r:id` only when the attribute is bound to the package relationships
 namespace.
 Body comparison excludes the source's direct final `sectPr` from its
@@ -1263,6 +1265,8 @@ Tables with different active grids use one deleted-table record followed by
 one inserted-table record at the aligned boundary. Row markers carry the
 revision metadata, so acceptance retains only the edited grid and rejection
 retains only the original grid. Equal-grid tables keep row and cell comparison.
+An empty paragraph-property element or paragraph mark compares like an absent
+one.
 Generated revisions use canonical `w`, `xml`, and `mc` prefixes in schema
 order, while reparse remains prefix tolerant. Source-span patching interleaves
 changed owner bytes with the exact original gaps, preserving unowned

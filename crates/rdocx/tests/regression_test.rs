@@ -17464,6 +17464,99 @@ fn paragraph_identity_attributes_do_not_hide_a_paragraph_property_change() {
     assert!(!tracked.contains("00D4E5F6"), "{tracked}");
 }
 
+/// python-docx and Google Docs write an empty `<w:pPr/>`. Read as unknown
+/// paragraph content, it made the paragraph uncomparable in both directions.
+/// An empty paragraph mark added a diagnostic, and the open-close forms in a
+/// header produced a spurious `w:pPrChange`.
+#[test]
+fn an_empty_paragraph_properties_element_compares_like_an_absent_one() {
+    let centered = r#"<w:pPr><w:jc w:val="center"/></w:pPr>"#;
+    let empty_mark = r#"<w:pPr><w:jc w:val="center"/><w:rPr/></w:pPr>"#;
+    let open_close_mark = r#"<w:pPr><w:jc w:val="center"/><w:rPr></w:rPr></w:pPr>"#;
+    let bookmark = r#"<w:bookmarkStart w:id="0" w:name="kept"/><w:bookmarkEnd w:id="0"/>"#;
+    let story = |header: bool, properties: &str, bookmark: &str, text: &str| {
+        let paragraph = format!(r#"<w:p>{properties}{bookmark}<w:r><w:t>{text}</w:t></w:r></w:p>"#);
+        if header {
+            document_with_comparison_header(&paragraph)
+        } else {
+            document_with_content_controls(&wrap_word_body(&paragraph))
+        }
+    };
+    for (original_properties, edited_properties, edited_text, bookmark, revision) in [
+        ("<w:pPr/>", "", "same", "", ""),
+        ("", "<w:pPr/>", "same", "", ""),
+        ("<w:pPr></w:pPr>", "", "same", "", ""),
+        (empty_mark, centered, "same", "", ""),
+        (centered, open_close_mark, "same", "", ""),
+        (open_close_mark, centered, "same", bookmark, ""),
+        ("<w:pPr/>", centered, "same", "", "<w:pPrChange "),
+        (centered, "<w:pPr/>", "same", "", "<w:pPrChange "),
+        ("<w:pPr/>", "", "edited", "", "<w:ins "),
+        (empty_mark, centered, "edited", bookmark, "<w:ins "),
+    ] {
+        for (part, header) in [("/word/document.xml", false), ("/word/header1.xml", true)] {
+            let case =
+                format!("{part}: {original_properties} -> {edited_properties} {edited_text}");
+            let original = story(header, original_properties, bookmark, "same");
+            let edited = story(header, edited_properties, bookmark, edited_text);
+            let mut compared = story(header, original_properties, bookmark, "same");
+            let diagnostics = compared
+                .compare(&edited, "Ada", "2026-09-20T12:00:00Z")
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
+            assert!(diagnostics.is_empty(), "{case}: {diagnostics:?}");
+            let tracked_bytes = compared.to_bytes().unwrap();
+            let tracked = comparison_part_xml(&mut compared, part);
+            assert_eq!(
+                tracked.matches("PrChange w:id=").count(),
+                usize::from(revision == "<w:pPrChange "),
+                "{case}: {tracked}"
+            );
+            for text_revision in ["<w:ins ", "<w:del "] {
+                assert_eq!(
+                    tracked.contains(text_revision),
+                    revision == "<w:ins ",
+                    "{case}: {tracked}"
+                );
+            }
+
+            let mut accepted = Document::from_bytes(&tracked_bytes).unwrap();
+            accepted.accept_all().unwrap();
+            assert!(
+                accepted
+                    .compare(&edited, "postcondition", "2026-09-20T12:01:00Z")
+                    .unwrap()
+                    .is_empty(),
+                "{case}"
+            );
+            let mut rejected = Document::from_bytes(&tracked_bytes).unwrap();
+            rejected.reject_all().unwrap();
+            assert!(
+                rejected
+                    .compare(&original, "postcondition", "2026-09-20T12:01:00Z")
+                    .unwrap()
+                    .is_empty(),
+                "{case}"
+            );
+        }
+    }
+}
+
+/// A raw `<w:pPr/>` stayed beside the properties a setter created, so the
+/// saved paragraph held two `w:pPr` elements, which the schema forbids.
+#[test]
+fn setting_a_property_on_an_empty_paragraph_properties_element_writes_one_owner() {
+    let mut document = document_with_content_controls(&wrap_word_body(
+        r#"<w:p><w:pPr/><w:r><w:t>aligned</w:t></w:r></w:p>"#,
+    ));
+    document
+        .paragraph_mut(0)
+        .unwrap()
+        .set_alignment(rdocx::paragraph::Alignment::Center);
+    let saved = document_xml(&mut document);
+    assert_eq!(saved.matches("<w:pPr").count(), 1, "{saved}");
+    assert!(saved.contains(r#"<w:jc w:val="center"/>"#), "{saved}");
+}
+
 #[test]
 fn comparison_replaces_paragraphs_and_tables_before_an_anchor() {
     let paragraph_xml = wrap_word_body(
