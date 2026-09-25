@@ -379,10 +379,13 @@ impl Document {
             }
             Ok(())
         })?;
-        let mut accepted = candidate.clone_for_staging();
-        accepted.accept_all()?;
-        let accepted_body =
-            normalized_package(&accepted, &original_stories, options, &text_box_markers)?;
+        let accepted_body = resolved_package(
+            &candidate,
+            Document::accept_all,
+            &original_stories,
+            options,
+            &text_box_markers,
+        )?;
         let mut edited_package =
             normalized_package(&edited, &edited_stories, options, &text_box_markers)?;
         if story_ignored(options, ComparisonStoryKind::Main) {
@@ -394,10 +397,13 @@ impl Document {
                 "comparison acceptance does not reproduce the edited stories: {accepted_body:?} != {edited_package:?}"
             )));
         }
-        let mut rejected = candidate.clone_for_staging();
-        rejected.reject_all()?;
-        let rejected_package =
-            normalized_package(&rejected, &original_stories, options, &text_box_markers)?;
+        let rejected_package = resolved_package(
+            &candidate,
+            Document::reject_all,
+            &original_stories,
+            options,
+            &text_box_markers,
+        )?;
         let original_package =
             normalized_package(&original, &original_stories, options, &text_box_markers)?;
         if rejected_package != original_package {
@@ -1858,6 +1864,22 @@ fn comparison_text_box_markers(
         );
     }
     Ok(markers)
+}
+
+/// Accept or reject every revision in a staged copy of `candidate` and
+/// normalize the result. Kept out of `compare_with_options`, whose debug frame
+/// already holds many `Document` values, so that the resolution and reopen run
+/// on a shallower stack.
+fn resolved_package(
+    candidate: &Document,
+    resolve: fn(&mut Document) -> Result<usize>,
+    stories: &[StoryPart],
+    options: &ComparisonOptions,
+    text_box_markers: &TextBoxMarkers,
+) -> Result<NormalizedPackage> {
+    let mut resolved = candidate.clone_for_staging();
+    resolve(&mut resolved)?;
+    normalized_package(&resolved, stories, options, text_box_markers)
 }
 
 fn normalized_package(
