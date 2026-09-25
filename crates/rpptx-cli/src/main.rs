@@ -25,9 +25,12 @@ enum Command {
     /// Extract slide text in presentation order
     Text {
         file: PathBuf,
-        /// Output paragraphs and runs as schema-1 JSON
+        /// Output paragraphs, runs, and speaker notes as schema-1 JSON
         #[arg(long)]
         json: bool,
+        /// Print speaker notes after each slide's text (JSON always includes them)
+        #[arg(long)]
+        notes: bool,
     },
     /// Convert a presentation to deterministic PDF or image output
     Convert {
@@ -93,9 +96,12 @@ enum Command {
     /// Print each slide title and recursive paragraph outline
     Outline {
         file: PathBuf,
-        /// Output titles and outline items as schema-1 JSON
+        /// Output titles, outline items, and speaker notes as schema-1 JSON
         #[arg(long)]
         json: bool,
+        /// Print speaker notes after each slide's outline (JSON always includes them)
+        #[arg(long)]
+        notes: bool,
     },
 }
 
@@ -114,7 +120,7 @@ fn main() {
 
     let result = match cli.command {
         Command::Inspect { file, json } => commands::inspect(&file, json),
-        Command::Text { file, json } => commands::text(&file, json),
+        Command::Text { file, json, notes } => commands::text(&file, json, notes),
         Command::Convert {
             file,
             to,
@@ -159,7 +165,7 @@ fn main() {
             transparent,
         ),
         Command::Thumbnail { file, output } => commands::thumbnail(&file, output.as_deref()),
-        Command::Outline { file, json } => commands::outline(&file, json),
+        Command::Outline { file, json, notes } => commands::outline(&file, json, notes),
     };
     if let Err(error) = result {
         eprintln!("Error: {error}");

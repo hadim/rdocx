@@ -1835,13 +1835,14 @@ degrees, direct autofit mode, paragraphs, table size, and children. A
 placeholder that inherits its transform reports null geometry, and a
 placeholder without an explicit type reports a null type. `text` emits slide
 text in presentation order. `text --json` emits schema-1 slides with a one-based
-slide number, the slide id, and paragraphs. Each paragraph carries a typed
-zero-based path of shape, table row, table cell, and paragraph positions, the
-owning shape id, its level, its visible text, and its regular runs. Run
-indexes match `TextParagraphRef::run`, so fields and line breaks appear only
-in the paragraph text, where a line break is U+000B. Run formatting is null
-without direct run properties. Otherwise it contains nullable direct bold,
-italic, underline token, Latin font, point size, and sRGB colour fields.
+slide number, the slide id, paragraphs, and speaker notes, which are null when
+the slide has no notes part. Each paragraph carries a typed zero-based path of
+shape, table row, table cell, and paragraph positions, the owning shape id, its
+level, its visible text, and its regular runs. Run indexes match
+`TextParagraphRef::run`, so fields and line breaks appear only in the paragraph
+text, where a line break is U+000B. Run formatting is null without direct run
+properties. Otherwise it contains nullable direct bold, italic, underline token,
+Latin font, point size, and sRGB colour fields.
 `convert` produces deterministic PDF, PNG, JPEG or TIFF output. Multi-slide PNG
 and JPEG output uses one-based filename suffixes and renders one slide at a
 time, while TIFF writes one multi-page stream. `diff` compares slide text with
@@ -1862,8 +1863,11 @@ the shared extension helper. `outline` prints each slide title once, followed
 by non-title text paragraphs in recursive shape z-order. Tables use row-major
 cell order, paragraph levels add two spaces of indentation, empty text is
 omitted, and embedded paragraph breaks become spaces. `outline --json` reports
-the same title, or null for an untitled slide, and the same items with their
-levels.
+the same title, or null for an untitled slide, the same items with their
+levels, and the speaker notes. Notes are the plain text of the notes body, with
+paragraphs and line breaks both written as newlines. `text --notes` and
+`outline --notes` print one `Notes:` line for each non-empty notes line after
+the slide's plain output. JSON output always carries the notes.
 
 The structured output reads public facade values only. `ShapeRef` gains
 `rotation` and `placeholder_type`, and `PhType::as_str` and

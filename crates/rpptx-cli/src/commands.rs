@@ -7,7 +7,8 @@ use oxml_cli_support::{
 };
 use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 use rpptx::{
-    AutofitMode, Presentation, ShapeKind, ShapeRef, TextFrameRef, TextParagraphRef, TextRunRef,
+    AutofitMode, Presentation, ShapeKind, ShapeRef, SlideRef, TextFrameRef, TextParagraphRef,
+    TextRunRef,
 };
 use serde_json::{Value, json};
 
@@ -116,7 +117,7 @@ pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn text(file: &Path, as_json: bool) -> Result<()> {
+pub fn text(file: &Path, as_json: bool, notes: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
     if as_json {
         let slides = presentation
@@ -132,6 +133,7 @@ pub fn text(file: &Path, as_json: bool) -> Result<()> {
                     "slide": index + 1,
                     "id": slide.id(),
                     "paragraphs": paragraphs,
+                    "notes": slide.notes_text(),
                 })
             })
             .collect::<Vec<_>>();
@@ -139,6 +141,9 @@ pub fn text(file: &Path, as_json: bool) -> Result<()> {
     }
     for slide in presentation.slides() {
         println!("{}", slide.text());
+        if notes {
+            print_notes(slide);
+        }
     }
     Ok(())
 }
@@ -282,6 +287,15 @@ fn autofit_label(mode: AutofitMode) -> &'static str {
         AutofitMode::None => "none",
         AutofitMode::Normal => "normal",
         AutofitMode::Shape => "shape",
+    }
+}
+
+fn print_notes(slide: SlideRef<'_>) {
+    for line in slide.notes_text().unwrap_or_default().lines() {
+        let line = normalize_outline_text(line);
+        if !line.is_empty() {
+            println!("Notes: {line}");
+        }
     }
 }
 
@@ -587,7 +601,7 @@ pub fn thumbnail(file: &Path, output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-pub fn outline(file: &Path, as_json: bool) -> Result<()> {
+pub fn outline(file: &Path, as_json: bool, notes: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
     let mut slides = Vec::new();
     for (index, slide) in presentation.slides().enumerate() {
@@ -613,6 +627,7 @@ pub fn outline(file: &Path, as_json: bool) -> Result<()> {
                     .into_iter()
                     .map(|(level, text)| json!({ "level": level, "text": text }))
                     .collect::<Vec<_>>(),
+                "notes": slide.notes_text(),
             }));
             continue;
         }
@@ -623,6 +638,9 @@ pub fn outline(file: &Path, as_json: bool) -> Result<()> {
         }
         for (level, text) in items {
             println!("{}- {text}", "  ".repeat(level as usize));
+        }
+        if notes {
+            print_notes(slide);
         }
     }
     if as_json {

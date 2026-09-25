@@ -1034,6 +1034,7 @@ fn text_json_anchors_paragraphs_by_typed_shape_paths_with_direct_run_formatting(
     let temp = TempWorkspace::new("text-json");
     let deck = temp.path.join("structured.pptx");
     write_structured_deck(&deck);
+    add_speaker_notes(&deck, "Presenter reminder");
     let shape = |index: usize| json!({ "kind": "shape", "index": index });
     let paragraph = |index: usize| json!({ "kind": "paragraph", "index": index });
     let cell = |index: usize| json!({ "kind": "cell", "index": index });
@@ -1113,8 +1114,9 @@ fn text_json_anchors_paragraphs_by_typed_shape_paths_with_direct_run_formatting(
                             "runs": plain_run("B1"),
                         },
                     ],
+                    "notes": "Presenter reminder",
                 },
-                { "slide": 2, "id": 257, "paragraphs": [] },
+                { "slide": 2, "id": 257, "paragraphs": [], "notes": null },
             ],
         })
     );
@@ -1274,10 +1276,11 @@ fn inspect_json_adds_shape_details_without_changing_existing_slide_keys() {
 }
 
 #[test]
-fn outline_json_reports_the_plain_outline_titles_and_levels() {
+fn outline_json_reports_the_plain_outline_titles_levels_and_notes() {
     let temp = TempWorkspace::new("outline-json");
     let deck = temp.path.join("structured.pptx");
     write_structured_deck(&deck);
+    add_speaker_notes(&deck, "Presenter reminder");
 
     let plain = cli(&["outline", deck.to_str().unwrap()]);
     assert!(plain.status.success());
@@ -1292,6 +1295,8 @@ fn outline_json_reports_the_plain_outline_titles_and_levels() {
         "outline --json failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let with_notes_flag = cli(&["outline", deck.to_str().unwrap(), "--json", "--notes"]);
+    assert_eq!(with_notes_flag.stdout, output.stdout);
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         value,
@@ -1308,9 +1313,48 @@ fn outline_json_reports_the_plain_outline_titles_and_levels() {
                         { "level": 0, "text": "A1" },
                         { "level": 0, "text": "B1" },
                     ],
+                    "notes": "Presenter reminder",
                 },
-                { "slide": 2, "id": 257, "title": null, "items": [] },
+                { "slide": 2, "id": 257, "title": null, "items": [], "notes": null },
             ],
         })
     );
+}
+
+#[test]
+fn plain_text_and_outline_print_speaker_notes_only_with_the_notes_flag() {
+    let temp = TempWorkspace::new("notes-flag");
+    let deck = temp.path.join("notes.pptx");
+    write_deck(&deck, &["first slide", "second slide"]);
+    // The helper writes its text into one run, so closing that run opens an
+    // empty notes paragraph and a second non-empty one.
+    add_speaker_notes(
+        &deck,
+        "Presenter reminder</a:t></a:r></a:p><a:p/><a:p><a:r><a:t>Second line",
+    );
+    let path = deck.to_str().unwrap();
+
+    for (args, expected) in [
+        (vec!["text", path], "first slide\nsecond slide\n"),
+        (
+            vec!["text", path, "--notes"],
+            "first slide\nNotes: Presenter reminder\nNotes: Second line\nsecond slide\n",
+        ),
+        (
+            vec!["outline", path],
+            "Slide 1\n- first slide\nSlide 2\n- second slide\n",
+        ),
+        (
+            vec!["outline", path, "--notes"],
+            "Slide 1\n- first slide\nNotes: Presenter reminder\nNotes: Second line\nSlide 2\n- second slide\n",
+        ),
+    ] {
+        let output = cli(&args);
+        assert!(output.status.success(), "{args:?} failed");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            expected,
+            "{args:?}"
+        );
+    }
 }
