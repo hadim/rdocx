@@ -8285,6 +8285,92 @@ fn toc_rebuild_accepts_several_defaults_of_one_style_type_and_follows_the_layout
     );
 }
 
+const ONE_HEADING_TOC_BODY: &str = r#"
+    <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+    <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+    <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>
+"#;
+
+#[test]
+fn toc_rebuild_retains_every_producer_style_graph_defect_the_read_surface_accepts() {
+    // One producer defect per strict check. Open, save, layout, and text
+    // replacement accept each of them. The `toc 1` style has no identifier an
+    // entry could reference, so the rebuild creates the canonical one.
+    let producer_styles = concat!(
+        r#"<w:style w:type="paragraph" w:styleId=""><w:name w:val="toc 1"/></w:style>"#,
+        r#"<w:style w:type="character" w:styleId="CharacterWithParagraph"><w:name w:val="Character With Paragraph"/><w:pPr><w:jc w:val="center"/></w:pPr></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="ParagraphWithTable"><w:name w:val="Paragraph With Table"/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/></w:tblPr></w:style>"#,
+        r#"<w:style w:type="table" w:styleId="RepeatedRegion"><w:name w:val="Repeated Region"/><w:tblStylePr w:type="firstRow"><w:rPr><w:b/></w:rPr></w:tblStylePr><w:tblStylePr w:type="firstRow"><w:rPr><w:i/></w:rPr></w:tblStylePr></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="Orphan"><w:name w:val="Orphan"/><w:basedOn w:val="Missing"/></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="OnCharacter"><w:name w:val="On Character"/><w:basedOn w:val="CharacterWithParagraph"/></w:style>"#,
+        r#"<w:style w:type="character" w:styleId="CharacterNext"><w:name w:val="Character Next"/><w:next w:val="Normal"/></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="NextMissing"><w:name w:val="Next Missing"/><w:next w:val="Missing"/></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="NextCharacter"><w:name w:val="Next Character"/><w:next w:val="CharacterNext"/></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="LinkMissing"><w:name w:val="Link Missing"/><w:link w:val="Missing"/></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="LinkParagraph"><w:name w:val="Link Paragraph"/><w:link w:val="Orphan"/></w:style>"#,
+        r#"<w:style w:type="character" w:styleId="OneWay"><w:name w:val="One Way"/><w:link w:val="Normal"/></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="CycleA"><w:name w:val="Cycle A"/><w:basedOn w:val="CycleB"/></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="CycleB"><w:name w:val="Cycle B"/><w:basedOn w:val="CycleA"/></w:style>"#,
+    );
+    let mut document = document_with_producer_styles(ONE_HEADING_TOC_BODY, producer_styles);
+    let source_style_count = document.styles().len();
+
+    assert!(document.validate_style_graph().is_err());
+    let report = document.rebuild_toc().unwrap();
+    assert_eq!(report.entry_count, 1);
+    assert_eq!(
+        report.diagnostics,
+        [
+            "style IDs cannot be empty",
+            "character style 'CharacterWithParagraph' cannot contain paragraph properties",
+            "paragraph style 'ParagraphWithTable' cannot contain table properties",
+            "table style 'RepeatedRegion' repeats conditional region 'firstRow'",
+            "style 'Orphan' is based on missing style 'Missing'",
+            "style 'OnCharacter' cannot be based on character style 'CharacterWithParagraph'",
+            "character style 'CharacterNext' cannot declare a next style",
+            "style 'NextMissing' names missing next style 'Missing'",
+            "paragraph style 'NextCharacter' has non-paragraph next style 'CharacterNext'",
+            "style 'LinkMissing' links to missing style 'Missing'",
+            "paragraph style 'LinkParagraph' cannot link to paragraph style 'Orphan'",
+            "linked styles 'OneWay' and 'Normal' are not reciprocal",
+            "based-on cycle contains style 'CycleA'",
+            "based-on cycle contains style 'CycleB'",
+        ]
+        .map(|defect| format!("{defect}, retained while rebuilding TOC"))
+    );
+    let xml = document_xml(&mut document);
+    assert!(!xml.contains(r#"<w:pStyle w:val=""/>"#), "{xml}");
+    let entries = toc_entry_signatures(&xml);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].1, "TOC1");
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.styles().len(), source_style_count + 1);
+    assert!(reopened.validate_style_graph().is_err());
+}
+
+#[test]
+fn toc_rebuild_rejects_a_defect_its_entry_style_introduces_behind_retained_ones() {
+    // The retained dangling parent must not hide the new `TOC1` style
+    // completing a producer's dangling link into a one-way link.
+    let mut document = document_with_producer_styles(
+        ONE_HEADING_TOC_BODY,
+        concat!(
+            r#"<w:style w:type="paragraph" w:styleId="Orphan"><w:name w:val="Orphan"/><w:basedOn w:val="Missing"/></w:style>"#,
+            r#"<w:style w:type="character" w:styleId="TOC1Char"><w:name w:val="TOC 1 Char"/><w:link w:val="TOC1"/></w:style>"#,
+        ),
+    );
+    let before = document.to_bytes().unwrap();
+
+    let error = document.rebuild_toc().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid style graph: linked styles 'TOC1Char' and 'TOC1' are not reciprocal"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
 #[test]
 fn numbered_toc_entries_reuse_the_visible_layout_marker() {
     let body = r#"

@@ -423,6 +423,14 @@ adds a later default paragraph style that breaks pages and a second default
 table style. It requires one ordered diagnostic per type naming the first
 default, page numbers and a page count that match that default, and every
 default retained after save and reopen.
+`toc_rebuild_retains_every_producer_style_graph_defect_the_read_surface_accepts`
+carries one defect per remaining strict check, including a `toc 1` style with
+an empty id. It requires the exact ordered diagnostics, an entry that
+references the canonical `TOC1` style, and every producer style after save and
+reopen.
+`toc_rebuild_rejects_a_defect_its_entry_style_introduces_behind_retained_ones`
+requires the one-way link a new `TOC1` style would complete to reject the
+rebuild despite a retained dangling parent, leaving the package unchanged.
 The Word-default instruction case retains argument-free `TOC \\z`, rebuilds
 through an existing content-control payload, and saves and reopens the result.
 A mixed simple and unsupported complex TOC case asserts exact diagnostic text

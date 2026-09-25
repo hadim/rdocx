@@ -1059,7 +1059,9 @@ impl Document {
         )?;
         diagnostics.extend(toc_duplicate_style_diagnostics(&candidate.styles));
         diagnostics.extend(toc_default_style_diagnostics(&candidate.styles));
-        let toc_entry_styles = ensure_toc_entry_styles(&mut candidate, &sources)?;
+        let (toc_entry_styles, retained_style_defects) =
+            ensure_toc_entry_styles(&mut candidate, &sources)?;
+        diagnostics.extend(retained_style_defects);
         candidate.flush_to_package()?;
         let rebuilt_toc_spans = toc_spans
             .iter()
@@ -5729,7 +5731,8 @@ fn toc_numbering_prefix(
 fn ensure_toc_entry_styles(
     document: &mut Document,
     sources: &[Vec<TocSource>],
-) -> Result<BTreeMap<u8, TocEntryStyle>> {
+) -> Result<(BTreeMap<u8, TocEntryStyle>, Vec<String>)> {
+    let source_styles = toc_style_view(&document.styles);
     let mut levels = sources
         .iter()
         .flatten()
@@ -5746,7 +5749,10 @@ fn ensure_toc_entry_styles(
             .styles
             .iter()
             .find(|style| {
+                // Entries reference their style by identifier, so a producer
+                // style without one cannot be the entry style.
                 style.style_type == StyleType::Paragraph
+                    && !style.style_id.is_empty()
                     && style
                         .name
                         .as_deref()
@@ -5778,8 +5784,14 @@ fn ensure_toc_entry_styles(
             },
         );
     }
-    style::validate_style_graph(&toc_style_view(&document.styles))?;
-    Ok(resolved)
+    // Producer defects the read surface accepts stay in the package and are
+    // reported. Only a defect the staged entry styles introduce rejects.
+    let retained =
+        style::validate_style_graph_change(&source_styles, &toc_style_view(&document.styles))?
+            .into_iter()
+            .map(|defect| format!("{defect}, retained while rebuilding TOC"))
+            .collect();
+    Ok((resolved, retained))
 }
 
 /// The style graph a TOC rebuild resolves. It keeps the first definition of
