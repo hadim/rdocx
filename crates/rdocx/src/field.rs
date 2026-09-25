@@ -1058,6 +1058,7 @@ impl Document {
             &numbering_layout,
         )?;
         diagnostics.extend(toc_duplicate_style_diagnostics(&candidate.styles));
+        diagnostics.extend(toc_default_style_diagnostics(&candidate.styles));
         let toc_entry_styles = ensure_toc_entry_styles(&mut candidate, &sources)?;
         candidate.flush_to_package()?;
         let rebuilt_toc_spans = toc_spans
@@ -5777,13 +5778,53 @@ fn ensure_toc_entry_styles(
             },
         );
     }
-    let mut first_definitions = document.styles.clone();
-    let mut seen = HashSet::new();
-    first_definitions
-        .styles
-        .retain(|style| seen.insert(style.style_id.clone()));
-    style::validate_style_graph(&first_definitions)?;
+    style::validate_style_graph(&toc_style_view(&document.styles))?;
     Ok(resolved)
+}
+
+/// The style graph a TOC rebuild resolves. It keeps the first definition of
+/// each style ID and, for each style type, the default that
+/// `CT_Styles::get_default` gives layout. The package keeps every definition.
+fn toc_style_view(styles: &CT_Styles) -> CT_Styles {
+    let mut view = styles.clone();
+    let mut seen = HashSet::new();
+    view.styles
+        .retain(|style| seen.insert(style.style_id.clone()));
+    for style in &mut view.styles {
+        style.is_default = styles
+            .get_default(style.style_type)
+            .is_some_and(|default| default.style_id == style.style_id);
+    }
+    view
+}
+
+fn toc_default_style_diagnostics(styles: &CT_Styles) -> Vec<String> {
+    [
+        StyleType::Paragraph,
+        StyleType::Character,
+        StyleType::Table,
+        StyleType::Numbering,
+    ]
+    .into_iter()
+    .filter_map(|style_type| {
+        let first = styles.get_default(style_type)?;
+        styles
+            .styles
+            .iter()
+            .any(|style| {
+                style.style_type == style_type
+                    && style.is_default
+                    && style.style_id != first.style_id
+            })
+            .then(|| {
+                format!(
+                    "multiple default {} styles used first default '{}' while rebuilding TOC",
+                    style_type.to_str(),
+                    first.style_id
+                )
+            })
+    })
+    .collect()
 }
 
 fn toc_duplicate_style_diagnostics(styles: &CT_Styles) -> Vec<String> {

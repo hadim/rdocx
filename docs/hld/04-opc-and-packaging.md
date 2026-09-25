@@ -1384,9 +1384,12 @@ styles and unmodelled style children retain their source bytes.
 One final empty component in a custom-style list is a tolerated producer
 separator. Interior empty names, missing levels, and invalid levels remain
 malformed. TOC discovery resolves duplicate style identifiers from the first
-source definition and reports each duplicated identifier once. Validation of
-that staged TOC view ignores later definitions without deleting or rewriting
-them. Public style mutation retains strict duplicate rejection.
+source definition and reports each duplicated identifier once. Several
+defaults of one style type resolve to the one layout applies, the first in
+source order, and each such type is reported once. Validation of that staged
+TOC view ignores later definitions and later defaults without deleting or
+rewriting them. Public style mutation retains strict duplicate and default
+rejection.
 Old-result exclusion adds a total nested-run order within each accepted
 revision or content-control owner, so fields on opposite sides of a marker in
 one wrapper remain distinguishable. The outer coordinate is the typed

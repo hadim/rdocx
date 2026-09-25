@@ -8211,6 +8211,80 @@ fn toc_rebuild_accepts_trailing_style_separator_and_duplicate_style_ids() {
     );
 }
 
+fn document_with_producer_styles(body: &str, producer_styles: &str) -> Document {
+    let mut source = document_with_field_parts(&wrap_word_body(body), None, None);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let styles = styles.replacen("</w:styles>", &format!("{producer_styles}</w:styles>"), 1);
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+#[test]
+fn toc_rebuild_accepts_several_defaults_of_one_style_type_and_follows_the_layout_default() {
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>First heading</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Body.</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Second heading</w:t></w:r></w:p>
+    "#;
+    // Google Docs exports declare several defaults of one type. The later
+    // default paragraph style would start every unstyled paragraph on a new
+    // page, so the rebuilt page numbers show which default was resolved.
+    let mut document = document_with_producer_styles(
+        body,
+        concat!(
+            r#"<w:style w:type="paragraph" w:default="1" w:styleId="LaterNormal"><w:name w:val="Later Normal"/><w:pPr><w:pageBreakBefore/></w:pPr></w:style>"#,
+            r#"<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/></w:style>"#,
+            r#"<w:style w:type="table" w:default="1" w:styleId="TableNormal2"><w:name w:val="Normal Table 2"/></w:style>"#,
+        ),
+    );
+
+    assert!(document.validate_style_graph().is_err());
+    let report = document.rebuild_toc().unwrap();
+    assert_eq!(report.entry_count, 2);
+    assert_eq!(
+        report.diagnostics,
+        [
+            "multiple default paragraph styles used first default 'Normal' while rebuilding TOC",
+            "multiple default table styles used first default 'TableNormal' while rebuilding TOC",
+        ]
+    );
+    let entries = toc_entry_signatures(&document_xml(&mut document))
+        .into_iter()
+        .map(|(display, style, _, _)| (display, style))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries,
+        [
+            ("First heading\t1".to_owned(), "TOC1".to_owned()),
+            ("Second heading\t1".to_owned(), "TOC1".to_owned()),
+        ]
+    );
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.layout_deterministic().unwrap().layout.pages.len(),
+        1
+    );
+    let defaults = reopened
+        .styles()
+        .iter()
+        .filter(|style| style.is_default())
+        .map(|style| style.style_id().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        defaults,
+        ["Normal", "LaterNormal", "TableNormal", "TableNormal2"]
+    );
+}
+
 #[test]
 fn numbered_toc_entries_reuse_the_visible_layout_marker() {
     let body = r#"

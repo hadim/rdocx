@@ -418,6 +418,11 @@ combines a final empty custom-style component with a duplicate `Normal` style.
 It requires two rebuilt entries, one ordered diagnostic, both style definitions
 after save and reopen, and unchanged strict failure from the public style-graph
 validator. Unit controls retain stored display for interior empty components.
+`toc_rebuild_accepts_several_defaults_of_one_style_type_and_follows_the_layout_default`
+adds a later default paragraph style that breaks pages and a second default
+table style. It requires one ordered diagnostic per type naming the first
+default, page numbers and a page count that match that default, and every
+default retained after save and reopen.
 The Word-default instruction case retains argument-free `TOC \\z`, rebuilds
 through an existing content-control payload, and saves and reopens the result.
 A mixed simple and unsupported complex TOC case asserts exact diagnostic text
