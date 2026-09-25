@@ -21322,6 +21322,16 @@ fn with_renumbered_shape_id(xml: &[u8], from: u32, to: u32) -> String {
     )
 }
 
+fn first_slide_shape_id(presentation: &Presentation, index: usize) -> u32 {
+    presentation
+        .slide(0)
+        .unwrap()
+        .shape(index)
+        .unwrap()
+        .non_visual_id()
+        .unwrap()
+}
+
 fn add_python_pptx_media(presentation: &mut Presentation, kind: MediaKind) {
     let poster = valid_one_pixel_png();
     let (bytes, filename, content_type) = match kind {
@@ -21584,4 +21594,417 @@ fn slide_layout_index_follows_the_slide_layout_relationship() {
         reopened.layout_name(reopened.slide_layout_index(1).unwrap()),
         presentation.layout_name(0)
     );
+}
+
+#[test]
+fn picture_image_returns_the_embedded_bytes_and_content_type_of_grouped_pictures() {
+    let png = valid_one_pixel_png();
+    let jpeg = valid_template_jpeg();
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation
+        .add_picture(0, &png, "pixel.png", Emu(1), Emu(1), None, None)
+        .unwrap();
+    presentation
+        .add_picture(0, &jpeg, "photo.jpg", Emu(1), Emu(1), None, None)
+        .unwrap();
+    let png_id = first_slide_shape_id(&presentation, 0);
+    let jpeg_id = first_slide_shape_id(&presentation, 1);
+    let image = presentation.picture_image(0, png_id).unwrap();
+    assert_eq!(image.bytes, png.as_slice());
+    assert_eq!(image.content_type, "image/png");
+    assert!(image.part_name.starts_with("/ppt/media/image"));
+    let image = presentation.picture_image(0, jpeg_id).unwrap();
+    assert_eq!(image.bytes, jpeg.as_slice());
+    assert_eq!(image.content_type, "image/jpeg");
+
+    let picture_xml = with_renumbered_shape_id(
+        &presentation
+            .slide(0)
+            .unwrap()
+            .shape(0)
+            .unwrap()
+            .xml()
+            .unwrap(),
+        png_id,
+        77,
+    );
+    let grouped = with_first_slide_children(
+        &presentation,
+        &format!(
+            r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="76" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{picture_xml}</p:grpSp>"#
+        ),
+        &[],
+    );
+    assert_eq!(grouped.picture_image(0, 77).unwrap().bytes, png.as_slice());
+    assert!(
+        grouped
+            .picture_image(0, 76)
+            .unwrap_err()
+            .to_string()
+            .contains("shape id 76 is not a picture")
+    );
+    assert!(matches!(
+        grouped.picture_image(4, 77),
+        Err(Error::UnknownSlideIndex { index: 4, .. })
+    ));
+}
+
+#[test]
+fn replacing_a_picture_image_changes_only_that_picture() {
+    let png = valid_one_pixel_png();
+    let blue = f226_blue_pixel_png();
+    let sparse = sparse_preview_png();
+    let jpeg = valid_template_jpeg();
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation.add_slide(6).unwrap();
+    for (slide, name) in [(0, "a.png"), (0, "b.png"), (1, "c.png")] {
+        presentation
+            .add_picture(slide, &png, name, Emu(1), Emu(1), None, None)
+            .unwrap();
+    }
+    let first = first_slide_shape_id(&presentation, 0);
+    let second = first_slide_shape_id(&presentation, 1);
+    let third = presentation
+        .slide(1)
+        .unwrap()
+        .shape(0)
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
+    let shared_part = presentation.picture_image(0, first).unwrap().part_name;
+    let slide_xml = |presentation: &Presentation| {
+        (0..2)
+            .map(|index| {
+                String::from_utf8(
+                    presentation
+                        .slide(0)
+                        .unwrap()
+                        .shape(index)
+                        .unwrap()
+                        .xml()
+                        .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    let embeds = |xml: &str| {
+        xml.split(r#"r:embed=""#)
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let before = slide_xml(&presentation);
+    assert_eq!(
+        embeds(&before[0]),
+        embeds(&before[1]),
+        "add_picture shares one relationship"
+    );
+
+    presentation.replace_picture_image(0, first, &blue).unwrap();
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    let after = slide_xml(&presentation);
+    assert_ne!(embeds(&after[0]), embeds(&after[1]));
+    assert_eq!(
+        presentation.picture_image(0, first).unwrap().bytes,
+        blue.as_slice()
+    );
+    let untouched = presentation.picture_image(0, second).unwrap();
+    assert_eq!(
+        (untouched.part_name.as_str(), untouched.bytes),
+        (shared_part.as_str(), png.as_slice())
+    );
+    assert_eq!(
+        presentation.picture_image(1, third).unwrap().bytes,
+        png.as_slice()
+    );
+
+    let own_part = presentation.picture_image(0, first).unwrap().part_name;
+    assert_ne!(own_part, shared_part);
+    presentation
+        .replace_picture_image(0, first, &sparse)
+        .unwrap();
+    let rewritten = presentation.picture_image(0, first).unwrap();
+    assert_eq!(
+        (rewritten.part_name.as_str(), rewritten.bytes),
+        (own_part.as_str(), sparse.as_slice())
+    );
+
+    presentation.replace_picture_image(0, first, &jpeg).unwrap();
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    let converted = presentation.picture_image(0, first).unwrap();
+    assert!(
+        converted.part_name.ends_with(".jpeg"),
+        "{}",
+        converted.part_name
+    );
+    assert_eq!(converted.content_type, "image/jpeg");
+    let package = open_opc(&presentation.to_bytes().unwrap(), "converted picture");
+    assert!(package.get_part(&own_part).is_none());
+    assert!(package.get_part(&shared_part).is_some());
+
+    presentation.replace_picture_image(1, third, &png).unwrap();
+    assert_eq!(
+        presentation.picture_image(1, third).unwrap().part_name,
+        shared_part
+    );
+
+    let before = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .replace_picture_image(0, first, b"not an image")
+            .unwrap_err()
+            .to_string()
+            .contains("not a supported image")
+    );
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(1), Emu(1), Emu(2), Emu(2))
+        .unwrap();
+    let textbox = first_slide_shape_id(&presentation, 2);
+    assert!(
+        presentation
+            .replace_picture_image(0, textbox, &png)
+            .is_err()
+    );
+    presentation.remove_shape(0, 2).unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    let reopened = Presentation::from_bytes(&before).unwrap();
+    assert_eq!(
+        reopened.picture_image(0, first).unwrap().bytes,
+        jpeg.as_slice()
+    );
+    assert_eq!(
+        reopened.picture_image(0, second).unwrap().bytes,
+        png.as_slice()
+    );
+}
+
+#[test]
+fn replacing_a_picture_with_an_svg_alternate_is_rejected_without_change() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "svg picture");
+    package.set_part("/ppt/media/raster.png", valid_one_pixel_png());
+    package.set_part(
+        "/ppt/media/vector.svg",
+        br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#.to_vec(),
+    );
+    package.content_types.add_default("svg", "image/svg+xml");
+    package.content_types.add_default("png", "image/png");
+    let slide_part = "/ppt/slides/slide1.xml";
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+    let picture = r#"<p:pic><p:nvPicPr><p:cNvPr id="40" name="Vector"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="raster"><a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="vector"/></a:ext></a:extLst></a:blip><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#;
+    let xml = xml.replacen("</p:spTree>", &format!("{picture}</p:spTree>"), 1);
+    package.set_part(slide_part, xml.into_bytes());
+    let relationships = package.get_or_create_part_rels(slide_part);
+    relationships.add_with_id("raster", rel_types::IMAGE, "../media/raster.png");
+    relationships.add_with_id("vector", rel_types::IMAGE, "../media/vector.svg");
+    let mut presentation = open_package(package).unwrap();
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    assert_eq!(
+        presentation.picture_image(0, 40).unwrap().content_type,
+        "image/png"
+    );
+    let before = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .replace_picture_image(0, 40, &f226_blue_pixel_png())
+            .unwrap_err()
+            .to_string()
+            .contains("second image")
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn removing_a_shape_deletes_only_relationships_and_parts_nothing_else_uses() {
+    let png = f226_blue_pixel_png();
+    let jpeg = valid_template_jpeg();
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    for (bytes, name) in [(&png, "a.png"), (&png, "b.png"), (&jpeg, "c.jpg")] {
+        presentation
+            .add_picture(0, bytes, name, Emu(1), Emu(1), None, None)
+            .unwrap();
+    }
+    presentation
+        .add_chart(
+            0,
+            ChartKind::Bar,
+            Emu(1),
+            Emu(2),
+            Emu(300),
+            Emu(400),
+            &f124_chart_data(),
+        )
+        .unwrap();
+    add_python_pptx_media(&mut presentation, MediaKind::Video);
+    let shared = presentation
+        .picture_image(0, first_slide_shape_id(&presentation, 0))
+        .unwrap()
+        .part_name;
+    let photo = presentation
+        .picture_image(0, first_slide_shape_id(&presentation, 2))
+        .unwrap()
+        .part_name;
+    let package_parts = |presentation: &Presentation| {
+        open_opc(&presentation.to_bytes().unwrap(), "shape removal")
+            .parts
+            .into_keys()
+            .collect::<HashSet<_>>()
+    };
+    let slide_relationship_count = |presentation: &Presentation| {
+        open_opc(&presentation.to_bytes().unwrap(), "shape removal")
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap()
+            .items
+            .len()
+    };
+    let initial = package_parts(&presentation);
+    let chart_parts = initial
+        .iter()
+        .filter(|part| part.starts_with("/ppt/charts/") || part.starts_with("/ppt/embeddings/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(chart_parts.len(), 2, "{initial:?}");
+    let relationships = slide_relationship_count(&presentation);
+
+    presentation.remove_shape(0, 2).unwrap();
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    assert!(!package_parts(&presentation).contains(&photo));
+    assert_eq!(slide_relationship_count(&presentation), relationships - 1);
+
+    presentation.remove_shape(0, 0).unwrap();
+    assert!(package_parts(&presentation).contains(&shared));
+    assert_eq!(slide_relationship_count(&presentation), relationships - 1);
+    presentation.remove_shape(0, 0).unwrap();
+    assert!(!package_parts(&presentation).contains(&shared));
+    assert_eq!(slide_relationship_count(&presentation), relationships - 2);
+
+    presentation.remove_shape(0, 0).unwrap();
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    let parts = package_parts(&presentation);
+    assert!(
+        chart_parts.iter().all(|part| !parts.contains(part)),
+        "{parts:?}"
+    );
+
+    assert_eq!(presentation.media(0).unwrap().len(), 1);
+    presentation.remove_shape(0, 0).unwrap();
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    assert!(presentation.media(0).unwrap().is_empty());
+    let parts = package_parts(&presentation);
+    assert!(
+        parts.iter().all(|part| !part.starts_with("/ppt/media/")),
+        "{parts:?}"
+    );
+    let slide_xml = String::from_utf8(
+        open_opc(&presentation.to_bytes().unwrap(), "media removal")
+            .get_part("/ppt/slides/slide1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(!slide_xml.contains("spTgt"), "{slide_xml}");
+    assert_eq!(slide_relationship_count(&presentation), 1);
+}
+
+#[test]
+fn removing_a_shape_detaches_connectors_and_rejects_animated_targets_without_change() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        slide
+            .add_shape("rect", Emu(1), Emu(1), Emu(10), Emu(10))
+            .unwrap();
+        slide
+            .add_shape("rect", Emu(30), Emu(1), Emu(10), Emu(10))
+            .unwrap();
+        slide.add_group_shape().unwrap();
+    }
+    let start = first_slide_shape_id(&presentation, 0);
+    let end = first_slide_shape_id(&presentation, 1);
+    let group = first_slide_shape_id(&presentation, 2);
+    let connected = format!(
+        r#"<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="50" name="Connector"/><p:cNvCxnSpPr><a:stCxn id="{start}" idx="3"/><a:endCxn id="{end}" idx="1"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="11" y="5"/><a:ext cx="19" cy="0"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom></p:spPr></p:cxnSp>"#
+    );
+    let mut presentation = with_first_slide_children(&presentation, &connected, &[]);
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "animated shape");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let timing = format!(
+        r#"<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" nodeType="tmRoot"/></p:par></p:tnLst><p:bldLst><p:bldP spid="{end}" grpId="0"/></p:bldLst></p:timing>"#
+    );
+    let xml = xml.replacen("</p:sld>", &format!("{timing}</p:sld>"), 1);
+    package.set_part("/ppt/slides/slide1.xml", xml.into_bytes());
+    let mut animated = open_package(package).unwrap();
+
+    let before = animated.to_bytes().unwrap();
+    assert!(
+        animated
+            .remove_shape(0, 1)
+            .unwrap_err()
+            .to_string()
+            .contains(&format!("slide animations still target shape id {end}"))
+    );
+    assert!(animated.remove_shape(0, 9).is_err());
+    assert_eq!(animated.to_bytes().unwrap(), before);
+
+    presentation.remove_shape(0, 0).unwrap();
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    let connector = String::from_utf8(
+        presentation
+            .slide(0)
+            .unwrap()
+            .shape(2)
+            .unwrap()
+            .xml()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(!connector.contains("stCxn"), "{connector}");
+    assert!(
+        connector.contains(&format!(r#"<a:endCxn id="{end}" idx="1"/>"#)),
+        "{connector}"
+    );
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.slide(0).unwrap().shapes().len(), 3);
+    assert_eq!(first_slide_shape_id(&reopened, 1), group);
 }

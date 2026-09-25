@@ -302,6 +302,14 @@ pub struct MediaInfo {
     pub diagnostics: Vec<MediaDiagnostic>,
 }
 
+/// The embedded image part shown by one picture shape.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PictureImage<'a> {
+    pub part_name: String,
+    pub content_type: String,
+    pub bytes: &'a [u8],
+}
+
 /// An error opening, resolving, or serialising a presentation package.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -2213,7 +2221,7 @@ impl Presentation {
         }
         self.presentation.slide_ids.remove(index);
         self.slides.remove(index);
-        prune_unreachable_media(&mut self.package, &media_candidates);
+        prune_unreachable_parts(&mut self.package, &media_candidates);
         self.media_store = MediaStore::scan(&self.package);
         Ok(())
     }
@@ -2582,6 +2590,264 @@ impl Presentation {
         ))
     }
 
+    /// Returns the embedded image one picture shows, found by shape id.
+    ///
+    /// Pictures inside groups and alternate-content fallbacks are found too.
+    /// The content type comes from the package, falling back to the sniffed
+    /// image format.
+    pub fn picture_image(&self, slide_index: usize, shape_id: u32) -> Result<PictureImage<'_>> {
+        self.require_slide_index(slide_index)?;
+        let record = &self.slides[slide_index];
+        let picture = find_picture(
+            &record.slide.common_slide_data.shape_tree.children,
+            shape_id,
+        )
+        .ok_or_else(|| not_a_picture("read picture image", shape_id))?;
+        let relationship_id = picture_image_relationship(picture, "read picture image", shape_id)?;
+        let part_name = require_internal_related_part(
+            &self.package,
+            &record.part_name,
+            relationship_id,
+            rel_types::IMAGE,
+        )?;
+        let bytes = required_part(&self.package, &part_name)?;
+        let content_type = self
+            .package
+            .content_types
+            .content_type_for(&part_name)
+            .map_or_else(
+                || resolve(bytes, &part_name).content_type().to_owned(),
+                str::to_owned,
+            );
+        Ok(PictureImage {
+            part_name,
+            content_type,
+            bytes,
+        })
+    }
+
+    /// Replaces the image one picture shows while keeping its geometry.
+    ///
+    /// Only this picture changes. A relationship other pictures share is
+    /// split first, a part no other relationship targets is rewritten in
+    /// place when its extension fits the new format, and any other part is
+    /// left to its remaining users while the picture moves to a new or equal
+    /// media part. A picture that carries a second image, such as an SVG
+    /// alternate, is rejected because PowerPoint would keep showing it.
+    pub fn replace_picture_image(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        image_data: &[u8],
+    ) -> Result<()> {
+        const OPERATION: &str = "replace picture image";
+        self.require_slide_index(slide_index)?;
+        let format = ImageFormat::sniff(image_data).ok_or_else(|| Error::InvalidShapeMutation {
+            operation: OPERATION,
+            message: "replacement bytes are not a supported image".to_owned(),
+        })?;
+        let mut staged = self.clone();
+        let slide_part = staged.slides[slide_index].part_name.clone();
+        let slide = &mut staged.slides[slide_index].slide;
+        let picture = find_picture_mut(&mut slide.common_slide_data.shape_tree.children, shape_id)
+            .ok_or_else(|| not_a_picture(OPERATION, shape_id))?;
+        let relationship_id = picture_image_relationship(picture, OPERATION, shape_id)?.to_owned();
+        let old_part = require_internal_related_part(
+            &staged.package,
+            &slide_part,
+            &relationship_id,
+            rel_types::IMAGE,
+        )?;
+        let mut relationships = staged
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let picture_xml = picture
+            .to_xml()
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+        let second_image = relationship_ids(&picture_xml)
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?
+            .into_iter()
+            .filter(|id| *id != relationship_id)
+            .any(|id| {
+                relationships
+                    .get_by_id(&id)
+                    .is_some_and(|relationship| relationship.rel_type == rel_types::IMAGE)
+            });
+        if second_image {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                format!("picture {shape_id} carries a second image, such as an SVG alternate"),
+            ));
+        }
+        let slide_xml = slide
+            .to_xml()
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+        let uses = relationship_ids(&slide_xml)
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?
+            .into_iter()
+            .filter(|id| *id == relationship_id)
+            .count();
+        let picture = find_picture_mut(&mut slide.common_slide_data.shape_tree.children, shape_id)
+            .expect("picture found above");
+        let relationship_id = if uses > 1 {
+            let isolated = relationships.add(
+                rel_types::IMAGE,
+                &relative_part_target(&slide_part, &old_part),
+            );
+            picture
+                .blip_fill
+                .as_mut()
+                .and_then(|fill| fill.blip.as_mut())
+                .expect("picture has an embedded image")
+                .embed = Some(isolated.clone());
+            isolated
+        } else {
+            relationship_id
+        };
+        let part_users = std::iter::once(("/", &staged.package.package_rels))
+            .chain(
+                staged
+                    .package
+                    .part_rels
+                    .iter()
+                    .filter(|(source, _)| **source != slide_part)
+                    .map(|(source, items)| (source.as_str(), items)),
+            )
+            .chain(std::iter::once((slide_part.as_str(), &relationships)))
+            .flat_map(|(source, items)| items.items.iter().map(move |item| (source, item)))
+            .filter(|(source, relationship)| {
+                !relationship_is_external(relationship)
+                    && OpcPackage::resolve_rel_target(source, &relationship.target)
+                        .eq_ignore_ascii_case(&old_part)
+            })
+            .count();
+        let extension = old_part
+            .rsplit_once('.')
+            .map_or("", |(_, extension)| extension)
+            .to_owned();
+        if part_users == 1 && ImageFormat::from_extension(&extension) == Some(format) {
+            staged.package.set_part(&old_part, image_data.to_vec());
+            register_content_type(
+                &mut staged.package,
+                &old_part,
+                &extension,
+                format.content_type(),
+            );
+        } else {
+            let new_part = staged.media_store.insert(
+                &mut staged.package,
+                image_data,
+                &format!("image.{}", format.extension()),
+            );
+            let relationship = relationships
+                .items
+                .iter_mut()
+                .find(|relationship| relationship.id == relationship_id)
+                .expect("picture relationship exists");
+            relationship.target = relative_part_target(&slide_part, &new_part);
+        }
+        staged.package.set_part_rels(&slide_part, relationships);
+        prune_unreachable_parts(&mut staged.package, &HashSet::from([old_part]));
+        staged.media_store = MediaStore::scan(&staged.package);
+        self.commit_candidate(staged)
+    }
+
+    /// Removes one immediate slide child and the package parts only it used.
+    ///
+    /// Connectors attached to a removed shape are detached, as PowerPoint does
+    /// on delete. The media timing a removed media picture owns goes with it.
+    /// A shape that other slide animations still target is rejected without
+    /// any change.
+    pub fn remove_shape(&mut self, slide_index: usize, shape_index: usize) -> Result<()> {
+        const OPERATION: &str = "remove shape";
+        self.require_slide_index(slide_index)?;
+        let mut staged = self.clone();
+        let slide_part = staged.slides[slide_index].part_name.clone();
+        let slide = &mut staged.slides[slide_index].slide;
+        let children = &slide.common_slide_data.shape_tree.children;
+        let child = children
+            .get(shape_index)
+            .ok_or_else(|| Error::InvalidSlideMutation {
+                operation: OPERATION,
+                message: format!(
+                    "shape index {shape_index} is out of range for {} shapes",
+                    children.len()
+                ),
+            })?;
+        let shape_id = child
+            .non_visual_id()
+            .ok_or_else(|| Error::UnsupportedShapeMutation {
+                operation: OPERATION,
+                shape_kind: shape_kind(child),
+            })?;
+        if children
+            .iter()
+            .position(|child| child.non_visual_id() == Some(shape_id))
+            != Some(shape_index)
+        {
+            return Err(Error::InvalidSlideMutation {
+                operation: OPERATION,
+                message: format!("shape id {shape_id} is not unique on the slide"),
+            });
+        }
+        let mut removed_ids = HashSet::new();
+        let mut media_ids = Vec::new();
+        collect_subtree_ids(
+            std::slice::from_ref(child),
+            &mut removed_ids,
+            &mut media_ids,
+        );
+        let before = slide_relationship_ids(slide)?;
+        if let Some(timing) = &mut slide.timing {
+            for media_id in media_ids {
+                timing
+                    .remove_media(media_id)
+                    .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+            }
+            if let Some(animated) = removed_ids
+                .iter()
+                .copied()
+                .filter(|id| timing.references_shape(*id))
+                .min()
+            {
+                return Err(invalid_shape_mutation(
+                    OPERATION,
+                    format!("slide animations still target shape id {animated}"),
+                ));
+            }
+        }
+        detach_connectors(
+            &mut slide.common_slide_data.shape_tree.children,
+            &removed_ids,
+        );
+        slide
+            .common_slide_data
+            .shape_tree
+            .remove_child_by_id(shape_id)
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+        let after = slide_relationship_ids(slide)?;
+        let mut candidates = HashSet::new();
+        if let Some(relationships) = staged.package.get_part_rels_mut(&slide_part) {
+            relationships.items.retain(|relationship| {
+                if !before.contains(&relationship.id) || after.contains(&relationship.id) {
+                    return true;
+                }
+                if !relationship_is_external(relationship) {
+                    candidates.insert(OpcPackage::resolve_rel_target(
+                        &slide_part,
+                        &relationship.target,
+                    ));
+                }
+                false
+            });
+        }
+        prune_unreachable_parts(&mut staged.package, &candidates);
+        staged.media_store = MediaStore::scan(&staged.package);
+        self.commit_candidate(staged)
+    }
+
     /// Inspects slide, layout, and master SmartArt in producing-scope order.
     pub fn smart_art(&self, slide_index: usize) -> Result<Vec<SmartArtInfo>> {
         let record = self
@@ -2918,7 +3184,7 @@ impl Presentation {
             false
         });
         staged.package.set_part_rels(&slide_part, relationships);
-        prune_unreachable_media(&mut staged.package, &candidates);
+        prune_unreachable_parts(&mut staged.package, &candidates);
         staged.media_store = MediaStore::scan(&staged.package);
         self.commit_candidate(staged)
     }
@@ -3006,7 +3272,7 @@ impl Presentation {
             false
         });
         staged.package.set_part_rels(&slide_part, relationships);
-        prune_unreachable_media(&mut staged.package, &candidates);
+        prune_unreachable_parts(&mut staged.package, &candidates);
         staged.media_store = MediaStore::scan(&staged.package);
         self.commit_candidate(staged)
     }
@@ -3360,6 +3626,110 @@ fn invalid_shape_mutation(operation: &'static str, message: impl Into<String>) -
     Error::InvalidShapeMutation {
         operation,
         message: message.into(),
+    }
+}
+
+fn not_a_picture(operation: &'static str, shape_id: u32) -> Error {
+    invalid_shape_mutation(operation, format!("shape id {shape_id} is not a picture"))
+}
+
+fn find_picture(children: &[ShapeTreeChild], shape_id: u32) -> Option<&CT_Picture> {
+    children.iter().find_map(|child| match child {
+        ShapeTreeChild::Picture(picture) if child.non_visual_id() == Some(shape_id) => {
+            Some(picture)
+        }
+        ShapeTreeChild::GroupShape(group) => find_picture(&group.children, shape_id),
+        ShapeTreeChild::AlternateContent(alternate) => {
+            find_picture(alternate.selected_fallback().unwrap_or_default(), shape_id)
+        }
+        _ => None,
+    })
+}
+
+fn find_picture_mut(children: &mut [ShapeTreeChild], shape_id: u32) -> Option<&mut CT_Picture> {
+    for child in children {
+        let id = child.non_visual_id();
+        match child {
+            ShapeTreeChild::Picture(picture) if id == Some(shape_id) => return Some(picture),
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(picture) = find_picture_mut(&mut group.children, shape_id) {
+                    return Some(picture);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn picture_image_relationship<'a>(
+    picture: &'a CT_Picture,
+    operation: &'static str,
+    shape_id: u32,
+) -> Result<&'a str> {
+    picture
+        .blip_fill
+        .as_ref()
+        .and_then(|fill| fill.blip.as_ref())
+        .and_then(|blip| blip.embed.as_deref())
+        .ok_or_else(|| {
+            invalid_shape_mutation(
+                operation,
+                format!("picture {shape_id} has no embedded image"),
+            )
+        })
+}
+
+fn collect_subtree_ids(
+    children: &[ShapeTreeChild],
+    ids: &mut HashSet<u32>,
+    media_ids: &mut Vec<u32>,
+) {
+    for child in children {
+        ids.extend(child.non_visual_id());
+        match child {
+            ShapeTreeChild::Picture(picture) if picture.media.is_some() => {
+                media_ids.extend(child.non_visual_id());
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                collect_subtree_ids(&group.children, ids, media_ids);
+            }
+            ShapeTreeChild::AlternateContent(alternate) => {
+                collect_subtree_ids(
+                    alternate.selected_fallback().unwrap_or_default(),
+                    ids,
+                    media_ids,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn detach_connectors(children: &mut [ShapeTreeChild], removed_ids: &HashSet<u32>) {
+    for child in children {
+        match child {
+            ShapeTreeChild::Connector(connector) => {
+                if connector
+                    .start_connection
+                    .as_ref()
+                    .is_some_and(|connection| removed_ids.contains(&connection.id))
+                {
+                    connector.start_connection = None;
+                }
+                if connector
+                    .end_connection
+                    .as_ref()
+                    .is_some_and(|connection| removed_ids.contains(&connection.id))
+                {
+                    connector.end_connection = None;
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                detach_connectors(&mut group.children, removed_ids)
+            }
+            _ => {}
+        }
     }
 }
 
@@ -4241,12 +4611,18 @@ fn collect_media_targets(package: &OpcPackage, source_part: &str, targets: &mut 
     }
 }
 
-fn prune_unreachable_media(package: &mut OpcPackage, candidates: &HashSet<String>) {
-    for candidate in candidates {
+/// Removes candidate parts that no relationship reaches any longer.
+///
+/// A removed part's own internal targets become candidates in turn, so a
+/// removed chart also drops its embedded workbook.
+fn prune_unreachable_parts(package: &mut OpcPackage, candidates: &HashSet<String>) {
+    let mut pending = candidates.iter().cloned().collect::<Vec<_>>();
+    pending.sort_unstable();
+    while let Some(candidate) = pending.pop() {
         let reachable_from_root = package.package_rels.items.iter().any(|relationship| {
             !relationship_is_external(relationship)
                 && OpcPackage::resolve_rel_target("/", &relationship.target)
-                    .eq_ignore_ascii_case(candidate)
+                    .eq_ignore_ascii_case(&candidate)
         });
         let reachable_from_part = package
             .part_rels
@@ -4255,14 +4631,26 @@ fn prune_unreachable_media(package: &mut OpcPackage, candidates: &HashSet<String
                 relationships.items.iter().any(|relationship| {
                     !relationship_is_external(relationship)
                         && OpcPackage::resolve_rel_target(source_part, &relationship.target)
-                            .eq_ignore_ascii_case(candidate)
+                            .eq_ignore_ascii_case(&candidate)
                 })
             });
-        if !reachable_from_root && !reachable_from_part {
-            package.remove_part(candidate);
-            package.remove_part_rels(candidate);
-            package.content_types.remove_override(candidate);
+        if reachable_from_root || reachable_from_part {
+            continue;
         }
+        if let Some(relationships) = package.get_part_rels(&candidate) {
+            pending.extend(
+                relationships
+                    .items
+                    .iter()
+                    .filter(|relationship| !relationship_is_external(relationship))
+                    .map(|relationship| {
+                        OpcPackage::resolve_rel_target(&candidate, &relationship.target)
+                    }),
+            );
+        }
+        package.remove_part(&candidate);
+        package.remove_part_rels(&candidate);
+        package.content_types.remove_override(&candidate);
     }
 }
 

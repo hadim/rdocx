@@ -397,6 +397,42 @@ succeeds. The picture receives a tree-wide allocated id and deterministic name,
 then its canonical `p:nvPicPr`, relationship-backed `p:blipFill`, and typed
 `p:spPr` shell append at top z-order.
 
+The owning facade also reads and replaces a picture's image and removes
+shapes:
+
+```rust
+pub struct PictureImage<'a> {
+    pub part_name: String,
+    pub content_type: String,
+    pub bytes: &'a [u8],
+}
+pub fn picture_image(&self, slide_index: usize, shape_id: u32) -> Result<PictureImage<'_>>;
+pub fn replace_picture_image(&mut self, slide_index: usize, shape_id: u32, image_data: &[u8]) -> Result<()>;
+pub fn remove_shape(&mut self, slide_index: usize, shape_index: usize) -> Result<()>;
+```
+
+`picture_image` finds the picture by `p:cNvPr/@id`, including inside groups
+and alternate-content fallbacks, and resolves its `a:blip/@r:embed` as an
+internal image relationship. The content type comes from the package, falling
+back to the sniffed format. `replace_picture_image` changes only the named
+picture. When other shape-tree attributes use the same relationship id, the
+picture first receives its own relationship to the same part. A part that only
+this relationship targets is rewritten in place when its extension fits the
+new format. Otherwise the picture moves to a new or equal media part, and the
+old part is pruned once nothing reaches it. Unsupported bytes, a picture
+without an embedded image, and a picture that carries a second image
+relationship, such as an SVG alternate that PowerPoint would keep showing, are
+rejected without change.
+
+`remove_shape` removes one immediate slide child by z-order index. It rejects
+a child without an id or whose id is not unique on the slide. The media timing
+of a removed media picture is removed with it, and a shape that other slide
+animations still target through `spid` is rejected without change. Connectors
+whose start or end names a removed shape are detached, as PowerPoint does on
+delete. Slide relationships that only the removed subtree referenced are
+deleted, and their internal targets are pruned recursively once unreachable,
+so a removed chart also drops its embedded workbook.
+
 An ordinary shape has canonical non-visual properties, a typed transform,
 preset geometry, and a minimal text body. `add_shape` keeps the string API but
 accepts only names in the generated table of all 187 ECMA preset shapes. An
