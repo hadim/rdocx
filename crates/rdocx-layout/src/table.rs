@@ -973,14 +973,23 @@ pub(crate) fn resolved_cell_edge<'a>(
     (edge.val != ST_Border::None).then_some(edge)
 }
 
-/// The height in points a horizontal border takes between two rows. A double
-/// border is two lines and the gap between them, each as wide as its size.
+/// The height in points a horizontal border takes between two rows, as Word 16
+/// reserves it. A single line is its `w:sz` eighths of a point. A compound
+/// style is its lines and gaps, some as wide as the size and some at a width
+/// Word fixes whatever the size, and a wave is a fixed height.
 fn border_band(edge: &CT_BorderEdge) -> f64 {
     let width = edge.sz.unwrap_or(4) as f64 / 8.0;
-    if edge.val == ST_Border::Double {
-        3.0 * width
-    } else {
-        width
+    match edge.val {
+        ST_Border::Double => 3.0 * width,
+        ST_Border::Triple => 5.0 * width,
+        ST_Border::ThinThickSmallGap | ST_Border::ThickThinSmallGap => width + 1.5,
+        ST_Border::ThinThickMediumGap | ST_Border::ThickThinMediumGap => 2.0 * width,
+        ST_Border::ThinThickLargeGap | ST_Border::ThickThinLargeGap => width + 2.25,
+        ST_Border::ThreeDEmboss | ST_Border::ThreeDEngrave if width < 3.0 => width + 1.5,
+        ST_Border::ThreeDEmboss | ST_Border::ThreeDEngrave => width + 3.0,
+        ST_Border::Wave => 3.0,
+        ST_Border::DoubleWave => 5.25,
+        _ => width,
     }
 }
 
@@ -2503,6 +2512,35 @@ mod tests {
         // from the declared grid and never exceeds the caller's width.
         assert!(block.table_width > 0.0);
         assert!(block.table_width <= 234.0);
+    }
+
+    #[test]
+    fn compound_borders_reserve_the_band_word_gives_their_lines_and_gaps() {
+        // Word 16 measurements: the points a top, inside or bottom border
+        // takes at w:sz 4 and at w:sz 24.
+        for (style, at_4, at_24) in [
+            (ST_Border::Single, 0.5, 3.0),
+            (ST_Border::Dotted, 0.5, 3.0),
+            (ST_Border::Outset, 0.5, 3.0),
+            (ST_Border::Double, 1.5, 9.0),
+            (ST_Border::Triple, 2.5, 15.0),
+            (ST_Border::ThinThickSmallGap, 2.0, 4.5),
+            (ST_Border::ThickThinSmallGap, 2.0, 4.5),
+            (ST_Border::ThinThickMediumGap, 1.0, 6.0),
+            (ST_Border::ThickThinMediumGap, 1.0, 6.0),
+            (ST_Border::ThinThickLargeGap, 2.75, 5.25),
+            (ST_Border::ThickThinLargeGap, 2.75, 5.25),
+            (ST_Border::ThreeDEmboss, 2.0, 6.0),
+            (ST_Border::ThreeDEngrave, 2.0, 6.0),
+            (ST_Border::Wave, 3.0, 3.0),
+            (ST_Border::DoubleWave, 5.25, 5.25),
+        ] {
+            for (sz, band) in [(4, at_4), (24, at_24)] {
+                let mut edge = CT_BorderEdge::new(style);
+                edge.sz = Some(sz);
+                assert_eq!(border_band(&edge), band, "{style:?} at w:sz {sz}");
+            }
+        }
     }
 
     #[test]

@@ -759,8 +759,14 @@ border is the first row's band, and its bottom border is a band the last row
 adds below its content. The cells a vertical merge covers keep their edges in
 those bands, although nothing is painted inside the merge, and the merge's
 bottom edge is the bottom edge of the last cell it covers. A
-border is `w:sz` eighths of a point, and a `double` border counts three times
-that, two lines and their gap. An automatic or minimum row height gains its
+border is `w:sz` eighths of a point, and a compound style reserves its lines
+and gaps as Word 16 does: `double` three times the size, `triple` five times,
+the medium gap pairs twice, the small gap pairs the size and 1.5 points, the
+large gap pairs the size and 2.25 points, `threeDEmboss` and `threeDEngrave`
+the size and 1.5 points below 3 points and the size and 3 points from there,
+and `wave` and `doubleWave` 3 and 5.25 points whatever the size. The three-line
+gap styles, `dashSmallGap` and `dashDotStroked` are not in the border model
+and reserve nothing. An automatic or minimum row height gains its
 band above, and an exact height already includes it. Content starts below the
 band and each horizontal line fills the band below its boundary. Vertical
 borders do not shift the table or its content.
