@@ -4921,6 +4921,7 @@ thread_local! {
     static LAYOUT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     static FAIL_NEXT_HEADER_FOOTER_SERIALIZATION: Cell<bool> = const { Cell::new(false) };
     static STORY_SOURCE_BUILDS: Cell<usize> = const { Cell::new(0) };
+    static STORY_TEXT_EVENTS: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -5623,6 +5624,51 @@ fn story_item_text_with_scope(
     let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
     let local = local_story_item(item, item.scan.start, closed.len(), added);
     story_item_text(&closed, &local)
+}
+
+/// Read a hyperlink's text from its own span. The inherited bindings sit on a
+/// parent element the text walker skips, so every prefix resolves as it does
+/// in the part while the walker still starts at the link, exactly as the read
+/// from the head of the part does.
+fn story_link_text_with_scope(
+    xml: &[u8],
+    link: &Range<usize>,
+    scope: &BTreeMap<String, String>,
+) -> Result<Option<String>> {
+    let span = xml
+        .get(link.clone())
+        .ok_or_else(|| Error::Other("story link lies outside its source part".to_owned()))?;
+    let mut wrapped = b"<rdocx-link-scope".to_vec();
+    for (prefix, namespace) in scope {
+        if prefix == "xml" {
+            continue;
+        }
+        wrapped.extend_from_slice(b" xmlns");
+        if !prefix.is_empty() {
+            wrapped.push(b':');
+            wrapped.extend_from_slice(prefix.as_bytes());
+        }
+        wrapped.extend_from_slice(b"=\"");
+        wrapped.extend_from_slice(quick_xml::escape::escape(namespace).as_bytes());
+        wrapped.push(b'"');
+    }
+    wrapped.push(b'>');
+    let start = wrapped.len();
+    wrapped.extend_from_slice(span);
+    let end = wrapped.len();
+    wrapped.extend_from_slice(b"</rdocx-link-scope>");
+    story_item_text(
+        &wrapped,
+        &StoryItemSpan {
+            kind: StoryItemKind::Paragraph,
+            full: start..end,
+            scan: start..end,
+            direct_owner_child: false,
+            complex_field: false,
+            complex_ancestors: Vec::new(),
+            sdt_context: None,
+        },
+    )
 }
 
 fn scan_story_item_links_with_scope(
@@ -7821,6 +7867,8 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
         let (namespace, event) = reader
             .read_resolved_event_into(&mut buffer)
             .map_err(|error| Error::Other(format!("story text scan failed: {error}")))?;
+        #[cfg(test)]
+        STORY_TEXT_EVENTS.set(STORY_TEXT_EVENTS.get() + 1);
         let namespace_kind = story_namespace(&namespace);
         let is_word_namespace = namespace_kind == StoryNamespace::Word;
         drop(namespace);
@@ -13155,7 +13203,7 @@ impl Document {
         // A scope inventoried up front lets the text scan read only the link
         // span. Without one, the scan starts at the head of the part.
         let text = match scope {
-            Some(scope) => story_item_text_with_scope(xml, &text_item, scope)?,
+            Some(scope) => story_link_text_with_scope(xml, &text_item.scan, scope)?,
             None => story_item_text(xml, &text_item)?,
         }
         .unwrap_or_default();
@@ -24721,6 +24769,33 @@ mod tests {
             assert!(document.story_link_snapshots().unwrap().is_empty());
             assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
         }
+    }
+
+    #[test]
+    fn story_link_snapshots_read_each_link_from_its_own_span() {
+        let mut events = Vec::new();
+        for paragraph_count in [64, 128] {
+            let mut document = Document::new();
+            let relationship_id = document.add_hyperlink_relationship("https://example.com/");
+            for index in 0..paragraph_count {
+                document
+                    .add_paragraph(&format!("paragraph {index}"))
+                    .add_hyperlink("link", &relationship_id);
+            }
+
+            STORY_TEXT_EVENTS.set(0);
+            assert_eq!(
+                document.story_link_snapshots().unwrap().len(),
+                paragraph_count
+            );
+            events.push(STORY_TEXT_EVENTS.get());
+        }
+        // Reading each link from its own span doubles the events when the
+        // links double. Reading from the head of the part quadruples them.
+        assert!(
+            events[1] <= events[0] * 5 / 2,
+            "story text events {events:?}"
+        );
     }
 
     #[test]
