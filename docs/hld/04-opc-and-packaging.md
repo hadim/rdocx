@@ -1268,7 +1268,9 @@ retains only the original grid. Equal-grid tables keep row and cell comparison.
 An empty paragraph-property element or paragraph mark compares like an absent
 one. A differing unmodelled paragraph or table property child keeps its
 original bytes and yields a formatting diagnostic, even when the modeled
-properties match.
+properties match. A tracked paragraph-property change records `CT_PPrBase`
+only, so the paragraph mark stays out of `w:pPrChange`. A changed mark keeps
+its original run properties and yields a formatting diagnostic.
 Generated revisions use canonical `w`, `xml`, and `mc` prefixes in schema
 order, while reparse remains prefix tolerant. Source-span patching interleaves
 changed owner bytes with the exact original gaps, preserving unowned

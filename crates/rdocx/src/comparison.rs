@@ -3785,6 +3785,16 @@ fn paragraph_properties_xml(
     };
     current.sect_pr = None;
     current.change = None;
+    // `w:pPrChange` records `CT_PPrBase`, which has no paragraph mark. A mark
+    // change would need a `w:rPrChange` inside the mark, which comparison does
+    // not write, so the original mark stays and the change is reported.
+    if paragraph_mark(original.properties.as_ref()) != paragraph_mark(edited.properties.as_ref()) {
+        formatting_diagnostic(diagnostics, location.to_owned());
+    }
+    current.rpr = original
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.rpr.clone());
     let (
         original_numbering_xml,
         original_numbering_positions,
@@ -3858,8 +3868,16 @@ fn modeled_paragraph_properties(properties: Option<&CT_PPr>) -> Option<CT_PPr> {
         properties.change = None;
         properties.revision_xml.clear();
         properties.revision_xml_positions.clear();
+        properties.rpr = None;
         nonempty_paragraph_properties(properties)
     })
+}
+
+/// The paragraph mark's run properties, with an empty mark read as absent.
+fn paragraph_mark(properties: Option<&CT_PPr>) -> Option<&rdocx_oxml::properties::CT_RPr> {
+    properties
+        .and_then(|properties| properties.rpr.as_ref())
+        .filter(|mark| **mark != rdocx_oxml::properties::CT_RPr::default())
 }
 
 /// An empty `w:pPr` or paragraph-mark `w:rPr` carries no formatting, so it

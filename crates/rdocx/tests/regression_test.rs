@@ -17464,6 +17464,49 @@ fn paragraph_identity_attributes_do_not_hide_a_paragraph_property_change() {
     assert!(!tracked.contains("00D4E5F6"), "{tracked}");
 }
 
+#[test]
+fn a_paragraph_property_change_leaves_the_paragraph_mark_out_of_its_prior_properties() {
+    // `w:pPrChange` records `CT_PPrBase`, which has no paragraph mark. The
+    // original mark stays, and a change to the mark alone is reported.
+    let paragraph = |alignment: &str, mark: &str| {
+        document_with_content_controls(&wrap_word_body(&format!(
+            r#"<w:p w:rsidR="00A1B2C3"><w:pPr><w:jc w:val="{alignment}"/><w:rPr>{mark}</w:rPr></w:pPr><w:r><w:t>same</w:t></w:r></w:p>"#
+        )))
+    };
+
+    let mut compared = paragraph("left", "<w:b/>");
+    let diagnostics = compared
+        .compare(
+            &paragraph("center", "<w:b/>"),
+            "Ada",
+            "2026-09-20T12:00:00Z",
+        )
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let tracked = document_xml(&mut compared);
+    let start = tracked
+        .find("<w:pPrChange")
+        .expect("a paragraph property change");
+    let end = start
+        + tracked[start..]
+            .find("</w:pPrChange>")
+            .expect("a closed change");
+    assert!(!tracked[start..end].contains("<w:rPr"), "{tracked}");
+    assert!(tracked[..start].contains("<w:b/>"), "{tracked}");
+
+    let mut compared = paragraph("left", "<w:b/>");
+    let diagnostics = compared
+        .compare(&paragraph("left", "<w:i/>"), "Ada", "2026-09-20T12:00:00Z")
+        .unwrap();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let tracked = document_xml(&mut compared);
+    assert!(!tracked.contains("<w:pPrChange"), "{tracked}");
+    assert!(
+        tracked.contains("<w:b/>") && !tracked.contains("<w:i/>"),
+        "{tracked}"
+    );
+}
+
 /// python-docx and Google Docs write an empty `<w:pPr/>`. Read as unknown
 /// paragraph content, it made the paragraph uncomparable in both directions.
 /// An empty paragraph mark added a diagnostic, and the open-close forms in a
