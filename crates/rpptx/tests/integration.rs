@@ -21486,6 +21486,65 @@ fn shape_type_classifies_every_shape_tree_child_like_python_pptx() {
 }
 
 #[test]
+fn a_video_in_a_slide_placeholder_is_classified_as_a_picture_like_python_pptx() {
+    // python-pptx builds a placeholder picture for every slide `p:pic` that
+    // carries `p:ph`, and a placeholder picture is a PICTURE.
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    add_python_pptx_media(&mut presentation, MediaKind::Video);
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "video placeholder");
+    let part = "/ppt/slides/slide1.xml";
+    let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+    assert!(xml.contains("<a:videoFile"), "{xml}");
+    package.set_part(
+        part,
+        xml.replacen("<a:videoFile", r#"<p:ph idx="1"/><a:videoFile"#, 1)
+            .into_bytes(),
+    );
+
+    let presentation = open_package(package).unwrap();
+
+    assert_eq!(
+        presentation
+            .slide(0)
+            .unwrap()
+            .shape(0)
+            .unwrap()
+            .shape_type(),
+        Some(rpptx::ShapeType::Picture)
+    );
+}
+
+#[test]
+fn setting_a_fill_replaces_a_group_fill_instead_of_adding_a_second_fill() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut presentation = with_first_slide_children(
+        &presentation,
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="60" name="Group filled"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:grpFill/></p:spPr></p:sp>"#,
+        &[],
+    );
+    let shape = presentation.slide(0).unwrap().shape(0).unwrap();
+    assert!(shape.has_group_fill() && shape.fill().is_none());
+
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_fill(Fill::NoFill(rpptx::NoFill::default()))
+        .unwrap();
+
+    let shape = presentation.slide(0).unwrap().shape(0).unwrap();
+    assert!(!shape.has_group_fill());
+    let xml = String::from_utf8(shape.xml().unwrap()).unwrap();
+    assert!(
+        !xml.contains("grpFill") && xml.contains("<a:noFill/>"),
+        "{xml}"
+    );
+}
+
+#[test]
 fn shape_reads_report_rotation_fill_line_and_self_contained_xml() {
     use rpptx::{ColorChoice, RgbColor, SolidFill};
 

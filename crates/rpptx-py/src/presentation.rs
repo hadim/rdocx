@@ -9,9 +9,9 @@ use crate::shape::length;
 use crate::slide::{PySlideCollection, PySlideLayoutCollection};
 use crate::{rpptx_to_pyerr, rpptx_value_to_pyerr};
 
-/// The bundled 16:9 slide size, paired with the first dimension set on a deck
-/// that has no `p:sldSz`.
-const DEFAULT_SLIDE_SIZE: (i64, i64) = (12_192_000, 6_858_000);
+/// The 4:3 size the renderer assumes for a deck without `p:sldSz`, paired with
+/// the first dimension set on such a deck so the other one keeps its effect.
+const DEFAULT_SLIDE_SIZE: (i64, i64) = (9_144_000, 6_858_000);
 
 #[pyclass(name = "CommentAuthor", frozen, get_all, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]

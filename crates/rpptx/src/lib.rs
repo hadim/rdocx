@@ -5889,7 +5889,7 @@ impl<'a> ShapeMut<'a> {
 
     /// Replaces the direct fill on a shape with typed shape properties.
     pub fn set_fill(&mut self, fill: Fill) -> Result<()> {
-        self.shape_properties_mut("set fill")?.fill = Some(fill);
+        self.shape_properties_mut("set fill")?.set_fill(Some(fill));
         Ok(())
     }
 
@@ -6980,11 +6980,14 @@ impl<'a> ShapeRef<'a> {
                     None
                 }
             }
+            // python-pptx reads every placeholder picture as a picture, video
+            // included.
             ShapeTreeChild::Picture(picture) => Some(
-                if picture
-                    .media
-                    .as_ref()
-                    .is_some_and(|media| media.kind == MediaKind::Video)
+                if picture.placeholder.is_none()
+                    && picture
+                        .media
+                        .as_ref()
+                        .is_some_and(|media| media.kind == MediaKind::Video)
                 {
                     ShapeType::Media
                 } else {
@@ -7051,6 +7054,11 @@ impl<'a> ShapeRef<'a> {
     /// Returns the direct fill of a shape, picture, or connector.
     pub fn fill(&self) -> Option<&'a Fill> {
         shape_properties(self.child)?.fill.as_ref()
+    }
+
+    /// Returns whether the shape takes its parent group's fill (`a:grpFill`).
+    pub fn has_group_fill(&self) -> bool {
+        shape_properties(self.child).is_some_and(CT_ShapeProperties::has_group_fill)
     }
 
     /// Returns the direct line of a shape, picture, or connector.

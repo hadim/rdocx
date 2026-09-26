@@ -167,6 +167,18 @@ impl PyFillFormat {
         let mut presentation = self.presentation.borrow_mut(py);
         write_fill(py, &mut presentation.inner, &self.path, self.target, fill)
     }
+
+    /// Only a shape fill can take its group's fill. A line fill or a slide
+    /// background has no `a:grpFill` choice.
+    fn has_group_fill(&self, py: Python<'_>) -> PyResult<bool> {
+        if !matches!(self.target, FillTarget::Shape) {
+            return Ok(false);
+        }
+        let presentation = self.presentation.borrow(py);
+        Ok(shape_ref_at(&presentation.inner, &self.path)
+            .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?
+            .has_group_fill())
+    }
 }
 
 #[pymethods]
@@ -174,6 +186,7 @@ impl PyFillFormat {
     #[getter(r#type)]
     fn fill_type(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let value = match self.fill(py)? {
+            None if self.has_group_fill(py)? => 101,
             None => return Ok(None),
             Some(rpptx::Fill::Solid(_)) => 1,
             Some(rpptx::Fill::Pattern(_)) => 2,
@@ -267,14 +280,15 @@ impl PyColorFormat {
                 fill.color = Some(with_rgb(fill.color.take(), rgb));
                 rpptx::Fill::Solid(fill)
             }
-            Some(rpptx::Fill::Pattern(mut fill)) => {
-                fill.foreground = Some(with_rgb(fill.foreground.take(), rgb));
-                rpptx::Fill::Pattern(fill)
-            }
+            // A line colour makes any other line fill solid, pattern included.
             _ if self.solidify => {
                 let mut fill = rpptx::SolidFill::default();
                 fill.color = Some(rpptx::ColorChoice::srgb(rgb));
                 rpptx::Fill::Solid(fill)
+            }
+            Some(rpptx::Fill::Pattern(mut fill)) => {
+                fill.foreground = Some(with_rgb(fill.foreground.take(), rgb));
+                rpptx::Fill::Pattern(fill)
             }
             other => return Err(no_foreground(other.as_ref())),
         };
@@ -362,7 +376,9 @@ impl PyLineFormat {
             .line()
             .cloned()
             .unwrap_or_default();
-        line.width = Some(width as u32);
+        // Zero is the schema default, so it is written as an absent width,
+        // as python-pptx does.
+        line.width = (width != 0).then_some(width as u32);
         shape_mut_at(&mut presentation.inner, &self.path)
             .ok_or_else(missing)?
             .set_line(line)

@@ -1081,7 +1081,8 @@ def test_slide_size_reads_and_writes_keep_the_other_dimension(tmp_path):
     prs = rpptx.Presentation(unsized)
     assert (prs.slide_width, prs.slide_height) == (None, None)
     prs.slide_height = rpptx.Inches(5)
-    assert (prs.slide_width, prs.slide_height) == (12_192_000, rpptx.Inches(5))
+    # The width the renderer assumed for the unsized deck stays in effect.
+    assert (prs.slide_width, prs.slide_height) == (9_144_000, rpptx.Inches(5))
 
 
 def test_slide_layout_hidden_and_background_round_trip_through_python_pptx(tmp_path):
@@ -1518,3 +1519,63 @@ def test_adjustments_match_python_pptx_defaults_reads_and_writes(tmp_path):
     prs.save(output)
     oracle = pptx.Presentation(output).slides[0].shapes
     assert oracle[list(MSO_SHAPE).index(MSO_SHAPE.ROUNDED_RECTANGLE)].adjustments[0] == 0.3
+
+
+def test_line_width_none_removes_the_width_attribute_like_python_pptx():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_shape("rect", 0, 0, 100, 100)
+    shape.line.width = rpptx.Pt(2)
+    shape.line.width = None
+    start_tag = prs.slides[0].shapes[0].xml.split(b"<a:ln", 1)[1].split(b">", 1)[0]
+    assert b" w=" not in start_tag
+    assert prs.slides[0].shapes[0].line.width == 0
+
+
+def test_a_group_fill_reads_as_group_and_a_new_fill_replaces_it(tmp_path):
+    import rpptx
+    from rpptx.enum.dml import MSO_FILL_TYPE
+
+    def build(deck):
+        pptx = pytest.importorskip("pptx")
+        from lxml import etree
+        from pptx.oxml.ns import qn
+
+        shape = deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_shape(
+            pptx.enum.shapes.MSO_SHAPE.RECTANGLE, 0, 0, 10, 10
+        )
+        etree.SubElement(shape._element.spPr, qn("a:grpFill"))
+
+    prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "group-fill.pptx", build))
+    fill = prs.slides[0].shapes[0].fill
+    assert fill.type == MSO_FILL_TYPE.GROUP
+    fill.solid()
+    xml = prs.slides[0].shapes[0].xml
+    assert b"grpFill" not in xml and xml.count(b"<a:solidFill") == 1
+    assert fill.type == MSO_FILL_TYPE.SOLID
+
+
+def test_assigning_a_line_colour_makes_a_patterned_line_solid(tmp_path):
+    import rpptx
+    from rpptx.dml.color import RGBColor
+    from rpptx.enum.dml import MSO_FILL_TYPE
+
+    def build(deck):
+        pptx = pytest.importorskip("pptx")
+        shape = deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_shape(
+            pptx.enum.shapes.MSO_SHAPE.RECTANGLE, 0, 0, 10, 10
+        )
+        shape.line.fill.patterned()
+        shape.line.fill.pattern = pptx.enum.dml.MSO_PATTERN.PERCENT_5
+        shape.line.fill.fore_color.rgb = pptx.dml.color.RGBColor(0, 0, 0xFF)
+
+    prs = rpptx.Presentation(
+        _python_pptx_deck(tmp_path / "patterned-line.pptx", build)
+    )
+    line = prs.slides[0].shapes[0].line
+    assert line.fill.type == MSO_FILL_TYPE.PATTERNED
+    line.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+    assert line.fill.type == MSO_FILL_TYPE.SOLID
+    assert str(line.color.rgb) == "FF0000"

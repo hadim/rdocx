@@ -290,7 +290,8 @@ width, and height plus optional non-visual id and name.
 
 `Presentation.slide_width` and `slide_height` read the optional `p:sldSz` as
 `Length` values. Assigning one keeps the other, and a deck without `p:sldSz`
-pairs the assigned value with the bundled 16:9 size. `Slide.slide_layout`
+pairs the assigned value with the 4:3 size the renderer assumes for such a
+deck. `Slide.slide_layout`
 returns the layout the slide relates to, equal to the same entry of
 `slide_layouts`, and `SlideLayoutCollection.index` returns its position.
 `Slide.hidden` reads and writes `p:sld/@show`. `Slide.background.fill` is a
@@ -303,20 +304,24 @@ use the native staged slide operations and advance the revision once.
 A missing partner coordinate becomes zero, as in python-pptx, and a negative
 extent is a `ValueError`. `rotation` reads clockwise degrees normalized below
 360 and writes them with round-half-even into the 60000-per-degree angle.
-`shape_type` reports an `MSO_SHAPE_TYPE` member or `None`. `fill` and `line`
-return live `FillFormat` and `LineFormat` views for ordinary shapes, pictures,
-and connectors, and raise `ValueError` for other kinds. `FillFormat` offers
-`type`, `solid()`, `background()`, and `fore_color`. `ColorFormat.rgb` reads an
-sRGB colour as `RGBColor`, or `None` for any other colour, and writing it keeps
-the transforms of an existing sRGB colour. Reading `LineFormat.color` changes
-nothing, and assigning its `rgb` makes the line fill solid. `LineFormat.width`
-reads zero without a width, writes `None` as zero, and rejects values above
-the `ST_LineWidth` maximum. `adjustments` is a live `AdjustmentCollection` of
-the effective preset adjustments, normalized so that 1.0 is 100000, and
-assignment truncates as python-pptx does. `xml` returns the element serialized
-on its own as bytes. A picture's `image` is a frozen `Image` snapshot with
-`blob`, `content_type`, and the python-pptx `ext`, and `replace_image` changes
-only that picture through the native staged replacement.
+`shape_type` reports an `MSO_SHAPE_TYPE` member or `None`, and a placeholder
+picture is a `PICTURE` even when it holds a video, as in python-pptx. `fill` and
+`line` return live `FillFormat` and `LineFormat` views for ordinary shapes,
+pictures, and connectors, and raise `ValueError` for other kinds. `FillFormat`
+offers `type`, `solid()`, `background()`, and `fore_color`. A shape fill of
+`a:grpFill` reads as `GROUP`, and setting a fill replaces it. `ColorFormat.rgb`
+reads an sRGB colour as `RGBColor`, or `None` for any other colour, and writing
+it keeps the transforms of an existing sRGB colour. Reading `LineFormat.color`
+changes nothing, and assigning its `rgb` makes any other line fill solid,
+pattern included. `LineFormat.width` reads zero without a width, removes the
+width when `None` or zero is written, as python-pptx does, and rejects values
+above the `ST_LineWidth` maximum. `adjustments` is a live
+`AdjustmentCollection` of the effective preset adjustments, normalized so that
+1.0 is 100000, and assignment truncates as python-pptx does. `xml` returns the
+element serialized on its own as bytes. A picture's `image` is a frozen `Image`
+snapshot with `blob`, `content_type`, and the python-pptx `ext`, and
+`replace_image` changes only that picture through the native staged
+replacement.
 
 `ShapeCollection.add_shape` accepts a DrawingML preset name or an `MSO_SHAPE`
 member. `add_connector` follows the python-pptx signature, `add_group_shape`
