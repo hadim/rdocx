@@ -33047,4 +33047,95 @@ mod table_row_border_and_margin_regressions {
             (vec![14.0, 20.0, 14.0, 14.0, 14.0], Vec::new())
         );
     }
+
+    /// Word 16 measurements. Word closes a table on every page it breaks
+    /// across: the last row of a page takes the table's bottom border below
+    /// it, with room kept for it, and the first row of the next page takes
+    /// the table's top border. Layout kept the inside border at both ends, so
+    /// a row that Word moves to the next page stayed on the page.
+    #[test]
+    fn a_table_broken_across_pages_keeps_its_top_and_bottom_borders_on_each_page() {
+        // An exact line of `top` points, then sixty one-line rows under a
+        // 6 point top border, 1 point inside borders and a 3 point bottom.
+        // Per page: the first-column labels and baselines, the horizontal
+        // lines as width and centre, and the table's top and bottom.
+        let layout = |top: f64| {
+            let mut document = Document::new();
+            let mut first = document.add_paragraph("TOP");
+            first.set_line_spacing(top);
+            first.set_space_before(Length::pt(0.0));
+            first.set_space_after(Length::pt(0.0));
+            {
+                let mut table = document.add_table(60, 2);
+                table.set_cell_margins(
+                    Length::pt(0.0),
+                    Length::pt(5.0),
+                    Length::pt(0.0),
+                    Length::pt(5.0),
+                );
+                table.set_borders(BorderStyle::Single, 8, "000000");
+                for (edge, eighths) in [(TableBorderEdge::Top, 48), (TableBorderEdge::Bottom, 24)] {
+                    table
+                        .set_border_checked(edge, BorderStyle::Single, eighths, "000000")
+                        .expect("border is valid");
+                }
+                for row in 0..60 {
+                    for column in 0..2 {
+                        let mut cell = table.cell(row, column).expect("cell exists");
+                        cell.set_text(&format!("{}{row:02}", ["A", "B"][column]));
+                        let mut paragraph = cell.paragraph_mut(0).expect("cell paragraph");
+                        paragraph.set_line_spacing(14.0);
+                        paragraph.set_space_before(Length::pt(0.0));
+                        paragraph.set_space_after(Length::pt(0.0));
+                    }
+                }
+            }
+            let result = document
+                .layout_deterministic()
+                .expect("document lays out in deterministic font mode");
+            let mut pages = Vec::new();
+            for page in &result.layout.pages {
+                let mut rows = Vec::new();
+                let mut lines = Vec::new();
+                oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                    oxml_layout::PositionedElement::Text(run) if run.text.starts_with('A') => {
+                        rows.push((run.text.trim().to_owned(), round(run.origin.y)));
+                    }
+                    oxml_layout::PositionedElement::Line {
+                        start, end, width, ..
+                    } if start.y == end.y => lines.push((*width, round(start.y))),
+                    _ => {}
+                });
+                lines.sort_by(|a, b| a.1.total_cmp(&b.1));
+                lines.dedup();
+                pages.push((rows, lines));
+            }
+            let boxes = result
+                .body_layout_fragments(1)
+                .expect("the table")
+                .iter()
+                .map(|fragment| (round(fragment.y), round(fragment.y + fragment.height)))
+                .collect::<Vec<_>>();
+            (pages, boxes)
+        };
+
+        // 12.5 points leave 15.5 under row 40: room for row 41 and its 1 point
+        // band, but not for the 3 point bottom border it would need below it.
+        let (pages, boxes) = layout(12.5);
+        let (first_rows, first_lines) = &pages[0];
+        let (second_rows, second_lines) = &pages[1];
+        assert_eq!(first_rows.last().expect("rows on page 1").0, "A40");
+        assert_eq!(second_rows[0].0, "A41");
+        // 9.5 points leave 18.5, room for all three.
+        assert_eq!(layout(9.5).0[0].0.last().expect("rows on page 1").0, "A41");
+        // Page 1 ends with the table's 3 point bottom border below row 40.
+        assert_eq!(first_lines.last(), Some(&(3.0, round(boxes[0].1 - 1.5))));
+        // Page 2 opens with the 6 point top border, and row 41 sits under it
+        // exactly as row 0 sits under it on page 1.
+        assert_eq!(second_lines[0], (6.0, round(boxes[1].0 + 3.0)));
+        assert_eq!(
+            round(second_rows[0].1 - boxes[1].0),
+            round(first_rows[0].1 - boxes[0].0)
+        );
+    }
 }

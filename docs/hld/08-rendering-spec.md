@@ -765,6 +765,14 @@ band above, and an exact height already includes it. Content starts below the
 band and each horizontal line fills the band below its boundary. Vertical
 borders do not shift the table or its content.
 
+Word closes a table on every page it breaks across. A row other than the
+table's last stays on a page only when there is room below it for its cells'
+bottom edges resolved against the table's bottom border, as on the last row,
+and the row that ends the page paints them there. A row that a break carries to
+the top of a page takes its cells' top edges resolved against the table's top
+border as its band, whatever its height rule. A row that follows repeated
+header rows keeps its own band.
+
 Borders are physical row or column segments rather than four strokes per cell.
 The renderer maps every logical cell edge onto those segments and emits each
 segment once. An adjacent-edge conflict selects the higher style-region

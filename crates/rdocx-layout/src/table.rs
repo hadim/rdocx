@@ -1031,6 +1031,69 @@ fn border_bands(rows: &[TableRow], table_borders: Option<&CT_TblBorders>) -> Vec
     bands
 }
 
+/// The band a page break gives a row at the top of a page, or at the bottom
+/// of one. Word closes a table on every page it crosses with the table's own
+/// top and bottom borders, so the row's cell edges resolve against those, as
+/// on the table's first and last row.
+pub(crate) fn page_break_band(
+    row: &TableRow,
+    table_borders: Option<&CT_TblBorders>,
+    top: bool,
+) -> f64 {
+    fn edge(borders: &CT_TblBorders, top: bool) -> Option<&CT_BorderEdge> {
+        if top {
+            borders.top.as_ref()
+        } else {
+            borders.bottom.as_ref()
+        }
+    }
+    let table_edge = table_borders.and_then(|borders| edge(borders, top));
+    row.cells
+        .iter()
+        .filter_map(|cell| {
+            let own = cell.borders.as_ref().and_then(|borders| edge(borders, top));
+            resolved_cell_edge(own, table_edge, true)
+        })
+        .map(border_band)
+        .fold(0.0, f64::max)
+}
+
+/// `row` as the first row of the page a table break carries it to. Its band
+/// becomes the one the top of a page gives it, which Word adds to the row
+/// whatever its height rule, and its cells paint the table's top border.
+pub(crate) fn row_opening_page(row: &TableRow, table_borders: Option<&CT_TblBorders>) -> TableRow {
+    let band = page_break_band(row, table_borders, true);
+    let growth = band - row.cells.first().map_or(0.0, |cell| cell.border_band_top);
+    let mut opened = row.clone();
+    opened.height += growth;
+    for cell in &mut opened.cells {
+        cell.height += growth;
+        cell.merged_height += growth;
+        cell.border_band_top = band;
+        cell.is_first_row = true;
+    }
+    opened
+}
+
+/// `row` as the last row of a page before a table break, carrying below its
+/// content the band and the edges that the table's bottom border gives it. A
+/// merge that goes on to the next page keeps its box.
+pub(crate) fn row_closing_page(row: &TableRow, table_borders: Option<&CT_TblBorders>) -> TableRow {
+    let band = page_break_band(row, table_borders, false);
+    let mut closed = row.clone();
+    closed.height += band;
+    for cell in &mut closed.cells {
+        if cell.merge_with_below {
+            continue;
+        }
+        cell.height += band;
+        cell.merged_height += band;
+        cell.border_band_bottom = band;
+        cell.is_last_row = true;
+    }
+    closed
+}
+
 fn resolve_base_table_properties(table: &CT_Tbl, styles: &CT_Styles) -> CT_TblPr {
     let direct = table.properties.as_ref();
     let selected_style_id = direct

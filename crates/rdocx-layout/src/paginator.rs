@@ -800,6 +800,18 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                 continue;
             }
 
+            // Word closes the table on every page it breaks across with the
+            // table's bottom border below the last row there, so a row other
+            // than the table's last must leave room for that band. The last
+            // row's height already carries the table's bottom band.
+            let last_row = table.rows.len().saturating_sub(1);
+            let closing_band = |row_idx: usize| {
+                if row_idx == last_row {
+                    0.0
+                } else {
+                    crate::table::page_break_band(&table.rows[row_idx], tbl_borders, false)
+                }
+            };
             for (row_idx, row) in table.rows.iter().enumerate() {
                 // Read per row, because finishing a page may have moved the
                 // body into the next column track.
@@ -807,7 +819,9 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                 let row_semantics = table
                     .semantics
                     .and_then(|semantics| semantics.rows.get(row_idx));
-                if pager.cursor_y + row.height > pager.available_height() && pager.has_content() {
+                if pager.cursor_y + row.height + closing_band(row_idx) > pager.available_height()
+                    && pager.has_content()
+                {
                     pager.finish_page();
 
                     // Repeat header rows
@@ -844,6 +858,28 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                         }
                     }
                 }
+
+                // A row the break carries to the top of a page takes the
+                // table's top border there, unless repeated headers came
+                // first. The row the next one cannot follow ends its page
+                // with the table's bottom border.
+                let opened;
+                let row = if row_idx > 0 && pager.cursor_y == 0.0 {
+                    opened = crate::table::row_opening_page(row, tbl_borders);
+                    &opened
+                } else {
+                    row
+                };
+                let closed;
+                let row = if table.rows.get(row_idx + 1).is_some_and(|next| {
+                    pager.cursor_y + row.height + next.height + closing_band(row_idx + 1)
+                        > pager.available_height()
+                }) {
+                    closed = crate::table::row_closing_page(row, tbl_borders);
+                    &closed
+                } else {
+                    row
+                };
 
                 if let Some(body_index) = body_index {
                     pager.record_body_fragment(
