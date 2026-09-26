@@ -756,7 +756,9 @@ rather than being drawn over their content. The band above a row is the widest
 resolved edge on that boundary, from the bottom edges of the row above and the
 top edges of the row below, so a shared border counts once. The table's top
 border is the first row's band, and its bottom border is a band the last row
-adds below its content. A vertical merge has no edge where it continues. A
+adds below its content. The cells a vertical merge covers keep their edges in
+those bands, although nothing is painted inside the merge, and the merge's
+bottom edge is the bottom edge of the last cell it covers. A
 border is `w:sz` eighths of a point, and a `double` border counts three times
 that, two lines and their gap. An automatic or minimum row height gains its
 band above, and an exact height already includes it. Content starts below the

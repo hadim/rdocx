@@ -907,6 +907,27 @@ fn layout_table_inner(
         }
     }
     for (row_index, cell_index, last_row, required) in spans {
+        // Word paints the bottom edge of a merge from the last cell it covers,
+        // not from the cell that starts it.
+        if last_row > row_index {
+            let (col_index, grid_span) = {
+                let restart = &rows[row_index].cells[cell_index];
+                (restart.col_index, restart.grid_span)
+            };
+            let bottom = rows[last_row]
+                .cells
+                .iter()
+                .find(|cell| {
+                    cell.is_vmerge_continue
+                        && cell.col_index == col_index
+                        && cell.grid_span == grid_span
+                })
+                .and_then(|cell| cell.borders.as_ref()?.bottom.clone());
+            rows[row_index].cells[cell_index]
+                .borders
+                .get_or_insert_with(CT_TblBorders::default)
+                .bottom = bottom;
+        }
         let restart = &mut rows[row_index].cells[cell_index];
         restart.merged_height = row_heights[row_index..=last_row].iter().sum();
         restart.is_last_row = last_row + 1 == num_rows;
@@ -967,8 +988,9 @@ fn border_band(edge: &CT_BorderEdge) -> f64 {
 ///
 /// The band between two rows is the widest edge that meets there, from the
 /// bottom edges of the row above and the top edges of the row below, so a
-/// border the two rows share counts once. A vertical merge has no edge where
-/// it continues into the next row.
+/// border the two rows share counts once. Word counts the edges of every
+/// cell, the cells a vertical merge covers included, although it paints none
+/// of them inside the merge.
 fn border_bands(rows: &[TableRow], table_borders: Option<&CT_TblBorders>) -> Vec<f64> {
     let mut bands = vec![0.0f64; rows.len() + 1];
     for (row_index, row) in rows.iter().enumerate() {
@@ -990,22 +1012,18 @@ fn border_bands(rows: &[TableRow], table_borders: Option<&CT_TblBorders>) -> Vec
         });
         for cell in &row.cells {
             let cell_borders = cell.borders.as_ref();
-            if !cell.is_vmerge_continue
-                && let Some(edge) = resolved_cell_edge(
-                    cell_borders.and_then(|borders| borders.top.as_ref()),
-                    table_top,
-                    first_row,
-                )
-            {
+            if let Some(edge) = resolved_cell_edge(
+                cell_borders.and_then(|borders| borders.top.as_ref()),
+                table_top,
+                first_row,
+            ) {
                 bands[row_index] = bands[row_index].max(border_band(edge));
             }
-            if !cell.merge_with_below
-                && let Some(edge) = resolved_cell_edge(
-                    cell_borders.and_then(|borders| borders.bottom.as_ref()),
-                    table_bottom,
-                    last_row,
-                )
-            {
+            if let Some(edge) = resolved_cell_edge(
+                cell_borders.and_then(|borders| borders.bottom.as_ref()),
+                table_bottom,
+                last_row,
+            ) {
                 bands[row_index + 1] = bands[row_index + 1].max(border_band(edge));
             }
         }

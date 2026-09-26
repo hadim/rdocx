@@ -32974,4 +32974,77 @@ mod table_row_border_and_margin_regressions {
             10.0
         );
     }
+
+    /// Word 16 measurements. Layout skipped the edges of the cells a vertical
+    /// merge covers, so a merge reserved no band inside itself, and it painted
+    /// the merge's bottom edge from the cell that starts it, even where the
+    /// row boundary below reserved no band for that edge.
+    #[test]
+    fn a_vertical_merge_reserves_every_cell_edge_and_paints_the_bottom_edge_of_its_last_cell() {
+        // The first column of rows 1 and 2 merged, each merged cell with an
+        // optional bottom edge, and no table borders.
+        let merged = |restart_bottom: Option<u32>, continuation_bottom: Option<u32>| {
+            probe(move |table| {
+                for (row, bottom) in [(1, restart_bottom), (2, continuation_bottom)] {
+                    let mut cell = table.cell(row, 0).expect("cell exists");
+                    if row == 1 {
+                        cell.set_v_merge_restart();
+                    } else {
+                        cell.set_v_merge_continue();
+                    }
+                    if let Some(eighths) = bottom {
+                        cell.set_border_checked(
+                            CellBorderEdge::Bottom,
+                            BorderStyle::Single,
+                            eighths,
+                            "000000",
+                        )
+                        .expect("border is valid");
+                    }
+                }
+            })
+        };
+        // Line to line distances down the second column, which no merge
+        // covers, then the width and centre below the table top of every
+        // horizontal line the first column paints.
+        let geometry = |document: &Document| {
+            let baselines = lines(document)
+                .into_iter()
+                .filter(|(text, ..)| text.ends_with('1') || text == "NEXT")
+                .map(|(_, baseline, _)| baseline)
+                .collect::<Vec<_>>();
+            let pitches = baselines
+                .windows(2)
+                .map(|pair| round(pair[1] - pair[0]))
+                .collect::<Vec<_>>();
+            let result = document
+                .layout_deterministic()
+                .expect("document lays out in deterministic font mode");
+            let table_top = result.body_layout_fragments(0).expect("the table")[0].y;
+            let mut painted = Vec::new();
+            oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Line {
+                    start, end, width, ..
+                } = element
+                    && start.y == end.y
+                    && start.x.min(end.x) < 300.0
+                {
+                    painted.push((*width, round(start.y - table_top)));
+                }
+            });
+            (pitches, painted)
+        };
+        // A 3 point bottom on the first cell of the merge is reserved inside
+        // it and never painted, and the last cell's 6 point bottom is the
+        // merge's bottom edge, reserved and painted below it.
+        assert_eq!(
+            geometry(&merged(Some(24), Some(48))),
+            (vec![14.0, 17.0, 20.0, 14.0, 14.0], vec![(6.0, 48.0)])
+        );
+        // With no bottom on the last cell, the merge has no bottom edge.
+        assert_eq!(
+            geometry(&merged(Some(48), None)),
+            (vec![14.0, 20.0, 14.0, 14.0, 14.0], Vec::new())
+        );
+    }
 }
