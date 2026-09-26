@@ -1012,8 +1012,11 @@ impl Document {
     /// Rebuild every supported table of contents already present in the document.
     ///
     /// The operation stages bookmarks, cached entries, and deterministic page
-    /// targets on an independent document. Any malformed or ambiguous source
-    /// leaves the receiver unchanged.
+    /// targets on an independent document. Any malformed or ambiguous TOC
+    /// source leaves the receiver unchanged. Style-graph defects the package
+    /// already has, which open, save, and layout accept, are retained and
+    /// reported as diagnostics. A defect the rebuild itself would introduce
+    /// rejects it and leaves the receiver unchanged.
     pub fn rebuild_toc(&mut self) -> Result<TocRebuildReport> {
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;
@@ -5744,13 +5747,13 @@ fn ensure_toc_entry_styles(
     for level in levels {
         let built_in_name = format!("toc {level}");
         let canonical_id = format!("TOC{level}");
-        let style_id = document
-            .styles
+        let style_id = source_styles
             .styles
             .iter()
             .find(|style| {
                 // Entries reference their style by identifier, so a producer
-                // style without one cannot be the entry style.
+                // style without one cannot be the entry style, and a later
+                // definition of an identifier is not the one it resolves to.
                 style.style_type == StyleType::Paragraph
                     && !style.style_id.is_empty()
                     && style

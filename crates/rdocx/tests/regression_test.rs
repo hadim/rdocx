@@ -8372,6 +8372,30 @@ fn toc_rebuild_rejects_a_defect_its_entry_style_introduces_behind_retained_ones(
 }
 
 #[test]
+fn toc_rebuild_ignores_a_toc_style_name_on_a_later_duplicate_definition() {
+    // `Contents1` resolves to its first definition, a centred custom style.
+    // The later definition's `toc 1` name must not make it the entry style.
+    let mut document = document_with_producer_styles(
+        ONE_HEADING_TOC_BODY,
+        concat!(
+            r#"<w:style w:type="paragraph" w:styleId="Contents1"><w:name w:val="Custom"/><w:pPr><w:jc w:val="center"/></w:pPr></w:style>"#,
+            r#"<w:style w:type="paragraph" w:styleId="Contents1"><w:name w:val="toc 1"/></w:style>"#,
+        ),
+    );
+
+    let report = document.rebuild_toc().unwrap();
+
+    assert_eq!(report.entry_count, 1);
+    assert_eq!(
+        report.diagnostics,
+        ["duplicate style ID 'Contents1' used first definition while rebuilding TOC"]
+    );
+    let entries = toc_entry_signatures(&document_xml(&mut document));
+    assert_eq!(entries.len(), 1, "the entry must not reference `Contents1`");
+    assert_eq!(entries[0].1, "TOC1");
+}
+
+#[test]
 fn numbered_toc_entries_reuse_the_visible_layout_marker() {
     let body = r#"
         <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
