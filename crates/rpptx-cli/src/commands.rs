@@ -698,6 +698,35 @@ pub struct CommentInput<'a> {
     pub date: &'a str,
 }
 
+impl CommentInput<'_> {
+    /// Refuses a value XML 1.0 cannot carry before anything is written, such
+    /// as the U+000B line break that `text --json` reports.
+    fn validate(&self) -> Result<()> {
+        require_xml_text("author", self.author)?;
+        if let Some(initials) = self.initials {
+            require_xml_text("initials", initials)?;
+        }
+        require_xml_text("text", self.text)
+    }
+}
+
+fn require_xml_text(field: &str, value: &str) -> Result<()> {
+    let forbidden = value.chars().find(|character| {
+        matches!(
+            character,
+            '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}'
+        )
+    });
+    match forbidden {
+        Some(character) => Err(format!(
+            "comment {field} contains U+{:04X}, which XML 1.0 cannot carry",
+            u32::from(character)
+        )
+        .into()),
+        None => Ok(()),
+    }
+}
+
 /// One modern comment or reply, flattened in slide and thread order.
 struct CommentEntry<'a> {
     slide: usize,
@@ -761,6 +790,7 @@ pub fn comment_add(
     as_json: bool,
 ) -> Result<()> {
     ensure_output_paths_available(&[output.to_path_buf()])?;
+    input.validate()?;
     let mut presentation = Presentation::open(file)?;
     if slide == 0 || slide > presentation.len() {
         return Err(format!(
@@ -791,6 +821,7 @@ pub fn comment_reply(
     as_json: bool,
 ) -> Result<()> {
     ensure_output_paths_available(&[output.to_path_buf()])?;
+    input.validate()?;
     let mut presentation = Presentation::open(file)?;
     let slide = thread_slide(&presentation, parent_id)?;
     let author_id = comment_author_id(&mut presentation, input.author, input.initials)?;

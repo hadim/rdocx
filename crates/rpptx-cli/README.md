@@ -20,7 +20,7 @@ replaces text, and produces deterministic fixed output.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rpptx-cli | 36,708 compressed bytes, 159,585 member bytes, 8 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
+| Crates.io archive: rpptx-cli | 37,149 compressed bytes, 161,995 member bytes, 8 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 
@@ -72,10 +72,12 @@ but are not listed. `list` shows each comment and reply as `open`, `resolved`,
 or `closed`, and its JSON carries the `resolved` flag beside the raw `status`
 token. `add --slide` takes a one-based slide number. `add` and `reply` require
 an RFC 3339 `--date`, reuse an existing author with the same name, and add the
-author otherwise. New ids are sequential GUIDs, so the output depends on
-neither a clock nor a random source. `resolve` takes a thread id. `remove`
-takes a thread id, which also removes its replies, or a reply id. Every
-mutation requires `-o/--output`, refuses an existing output, publishes only a
-complete presentation, and supports a schema-1 record through `--json`.
+author otherwise. They refuse an author, initials, or text that XML 1.0 cannot
+carry, such as the U+000B line break `text --json` reports. New ids are
+sequential GUIDs, so the output depends on neither a clock nor a random source.
+`resolve` takes a thread id. `remove` takes a thread id, which also removes its
+replies, or a reply id. Every mutation requires `-o/--output`, refuses an
+existing output, publishes only a complete presentation, and supports a
+schema-1 record through `--json`.
 
 Run `rpptx --help` or `rpptx <command> --help` for the complete command surface.

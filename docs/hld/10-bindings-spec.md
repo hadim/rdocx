@@ -1883,13 +1883,14 @@ comment or reply without a status, or with the `active` status, as open, and a
 beside the raw `status` token. `add` takes a one-based `--slide`. `add` and
 `reply` require an RFC 3339 `--date`, reuse the first author with the given
 name, and otherwise add an author whose `userId` is that name and whose
-`providerId` is `None`. New author, comment, and reply ids are the first
-unused sequential GUIDs, so the output depends on neither a clock nor a random
-source. `resolve` accepts only a thread id. `remove` accepts a thread id,
-which removes its replies, or a reply id. Every mutation requires an explicit
-output, refuses an existing one, and publishes through the shared staged
-output set. Its schema-1 record states the action, comment id, one-based
-slide, and output path. The commands use the additive
+`providerId` is `None`. They refuse an author, initials, or text that XML 1.0
+cannot carry before writing anything. New author, comment, and reply ids are
+the first unused sequential GUIDs, so the output depends on neither a clock nor
+a random source. `resolve` accepts only a thread id. `remove` accepts a thread
+id, which removes its replies, or a reply id. Every mutation requires an
+explicit output, refuses an existing one, and publishes through the shared
+staged output set. Its schema-1 record states the action, comment id,
+one-based slide, and output path. The commands use the additive
 `Presentation::resolve_comment` and `Presentation::remove_comment` facade
 methods, which rest on the new `Comment::remove_reply`.
 

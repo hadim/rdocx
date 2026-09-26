@@ -1687,6 +1687,51 @@ fn comment_mutations_fail_without_creating_output() {
             vec!["remove", replied, "--id", unknown],
             format!("comment id {unknown} does not exist"),
         ),
+        (
+            vec![
+                "add",
+                input,
+                "--slide",
+                "1",
+                "--author",
+                "Ada",
+                "--text",
+                "one\u{b}two",
+                "--date",
+                date,
+            ],
+            "comment text contains U+000B, which XML 1.0 cannot carry".to_owned(),
+        ),
+        (
+            vec![
+                "add", input, "--slide", "1", "--author", "A\u{1}da", "--text", "x", "--date", date,
+            ],
+            "comment author contains U+0001, which XML 1.0 cannot carry".to_owned(),
+        ),
+        (
+            vec![
+                "add",
+                input,
+                "--slide",
+                "1",
+                "--author",
+                "Ada",
+                "--initials",
+                "A\u{1f}",
+                "--text",
+                "x",
+                "--date",
+                date,
+            ],
+            "comment initials contains U+001F, which XML 1.0 cannot carry".to_owned(),
+        ),
+        (
+            vec![
+                "reply", replied, "--id", thread, "--author", "Ada", "--text", "x\u{c}", "--date",
+                date,
+            ],
+            "comment text contains U+000C, which XML 1.0 cannot carry".to_owned(),
+        ),
     ] {
         let mut command = vec!["comment"];
         command.extend(&args);
