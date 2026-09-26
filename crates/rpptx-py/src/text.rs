@@ -728,8 +728,11 @@ impl PyParagraph {
             }
             Some(value) => {
                 let character = value.extract::<String>()?;
-                let character = TextBulletCharacter::new(character)
-                    .map_err(|_| PyValueError::new_err("bullet character must not be empty"))?;
+                let character = TextBulletCharacter::new(character).map_err(|_| {
+                    PyValueError::new_err(
+                        "bullet character must be non-empty text that XML can carry",
+                    )
+                })?;
                 Some(TextBulletChoice::Character(character))
             }
         };
@@ -1212,7 +1215,7 @@ impl PyFont {
 
     #[setter]
     fn set_all_caps(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
-        self.update(py, |properties| properties.all_caps = value)
+        self.update(py, |properties| properties.set_all_caps(value))
     }
 
     #[getter]
@@ -1226,10 +1229,9 @@ impl PyFont {
 
     #[setter]
     fn set_name(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
-        let font = value
-            .map(TextFont::new)
-            .transpose()
-            .map_err(|_| PyValueError::new_err("font name must not be empty"))?;
+        let font = value.map(TextFont::new).transpose().map_err(|_| {
+            PyValueError::new_err("font name must be non-empty text that XML can carry")
+        })?;
         self.update(py, |properties| match (properties.latin.as_mut(), font) {
             (_, None) => properties.latin = None,
             // An existing Latin font keeps its panose and charset attributes.

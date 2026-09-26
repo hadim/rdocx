@@ -11,7 +11,7 @@ use crate::fill::Fill;
 use crate::namespace::reject_conflicting_a_prefix;
 use crate::order::OrderedRawChildren;
 
-use super::body::{Result, TextError, missing_end};
+use super::body::{Result, TextError, has_forbidden_xml_char, missing_end};
 use super::bullet::TextBullet;
 
 const MAX_TEXT_MARGIN: i32 = 51_206_400;
@@ -402,8 +402,8 @@ pub struct TextFont {
 impl TextFont {
     pub fn new(typeface: impl Into<String>) -> Result<Self> {
         let typeface = typeface.into();
-        if typeface.is_empty() {
-            return Err(invalid_attribute("font", "typeface", ""));
+        if typeface.is_empty() || has_forbidden_xml_char(&typeface) {
+            return Err(invalid_attribute("font", "typeface", &typeface));
         }
         Ok(Self {
             typeface,
@@ -433,8 +433,8 @@ impl TextFont {
     }
 
     pub(crate) fn write_xml<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
-        if self.typeface.is_empty() {
-            return Err(invalid_attribute(tag, "typeface", ""));
+        if self.typeface.is_empty() || has_forbidden_xml_char(&self.typeface) {
+            return Err(invalid_attribute(tag, "typeface", &self.typeface));
         }
         let mut start = BytesStart::new(tag);
         start.push_attribute(("typeface", self.typeface.as_str()));
@@ -602,6 +602,16 @@ pub struct CT_TextCharacterProperties {
 }
 
 impl CT_TextCharacterProperties {
+    /// Sets the typed capitalisation. A typed value replaces a preserved
+    /// `cap`, such as `cap="small"`, for good, so clearing the typed value
+    /// later leaves no capitalisation rather than the preserved one.
+    pub fn set_all_caps(&mut self, all_caps: Option<bool>) {
+        if all_caps.is_some() {
+            self.raw_attributes.retain(|(name, _)| name != "cap");
+        }
+        self.all_caps = all_caps;
+    }
+
     /// Parses one complete character-property element with any prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let expected = root_local_name(xml)?;
@@ -1016,42 +1026,61 @@ impl CT_TextParagraphProperties {
             return write_empty(writer, start);
         }
         write_start(writer, start)?;
-        emit_raw(writer, self.raw_children.at(0))?;
+        // A typed bullet member replaces the preserved alternative of its
+        // group whatever path set it, so a group never holds two members.
+        let raw_at = |boundary| {
+            self.raw_children
+                .at(boundary)
+                .filter(|raw| !self.bullet_replaces(raw_local_name(raw)))
+        };
+        emit_raw(writer, raw_at(0))?;
         if let Some(spacing) = &self.line_spacing {
             spacing.write_xml(writer, "a:lnSpc")?;
         }
-        emit_raw(writer, self.raw_children.at(1))?;
+        emit_raw(writer, raw_at(1))?;
         if let Some(spacing) = &self.space_before {
             spacing.write_xml(writer, "a:spcBef")?;
         }
-        emit_raw(writer, self.raw_children.at(2))?;
+        emit_raw(writer, raw_at(2))?;
         if let Some(spacing) = &self.space_after {
             spacing.write_xml(writer, "a:spcAft")?;
         }
-        emit_raw(writer, self.raw_children.at(3))?;
+        emit_raw(writer, raw_at(3))?;
         if let Some(bullet) = &self.bullet {
             bullet.write_color(writer)?;
         }
-        emit_raw(writer, self.raw_children.at(4))?;
+        emit_raw(writer, raw_at(4))?;
         if let Some(bullet) = &self.bullet {
             bullet.write_size(writer)?;
         }
-        emit_raw(writer, self.raw_children.at(5))?;
+        emit_raw(writer, raw_at(5))?;
         if let Some(bullet) = &self.bullet {
             bullet.write_font(writer)?;
         }
-        emit_raw(writer, self.raw_children.at(6))?;
+        emit_raw(writer, raw_at(6))?;
         if let Some(bullet) = &self.bullet {
             bullet.write_choice(writer)?;
         }
-        emit_raw(writer, self.raw_children.at(7))?;
-        emit_raw(writer, self.raw_children.at(8))?;
+        emit_raw(writer, raw_at(7))?;
+        emit_raw(writer, raw_at(8))?;
         if let Some(properties) = &self.default_run_properties {
             properties.write_xml(writer, "a:defRPr")?;
         }
-        emit_raw(writer, self.raw_children.at(9))?;
-        emit_raw(writer, self.raw_children.at(10))?;
+        emit_raw(writer, raw_at(9))?;
+        emit_raw(writer, raw_at(10))?;
         write_end(writer, tag)
+    }
+
+    /// Whether the typed bullet has the member of the group a preserved
+    /// child named `name` belongs to.
+    fn bullet_replaces(&self, name: &[u8]) -> bool {
+        self.bullet.as_ref().is_some_and(|bullet| match name {
+            b"buClrTx" => bullet.color.is_some(),
+            b"buSzTx" => bullet.size.is_some(),
+            b"buFontTx" => bullet.font.is_some(),
+            b"buBlip" => bullet.choice.is_some(),
+            _ => false,
+        })
     }
 
     pub fn raw_children(&self) -> &OrderedRawChildren {
@@ -1060,11 +1089,12 @@ impl CT_TextParagraphProperties {
 
     /// Returns whether the paragraph keeps a preserved `a:buBlip` picture bullet.
     pub fn has_picture_bullet(&self) -> bool {
-        (0..=10).any(|boundary| {
-            self.raw_children
-                .at(boundary)
-                .any(|raw| raw_local_name(raw) == b"buBlip")
-        })
+        !self.bullet_replaces(b"buBlip")
+            && (0..=10).any(|boundary| {
+                self.raw_children
+                    .at(boundary)
+                    .any(|raw| raw_local_name(raw) == b"buBlip")
+            })
     }
 
     /// Replaces the direct bullet.
@@ -2165,6 +2195,14 @@ mod tests {
         let mut writer = quick_xml::Writer::new(Vec::new());
         properties.write_xml(&mut writer, "a:rPr").unwrap();
         assert_eq!(writer.into_inner(), br#"<a:rPr cap="small" lang="en-US"/>"#);
+
+        // The setter drops the preserved value, so clearing afterwards leaves
+        // no capitalisation, saved or not.
+        properties.set_all_caps(Some(true));
+        properties.set_all_caps(None);
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        properties.write_xml(&mut writer, "a:rPr").unwrap();
+        assert_eq!(writer.into_inner(), br#"<a:rPr lang="en-US"/>"#);
     }
 
     #[test]
@@ -2210,6 +2248,36 @@ mod tests {
             properties.to_xml().unwrap(),
             br#"<a:pPr><q:tabLst/></a:pPr>"#
         );
+    }
+
+    #[test]
+    fn a_bullet_member_set_through_the_public_field_still_replaces_its_alternative() {
+        // Assigning the field bypasses `set_bullet`, so the writer itself keeps
+        // one member per bullet group.
+        let mut properties = CT_TextParagraphProperties::from_xml(
+            br#"<q:pPr><q:buFontTx/><q:buBlip><q:blip x:embed="rId9"/></q:buBlip></q:pPr>"#,
+        )
+        .unwrap();
+        properties.bullet = Some(TextBullet {
+            font: Some(super::TextFont::new("Wingdings").unwrap()),
+            choice: Some(TextBulletChoice::Character(
+                TextBulletCharacter::new("*").unwrap(),
+            )),
+            ..TextBullet::default()
+        });
+
+        assert!(!properties.has_picture_bullet());
+        assert_eq!(
+            properties.to_xml().unwrap(),
+            br#"<a:pPr><a:buFont typeface="Wingdings"/><a:buChar char="*"/></a:pPr>"#
+        );
+    }
+
+    #[test]
+    fn typefaces_and_bullet_characters_refuse_characters_xml_cannot_carry() {
+        assert!(super::TextFont::new("Aria\u{1}l").is_err());
+        assert!(TextBulletCharacter::new("\u{b}").is_err());
+        assert!(super::TextFont::new("Aptos Display").is_ok());
     }
 
     #[test]

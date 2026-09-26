@@ -1638,3 +1638,51 @@ def test_text_enums_match_python_pptx_member_values_and_xml_tokens():
             if assign is not None:
                 assign(ours[name])
                 assert written(attribute) == member.xml_value
+
+
+def test_clearing_all_caps_after_it_replaced_small_caps_writes_no_cap(tmp_path):
+    import rpptx
+
+    source, variant, output = (
+        tmp_path / name for name in ("source.pptx", "small.pptx", "output.pptx")
+    )
+    _textbox_presentation(rpptx).save(source)
+    _replace_in_slide(source, variant, "<a:r><a:t>", '<a:r><a:rPr cap="small"/><a:t>')
+    presentation = rpptx.Presentation(variant)
+    font = presentation.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font
+    font.all_caps = True
+    font.all_caps = None
+    presentation.save(output)
+    assert "cap=" not in _text_body_xml(output)
+
+
+def test_setting_one_margin_keeps_the_other_insets_as_written(tmp_path):
+    import rpptx
+
+    source, measured, output = (
+        tmp_path / name for name in ("source.pptx", "measured.pptx", "output.pptx")
+    )
+    _textbox_presentation(rpptx).save(source)
+    _replace_in_slide(source, measured, "<a:bodyPr", '<a:bodyPr lIns="0.1in"')
+    presentation = rpptx.Presentation(measured)
+    frame = presentation.slides[0].shapes[0].text_frame
+    before = presentation.to_bytes()
+    frame.margin_left = frame.margin_left
+    assert presentation.to_bytes() == before
+    frame.margin_top = rpptx.Pt(3)
+    presentation.save(output)
+    body = _text_body_xml(output)
+    assert 'lIns="0.1in"' in body and 'tIns="38100"' in body
+
+
+def test_font_name_and_bullet_refuse_characters_xml_cannot_carry():
+    import rpptx
+
+    presentation = _textbox_presentation(rpptx)
+    paragraph = presentation.slides[0].shapes[0].text_frame.paragraphs[0]
+    before = presentation.to_bytes()
+    with pytest.raises(ValueError):
+        paragraph.runs[0].font.name = "Aria\x01l"
+    with pytest.raises(ValueError):
+        paragraph.bullet = "\x0b"
+    assert presentation.to_bytes() == before

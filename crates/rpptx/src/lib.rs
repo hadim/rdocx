@@ -6063,7 +6063,8 @@ impl<'a> TextFrame<'a> {
     /// Replaces all four optional text insets.
     ///
     /// An inset outside the 32-bit `ST_Coordinate32` range is rejected before
-    /// any inset changes.
+    /// any inset changes. An inset equal to the stored one keeps its stored
+    /// spelling, such as `0.1in`.
     pub fn set_insets(
         &mut self,
         left: Option<Emu>,
@@ -6083,17 +6084,33 @@ impl<'a> TextFrame<'a> {
                 })
                 .transpose()
         };
+        // A side whose value is unchanged keeps its stored spelling, such as a
+        // universal measure, so setting one inset leaves the others as read.
+        let properties = &self.body.body_properties;
+        let resolve = |stored: &Option<Coordinate32Value>, value: Option<Emu>| {
+            if stored.as_ref().and_then(coordinate_emu) == value {
+                Ok(None)
+            } else {
+                coordinate(value).map(Some)
+            }
+        };
         let (left, right, top, bottom) = (
-            coordinate(left)?,
-            coordinate(right)?,
-            coordinate(top)?,
-            coordinate(bottom)?,
+            resolve(&properties.left_inset, left)?,
+            resolve(&properties.right_inset, right)?,
+            resolve(&properties.top_inset, top)?,
+            resolve(&properties.bottom_inset, bottom)?,
         );
         let properties = &mut self.body.body_properties;
-        properties.left_inset = left;
-        properties.right_inset = right;
-        properties.top_inset = top;
-        properties.bottom_inset = bottom;
+        for (slot, value) in [
+            (&mut properties.left_inset, left),
+            (&mut properties.right_inset, right),
+            (&mut properties.top_inset, top),
+            (&mut properties.bottom_inset, bottom),
+        ] {
+            if let Some(value) = value {
+                *slot = value;
+            }
+        }
         Ok(())
     }
 

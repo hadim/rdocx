@@ -673,6 +673,17 @@ fn element_name(element: &BytesStart<'_>) -> String {
     String::from_utf8_lossy(element.name().as_ref()).into_owned()
 }
 
+/// Whether a value holds a character XML 1.0 cannot carry. The writer only
+/// escapes markup, so such a character would reach the part as it is.
+pub(crate) fn has_forbidden_xml_char(value: &str) -> bool {
+    value.chars().any(|character| {
+        matches!(
+            character,
+            '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}'
+        )
+    })
+}
+
 pub(crate) fn missing_end(element: &str) -> TextError {
     TextError::Xml(OxmlError::MissingElement(format!(
         "closing DrawingML {element}"
