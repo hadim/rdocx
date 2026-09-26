@@ -791,11 +791,6 @@ fn layout_table_inner(
             col_index += grid_span as usize;
         }
 
-        let max_cell_height = cells
-            .iter()
-            .filter(|cell| !cell.starts_vmerge)
-            .map(|cell| cell.height)
-            .fold(0.0f64, f64::max);
         let specified_height = row_properties.height.map(|h| h.to_pt()).unwrap_or(0.0);
         let exact =
             row_properties.height_rule.as_deref() == Some("exact") && specified_height > 0.0;
@@ -803,10 +798,22 @@ fn layout_table_inner(
         for cell in &mut cells {
             cell.clip_content = exact && !cell.is_vmerge_continue;
         }
+        // Word keeps a cell's top and bottom margins outside a minimum height,
+        // which bounds the content between them. An exact height holds the
+        // band and the top margin, and Word adds the bottom margin below it.
+        let row_cells = || cells.iter().filter(|cell| !cell.starts_vmerge);
         let row_height = if exact {
             specified_height
+                + row_cells()
+                    .map(|cell| cell.margin_bottom)
+                    .fold(0.0f64, f64::max)
         } else {
-            max_cell_height.max(specified_height)
+            row_cells()
+                .map(|cell| {
+                    cell.height
+                        .max(specified_height + cell.margin_top + cell.margin_bottom)
+                })
+                .fold(specified_height, f64::max)
         };
 
         rows.push(TableRow {

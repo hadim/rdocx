@@ -767,7 +767,10 @@ the size and 1.5 points below 3 points and the size and 3 points from there,
 and `wave` and `doubleWave` 3 and 5.25 points whatever the size. The three-line
 gap styles, `dashSmallGap` and `dashDotStroked` are not in the border model
 and reserve nothing. An automatic or minimum row height gains its
-band above, and an exact height already includes it. Content starts below the
+band above, and an exact height already includes it. A minimum height bounds
+each cell's content with its top and bottom margins outside, and an exact
+height holds the top margin, with the row's largest bottom margin added below
+it, which is also what Word does. Content starts below the
 band and each horizontal line fills the band below its boundary. Vertical
 borders do not shift the table or its content.
 

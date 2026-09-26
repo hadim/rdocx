@@ -32923,6 +32923,50 @@ mod table_row_border_and_margin_regressions {
         );
     }
 
+    /// Word 16 measurements. Layout counted a cell's top and bottom margins
+    /// inside a minimum row height and left the bottom margin out of an exact
+    /// one. Word bounds the content with a minimum and keeps both margins
+    /// outside it, and it adds the bottom margin below an exact height, which
+    /// holds the top margin.
+    #[test]
+    fn a_minimum_row_height_leaves_out_both_cell_margins_and_an_exact_one_the_bottom() {
+        let rows = |height: RowHeight, top: f64, bottom: f64| {
+            probe(move |table| {
+                table.set_cell_margins(
+                    Length::pt(top),
+                    Length::pt(5.0),
+                    Length::pt(bottom),
+                    Length::pt(5.0),
+                );
+                for row in 0..5 {
+                    table
+                        .row(row)
+                        .expect("row exists")
+                        .set_height_checked(height)
+                        .expect("height is valid");
+                }
+            })
+        };
+        let exact = RowHeight::Exact(Length::pt(30.0));
+        let at_least = RowHeight::AtLeast(Length::pt(30.0));
+        // An exact 30 point row holds a 10 point top margin, and a 10 point
+        // bottom margin goes below it.
+        assert_eq!(
+            row_geometry(&rows(exact, 10.0, 0.0)),
+            (10.0, vec![30.0, 30.0, 30.0, 30.0, 20.0])
+        );
+        assert_eq!(row_geometry(&rows(exact, 0.0, 10.0)), (0.0, vec![40.0; 5]));
+        // A 30 point minimum bounds the content, with both margins outside.
+        assert_eq!(
+            row_geometry(&rows(at_least, 10.0, 0.0)),
+            (10.0, vec![40.0, 40.0, 40.0, 40.0, 30.0])
+        );
+        assert_eq!(
+            row_geometry(&rows(at_least, 10.0, 10.0)),
+            (10.0, vec![50.0, 50.0, 50.0, 50.0, 40.0])
+        );
+    }
+
     /// Layout read only the table's `w:tblCellMar` and ignored a cell's own
     /// `w:tcMar`, which Google Docs writes on every cell.
     #[test]
