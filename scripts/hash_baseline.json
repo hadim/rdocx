@@ -35,9 +35,9 @@
     "proposal:word/document.xml": "7235579097314e5cc8b07822884ebfadd9927b3ae34820a2673ba63097c5e02e",
     "proposal:word/numbering.xml": "061e20beb3409ce0f3feda1a99793956124a2967dd23afe1b528dd8fdeb82182",
     "proposal:word/styles.xml": "dae1d6c1083bba6bb4b29ba2ab748a713f5da60b8c2cd4d52224c6f0a8f21bef",
-    "quote:page1.png": "0cb8e2ee78d96f816e490bd3830ccc6e7807c400c094872b42359284460c62af",
-    "quote:pdf/bytes": "b74bc8a08f1e66aabcb3334f2110e4da497cb2b467b773c9a61ac072d251db44",
-    "quote:pdf/pages": "bb61084121bf416506cd62bd49683e0b1773f13f72c6d0e15322826d5c4b129b",
+    "quote:page1.png": "8d8d7960a134917ba079c99e34ee94190716e243932b4be85979e966d7077e22",
+    "quote:pdf/bytes": "1737e5bdb8cd6f10ad7bc275cf31de8a0e165eb81a0effccf360293703fc0354",
+    "quote:pdf/pages": "b790acef64e731782c767d532fd06140915b30613d19b8e5ab5c53edad6b122a",
     "quote:pdf/resources": "c0433753ef113d5aad02e5ce159bf67aded188fb7828d2dc8c99293a81608313",
     "quote:word/document.xml": "0c72970432f77927f6fb3bd6e980f9e12eebcf3a4c56b5260bf5902ef92ebdb5",
     "quote:word/numbering.xml": "c6511604704117eb00ad2faffb9173e4f48d22f62557ca72a51d60b7907c8058",
@@ -50,5 +50,5 @@
     "report:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
     "report:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4"
   },
-  "reason": "Paragraph spacing keeps the larger of space after and space before and horizontal table borders take their width between rows, which moves the rendered PDF and PNG of six samples and no OOXML part"
+  "reason": "A table that breaks across pages closes each page with its bottom border band, which moves the quote page 1 PNG and PDF (GitHub issue #138)"
 }
