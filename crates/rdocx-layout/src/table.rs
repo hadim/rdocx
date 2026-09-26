@@ -911,7 +911,10 @@ fn layout_table_inner(
         restart.merged_height = row_heights[row_index..=last_row].iter().sum();
         restart.is_last_row = last_row + 1 == num_rows;
         restart.border_band_bottom = table_bottom_band(last_row);
-        restart.clip_content = required > restart.merged_height;
+        // The painter draws the merged content between the band above the
+        // merge and the table's bottom band, so exact rows clip to that box.
+        restart.clip_content =
+            required > restart.merged_height - restart.border_band_top - restart.border_band_bottom;
     }
 
     Ok((
@@ -2419,6 +2422,83 @@ mod tests {
         // from the declared grid and never exceeds the caller's width.
         assert!(block.table_width > 0.0);
         assert!(block.table_width <= 234.0);
+    }
+
+    #[test]
+    fn a_merge_over_exact_rows_clips_to_the_box_between_its_bands() {
+        // Two exact 20 point rows under 3 point borders hold a 43 point merge
+        // whose painted box is 37 points, so 39 points of content must clip.
+        let edge = || {
+            let mut edge = CT_BorderEdge::new(ST_Border::Single);
+            edge.sz = Some(24);
+            edge
+        };
+        let mut table = CT_Tbl::new();
+        table.properties = Some(CT_TblPr {
+            borders: Some(CT_TblBorders {
+                top: Some(edge()),
+                bottom: Some(edge()),
+                left: Some(edge()),
+                right: Some(edge()),
+                inside_h: Some(edge()),
+                inside_v: Some(edge()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        table.grid = Some(CT_TblGrid {
+            columns: vec![CT_TblGridCol { width: Twips(3000) }],
+            ..Default::default()
+        });
+        let exact_row = || {
+            let mut row = CT_Row::new();
+            row.properties = Some(CT_TrPr {
+                height: Some(Twips(400)),
+                height_rule: Some("exact".to_owned()),
+                ..Default::default()
+            });
+            row
+        };
+        let mut restart = CT_Tc::new();
+        restart.properties = Some(CT_TcPr {
+            v_merge: Some(VMerge::Restart),
+            ..Default::default()
+        });
+        restart.content.clear();
+        for text in ["one", "two", "three"] {
+            let mut paragraph = rdocx_oxml::text::CT_P::new();
+            paragraph.properties = Some(rdocx_oxml::properties::CT_PPr {
+                line_spacing: Some(Twips(260)),
+                line_rule: Some("exact".to_owned()),
+                space_before: Some(Twips(0)),
+                space_after: Some(Twips(0)),
+                ..Default::default()
+            });
+            paragraph.add_run(text);
+            restart
+                .content
+                .push(rdocx_oxml::table::CellContent::Paragraph(paragraph));
+        }
+        let mut first = exact_row();
+        first.cells.push(restart);
+        let mut continuation = CT_Tc::new();
+        continuation.properties = Some(CT_TcPr {
+            v_merge: Some(VMerge::Continue),
+            ..Default::default()
+        });
+        let mut second = exact_row();
+        second.cells.push(continuation);
+        table.rows = vec![first, second];
+
+        let block = layout_with_defaults(&table, 150.0);
+
+        let restart = &block.rows[0].cells[0];
+        assert_eq!(restart.merged_height, 43.0);
+        assert_eq!(
+            (restart.border_band_top, restart.border_band_bottom),
+            (3.0, 3.0)
+        );
+        assert!(restart.clip_content);
     }
 
     #[test]
