@@ -12371,6 +12371,32 @@ impl Document {
         Ok(())
     }
 
+    /// The main story as the typed serializer writes it, with the fixed `w:`
+    /// prefix, or `None` when unsafe retained namespace shadows keep the
+    /// stored bytes. Comparison stages a main story stored under another
+    /// prefix in this form, which an untouched body no longer takes on save.
+    pub(crate) fn canonical_main_story(&self) -> Result<Option<Vec<u8>>> {
+        let stored = self.package.get_part(&self.doc_part_name);
+        let nested_namespace_owners = stored
+            .map(nested_modeled_namespace_owners)
+            .transpose()?
+            .unwrap_or_default();
+        if unsafe_serializer_namespace_prefix(
+            &self.root_namespace_declarations,
+            &self.body_namespace_declarations,
+            stored,
+        )
+        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners))
+        .is_some()
+        {
+            return Ok(None);
+        }
+        Ok(Some(replay_nested_namespace_declarations(
+            &self.document.to_xml()?,
+            &nested_namespace_owners,
+        )?))
+    }
+
     fn flush_document_to_package(&mut self) -> Result<()> {
         // A read-only save with unsafe retained namespace shadows keeps the
         // producer's complete scopes and every retained raw subtree byte for

@@ -1422,6 +1422,19 @@ fn comparison_input(document: &Document) -> Result<Document> {
             retain_matching_drawing_namespaces(&mut candidate.document, &scoped_document);
         }
     }
+    // A save keeps an untouched body as stored, and the main-story helpers
+    // read the fixed `w:` prefix. A main story stored under another prefix is
+    // staged in its canonical form, while a `w:` one keeps its source bytes.
+    let fixed_prefix = candidate
+        .package
+        .get_part(&candidate.doc_part_name)
+        .and_then(|xml| std::str::from_utf8(xml).ok())
+        .is_some_and(|xml| root_prefix(xml, "document").is_ok_and(|prefix| prefix == "w"));
+    if !fixed_prefix && let Some(canonical) = candidate.canonical_main_story()? {
+        candidate
+            .package
+            .set_part(&candidate.doc_part_name, canonical);
+    }
     candidate.prepare_staged_package()?;
     let source = candidate
         .package

@@ -32926,6 +32926,76 @@ mod save_fidelity_regressions {
         assert!(reports[0].cryptographically_valid && reports[0].coverage_complete);
     }
 
+    #[cfg(all(feature = "digital-signatures", not(target_arch = "wasm32")))]
+    #[test]
+    fn respelling_a_nil_border_as_none_marks_a_retained_signature_invalidated() {
+        use rdocx::{BorderStyle, ParagraphBorderEdge};
+
+        // Model equality ignores the `nil` spelling, while the saved bytes
+        // change, so the signature check must follow the save's own rule.
+        let body = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:pBdr><w:top w:val="nil" w:sz="4" w:space="1" w:color="000000"/></w:pBdr></w:pPr><w:r><w:t>boxed</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let source = document_with_parts(&[("/word/document.xml", body)])
+            .to_bytes()
+            .unwrap();
+        let mut package = oxml_opc::OpcPackage::from_reader(Cursor::new(source)).unwrap();
+        package
+            .sign(
+                &signature_fixture("TEST_PRIVATE_KEY_PKCS8_BASE64"),
+                &signature_fixture("TEST_CERTIFICATE_DER_BASE64"),
+            )
+            .unwrap();
+        let mut signed = Cursor::new(Vec::new());
+        package.write_to(&mut signed).unwrap();
+
+        let mut document = Document::from_bytes(&signed.into_inner()).unwrap();
+        document.paragraph_mut(0).unwrap().set_border(
+            ParagraphBorderEdge::Top,
+            BorderStyle::None,
+            4,
+            "000000",
+        );
+        let saved = document.to_bytes().unwrap();
+
+        let body =
+            String::from_utf8(zip_entries(&saved).remove("word/document.xml").unwrap()).unwrap();
+        assert!(body.contains(NONE) && !body.contains(NIL), "{body}");
+        let package = oxml_opc::OpcPackage::from_reader(Cursor::new(saved)).unwrap();
+        assert!(package.package_rels.items.iter().any(|relationship| {
+            relationship.rel_type == "urn:rdocx:relationships/invalidated-package-signature"
+        }));
+    }
+
+    #[test]
+    fn comparing_untouched_documents_with_an_aliased_word_prefix_tracks_the_edit() {
+        // A save keeps an untouched body as stored, but comparison reads the
+        // main story in the canonical form with its fixed `w:` prefix.
+        let aliased = |text: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><q:document xmlns:q="{W_NS}"><q:body><q:p><q:r><q:t>{text}</q:t></q:r></q:p></q:body></q:document>"#
+            )
+        };
+        let mut original = document_with_parts(&[("/word/document.xml", aliased("old text"))]);
+        let edited = document_with_parts(&[("/word/document.xml", aliased("new text"))]);
+
+        let diagnostics = original
+            .compare(&edited, "Ada", "2026-09-04T09:00:00Z")
+            .unwrap();
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(!original.revisions().is_empty());
+        let mut accepted = Document::from_bytes(&original.to_bytes().unwrap()).unwrap();
+        accepted.accept_all().unwrap();
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-09-04T09:01:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(accepted.revisions().is_empty());
+    }
+
     #[test]
     fn a_text_replacement_rewrites_only_the_body() {
         let source = producer_package();

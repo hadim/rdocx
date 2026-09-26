@@ -62,7 +62,12 @@ presentation, slide, and notes-slide parts on every save, class conversion,
 encrypted save, signature operation, and staged commit, while rendering stages
 canonical bytes. Unless the save itself repairs identifiers, a no-op save
 therefore writes every part and relationship part byte for byte, and an
-untouched signed package keeps a valid signature.
+untouched signed package keeps a valid signature. The check that marks a
+retained signature invalidated flushes under the same rule, so a change model
+equality ignores, such as a `nil` border edge respelled as `none`, still
+invalidates it. Document comparison stages a main story stored under another
+Word prefix in its canonical form, because its story helpers read the fixed
+`w:` prefix.
 
 Modern presentation package identity is the main presentation part's exact
 content type. `oxml-opc` names the ordinary presentation, macro-enabled
