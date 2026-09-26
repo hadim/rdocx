@@ -208,9 +208,10 @@ pub struct RenderInput {
 /// One shape's text as the slide renderer lays it out, in points.
 ///
 /// Rectangles are in slide coordinates for the shape's unrotated frame, which
-/// moves with the shape's centre through any parent groups. Vertical text is
-/// reported in its reading frame, the content box turned a quarter turn about
-/// its centre, so `height` compares with `usable.height` in every direction.
+/// moves with the shape's centre through any parent groups and scales with a
+/// group that scales the drawn text. Vertical text is reported in its reading
+/// frame, the content box turned a quarter turn about its centre, so `height`
+/// compares with `usable.height` in every direction.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapeTextLayout {
     /// The shape's frame.
@@ -238,7 +239,7 @@ pub struct TextLineLayout {
     pub bounds: Rect,
     /// The baseline's vertical position.
     pub baseline: f64,
-    /// The largest run size on the line after autofit scaling.
+    /// The largest run size on the line as drawn, after autofit and group scaling.
     pub font_size: f64,
 }
 
@@ -358,7 +359,7 @@ pub fn layout_shape_text(
     text_directions: &[Vec<oxml_layout::TextDirection>],
     width_factor: f64,
 ) -> Result<ShapeTextLayout, RenderInputError> {
-    let (usable, _, stacked) = stack_shape_text(
+    let (usable, text_transform, stacked) = stack_shape_text(
         shape,
         text,
         font_manager,
@@ -366,37 +367,52 @@ pub fn layout_shape_text(
         text_directions,
         width_factor,
     )?;
-    let centre = Point {
-        x: shape.bounds.x + shape.bounds.width / 2.0,
-        y: shape.bounds.y + shape.bounds.height / 2.0,
+    let (half_width, half_height) = (shape.bounds.width / 2.0, shape.bounds.height / 2.0);
+    let placed = shape.group_transform.apply(Point {
+        x: shape.bounds.x + half_width,
+        y: shape.bounds.y + half_height,
+    });
+    // A transparent text box in a scaled group is laid out in child units and
+    // drawn through the group scale, so every offset from the centre and every
+    // size scales with the group. A rigid group transform has unit axis
+    // scales. The reading frame of vertical text swaps the physical axes.
+    let transform = shape.group_transform;
+    let physical = (
+        transform.a.hypot(transform.b),
+        transform.c.hypot(transform.d),
+    );
+    let reading = if text_transform.is_some() {
+        (physical.1, physical.0)
+    } else {
+        physical
     };
-    let placed = shape.group_transform.apply(centre);
-    let origin = Point {
-        x: shape.bounds.x + (placed.x - centre.x),
-        y: shape.bounds.y + (placed.y - centre.y),
-    };
-    let on_slide = |rect: Rect| Rect {
-        x: origin.x + rect.x,
-        y: origin.y + rect.y,
-        ..rect
+    let on_slide = |rect: Rect, (scale_x, scale_y): (f64, f64)| Rect {
+        x: placed.x + (rect.x - half_width) * scale_x,
+        y: placed.y + (rect.y - half_height) * scale_y,
+        width: rect.width * scale_x,
+        height: rect.height * scale_y,
     };
     Ok(ShapeTextLayout {
-        frame: Rect {
-            x: origin.x,
-            y: origin.y,
-            width: shape.bounds.width,
-            height: shape.bounds.height,
-        },
-        usable: on_slide(usable),
+        frame: on_slide(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: shape.bounds.width,
+                height: shape.bounds.height,
+            },
+            physical,
+        ),
+        usable: on_slide(usable, reading),
         font_scale: stacked.font_scale,
-        height: stacked.height,
+        height: stacked.height * reading.1,
         overflow: !stacked.fits(usable),
         lines: stacked
             .lines
             .into_iter()
             .map(|line| TextLineLayout {
-                bounds: on_slide(line.bounds),
-                baseline: origin.y + line.baseline,
+                bounds: on_slide(line.bounds, reading),
+                baseline: placed.y + (line.baseline - half_height) * reading.1,
+                font_size: line.font_size * reading.1,
                 ..line
             })
             .collect(),

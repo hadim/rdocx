@@ -997,17 +997,20 @@ PNG and PDF output.
 
 Values are points. Rectangles use slide coordinates for the shape's unrotated
 frame, the box `a:xfrm` describes before rotation and flips, moved with the
-shape's centre through its parent groups. `frame` is that box and `usable` is
-its text rectangle minus insets, where lines wrap. Vertical text is reported in
-its reading frame, the usable box turned a quarter turn about its centre, so its
-`height` compares with `usable.height` exactly as horizontal text does.
+shape's centre through its parent groups. A transparent text box inside a
+scaled group is laid out in child units and drawn through the group scale, so
+its rectangles, heights, baselines and sizes are reported scaled the same way.
+`frame` is that box and `usable` is its text rectangle minus insets, where
+lines wrap. Vertical text is reported in its reading frame, the usable box
+turned a quarter turn about its centre, so its `height` compares with
+`usable.height` exactly as horizontal text does.
 
 Each `TextLineLayout` gives its zero-based paragraph, its run and field text as
 drawn without the bullet marker, its bounds, its baseline, and the largest run
-point size on the line after autofit scaling. The bounds span every drawn item,
-bullet included, and the full line height. Rich spans appear in logical order,
-as extraction reads them. Line text keeps the spaces the renderer draws, so a
-line can begin or end with one.
+point size on the line as drawn, after autofit and group scaling. The bounds
+span every drawn item, bullet included, and the full line height. Rich spans
+appear in logical order, as extraction reads them. Line text keeps the spaces
+the renderer draws, so a line can begin or end with one.
 
 `overflow` applies the test the bare normal-autofit ladder uses to accept a
 candidate. Every line must fit its available width and the whole stack,

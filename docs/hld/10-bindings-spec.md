@@ -297,10 +297,11 @@ slide and draw order. Each carries its zero-based slide index, optional shape
 id and name, the effective autofit mode as `none`, `normal`, or `shape`,
 `frame` and `usable` `BoundingBox` values, `font_scale`, `height`, `overflow`,
 and a tuple of frozen `TextLineLayout` snapshots with paragraph index, text,
-bounds, baseline, and font size. Every value is a float in points, as in the
-rdocx `BoundingBox` and `LayoutFragment`, unlike the EMU `Length` values of
-`Shape` and `Font`. The call releases the GIL, and a width factor that is not
-finite and positive raises `RpptxError`, as an invalid raster DPI does.
+bounds, baseline, and font size. Every coordinate and size is a float in
+points, as in the rdocx `BoundingBox` and `LayoutFragment`, unlike the EMU
+`Length` values of `Shape` and `Font`. The call releases the GIL, and a width
+factor that is not finite and positive raises `RpptxError`, as an invalid
+raster DPI does.
 
 A `Slide` exposes optional speaker-note text as a readable and writable
 property. A successful notes assignment publishes the native staged mutation,

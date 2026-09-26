@@ -9696,6 +9696,100 @@ fn text_layout_lines_match_the_glyph_runs_the_renderer_draws() {
 }
 
 #[test]
+fn text_layout_places_a_text_box_in_a_scaled_group_where_its_runs_are_drawn() {
+    // The group doubles its child extent. A transparent text box keeps its
+    // child bounds and is drawn through the group scale, so the reported
+    // frame, lines and sizes must scale with it.
+    let presentation = text_layout_deck(
+        &format!(
+            r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="3" name="Scaled group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="4572000" y="914400"/><a:ext cx="4572000" cy="1828800"/><a:chOff x="0" y="0"/><a:chExt cx="2286000" cy="914400"/></a:xfrm></p:grpSpPr>{}</p:grpSp>"#,
+            text_layout_shape(
+                4,
+                "Scaled",
+                (0, 0, 2_286_000, 914_400),
+                "<a:bodyPr/>",
+                &text_layout_paragraphs(&["Scaled"], ""),
+            )
+        ),
+        "",
+    );
+    let (_, rendered) = presentation.render_deterministic().unwrap();
+    let mut drawn = Vec::new();
+    walk(&rendered.pages[0].elements, &mut |element, transform| {
+        let origin = match element {
+            PositionedElement::Text(run) => run.origin,
+            PositionedElement::MultilingualText(run) => run.origin,
+            _ => return,
+        };
+        drawn.push(transform.apply(origin));
+    });
+
+    let frames = presentation.text_layout_deterministic(1.0).unwrap();
+
+    let layout = &frames[0].layout;
+    assert_eq!(drawn.len(), 1);
+    assert_eq!(
+        layout.frame,
+        Rect {
+            x: 360.0,
+            y: 72.0,
+            width: 360.0,
+            height: 144.0,
+        }
+    );
+    assert!((drawn[0].x - layout.lines[0].bounds.x).abs() < 1.0e-9);
+    assert!((drawn[0].y - layout.lines[0].baseline).abs() < 1.0e-9);
+    assert_eq!(layout.lines[0].font_size, 36.0);
+    assert!(!layout.overflow && layout.height <= layout.usable.height);
+}
+
+#[test]
+fn text_layout_reports_vertical_text_in_its_reading_frame() {
+    // The group doubles only the width of its child, so the reading frame of
+    // the grouped vertical text must scale its height, the physical width.
+    let vertical = |id, name, frame| {
+        text_layout_shape(
+            id,
+            name,
+            frame,
+            &format!(r#"<a:bodyPr vert="vert" wrap="square" {TEXT_LAYOUT_NO_INSETS}/>"#),
+            &text_layout_paragraphs(&["Vertical"], ""),
+        )
+    };
+    let slide_shapes = [
+        vertical(2, "Vertical", (914_400, 914_400, 914_400, 3_657_600)),
+        format!(
+            r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="3" name="Widened group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="4572000" y="914400"/><a:ext cx="1828800" cy="3657600"/><a:chOff x="0" y="0"/><a:chExt cx="914400" cy="3657600"/></a:xfrm></p:grpSpPr>{}</p:grpSp>"#,
+            vertical(4, "Widened", (0, 0, 914_400, 3_657_600))
+        ),
+    ]
+    .concat();
+    let presentation = text_layout_deck(&slide_shapes, "");
+
+    let frames = presentation.text_layout_deterministic(1.0).unwrap();
+
+    let upright = &frames[0].layout;
+    assert_eq!((upright.frame.width, upright.frame.height), (72.0, 288.0));
+    assert_eq!((upright.usable.width, upright.usable.height), (288.0, 72.0));
+    assert!(!upright.overflow && upright.height <= upright.usable.height);
+    let widened = &frames[1].layout;
+    assert_eq!(
+        widened.frame,
+        Rect {
+            x: 360.0,
+            y: 72.0,
+            width: 144.0,
+            height: 288.0,
+        }
+    );
+    assert_eq!(
+        (widened.usable.width, widened.usable.height),
+        (288.0, 144.0)
+    );
+    assert!(!widened.overflow && widened.height <= widened.usable.height);
+}
+
+#[test]
 fn notes_and_handout_export_resolve_noncanonical_master_theme_and_media_targets() {
     let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
     assert!(
