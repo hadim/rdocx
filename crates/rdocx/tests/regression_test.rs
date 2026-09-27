@@ -12427,6 +12427,158 @@ mod content_control_read_walker_regressions {
             "outer\tfirst inner row\tsecond inner row\tafter\t\n"
         );
     }
+
+    fn picture(id: usize, name: &str) -> String {
+        format!(
+            r#"<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><wp:extent cx="1" cy="2"/><wp:docPr id="{id}" name="{name}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId{id}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+        )
+    }
+
+    /// A heading paragraph holding a word, an internal link and a picture.
+    fn probe_paragraph() -> String {
+        format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t xml:space="preserve">probe </w:t></w:r><w:hyperlink w:anchor="target"><w:r><w:t>link</w:t></w:r></w:hyperlink>{}</w:p>"#,
+            picture(7, "probe picture")
+        )
+    }
+
+    /// The same heading with its word and picture runs passed through `wrap`.
+    fn inline_probe_paragraph(wrap: impl Fn(&str) -> String) -> String {
+        let runs = format!(
+            r#"<w:r><w:t xml:space="preserve">probe </w:t></w:r>{}"#,
+            picture(7, "probe picture")
+        );
+        format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr>{}<w:hyperlink w:anchor="target"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p>"#,
+            wrap(&runs)
+        )
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Walked {
+        text: String,
+        images: Vec<(String, Option<String>)>,
+        word_count: usize,
+        headings: Vec<(u32, String)>,
+        links: Vec<(String, Option<String>)>,
+    }
+
+    fn walk(body: &str) -> Walked {
+        let document = document_with_content_controls(&wrap_word_body(body));
+        Walked {
+            text: document.text(),
+            images: document
+                .images()
+                .into_iter()
+                .map(|image| (image.embed_id, image.name))
+                .collect(),
+            word_count: document.word_count(),
+            headings: document.headings(),
+            links: document
+                .links()
+                .into_iter()
+                .map(|link| (link.text, link.anchor))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_content_control_hides_nothing_from_any_body_read_walker() {
+        let probe = probe_paragraph();
+        let in_cell = |content: &str| table(&row(&cell(content)));
+        // (location, wrapped body, the same body without the control, body level)
+        let locations = [
+            (
+                "body block control",
+                control("goog_rdk_1", &probe),
+                probe.clone(),
+                true,
+            ),
+            (
+                "nested body control",
+                control("outer", &control("goog_rdk_2", &probe)),
+                probe.clone(),
+                true,
+            ),
+            (
+                "inline control",
+                inline_probe_paragraph(|runs| control("goog_rdk_3", runs)),
+                inline_probe_paragraph(str::to_owned),
+                true,
+            ),
+            (
+                "nested inline control",
+                inline_probe_paragraph(|runs| control("outer", &control("goog_rdk_4", runs))),
+                inline_probe_paragraph(str::to_owned),
+                true,
+            ),
+            (
+                "cell control",
+                in_cell(&control("goog_rdk_5", &probe)),
+                in_cell(&probe),
+                false,
+            ),
+            (
+                "nested cell control",
+                in_cell(&control("outer", &control("goog_rdk_6", &probe))),
+                in_cell(&probe),
+                false,
+            ),
+            (
+                "row control around a cell",
+                table(&row(&control("goog_rdk_7", &cell(&probe)))),
+                in_cell(&probe),
+                false,
+            ),
+            (
+                "table control around a row",
+                table(&control("goog_rdk_8", &row(&cell(&probe)))),
+                in_cell(&probe),
+                false,
+            ),
+            (
+                "control in a nested table",
+                in_cell(&format!(
+                    "{}<w:p/>",
+                    in_cell(&control("goog_rdk_9", &probe))
+                )),
+                in_cell(&format!("{}<w:p/>", in_cell(&probe))),
+                false,
+            ),
+            (
+                "body control around a table",
+                control("goog_rdk_10", &in_cell(&probe)),
+                in_cell(&probe),
+                false,
+            ),
+        ];
+        for (location, wrapped, unwrapped, body_level) in locations {
+            let body = format!("{}{wrapped}{}", paragraph("before"), paragraph("end"));
+            let plain = format!("{}{unwrapped}{}", paragraph("before"), paragraph("end"));
+            let seen = walk(&body);
+            assert_eq!(seen, walk(&plain), "{location}");
+
+            assert!(seen.text.contains("probe link"), "{location}: text");
+            assert_eq!(seen.text.matches("probe").count(), 1, "{location}: text");
+            assert_eq!(
+                seen.images,
+                [("rId7".to_owned(), Some("probe picture".to_owned()))],
+                "{location}: images"
+            );
+            assert_eq!(seen.word_count, 4, "{location}: word count");
+            let (headings, links) = if body_level {
+                (
+                    vec![(2, "probe link".to_owned())],
+                    vec![("link".to_owned(), Some("target".to_owned()))],
+                )
+            } else {
+                // Headings and links do not search table cells.
+                (Vec::new(), Vec::new())
+            };
+            assert_eq!(seen.headings, headings, "{location}: headings");
+            assert_eq!(seen.links, links, "{location}: links");
+        }
+    }
 }
 
 fn ordered_reader_fixture() -> &'static str {
