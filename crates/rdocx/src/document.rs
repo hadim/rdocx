@@ -13088,7 +13088,7 @@ impl Document {
     }
 
     pub(crate) fn story_paragraph_mut(&mut self, location: &ContentLocation) -> Result<&mut CT_P> {
-        let (part_name, mut paragraph_index, cell_route) = {
+        let (part_name, paragraph_slot, cell_route) = {
             let (source, owner) = self.story_source_and_owner(&location.story)?;
             let part_name = source.part_name.clone();
             let source_xml = source.xml.into_owned();
@@ -13116,15 +13116,25 @@ impl Document {
                 }
                 .into());
             }
-            let paragraph_index = items[..item_index]
-                .iter()
-                .filter(|item| item.kind == StoryItemKind::Paragraph)
-                .count();
+            // A paragraph item is a direct child of its owner. In the body it
+            // resolves to its direct body slot, the count of direct items
+            // before it, and in a cell to its position among the cell's
+            // direct paragraphs. Neither counts the paragraphs inside a block
+            // content control. The body section properties are serialized
+            // last, so they never precede a paragraph.
+            let preceding = items[..item_index].iter();
+            let paragraph_slot = if location.story.kind == StoryKind::Body {
+                preceding.filter(|item| item.direct_owner_child).count()
+            } else {
+                preceding
+                    .filter(|item| item.kind == StoryItemKind::Paragraph)
+                    .count()
+            };
             let cell_route = (location.story.kind == StoryKind::TableCell
                 && part_name == self.doc_part_name)
                 .then(|| modeled_main_cell_route(&source_xml, &owner))
                 .transpose()?;
-            (part_name, paragraph_index, cell_route)
+            (part_name, paragraph_slot, cell_route)
         };
         if part_name != self.doc_part_name {
             return Err(Error::Other(
@@ -13132,10 +13142,10 @@ impl Document {
             ));
         }
         match location.story.kind {
-            StoryKind::Body => {
-                nth_paragraph_in_body(&mut self.document.body.content, &mut paragraph_index)
-                    .ok_or_else(|| Error::Other("comment body paragraph is missing".to_owned()))
-            }
+            StoryKind::Body => match self.document.body.content.get_mut(paragraph_slot) {
+                Some(BodyContent::Paragraph(paragraph)) => Ok(paragraph),
+                _ => Err(Error::Other("comment body paragraph is missing".to_owned())),
+            },
             StoryKind::TableCell => {
                 let (content_index, mut cell_index) = cell_route.ok_or_else(|| {
                     Error::Other("comment position has no modeled table-cell route".to_owned())
@@ -13154,7 +13164,13 @@ impl Document {
                     BodyContent::Paragraph(_) | BodyContent::RawXml(_) => None,
                 }
                 .ok_or_else(|| Error::Other("comment table cell is missing".to_owned()))?;
-                nth_paragraph_in_cell(cell, &mut paragraph_index)
+                cell.content
+                    .iter_mut()
+                    .filter_map(|child| match child {
+                        CellContent::Paragraph(paragraph) => Some(paragraph),
+                        CellContent::Table(_) | CellContent::ContentControl(_) => None,
+                    })
+                    .nth(paragraph_slot)
                     .ok_or_else(|| Error::Other("comment cell paragraph is missing".to_owned()))
             }
             _ => Err(Error::Other(

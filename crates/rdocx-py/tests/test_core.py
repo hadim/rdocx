@@ -1383,6 +1383,40 @@ def test_split_run_accepts_a_paragraph_handle_in_a_control_or_the_body():
     assert document.to_bytes() == before
 
 
+def test_story_comment_after_a_block_content_control_anchors_on_its_paragraph():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        "<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>Control one.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        "<w:p><w:r><w:t>Beta paragraph.</w:t></w:r></w:p>",
+    )
+    item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body"
+        and item.kind == "paragraph"
+        and item.text == "Beta paragraph."
+    )
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=item, run_index=0),
+            end=rdocx.StoryRunPosition(item=item, run_index=1),
+        ),
+        author="Ada",
+        text="Here",
+    )
+    xml = _document_xml(document).decode()
+    start = xml.index(f'commentRangeStart w:id="{comment_id}"')
+    end = xml.index(f'commentRangeEnd w:id="{comment_id}"')
+    assert re.findall(r"<w:t[^>]*>([^<]*)</w:t>", xml[start:end]) == [
+        "Beta paragraph."
+    ]
+
+
 def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     import rdocx
 

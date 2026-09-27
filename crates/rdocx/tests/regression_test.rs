@@ -1638,7 +1638,9 @@ fn checked_table_cell_comment_range_is_atomic_and_reopens() {
 /// child index, and every body API that takes an index must address the same
 /// paragraph with it, whatever tables or block content controls precede it.
 mod direct_body_index_coordinates {
-    use rdocx::{Document, RunPosition, RunRange};
+    use rdocx::{
+        Document, RunPosition, RunRange, StoryItemKind, StoryKind, StoryRunPosition, StoryRunRange,
+    };
 
     const TABLE: &str = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>c00</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>c01</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>c10</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>c11</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
     const CONTROL: &str = r#"<w:sdt><w:sdtPr><w:alias w:val="Block"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Control one.</w:t></w:r></w:p><w:p><w:r><w:t>Control two.</w:t></w:r></w:p></w:sdtContent></w:sdt>"#;
@@ -1808,6 +1810,64 @@ mod direct_body_index_coordinates {
             assert_eq!(named(name).direct_range(), None, "{name}");
         }
         assert_eq!(named("direct").direct_range(), Some(one_run_range(3)));
+    }
+
+    fn comment_on_story_paragraph(document: &mut Document, kind: StoryKind, text: &str) -> i32 {
+        let story = super::f254_story(document, kind);
+        let location = document
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                item.kind() == StoryItemKind::Paragraph
+                    && item.text().unwrap().as_deref() == Some(text)
+            })
+            .unwrap()
+            .location()
+            .clone();
+        document
+            .add_story_comment(
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "Here",
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn story_comment_after_a_block_content_control_anchors_on_its_paragraph() {
+        let mut document = document_from_body(&format!(
+            "{}{CONTROL}{}",
+            paragraph("Alpha."),
+            paragraph("Beta paragraph.")
+        ));
+        let id = comment_on_story_paragraph(&mut document, StoryKind::Body, "Beta paragraph.");
+        assert_eq!(commented_text(&mut document, id), "Beta paragraph.");
+    }
+
+    #[test]
+    fn story_comment_in_a_cell_after_a_block_content_control_anchors_on_its_paragraph() {
+        let mut document = document_from_body(&format!(
+            r#"<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>{CONTROL}{}</w:tc></w:tr></w:tbl>{}"#,
+            paragraph("Target cell paragraph."),
+            paragraph("After.")
+        ));
+        let id = comment_on_story_paragraph(
+            &mut document,
+            StoryKind::TableCell,
+            "Target cell paragraph.",
+        );
+        assert_eq!(commented_text(&mut document, id), "Target cell paragraph.");
     }
 }
 
