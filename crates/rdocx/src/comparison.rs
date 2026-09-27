@@ -5141,22 +5141,67 @@ fn deleted_text_xml(xml: &str) -> String {
 }
 
 fn complex_field_result(xml: &str) -> Result<(String, String, String)> {
-    let separate = xml
-        .find("fldCharType=\"separate\"")
-        .or_else(|| xml.find("fldCharType='separate'"))
+    let separate = field_character(xml, 0, "separate")
         .ok_or_else(|| Error::Other("complex field source has no separate boundary".to_owned()))?;
-    let (_, result_start) = containing_run(xml, separate)?;
-    let end_marker = xml[result_start..]
-        .find("fldCharType=\"end\"")
-        .or_else(|| xml[result_start..].find("fldCharType='end'"))
-        .map(|offset| result_start + offset)
+    // A producer may pack a whole field in one run, as Google Docs writes page
+    // fields. Ending a run after `separate` and starting one at `end` reads it
+    // as the same field written one run per part.
+    let xml = split_field_run(xml, separate, true)?;
+    let (_, result_start) = containing_run(&xml, separate)?;
+    let end_marker = field_character(&xml, result_start, "end")
         .ok_or_else(|| Error::Other("complex field source has no end boundary".to_owned()))?;
-    let (result_end, _) = containing_run(xml, end_marker)?;
+    let xml = split_field_run(&xml, end_marker, false)?;
+    // The split may have moved the `end` character further along.
+    let end_marker = field_character(&xml, result_start, "end")
+        .ok_or_else(|| Error::Other("complex field source has no end boundary".to_owned()))?;
+    let (result_end, _) = containing_run(&xml, end_marker)?;
     Ok((
         xml[..result_start].to_owned(),
         xml[result_start..result_end].to_owned(),
         xml[result_end..].to_owned(),
     ))
+}
+
+fn field_character(xml: &str, from: usize, kind: &str) -> Option<usize> {
+    let tail = &xml[from..];
+    tail.find(&format!("fldCharType=\"{kind}\""))
+        .or_else(|| tail.find(&format!("fldCharType='{kind}'")))
+        .map(|offset| from + offset)
+}
+
+/// Split the run holding the field character at `marker` so that the
+/// character ends its run (`after`) or starts it.
+///
+/// Both runs repeat the original start tag and run properties. A run with no
+/// content on that side of the character is returned unchanged.
+fn split_field_run(xml: &str, marker: usize, after: bool) -> Result<String> {
+    let (run_start, run_end) = containing_run(xml, marker)?;
+    let run = &xml[run_start..run_end];
+    let children = direct_element_spans(run)?;
+    let character = children
+        .iter()
+        .position(|child| child.contains(&(marker - run_start)))
+        .ok_or_else(|| Error::Other("complex field character is not a run child".to_owned()))?;
+    let is_properties = |child: &Range<usize>| {
+        let mut reader = Reader::from_reader(run[child.clone()].as_bytes());
+        matches!(
+            reader.read_event(),
+            Ok(Event::Start(element) | Event::Empty(element))
+                if element.local_name().as_ref() == b"rPr"
+        )
+    };
+    let first_content = usize::from(children.first().is_some_and(is_properties));
+    let split = if after { character + 1 } else { character };
+    if split <= first_content || split >= children.len() {
+        return Ok(xml.to_owned());
+    }
+    let head = &run[..children[first_content].start];
+    let close = run
+        .rfind("</")
+        .map(|at| &run[at..])
+        .ok_or_else(|| Error::Other("complex field run has no end tag".to_owned()))?;
+    let at = run_start + children[split].start;
+    Ok(format!("{}{close}{head}{}", &xml[..at], &xml[at..]))
 }
 
 fn containing_run(xml: &str, at: usize) -> Result<(usize, usize)> {
@@ -6360,7 +6405,8 @@ fn utf8_error(error: impl std::fmt::Display) -> Error {
 mod tests {
     use super::{
         ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING,
-        attributed_run_units, comparison_postcondition_error, story_document, word_fragments,
+        attributed_run_units, comparison_postcondition_error, complex_field_result, story_document,
+        word_fragments,
     };
     use crate::Document;
     use rdocx_oxml::document::BodyContent;
@@ -6450,6 +6496,36 @@ mod tests {
                 .sum::<usize>(),
             1
         );
+    }
+
+    #[test]
+    fn a_packed_field_result_is_read_as_one_run_per_part() {
+        for w in ["w", "q"] {
+            let shell = format!(r#"<{w}:r {w}:rsidR="00AB12CD"><{w}:rPr><{w}:b/></{w}:rPr>"#);
+            let close = format!("</{w}:r>");
+            let character = |kind: &str| format!(r#"<{w}:fldChar {w}:fldCharType="{kind}"/>"#);
+            let (begin, separate, end) =
+                (character("begin"), character("separate"), character("end"));
+            let code = format!("<{w}:instrText>PAGE</{w}:instrText>");
+            let result = format!("<{w}:t>1</{w}:t>");
+            let expected = (
+                format!("{shell}{begin}{code}{separate}{close}"),
+                format!("{shell}{result}{close}"),
+                format!("{shell}{end}{close}"),
+            );
+            for field in [
+                format!("{shell}{begin}{code}{separate}{result}{end}{close}"),
+                format!("{shell}{begin}{code}{separate}{close}{shell}{result}{end}{close}"),
+                format!("{}{}{}", expected.0, expected.1, expected.2),
+            ] {
+                assert_eq!(complex_field_result(&field).unwrap(), expected, "{field}");
+            }
+            let uncached = format!("{shell}{begin}{code}{separate}{end}{close}");
+            assert_eq!(
+                complex_field_result(&uncached).unwrap(),
+                (expected.0, String::new(), expected.2)
+            );
+        }
     }
 
     #[test]

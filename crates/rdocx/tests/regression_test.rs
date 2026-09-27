@@ -30715,6 +30715,102 @@ mod compare_producer_noise {
             );
         }
     }
+
+    fn document_with_footer(footer_paragraph: &str) -> Document {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part(
+            "/word/footer1.xml",
+            format!(r#"<w:ftr xmlns:w="{W_NS}">{footer_paragraph}</w:ftr>"#).into_bytes(),
+        );
+        package.content_types.add_override(
+            "/word/footer1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        );
+        let footer_id = package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(oxml_opc::relationship::rel_types::FOOTER, "footer1.xml");
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>Lorem ipsum dolor sit amet.</w:t></w:r></w:p><w:sectPr><w:footerReference w:type="default" r:id="{footer_id}"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn page_field(packed: bool, cached: bool) -> String {
+        let parts = [
+            r#"<w:fldChar w:fldCharType="begin"/>"#,
+            r#"<w:instrText xml:space="preserve"> PAGE </w:instrText>"#,
+            r#"<w:fldChar w:fldCharType="separate"/>"#,
+            if cached { "<w:t>1</w:t>" } else { "" },
+            r#"<w:fldChar w:fldCharType="end"/>"#,
+        ];
+        let field = if packed {
+            format!("<w:r>{}</w:r>", parts.concat())
+        } else {
+            parts
+                .iter()
+                .filter(|part| !part.is_empty())
+                .map(|part| format!("<w:r>{part}</w:r>"))
+                .collect()
+        };
+        format!(r#"<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r>{field}</w:p>"#)
+    }
+
+    /// Compare a footer field against its copy refreshed by `update_page_fields`.
+    fn refreshed_field_comparison(packed: bool, cached: bool) -> String {
+        let source = document_with_footer(&page_field(packed, cached))
+            .to_bytes()
+            .unwrap();
+        let mut refreshed = Document::from_bytes(&source).unwrap();
+        refreshed.update_page_fields().unwrap();
+        let refreshed = Document::from_bytes(&refreshed.to_bytes().unwrap()).unwrap();
+        let mut compared = Document::from_bytes(&source).unwrap();
+        let diagnostics = compared
+            .compare(&refreshed, "R", TIMESTAMP)
+            .unwrap_or_else(|error| panic!("packed={packed} cached={cached}: {error}"));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_resolutions(
+            &compared.to_bytes().unwrap(),
+            &Document::from_bytes(&source).unwrap(),
+            &refreshed,
+            &ComparisonOptions::default(),
+        );
+        comparison_part_xml(&mut compared, "/word/footer1.xml")
+    }
+
+    #[test]
+    fn a_packed_field_compares_like_the_same_field_split_into_runs() {
+        let separate = r#"<w:fldChar w:fldCharType="separate"/></w:r>"#;
+        let result_and_end = |footer: &str| footer[footer.find(separate).unwrap()..].to_owned();
+        for (cached, deleted) in [(true, "<w:r><w:delText>1</w:delText></w:r>"), (false, "")] {
+            let split = refreshed_field_comparison(false, cached);
+            let packed = refreshed_field_comparison(true, cached);
+            assert_eq!(
+                result_and_end(&split),
+                format!(
+                    r#"{separate}<w:del w:id="0" w:author="R" w:date="{TIMESTAMP}">{deleted}</w:del><w:ins w:id="1" w:author="R" w:date="{TIMESTAMP}"><w:r><w:t>1</w:t></w:r></w:ins><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>"#
+                ),
+                "cached={cached}"
+            );
+            assert_eq!(
+                result_and_end(&packed),
+                result_and_end(&split),
+                "cached={cached}"
+            );
+            assert!(
+                packed.contains(r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>"#),
+                "{packed}"
+            );
+        }
+    }
 }
 
 #[test]
