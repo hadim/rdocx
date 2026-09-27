@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use zip::ZipWriter;
 use zip::read::ZipArchive;
@@ -248,10 +248,21 @@ impl OpcPackage {
     }
 
     /// Save the OPC package to a file path.
+    ///
+    /// The complete ZIP is built in memory and published through
+    /// [`write_atomic_file`], so a failed save leaves an existing file as it
+    /// was.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let serialized = self.serialize()?;
-        let file = std::fs::File::create(path)?;
-        Self::write_serialized(file, serialized)
+        let mut output = std::io::Cursor::new(Vec::new());
+        self.write_to(&mut output)?;
+        write_atomic_file(
+            path.as_ref(),
+            output.get_ref(),
+            "oxml-opc",
+            "invalid package file name",
+            "could not allocate package save staging file",
+        )?;
+        Ok(())
     }
 
     /// Write the OPC package to any writer.
@@ -708,6 +719,199 @@ impl Default for OpcPackage {
     }
 }
 
+/// Replace the file at `path` with `bytes` through a synced sibling file.
+///
+/// The bytes are written to `.{file name}.{staging_tag}-{process id}-{attempt}.tmp`
+/// beside the file being replaced, synced, and renamed over it, so readers see
+/// the old file or the new one and never a partial write. A file name too long
+/// for that staging name is shortened in it. Any failure removes the staged
+/// file and leaves the destination as it was. A symbolic link at `path` is
+/// followed and kept, and the file it names is replaced. On Unix the
+/// replacement keeps the permission bits of the file it replaces, from the
+/// moment the staged file is created. The owner, extended attributes, and
+/// other hard links of that file are not carried over. A file this process
+/// cannot open for writing is refused and left as it was.
+///
+/// A path that names a device or a FIFO, such as `/dev/null`, has no file to
+/// replace. It takes the bytes in place, as a plain write would.
+///
+/// `staging_tag` is a fragment of a file name and must not contain a path
+/// separator.
+///
+/// # Errors
+///
+/// Returns `invalid_name_message` when `path` names no file, the error of
+/// opening the file to replace for writing, such as
+/// [`PermissionDenied`](std::io::ErrorKind::PermissionDenied) when it is
+/// read-only, an
+/// [`InvalidInput`](std::io::ErrorKind::InvalidInput) error when `path` goes
+/// through more than 40 symbolic links, `exhausted_message` when every staging
+/// name is taken, and the I/O error of a failed write, staging, sync, or
+/// rename.
+pub fn write_atomic_file(
+    path: &Path,
+    bytes: &[u8],
+    staging_tag: &str,
+    invalid_name_message: &'static str,
+    exhausted_message: &'static str,
+) -> std::io::Result<()> {
+    // Renaming over a device or a FIFO would put a regular file in its place.
+    // The kernel follows every link here, including /dev/stdout.
+    if std::fs::metadata(path).is_ok_and(|metadata| !metadata.is_file() && !metadata.is_dir()) {
+        return std::fs::write(path, bytes);
+    }
+    let path = resolve_symbolic_links(path)?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, invalid_name_message)
+    })?;
+    let existing = std::fs::metadata(&path).ok();
+    // A rename needs write access to the directory, not to the file it
+    // replaces. Opening the file for writing, without truncating it, refuses
+    // the files the in-place write refused, such as a read-only file or
+    // another user's file.
+    if existing.as_ref().is_some_and(std::fs::Metadata::is_file) {
+        std::fs::OpenOptions::new().write(true).open(&path)?;
+    }
+    // Only Unix mode bits carry over. On Windows the staged file keeps its
+    // default attributes.
+    let permissions = existing
+        .filter(|_| cfg!(unix))
+        .map(|metadata| metadata.permissions());
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    // Creating the staged file with the kept mode means it is never more open
+    // than the file it replaces. The umask can narrow that mode, so it is set
+    // again once the file exists.
+    #[cfg(unix)]
+    if let Some(permissions) = &permissions {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        options.mode(permissions.mode());
+    }
+    // wasm targets have no process id, and std panics when asked for one. The
+    // retry below covers two processes that share a staging name.
+    let process_id = if cfg!(target_family = "wasm") {
+        0
+    } else {
+        std::process::id()
+    };
+    for attempt in 0..128_u8 {
+        let temporary = parent.join(staging_file_name(
+            file_name,
+            &format!(".{staging_tag}-{process_id}-{attempt}.tmp"),
+        ));
+        let mut file = match options.open(&temporary) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = permissions
+            .clone()
+            .map_or(Ok(()), |permissions| file.set_permissions(permissions))
+            .and_then(|()| file.write_all(bytes))
+            .and_then(|()| file.sync_all());
+        drop(file);
+        let result = result.and_then(|()| replace_file(&temporary, &path));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        return result;
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        exhausted_message,
+    ))
+}
+
+/// Name a staged file `.{file name}{suffix}`, keeping it within 255 bytes.
+///
+/// Common file systems refuse a longer name, so a long file name keeps only
+/// the prefix that fits, cut on a character boundary.
+fn staging_file_name(file_name: &std::ffi::OsStr, suffix: &str) -> std::ffi::OsString {
+    let available = 255_usize.saturating_sub(1 + suffix.len());
+    let mut name = std::ffi::OsString::from(".");
+    if file_name.len() <= available {
+        name.push(file_name);
+    } else {
+        let file_name = file_name.to_string_lossy();
+        let mut end = available.min(file_name.len());
+        while !file_name.is_char_boundary(end) {
+            end -= 1;
+        }
+        name.push(&file_name[..end]);
+    }
+    name.push(suffix);
+    name
+}
+
+/// Follow symbolic links from `path` to the file a save replaces.
+///
+/// A relative link target resolves against the directory holding the link,
+/// and a dangling link resolves to the missing file it names.
+fn resolve_symbolic_links(path: &Path) -> std::io::Result<PathBuf> {
+    let mut resolved = path.to_path_buf();
+    // Up to 40 links are followed, the Linux limit, so 41 paths are checked.
+    // A longer chain is treated as a loop.
+    for _ in 0..=40 {
+        match std::fs::symlink_metadata(&resolved) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let target = std::fs::read_link(&resolved)?;
+                resolved = match resolved.parent() {
+                    Some(parent) => parent.join(target),
+                    None => target,
+                };
+            }
+            _ => return Ok(resolved),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "too many levels of symbolic links",
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both path buffers are NUL-terminated and remain alive for the call.
+    let replaced = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 fn docx_package() -> OpcPackage {
     let mut package = OpcPackage::with_main_part(
@@ -961,6 +1165,246 @@ mod tests {
         ));
         assert_eq!(std::fs::read(&destination).unwrap(), b"sentinel");
         std::fs::remove_file(destination).unwrap();
+    }
+
+    fn save_test_directory(label: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("oxml-opc-save-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    fn staging_files(directory: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "tmp"))
+            .collect()
+    }
+
+    fn package_bytes(package: &OpcPackage) -> Vec<u8> {
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        output.into_inner()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_an_existing_file_by_rename_and_keeps_its_mode() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let directory = save_test_directory("rename");
+        let destination = directory.join("existing.docx");
+        std::fs::write(&destination, b"previous bytes").unwrap();
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let previous_inode = std::fs::metadata(&destination).unwrap().ino();
+
+        let package = docx_package();
+        package.save(&destination).unwrap();
+
+        // A new inode shows the file was replaced by rename, not rewritten in place.
+        let metadata = std::fs::metadata(&destination).unwrap();
+        assert_ne!(metadata.ino(), previous_inode);
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            package_bytes(&package)
+        );
+        assert!(staging_files(&directory).is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_through_a_symbolic_link_replaces_the_file_it_names() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = save_test_directory("symlink");
+        let links = directory.join("links");
+        std::fs::create_dir(&links).unwrap();
+        let target = directory.join("target.docx");
+        std::fs::write(&target, b"previous bytes").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let link = links.join("link.docx");
+        std::os::unix::fs::symlink("../target.docx", &link).unwrap();
+
+        let package = docx_package();
+        package.save(&link).unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            Path::new("../target.docx")
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), package_bytes(&package));
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
+            0o640
+        );
+
+        // A dangling link names the file the save creates.
+        std::fs::remove_file(&target).unwrap();
+        package.save(&link).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), package_bytes(&package));
+
+        // A chain of 40 links is followed, and one more link is refused as a loop.
+        std::fs::remove_file(&target).unwrap();
+        let mut head = target.clone();
+        for index in 0..40 {
+            let chained = links.join(format!("chain-{index}.docx"));
+            std::os::unix::fs::symlink(&head, &chained).unwrap();
+            head = chained;
+        }
+        package.save(&head).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), package_bytes(&package));
+        let too_long = links.join("chain-40.docx");
+        std::os::unix::fs::symlink(&head, &too_long).unwrap();
+        assert!(package.save(&too_long).is_err());
+        assert!(staging_files(&directory).is_empty());
+        assert!(staging_files(&links).is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_save_keeps_the_destination_and_leaves_no_staging_file() {
+        let directory = save_test_directory("failure");
+
+        // Renaming the staged file over a directory fails after staging.
+        let occupied = directory.join("directory.docx");
+        std::fs::create_dir(&occupied).unwrap();
+        std::fs::write(occupied.join("inner.xml"), b"inner bytes").unwrap();
+        assert!(docx_package().save(&occupied).is_err());
+        assert_eq!(
+            std::fs::read(occupied.join("inner.xml")).unwrap(),
+            b"inner bytes"
+        );
+        assert!(staging_files(&directory).is_empty());
+
+        // Exhausted staging names fail before the destination is touched.
+        let destination = directory.join("existing.docx");
+        std::fs::write(&destination, b"previous bytes").unwrap();
+        for attempt in 0..128_u8 {
+            let staging = directory.join(format!(
+                ".existing.docx.oxml-opc-{}-{attempt}.tmp",
+                std::process::id()
+            ));
+            std::fs::write(staging, b"occupied").unwrap();
+        }
+        let error = docx_package().save(&destination).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("could not allocate package save staging file"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), b"previous bytes");
+        assert_eq!(staging_files(&directory).len(), 128);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_to_a_device_or_fifo_writes_in_place_and_keeps_the_node() {
+        use std::os::unix::fs::FileTypeExt as _;
+
+        let package = docx_package();
+        package.save("/dev/null").unwrap();
+        assert!(
+            std::fs::metadata("/dev/null")
+                .unwrap()
+                .file_type()
+                .is_char_device()
+        );
+
+        let directory = save_test_directory("fifo");
+        let fifo = directory.join("pipe.docx");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let reader = {
+            let fifo = fifo.clone();
+            std::thread::spawn(move || std::fs::read(fifo).unwrap())
+        };
+        package.save(&fifo).unwrap();
+        // Checked before the join, so a save that replaced the FIFO fails here
+        // instead of leaving the test waiting on a reader that never gets data.
+        assert!(
+            std::fs::symlink_metadata(&fifo)
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
+        assert_eq!(reader.join().unwrap(), package_bytes(&package));
+        assert!(staging_files(&directory).is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_refuses_a_read_only_file_and_leaves_it_as_it_was() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = save_test_directory("read-only");
+        let destination = directory.join("protected.docx");
+        std::fs::write(&destination, b"previous bytes").unwrap();
+        // 0o464 leaves write bits for the group but none for the owner, who
+        // cannot write the file either.
+        for mode in [0o444, 0o464] {
+            std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(mode)).unwrap();
+            // Root writes a read-only file in place, so it may replace it too.
+            if std::fs::OpenOptions::new()
+                .write(true)
+                .open(&destination)
+                .is_ok()
+            {
+                continue;
+            }
+            let error = docx_package().save(&destination).unwrap_err();
+            assert!(
+                matches!(&error, OpcError::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied),
+                "{mode:o}: {error}"
+            );
+            assert_eq!(std::fs::read(&destination).unwrap(), b"previous bytes");
+        }
+        assert!(staging_files(&directory).is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    // Unix only: on Windows the full path passes MAX_PATH, and the MoveFileExW
+    // rename takes it without the `\\?\` prefix that std adds for long paths.
+    #[cfg(unix)]
+    #[test]
+    fn save_shortens_the_staging_name_of_a_long_file_name() {
+        let directory = save_test_directory("long-name");
+        // A name of 255 bytes in 235 characters fills the limit of ext4 and APFS.
+        // The shortened staging name ends inside the run of three-byte
+        // characters, so it has to cut on a character boundary.
+        let destination =
+            directory.join(format!("{}{}.docx", "a".repeat(220), "\u{6587}".repeat(10)));
+        let package = docx_package();
+        package.save(&destination).unwrap();
+        std::fs::write(&destination, b"previous bytes").unwrap();
+        package.save(&destination).unwrap();
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            package_bytes(&package)
+        );
+        assert!(staging_files(&directory).is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
