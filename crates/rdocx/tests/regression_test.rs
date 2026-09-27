@@ -30572,6 +30572,175 @@ fn no_op_save_preserves_every_unchanged_part() {
     assert_eq!(changed, ["word/document.xml"]);
 }
 
+/// Part roots written by Word and Google Docs survive a save (#160, section
+/// 3). An unchanged comments part keeps its bytes, so a document compares
+/// against its own save.
+mod producer_part_roots_survive_save {
+    use super::*;
+    use rdocx::RevisionKind;
+
+    const TIMESTAMP: &str = "2026-09-27T12:00:00Z";
+    const COMMENTS: (&str, &str) = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+        oxml_opc::relationship::rel_types::COMMENTS,
+    );
+    /// The root declarations of the reproduction in #160, as Word writes them.
+    const WORD_ROOT: &str = concat!(
+        r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" "#,
+        r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" "#,
+        r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+        r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" "#,
+        r#"xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" "#,
+        r#"mc:Ignorable="w14 w15""#,
+    );
+    const DECLARATION: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
+
+    /// A document package with the given main part (or rdocx's own), plus
+    /// parts related from it as `(relationship id, part, kind, xml)`.
+    fn package_with(
+        document_xml: Option<&str>,
+        parts: &[(&str, &str, (&str, &str), &str)],
+    ) -> Vec<u8> {
+        let mut seed = Document::new();
+        seed.add_paragraph("Lorem ipsum dolor.");
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        if let Some(xml) = document_xml {
+            package.set_part("/word/document.xml", xml.as_bytes().to_vec());
+        }
+        for (id, part, (content_type, relationship_type), xml) in parts {
+            package.set_part(part, xml.as_bytes().to_vec());
+            package.content_types.add_override(part, content_type);
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .add_with_id(id, relationship_type, part.trim_start_matches("/word/"));
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
+
+    fn part(package: &[u8], name: &str) -> String {
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(package)).unwrap();
+        String::from_utf8(package.get_part(name).unwrap().to_vec()).unwrap()
+    }
+
+    /// The parts whose bytes differ between two packages with the same parts.
+    fn changed_parts(source: &[u8], saved: &[u8]) -> Vec<String> {
+        let (source, saved) = (zip_entries(source), zip_entries(saved));
+        assert_eq!(
+            source.keys().collect::<Vec<_>>(),
+            saved.keys().collect::<Vec<_>>()
+        );
+        source
+            .into_iter()
+            .filter(|(name, bytes)| saved.get(name) != Some(bytes))
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    fn revision_kinds(original: &[u8], edited: &[u8]) -> Vec<RevisionKind> {
+        let mut compared = Document::from_bytes(original).unwrap();
+        compared
+            .compare(&Document::from_bytes(edited).unwrap(), "R", TIMESTAMP)
+            .unwrap();
+        compared
+            .revisions()
+            .iter()
+            .map(|revision| revision.kind())
+            .collect()
+    }
+
+    fn edited_save(source: &[u8], old: &str, new: &str, expected: usize) -> Vec<u8> {
+        let mut document = Document::from_bytes(source).unwrap();
+        assert_eq!(document.try_replace_text(old, new).unwrap(), expected);
+        document.to_bytes().unwrap()
+    }
+
+    /// The reproduction of #160 section 3, with the self-closed root it
+    /// reports, the open and close pair of the #158 report fixture, and that
+    /// fixture's unused default namespace.
+    #[test]
+    fn empty_comments_part_keeps_its_bytes_and_compares_against_its_own_save() {
+        for comments in [
+            format!("{DECLARATION}<w:comments {WORD_ROOT}/>"),
+            format!("{DECLARATION}<w:comments {WORD_ROOT}></w:comments>"),
+            format!(
+                r#"{DECLARATION}<w:comments {WORD_ROOT} xmlns="http://schemas.microsoft.com/office/tasks/2019/documenttasks"></w:comments>"#
+            ),
+        ] {
+            let source = package_with(
+                None,
+                &[("rId99", "/word/comments.xml", COMMENTS, &comments)],
+            );
+
+            let saved = Document::from_bytes(&source).unwrap().to_bytes().unwrap();
+            assert_eq!(
+                changed_parts(&source, &saved),
+                Vec::<String>::new(),
+                "{comments}"
+            );
+            assert_eq!(revision_kinds(&source, &saved), []);
+
+            let edited = edited_save(&source, "Lorem", "LOREM", 1);
+            assert_eq!(part(&edited, "/word/comments.xml"), comments);
+            assert_eq!(
+                revision_kinds(&source, &edited),
+                [RevisionKind::Deletion, RevisionKind::Insertion]
+            );
+        }
+    }
+
+    /// A Word document with one comment. Word writes `w:id` first on the
+    /// comment and `w14:paraId` on its paragraph, and rdocx writes neither
+    /// that way.
+    fn word_comment_package() -> (Vec<u8>, String) {
+        let document = format!(
+            concat!(
+                "{}<w:document {}><w:body><w:p w14:paraId=\"1A2B3C4D\" w14:textId=\"77777777\">",
+                "<w:commentRangeStart w:id=\"0\"/><w:r><w:t>Lorem</w:t></w:r>",
+                "<w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r>",
+                "<w:r><w:t xml:space=\"preserve\"> ipsum dolor.</w:t></w:r></w:p>",
+                "<w:sectPr/></w:body></w:document>",
+            ),
+            DECLARATION, WORD_ROOT
+        );
+        let comments = format!(
+            concat!(
+                "{}<w:comments {}><w:comment w:id=\"0\" w:author=\"Ada\" ",
+                "w:date=\"2026-09-27T10:00:00Z\" w:initials=\"AL\">",
+                "<w:p w14:paraId=\"5E6F7A8B\" w14:textId=\"77777777\"><w:r><w:t>Check this.</w:t></w:r></w:p>",
+                "</w:comment></w:comments>",
+            ),
+            DECLARATION, WORD_ROOT
+        );
+        let source = package_with(
+            Some(&document),
+            &[("rId99", "/word/comments.xml", COMMENTS, &comments)],
+        );
+        (source, comments)
+    }
+
+    /// A rewrite of the unchanged part made compare refuse any Word file with
+    /// comments against its own save.
+    #[test]
+    fn word_comments_keep_their_bytes_through_a_body_edit() {
+        let (source, comments) = word_comment_package();
+
+        let saved = Document::from_bytes(&source).unwrap().to_bytes().unwrap();
+        assert_eq!(changed_parts(&source, &saved), Vec::<String>::new());
+        assert_eq!(revision_kinds(&source, &saved), []);
+
+        let edited = edited_save(&source, "dolor", "DOLOR", 1);
+        assert_eq!(part(&edited, "/word/comments.xml"), comments);
+        assert_eq!(
+            revision_kinds(&source, &edited),
+            [RevisionKind::Deletion, RevisionKind::Insertion]
+        );
+    }
+}
+
 mod f265_run_property_regressions {
     use super::*;
     use rdocx::RunFontSlot;

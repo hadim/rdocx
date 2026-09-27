@@ -11316,6 +11316,46 @@ fn comments_part_uses_its_existing_relationship_target() {
     let mut input = std::io::Cursor::new(Vec::new());
     package.write_to(&mut input).unwrap();
     let mut document = Document::from_bytes(input.get_ref()).unwrap();
+
+    // Without a comment edit, every output keeps the producer part byte for
+    // byte at its target, so the package signature over it stays valid.
+    // F-255 wrote the typed model here on every save, which made compare
+    // refuse a document against its own save (#160).
+    let saved = document.to_bytes().unwrap();
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert!(saved_package.get_part("/word/comments.xml").is_none());
+    assert_eq!(
+        saved_package.get_part("/custom/comments-data.xml"),
+        Some(comments_xml.as_slice())
+    );
+    assert!(
+        !flat_opc_package_class_tests::has_package_signature_invalidation_marker(&saved_package)
+    );
+    let flat = document.to_flat_opc_bytes().unwrap();
+    let flat_xml = std::str::from_utf8(&flat).unwrap();
+    assert!(flat_xml.contains("<x:comments"), "{flat_xml}");
+    assert!(!flat_xml.contains("urn:rdocx:relationships/invalidated-package-signature"));
+
+    // A comment edit writes the typed model back to that same target, with
+    // the fixed `w:` root and every raw child, identically through ZIP and
+    // Flat OPC.
+    document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "edited",
+        )
+        .unwrap();
     let assert_canonical_package = |saved_package: &OpcPackage| {
         assert!(saved_package.get_part("/word/comments.xml").is_none());
         assert_eq!(
