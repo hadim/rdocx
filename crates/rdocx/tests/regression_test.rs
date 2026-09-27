@@ -23816,6 +23816,214 @@ fn granular_hyperlink_edits_preserve_the_owner_shell() {
     );
 }
 
+/// Words inserted or deleted outside a hyperlink or an inline control move
+/// its boundaries, which the word and character paths follow (#161).
+#[test]
+fn granular_edits_beside_a_shell_move_its_boundaries() {
+    let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    let link = |text: &str| {
+        format!(r#"<w:hyperlink w:anchor="target"><w:r><w:t>{text}</w:t></w:r></w:hyperlink>"#)
+    };
+    let control = |text: &str| {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="keep"/></w:sdtPr><w:sdtContent><w:r><w:t>{text}</w:t></w:r></w:sdtContent></w:sdt>"#
+        )
+    };
+    let paragraph = |parts: &[String]| wrap_word_body(&format!("<w:p>{}</w:p>", parts.concat()));
+    let compare = |original_xml: &str, edited_xml: &str, options: &rdocx::ComparisonOptions| {
+        let mut tracked = document_with_content_controls(original_xml);
+        tracked
+            .compare_with_options(
+                &document_with_content_controls(edited_xml),
+                "Ada",
+                "2026-09-04T09:00:00Z",
+                options,
+            )
+            .map(|diagnostics| {
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+                tracked
+            })
+    };
+    // The redline, after checking that accepting and rejecting it give the
+    // edited and the original side with no revision left.
+    let redline = |original_xml: &str, edited_xml: &str, options: &rdocx::ComparisonOptions| {
+        let mut tracked = compare(original_xml, edited_xml, options)
+            .unwrap_or_else(|error| panic!("{:?}: {edited_xml}: {error}", options.granularity));
+        let bytes = tracked.to_bytes().unwrap();
+        for (resolve, expected_xml) in [
+            (
+                Document::accept_all as fn(&mut Document) -> rdocx::Result<usize>,
+                edited_xml,
+            ),
+            (Document::reject_all, original_xml),
+        ] {
+            let mut resolved = Document::from_bytes(&bytes).unwrap();
+            resolve(&mut resolved).unwrap();
+            let diagnostics = resolved
+                .compare_with_options(
+                    &document_with_content_controls(expected_xml),
+                    "postcondition",
+                    "2026-09-04T09:01:00Z",
+                    options,
+                )
+                .unwrap();
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert!(resolved.revisions().is_empty(), "{expected_xml}");
+        }
+        document_xml(&mut tracked)
+    };
+    let cases = [
+        // Word writes an inserted word in a run of its own, other producers
+        // in the run it extends.
+        (
+            vec![run("see "), link("site")],
+            vec![run("please see "), link("site")],
+        ),
+        (
+            vec![run("see "), link("site")],
+            vec![run("please "), run("see "), link("site")],
+        ),
+        (
+            vec![run("please see "), link("site")],
+            vec![run("see "), link("site")],
+        ),
+        // At character granularity the "s" of "see" must not match the one
+        // of "site".
+        (vec![run("see "), link("site")], vec![link("site")]),
+        (
+            vec![run("see "), link("site")],
+            vec![run("see "), link("site"), run(" now")],
+        ),
+        (
+            vec![run("see "), link("site"), run(", now")],
+            vec![run("see "), link("site"), run(" today, now")],
+        ),
+        (
+            vec![run("see "), link("site"), run("now")],
+            vec![run("see "), link("site"), run("right now")],
+        ),
+        (
+            vec![link("one"), run(" and "), link("two")],
+            vec![link("one"), run(" and also "), link("two")],
+        ),
+        (
+            vec![run("see "), control("field"), run(" now")],
+            vec![run("please see "), control("field"), run(" now")],
+        ),
+        (
+            vec![run("see "), control("field"), run(" now")],
+            vec![run("please "), run("see "), control("field"), run(" now")],
+        ),
+        // The spaces on both sides of a control must not match each other.
+        (
+            vec![run("Enter "), control("field"), run(" today")],
+            vec![run("Enter it "), control("field"), run(" today")],
+        ),
+        (
+            vec![run("Your name "), control("field"), run(" here")],
+            vec![run("Your name is "), control("field"), run(" here")],
+        ),
+        (
+            vec![run("see "), control("field"), run(" now")],
+            vec![run("see the "), control("field"), run(" now")],
+        ),
+        (
+            vec![run("see the "), control("field"), run(" now")],
+            vec![run("see "), control("field"), run(" now")],
+        ),
+        (
+            vec![run("see "), control("field"), run("now")],
+            vec![run("see "), control("field"), run("right now")],
+        ),
+        (
+            vec![run("see "), control("field"), run(" now")],
+            vec![run("see "), control("field")],
+        ),
+    ];
+    for granularity in [
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Character,
+    ] {
+        let options = rdocx::ComparisonOptions {
+            granularity,
+            ..Default::default()
+        };
+        for (original, edited) in &cases {
+            let xml = redline(&paragraph(original), &paragraph(edited), &options);
+            for (open, close) in [("<w:hyperlink ", "</w:hyperlink>"), ("<w:sdt>", "</w:sdt>")] {
+                assert_eq!(
+                    xml.matches(open).count(),
+                    original.concat().matches(open).count(),
+                    "{xml}"
+                );
+                for (start, _) in xml.match_indices(open) {
+                    let shell = &xml[start..start + xml[start..].find(close).unwrap()];
+                    assert!(
+                        !shell.contains("<w:ins ") && !shell.contains("<w:del "),
+                        "{xml}"
+                    );
+                }
+            }
+        }
+
+        // Text inserted at the start of a hyperlink goes inside it, and a
+        // word moved into a hyperlink is deleted outside and inserted inside.
+        for (original, edited, deleted_after) in [
+            (
+                paragraph(&[run("see "), link("site")]),
+                paragraph(&[run("see "), link("my site")]),
+                false,
+            ),
+            (
+                paragraph(&[link("see"), run(" site")]),
+                paragraph(&[link("see site")]),
+                true,
+            ),
+        ] {
+            let xml = redline(&original, &edited, &options);
+            let (open, close) = (
+                xml.find("<w:hyperlink ").unwrap(),
+                xml.find("</w:hyperlink>").unwrap(),
+            );
+            let (before, shell, after) = (&xml[..open], &xml[open..close], &xml[close..]);
+            assert!(
+                shell.contains("<w:ins ") && !shell.contains("<w:del "),
+                "{xml}"
+            );
+            assert!(
+                !before.contains("<w:ins ") && !before.contains("<w:del "),
+                "{xml}"
+            );
+            assert!(!after.contains("<w:ins "), "{xml}");
+            assert_eq!(after.contains("<w:del "), deleted_after, "{xml}");
+        }
+
+        // Text between two shells with no original run between them, or
+        // before a hyperlink that opens its paragraph, has no original bytes
+        // to be written between.
+        for (original, edited) in [
+            (
+                paragraph(&[link("one"), link("two")]),
+                paragraph(&[link("one"), run(" and "), link("two")]),
+            ),
+            (
+                paragraph(&[link("site")]),
+                paragraph(&[run("see "), link("site")]),
+            ),
+        ] {
+            let error = compare(&original, &edited, &options)
+                .err()
+                .unwrap_or_else(|| panic!("{granularity:?}: {edited}"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("cannot revise paragraph boundary structures at body/paragraph[0]"),
+                "{error}"
+            );
+        }
+    }
+}
+
 #[test]
 fn inline_control_runs_use_granularity_and_left_biased_ignores() {
     let control = |text: &str| {

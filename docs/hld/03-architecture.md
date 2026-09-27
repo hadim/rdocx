@@ -915,7 +915,12 @@ is producer identity and not part of its shell, so controls that differ only
 by it align, compare, and keep the original `w:sdtPr`. Attributed text
 alignment retains owner, formatting, content position, and raw-child
 boundaries, then coalesces adjacent equal-owner edits into minimal revision
-wrappers.
+wrappers. That alignment runs separately between consecutive hyperlink and
+inline-control boundaries, so no text matches across a shell and words
+inserted or deleted beside a shell move it. Text inserted between two
+boundaries with no original run between them, such as before a hyperlink
+that opens its paragraph, has no original bytes to go between and refuses
+the pair.
 When a main story gains a trailing run of paragraphs, comparison marks the
 original final paragraph boundary once, marks each intermediate inserted
 paragraph boundary once, and leaves the final inserted paragraph mark as the

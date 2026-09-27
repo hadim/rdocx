@@ -2975,15 +2975,27 @@ fn compare_granular_paragraph(
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
+    let control_slots = |paragraph: &CT_P| {
+        paragraph
+            .content_controls
+            .iter()
+            .map(|(_, raw_before, markers_before, _)| (*raw_before, *markers_before))
+            .collect::<Vec<_>>()
+    };
+    let boundary_error = || {
+        Error::Other(format!(
+            "comparison cannot revise paragraph boundary structures at {location}"
+        ))
+    };
     if hyperlink_shells(original, metadata.options) != hyperlink_shells(edited, metadata.options)
         || (!metadata.options.ignore_comments && original.comment_ranges != edited.comment_ranges)
         || original.bookmark_markers != edited.bookmark_markers
-        || paragraph_control_boundaries(original) != paragraph_control_boundaries(edited)
+        || control_slots(original) != control_slots(edited)
     {
-        return Err(Error::Other(format!(
-            "comparison cannot revise paragraph boundary structures at {location}"
-        )));
+        return Err(boundary_error());
     }
+    let original_boundaries = shell_run_boundaries(original);
+    let edited_boundaries = shell_run_boundaries(edited);
 
     let original_run_signatures = original
         .runs
@@ -2997,6 +3009,7 @@ fn compare_granular_paragraph(
         .collect::<Vec<_>>();
     if original_run_signatures == edited_run_signatures
         && original.content_controls == edited.content_controls
+        && original_boundaries == edited_boundaries
     {
         let properties =
             paragraph_properties_xml(original, edited, location, metadata, diagnostics)?;
@@ -3050,7 +3063,23 @@ fn compare_granular_paragraph(
         .collect::<Vec<_>>();
 
     let properties = paragraph_properties_xml(original, edited, location, metadata, diagnostics)?;
-    let aligned = align(&original_signatures, &edited_signatures);
+    let Some(cuts) = shell_unit_cuts(
+        &original_units,
+        &edited_units,
+        original_boundaries.into_iter().zip(edited_boundaries),
+    ) else {
+        return Err(boundary_error());
+    };
+    let (aligned, segments) = align_between_shells(&original_signatures, &edited_signatures, &cuts);
+    // The original run each shell segment starts at, before which the
+    // redline copies the original bytes, shell tags included.
+    let segment_runs = std::iter::once(0)
+        .chain(cuts.iter().map(|&(cut, _)| {
+            original_units
+                .get(cut)
+                .map_or(original.runs.len(), |unit| unit.owner)
+        }))
+        .collect::<Vec<_>>();
     if !metadata.options.ignore_fields {
         validate_field_alignment(
             &aligned,
@@ -3075,10 +3104,12 @@ fn compare_granular_paragraph(
         &edited_signatures,
     );
     let mut grouped_alignment = Vec::with_capacity(grouped.len());
+    let mut grouped_segment_runs = Vec::with_capacity(grouped.len());
     let mut replacements = Vec::with_capacity(grouped.len());
     for (action, members) in grouped {
         let first = aligned[members.start];
         grouped_alignment.push(first);
+        grouped_segment_runs.push(segment_runs[segments[members.start]]);
         let left_indices = members
             .clone()
             .filter_map(|index| aligned[index].0)
@@ -3139,6 +3170,7 @@ fn compare_granular_paragraph(
         &original_units,
         &edited_units,
         &grouped_alignment,
+        &grouped_segment_runs,
         &replacements,
         &properties,
         location,
@@ -3147,13 +3179,15 @@ fn compare_granular_paragraph(
     )
 }
 
+/// The hyperlink owners without their place in the paragraph, which
+/// [`shell_unit_cuts`] follows through the unit alignment.
 fn hyperlink_shells(paragraph: &CT_P, options: &ComparisonOptions) -> Vec<String> {
     paragraph
         .hyperlinks
         .iter()
         .map(|link| {
             format!(
-                "{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{}:{}",
+                "{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
                 link.rel_id,
                 link.anchor,
                 link.tooltip,
@@ -3161,11 +3195,93 @@ fn hyperlink_shells(paragraph: &CT_P, options: &ComparisonOptions) -> Vec<String
                 link.extra_attributes,
                 hyperlink_raw_boundaries(paragraph, link, options),
                 link.preserved_raw_before,
-                policy_run_boundary(paragraph, link.run_start, options),
-                policy_run_boundary(paragraph, link.run_end, options)
             )
         })
         .collect()
+}
+
+/// The run boundaries of the shells that the attributed path keeps from the
+/// original: where each hyperlink starts and ends and where each inline
+/// control sits.
+fn shell_run_boundaries(paragraph: &CT_P) -> Vec<usize> {
+    paragraph
+        .hyperlinks
+        .iter()
+        .flat_map(|link| [link.run_start, link.run_end])
+        .chain(paragraph.content_controls.iter().map(|(at, ..)| *at))
+        .collect()
+}
+
+/// The `(original, edited)` unit indices where the shell boundaries fall, in
+/// document order, for `(original, edited)` run boundaries.
+///
+/// The units between two consecutive boundaries form a segment, and the
+/// redline copies the original bytes before the first run of a segment,
+/// shell tags included, before anything of that segment, so each boundary
+/// moves with the words inserted or deleted around it. `None` when the
+/// shells are not in the same order on both sides, or when the edited side
+/// writes a unit between two boundaries that fall between the same two
+/// original runs, because the original bytes there are not split. Ignorable
+/// and empty units are left out, as in the accept and reject postconditions.
+fn shell_unit_cuts(
+    original_units: &[AttributedRunUnit],
+    edited_units: &[AttributedRunUnit],
+    boundaries: impl IntoIterator<Item = (usize, usize)>,
+) -> Option<Vec<(usize, usize)>> {
+    let mut boundaries = boundaries.into_iter().collect::<Vec<_>>();
+    boundaries.sort_unstable();
+    if boundaries.windows(2).any(|pair| pair[0].1 > pair[1].1) {
+        return None;
+    }
+    let cuts = boundaries
+        .into_iter()
+        .map(|(original, edited)| {
+            (
+                original_units.partition_point(|unit| unit.owner < original),
+                edited_units.partition_point(|unit| unit.owner < edited),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut start = (0, 0);
+    cuts.iter()
+        .all(|&end| {
+            let writable = start.0 < end.0
+                || edited_units[start.1..end.1]
+                    .iter()
+                    .all(|unit| unit_is_ignorable(unit) || unit_is_empty(unit));
+            start = end;
+            writable
+        })
+        .then_some(cuts)
+}
+
+/// The unit alignment made segment by segment between the shell boundaries
+/// at `cuts`, so no unit is matched across a hyperlink or an inline control,
+/// and the segment of each pair.
+#[allow(clippy::type_complexity)]
+fn align_between_shells(
+    original: &[String],
+    edited: &[String],
+    cuts: &[(usize, usize)],
+) -> (Vec<(Option<usize>, Option<usize>)>, Vec<usize>) {
+    let mut aligned = Vec::with_capacity(original.len().max(edited.len()));
+    let mut segments = Vec::with_capacity(aligned.capacity());
+    let mut start = (0, 0);
+    for (segment, &end) in cuts
+        .iter()
+        .chain(std::iter::once(&(original.len(), edited.len())))
+        .enumerate()
+    {
+        for (left, right) in align(&original[start.0..end.0], &edited[start.1..end.1]) {
+            aligned.push((
+                left.map(|index| index + start.0),
+                right.map(|index| index + start.1),
+            ));
+            segments.push(segment);
+        }
+        start = end;
+    }
+    (aligned, segments)
 }
 
 fn hyperlink_raw_boundaries(
@@ -3347,6 +3463,7 @@ fn interleave_granular_paragraph(
     original_units: &[AttributedRunUnit],
     edited_units: &[AttributedRunUnit],
     aligned: &[(Option<usize>, Option<usize>)],
+    segment_runs: &[usize],
     replacements: &[String],
     properties: &str,
     location: &str,
@@ -3370,14 +3487,20 @@ fn interleave_granular_paragraph(
         (None, true) => {}
     }
     let spans = modeled_paragraph_run_spans(original, &source)?;
-    if spans.len() != original.runs.len() || aligned.len() != replacements.len() {
+    if spans.len() != original.runs.len()
+        || aligned.len() != replacements.len()
+        || aligned.len() != segment_runs.len()
+    {
         return Err(Error::Other(format!(
             "comparison could not correlate granular run owners at {location}"
         )));
     }
-    let insertion_boundary = spans
-        .first()
-        .map_or_else(|| paragraph_close_start(&source), |span| Ok(span.start))?;
+    let run_start = |run: usize| {
+        spans
+            .get(run)
+            .map_or_else(|| paragraph_close_start(&source), |span| Ok(span.start))
+    };
+    let insertion_boundary = run_start(0)?;
     let mut output = source[..insertion_boundary].to_owned();
     let mut cursor = insertion_boundary;
     let mut consumed_owner = None;
@@ -3389,7 +3512,16 @@ fn interleave_granular_paragraph(
     for unit in edited_units {
         edited_owner_units[unit.owner] += 1;
     }
-    for ((left, right), replacement) in aligned.iter().zip(replacements) {
+    for (((left, right), replacement), &segment_run) in
+        aligned.iter().zip(replacements).zip(segment_runs)
+    {
+        // Text inserted at the start of a shell segment comes after the
+        // shell tags that open it.
+        let segment_start = run_start(segment_run)?;
+        if segment_start > cursor {
+            output.push_str(&source[cursor..segment_start]);
+            cursor = segment_start;
+        }
         let mut exact_run = None;
         if let Some(unit) = left.map(|index| &original_units[index])
             && consumed_owner != Some(unit.owner)
