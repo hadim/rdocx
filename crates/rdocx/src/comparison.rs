@@ -29,7 +29,6 @@ thread_local! {
 type ControlPropertySignature<'a> = Option<(
     Option<&'a str>,
     Option<&'a str>,
-    Option<i32>,
     Option<rdocx_oxml::content_control::SdtType>,
     Option<&'a rdocx_oxml::content_control::CT_DataBinding>,
 )>;
@@ -5478,16 +5477,25 @@ fn control_signature(control: &CT_Sdt) -> String {
     )
 }
 
+/// The content-control properties that alignment, refusal and the accept and
+/// reject postconditions compare.
+///
+/// `w:id` is left out. Producers renumber it on save and it carries no
+/// content, so a pair that differs only by it keeps the original's `w:sdtPr`.
+/// A `w:sdtPr` with none of these properties reads like no `w:sdtPr`.
 fn control_property_signature(control: &CT_Sdt) -> ControlPropertySignature<'_> {
-    control.properties.as_ref().map(|properties| {
-        (
-            properties.alias.as_deref(),
-            properties.tag.as_deref(),
-            properties.id,
-            properties.control_type,
-            properties.data_binding.as_ref(),
-        )
-    })
+    control
+        .properties
+        .as_ref()
+        .map(|properties| {
+            (
+                properties.alias.as_deref(),
+                properties.tag.as_deref(),
+                properties.control_type,
+                properties.data_binding.as_ref(),
+            )
+        })
+        .filter(|signature| !matches!(signature, (None, None, None, None)))
 }
 
 fn modeled_control_content(control: &CT_Sdt) -> Vec<&SdtContent> {

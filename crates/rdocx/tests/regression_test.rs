@@ -30379,6 +30379,134 @@ fn comparison_treats_empty_paragraph_properties_as_absent() {
     assert!(document_xml(&mut empty).contains("<w:pPrChange"));
 }
 
+/// Producer serialization that `compare()` must read as equivalent content.
+///
+/// None of it is content, so none of it may refuse a pair or become a
+/// revision.
+mod compare_producer_noise {
+    use super::*;
+    use rdocx::RevisionKind;
+
+    const TIMESTAMP: &str = "2026-09-27T12:00:00Z";
+
+    fn revision_kinds(document: &Document) -> Vec<RevisionKind> {
+        document
+            .revisions()
+            .iter()
+            .map(|revision| revision.kind())
+            .collect()
+    }
+
+    /// Check that accepting gives the edited side and rejecting the original,
+    /// each compared again with no diagnostic and no revision.
+    fn assert_resolutions(tracked: &[u8], original: &Document, edited: &Document) {
+        for (resolve, expected) in [
+            (
+                Document::accept_all as fn(&mut Document) -> rdocx::Result<usize>,
+                edited,
+            ),
+            (Document::reject_all, original),
+        ] {
+            let mut resolved = Document::from_bytes(tracked).unwrap();
+            resolve(&mut resolved).unwrap();
+            let diagnostics = resolved
+                .compare(expected, "postcondition", TIMESTAMP)
+                .unwrap();
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert_eq!(revision_kinds(&resolved), []);
+        }
+    }
+
+    /// Compare two bodies and return the revision kinds and the redline.
+    fn compared_kinds(original_xml: &str, edited_xml: &str) -> (Vec<RevisionKind>, String) {
+        let original = document_with_content_controls(original_xml);
+        let edited = document_with_content_controls(edited_xml);
+        let mut compared = document_with_content_controls(original_xml);
+        let diagnostics = compared
+            .compare(&edited, "R", TIMESTAMP)
+            .expect("producer noise must not refuse the pair");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_resolutions(&compared.to_bytes().unwrap(), &original, &edited);
+        (revision_kinds(&compared), document_xml(&mut compared))
+    }
+
+    fn table_of_contents_control(id: Option<&str>, first_entry: &str) -> String {
+        let id = id.map_or_else(String::new, |value| format!(r#"<w:id w:val="{value}"/>"#));
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t>Before the content control.</w:t></w:r></w:p><w:sdt><w:sdtPr>{id}<w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{first_entry} entry</w:t></w:r></w:p><w:p><w:r><w:t>Beta entry</w:t></w:r></w:p><w:p><w:r><w:t>Gamma entry</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>After the content control.</w:t></w:r></w:p>"#
+        ))
+    }
+
+    fn google_docs_inline_control(id: &str, word: &str) -> String {
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_0"/><w:id w:val="{id}"/></w:sdtPr><w:sdtContent><w:r><w:t>{word}</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t xml:space="preserve"> after.</w:t></w:r></w:p>"#
+        ))
+    }
+
+    #[test]
+    fn a_content_control_identity_is_not_content() {
+        for (original, edited, kept_id) in [
+            (None, Some("-2000000001"), None),
+            (Some("-2000000001"), None, Some("-2000000001")),
+            (Some("11"), Some("12"), Some("11")),
+        ] {
+            let (kinds, tracked) = compared_kinds(
+                &table_of_contents_control(original, "Alpha"),
+                &table_of_contents_control(edited, "Alpha"),
+            );
+            assert_eq!(kinds, [], "{original:?} -> {edited:?}");
+            let ids = [original, edited]
+                .into_iter()
+                .flatten()
+                .filter(|id| tracked.contains(&format!(r#"<w:id w:val="{id}"/>"#)))
+                .collect::<Vec<_>>();
+            assert_eq!(ids, kept_id.into_iter().collect::<Vec<_>>(), "{tracked}");
+
+            let (kinds, tracked) = compared_kinds(
+                &table_of_contents_control(original, "Alpha"),
+                &table_of_contents_control(edited, "Delta"),
+            );
+            assert_eq!(
+                kinds,
+                [RevisionKind::Deletion, RevisionKind::Insertion],
+                "{original:?} -> {edited:?}"
+            );
+            assert_eq!(tracked.matches("<w:sdtPr>").count(), 1, "{tracked}");
+        }
+
+        let (kinds, _) = compared_kinds(
+            &google_docs_inline_control("-1854911024", "Alpha"),
+            &google_docs_inline_control("1374263513", "Alpha"),
+        );
+        assert_eq!(kinds, []);
+        let (kinds, tracked) = compared_kinds(
+            &google_docs_inline_control("-1854911024", "Alpha"),
+            &google_docs_inline_control("1374263513", "Delta"),
+        );
+        assert_eq!(kinds, [RevisionKind::Deletion, RevisionKind::Insertion]);
+        assert!(
+            tracked.contains(r#"<w:id w:val="-1854911024"/>"#),
+            "{tracked}"
+        );
+
+        let bare_control = |properties: &str| {
+            wrap_word_body(&format!(
+                r#"<w:sdt>{properties}<w:sdtContent><w:p><w:r><w:t>Alpha entry</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>After the content control.</w:t></w:r></w:p>"#
+            ))
+        };
+        let id_only = r#"<w:sdtPr><w:id w:val="5"/></w:sdtPr>"#;
+        for (original, edited) in [("", id_only), (id_only, "")] {
+            let (kinds, tracked) = compared_kinds(&bare_control(original), &bare_control(edited));
+            assert_eq!(kinds, [], "{original:?} -> {edited:?}");
+            assert_eq!(
+                tracked.contains("<w:sdtPr>"),
+                !original.is_empty(),
+                "{tracked}"
+            );
+        }
+    }
+}
+
 #[test]
 fn unmodelled_property_changes_report_a_diagnostic() {
     for (original, edited, expected_location) in [
