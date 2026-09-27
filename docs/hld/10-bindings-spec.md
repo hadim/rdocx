@@ -852,6 +852,16 @@ explicit output and reports the counts through a schema-1 main-story record.
 Python exposes the same operation and returns diagnostics as an immutable tuple
 with a derived `diagnostic_count` property. WASM does not expose this operation.
 
+`Document::insert_toc(index, max_level)` writes a static table of contents at
+a direct body index: a title paragraph and one entry per `Heading1` to
+`HeadingN` paragraph, each linked to a new `_TocN` bookmark on its heading. It
+writes no `TOC` field, so `rebuild_toc` does not refresh it. Python
+`Document.insert_toc(index, max_level=3)` binds it. An index past the body end
+raises `IndexError` and a level outside 1 to 9 raises `ValueError`, both before
+any change. When the native call inserts nothing because it cannot allocate
+unique heading bookmarks, the binding raises `RdocxError`. Otherwise it
+advances the revision once.
+
 The native facade re-exports the concrete OfficeMath tree from `rdocx-oxml`.
 `Paragraph::equations`, `Paragraph::equation`, and their read-only equivalents
 borrow inline and display equations in source order. Mutable paragraphs add
@@ -1268,9 +1278,14 @@ accepted-view boundaries of the range, which are the run indexes
 boundaries, rejects duplicate or producer-reserved names, and returns the
 allocated nonnegative id. The shared recursive `Field` model retains the
 complete `REF` and `PAGEREF` instruction, target argument, cached display,
-dirty state, source form, and producer XML. These additions are native Rust
-APIs only. Python, WASM, and CLI consumers keep their existing surface and
-preserve the typed content when they save the owned document.
+dirty state, source form, and producer XML. Python `Document.bookmarks`
+returns a tuple of frozen `Bookmark` snapshots with the same fields, both
+ranges as `RunRange` values or `None`. `Document.add_bookmark(name, range)`
+returns the id. Its markers sit between runs, so it keeps live handles valid
+and does not advance the revision. A rejected name or range raises
+`RdocxError` and leaves the document unchanged. WASM and CLI consumers keep
+their existing surface and preserve the typed content when they save the owned
+document.
 
 Native Word callers evaluate fields with `Document::evaluate_fields` and an
 explicit `FieldEvaluationContext`. `FieldDateTime` supplies deterministic civil
@@ -1425,8 +1440,16 @@ relationship already created by `Document::embed_image`. `add_field` rejects
 an instruction without a field name before mutation. `add_symbol` stores one
 Unicode scalar as text. `set_text` remains the explicit replacement operation,
 while formatting setters retain the complete ordered content sequence. These
-methods are additive on the pre-1.0 native Rust facade. Python, WASM, and CLI
-gain no implicit surface.
+methods are additive on the pre-1.0 native Rust facade. Python `Run` binds
+`add_tab()` and `add_field(instruction, cached_result="")`. Both append inside
+the run through the same accepted run path as the text setter, so no run index
+moves. A tab keeps live handles valid. A field becomes a story item of its
+own, which moves the index path of every later `StoryItem`, so `add_field`
+advances the revision once. An instruction without a field name raises
+`RdocxError` and leaves the run and the revision unchanged. The field
+serializes as a simple field after the run's earlier content, and
+`update_layout_backed_fields` fills a `PAGE`, `NUMPAGES`, or `PAGEREF` cache.
+WASM and CLI gain no implicit surface.
 
 `add_symbol` keeps that meaning. `add_symbol_char(font, char_code)` is the
 separate method that produces `w:sym`, and `add_special_character` produces

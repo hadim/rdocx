@@ -47,8 +47,8 @@ with open("report.pdf", "wb") as output:
 - Complete paragraph and run formatting, multilingual and vertical typography,
   conditional and floating tables, section semantics, settings, fields, forms,
   equations, drawings, comments, and metadata.
-- Tracked comparison, main-body comment threads, revision resolution, and TOC
-  rebuilding.
+- Tracked comparison, main-body comment threads, bookmarks, revision
+  resolution, and TOC insertion and rebuilding.
 - Deterministic layout fragments, page geometry, and PDF, PNG, JPEG, and TIFF
   output through the native document engine.
 - Python collections with negative indexes, slices, iteration, and explicit

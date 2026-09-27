@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, assert_type
 
 from rdocx import (
+    Bookmark,
     BoundingBox,
     Cell,
     CellCollection,
@@ -136,6 +137,12 @@ def exercise_rdocx_types(path: Path) -> None:
         text="done",
         date="2026-09-16T11:00:00+01:00",
     )
+    bookmark_id: int = document.add_bookmark("target", range_)
+    bookmarks: tuple[Bookmark, ...] = document.bookmarks
+    assert_type(bookmarks[0].direct_range, RunRange | None)
+    run.add_tab()
+    run.add_field("PAGEREF target \\h", "1")
+    document.insert_toc(0, max_level=2)
     comments: tuple[Comment, ...] = document.comments
     sections: tuple[Section, ...] = document.sections
     updated_section: Section = document.update_section(
