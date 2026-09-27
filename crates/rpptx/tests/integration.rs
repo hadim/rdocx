@@ -14458,6 +14458,204 @@ fn paragraph_run_font_and_bullet_properties_round_trip() {
     assert_eq!(properties.latin.as_ref().unwrap().typeface, "Carlito");
 }
 
+fn two_run_text_box() -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_textbox(Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+        .unwrap();
+    shape.set_text("first").unwrap();
+    shape
+        .text_frame()
+        .unwrap()
+        .paragraph_mut(0)
+        .unwrap()
+        .add_run(" second");
+    presentation
+}
+
+fn run_hyperlink_id(presentation: &Presentation, run: usize) -> Option<String> {
+    presentation
+        .slide(0)
+        .unwrap()
+        .shape(0)
+        .unwrap()
+        .text_frame()
+        .unwrap()
+        .paragraph(0)
+        .unwrap()
+        .run(run)
+        .unwrap()
+        .properties()
+        .and_then(|properties| properties.hyperlink_click.as_ref())
+        .and_then(|hyperlink| hyperlink.relationship_id.clone())
+}
+
+fn slide_hyperlink_targets(presentation: &Presentation) -> Vec<(String, String)> {
+    open_opc(&presentation.to_bytes().unwrap(), "slide hyperlinks")
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .get_all_by_type(rel_types::HYPERLINK)
+        .into_iter()
+        .map(|relationship| {
+            assert_eq!(relationship.target_mode.as_deref(), Some("External"));
+            (relationship.id.clone(), relationship.target.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn run_hyperlinks_reuse_resolve_and_prune_their_relationships() {
+    let mut presentation = two_run_text_box();
+    let id = first_slide_shape_id(&presentation, 0);
+    let before = presentation.to_bytes().unwrap();
+    for address in ["", "https://example.com/\nnext", "\u{FFFE}"] {
+        assert!(matches!(
+            presentation.set_run_hyperlink(0, id, 0, 0, Some(address)),
+            Err(Error::InvalidShapeMutation { .. })
+        ));
+    }
+    for (slide, shape, paragraph, run) in [
+        (1, id, 0, 0),
+        (0, id + 1, 0, 0),
+        (0, id, 1, 0),
+        (0, id, 0, 2),
+    ] {
+        assert!(
+            presentation
+                .set_run_hyperlink(slide, shape, paragraph, run, Some("https://example.com/a"))
+                .is_err()
+        );
+    }
+    presentation.set_run_hyperlink(0, id, 0, 0, None).unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    let a = "https://example.com/a?x=1&y=2";
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some(a))
+        .unwrap();
+    presentation
+        .set_run_hyperlink(0, id, 0, 1, Some(a))
+        .unwrap();
+    let first = run_hyperlink_id(&presentation, 0).unwrap();
+    assert_eq!(run_hyperlink_id(&presentation, 1), Some(first.clone()));
+    assert_eq!(presentation.hyperlink_address(0, &first), Some(a));
+    assert_eq!(
+        slide_hyperlink_targets(&presentation),
+        [(first.clone(), a.to_owned())]
+    );
+    let linked = presentation.to_bytes().unwrap();
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some(a))
+        .unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), linked);
+
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some("https://example.com/b"))
+        .unwrap();
+    let second = run_hyperlink_id(&presentation, 0).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(slide_hyperlink_targets(&presentation).len(), 2);
+    presentation.set_run_hyperlink(0, id, 0, 1, None).unwrap();
+    assert_eq!(run_hyperlink_id(&presentation, 1), None);
+    assert_eq!(presentation.hyperlink_address(0, &first), None);
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some("https://example.com/c"))
+        .unwrap();
+    let third = run_hyperlink_id(&presentation, 0).unwrap();
+    assert_eq!(
+        slide_hyperlink_targets(&presentation),
+        [(third.clone(), "https://example.com/c".to_owned())]
+    );
+    let layout = open_opc(&presentation.to_bytes().unwrap(), "hyperlink layout")
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .get_by_type(rel_types::SLIDE_LAYOUT)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        presentation.hyperlink_address(0, &layout.id),
+        Some(layout.target.as_str())
+    );
+    assert_eq!(presentation.hyperlink_address(1, &third), None);
+
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(reopened.validate().is_empty(), "{:?}", reopened.validate());
+    assert_eq!(
+        (
+            run_hyperlink_id(&reopened, 0),
+            run_hyperlink_id(&reopened, 1)
+        ),
+        (Some(third.clone()), None)
+    );
+    assert_eq!(
+        reopened.hyperlink_address(0, &third),
+        Some("https://example.com/c")
+    );
+
+    let grouped = r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="50" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="51" name="Inner"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>inner</a:t></a:r></a:p></p:txBody></p:sp></p:grpSp>"#;
+    let mut grouped = with_first_slide_children(&reopened, grouped, &[]);
+    grouped
+        .set_run_hyperlink(0, 51, 0, 0, Some("https://example.com/c"))
+        .unwrap();
+    assert_eq!(slide_hyperlink_targets(&grouped).len(), 1);
+    let duplicate = format!(
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="Duplicate"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>x</a:t></a:r></a:p></p:txBody></p:sp>"#
+    );
+    let mut duplicated = with_first_slide_children(&reopened, &duplicate, &[]);
+    assert!(
+        duplicated
+            .set_run_hyperlink(0, id, 0, 0, None)
+            .unwrap_err()
+            .to_string()
+            .contains("not unique")
+    );
+
+    let sounding = r#"<p:sp><p:nvSpPr><p:cNvPr id="60" name="Sounding"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr><a:hlinkClick r:id="rId80"><a:snd r:embed="rId90" name="click"/></a:hlinkClick></a:rPr><a:t>click</a:t></a:r></a:p></p:txBody></p:sp>"#;
+    let mut sounding = with_first_slide_children(
+        &reopened,
+        sounding,
+        &[
+            ("rId80", rel_types::HYPERLINK, "https://example.com/sound"),
+            ("rId90", rel_types::AUDIO, "../media/click.wav"),
+        ],
+    );
+    sounding.set_run_hyperlink(0, 60, 0, 0, None).unwrap();
+    let relationships = open_opc(&sounding.to_bytes().unwrap(), "click sound")
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .clone();
+    assert!(relationships.get_by_id("rId80").is_none());
+    assert!(relationships.get_by_id("rId90").is_none());
+    assert!(relationships.get_by_id(&third).is_some());
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn run_hyperlinks_read_back_in_pinned_python_pptx() {
+    let mut presentation = two_run_text_box();
+    let id = first_slide_shape_id(&presentation, 0);
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some("https://example.com/a?x=1&y=2"))
+        .unwrap();
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "run-hyperlinks",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+runs = Presentation(sys.argv[1]).slides[0].shapes[0].text_frame.paragraphs[0].runs
+print([run.hyperlink.address for run in runs])
+"#,
+    );
+    assert_eq!(records, "['https://example.com/a?x=1&y=2', None]\n");
+}
+
 fn plain_shape_fixture_bytes(from: &str, to: &str) -> Vec<u8> {
     let mut package = fixture_package();
     let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();

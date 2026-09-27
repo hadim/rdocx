@@ -39,7 +39,7 @@ use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_Tab
 use oxml_drawing::text::CT_TextListStyle;
 use oxml_drawing::text::{
     CT_RegularTextRun, CT_TextBody, CT_TextParagraph, Coordinate32Value, NormalAutofit,
-    TextAutofit, TextRun, TextWrap,
+    TextAutofit, TextHyperlink, TextRun, TextWrap,
 };
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextAlignment, TextAnchor, TextBullet,
@@ -3193,6 +3193,144 @@ impl Presentation {
         self.commit_candidate(staged)
     }
 
+    /// Returns the target of one relationship of a slide, the address that a
+    /// hyperlink naming this relationship id opens.
+    ///
+    /// Pass the `r:id` of an `a:hlinkClick`. An external hyperlink returns
+    /// its URL, and an internal relationship, such as a jump to another
+    /// slide, returns its stored relative target, as python-pptx `address`
+    /// does. An unknown slide or id returns `None`.
+    pub fn hyperlink_address(&self, slide_index: usize, relationship_id: &str) -> Option<&str> {
+        let record = self.slides.get(slide_index)?;
+        self.package
+            .get_part_rels(&record.part_name)?
+            .get_by_id(relationship_id)
+            .map(|relationship| relationship.target.as_str())
+    }
+
+    /// Points one text run's click hyperlink at an external `address`, or
+    /// removes it with `None`, as python-pptx `hyperlink.address` does.
+    ///
+    /// The run is the zero-based regular run of a paragraph in the ordinary
+    /// shape whose `p:cNvPr/@id` is `shape_id`, inside groups too. It gets an
+    /// `a:hlinkClick` naming the slide's external hyperlink relationship to
+    /// `address`, which is reused when the slide has one. Assigning the
+    /// current address changes nothing. Every relationship that only the old
+    /// hyperlink named, its target or a click sound, is removed, so no
+    /// relationship is left unreferenced. An empty address, one with a
+    /// control character, or a shape id that is missing, shared, or not an
+    /// ordinary shape with that run is rejected without change.
+    pub fn set_run_hyperlink(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        paragraph_index: usize,
+        run_index: usize,
+        address: Option<&str>,
+    ) -> Result<()> {
+        const OPERATION: &str = "set run hyperlink";
+        self.require_slide_index(slide_index)?;
+        if address.is_some_and(|address| {
+            address.is_empty()
+                || address.chars().any(|character| {
+                    character.is_control() || matches!(character, '\u{FFFE}' | '\u{FFFF}')
+                })
+        }) {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "a hyperlink address must be non-empty text without control characters",
+            ));
+        }
+        let record = &self.slides[slide_index];
+        let part_name = record.part_name.clone();
+        if shape_id_count(
+            &record.slide.common_slide_data.shape_tree.children,
+            shape_id,
+        ) > 1
+        {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                format!("shape id {shape_id} is not unique on the slide"),
+            ));
+        }
+        let mut slide = record.slide.clone();
+        let mut relationships = self
+            .package
+            .get_part_rels(&part_name)
+            .cloned()
+            .unwrap_or_default();
+        let (old, new) = {
+            let missing = || {
+                invalid_shape_mutation(
+                    OPERATION,
+                    format!(
+                        "shape id {shape_id} has no ordinary shape run {run_index} in paragraph {paragraph_index}"
+                    ),
+                )
+            };
+            let body = find_shape_mut(&mut slide.common_slide_data.shape_tree.children, shape_id)
+                .and_then(|shape| shape.text_body.as_mut())
+                .ok_or_else(missing)?;
+            let mut paragraph = TextFrame { body }
+                .into_paragraph_mut(paragraph_index)
+                .ok_or_else(missing)?;
+            let mut run = paragraph.run_mut(run_index).ok_or_else(missing)?;
+            let mut properties = run.properties().cloned().unwrap_or_default();
+            let old = properties
+                .hyperlink_click
+                .as_ref()
+                .and_then(|hyperlink| hyperlink.relationship_id.clone())
+                .filter(|id| !id.is_empty());
+            let current = old
+                .as_deref()
+                .and_then(|id| relationships.get_by_id(id))
+                .filter(|relationship| {
+                    relationship.rel_type == rel_types::HYPERLINK
+                        && relationship_is_external(relationship)
+                })
+                .map(|relationship| relationship.target.as_str());
+            let unchanged = match address {
+                None => properties.hyperlink_click.is_none(),
+                Some(address) => current == Some(address),
+            };
+            if unchanged {
+                return Ok(());
+            }
+            let new = address.map(|address| {
+                relationships
+                    .items
+                    .iter()
+                    .find(|relationship| {
+                        relationship.rel_type == rel_types::HYPERLINK
+                            && relationship_is_external(relationship)
+                            && relationship.target == address
+                    })
+                    .map(|relationship| relationship.id.clone())
+                    .unwrap_or_else(|| relationships.add_external(rel_types::HYPERLINK, address))
+            });
+            properties.hyperlink_click = new.clone().map(|id| {
+                let mut hyperlink = TextHyperlink::default();
+                hyperlink.relationship_id = Some(id);
+                hyperlink
+            });
+            run.set_properties(properties);
+            (old, new)
+        };
+        if old.is_some_and(|old| Some(&old) != new.as_ref()) {
+            // The old a:hlinkClick can carry more than its r:id, such as an
+            // a:snd click sound naming an audio relationship. Remove every
+            // relationship this edit left without a reference.
+            let before = slide_relationship_ids(&self.slides[slide_index].slide)?;
+            let after = slide_relationship_ids(&slide)?;
+            relationships.items.retain(|relationship| {
+                !before.contains(&relationship.id) || after.contains(&relationship.id)
+            });
+        }
+        self.slides[slide_index].slide = slide;
+        self.package.set_part_rels(&part_name, relationships);
+        Ok(())
+    }
+
     /// Moves one immediate slide child so that it ends up at z-order index
     /// `to_index`, where later children draw on top.
     ///
@@ -4035,6 +4173,37 @@ fn find_picture_mut(children: &mut [ShapeTreeChild], shape_id: u32) -> Option<&m
             ShapeTreeChild::GroupShape(group) => {
                 if let Some(picture) = find_picture_mut(&mut group.children, shape_id) {
                     return Some(picture);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Counts the slide children and group members whose `p:cNvPr/@id` is
+/// `shape_id`.
+fn shape_id_count(children: &[ShapeTreeChild], shape_id: u32) -> usize {
+    children
+        .iter()
+        .map(|child| {
+            let nested = match child {
+                ShapeTreeChild::GroupShape(group) => shape_id_count(&group.children, shape_id),
+                _ => 0,
+            };
+            usize::from(child.non_visual_id() == Some(shape_id)) + nested
+        })
+        .sum()
+}
+
+fn find_shape_mut(children: &mut [ShapeTreeChild], shape_id: u32) -> Option<&mut CT_Shape> {
+    for child in children {
+        let id = child.non_visual_id();
+        match child {
+            ShapeTreeChild::Shape(shape) if id == Some(shape_id) => return Some(shape),
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(shape) = find_shape_mut(&mut group.children, shape_id) {
+                    return Some(shape);
                 }
             }
             _ => {}

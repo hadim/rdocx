@@ -12,7 +12,7 @@ use rpptx::{
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
 use crate::rpptx_to_pyerr;
-use crate::shape::{shape_mut_at, shape_ref_at};
+use crate::shape::{shape_mut_at, shape_ref_at, slide_index};
 use crate::validate_path;
 
 const EMU_PER_CENTIPOINT: i64 = 127;
@@ -95,6 +95,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyParagraphCollection>()?;
     module.add_class::<PyRun>()?;
     module.add_class::<PyRunCollection>()?;
+    module.add_class::<PyHyperlink>()?;
     module.add_class::<PyFont>()?;
     Ok(())
 }
@@ -897,6 +898,95 @@ impl PyRun {
                 path: self.path.clone(),
             },
         )
+    }
+
+    #[getter]
+    fn hyperlink(&self, py: Python<'_>) -> PyResult<Py<PyHyperlink>> {
+        validate_path(py, &self.presentation.borrow(py), &self.path, "run", "")?;
+        Py::new(
+            py,
+            PyHyperlink {
+                presentation: self.presentation.clone_ref(py),
+                path: self.path.clone(),
+            },
+        )
+    }
+}
+
+/// The click hyperlink of one run, like python-pptx `_Hyperlink`.
+#[pyclass(name = "Hyperlink")]
+pub struct PyHyperlink {
+    presentation: Py<PyPresentation>,
+    path: ContentPath,
+}
+
+impl PyHyperlink {
+    /// Returns the run's direct character properties, raising when the run
+    /// no longer exists.
+    fn run_properties(
+        &self,
+        py: Python<'_>,
+        presentation: &PyPresentation,
+    ) -> PyResult<Option<CT_TextCharacterProperties>> {
+        validate_path(py, presentation, &self.path, "hyperlink", ".hyperlink")?;
+        let paragraph = paragraph_index(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
+        let run =
+            run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
+        shape_ref_at(&presentation.inner, &self.path)
+            .and_then(|shape| shape.text_frame())
+            .and_then(|frame| frame.paragraph(paragraph))
+            .and_then(|paragraph| paragraph.run(run))
+            .map(|run| run.properties().cloned())
+            .ok_or_else(|| PyIndexError::new_err("run index out of range"))
+    }
+}
+
+#[pymethods]
+impl PyHyperlink {
+    /// The address the run's click hyperlink opens, or `None` without one.
+    #[getter]
+    fn address(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        let presentation = self.presentation.borrow(py);
+        let properties = self.run_properties(py, &presentation)?;
+        let Some(relationship_id) = properties
+            .as_ref()
+            .and_then(|properties| properties.hyperlink_click.as_ref())
+            .and_then(|hyperlink| hyperlink.relationship_id.as_deref())
+            .filter(|id| !id.is_empty())
+        else {
+            return Ok(None);
+        };
+        Ok(presentation
+            .inner
+            .hyperlink_address(slide_index(&self.path)?, relationship_id)
+            .map(str::to_owned))
+    }
+
+    /// Points the run's click hyperlink at `value`, or removes it for `None`
+    /// or an empty string, as python-pptx does. The relationship the old
+    /// hyperlink used goes when nothing else on the slide uses it.
+    #[setter]
+    fn set_address(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        let mut presentation = self.presentation.borrow_mut(py);
+        self.run_properties(py, &presentation)?;
+        let paragraph = paragraph_index(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
+        let run =
+            run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
+        let shape_id = shape_ref_at(&presentation.inner, &self.path)
+            .and_then(|shape| shape.non_visual_id())
+            .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
+        presentation
+            .inner
+            .set_run_hyperlink(
+                slide_index(&self.path)?,
+                shape_id,
+                paragraph,
+                run,
+                value.filter(|value| !value.is_empty()),
+            )
+            .map_err(|error| rpptx_to_pyerr(py, error))
     }
 }
 

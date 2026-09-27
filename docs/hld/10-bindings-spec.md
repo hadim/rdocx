@@ -359,7 +359,14 @@ as a column width keeps the frame width. A height that is not positive raises
 reports `none`, `normal`, or `shape` when the body carries an explicit choice.
 `Run.font` reads the run's direct Latin name, size, and sRGB colour, while the
 `Run.text` setter replaces only that run's text and preserves its typed and
-unmodelled properties.
+unmodelled properties. `Run.hyperlink` returns a live `Hyperlink` whose
+`address` reads the target of the run's `a:hlinkClick`, or `None`. Assigning
+an address goes through the native `set_run_hyperlink`, which reuses the
+slide's relationship to the same address and removes the old relationship
+once nothing on the slide names it, so retargeting does not grow the part.
+`None` or an empty string removes the hyperlink, as in python-pptx, an address
+with a control character raises `RpptxError`, and the write does not advance
+the revision.
 
 Text formatting follows python-pptx names and value types. Every property
 reads the direct value only, `None` when the element or attribute is absent,

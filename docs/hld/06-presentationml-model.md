@@ -513,6 +513,35 @@ exactly the children between its two indices, and reparses, the technique
 schema-final `p:extLst` content therefore keep their bytes and their place
 among the other children.
 
+The owning facade also resolves and writes run hyperlinks, because their
+relationships belong to the slide part rather than to a borrowed run handle:
+
+```rust
+pub fn hyperlink_address(&self, slide_index: usize, relationship_id: &str) -> Option<&str>;
+pub fn set_run_hyperlink(
+    &mut self,
+    slide_index: usize,
+    shape_id: u32,
+    paragraph_index: usize,
+    run_index: usize,
+    address: Option<&str>,
+) -> Result<()>;
+```
+
+`hyperlink_address` returns the target of the relationship an
+`a:hlinkClick/@r:id` names, the URL of an external hyperlink or the stored
+relative target of an internal one, as python-pptx `address` does.
+`set_run_hyperlink` finds the ordinary shape by its `p:cNvPr/@id`, inside
+groups too, and rejects an id that another slide child shares. The regular run
+gets a fresh `a:hlinkClick` that names the slide's external hyperlink
+relationship to the address, reused when the slide has one, and `None` removes
+it. Assigning the current address changes nothing. Validation reports an
+unreferenced hyperlink relationship, so the relationship the old hyperlink
+named is removed once no other element of the slide names it, and one call
+changes the run and the relationships together. An empty address, a control
+character, or a missing shape, paragraph, or run leaves the slide and its
+relationships unchanged.
+
 An ordinary shape has canonical non-visual properties, a typed transform,
 preset geometry, and a minimal text body. `add_shape` keeps the string API but
 accepts only names in the generated table of all 187 ECMA preset shapes. An

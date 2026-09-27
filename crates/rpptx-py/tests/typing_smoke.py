@@ -29,6 +29,7 @@ from rpptx._rpptx import (
     ColumnCollection,
     FillFormat,
     Font,
+    Hyperlink,
     Image,
     LineFormat,
     Paragraph,
@@ -342,6 +343,14 @@ def exercise_rpptx_z_order_types(slide: Slide) -> None:
     slide.shapes.move(0, -1)
 
 
+def exercise_rpptx_hyperlink_types(run: Run) -> None:
+    hyperlink: Hyperlink = run.hyperlink
+    hyperlink.address = "https://example.com"
+    address: str | None = hyperlink.address
+    hyperlink.address = None
+    (address,)
+
+
 def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
     frames: tuple[TextFrameLayout, ...] = presentation.text_layout()
     narrower: tuple[TextFrameLayout, ...] = presentation.text_layout(width_factor=0.95)
@@ -397,6 +406,7 @@ if TYPE_CHECKING:
     Column()  # type: ignore[call-arg]
     ColumnCollection()  # type: ignore[call-arg]
     Font()  # type: ignore[call-arg]
+    Hyperlink()  # type: ignore[call-arg]
     Paragraph()  # type: ignore[call-arg]
     ParagraphCollection()  # type: ignore[call-arg]
     PlaceholderCollection()  # type: ignore[call-arg]

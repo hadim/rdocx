@@ -1684,6 +1684,83 @@ def test_text_properties_agree_with_python_pptx_in_both_directions(tmp_path):
     assert font.color.rgb == OracleRGBColor(0xAA, 0xBB, 0xCC)
 
 
+def _slide_hyperlink_targets(data):
+    import xml.etree.ElementTree as ElementTree
+
+    relationships = _package_parts(data)["ppt/slides/_rels/slide1.xml.rels"]
+    return sorted(
+        relationship.get("Target")
+        for relationship in ElementTree.fromstring(relationships)
+        if relationship.get("Type").endswith("/hyperlink")
+    )
+
+
+def test_run_hyperlink_address_reads_writes_and_prunes_like_python_pptx(tmp_path):
+    import rpptx
+
+    prs = _textbox_presentation(rpptx)
+    prs.slides[0].shapes[0].text_frame.paragraphs[0].add_run(" world")
+    first, second = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs
+    link = first.hyperlink
+    assert link.address is None
+    before = prs.to_bytes()
+    link.address = None
+    link.address = ""
+    assert prs.to_bytes() == before
+    link.address = "https://example.com/a?x=1&y=2"
+    second.hyperlink.address = "https://example.com/a?x=1&y=2"
+    assert (first.hyperlink.address, second.text) == ("https://example.com/a?x=1&y=2", " world")
+    assert _slide_hyperlink_targets(prs.to_bytes()) == ["https://example.com/a?x=1&y=2"]
+    for _ in range(3):
+        link.address = "https://example.com/b"
+        link.address = "https://example.com/c"
+    assert _slide_hyperlink_targets(prs.to_bytes()) == [
+        "https://example.com/a?x=1&y=2",
+        "https://example.com/c",
+    ]
+    second.hyperlink.address = None
+    assert (second.hyperlink.address, second.font.name) == (None, None)
+    assert _slide_hyperlink_targets(prs.to_bytes()) == ["https://example.com/c"]
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="control characters"):
+        link.address = "https://example.com/\nnext"
+    assert prs.to_bytes() == before
+    assert b"https://example.com/c" in prs.to_pdf()
+    held = first.hyperlink
+    prs.slides.add_slide(prs.slide_layouts[6])
+    with pytest.raises(rpptx.StaleElementError, match=r"\.runs\[0\]\.hyperlink\."):
+        _ = held.address
+    output = tmp_path / "hyperlinks.pptx"
+    prs.save(output)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    runs = pptx.Presentation(output).slides[0].shapes[0].text_frame.paragraphs[0].runs
+    assert [run.hyperlink.address for run in runs] == ["https://example.com/c", None]
+
+    def build(deck):
+        frame = deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_textbox(0, 0, 100, 100)
+        paragraph = frame.text_frame.paragraphs[0]
+        for text in ("one", "two"):
+            run = paragraph.add_run()
+            run.text = text
+            run.hyperlink.address = f"https://example.com/{text}"
+
+    source = _python_pptx_deck(tmp_path / "python-pptx-links.pptx", build)
+    prs = rpptx.Presentation(source)
+    runs = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs
+    assert [run.hyperlink.address for run in runs] == [
+        "https://example.com/one",
+        "https://example.com/two",
+    ]
+    runs[0].hyperlink.address = "https://example.com/two"
+    runs[1].hyperlink.address = None
+    retargeted = tmp_path / "python-pptx-links-out.pptx"
+    prs.save(retargeted)
+    assert _slide_hyperlink_targets(retargeted.read_bytes()) == ["https://example.com/two"]
+    runs = pptx.Presentation(retargeted).slides[0].shapes[0].text_frame.paragraphs[0].runs
+    assert [run.hyperlink.address for run in runs] == ["https://example.com/two", None]
+
+
 def test_text_enums_match_python_pptx_member_values_and_xml_tokens():
     if importlib.util.find_spec("pptx") is None:
         pytest.skip("python-pptx oracle is installed only for the differential gate")

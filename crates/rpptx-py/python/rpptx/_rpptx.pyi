@@ -26,8 +26,8 @@ __all__ = [
     "SlideCollection", "Shape", "ShapeCollection", "PlaceholderCollection",
     "Image", "AdjustmentCollection", "FillFormat", "LineFormat", "ColorFormat",
     "TextFrame", "Paragraph", "ParagraphCollection", "Run", "RunCollection",
-    "Font", "Table", "Column", "ColumnCollection", "Row", "RowCollection",
-    "Cell",
+    "Hyperlink", "Font", "Table", "Column", "ColumnCollection", "Row",
+    "RowCollection", "Cell",
 ]
 
 
@@ -535,6 +535,17 @@ class Run:
     def text(self, value: str) -> None: ...
     @property
     def font(self) -> Font: ...
+    @property
+    def hyperlink(self) -> Hyperlink: ...
+
+
+@_final
+class Hyperlink:
+    def __new__(cls, *, _private: _Never) -> Hyperlink: ...
+    @property
+    def address(self) -> str | None: ...
+    @address.setter
+    def address(self, value: str | None) -> None: ...
 
 
 @_final
