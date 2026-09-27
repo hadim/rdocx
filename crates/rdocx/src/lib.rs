@@ -128,7 +128,7 @@ pub use rdocx_oxml::text::{
     SpecialCharacter,
 };
 pub use redaction::RedactionReport;
-pub use revision::{RevisionKind, RevisionRef};
+pub use revision::{RevisionKind, RevisionRef, StoryRevision};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
 pub use run::{
     BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind, FieldDisplaySegmentRef, FieldKind,
