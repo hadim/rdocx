@@ -1484,13 +1484,18 @@ location only after the image part, relationship, drawing identity, and story
 content all validate together.
 
 `Document::split_run` creates an exact accepted-view run boundary without
-changing `RunPosition`. It clones the selected paragraph, resolves the selected
+changing `RunPosition`. Its paragraph argument is the same direct body child
+index as `RunPosition` and `find_content_index`, and an index that names a
+table, a block content control, or preserved XML fails with an error naming
+that kind. It clones the selected paragraph, resolves the selected
 recursive source path, counts Unicode scalar values only in literal text,
 partitions ordered zero-width children at their source boundary, repairs
 hyperlink and marker coordinates, and publishes the clone only on success.
 Zero and end offsets select existing boundaries and leave typed state, layout,
-and binding revisions unchanged. A structural edit makes an earlier path-backed
-Python run handle stale.
+and binding revisions unchanged. A Python `Paragraph` handle to a paragraph
+inside a block content control splits through `Document::paragraph_mut`, which
+clears the cached layout even for those offsets. A structural edit makes an
+earlier path-backed Python run handle stale.
 
 Word bookmark mutation input reuses the same top-level `RunPosition` and
 half-open `RunRange` boundary as comments. `Document::bookmarks` returns

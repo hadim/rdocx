@@ -14529,7 +14529,9 @@ impl Document {
             .collect()
     }
 
-    /// Get an immutable reference to a paragraph by index (among paragraphs only).
+    /// Get an immutable reference to a paragraph by its index in
+    /// [`Self::paragraphs`]. That index skips body tables and enters block
+    /// content controls, so it is not the direct body index.
     pub fn paragraph(&self, index: usize) -> Option<ParagraphRef<'_>> {
         self.document
             .body
@@ -14661,7 +14663,8 @@ impl Document {
         result
     }
 
-    /// Get a mutable reference to a paragraph by index (among paragraphs only).
+    /// Get a mutable reference to a paragraph by the same index as
+    /// [`Self::paragraph`].
     pub fn paragraph_mut(&mut self, index: usize) -> Option<Paragraph<'_>> {
         self.invalidate_layout();
         let mut remaining = index;
@@ -14671,6 +14674,14 @@ impl Document {
 
     /// Split a direct body paragraph run at a Unicode scalar offset of its
     /// literal text and return the resulting run boundary.
+    ///
+    /// `body_index` is the direct body child index that `RunPosition`,
+    /// [`Self::find_content_index`], [`Self::add_comment`] and
+    /// [`Self::insert_paragraph`] use, where a table or a block content
+    /// control counts as one child. An index that names a table, a block
+    /// content control or preserved XML is an error that names its kind. A
+    /// paragraph inside a block content control is split through
+    /// `paragraph_mut(i).split_run`.
     ///
     /// Zero returns the boundary before the selected run and the literal text
     /// length returns the boundary after it without changing the document.
@@ -14683,23 +14694,40 @@ impl Document {
         run_index: usize,
         character_offset: usize,
     ) -> Result<usize> {
-        let original = self.paragraph(body_index).ok_or_else(|| {
-            Error::Other(format!("body paragraph index {body_index} is out of range"))
-        })?;
-        let mut candidate = original.inner.clone();
+        let not_a_paragraph = |kind: &str| {
+            Error::Other(format!(
+                "body index {body_index} is {kind}, not a paragraph"
+            ))
+        };
+        let original = match self.document.body.content.get(body_index) {
+            Some(BodyContent::Paragraph(paragraph)) => paragraph,
+            Some(BodyContent::Table(_)) => return Err(not_a_paragraph("a table")),
+            Some(BodyContent::ContentControl(_)) => {
+                return Err(not_a_paragraph("a block content control"));
+            }
+            Some(BodyContent::RawXml(_)) => return Err(not_a_paragraph("preserved XML")),
+            None => {
+                return Err(Error::Other(format!(
+                    "body index {body_index} is out of range"
+                )));
+            }
+        };
+        let mut candidate = original.clone();
         let boundary = Paragraph {
             inner: &mut candidate,
         }
         .split_run(run_index, character_offset)?;
-        if candidate == *original.inner {
+        if candidate == *original {
             return Ok(boundary);
         }
 
-        self.invalidate_layout();
-        let mut remaining = body_index;
-        let paragraph = nth_paragraph_in_body(&mut self.document.body.content, &mut remaining)
-            .ok_or_else(|| Error::Other("body paragraph disappeared during split".to_owned()))?;
+        let Some(BodyContent::Paragraph(paragraph)) =
+            self.document.body.content.get_mut(body_index)
+        else {
+            unreachable!("body index {body_index} was checked to be a paragraph");
+        };
         *paragraph = candidate;
+        self.invalidate_layout();
         Ok(boundary)
     }
 

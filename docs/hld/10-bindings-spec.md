@@ -1006,12 +1006,17 @@ although third-party editors may renumber them. `RunPosition` and `RunRange`
 define top-level paragraph run
 boundaries with an inclusive start and exclusive end. `Document::split_run`
 splits one direct-body run at a Unicode scalar offset of its literal text, so
-such a boundary can fall inside what was one run. The second part keeps the run
+such a boundary can fall inside what was one run. Its first argument is the
+same direct body child index as `RunPosition` and `find_content_index`. An
+index that names a table, a block content control, or preserved XML is an
+error naming that kind. The second part keeps the run
 properties and the enclosing hyperlink. Tabs, breaks, fields, drawings,
 references, and preserved raw children have zero width. Zero and the literal
 text length return the existing boundary without mutation. Interior success
-returns the new continuation index. Python exposes the same method and advances
-the binding revision only when a continuation is created. `CommentRef` exposes
+returns the new continuation index. Python exposes the same method and also
+accepts a `Paragraph` handle in place of the index, which reaches paragraphs
+inside block content controls. A table cell paragraph handle is refused. The
+binding revision advances only when a continuation is created. `CommentRef` exposes
 comment metadata, text, parent identity, and resolved state without permitting
 part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
 removes comments. Add ranges use explicit zero-based, half-open body paragraph

@@ -27,7 +27,8 @@ const DEFAULT_COMMENTS_EXTENDED_PART: &str = "/word/commentsExtended.xml";
 /// A stable insertion point between runs in a body paragraph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunPosition {
-    /// Index in the document body's paragraph and table sequence.
+    /// Direct body child index, where a table or a block content control
+    /// counts as one child. `Document::find_content_index` returns it.
     pub body_index: usize,
     /// Run insertion index in the selected paragraph.
     pub run_index: usize,
