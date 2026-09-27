@@ -2291,6 +2291,39 @@ def test_picture_crop_matches_python_pptx_in_both_directions(tmp_path):
     assert (read.crop_left, read.crop_top, read.crop_right) == (0.0, 0.2, 0.33333)
 
 
+def test_shapes_move_changes_the_z_order_and_stales_handles_once(tmp_path):
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    for name in ("back", "middle", "front"):
+        prs.slides[0].shapes.add_shape("rect", 0, 0, 100, 100).name = name
+    shapes = prs.slides[0].shapes
+    held = shapes[0]
+    shapes.move(0, -1)
+    assert [shape.name for shape in prs.slides[0].shapes] == ["middle", "front", "back"]
+    for operation in (lambda: held.name, lambda: len(shapes)):
+        _assert_stale_after_exactly_one_bump(rpptx, operation)
+    with pytest.raises(rpptx.StaleElementError, match=r"prs\.slides\[0\]\.shapes\[0\]\."):
+        _ = held.name
+    prs.slides[0].shapes.move(-1, 1)
+    assert [shape.name for shape in prs.slides[0].shapes] == ["middle", "back", "front"]
+    before = prs.to_bytes()
+    with pytest.raises(IndexError, match="shape index out of range"):
+        prs.slides[0].shapes.move(0, 3)
+    group = prs.slides[0].shapes.add_group_shape()
+    with pytest.raises(ValueError, match="nested shape collections are read-only"):
+        group.shapes.move(0, 0)
+    prs.slides[0].shapes.remove(prs.slides[0].shapes[3])
+    assert prs.to_bytes() == before
+    output = tmp_path / "z-order.pptx"
+    prs.save(output)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output).slides[0].shapes
+    assert [shape.name for shape in oracle] == ["middle", "back", "front"]
+
+
 def test_shapes_and_slides_are_removed_and_reordered_with_stale_handles(tmp_path):
     import rpptx
 

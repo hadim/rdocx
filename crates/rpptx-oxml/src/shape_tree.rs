@@ -1470,14 +1470,59 @@ impl CT_ShapeTree {
         };
         let removed = self.children[index].clone();
         let xml = self.to_xml()?;
-        let range = direct_shape_child_range(&xml, id)?.ok_or_else(|| {
-            OxmlError::InvalidValue(format!("shape id {id} disappeared during removal"))
-        })?;
+        let range = direct_shape_child_ranges(&xml)?
+            .get(index)
+            .cloned()
+            .ok_or_else(|| {
+                OxmlError::InvalidValue(format!("shape id {id} disappeared during removal"))
+            })?;
         let mut rewritten = Vec::with_capacity(xml.len() - range.len());
         rewritten.extend_from_slice(&xml[..range.start]);
         rewritten.extend_from_slice(&xml[range.end..]);
         *self = Self::from_xml(&rewritten)?;
         Ok(Some(removed))
+    }
+
+    /// Moves one immediate child so that it ends up at index `to`, where
+    /// later children draw on top.
+    ///
+    /// The moved child passes only the children between its old and new
+    /// index. Unmodelled members, such as `p:contentPart`, and schema-final
+    /// content keep their bytes and their place among the other children.
+    pub fn move_child(&mut self, from: usize, to: usize) -> Result<()> {
+        let count = self.children.len();
+        if let Some(index) = [from, to].into_iter().find(|index| *index >= count) {
+            return Err(OxmlError::InvalidValue(format!(
+                "shape-tree child index {index} is out of range for {count} children"
+            )));
+        }
+        if from == to {
+            return Ok(());
+        }
+        let xml = self.to_xml()?;
+        let ranges = direct_shape_child_ranges(&xml)?;
+        if ranges.len() != count {
+            return Err(OxmlError::InvalidValue(
+                "shape-tree children changed during a move".to_owned(),
+            ));
+        }
+        let moved = ranges[from].clone();
+        let mut rewritten = Vec::with_capacity(xml.len());
+        if from < to {
+            let after = ranges[to].end;
+            rewritten.extend_from_slice(&xml[..moved.start]);
+            rewritten.extend_from_slice(&xml[moved.end..after]);
+            rewritten.extend_from_slice(&xml[moved]);
+            rewritten.extend_from_slice(&xml[after..]);
+        } else {
+            let before = ranges[to].start;
+            rewritten.extend_from_slice(&xml[..before]);
+            rewritten.extend_from_slice(&xml[moved.clone()]);
+            rewritten.extend_from_slice(&xml[before..moved.start]);
+            rewritten.extend_from_slice(&xml[moved.end..]);
+        }
+        *self = Self::from_xml(&rewritten)?;
+        Ok(())
     }
 
     /// Parses a complete `p:spTree` with any prefix bound to PresentationML.
@@ -1522,10 +1567,12 @@ impl CT_ShapeTree {
     }
 }
 
-fn direct_shape_child_range(xml: &[u8], id: u32) -> Result<Option<Range<usize>>> {
+/// Returns the byte range of every typed shape-tree child, in child order.
+fn direct_shape_child_ranges(xml: &[u8]) -> Result<Vec<Range<usize>>> {
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut root = None;
+    let mut ranges = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
             Event::Start(start) if root.is_none() => {
@@ -1538,10 +1585,8 @@ fn direct_shape_child_range(xml: &[u8], id: u32) -> Result<Option<Range<usize>>>
                 let start = shape_start_tag_range(xml, reader.buffer_position() as usize)?.start;
                 let raw = capture_element(&mut reader, &child)?;
                 let range = start..reader.buffer_position() as usize;
-                if parse_shape_tree_child(&name, uri, &raw, &namespaces)?
-                    .is_some_and(|child| child.non_visual_id() == Some(id))
-                {
-                    return Ok(Some(range));
+                if parse_shape_tree_child(&name, uri, &raw, &namespaces)?.is_some() {
+                    ranges.push(range);
                 }
             }
             Event::Empty(child) => {
@@ -1550,13 +1595,11 @@ fn direct_shape_child_range(xml: &[u8], id: u32) -> Result<Option<Range<usize>>>
                 let uri = namespaces.element_uri(child.name().as_ref());
                 let range = shape_start_tag_range(xml, reader.buffer_position() as usize)?;
                 let raw = capture_empty_element(&child)?;
-                if parse_shape_tree_child(&name, uri, &raw, &namespaces)?
-                    .is_some_and(|child| child.non_visual_id() == Some(id))
-                {
-                    return Ok(Some(range));
+                if parse_shape_tree_child(&name, uri, &raw, &namespaces)?.is_some() {
+                    ranges.push(range);
                 }
             }
-            Event::End(_) | Event::Eof => return Ok(None),
+            Event::End(_) | Event::Eof => return Ok(ranges),
             _ => {}
         }
         buffer.clear();
@@ -2426,5 +2469,53 @@ mod style_tests {
         assert!(text.find("<p:spPr").unwrap() < text.find("<p:style").unwrap());
         assert!(text.find("<p:style").unwrap() < text.find("<x:after-style").unwrap());
         assert_eq!(CT_Shape::from_xml(&written).unwrap(), shape);
+    }
+
+    #[test]
+    fn moving_a_child_passes_only_the_children_between_its_indices() {
+        let shape = |id: u32| {
+            format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="S{id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#
+            )
+        };
+        let xml = format!(
+            r#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{}<x:ink xmlns:x="urn:producer" x:kept="between"/>{}{}<p:extLst><p:ext uri="{{kept}}"/></p:extLst></p:spTree>"#,
+            shape(2),
+            shape(3),
+            shape(4)
+        );
+        let mut tree = CT_ShapeTree::from_xml(xml.as_bytes()).unwrap();
+        let ids = |tree: &CT_ShapeTree| {
+            tree.children
+                .iter()
+                .filter_map(ShapeTreeChild::non_visual_id)
+                .collect::<Vec<_>>()
+        };
+        let order = |tree: &CT_ShapeTree| {
+            let text = String::from_utf8(tree.to_xml().unwrap()).unwrap();
+            let mut marks = [r#"id="2""#, r#"id="3""#, r#"id="4""#, "<x:ink", "<p:extLst"]
+                .map(|mark| (text.find(mark).unwrap(), mark));
+            marks.sort();
+            marks.map(|(_, mark)| mark)
+        };
+
+        tree.move_child(0, 2).unwrap();
+        assert_eq!(ids(&tree), [3, 4, 2]);
+        assert_eq!(
+            order(&tree),
+            ["<x:ink", r#"id="3""#, r#"id="4""#, r#"id="2""#, "<p:extLst"]
+        );
+        tree.move_child(2, 1).unwrap();
+        assert_eq!(ids(&tree), [3, 2, 4]);
+        tree.move_child(1, 0).unwrap();
+        assert_eq!(
+            order(&tree),
+            ["<x:ink", r#"id="2""#, r#"id="3""#, r#"id="4""#, "<p:extLst"]
+        );
+        let before = tree.to_xml().unwrap();
+        tree.move_child(1, 1).unwrap();
+        assert!(tree.move_child(0, 3).is_err());
+        assert!(tree.move_child(3, 0).is_err());
+        assert_eq!(tree.to_xml().unwrap(), before);
     }
 }

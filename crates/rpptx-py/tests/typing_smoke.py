@@ -338,6 +338,10 @@ def exercise_rpptx_picture_crop_types(picture: Shape) -> None:
     picture.crop_bottom = -0.1
 
 
+def exercise_rpptx_z_order_types(slide: Slide) -> None:
+    slide.shapes.move(0, -1)
+
+
 def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
     frames: tuple[TextFrameLayout, ...] = presentation.text_layout()
     narrower: tuple[TextFrameLayout, ...] = presentation.text_layout(width_factor=0.95)

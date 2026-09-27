@@ -3193,6 +3193,35 @@ impl Presentation {
         self.commit_candidate(staged)
     }
 
+    /// Moves one immediate slide child so that it ends up at z-order index
+    /// `to_index`, where later children draw on top.
+    ///
+    /// Animations, connector glue, and relationships refer to shape ids, so
+    /// they follow the moved shape. Unmodelled shape-tree members keep their
+    /// place among the other children.
+    pub fn move_shape(
+        &mut self,
+        slide_index: usize,
+        from_index: usize,
+        to_index: usize,
+    ) -> Result<()> {
+        const OPERATION: &str = "move shape";
+        self.require_slide_index(slide_index)?;
+        let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
+        let count = tree.children.len();
+        if let Some(index) = [from_index, to_index]
+            .into_iter()
+            .find(|index| *index >= count)
+        {
+            return Err(invalid_slide_mutation(
+                OPERATION,
+                format!("shape index {index} is out of range for {count} shapes"),
+            ));
+        }
+        tree.move_child(from_index, to_index)
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))
+    }
+
     /// Inspects slide, layout, and master SmartArt in producing-scope order.
     pub fn smart_art(&self, slide_index: usize) -> Result<Vec<SmartArtInfo>> {
         let record = self

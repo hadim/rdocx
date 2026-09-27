@@ -61,6 +61,7 @@ with open("review.pdf", "wb") as output:
 - Table cell merge and split, cell fills, margins, and borders, and row
   heights.
 - Picture crop, read and written as in python-pptx.
+- Shape z-order through `slide.shapes.move(from_, to)`.
 
 ## Use it when
 

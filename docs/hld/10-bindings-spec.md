@@ -331,7 +331,10 @@ member. `add_connector` follows the python-pptx signature, `add_group_shape`
 appends an empty group, and `add_picture` accepts a path, bytes, or a binary
 file-like object, which is rewound first when it can seek. `remove` deletes one
 shape of a slide with the relationships and parts only it used and advances the
-revision once. Nested collections stay read-only.
+revision once. `move(from_, to)` changes the z-order like
+`SlideCollection.move`, so the shape ends up at index `to` and draws above the
+shapes before it, and advances the revision once. python-pptx has no z-order
+API. Nested collections stay read-only.
 
 A table `Cell` follows python-pptx for `merge(other_cell)`, `split()`,
 `is_merge_origin`, `is_spanned`, `span_height`, and `span_width`. Merge and

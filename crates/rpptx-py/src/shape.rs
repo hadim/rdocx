@@ -850,6 +850,24 @@ impl PyShapeCollection {
         Ok(())
     }
 
+    /// Moves the shape at `from_` so that it ends up at z-order index `to`,
+    /// where later shapes draw on top.
+    #[pyo3(name = "move")]
+    fn move_shape(&mut self, py: Python<'_>, from_: isize, to: isize) -> PyResult<()> {
+        self.require_slide_root()?;
+        let slide_index = self.validate(py)?;
+        let len = self.len(py)?;
+        let from_ = normalize_index(from_, len, "shape")?;
+        let to = normalize_index(to, len, "shape")?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .move_shape(slide_index, from_, to)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn add_table(
         &mut self,

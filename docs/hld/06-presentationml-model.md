@@ -478,6 +478,7 @@ pub struct PictureImage<'a> {
 pub fn picture_image(&self, slide_index: usize, shape_id: u32) -> Result<PictureImage<'_>>;
 pub fn replace_picture_image(&mut self, slide_index: usize, shape_id: u32, image_data: &[u8]) -> Result<()>;
 pub fn remove_shape(&mut self, slide_index: usize, shape_index: usize) -> Result<()>;
+pub fn move_shape(&mut self, slide_index: usize, from_index: usize, to_index: usize) -> Result<()>;
 ```
 
 `picture_image` finds the picture by `p:cNvPr/@id`, including inside groups
@@ -501,6 +502,16 @@ whose start or end names a removed shape are detached, as PowerPoint does on
 delete. Slide relationships that only the removed subtree referenced are
 deleted, and their internal targets are pruned recursively once unreachable,
 so a removed chart also drops its embedded workbook.
+
+`move_shape` changes the z-order of one immediate slide child so that it ends
+up at `to_index`, where later children draw on top. An index past the last
+child is rejected without change. Animations, connector glue, and
+relationships name shape ids, so they need no rewrite.
+`CT_ShapeTree::move_child` serializes the tree, moves the child's bytes past
+exactly the children between its two indices, and reparses, the technique
+`remove_child_by_id` uses. Unmodelled members such as `p:contentPart` and
+schema-final `p:extLst` content therefore keep their bytes and their place
+among the other children.
 
 An ordinary shape has canonical non-visual properties, a typed transform,
 preset geometry, and a minimal text body. `add_shape` keeps the string API but

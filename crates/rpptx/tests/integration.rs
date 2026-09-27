@@ -23060,6 +23060,101 @@ fn removing_a_shape_detaches_connectors_and_rejects_animated_targets_without_cha
     assert_eq!(first_slide_shape_id(&reopened, 1), group);
 }
 
+fn z_order_fixture() -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    for (name, color) in [("Red", "FF0000"), ("Blue", "0000FF")] {
+        let mut shape = slide
+            .add_shape("rect", Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+            .unwrap();
+        shape.set_name(name).unwrap();
+        shape
+            .set_fill(
+                Fill::from_xml(
+                    format!(r#"<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>"#).as_bytes(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    presentation
+}
+
+#[test]
+fn moving_a_shape_changes_the_draw_order_and_keeps_every_shape_id() {
+    let mut presentation = z_order_fixture();
+    let ids = |presentation: &Presentation| {
+        presentation
+            .slide(0)
+            .unwrap()
+            .shapes()
+            .map(|shape| shape.non_visual_id().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let top_color = |presentation: &Presentation| {
+        let png = presentation
+            .slide_png_deterministic(0, 72.0)
+            .unwrap()
+            .unwrap();
+        let pixel = tiny_skia::Pixmap::decode_png(&png)
+            .unwrap()
+            .pixel(36, 36)
+            .unwrap();
+        (pixel.red(), pixel.green(), pixel.blue())
+    };
+    let original = ids(&presentation);
+    assert_eq!(top_color(&presentation), (0, 0, 255));
+
+    presentation.move_shape(0, 1, 0).unwrap();
+    assert_eq!(ids(&presentation), [original[1], original[0]]);
+    assert_eq!(top_color(&presentation), (255, 0, 0));
+    let moved = presentation.to_bytes().unwrap();
+    assert!(matches!(
+        presentation.move_shape(0, 0, 2),
+        Err(Error::InvalidSlideMutation { .. })
+    ));
+    assert!(matches!(
+        presentation.move_shape(1, 0, 0),
+        Err(Error::UnknownSlideIndex { .. })
+    ));
+    presentation.move_shape(0, 1, 1).unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), moved);
+
+    let reopened = Presentation::from_bytes(&moved).unwrap();
+    assert!(reopened.validate().is_empty(), "{:?}", reopened.validate());
+    assert_eq!(ids(&reopened), [original[1], original[0]]);
+    assert_eq!(top_color(&reopened), (255, 0, 0));
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn moved_shapes_read_back_in_pinned_python_pptx_order() {
+    let mut presentation = z_order_fixture();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(10), Emu(10))
+        .unwrap()
+        .set_name("Text")
+        .unwrap();
+    presentation.move_shape(0, 2, 0).unwrap();
+    presentation.move_shape(0, 1, 2).unwrap();
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "z-order",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+print([shape.name for shape in Presentation(sys.argv[1]).slides[0].shapes])
+"#,
+    );
+    assert_eq!(records, "['Text', 'Blue', 'Red']\n");
+}
+
 #[test]
 fn setting_notes_text_creates_the_notes_slide_and_a_missing_notes_master() {
     let mut presentation = Presentation::new().unwrap();
