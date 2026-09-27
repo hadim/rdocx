@@ -1417,6 +1417,106 @@ def test_story_comment_after_a_block_content_control_anchors_on_its_paragraph():
     ]
 
 
+# GitHub issue #172: a run index read from Paragraph.runs anchors on that run,
+# including the runs inside an inline content control.
+_INLINE_CONTROL_PARAGRAPH = (
+    '<w:p><w:r><w:t xml:space="preserve">before </w:t></w:r>'
+    "<w:sdt><w:sdtPr/><w:sdtContent>{runs}</w:sdtContent></w:sdt>"
+    '<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>'
+)
+
+
+def _anchored_texts(document, comment_id):
+    xml = _document_xml(document).decode()
+    start = xml.index(f'commentRangeStart w:id="{comment_id}"')
+    end = xml.index(f'commentRangeEnd w:id="{comment_id}"')
+    return re.findall(r"<w:t[^>]*>([^<]*)</w:t>", xml[start:end])
+
+
+def _run_range(start, end, body_index=0):
+    import rdocx
+
+    return rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=body_index, run_index=start),
+        end=rdocx.RunPosition(body_index=body_index, run_index=end),
+    )
+
+
+def test_comment_run_index_counts_the_runs_of_an_inline_content_control():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        _INLINE_CONTROL_PARAGRAPH.format(runs="<w:r><w:t>TARGET</w:t></w:r>"),
+    )
+    runs = [run.text for run in document.paragraphs[0].runs]
+    assert runs == ["before ", "TARGET", " after"]
+
+    target = document.add_comment(_run_range(1, 2), author="A", text="x")
+    assert _anchored_texts(document, target) == ["TARGET"]
+    # The reference run of the first comment is run 2 now.
+    assert [run.text for run in document.paragraphs[0].runs][3] == " after"
+    last = document.add_comment(_run_range(3, 4), author="A", text="y")
+    assert _anchored_texts(document, last) == [" after"]
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [comment.text for comment in reopened.comments] == ["x", "y"]
+    assert _anchored_texts(reopened, target) == ["TARGET"]
+
+
+def test_story_comment_run_index_counts_the_runs_of_an_inline_content_control():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        _INLINE_CONTROL_PARAGRAPH.format(runs="<w:r><w:t>TARGET</w:t></w:r>"),
+    )
+    item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body" and item.kind == "paragraph"
+    )
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=item, run_index=1),
+            end=rdocx.StoryRunPosition(item=item, run_index=2),
+        ),
+        author="A",
+        text="x",
+    )
+    assert _anchored_texts(document, comment_id) == ["TARGET"]
+
+
+def test_comment_ranges_that_cannot_be_anchored_exactly_are_refused():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        _INLINE_CONTROL_PARAGRAPH.format(
+            runs="<w:r><w:t>A</w:t></w:r><w:r><w:t>B</w:t></w:r>"
+        ),
+    )
+    before = document.to_bytes()
+    for start, end in ((0, 2), (2, 4)):
+        with pytest.raises(
+            rdocx.RdocxError, match="crosses the edge of an inline content control"
+        ):
+            document.add_comment(_run_range(start, end), author="A", text="x")
+    assert document.to_bytes() == before
+
+    comment_id = document.add_comment(_run_range(2, 3), author="A", text="x")
+    assert _anchored_texts(document, comment_id) == ["B"]
+    assert document.remove_comment(comment_id)
+    xml = _document_xml(document).decode()
+    assert "commentRange" not in xml and "commentReference" not in xml
+    assert [run.text for run in document.paragraphs[0].runs] == [
+        "before ",
+        "A",
+        "B",
+        " after",
+    ]
+
+
 def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     import rdocx
 

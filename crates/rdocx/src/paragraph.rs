@@ -2561,9 +2561,14 @@ impl<'a> ParagraphRef<'a> {
             .map(|twips| Length::twips(twips.0.saturating_neg()))
     }
 
-    /// Get an iterator over immutable run references.
+    /// Get an iterator over immutable accepted-view run references, the runs
+    /// that [`Self::run`] indexes, including those inside inline content
+    /// controls and tracked insertions.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
-        self.inner.runs.iter().map(|r| RunRef { inner: r })
+        self.inner
+            .accepted_bookmark_runs()
+            .into_iter()
+            .map(|inner| RunRef { inner })
     }
 
     /// Iterate over the paragraph's ruby annotations in source order.

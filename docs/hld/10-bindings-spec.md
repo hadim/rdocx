@@ -1004,7 +1004,11 @@ optional `date` keyword. Omission writes no date and remains deterministic.
 Returned ids keep naming the same comment or reply after rdocx save and reopen,
 although third-party editors may renumber them. `RunPosition` and `RunRange`
 define top-level paragraph run
-boundaries with an inclusive start and exclusive end. `Document::split_run`
+boundaries with an inclusive start and exclusive end. Run boundaries count the
+accepted-view runs that `Paragraph.runs` and `rdocx-cli text --json` list,
+including the runs inside inline content controls and tracked insertions, and
+a range that cannot be anchored exactly is an error rather than a shifted
+range. `Document::split_run`
 splits one direct-body run at a Unicode scalar offset of its literal text, so
 such a boundary can fall inside what was one run. Its first argument is the
 same direct body child index as `RunPosition` and `find_content_index`. An
@@ -1020,7 +1024,8 @@ binding revision advances only when a continuation is created. `CommentRef` expo
 comment metadata, text, parent identity, and resolved state without permitting
 part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
 removes comments. Add ranges use explicit zero-based, half-open body paragraph
-and run coordinates. Every mutation publishes a complete validated document
+and run coordinates, and the run coordinates count the runs that `text --json`
+lists. Every mutation publishes a complete validated document
 to an explicit output. Python and WASM keep their package-preserving owners.
 
 Native Word callers remove one exact non-empty literal with
@@ -1038,9 +1043,8 @@ direct range, current text, and marker issue. The range counts paragraphs
 recursively through tables and block content controls. The direct range uses
 the `RunPosition` body index that `add_bookmark` takes and is present only when
 both markers sit in direct body paragraphs. Its run indexes stay the
-accepted-view boundaries of the range, which equal the run indexes
-`add_bookmark` takes only in a paragraph without inline content controls or
-tracked insertions. Insertion validates the Word name and both
+accepted-view boundaries of the range, which are the run indexes
+`add_bookmark` takes. Insertion validates the Word name and both
 boundaries, rejects duplicate or producer-reserved names, and returns the
 allocated nonnegative id. The shared recursive `Field` model retains the
 complete `REF` and `PAGEREF` instruction, target argument, cached display,

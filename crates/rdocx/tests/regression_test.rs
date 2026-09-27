@@ -1871,6 +1871,339 @@ mod direct_body_index_coordinates {
     }
 }
 
+/// GitHub issue #172: a run index read from `Paragraph::runs` or
+/// `rdocx text --json` counts the runs inside inline content controls and
+/// tracked insertions, and comment and bookmark anchoring use the same count.
+mod accepted_run_index_anchoring {
+    use rdocx::{
+        Document, RunPosition, RunRange, StoryItemKind, StoryKind, StoryRunPosition, StoryRunRange,
+    };
+
+    /// `before ` | control `TARGET` | ` after`, the issue reproduction.
+    const INLINE_CONTROL: &str = r#"<w:p><w:r><w:t xml:space="preserve">before </w:t></w:r><w:sdt><w:sdtPr><w:alias w:val="Inline"/></w:sdtPr><w:sdtContent><w:r><w:t>TARGET</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>"#;
+    /// `before ` | control `A` `B` | ` after`.
+    const TWO_RUN_CONTROL: &str = r#"<w:p><w:r><w:t xml:space="preserve">before </w:t></w:r><w:sdt><w:sdtPr><w:alias w:val="Inline"/></w:sdtPr><w:sdtContent><w:r><w:t>A</w:t></w:r><w:r><w:t>B</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>"#;
+    /// The same paragraph in a document that names the Word namespace `ns0`,
+    /// as ElementTree-based producers write it.
+    const NS0_TWO_RUN_CONTROL: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ns0:document xmlns:ns0="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><ns0:body><ns0:p><ns0:r><ns0:t xml:space="preserve">before </ns0:t></ns0:r><ns0:sdt><ns0:sdtPr/><ns0:sdtContent><ns0:r><ns0:t>A</ns0:t></ns0:r><ns0:r><ns0:t>B</ns0:t></ns0:r></ns0:sdtContent></ns0:sdt><ns0:r><ns0:t xml:space="preserve"> after</ns0:t></ns0:r></ns0:p></ns0:body></ns0:document>"#;
+
+    fn document_from_body(body: &str) -> Document {
+        super::document_with_content_controls(&super::wrap_word_body(body))
+    }
+
+    fn range(start: (usize, usize), end: (usize, usize)) -> RunRange {
+        RunRange {
+            start: RunPosition {
+                body_index: start.0,
+                run_index: start.1,
+            },
+            end: RunPosition {
+                body_index: end.0,
+                run_index: end.1,
+            },
+        }
+    }
+
+    fn run_texts(document: &Document, index: usize) -> Vec<String> {
+        document
+            .paragraph(index)
+            .unwrap()
+            .runs()
+            .map(|run| run.text())
+            .collect()
+    }
+
+    /// The `w:t` text of an XML slice that may cross element boundaries.
+    fn slice_text(xml: &str) -> String {
+        let mut text = String::new();
+        let mut rest = xml;
+        while let Some(index) = rest.find("<w:t") {
+            rest = &rest[index + "<w:t".len()..];
+            let Some(open_end) = rest.find('>') else {
+                break;
+            };
+            if !(rest.starts_with('>') || rest.starts_with(' ')) || rest[..open_end].ends_with('/')
+            {
+                continue;
+            }
+            rest = &rest[open_end + 1..];
+            let close = rest.find("</w:t>").expect("text element end");
+            text.push_str(&rest[..close]);
+            rest = &rest[close..];
+        }
+        text
+    }
+
+    /// The saved main part and the part between the range markers of `id`,
+    /// markers included.
+    fn anchored_xml(document: &mut Document, id: i32) -> (String, String) {
+        let xml = super::document_xml(document);
+        let start = xml
+            .find(&format!(r#"<w:commentRangeStart w:id="{id}"/>"#))
+            .expect("comment start marker");
+        let end_marker = format!(r#"<w:commentRangeEnd w:id="{id}"/>"#);
+        let end = xml.find(&end_marker).expect("comment end marker") + end_marker.len();
+        let anchored = xml[start..end].to_owned();
+        (xml, anchored)
+    }
+
+    fn comment(document: &mut Document, range: RunRange) -> rdocx::Result<i32> {
+        document.add_comment(range, "Ada", None, "Here")
+    }
+
+    #[test]
+    fn comment_run_index_counts_the_runs_of_an_inline_control() {
+        let mut document = document_from_body(INLINE_CONTROL);
+        assert_eq!(run_texts(&document, 0), ["before ", "TARGET", " after"]);
+
+        let id = comment(&mut document, range((0, 1), (0, 2))).unwrap();
+        let (xml, anchored) = anchored_xml(&mut document, id);
+        assert_eq!(slice_text(&anchored), "TARGET");
+        // The range covers the whole control, so its markers surround it.
+        assert!(anchored.contains("<w:sdt>") && anchored.contains("</w:sdt>"));
+        let end = xml.find("<w:commentRangeEnd").unwrap();
+        let reference = xml.find("<w:commentReference").unwrap();
+        let after = xml.find(" after</w:t>").unwrap();
+        assert!(end < reference && reference < after, "{xml}");
+
+        // The last run of the paragraph is addressable too.
+        let id = comment(&mut document, range((0, 3), (0, 4))).unwrap();
+        let (_, anchored) = anchored_xml(&mut document, id);
+        assert_eq!(slice_text(&anchored), " after");
+
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.comments().len(), 2);
+        assert_eq!(reopened.content_controls()[0].text(), "TARGET");
+        let (_, anchored) = anchored_xml(&mut reopened, id);
+        assert_eq!(slice_text(&anchored), " after");
+    }
+
+    #[test]
+    fn comment_inside_a_control_is_written_inside_its_content() {
+        let mut document = document_from_body(TWO_RUN_CONTROL);
+        assert_eq!(run_texts(&document, 0), ["before ", "A", "B", " after"]);
+
+        let id = comment(&mut document, range((0, 1), (0, 2))).unwrap();
+        let (xml, anchored) = anchored_xml(&mut document, id);
+        assert_eq!(slice_text(&anchored), "A");
+        let content = xml.find("<w:sdtContent>").unwrap();
+        let start = xml.find("<w:commentRangeStart").unwrap();
+        let reference = xml.find("<w:commentReference").unwrap();
+        let b = xml.find("<w:t>B</w:t>").unwrap();
+        let content_end = xml.find("</w:sdtContent>").unwrap();
+        assert!(content < start && reference < b && b < content_end, "{xml}");
+
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.content_controls()[0].text(), "AB");
+        let (_, anchored) = anchored_xml(&mut reopened, id);
+        assert_eq!(slice_text(&anchored), "A");
+    }
+
+    #[test]
+    fn comment_on_a_nested_control_goes_around_it_inside_the_outer_one() {
+        let mut document = document_from_body(
+            r#"<w:p><w:sdt><w:sdtContent><w:r><w:t>X</w:t></w:r><w:sdt><w:sdtContent><w:r><w:t>Y</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t>Z</w:t></w:r></w:sdtContent></w:sdt></w:p>"#,
+        );
+        assert_eq!(run_texts(&document, 0), ["X", "Y", "Z"]);
+        let id = comment(&mut document, range((0, 1), (0, 2))).unwrap();
+        let (xml, anchored) = anchored_xml(&mut document, id);
+        assert_eq!(slice_text(&anchored), "Y");
+        let x = xml.find("<w:t>X</w:t>").unwrap();
+        let z = xml.find("<w:t>Z</w:t>").unwrap();
+        let inner = xml.rfind("<w:sdt>").unwrap();
+        let start = xml.find("<w:commentRangeStart").unwrap();
+        let reference = xml.find("<w:commentReference").unwrap();
+        assert!(x < start && start < inner && reference < z, "{xml}");
+    }
+
+    #[test]
+    fn ranges_that_cannot_be_anchored_exactly_are_refused() {
+        let mut document = document_from_body(&format!(
+            r#"{TWO_RUN_CONTROL}<w:p><w:r><w:t>A </w:t></w:r><w:ins w:id="7" w:author="Ada"><w:r><w:t>B</w:t></w:r><w:r><w:t>C</w:t></w:r></w:ins></w:p>"#
+        ));
+        assert_eq!(run_texts(&document, 1), ["A ", "B", "C"]);
+        let before = document.to_bytes().unwrap();
+        for (range, reason) in [
+            // From outside the control to between its two runs.
+            (
+                range((0, 0), (0, 2)),
+                "crosses the edge of an inline content control",
+            ),
+            (
+                range((0, 2), (0, 4)),
+                "crosses the edge of an inline content control",
+            ),
+            // Between two runs of one tracked insertion.
+            (range((1, 2), (1, 3)), "inside a tracked insertion"),
+            // A range that continues into another paragraph from inside a control.
+            (range((0, 2), (1, 1)), "inside an inline content control"),
+            (range((0, 4), (0, 5)), "exceeds paragraph run count 4"),
+        ] {
+            let error = comment(&mut document, range).unwrap_err().to_string();
+            assert!(error.contains(reason), "{range:?}: {error}");
+            let error = document.add_bookmark("refused", range).unwrap_err();
+            assert!(error.to_string().contains(reason), "{range:?}: {error}");
+        }
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        // The whole insertion can be commented, and so can a range that
+        // starts before the control and continues into the next paragraph.
+        let id = comment(&mut document, range((1, 1), (1, 3))).unwrap();
+        let (_, anchored) = anchored_xml(&mut document, id);
+        assert_eq!(slice_text(&anchored), "BC");
+        let id = comment(&mut document, range((0, 1), (1, 1))).unwrap();
+        let (_, anchored) = anchored_xml(&mut document, id);
+        assert_eq!(slice_text(&anchored), "AB afterA ");
+    }
+
+    #[test]
+    fn removing_a_comment_clears_markers_inside_control_content() {
+        let mut document = document_from_body(TWO_RUN_CONTROL);
+        let original = super::document_xml(&mut document);
+        let id = comment(&mut document, range((0, 2), (0, 3))).unwrap();
+        assert!(super::document_xml(&mut document).contains("<w:commentReference"));
+
+        assert!(document.remove_comment(id).unwrap());
+        let removed = super::document_xml(&mut document);
+        assert!(!removed.contains("commentRange"), "{removed}");
+        assert!(!removed.contains("commentReference"), "{removed}");
+        assert_eq!(run_texts(&document, 0), ["before ", "A", "B", " after"]);
+
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(super::document_xml(&mut reopened), original);
+    }
+
+    #[test]
+    fn removing_a_producer_comment_clears_its_markers_inside_control_content() {
+        let (mut document, id) = super::document_with_comment_paragraphs(&format!(
+            r#"<w:p><w:sdt><w:sdtContent><w:r><w:t>A</w:t></w:r><w:commentRangeStart w:id="{id}"/><w:r><w:t>B</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:sdtContent></w:sdt></w:p>"#,
+            id = 0
+        ));
+        assert!(document.remove_comment(id).unwrap());
+        let removed = super::document_xml(&mut document);
+        assert!(!removed.contains("commentRange"), "{removed}");
+        assert!(!removed.contains("commentReference"), "{removed}");
+        assert!(
+            removed.contains("<w:sdtContent><w:r><w:t>A</w:t></w:r><w:r><w:t>B</w:t></w:r>"),
+            "{removed}"
+        );
+    }
+
+    #[test]
+    fn removing_a_comment_clears_fixed_prefix_markers_in_a_document_of_another_prefix() {
+        // The markers added inside the control use the fixed `w` prefix.
+        let mut document = super::document_with_content_controls(NS0_TWO_RUN_CONTROL);
+        assert_eq!(run_texts(&document, 0), ["before ", "A", "B", " after"]);
+        let marker_counts = |xml: &str| {
+            ["commentRangeStart", "commentRangeEnd", "commentReference"]
+                .map(|name| xml.matches(name).count())
+        };
+
+        let id = comment(&mut document, range((0, 2), (0, 3))).unwrap();
+        assert_eq!(marker_counts(&super::document_xml(&mut document)), [1; 3]);
+        assert!(document.remove_comment(id).unwrap());
+        let removed = super::document_xml(&mut document);
+        assert_eq!(marker_counts(&removed), [0; 3], "{removed}");
+
+        // The next comment reuses the id and owns the only marker pair.
+        let next = comment(&mut document, range((0, 0), (0, 1))).unwrap();
+        assert_eq!(next, id);
+        let xml = super::document_xml(&mut document);
+        assert_eq!(marker_counts(&xml), [1; 3], "{xml}");
+        let (_, anchored) = anchored_xml(&mut document, next);
+        assert_eq!(slice_text(&anchored), "before ");
+    }
+
+    #[test]
+    fn bookmarks_inside_and_around_a_control_keep_their_text_and_distinct_ids() {
+        for body in [
+            super::wrap_word_body(TWO_RUN_CONTROL),
+            NS0_TWO_RUN_CONTROL.to_owned(),
+        ] {
+            let mut document = super::document_with_content_controls(&body);
+            // Saving renumbers added bookmarks in document order, which runs
+            // against the order they were added in.
+            for (name, range) in [
+                ("inside", range((0, 2), (0, 3))),
+                ("after", range((0, 3), (0, 4))),
+                ("before", range((0, 0), (0, 1))),
+            ] {
+                document.add_bookmark(name, range).unwrap();
+            }
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            for document in [&document, &reopened] {
+                let bookmarks = document
+                    .bookmarks()
+                    .iter()
+                    .map(|bookmark| {
+                        (
+                            bookmark.name().unwrap().to_owned(),
+                            bookmark.text().to_owned(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    bookmarks,
+                    [
+                        ("before".to_owned(), "before ".to_owned()),
+                        ("inside".to_owned(), "B".to_owned()),
+                        ("after".to_owned(), " after".to_owned()),
+                    ]
+                );
+            }
+            let mut ids = reopened
+                .bookmarks()
+                .iter()
+                .map(|bookmark| bookmark.id())
+                .collect::<Vec<_>>();
+            ids.dedup();
+            assert_eq!(ids, [Some(0), Some(1), Some(2)]);
+        }
+    }
+
+    #[test]
+    fn story_comment_and_bookmark_use_the_same_run_index() {
+        let mut document = document_from_body(INLINE_CONTROL);
+        let story = super::f254_story(&document, StoryKind::Body);
+        let location = document
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind() == StoryItemKind::Paragraph)
+            .unwrap()
+            .location()
+            .clone();
+        let position = |run_index| StoryRunPosition {
+            location: location.clone(),
+            run_index,
+        };
+        let id = document
+            .add_story_comment(
+                StoryRunRange {
+                    start: position(1),
+                    end: position(2),
+                },
+                "Ada",
+                None,
+                "Here",
+            )
+            .unwrap();
+        let (_, anchored) = anchored_xml(&mut document, id);
+        assert_eq!(slice_text(&anchored), "TARGET");
+
+        let mut document = document_from_body(TWO_RUN_CONTROL);
+        document
+            .add_bookmark("second", range((0, 2), (0, 3)))
+            .unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        for document in [&document, &reopened] {
+            let bookmark = &document.bookmarks()[0];
+            assert_eq!(bookmark.text(), "B");
+            assert_eq!(bookmark.direct_range(), Some(range((0, 2), (0, 3))));
+        }
+    }
+}
+
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
     let mut document = f255_story_document();
     document.add_picture(b"body image", "body.png", Length::pt(1.0), Length::pt(1.0));
@@ -15406,30 +15739,48 @@ fn comment_insertion_keeps_content_at_the_hyperlink_end_boundary() {
         r#"<w:p><w:hyperlink><w:r><w:t>one</w:t></w:r><w:r><w:t>two</w:t></w:r><w:ins w:id="43" w:author="Ada"><w:r><w:t>end</w:t></w:r></w:ins>{raw}</w:hyperlink></w:p>"#
     ));
     let mut document = document_with_content_controls(&xml);
+    let range = |end| RunRange {
+        start: RunPosition {
+            body_index: 0,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index: 0,
+            run_index: end,
+        },
+    };
+    // The accepted view lists `one`, `two` and the inserted `end`. Ending the
+    // range after `two` would need an end marker inside the hyperlink before
+    // the insertion, which the paragraph model cannot place, so it is refused
+    // rather than silently widened over `end` as before GitHub issue #172.
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .add_comment(range(2), "Ada", None, "review")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("next to a tracked change inside a hyperlink"),
+        "{error}"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
     let comment_id = document
-        .add_comment(
-            RunRange {
-                start: RunPosition {
-                    body_index: 0,
-                    run_index: 0,
-                },
-                end: RunPosition {
-                    body_index: 0,
-                    run_index: 2,
-                },
-            },
-            "Ada",
-            None,
-            "review",
-        )
+        .add_comment(range(3), "Ada", None, "review")
         .unwrap();
 
     let inserted = document_xml(&mut document);
     let revision = inserted.find(r#"w:id="43""#).unwrap();
     let raw_position = inserted.find(raw).unwrap();
     let hyperlink_end = inserted.find("</w:hyperlink>").unwrap();
+    let range_end = inserted.find("<w:commentRangeEnd").unwrap();
     let reference = inserted.find("<w:commentReference").unwrap();
-    assert!(revision < raw_position && raw_position < hyperlink_end && hyperlink_end < reference);
+    assert!(
+        revision < raw_position
+            && raw_position < hyperlink_end
+            && hyperlink_end < range_end
+            && range_end < reference
+    );
 
     assert!(document.remove_comment(comment_id).unwrap());
     let removed = document_xml(&mut document);
@@ -16030,17 +16381,20 @@ fn new_bookmark_after_an_accepted_control_has_live_accepted_coordinates() {
     "#;
     let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
 
+    // `add_bookmark` takes the accepted-view run index that `bookmarks()`
+    // reports, so `direct target` is run 1 after the wrapped prefix, as
+    // `Paragraph::runs` lists it since GitHub issue #172.
     document
         .add_bookmark(
             "destination",
             RunRange {
                 start: RunPosition {
                     body_index: 1,
-                    run_index: 0,
+                    run_index: 1,
                 },
                 end: RunPosition {
                     body_index: 1,
-                    run_index: 1,
+                    run_index: 2,
                 },
             },
         )

@@ -3462,6 +3462,58 @@ pub enum RunSplitError {
     BookmarkProjection,
 }
 
+/// The range kind that [`CT_P::anchor_accepted_range`] writes.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeAnchor<'a> {
+    /// Comment range markers, with the reference run right after the end.
+    Comment(i32),
+    /// Bookmark markers.
+    Bookmark { id: i32, name: &'a str },
+}
+
+/// Why [`CT_P::anchor_accepted_range`] could not place a range exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RangeAnchorError {
+    #[error("run boundary {boundary} exceeds the paragraph run count {run_count}")]
+    OutOfRange { boundary: usize, run_count: usize },
+    #[error("run range {start}..{end} ends before it starts")]
+    Reversed { start: usize, end: usize },
+    #[error("run range {start}..{end} crosses the edge of an inline content control")]
+    CrossesControl { start: usize, end: usize },
+    #[error(
+        "run boundary {boundary} falls inside an inline content control, where a range that continues into another paragraph cannot start or end"
+    )]
+    InsideControl { boundary: usize },
+    #[error("run boundary {boundary} falls inside a tracked insertion or move")]
+    InsideRevision { boundary: usize },
+    #[error("run boundary {boundary} sits next to a tracked change inside a hyperlink")]
+    HyperlinkRevision { boundary: usize },
+    #[error("range markers could not be written into the paragraph")]
+    Write,
+}
+
+/// One physical place for a range marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MarkerSite {
+    /// A position among the paragraph-level children at a direct run boundary.
+    Paragraph { boundary: usize, position: usize },
+    /// A `w:sdtContent` child index in the inline control that `controls`
+    /// reaches: a paragraph control index, then nested content indexes.
+    Control { controls: Vec<usize>, index: usize },
+}
+
+/// A direct run boundary and a position among its paragraph-level children.
+type ChildPosition = (usize, usize);
+
+/// One paragraph-level child at a direct run boundary, in serialization order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundaryItem {
+    Control(usize),
+    Marker(usize),
+    Raw(usize),
+}
+
 /// `CT_P` — A paragraph element containing runs and properties.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
@@ -4569,6 +4621,497 @@ impl CT_P {
         projected
     }
 
+    /// Write range markers at accepted-view run boundaries, the run index
+    /// space of [`Self::accepted_run_paths`].
+    ///
+    /// The markers go inside `w:sdtContent` when the range starts or ends
+    /// between two runs of an inline content control, and around the whole
+    /// control when the range covers it. A missing side means the range
+    /// continues into another paragraph, so that side must not fall inside a
+    /// control. A comment reference run follows the comment end marker. A
+    /// range that cannot be written exactly is refused and the paragraph is
+    /// unchanged.
+    #[doc(hidden)]
+    pub fn anchor_accepted_range(
+        &mut self,
+        start: Option<usize>,
+        end: Option<usize>,
+        anchor: RangeAnchor<'_>,
+    ) -> std::result::Result<(), RangeAnchorError> {
+        let (start_site, end_site) = self.accepted_range_sites(start, end)?;
+        let mut paragraph = self.clone();
+        // The end goes first. A start site never follows it, so the end and
+        // its reference run leave the start site where it was.
+        if let Some(site) = end_site {
+            paragraph.insert_range_marker(site, anchor, false)?;
+        }
+        if let Some(site) = start_site {
+            paragraph.insert_range_marker(site, anchor, true)?;
+        }
+        if !paragraph.refresh_bookmark_projection() {
+            return Err(RangeAnchorError::Write);
+        }
+        *self = paragraph;
+        Ok(())
+    }
+
+    /// Resolve where the start and end markers of a range go.
+    fn accepted_range_sites(
+        &self,
+        start: Option<usize>,
+        end: Option<usize>,
+    ) -> std::result::Result<(Option<MarkerSite>, Option<MarkerSite>), RangeAnchorError> {
+        let paths = self.accepted_run_paths();
+        let run_count = paths.len();
+        for boundary in [start, end].into_iter().flatten() {
+            if boundary > run_count {
+                return Err(RangeAnchorError::OutOfRange {
+                    boundary,
+                    run_count,
+                });
+            }
+        }
+        // The recursive owner of a run is its path without the final run step.
+        let owner = |index: usize| {
+            let segments = paths[index].segments();
+            &segments[..segments.len() - 1]
+        };
+        // The deepest owner holding the runs on both sides of a boundary.
+        let shared = |boundary: usize| match boundary.checked_sub(1) {
+            Some(left) if boundary < run_count => {
+                &owner(left)[..common_prefix_len(owner(left), owner(boundary))]
+            }
+            _ => &[] as &[AcceptedRunPathSegment],
+        };
+        let (owner_path, blamed) = match (start, end) {
+            (Some(start), Some(end)) if start > end => {
+                return Err(RangeAnchorError::Reversed { start, end });
+            }
+            (Some(start), Some(end)) if start == end => (shared(start), start),
+            (Some(start), Some(end)) => {
+                // The outermost owner that holds the first and the last run
+                // of the range and reaches both boundaries.
+                let (start_depth, end_depth) = (shared(start).len(), shared(end).len());
+                let depth = start_depth.max(end_depth);
+                let first = owner(start);
+                if depth > common_prefix_len(first, owner(end - 1)) {
+                    return Err(RangeAnchorError::CrossesControl { start, end });
+                }
+                let blamed = if start_depth >= end_depth { start } else { end };
+                (&first[..depth], blamed)
+            }
+            (Some(boundary), None) | (None, Some(boundary)) => {
+                let shared = shared(boundary);
+                if shared
+                    .iter()
+                    .any(|segment| matches!(segment, AcceptedRunPathSegment::Revision(_)))
+                {
+                    return Err(RangeAnchorError::InsideRevision { boundary });
+                } else if !shared.is_empty() {
+                    return Err(RangeAnchorError::InsideControl { boundary });
+                }
+                (shared, boundary)
+            }
+            (None, None) => return Ok((None, None)),
+        };
+        let mut controls = Vec::with_capacity(owner_path.len());
+        for segment in owner_path {
+            match *segment {
+                AcceptedRunPathSegment::ContentControl(index) => controls.push(index),
+                AcceptedRunPathSegment::Revision(_) | AcceptedRunPathSegment::Run(_) => {
+                    return Err(RangeAnchorError::InsideRevision { boundary: blamed });
+                }
+            }
+        }
+
+        let end_site = end
+            .map(|boundary| self.marker_site(&paths, &controls, boundary, false))
+            .transpose()?;
+        let start_site = match (start, end) {
+            (Some(start), Some(end)) if start == end => end_site.clone(),
+            _ => start
+                .map(|boundary| self.marker_site(&paths, &controls, boundary, true))
+                .transpose()?,
+        };
+        Ok((start_site, end_site))
+    }
+
+    /// Place a marker just before the run after `boundary` for a start, or
+    /// just after the run before it for an end, inside the owner `controls`.
+    fn marker_site(
+        &self,
+        paths: &[AcceptedRunPath],
+        controls: &[usize],
+        boundary: usize,
+        start: bool,
+    ) -> std::result::Result<MarkerSite, RangeAnchorError> {
+        if !controls.is_empty() {
+            let path = if start {
+                paths.get(boundary)
+            } else {
+                boundary.checked_sub(1).map(|index| &paths[index])
+            }
+            .ok_or(RangeAnchorError::Write)?;
+            let control = self.control_at(controls).ok_or(RangeAnchorError::Write)?;
+            let index = match path.segments()[controls.len()] {
+                AcceptedRunPathSegment::Run(index)
+                | AcceptedRunPathSegment::ContentControl(index) => index,
+                AcceptedRunPathSegment::Revision(index) => {
+                    control
+                        .revisions()
+                        .get(index)
+                        .ok_or(RangeAnchorError::Write)?
+                        .0
+                }
+            };
+            return Ok(MarkerSite::Control {
+                controls: controls.to_vec(),
+                index: index + usize::from(!start),
+            });
+        }
+        // A paragraph-level marker must fall between the top-level owners of
+        // both neighbouring runs, which a revision inside a hyperlink can
+        // prevent.
+        let before_right = paths
+            .get(boundary)
+            .map(|path| self.paragraph_owner_positions(path).0);
+        let after_left = boundary
+            .checked_sub(1)
+            .map(|index| self.paragraph_owner_positions(&paths[index]).1);
+        let (Some(before_right), Some(after_left)) = (
+            before_right.unwrap_or(Some((
+                self.runs.len(),
+                self.boundary_items(self.runs.len()).len(),
+            ))),
+            after_left.unwrap_or(Some((0, 0))),
+        ) else {
+            return Err(RangeAnchorError::HyperlinkRevision { boundary });
+        };
+        let (boundary, position) = if start { before_right } else { after_left };
+        Ok(MarkerSite::Paragraph { boundary, position })
+    }
+
+    /// Positions just before and just after the paragraph-level owner of one
+    /// accepted run, or `None` where no paragraph-level child can go.
+    fn paragraph_owner_positions(
+        &self,
+        path: &AcceptedRunPath,
+    ) -> (Option<ChildPosition>, Option<ChildPosition>) {
+        let around = |boundary: usize, item: BoundaryItem| {
+            let items = self.boundary_items(boundary);
+            match items.iter().position(|candidate| *candidate == item) {
+                Some(position) => (Some((boundary, position)), Some((boundary, position + 1))),
+                None => (None, None),
+            }
+        };
+        let raw_at = |boundary: usize, slot: usize| {
+            self.extra_xml
+                .iter()
+                .enumerate()
+                .filter(|(_, (position, _))| *position == boundary)
+                .nth(slot)
+                .map(|(index, _)| BoundaryItem::Raw(index))
+        };
+        match path.segments()[0] {
+            AcceptedRunPathSegment::Run(index) => (
+                Some((index, self.boundary_items(index).len())),
+                Some((index + 1, 0)),
+            ),
+            AcceptedRunPathSegment::ContentControl(index) => self
+                .content_controls
+                .get(index)
+                .map_or((None, None), |(boundary, _, _, _)| {
+                    around(*boundary, BoundaryItem::Control(index))
+                }),
+            AcceptedRunPathSegment::Revision(index) => {
+                let Some((boundary, slot, _)) = self.revisions.get(index) else {
+                    return (None, None);
+                };
+                let boundary = *boundary;
+                let Some(hyperlink) = hyperlink_revision_index(*slot) else {
+                    return raw_at(boundary, *slot)
+                        .map_or((None, None), |item| around(boundary, item));
+                };
+                match self.hyperlinks.get(hyperlink) {
+                    Some(hyperlink) if hyperlink.preserved_raw_before.is_some() => {
+                        raw_at(boundary, hyperlink.preserved_raw_before.unwrap_or_default())
+                            .map_or((None, None), |item| around(boundary, item))
+                    }
+                    // A closing hyperlink writes its revision before the
+                    // paragraph children at its end boundary, and an open
+                    // one writes it after them.
+                    Some(hyperlink)
+                        if hyperlink.run_start < hyperlink.run_end
+                            && boundary == hyperlink.run_end =>
+                    {
+                        (None, Some((boundary, 0)))
+                    }
+                    Some(hyperlink) if hyperlink.run_start < hyperlink.run_end => {
+                        (Some((boundary, self.boundary_items(boundary).len())), None)
+                    }
+                    _ => (None, None),
+                }
+            }
+        }
+    }
+
+    /// Reach the inline control that `controls` names.
+    fn control_at(&self, controls: &[usize]) -> Option<&CT_Sdt> {
+        let (first, rest) = controls.split_first()?;
+        let mut control = &self.content_controls.get(*first)?.3;
+        for index in rest {
+            let SdtContent::ContentControl(nested) = control.content.get(*index)? else {
+                return None;
+            };
+            control = nested;
+        }
+        Some(control)
+    }
+
+    fn control_at_mut(&mut self, controls: &[usize]) -> Option<&mut CT_Sdt> {
+        let (first, rest) = controls.split_first()?;
+        let mut control = &mut self.content_controls.get_mut(*first)?.3;
+        for index in rest {
+            let SdtContent::ContentControl(nested) = control.content.get_mut(*index)? else {
+                return None;
+            };
+            control = nested;
+        }
+        Some(control)
+    }
+
+    fn insert_range_marker(
+        &mut self,
+        site: MarkerSite,
+        anchor: RangeAnchor<'_>,
+        start: bool,
+    ) -> std::result::Result<(), RangeAnchorError> {
+        let marker_xml = range_marker_xml(anchor, start).ok_or(RangeAnchorError::Write)?;
+        let reference = match anchor {
+            RangeAnchor::Comment(id) if !start => Some(CT_R {
+                properties: None,
+                content: vec![RunContent::CommentReference { id, raw_before: 0 }],
+                extra_xml: Vec::new(),
+                extra_xml_positions: Vec::new(),
+                alt_drawings: Vec::new(),
+            }),
+            RangeAnchor::Comment(_) | RangeAnchor::Bookmark { .. } => None,
+        };
+        let inserted = match site {
+            MarkerSite::Control { controls, index } => {
+                let mut children = vec![SdtContent::RawXml(marker_xml)];
+                children.extend(reference.map(SdtContent::Run));
+                self.control_at_mut(&controls)
+                    .is_some_and(|control| control.insert_content(index, children))
+            }
+            MarkerSite::Paragraph { boundary, position } => {
+                let mut items = self.boundary_items(boundary);
+                let item = match anchor {
+                    RangeAnchor::Comment(id) => {
+                        self.comment_ranges.push(if start {
+                            CommentRangeMarker::Start {
+                                id,
+                                run_index: boundary,
+                                raw_before: 0,
+                                has_child_content: false,
+                            }
+                        } else {
+                            CommentRangeMarker::End {
+                                id,
+                                run_index: boundary,
+                                raw_before: 0,
+                                has_child_content: false,
+                            }
+                        });
+                        BoundaryItem::Marker(self.comment_ranges.len() - 1)
+                    }
+                    RangeAnchor::Bookmark { .. } => {
+                        self.extra_xml.push((boundary, marker_xml));
+                        BoundaryItem::Raw(self.extra_xml.len() - 1)
+                    }
+                };
+                items.insert(position.min(items.len()), item);
+                self.place_boundary_items(&[(boundary, items)]);
+                match reference {
+                    Some(run) => self.insert_run_after_boundary_items(boundary, position + 1, run),
+                    None => true,
+                }
+            }
+        };
+        if inserted {
+            Ok(())
+        } else {
+            Err(RangeAnchorError::Write)
+        }
+    }
+
+    /// List the paragraph-level children at one direct run boundary in the
+    /// order that serialization writes them.
+    fn boundary_items(&self, boundary: usize) -> Vec<BoundaryItem> {
+        let raws = self
+            .extra_xml
+            .iter()
+            .enumerate()
+            .filter(|(_, (position, _))| *position == boundary)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let mut items = Vec::new();
+        for raw_slot in 0..=raws.len() {
+            let markers = self
+                .comment_ranges
+                .iter()
+                .enumerate()
+                .filter(|(_, marker)| {
+                    marker.run_index() == boundary
+                        && marker.raw_before().min(raws.len()) == raw_slot
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            for marker_slot in 0..=markers.len() {
+                items.extend(
+                    self.content_controls
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (at, raw_before, markers_before, _))| {
+                            *at == boundary
+                                && (*raw_before).min(raws.len()) == raw_slot
+                                && (*markers_before).min(markers.len()) == marker_slot
+                        })
+                        .map(|(index, _)| BoundaryItem::Control(index)),
+                );
+                if let Some(marker) = markers.get(marker_slot) {
+                    items.push(BoundaryItem::Marker(*marker));
+                }
+            }
+            if let Some(raw) = raws.get(raw_slot) {
+                items.push(BoundaryItem::Raw(*raw));
+            }
+        }
+        items
+    }
+
+    /// Give each listed direct run boundary exactly its listed children in
+    /// order, and move every projection that names a moved raw child.
+    fn place_boundary_items(&mut self, boundaries: &[(usize, Vec<BoundaryItem>)]) {
+        let mut raw_moves = Vec::new();
+        let mut placed_raws = Vec::new();
+        let mut placed_markers = Vec::new();
+        for (boundary, items) in boundaries {
+            let (mut raws, mut markers) = (0, 0);
+            for item in items {
+                match *item {
+                    BoundaryItem::Control(index) => {
+                        let control = &mut self.content_controls[index];
+                        (control.0, control.1, control.2) = (*boundary, raws, markers);
+                    }
+                    BoundaryItem::Marker(index) => {
+                        match &mut self.comment_ranges[index] {
+                            CommentRangeMarker::Start {
+                                run_index,
+                                raw_before,
+                                ..
+                            }
+                            | CommentRangeMarker::End {
+                                run_index,
+                                raw_before,
+                                ..
+                            } => (*run_index, *raw_before) = (*boundary, raws),
+                        }
+                        markers += 1;
+                        placed_markers.push(index);
+                    }
+                    BoundaryItem::Raw(index) => {
+                        let old_boundary = self.extra_xml[index].0;
+                        let old_slot = self.extra_xml[..index]
+                            .iter()
+                            .filter(|(position, _)| *position == old_boundary)
+                            .count();
+                        raw_moves.push(((old_boundary, old_slot), (*boundary, raws)));
+                        placed_raws.push(index);
+                        raws += 1;
+                        markers = 0;
+                    }
+                }
+            }
+        }
+        // Serialization reads the raw children and markers of one boundary in
+        // vector order, so the placed ones move to the end in list order.
+        let mut extra_xml = std::mem::take(&mut self.extra_xml)
+            .into_iter()
+            .map(Some)
+            .collect::<Vec<_>>();
+        let placed = placed_raws
+            .iter()
+            .zip(&raw_moves)
+            .filter_map(|(index, (_, (boundary, _)))| {
+                extra_xml[*index].take().map(|(_, raw)| (*boundary, raw))
+            })
+            .collect::<Vec<_>>();
+        self.extra_xml = extra_xml.into_iter().flatten().chain(placed).collect();
+        let mut comment_ranges = std::mem::take(&mut self.comment_ranges)
+            .into_iter()
+            .map(Some)
+            .collect::<Vec<_>>();
+        let placed = placed_markers
+            .iter()
+            .filter_map(|index| comment_ranges[*index].take())
+            .collect::<Vec<_>>();
+        self.comment_ranges = comment_ranges.into_iter().flatten().chain(placed).collect();
+
+        let moved = |at: usize, slot: usize| {
+            raw_moves
+                .iter()
+                .find(|(old, _)| *old == (at, slot))
+                .map(|(_, new)| *new)
+        };
+        let mut moved_hyperlinks = Vec::new();
+        for (hyperlink_index, hyperlink) in self.hyperlinks.iter_mut().enumerate() {
+            if hyperlink.run_start == hyperlink.run_end
+                && let Some(slot) = hyperlink.preserved_raw_before
+                && let Some((boundary, slot)) = moved(hyperlink.run_start, slot)
+            {
+                moved_hyperlinks.push((hyperlink_index, hyperlink.run_start, boundary));
+                (hyperlink.run_start, hyperlink.run_end) = (boundary, boundary);
+                hyperlink.preserved_raw_before = Some(slot);
+            }
+        }
+        for (at, slot, _) in &mut self.revisions {
+            if let Some(hyperlink) = hyperlink_revision_index(*slot) {
+                if let Some((_, _, boundary)) = moved_hyperlinks
+                    .iter()
+                    .find(|(index, old, _)| *index == hyperlink && *old == *at)
+                {
+                    *at = *boundary;
+                }
+            } else if let Some(new) = moved(*at, *slot) {
+                (*at, *slot) = new;
+            }
+        }
+        for (at, slot, _) in &mut self.equations {
+            if let Some(new) = moved(*at, *slot) {
+                (*at, *slot) = new;
+            }
+        }
+    }
+
+    /// Insert a direct run at `boundary` after the first `kept` children
+    /// there, so the remaining children follow the new run.
+    fn insert_run_after_boundary_items(&mut self, boundary: usize, kept: usize, run: CT_R) -> bool {
+        let items = self.boundary_items(boundary);
+        // The insertion moves every child of the boundary after the new run.
+        if !self.insert_unwrapped_run(boundary, run) {
+            return false;
+        }
+        let (before, after) = items.split_at(kept.min(items.len()));
+        if !before.is_empty() {
+            self.place_boundary_items(&[
+                (boundary, before.to_vec()),
+                (boundary + 1, after.to_vec()),
+            ]);
+        }
+        true
+    }
+
     /// Remap facade-authored bookmark marker ids without reserializing any
     /// unrelated preserved child XML.
     #[doc(hidden)]
@@ -4577,30 +5120,11 @@ impl CT_P {
         remap: &std::collections::HashMap<i32, i32>,
     ) -> bool {
         for (_, raw) in &mut self.extra_xml {
-            let Ok(text) = std::str::from_utf8(raw) else {
-                continue;
-            };
-            if !(text.starts_with("<w:bookmarkStart ") || text.starts_with("<w:bookmarkEnd ")) {
-                continue;
-            }
-            let Some(attribute) = text.find("w:id=\"") else {
-                continue;
-            };
-            let value_start = attribute + "w:id=\"".len();
-            let Some(value_end) = text[value_start..].find('"').map(|end| value_start + end) else {
-                continue;
-            };
-            let Ok(old) = text[value_start..value_end].parse::<i32>() else {
-                continue;
-            };
-            let Some(updated) = remap.get(&old) else {
-                continue;
-            };
-            let mut replaced = Vec::with_capacity(raw.len());
-            replaced.extend_from_slice(&raw[..value_start]);
-            replaced.extend_from_slice(updated.to_string().as_bytes());
-            replaced.extend_from_slice(&raw[value_end..]);
-            *raw = replaced;
+            remap_authored_bookmark_marker(raw, remap);
+        }
+        // Markers anchored inside an inline control are its content children.
+        for (_, _, _, control) in &mut self.content_controls {
+            control.remap_authored_bookmark_ids(remap);
         }
         self.refresh_bookmark_projection()
     }
@@ -4611,10 +5135,17 @@ impl CT_P {
             format!("\0r\0{R_NS}"),
             format!("\0mc\0{}", crate::namespace::MC_NS),
         ];
+        // Inline controls keep the source prefix of their preserved runs,
+        // which the isolated paragraph no longer declares.
         for prefix in self
             .bookmark_markers
             .iter()
             .flat_map(|marker| marker.word_prefixes.iter())
+            .chain(
+                self.content_controls
+                    .iter()
+                    .flat_map(|(_, _, _, control)| control.word_prefixes()),
+            )
         {
             if !word_prefixes.contains(prefix) {
                 word_prefixes.push(prefix.clone());
@@ -7404,6 +7935,90 @@ fn raw_xml_count_at(extra_xml: &[(usize, Vec<u8>)], run_index: usize) -> usize {
         .iter()
         .filter(|(position, raw)| *position == run_index && !is_xml_whitespace(raw))
         .count()
+}
+
+fn common_prefix_len(left: &[AcceptedRunPathSegment], right: &[AcceptedRunPathSegment]) -> usize {
+    left.iter()
+        .zip(right)
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+/// Serialize one canonical comment or bookmark range marker.
+fn range_marker_xml(anchor: RangeAnchor<'_>, start: bool) -> Option<Vec<u8>> {
+    let (tag, id, name) = match anchor {
+        RangeAnchor::Comment(id) if start => ("w:commentRangeStart", id, None),
+        RangeAnchor::Comment(id) => ("w:commentRangeEnd", id, None),
+        RangeAnchor::Bookmark { id, name } if start => ("w:bookmarkStart", id, Some(name)),
+        RangeAnchor::Bookmark { id, .. } => ("w:bookmarkEnd", id, None),
+    };
+    let mut value = itoa::Buffer::new();
+    let mut element = BytesStart::new(tag);
+    element.push_attribute(("w:id", value.format(id)));
+    if let Some(name) = name {
+        element.push_attribute(("w:name", name));
+    }
+    let mut raw = Vec::new();
+    Writer::new(&mut raw)
+        .write_event(Event::Empty(element))
+        .ok()?;
+    Some(raw)
+}
+
+/// Rewrite the id of one facade-authored bookmark marker through `remap`,
+/// leaving any other raw child unchanged.
+pub(crate) fn remap_authored_bookmark_marker(
+    raw: &mut Vec<u8>,
+    remap: &std::collections::HashMap<i32, i32>,
+) {
+    let Ok(text) = std::str::from_utf8(raw) else {
+        return;
+    };
+    if !(text.starts_with("<w:bookmarkStart ") || text.starts_with("<w:bookmarkEnd ")) {
+        return;
+    }
+    let Some(attribute) = text.find("w:id=\"") else {
+        return;
+    };
+    let value_start = attribute + "w:id=\"".len();
+    let Some(value_end) = text[value_start..].find('"').map(|end| value_start + end) else {
+        return;
+    };
+    let Ok(old) = text[value_start..value_end].parse::<i32>() else {
+        return;
+    };
+    let Some(updated) = remap.get(&old) else {
+        return;
+    };
+    let mut replaced = Vec::with_capacity(raw.len());
+    replaced.extend_from_slice(&raw[..value_start]);
+    replaced.extend_from_slice(updated.to_string().as_bytes());
+    replaced.extend_from_slice(&raw[value_end..]);
+    *raw = replaced;
+}
+
+/// Return the id of a preserved comment range marker, or `None` for any
+/// other raw child.
+pub(crate) fn raw_comment_marker_id(raw: &[u8], word_prefixes: &[String]) -> Option<i32> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer).ok()? {
+            Event::Start(element) | Event::Empty(element) => {
+                let prefixes = word_prefixes_at(&element, word_prefixes).ok()?;
+                let name = element.name();
+                if !is_word_element(name.as_ref(), b"commentRangeStart", &prefixes)
+                    && !is_word_element(name.as_ref(), b"commentRangeEnd", &prefixes)
+                {
+                    return None;
+                }
+                return required_word_i32_attribute(&element, b"id", &prefixes).ok();
+            }
+            Event::Eof => return None,
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn parse_hyperlink_children(

@@ -1462,7 +1462,16 @@ layout caches unchanged. A successful operation invalidates layout once.
 
 Word comment mutation uses `RunPosition` and half-open `RunRange` values whose
 body indexes select top-level paragraphs and whose run indexes select insertion
-boundaries. `Document` validates both endpoints before mutation, allocates
+boundaries. Run indexes count the accepted-view runs that `Paragraph::runs`
+lists, including the runs inside inline content controls and tracked
+insertions. `CT_P::anchor_accepted_range` writes the markers inside
+`w:sdtContent` when a boundary falls between two runs of a control, and around
+the control when the range covers it. A range that crosses the edge of a
+control, has a boundary between two runs of a tracked insertion or move, sits
+next to a tracked change inside a hyperlink, or continues into another
+paragraph from inside a control is refused instead of shifted. Removal also
+clears the markers and reference runs that are direct children of a control's
+content. `Document` validates both endpoints before mutation, allocates
 collision-free comment and paragraph ids, updates the comment parts and all
 three anchors together, then invalidates layout once. `CommentRef` is a
 read-only view over the typed comment and its comments-extended thread entry.
@@ -1504,7 +1513,9 @@ tables and block content controls. A reported body index is that recursive
 paragraph ordinal, and its run index is the accepted-view boundary used to
 extract bookmark text. `BookmarkRef::direct_range` reports the same range with
 the direct body child index of `RunPosition` when both markers sit in direct
-body paragraphs, and `None` otherwise. Marker encounter order resolves direction when start
+body paragraphs, and `None` otherwise. `Document::add_bookmark` takes the
+same accepted-view run boundaries and places its markers as comments do.
+Marker encounter order resolves direction when start
 and end share one accepted boundary, so end before start remains reversed and
 start before end is a valid empty range. Isolated projection refresh after a
 run, comment, or bookmark edit carries the original Word namespace aliases.
