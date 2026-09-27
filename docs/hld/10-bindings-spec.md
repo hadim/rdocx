@@ -300,6 +300,12 @@ live `FillFormat` over the direct background fill that never changes the slide
 when read, and `follow_master_background` reports and sets whether the slide
 has no `p:bg`. `SlideCollection.remove` and `SlideCollection.move(from_, to)`
 use the native staged slide operations and advance the revision once.
+`SlideCollection.duplicate(slide)` copies a slide of the same presentation,
+with its speaker notes, to the position right after it through the native
+staged `duplicate_slide`, advances the revision once, and returns the new slide
+captured at that revision. As in the facade, a slide that owns a modern
+comments part is refused, even when removing its last comment left that part
+empty, and the refusal leaves the package and the revision unchanged.
 
 `Shape` geometry, `name`, and `rotation` are writable without a revision bump.
 A missing partner coordinate becomes zero, as in python-pptx, and a negative

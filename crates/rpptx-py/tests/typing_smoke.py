@@ -227,6 +227,7 @@ def exercise_rpptx_types(path: Path) -> None:
     picture.replace_image(b"")
     picture.replace_image(path)
     presentation.slides[0].shapes.remove(group)
+    duplicated: Slide = presentation.slides.duplicate(presentation.slides[0])
     presentation.slides.move(0, -1)
     presentation.slides.remove(presentation.slides[0])
     presentation.save(path)
@@ -286,6 +287,7 @@ def exercise_rpptx_types(path: Path) -> None:
         blob,
         image.content_type,
         image.ext,
+        duplicated,
     )
 
 

@@ -2094,6 +2094,71 @@ def test_shapes_and_slides_are_removed_and_reordered_with_stale_handles(tmp_path
     assert [len(slide.shapes) for slide in oracle.slides] == [2, 1]
 
 
+def test_slide_duplicate_inserts_after_the_source_with_its_notes(tmp_path):
+    import rpptx
+
+    prs = rpptx.Presentation()
+    for index in range(3):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide.shapes.add_textbox(0, 0, 10, 10).text = f"slide {index}"
+    prs.slides[1].notes_text = "note 1"
+    source = prs.slides[1]
+    held = prs.slides[2].shapes[0]
+
+    duplicate = prs.slides.duplicate(source)
+    assert [slide.shapes[0].text for slide in prs.slides] == [
+        "slide 0",
+        "slide 1",
+        "slide 1",
+        "slide 2",
+    ]
+    assert [slide.notes_text for slide in prs.slides] == [None, "note 1", "note 1", None]
+    assert (duplicate.shapes[0].text, duplicate.notes_text) == ("slide 1", "note 1")
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: held.text)
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: source.notes_text)
+    duplicate.notes_text = "copy note"
+    assert [slide.notes_text for slide in prs.slides] == [None, "note 1", "copy note", None]
+
+    other = rpptx.Presentation()
+    other_slide = other.slides.add_slide(other.slide_layouts[6])
+    with pytest.raises(ValueError, match="slide is not in this collection"):
+        prs.slides.duplicate(other_slide)
+
+    prs.add_comment_author(
+        id="{11111111-1111-1111-1111-111111111111}",
+        name="Ada Lovelace",
+        user_id="ada@example.com",
+        provider_id="local",
+    )
+    prs.slides[0].add_comment(
+        id="{22222222-2222-2222-2222-222222222222}",
+        author_id="{11111111-1111-1111-1111-111111111111}",
+        created="2026-09-14T10:30:00Z",
+        text="Blocks duplication",
+    )
+    commented = prs.slides[0]
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="modern comments"):
+        prs.slides.duplicate(commented)
+    assert prs.to_bytes() == before
+    assert (len(prs.slides), commented.shapes[0].text) == (4, "slide 0")
+
+    output = tmp_path / "duplicated.pptx"
+    prs.save(output)
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output)
+    assert [slide.shapes[0].text for slide in oracle.slides] == [
+        "slide 0",
+        "slide 1",
+        "slide 1",
+        "slide 2",
+    ]
+    assert [
+        slide.notes_slide.notes_text_frame.text if slide.has_notes_slide else None
+        for slide in oracle.slides
+    ] == [None, "note 1", "copy note", None]
+
+
 def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     import rpptx
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE
