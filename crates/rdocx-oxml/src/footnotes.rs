@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::word_prefixes_at;
 use crate::properties::is_word_element;
-use crate::text::CT_P;
+use crate::text::{CT_P, declare_w14_on_part_root};
 
 /// `ST_FtnEdn` — what a note in the stream is for.
 ///
@@ -212,7 +212,9 @@ impl CT_Footnotes {
 
         writer.write_event(Event::End(BytesEnd::new(root_tag)))?;
 
-        Ok(writer.into_inner())
+        let mut xml = writer.into_inner();
+        declare_w14_on_part_root(&mut xml)?;
+        Ok(xml)
     }
 }
 
@@ -272,6 +274,18 @@ fn parse_footnote_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_note_paragraph_identity_stays_bound_under_the_written_root() {
+        // The written root declares only `w` and `r`, while Word declares
+        // `w14` on the root of the notes part it writes.
+        let xml = br#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:footnote w:id="1"><w:p w14:paraId="1A2B3C4D" w14:textId="5E6F7A8B"><w:r><w:t>note</w:t></w:r></w:p></w:footnote></w:footnotes>"#;
+        let footnotes = CT_Footnotes::from_xml(xml).unwrap();
+        let output = footnotes.to_xml_footnotes().unwrap();
+        let reparsed = CT_Footnotes::from_xml(&output)
+            .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output)));
+        assert_eq!(reparsed.to_xml_footnotes().unwrap(), output);
+    }
 
     #[test]
     fn parse_footnotes_xml() {

@@ -10,7 +10,7 @@ use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::{namespace_bindings, word_prefixes_at};
 use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
-use crate::text::CT_P;
+use crate::text::{CT_P, declare_w14_on_part_root};
 
 const VML_NS: &str = "urn:schemas-microsoft-com:vml";
 const OFFICE_NS: &str = "urn:schemas-microsoft-com:office:office";
@@ -352,7 +352,9 @@ impl CT_HdrFtr {
 
         writer.write_event(Event::End(BytesEnd::new(root_tag)))?;
 
-        Ok(writer.into_inner())
+        let mut xml = writer.into_inner();
+        declare_w14_on_part_root(&mut xml)?;
+        Ok(xml)
     }
 }
 
@@ -1185,6 +1187,20 @@ pub struct HdrFtrRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_paragraph_identity_stays_bound_when_only_the_paragraph_declares_w14() {
+        let w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{W_NS}"><w:p xmlns:w14="{w14}" w14:paraId="1A2B3C4D"><w:r><w:t>header</w:t></w:r></w:p></w:hdr>"#
+        );
+        let header = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        let output = String::from_utf8(header.to_xml_header().unwrap()).unwrap();
+        let root = &output[output.find("<w:hdr").unwrap()..];
+        let root = &root[..root.find('>').unwrap()];
+        assert!(root.contains(&format!(r#"xmlns:w14="{w14}""#)), "{output}");
+        assert!(output.contains(r#"w14:paraId="1A2B3C4D""#), "{output}");
+    }
 
     #[test]
     fn round_trip_header() {

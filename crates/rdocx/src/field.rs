@@ -1643,10 +1643,7 @@ fn merge_field_name(field: &Field) -> Option<String> {
 }
 
 fn rich_region_marker(paragraph: &CT_P) -> Option<RichRegionMarker> {
-    if paragraph
-        .extra_xml
-        .iter()
-        .any(|(_, raw)| !raw.iter().all(u8::is_ascii_whitespace))
+    if paragraph_has_raw_content(paragraph)
         || paragraph.properties.is_some()
         || !paragraph.content_controls.is_empty()
         || !paragraph.revisions.is_empty()
@@ -1684,6 +1681,14 @@ fn rich_region_marker(paragraph: &CT_P) -> Option<RichRegionMarker> {
             name.strip_prefix("TableEnd:")
                 .map(|name| RichRegionMarker::End(name.to_owned()))
         })
+}
+
+/// Whether a paragraph holds raw XML other than whitespace. The attributes
+/// of its start tag, such as `w:rsidR` or `w14:paraId`, are not content.
+fn paragraph_has_raw_content(paragraph: &CT_P) -> bool {
+    paragraph.extra_xml.iter().any(|(position, raw)| {
+        !CT_P::raw_is_root_attributes(*position, raw) && !raw.iter().all(u8::is_ascii_whitespace)
+    })
 }
 
 fn find_body_region_end(items: &[BodyContent], start: usize, name: &str) -> Result<usize> {
@@ -1801,10 +1806,7 @@ fn whole_paragraph_fragment<'a>(
     paragraph: &CT_P,
     scopes: &[&'a MailMergeRecord],
 ) -> Result<Option<&'a [u8]>> {
-    if paragraph
-        .extra_xml
-        .iter()
-        .any(|(_, raw)| !raw.iter().all(u8::is_ascii_whitespace))
+    if paragraph_has_raw_content(paragraph)
         || !paragraph.content_controls.is_empty()
         || !paragraph.revisions.is_empty()
         || !paragraph.hyperlinks.is_empty()
@@ -3057,7 +3059,13 @@ fn expand_rich_rows(
 }
 
 fn rich_row_region_marker(row: &CT_Row) -> Option<RichRegionMarker> {
-    if !row.extra_xml.is_empty() || !row.content_controls.is_empty() || row.cells.len() != 1 {
+    if row
+        .extra_xml
+        .iter()
+        .any(|(position, raw)| !CT_Row::raw_is_root_attributes(*position, raw))
+        || !row.content_controls.is_empty()
+        || row.cells.len() != 1
+    {
         return None;
     }
     let cell = &row.cells[0];

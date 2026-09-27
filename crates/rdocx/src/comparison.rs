@@ -12,7 +12,7 @@ use rdocx_oxml::document::{BodyContent, CT_Document};
 use rdocx_oxml::namespace::W_NS;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblPr, CT_Tc, CT_TrPr, CellContent};
-use rdocx_oxml::text::{CT_P, CT_R, CT_Text, RunContent};
+use rdocx_oxml::text::{CT_P, CT_R, CT_Text, RunContent, declare_w14_on_part_root};
 use sha2::{Digest, Sha256};
 
 use crate::revision::validate_revision_timestamp;
@@ -357,8 +357,11 @@ impl Document {
                 &mut diagnostics,
             )?
         };
-        let tracked_xml = replace_body_inner(original_xml, &tracked_body)?;
-        let tracked_xml = crate::document::uniquify_drawing_ids_in_xml(tracked_xml.as_bytes())?;
+        let mut tracked_xml = replace_body_inner(original_xml, &tracked_body)?.into_bytes();
+        // Content from the edited document can use the `w14` its own root
+        // declares, which the original root may not.
+        declare_w14_on_part_root(&mut tracked_xml)?;
+        let tracked_xml = crate::document::uniquify_drawing_ids_in_xml(&tracked_xml)?;
         let tracked_model_xml = close_drawing_namespaces(tracked_xml, true)?;
         let tracked = CT_Document::from_xml(&tracked_model_xml)?;
         tracked.to_xml()?;
@@ -877,8 +880,10 @@ fn compare_story_part(
         tracked.replace_range(original_root, &tracked_inner);
         tracked
     };
-    crate::revision::modeled_revision_count(tracked.as_bytes())?;
-    Ok(tracked.into_bytes())
+    let mut tracked = tracked.into_bytes();
+    declare_w14_on_part_root(&mut tracked)?;
+    crate::revision::modeled_revision_count(&tracked)?;
+    Ok(tracked)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4358,7 +4363,7 @@ fn compare_row(
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
     if original.cells.len() != edited.cells.len()
-        || original.extra_xml != edited.extra_xml
+        || row_raw_children(original) != row_raw_children(edited)
         || row_control_boundaries(original) != row_control_boundaries(edited)
     {
         return Err(Error::Other(format!(
@@ -4413,6 +4418,15 @@ fn compare_row(
         )?);
     }
     replace_direct_word_elements(&output, "sdt", &control_replacements)
+}
+
+/// Return the raw children of a row without the record of its start-tag
+/// attributes, which carry producer identities and no content.
+fn row_raw_children(row: &CT_Row) -> Vec<&(usize, Vec<u8>)> {
+    row.extra_xml
+        .iter()
+        .filter(|(position, raw)| !CT_Row::raw_is_root_attributes(*position, raw))
+        .collect()
 }
 
 fn row_control_boundaries(row: &CT_Row) -> Vec<(usize, usize)> {
@@ -5433,7 +5447,7 @@ fn row_signature(row: &CT_Row) -> String {
     format!(
         "{:?}:{:?}:{:?}",
         row.cells.iter().map(cell_signature).collect::<Vec<_>>(),
-        row.extra_xml,
+        row_raw_children(row),
         row.content_controls
             .iter()
             .map(|(at, raw_before, control)| (at, raw_before, control_signature(control)))
@@ -5674,7 +5688,7 @@ fn row_signature_with_options(row: &CT_Row, options: &ComparisonOptions) -> Stri
             .iter()
             .map(|cell| cell_signature_with_options(cell, options))
             .collect::<Vec<_>>(),
-        row.extra_xml,
+        row_raw_children(row),
         row.content_controls
             .iter()
             .map(|(at, raw_before, control)| (

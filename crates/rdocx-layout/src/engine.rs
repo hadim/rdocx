@@ -3617,7 +3617,9 @@ fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
             properties.change.is_none() && properties.revision_xml.is_empty()
         })
         && table.rows.iter().all(|row| {
-            row.extra_xml.is_empty()
+            row.extra_xml
+                .iter()
+                .all(|(position, raw)| CT_Row::raw_is_root_attributes(*position, raw))
                 && row.content_controls.is_empty()
                 && row.properties.as_ref().is_none_or(|properties| {
                     properties.revision_markers.is_empty() && properties.revision_xml.is_empty()
@@ -14416,6 +14418,24 @@ mod tests {
             .extra_xml
             .push((0, br#"<w:unknown/>"#.to_vec()));
         assert!(!table_is_cache_safe(&preserved_cell, &input.styles));
+
+        // Word writes revision-save and paragraph identities on every row.
+        // They carry no content, so the row stays cache safe, unlike a raw
+        // child of the row.
+        let document = rdocx_oxml::CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body><w:tbl><w:tr w:rsidR="00A1B2C3" w:rsidTr="00A1B2C4" w14:paraId="1A2B3C4D"><w:tc><w:p><w:r><w:t>identified row</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#,
+        )
+        .expect("identified row document parses");
+        let Some(BodyContent::Table(mut identified_row)) = document.body.content.into_iter().next()
+        else {
+            panic!("identified row table parses");
+        };
+        assert!(!identified_row.rows[0].extra_xml.is_empty());
+        assert!(table_is_cache_safe(&identified_row, &input.styles));
+        identified_row.rows[0]
+            .extra_xml
+            .push((0, br#"<w:unknown/>"#.to_vec()));
+        assert!(!table_is_cache_safe(&identified_row, &input.styles));
     }
 
     fn restart_input() -> LayoutInput {

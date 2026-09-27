@@ -14538,6 +14538,366 @@ fn paragraph_run_and_section_identity_attributes_survive_noop_save() {
     assert_eq!(stable.to_bytes().unwrap(), reopened.to_bytes().unwrap());
 }
 
+/// Word and Google Docs write revision-save and paragraph identities on every
+/// table row. They survived only a save with no edit, because the row model
+/// had no carrier for them. They are now kept like the ones on paragraphs and
+/// runs, and nothing that reads a row takes them for row content.
+mod table_row_identity_attribute_regressions {
+    use rdocx::Document;
+    use rdocx_oxml::namespace::W_NS;
+
+    const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
+    /// Every identity Word writes on a row, in the order it writes them.
+    const ALL: &str = r#" w:rsidR="00A1B2C3" w:rsidTr="00A1B2C4" w:rsidRPr="00A1B2C5" w:rsidDel="00A1B2C6" w14:paraId="1A2B3C4D" w14:textId="5E6F7A8B""#;
+
+    /// A paragraph to edit, then a table with two direct rows, a row inside
+    /// a table-level content control and a self-closing row, each carrying
+    /// `attributes`. The first cell holds `word`.
+    fn row_document_xml(attributes: &str, word: &str) -> String {
+        let row = |first: &str, second: &str| {
+            format!(
+                r#"<w:tr{attributes}><w:tc><w:p><w:r><w:t>{first}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>{second}</w:t></w:r></w:p></w:tc></w:tr>"#
+            )
+        };
+        let rows = [
+            row(word, "one"),
+            row("beta", "two"),
+            format!(
+                r#"<w:sdt><w:sdtPr><w:alias w:val="Rows"/></w:sdtPr><w:sdtContent>{}</w:sdtContent></w:sdt>"#,
+                row("gamma", "three")
+            ),
+            format!("<w:tr{attributes}/>"),
+        ]
+        .concat();
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:w14="{W14_NS}"><w:body><w:p><w:r><w:t>Body text of section 3.1.</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>{rows}</w:tbl><w:p><w:r><w:t>After the table.</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>"#
+        )
+    }
+
+    fn document_with_row_attributes(attributes: &str, word: &str) -> Document {
+        super::document_with_content_controls(&row_document_xml(attributes, word))
+    }
+
+    #[test]
+    fn row_identity_attributes_survive_an_edit_elsewhere() {
+        // The table-row rows of the identity matrix of #159, one attribute at
+        // a time, then every identity Word writes together.
+        for attributes in [
+            r#" w:rsidR="00A1B2C3""#,
+            r#" w:rsidTr="00A1B2C4""#,
+            r#" w14:paraId="1A2B3C4D""#,
+            r#" w14:textId="5E6F7A8B""#,
+            r#" w:rsidRPr="00A1B2C5""#,
+            r#" w:rsidDel="00A1B2C6""#,
+            ALL,
+        ] {
+            let mut document = document_with_row_attributes(attributes, "alpha");
+            assert_eq!(
+                document
+                    .try_replace_text("Body text of section 3.1.", "Body text of section three.")
+                    .unwrap(),
+                1
+            );
+            let saved = super::document_xml(&mut document);
+            assert!(saved.contains("section three"), "{saved}");
+            for attribute in attributes.split_whitespace() {
+                assert_eq!(saved.matches(attribute).count(), 4, "{attribute}: {saved}");
+            }
+            assert!(!saved.contains("rdocxRootAttributes"), "{saved}");
+            for tag in saved.split("<w:tr ").skip(1) {
+                let tag = &tag[..tag.find('>').unwrap()];
+                assert!(
+                    tag.trim_end_matches('/')
+                        .starts_with(attributes.trim_start()),
+                    "row attribute order changed: {tag}"
+                );
+            }
+
+            let bytes = document.to_bytes().unwrap();
+            let mut reopened = Document::from_bytes(&bytes).unwrap();
+            assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn row_identity_attributes_are_not_row_content() {
+        // A row without a cell has no grid position for the exporters.
+        let document = super::document_with_content_controls(
+            &row_document_xml(ALL, "alpha").replace(&format!("<w:tr{ALL}/>"), ""),
+        );
+        let table = document.table(0).unwrap();
+        for index in 0..table.row_count() {
+            assert!(!table.row(index).unwrap().has_unsupported_content());
+        }
+        let messages = [
+            document
+                .to_mhtml_bytes()
+                .unwrap()
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect::<Vec<_>>(),
+            document
+                .to_odt_bytes()
+                .unwrap()
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect(),
+            document
+                .to_rtf_bytes()
+                .unwrap()
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect(),
+            document
+                .to_epub_bytes()
+                .unwrap()
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect(),
+        ]
+        .concat();
+        assert!(
+            messages
+                .iter()
+                .all(|message| !message.contains("table-row XML")
+                    && message != "dropped unsupported Word table row content"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn row_identity_differences_add_no_comparison_revision() {
+        let compare = |original: &str, edited: &str, word: &str| {
+            let mut compared = document_with_row_attributes(original, "alpha");
+            compared
+                .compare(
+                    &document_with_row_attributes(edited, word),
+                    "R",
+                    "2026-09-27T12:00:00Z",
+                )
+                .unwrap_or_else(|error| panic!("{original} against {edited}: {error}"));
+            compared.revisions().len()
+        };
+        let resaved = ALL
+            .replace("00A1B2C3", "00D4E5F6")
+            .replace("1A2B3C4D", "2B3C4D5E");
+        // An identity-only difference, as between a file and its copy saved
+        // again by Word, records nothing.
+        assert_eq!(compare("", ALL, "alpha"), 0);
+        assert_eq!(compare(ALL, "", "alpha"), 0);
+        assert_eq!(compare(ALL, &resaved, "alpha"), 0);
+        // One changed word in a row records its deletion and insertion, with
+        // or without new identity values on the rows.
+        assert_eq!(compare(ALL, ALL, "delta"), 2);
+        assert_eq!(compare(ALL, &resaved, "delta"), 2);
+    }
+
+    #[test]
+    fn w14_identities_stay_bound_when_only_their_element_declares_w14() {
+        // The retained identities leave the `w14` declaration to the part
+        // root, where Word and python-docx write it. A producer may declare
+        // it on the row or paragraph instead, and an edit elsewhere must
+        // still save a readable part.
+        let local = format!(r#" xmlns:w14="{W14_NS}" w:rsidR="00A1B2C3" w14:paraId="1A2B3C4D""#);
+        let xml = row_document_xml(&local, "alpha").replacen(
+            &format!(r#" xmlns:w14="{W14_NS}"><w:body><w:p>"#),
+            &format!("><w:body><w:p{local}>"),
+            1,
+        );
+        let mut document = super::document_with_content_controls(&xml);
+        assert_eq!(
+            document
+                .try_replace_text("After the table.", "After the rows.")
+                .unwrap(),
+            1
+        );
+        let bytes = document.to_bytes().unwrap();
+        let saved = super::document_xml(&mut document);
+        assert!(saved.contains("After the rows."), "{saved}");
+        assert_eq!(
+            saved.matches(r#"w14:paraId="1A2B3C4D""#).count(),
+            5,
+            "{saved}"
+        );
+        let mut reopened = Document::from_bytes(&bytes)
+            .unwrap_or_else(|error| panic!("the saved part is unreadable: {error}: {saved}"));
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn comparing_with_a_copy_that_declares_w14_keeps_its_identities_bound() {
+        // The original part declares no `w14`, as a part rdocx wrote. Its
+        // copy saved again by Word declares it on the root and adds a row
+        // whose row and paragraphs carry w14 identities.
+        let original =
+            row_document_xml("", "alpha").replacen(&format!(r#" xmlns:w14="{W14_NS}">"#), ">", 1);
+        let cell = |text: &str, id: u8| {
+            format!(
+                r#"<w:tc><w:p w:rsidR="00B1B2B3" w14:paraId="3C4D5E{id:02}" w14:textId="7A8B9C{id:02}"><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>"#
+            )
+        };
+        let inserted = format!(
+            r#"<w:tr w:rsidR="00A1B2C3" w:rsidTr="00A1B2C4" w14:paraId="1A2B3C01" w14:textId="5E6F7A01">{}{}</w:tr>"#,
+            cell("inserted", 2),
+            cell("row", 3)
+        );
+        let edited = row_document_xml("", "alpha").replacen(
+            "<w:tr/></w:tbl>",
+            &format!("<w:tr/>{inserted}</w:tbl>"),
+            1,
+        );
+        assert!(edited.contains("inserted"));
+        let mut compared = super::document_with_content_controls(&original);
+        compared
+            .compare(
+                &super::document_with_content_controls(&edited),
+                "R",
+                "2026-09-27T12:00:00Z",
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(!compared.revisions().is_empty());
+        let bytes = compared.to_bytes().unwrap();
+        let saved = super::document_xml(&mut compared);
+        for attribute in [
+            r#"w14:paraId="1A2B3C01""#,
+            r#"w14:paraId="3C4D5E02""#,
+            r#"w14:textId="7A8B9C03""#,
+        ] {
+            assert_eq!(saved.matches(attribute).count(), 1, "{attribute}: {saved}");
+        }
+        Document::from_bytes(&bytes)
+            .unwrap_or_else(|error| panic!("the compared part is unreadable: {error}: {saved}"));
+
+        // A header story is compared the same way.
+        let table = |rows: &str| {
+            format!(
+                r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>kept</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>row</w:t></w:r></w:p></w:tc></w:tr>{rows}</w:tbl>"#
+            )
+        };
+        let with_header = |header: &str| {
+            let mut document = super::document_with_comparison_stories("alpha");
+            let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+                document.to_bytes().unwrap(),
+            ))
+            .unwrap();
+            package.set_part("/word/header1.xml", header.as_bytes().to_vec());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        };
+        let header = |root: &str, rows: &str| {
+            format!(
+                r#"<w:hdr xmlns:w="{W_NS}"{root}><w:p><w:r><w:t>alpha header</w:t></w:r></w:p>{}</w:hdr>"#,
+                table(rows)
+            )
+        };
+        let mut compared = with_header(&header("", ""));
+        compared
+            .compare(
+                &with_header(&header(&format!(r#" xmlns:w14="{W14_NS}""#), &inserted)),
+                "R",
+                "2026-09-27T12:00:00Z",
+            )
+            .unwrap_or_else(|error| panic!("header: {error}"));
+        let bytes = compared.to_bytes().unwrap();
+        let header_xml = super::comparison_part_xml(&mut compared, "/word/header1.xml");
+        assert!(
+            header_xml.contains(r#"w14:paraId="1A2B3C01""#),
+            "{header_xml}"
+        );
+        assert!(
+            header_xml.contains(r#"w14:paraId="3C4D5E02""#),
+            "{header_xml}"
+        );
+        Document::from_bytes(&bytes).unwrap_or_else(|error| {
+            panic!("the compared header is unreadable: {error}: {header_xml}")
+        });
+    }
+
+    #[test]
+    fn mail_merge_regions_and_fragments_are_found_in_word_paragraphs_and_rows() {
+        // Word writes distinct identities on every row and paragraph, and a
+        // revision-save identity on the runs it edits. None of them is
+        // content, so the region markers and a whole-paragraph fragment field
+        // are still found.
+        let paragraph = |instruction: &str, id: u8| {
+            format!(
+                r#"<w:p w:rsidR="00B1B2B3" w:rsidRDefault="00B1B2B3" w14:paraId="3C4D5E{id:02}" w14:textId="7A8B9C{id:02}"><w:r w:rsidR="00B1B2B4"><w:fldChar w:fldCharType="begin"/></w:r><w:r w:rsidR="00B1B2B4"><w:instrText xml:space="preserve"> MERGEFIELD {instruction} </w:instrText></w:r><w:r w:rsidR="00B1B2B4"><w:fldChar w:fldCharType="separate"/></w:r><w:r w:rsidR="00B1B2B4"><w:t>stored</w:t></w:r><w:r w:rsidR="00B1B2B4"><w:fldChar w:fldCharType="end"/></w:r></w:p>"#
+            )
+        };
+        let row = |instruction: &str, id: u8| {
+            format!(
+                r#"<w:tr w:rsidR="00A1B2C3" w:rsidTr="00A1B2C4" w14:paraId="1A2B3C{id:02}" w14:textId="5E6F7A{id:02}"><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr>{}</w:tc></w:tr>"#,
+                paragraph(instruction, id + 10)
+            )
+        };
+        let body = format!(
+            r#"{}{}{}{}<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid>{}{}{}</w:tbl><w:sectPr/>"#,
+            paragraph("TableStart:Lines", 1),
+            paragraph("Name", 2),
+            paragraph("Insert", 3),
+            paragraph("TableEnd:Lines", 4),
+            row("TableStart:Rows", 5),
+            row("RowValue", 6),
+            row("TableEnd:Rows", 7)
+        );
+        let document =
+            super::document_with_content_controls(&super::wrap_word_body(&body).replacen(
+                "<w:document ",
+                &format!(r#"<w:document xmlns:w14="{W14_NS}" "#),
+                1,
+            ));
+        let mut fragment = Document::new();
+        fragment.add_paragraph("fragment");
+        let fragment = fragment.to_bytes().unwrap();
+        let record = |name: &str, value: rdocx::MailMergeValue| rdocx::MailMergeRecord {
+            values: std::collections::BTreeMap::from([(name.to_owned(), value)]),
+            ..Default::default()
+        };
+        let lines = ["alpha", "beta"]
+            .map(|name| {
+                let mut line = record("Name", rdocx::MailMergeValue::Text(name.to_owned()));
+                line.values.insert(
+                    "Insert".to_owned(),
+                    rdocx::MailMergeValue::Fragment(fragment.clone()),
+                );
+                line
+            })
+            .to_vec();
+        let rows = ["first", "second"]
+            .map(|value| record("RowValue", rdocx::MailMergeValue::Text(value.to_owned())))
+            .to_vec();
+        let data = rdocx::MailMergeData {
+            records: vec![rdocx::MailMergeRecord {
+                regions: std::collections::BTreeMap::from([
+                    ("Lines".to_owned(), lines),
+                    ("Rows".to_owned(), rows),
+                ]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let output = document
+            .mail_merge_rich(&data, None)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .remove(0);
+        let paragraphs = output
+            .paragraphs()
+            .into_iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>();
+        assert_eq!(paragraphs, ["alpha", "fragment", "beta", "fragment"]);
+        let table = output.table(0).unwrap();
+        assert_eq!(table.row_count(), 2);
+        assert_eq!(table.cell(0, 0).unwrap().text(), "first");
+        assert_eq!(table.cell(1, 0).unwrap().text(), "second");
+    }
+}
+
 fn document_with_comment_paragraphs(paragraphs: &str) -> (Document, i32) {
     let mut document = Document::new();
     document.add_paragraph("seed");

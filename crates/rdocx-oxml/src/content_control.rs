@@ -1242,6 +1242,7 @@ fn parse_content(
                             reader,
                             &prefixes,
                             &owner_bindings,
+                            Some(&child),
                         )?,
                     ));
                 } else if is_word_element(child.name().as_ref(), b"tc", &prefixes) {
@@ -1298,7 +1299,7 @@ fn parse_content(
                 } else if is_word_element(child.name().as_ref(), b"tbl", &prefixes) {
                     content.push(SdtContent::Table(CT_Tbl::new()));
                 } else if is_word_element(child.name().as_ref(), b"tr", &prefixes) {
-                    content.push(SdtContent::Row(CT_Row::new()));
+                    content.push(SdtContent::Row(CT_Row::from_empty_root(&child, &prefixes)?));
                 } else if is_word_element(child.name().as_ref(), b"tc", &prefixes) {
                     content.push(SdtContent::Cell(CT_Tc {
                         properties: None,

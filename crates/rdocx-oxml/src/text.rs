@@ -22,7 +22,7 @@ use crate::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 static NEXT_FIELD_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 
 const ROOT_ATTRIBUTES_ELEMENT: &[u8] = b"rdocxRootAttributes";
-const ROOT_ATTRIBUTES_POSITION: usize = usize::MAX;
+pub(crate) const ROOT_ATTRIBUTES_POSITION: usize = usize::MAX;
 const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
 
 fn namespace_declaration(name: &[u8]) -> bool {
@@ -184,6 +184,45 @@ pub(crate) fn push_root_attribute_record(
         let value =
             attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?;
         target.push_attribute((name, value.as_ref()));
+    }
+    Ok(())
+}
+
+/// Declare the canonical `w14` prefix on the root of a serialized part whose
+/// content uses the prefix while the root does not bind it.
+///
+/// A retained root-attribute record writes `w14:paraId` and `w14:textId`
+/// without their declaration, because Word and python-docx declare `w14` on
+/// the part root. A root rdocx wrote does not, and a producer may declare the
+/// prefix on the element that uses it, so the part declares it here once. A
+/// root that binds `w14` itself is left as it is.
+#[doc(hidden)]
+pub fn declare_w14_on_part_root(xml: &mut Vec<u8>) -> Result<()> {
+    let mut reader = Reader::from_reader(xml.as_slice());
+    let mut buffer = Vec::new();
+    let root_end = loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(root) => {
+                for attribute in root.attributes() {
+                    if attribute?.key.as_ref() == b"xmlns:w14" {
+                        return Ok(());
+                    }
+                }
+                break reader.buffer_position() as usize;
+            }
+            Event::Empty(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    };
+    // A qualified name starts after `<`, `</` or the whitespace before an
+    // attribute. Text that happens to match only adds a declaration.
+    let uses_w14 = xml[root_end..].windows(5).any(|window| {
+        matches!(window[0], b'<' | b'/' | b' ' | b'\t' | b'\r' | b'\n') && &window[1..] == b"w14:"
+    });
+    if uses_w14 {
+        let declaration = format!(r#" xmlns:w14="{W14_NS}""#);
+        xml.splice(root_end - 1..root_end - 1, declaration.into_bytes());
     }
     Ok(())
 }
@@ -8721,6 +8760,35 @@ mod tests {
             !output.contains("xmlns:w14"),
             "the paragraph rebound a prefix its part root already owns: {output}"
         );
+    }
+
+    #[test]
+    fn a_part_root_declares_w14_only_when_its_content_needs_it() {
+        let w_ns = crate::namespace::W_NS;
+        let part = |root: &str, body: &str| {
+            format!(
+                r#"<?xml version="1.0"?><w:document xmlns:w="{w_ns}"{root}><w:body>{body}</w:body></w:document>"#
+            )
+            .into_bytes()
+        };
+        let identity = r#"<w:p w14:paraId="00000001"/>"#;
+        let mut unbound = part("", identity);
+        declare_w14_on_part_root(&mut unbound).unwrap();
+        assert_eq!(
+            unbound,
+            part(&format!(r#" xmlns:w14="{W14_NS}""#), identity)
+        );
+        crate::document::CT_Document::from_xml(&unbound).unwrap();
+
+        for unchanged in [
+            part(&format!(r#" xmlns:w14="{W14_NS}""#), identity),
+            part(r#" xmlns:w14="urn:other""#, identity),
+            part("", r#"<w:p><w:r><w:t>w14</w:t></w:r></w:p>"#),
+        ] {
+            let mut xml = unchanged.clone();
+            declare_w14_on_part_root(&mut xml).unwrap();
+            assert_eq!(xml, unchanged);
+        }
     }
 
     #[test]

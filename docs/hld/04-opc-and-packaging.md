@@ -428,14 +428,20 @@ namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
 
-Modeled paragraph, run, and section-property owners retain every ordered root
-attribute, including producer identity, revision-session, foreign, and
-unqualified attributes. Retention uses the existing raw-preservation carriers
+Modeled paragraph, run, table-row, and section-property owners retain every
+ordered root attribute, including producer identity, revision-session, foreign,
+and unqualified attributes. Retention uses the existing raw-preservation carriers
 without exposing the attribute record as child XML. Expanded names govern
 duplicate rejection and authored paragraph identity precedence, so an authored
 `paraId` replaces only the retained attribute with the same namespace and
 local name. Typed child mutation leaves all other retained root attributes in
-source order.
+source order. A table row keeps its record in its raw-child list at a position
+no cell boundary reaches. Every reader that treats raw row children as content
+skips it: comparison row signatures and boundaries, the retained table layout
+cache, the row diagnostics of the MHTML, ODT, RTF and EPUB writers, and the
+rich merge row-region markers. The rich merge region-marker and whole-paragraph
+fragment checks skip the record of a paragraph the same way, so a paragraph
+Word wrote still holds a region marker or a fragment field.
 
 Retention covers attributes, not namespace bindings. A declaration is recorded
 only when a retained attribute uses its prefix, because the alias machinery
@@ -443,9 +449,14 @@ already materializes a binding onto every element that needs one, and recording
 a declaration a child carries for itself would emit it twice. A root carrying
 nothing but declarations retains no record at all. On the way back out, the
 canonical `w14` binding is not copied onto the written element, since the part
-root that owns the element already declares it and the authored identity write
-makes the same assumption. Together these keep a reopened save byte identical
-to the save it was read from.
+root that owns the element declares it in what Word and python-docx write, and
+the authored identity write makes the same assumption. Together these keep a
+reopened save byte identical to the save it was read from. A part root that
+does not declare `w14`, such as one rdocx wrote or one under an element that
+declared the prefix itself, gains the canonical declaration when the written
+content uses the prefix. The serializers of the document, header, footer,
+note and comment parts and the comparison output of every story add it, so the
+written part stays namespace well formed.
 
 A paragraph cut out of its part and parsed on its own carries none of the
 declarations of its part. The table-of-contents rebuild adds the bindings the

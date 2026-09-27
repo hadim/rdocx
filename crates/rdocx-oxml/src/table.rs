@@ -19,7 +19,10 @@ use crate::revision::{CT_Revision, RevisionKind};
 #[cfg(test)]
 use crate::shared::ST_Border;
 use crate::shared::ST_Jc;
-use crate::text::CT_P;
+use crate::text::{
+    CT_P, ROOT_ATTRIBUTES_POSITION, capture_root_attribute_record, is_root_attribute_record,
+    push_root_attribute_record,
+};
 use crate::units::Twips;
 
 const MAX_RECOGNIZED_TABLE_NESTING: usize = 32;
@@ -2192,7 +2195,9 @@ pub struct CT_Row {
     pub properties: Option<CT_TrPr>,
     pub cells: Vec<CT_Tc>,
     /// Raw XML for children we do not model, tagged with the cell index they
-    /// appeared before so they can be written back in place.
+    /// appeared before so they can be written back in place. The attributes
+    /// of the `w:tr` start tag, such as `w:rsidR` or `w14:paraId`, are kept in
+    /// one record at position `usize::MAX`, which no cell boundary reaches.
     pub extra_xml: Vec<(usize, Vec<u8>)>,
     /// Typed cell controls at `(cell index, raw children before, control)`.
     pub content_controls: Vec<(usize, usize, CT_Sdt)>,
@@ -2210,20 +2215,36 @@ impl CT_Row {
         }
     }
 
+    /// Report whether one raw row carrier retains root attributes.
+    #[doc(hidden)]
+    pub fn raw_is_root_attributes(position: usize, raw: &[u8]) -> bool {
+        position == ROOT_ATTRIBUTES_POSITION && is_root_attribute_record(raw)
+    }
+
+    pub(crate) fn from_empty_root(root: &BytesStart<'_>, word_prefixes: &[String]) -> Result<Self> {
+        let mut row = Self::new();
+        if let Some(record) = capture_root_attribute_record(root, word_prefixes)? {
+            row.extra_xml.push((ROOT_ATTRIBUTES_POSITION, record));
+        }
+        Ok(row)
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_string()], &[])
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_string()], &[], None)
     }
 
     pub(crate) fn from_xml_with_prefixes_and_owner_bindings(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
+        root: Option<&BytesStart<'_>>,
     ) -> Result<Self> {
         Self::from_xml_with_prefixes_and_owner_bindings_at_depth(
             reader,
             word_prefixes,
             owner_bindings,
             0,
+            root,
         )
     }
 
@@ -2232,6 +2253,7 @@ impl CT_Row {
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
         table_depth: usize,
+        root: Option<&BytesStart<'_>>,
     ) -> Result<Self> {
         let mut table_property_exception = None;
         let mut properties = None;
@@ -2328,6 +2350,14 @@ impl CT_Row {
             buf.clear();
         }
 
+        if let Some(record) = root
+            .map(|root| capture_root_attribute_record(root, word_prefixes))
+            .transpose()?
+            .flatten()
+        {
+            extra_xml.push((ROOT_ATTRIBUTES_POSITION, record));
+        }
+
         Ok(CT_Row {
             table_property_exception,
             properties,
@@ -2338,7 +2368,13 @@ impl CT_Row {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        writer.write_event(Event::Start(BytesStart::new("w:tr")))?;
+        let mut start = BytesStart::new("w:tr");
+        for (position, raw) in &self.extra_xml {
+            if Self::raw_is_root_attributes(*position, raw) {
+                push_root_attribute_record(&mut start, raw, None)?;
+            }
+        }
+        writer.write_event(Event::Start(start))?;
 
         if let Some(raw) = &self.table_property_exception {
             writer.get_mut().write_all(raw)?;
@@ -2517,6 +2553,7 @@ impl CT_Tbl {
                             &prefixes,
                             &row_bindings,
                             table_depth,
+                            Some(e),
                         )?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
@@ -2560,7 +2597,7 @@ impl CT_Tbl {
                     if is_word_element(name.as_ref(), b"tblGrid", &prefixes) {
                         grid = Some(CT_TblGrid::default());
                     } else if is_word_element(name.as_ref(), b"tr", &prefixes) {
-                        rows.push(CT_Row::new());
+                        rows.push(CT_Row::from_empty_root(e, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"tblGrid") {
                         let raw = capture_empty_element(e)?;
                         let raw_bindings = merged_owner_bindings(
@@ -4023,6 +4060,52 @@ mod tests {
         let exception = xml.find("<w:tblPrEx>").expect("exception writes");
         let properties = xml.find("<w:trPr>").expect("row properties write");
         assert!(exception < properties, "tblPrEx must precede trPr: {xml}");
+    }
+
+    /// Word and Google Docs write revision-save and paragraph identities on
+    /// every row. A row used to be written back with a bare start tag, so any
+    /// save of an edited model lost them.
+    #[test]
+    fn row_root_attributes_survive_serialization_in_source_order() {
+        const IDENTITY: &str =
+            r#"w:rsidR="00A1B2C3" w:rsidTr="00A1B2C4" w14:paraId="1A2B3C4D" w14:textId="5E6F7A8B""#;
+        let cell = r#"<w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc>"#;
+        let xml = format!(
+            r#"<w:tbl xmlns:w="{}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr {IDENTITY}><w:bookmarkStart w:id="1" w:name="b"/>{cell}</w:tr><w:sdt><w:sdtContent><w:tr {IDENTITY}>{cell}</w:tr><w:tr {IDENTITY}/></w:sdtContent></w:sdt><w:tr {IDENTITY}/></w:tbl>"#,
+            crate::namespace::W_NS
+        );
+        let mut table = parse_scoped_table(&xml).unwrap();
+        let direct = &table.rows[0];
+        assert_eq!(direct.cells.len(), 1);
+        assert!(
+            direct
+                .extra_xml
+                .iter()
+                .any(|(position, raw)| CT_Row::raw_is_root_attributes(*position, raw))
+        );
+        table.rows[0].cells.push(CT_Tc::new());
+
+        let written = table_to_xml(&table);
+        assert_eq!(
+            written.matches(&format!("<w:tr {IDENTITY}")).count(),
+            4,
+            "{written}"
+        );
+        assert!(!written.contains("rdocxRootAttributes"), "{written}");
+        assert!(
+            written.contains(r#"<w:bookmarkStart w:id="1" w:name="b"/><w:tc>"#),
+            "{written}"
+        );
+        let reparsed = parse_scoped_table(&written.replacen(
+            "<w:tbl>",
+            &format!(
+                r#"<w:tbl xmlns:w="{}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">"#,
+                crate::namespace::W_NS
+            ),
+            1,
+        ))
+        .unwrap();
+        assert_eq!(table_to_xml(&reparsed), written);
     }
 
     #[test]
