@@ -273,9 +273,11 @@ document revision. A rejected image, filename, dimension pair, or stale path
 leaves package bytes and binding revisions unchanged.
 
 `rpptx` mirrors python-pptx through an unpublished mixed-layout `rpptx-py`
-crate. `Presentation` owns the Rust facade and one revision counter. Lazy
-layouts, slides, shapes, placeholders, text frames, paragraphs, runs, columns
-and cells store only a presentation reference and `ContentPath`. The bounded
+crate. `Presentation` owns the Rust facade and one revision counter.
+`Presentation(path)` opens a file and the static `Presentation.from_bytes`
+opens in-memory package bytes, as the rdocx `Document` does. Lazy layouts,
+slides, shapes, placeholders, text frames, paragraphs, runs, columns and cells
+store only a presentation reference and `ContentPath`. The bounded
 source-compatibility surface is the seven python-pptx 1.0.2 Getting Started
 workflows. They change the import namespace and re-fetch through the public
 path after each structural write, because strict global revision invalidation

@@ -152,6 +152,7 @@ def exercise_rpptx_types(path: Path) -> None:
         for current_shape in current_slide.shapes:
             current_shape.has_text_frame
     package_bytes: bytes = presentation.to_bytes()
+    reopened: Presentation = Presentation.from_bytes(package_bytes)
     pdf_bytes: bytes = presentation.to_pdf()
     slide_png: bytes | None = presentation.render_slide_to_png(0)
     slide_pngs: list[bytes] = presentation.render_all_slides()
@@ -288,6 +289,7 @@ def exercise_rpptx_types(path: Path) -> None:
         image.content_type,
         image.ext,
         duplicated,
+        reopened,
     )
 
 

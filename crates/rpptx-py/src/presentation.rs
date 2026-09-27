@@ -163,6 +163,13 @@ impl PyPresentation {
         }
     }
 
+    #[staticmethod]
+    fn from_bytes(bytes: &[u8], py: Python<'_>) -> PyResult<Self> {
+        rpptx::Presentation::from_bytes(bytes)
+            .map(Self::from_presentation)
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
     fn save(&self, path: PathBuf, py: Python<'_>) -> PyResult<()> {
         self.inner
             .save(path)

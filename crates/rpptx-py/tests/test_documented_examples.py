@@ -2159,6 +2159,25 @@ def test_slide_duplicate_inserts_after_the_source_with_its_notes(tmp_path):
     ] == [None, "note 1", "copy note", None]
 
 
+def test_presentation_from_bytes_opens_like_a_path_and_rejects_other_bytes(tmp_path):
+    import rpptx
+
+    prs = _textbox_presentation(rpptx)
+    prs.slides[0].notes_text = "note"
+    path = tmp_path / "source.pptx"
+    prs.save(path)
+
+    reopened = rpptx.Presentation.from_bytes(path.read_bytes())
+    assert len(reopened.slides) == 1
+    assert (reopened.slides[0].shapes[0].text, reopened.slides[0].notes_text) == (
+        "hello",
+        "note",
+    )
+    assert reopened.to_bytes() == rpptx.Presentation(path).to_bytes()
+    with pytest.raises(rpptx.PackageError):
+        rpptx.Presentation.from_bytes(b"not a package")
+
+
 def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     import rpptx
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE
