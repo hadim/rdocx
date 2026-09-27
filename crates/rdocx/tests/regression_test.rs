@@ -17773,6 +17773,52 @@ fn comparison_deletes_text_without_corrupting_tabs() {
 }
 
 #[test]
+fn comparison_deletes_field_results_without_corrupting_tabs() {
+    let field = |instruction: &str, result: &str| {
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Page</w:t><w:tab/><w:t>{result}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#
+        ))
+    };
+    // A refreshed result, then a new instruction that replaces the field.
+    for (original_xml, edited_xml) in [
+        (field("PAGE", "1"), field("PAGE", "2")),
+        (field("PAGE", "1"), field("NUMPAGES", "1")),
+    ] {
+        let original = document_with_content_controls(&original_xml);
+        let edited = document_with_content_controls(&edited_xml);
+        let mut compared = document_with_content_controls(&original_xml);
+        compared
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap();
+        let tracked = document_xml(&mut compared);
+        let deleted = &tracked[tracked.find("<w:del ").unwrap()..tracked.find("</w:del>").unwrap()];
+        assert!(
+            deleted.contains("<w:delText>Page</w:delText><w:tab/>"),
+            "{tracked}"
+        );
+        assert!(!tracked.contains("delTextab"), "{tracked}");
+
+        let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        accepted.accept_all().unwrap();
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        rejected.reject_all().unwrap();
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(document_xml(&mut rejected).contains("<w:t>Page</w:t><w:tab/>"));
+    }
+}
+
+#[test]
 fn comparison_reports_formatting_inside_matched_table_rows() {
     let original_xml = wrap_word_body(
         r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr><w:shd w:fill="FF0000"/></w:tcPr><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>same</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,

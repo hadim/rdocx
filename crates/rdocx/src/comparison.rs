@@ -5413,9 +5413,22 @@ fn tracked_field_result(
     Ok(format!("{deleted}{inserted}"))
 }
 
+/// Rename each `w:t` element to `w:delText`, and no other element whose
+/// name starts the same way, such as `w:tab`.
 fn deleted_text_xml(xml: &str) -> String {
-    xml.replace("<w:t", "<w:delText")
-        .replace("</w:t>", "</w:delText>")
+    let mut output = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(at) = rest.find("w:t") {
+        let (before, after) = rest.split_at(at);
+        let after = &after["w:t".len()..];
+        let is_tag = (before.ends_with('<') || before.ends_with("</"))
+            && after.starts_with(|next: char| matches!(next, '>' | '/') || next.is_whitespace());
+        output.push_str(before);
+        output.push_str(if is_tag { "w:delText" } else { "w:t" });
+        rest = after;
+    }
+    output.push_str(rest);
+    output
 }
 
 fn complex_field_result(xml: &str) -> Result<(String, String, String)> {
@@ -6784,7 +6797,7 @@ mod tests {
     use super::{
         ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING,
         attributed_run_units, canonical_owned_story, comparison_postcondition_error,
-        complex_field_result, story_document, word_fragments,
+        complex_field_result, deleted_text_xml, story_document, word_fragments,
     };
     use crate::Document;
     use rdocx_oxml::document::BodyContent;
@@ -6904,6 +6917,16 @@ mod tests {
                 (expected.0, String::new(), expected.2)
             );
         }
+    }
+
+    #[test]
+    fn only_text_elements_become_deleted_text() {
+        assert_eq!(
+            deleted_text_xml(
+                r#"<w:r><w:t>a</w:t><w:tab/><w:t xml:space="preserve"> b </w:t><w:t/><w:br w:type="page"/></w:r><w:ffData><w:textInput><w:maxLength w:val="4"/></w:textInput></w:ffData>"#
+            ),
+            r#"<w:r><w:delText>a</w:delText><w:tab/><w:delText xml:space="preserve"> b </w:delText><w:delText/><w:br w:type="page"/></w:r><w:ffData><w:textInput><w:maxLength w:val="4"/></w:textInput></w:ffData>"#
+        );
     }
 
     #[test]
