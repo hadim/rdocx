@@ -53,6 +53,9 @@ enum Command {
         /// Output file path (defaults to input with new extension)
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
+        /// Replace existing output files, but never the input file
+        #[arg(long)]
+        force: bool,
         /// DPI for image rendering (default: 150)
         #[arg(long, default_value = "150")]
         dpi: u32,
@@ -105,6 +108,9 @@ enum Command {
         /// Output directory (defaults to current directory)
         #[arg(long, short = 'o')]
         output_dir: Option<PathBuf>,
+        /// Replace existing page images, but never the input file
+        #[arg(long)]
+        force: bool,
         /// DPI resolution (default: 150)
         #[arg(long, default_value = "150")]
         dpi: f64,
@@ -351,6 +357,7 @@ fn main() {
             file,
             to,
             output,
+            force,
             dpi,
             font_dir,
             pages,
@@ -360,6 +367,7 @@ fn main() {
             &file,
             &to,
             output.as_deref(),
+            force,
             dpi,
             font_dir.as_deref(),
             commands::ImageOptions {
@@ -381,6 +389,7 @@ fn main() {
         Command::Render {
             file,
             output_dir,
+            force,
             dpi,
             page,
             pages,
@@ -390,6 +399,7 @@ fn main() {
         } => commands::render(
             &file,
             output_dir.as_deref(),
+            force,
             dpi,
             commands::RenderOptions {
                 page,

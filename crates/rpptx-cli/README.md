@@ -78,4 +78,11 @@ takes a thread id, which also removes its replies, or a reply id. Every
 mutation requires `-o/--output`, refuses an existing output, publishes only a
 complete presentation, and supports a schema-1 record through `--json`.
 
+`convert`, `render`, and `thumbnail` refuse an output file that already exists
+unless `--force` is given. Even with `--force` they refuse their own input file
+under any spelling of its path, and an output that is not a regular file, such
+as a directory, a symbolic link, a FIFO, or a device like `/dev/null`. A run
+checks every file it would write before it writes the first one, and publishes
+each file only once it is complete, so a failed run leaves no truncated output.
+
 Run `rpptx --help` or `rpptx <command> --help` for the complete command surface.

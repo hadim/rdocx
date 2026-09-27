@@ -5,7 +5,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use oxml_cli_support::{
-    StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
+    StagedOutputSet, default_output_path, ensure_output_paths_allowed,
+    ensure_output_paths_available, json_envelope, parse_range,
 };
 use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 use rpptx::{
@@ -19,6 +20,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const MAX_RASTER_PIXELS: u64 = 8_000_000;
 const MAX_LCS_CELLS: usize = 1_000_000;
 const THUMBNAIL_WIDTH: f64 = 320.0;
+
+pub struct ImageOptions<'a> {
+    pub slides: Option<&'a str>,
+    pub quality: u8,
+    pub transparent: bool,
+}
 
 pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
@@ -319,14 +326,13 @@ pub fn convert(
     file: &Path,
     format: &str,
     output: Option<&Path>,
+    force: bool,
     dpi: f64,
-    slides: Option<&str>,
-    quality: u8,
-    transparent: bool,
+    image: ImageOptions<'_>,
 ) -> Result<()> {
     validate_dpi(dpi)?;
     let presentation = Presentation::open(file)?;
-    let image_format = parse_image_format(format, quality, transparent);
+    let image_format = parse_image_format(format, image.quality, image.transparent);
     let extension = match (format, image_format.as_ref()) {
         ("pdf", _) => "pdf",
         (_, Ok((_, extension))) => extension,
@@ -337,10 +343,18 @@ pub fn convert(
     let output = output
         .map(Path::to_path_buf)
         .unwrap_or_else(|| default_output_path(file, extension));
+    // Several PNG or JPEG slides are written under numbered names, so those
+    // outputs are checked once the slides are selected.
+    if !matches!(format, "png" | "jpg" | "jpeg") {
+        ensure_output_paths_allowed(std::slice::from_ref(&output), file, force)?;
+    }
     let mut stdout = io::stdout().lock();
     match format {
         "pdf" => {
-            std::fs::write(&output, presentation.to_pdf_deterministic()?)?;
+            stage_and_publish(
+                &[(output.clone(), presentation.to_pdf_deterministic()?)],
+                force,
+            )?;
             writeln!(stdout, "Written to {}", output.display())?;
         }
         "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
@@ -356,7 +370,7 @@ pub fn convert(
                 )
                 .into());
             }
-            let selected = selected_zero_based_slides(presentation.len(), slides)?;
+            let selected = selected_zero_based_slides(presentation.len(), image.slides)?;
             for index in &selected {
                 let page = &layout.pages[*index];
                 validate_raster_dimensions(page.width, page.height, dpi)?;
@@ -369,14 +383,14 @@ pub fn convert(
                     let RasterOutput::MultiPageTiff(tiff) = output_bytes else {
                         return Err("TIFF render did not produce one stream".into());
                     };
-                    stage_and_publish(&[(output.clone(), tiff)])?;
+                    stage_and_publish(&[(output.clone(), tiff)], force)?;
                     writeln!(stdout, "Written to {}", output.display())?;
                 }
                 RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
                     let output_paths =
                         convert_separate_output_paths(&output, extension, selected.len());
-                    ensure_output_paths_available(&output_paths)?;
-                    let mut staged = StagedOutputSet::new();
+                    ensure_output_paths_allowed(&output_paths, file, force)?;
+                    let mut staged = StagedOutputSet::with_replace_existing(force);
                     let mut rendered = Vec::with_capacity(selected.len());
                     for (one_based, (index, path)) in
                         selected.iter().zip(output_paths.iter()).enumerate()
@@ -504,7 +518,7 @@ pub fn replace(
         return Err(format!("no replacements found for \"{placeholder}\"").into());
     }
     let bytes = presentation.to_bytes()?;
-    stage_and_publish(&[(output.to_path_buf(), bytes)])?;
+    stage_and_publish(&[(output.to_path_buf(), bytes)], false)?;
     let mut stdout = io::stdout().lock();
     writeln!(
         stdout,
@@ -537,16 +551,15 @@ pub fn validate(file: &Path) -> Result<bool> {
 pub fn render(
     file: &Path,
     output: Option<&Path>,
+    force: bool,
     dpi: f64,
-    range: Option<&str>,
     format: &str,
-    quality: u8,
-    transparent: bool,
+    image: ImageOptions<'_>,
 ) -> Result<()> {
     validate_dpi(dpi)?;
     let presentation = Presentation::open(file)?;
-    let (format, extension) = parse_image_format(format, quality, transparent)?;
-    let selected = selected_zero_based_slides(presentation.len(), range)?;
+    let (format, extension) = parse_image_format(format, image.quality, image.transparent)?;
+    let selected = selected_zero_based_slides(presentation.len(), image.slides)?;
     let output = output.unwrap_or_else(|| Path::new("."));
     let stem = file.file_stem().unwrap_or_default().to_string_lossy();
     let (_, layout) = presentation.render_deterministic()?;
@@ -560,14 +573,15 @@ pub fn render(
     let mut stdout = io::stdout().lock();
     match format {
         RasterFormat::Tiff => {
+            let path = output.join(format!("{stem}.tiff"));
+            ensure_output_paths_allowed(std::slice::from_ref(&path), file, force)?;
             let output_bytes =
                 oxml_pdf::render_pages(&layout, &selected, RasterOptions { dpi, format })?;
             let RasterOutput::MultiPageTiff(tiff) = output_bytes else {
                 return Err("TIFF render did not produce one stream".into());
             };
-            let path = output.join(format!("{stem}.tiff"));
             std::fs::create_dir_all(output)?;
-            stage_and_publish(&[(path.clone(), tiff)])?;
+            stage_and_publish(&[(path.clone(), tiff)], force)?;
             writeln!(stdout, "Written to {}", path.display())?;
         }
         RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
@@ -579,8 +593,8 @@ pub fn render(
                 })
                 .collect::<Vec<_>>();
             std::fs::create_dir_all(output)?;
-            ensure_output_paths_available(&output_paths)?;
-            let mut staged = StagedOutputSet::new();
+            ensure_output_paths_allowed(&output_paths, file, force)?;
+            let mut staged = StagedOutputSet::with_replace_existing(force);
             let mut rendered = Vec::with_capacity(selected.len());
             for (index, path) in selected.iter().zip(output_paths.iter()) {
                 let one_based = index + 1;
@@ -597,11 +611,15 @@ pub fn render(
     Ok(())
 }
 
-pub fn thumbnail(file: &Path, output: Option<&Path>) -> Result<()> {
+pub fn thumbnail(file: &Path, output: Option<&Path>, force: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
     if presentation.is_empty() {
         return Err("cannot thumbnail a presentation with no slides".into());
     }
+    let output = output
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_output_path(file, "png"));
+    ensure_output_paths_allowed(std::slice::from_ref(&output), file, force)?;
     let (_, layout) = presentation.render_deterministic()?;
     let page = layout
         .pages
@@ -614,10 +632,7 @@ pub fn thumbnail(file: &Path, output: Option<&Path>) -> Result<()> {
     validate_raster_dimensions(page.width, page.height, dpi)?;
     let png = oxml_pdf::render_page_to_png(&layout, 0, dpi)
         .ok_or("slide one did not rasterize for thumbnail")?;
-    let output = output
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| default_output_path(file, "png"));
-    std::fs::write(&output, png)?;
+    stage_and_publish(&[(output.clone(), png)], force)?;
     writeln!(io::stdout(), "Written to {}", output.display())?;
     Ok(())
 }
@@ -967,7 +982,7 @@ fn next_comment_guid(presentation: &Presentation) -> String {
 }
 
 fn publish_presentation(presentation: &Presentation, output: &Path) -> Result<()> {
-    stage_and_publish(&[(output.to_path_buf(), presentation.to_bytes()?)])
+    stage_and_publish(&[(output.to_path_buf(), presentation.to_bytes()?)], false)
 }
 
 /// Prints a schema-1 operation record, or the action and the output path.
@@ -1057,13 +1072,16 @@ fn render_one_raster_page(
     Ok(pages.remove(0))
 }
 
-fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)]) -> Result<()> {
-    let paths = outputs
-        .iter()
-        .map(|(path, _)| path.clone())
-        .collect::<Vec<_>>();
-    ensure_output_paths_available(&paths)?;
-    let mut staged = StagedOutputSet::new();
+/// Publishes complete outputs, replacing existing files only with `force`.
+fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)], force: bool) -> Result<()> {
+    if !force {
+        let paths = outputs
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        ensure_output_paths_available(&paths)?;
+    }
+    let mut staged = StagedOutputSet::with_replace_existing(force);
     for (path, bytes) in outputs {
         staged.stage_bytes(path, bytes)?;
     }

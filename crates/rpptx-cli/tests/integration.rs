@@ -55,6 +55,56 @@ fn cli_with_closed_stdout(args: &[&str]) -> Output {
     child.wait_with_output().expect("wait for rpptx CLI")
 }
 
+/// Asserts that `args` refuses to replace an existing `output` and leaves it
+/// byte-identical, and that the same command with `--force` replaces it.
+fn assert_existing_output_needs_force(args: &[&str], output: &Path) {
+    fs::write(output, b"keep me").unwrap();
+    let refused = cli(args);
+    assert_eq!(refused.status.code(), Some(1), "{args:?} was not refused");
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr),
+        format!(
+            "Error: output already exists: {} (pass --force to replace it)\n",
+            output.display()
+        )
+    );
+    assert_eq!(fs::read(output).unwrap(), b"keep me");
+
+    let forced = cli(&[args, &["--force"]].concat());
+    assert!(
+        forced.status.success(),
+        "{args:?} --force failed: {}",
+        String::from_utf8_lossy(&forced.stderr)
+    );
+    assert_ne!(fs::read(output).unwrap(), b"keep me");
+    assert!(
+        fs::read_dir(output.parent().unwrap())
+            .unwrap()
+            .all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            })
+    );
+}
+
+/// Asserts that `args`, whose output is `input` under some spelling, leaves
+/// the input byte-identical with and without `--force`.
+fn assert_input_is_never_replaced(args: &[&str], input: &Path, output: &str) {
+    let before = fs::read(input).unwrap();
+    for force in [&[][..], &["--force"]] {
+        let refused = cli(&[args, force].concat());
+        assert_eq!(refused.status.code(), Some(1), "{args:?} {force:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&refused.stderr),
+            format!("Error: output is the input file: {output}\n")
+        );
+        assert_eq!(fs::read(input).unwrap(), before, "{args:?} {force:?}");
+    }
+}
+
 fn write_deck(path: &Path, texts: &[&str]) {
     let mut presentation = Presentation::new().expect("open bundled template");
     for text in texts {
@@ -852,6 +902,112 @@ fn multi_file_image_export_preserves_existing_outputs_before_streaming() {
     assert!(!converted.status.success());
     assert!(!temp.path.join("export_001.png").exists());
     assert_eq!(fs::read(preexisting).unwrap(), b"keep me");
+}
+
+#[test]
+fn convert_replaces_an_existing_output_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("convert-output-policy");
+    let input = temp.path.join("deck.pptx");
+    write_deck(&input, &["Output policy"]);
+    let deck = input.to_str().unwrap();
+    let spelled = temp.path.join("slides/../deck.pptx");
+    fs::create_dir(temp.path.join("slides")).unwrap();
+
+    let default_pdf = temp.path.join("deck.pdf");
+    assert_existing_output_needs_force(&["convert", deck, "--to", "pdf"], &default_pdf);
+    for to in ["pdf", "png", "tiff"] {
+        let output = temp.path.join(format!("converted.{to}"));
+        assert_existing_output_needs_force(
+            &[
+                "convert",
+                deck,
+                "--to",
+                to,
+                "--dpi",
+                "24",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            &output,
+        );
+        for spelling in [deck, spelled.to_str().unwrap()] {
+            assert_input_is_never_replaced(
+                &["convert", deck, "--to", to, "--dpi", "24", "-o", spelling],
+                &input,
+                spelling,
+            );
+        }
+    }
+}
+
+#[test]
+fn render_replaces_existing_slides_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("render-output-policy");
+    let input = temp.path.join("deck.pptx");
+    let slides = temp.path.join("slides");
+    write_deck(&input, &["Output policy"]);
+    fs::create_dir(&slides).unwrap();
+    let render = [
+        "render",
+        input.to_str().unwrap(),
+        "-o",
+        slides.to_str().unwrap(),
+        "--dpi",
+        "24",
+    ];
+
+    assert_existing_output_needs_force(&render, &slides.join("deck_slide1.png"));
+    assert_existing_output_needs_force(
+        &[render.as_slice(), &["--format", "tiff"]].concat(),
+        &slides.join("deck.tiff"),
+    );
+
+    // A deck named like its own TIFF output, rendered into its folder.
+    let named = temp.path.join("named.tiff");
+    fs::copy(&input, &named).unwrap();
+    assert_input_is_never_replaced(
+        &[
+            "render",
+            named.to_str().unwrap(),
+            "-o",
+            temp.path.to_str().unwrap(),
+            "--format",
+            "tiff",
+            "--dpi",
+            "24",
+        ],
+        &named,
+        named.to_str().unwrap(),
+    );
+}
+
+#[test]
+fn thumbnail_replaces_an_existing_output_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("thumbnail-output-policy");
+    let input = temp.path.join("deck.pptx");
+    write_deck(&input, &["Output policy"]);
+    let deck = input.to_str().unwrap();
+    let chosen = temp.path.join("chosen.png");
+    let spelled = temp.path.join("slides/../deck.pptx");
+    fs::create_dir(temp.path.join("slides")).unwrap();
+
+    assert_existing_output_needs_force(&["thumbnail", deck], &temp.path.join("deck.png"));
+    assert_existing_output_needs_force(
+        &["thumbnail", deck, "-o", chosen.to_str().unwrap()],
+        &chosen,
+    );
+    for spelling in [deck, spelled.to_str().unwrap()] {
+        assert_input_is_never_replaced(&["thumbnail", deck, "-o", spelling], &input, spelling);
+    }
+    #[cfg(unix)]
+    {
+        let refused = cli(&["thumbnail", deck, "-o", "/dev/null", "--force"]);
+        assert_eq!(refused.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8_lossy(&refused.stderr),
+            "Error: output is not a regular file: /dev/null\n"
+        );
+    }
 }
 
 #[test]

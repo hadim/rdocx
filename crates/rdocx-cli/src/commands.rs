@@ -4,7 +4,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use oxml_cli_support::{
-    StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
+    StagedOutputSet, default_output_path, ensure_output_paths_allowed,
+    ensure_output_paths_available, json_envelope, parse_range,
 };
 use rdocx::{
     BodyItemRef, Document, RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
@@ -377,6 +378,7 @@ pub fn convert(
     file: &Path,
     to: &str,
     output: Option<&Path>,
+    force: bool,
     dpi: u32,
     font_dir: Option<&Path>,
     image: ImageOptions<'_>,
@@ -402,6 +404,11 @@ pub fn convert(
         Some(p) => p.to_path_buf(),
         None => default_output_path(file, default_ext),
     };
+    // Several PNG or JPEG pages are written under numbered names, so those
+    // outputs are checked once the pages are selected.
+    if !matches!(to, "png" | "jpg" | "jpeg") {
+        ensure_output_paths_allowed(std::slice::from_ref(&output_path), file, force)?;
+    }
 
     let mut stdout = io::stdout().lock();
     match to {
@@ -416,15 +423,15 @@ pub fn convert(
             } else {
                 doc.to_pdf()?
             };
-            std::fs::write(&output_path, bytes)?;
+            stage_and_publish(&[(output_path.clone(), bytes)], force)?;
         }
         "html" => {
             let html = doc.to_html();
-            std::fs::write(&output_path, html)?;
+            stage_and_publish(&[(output_path.clone(), html.into_bytes())], force)?;
         }
         "md" | "markdown" => {
             let md = doc.to_markdown();
-            std::fs::write(&output_path, md)?;
+            stage_and_publish(&[(output_path.clone(), md.into_bytes())], force)?;
         }
         "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
             let (format, extension) = parse_image_format(to, image.quality, image.transparent)?;
@@ -443,14 +450,14 @@ pub fn convert(
                     let RasterOutput::MultiPageTiff(tiff) = output else {
                         return Err("TIFF render did not produce one stream".into());
                     };
-                    stage_and_publish(&[(output_path.clone(), tiff)])?;
+                    stage_and_publish(&[(output_path.clone(), tiff)], force)?;
                     writeln!(stdout, "Written to {}", output_path.display())?;
                 }
                 RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
                     let output_paths =
                         convert_separate_output_paths(&output_path, extension, selected.len());
-                    ensure_output_paths_available(&output_paths)?;
-                    let mut staged = StagedOutputSet::new();
+                    ensure_output_paths_allowed(&output_paths, file, force)?;
+                    let mut staged = StagedOutputSet::with_replace_existing(force);
                     for (page_index, path) in selected.iter().zip(output_paths.iter()) {
                         let image = render_one_raster_page(
                             &layout.layout,
@@ -884,7 +891,7 @@ fn revision_kind_label(kind: RevisionKind) -> &'static str {
 
 fn publish_document(doc: &mut Document, output: &Path) -> Result<()> {
     let bytes = doc.to_bytes()?;
-    stage_and_publish(&[(output.to_path_buf(), bytes)])
+    stage_and_publish(&[(output.to_path_buf(), bytes)], false)
 }
 
 fn mutation_record(
@@ -991,6 +998,7 @@ pub fn replace(
 pub fn render(
     file: &Path,
     output_dir: Option<&Path>,
+    force: bool,
     dpi: f64,
     options: RenderOptions<'_>,
 ) -> Result<()> {
@@ -1010,15 +1018,16 @@ pub fn render(
     // encoding so invalid options leave no partial output.
     match format {
         RasterFormat::Tiff => {
+            let out_path = out_dir.join(format!("{stem}.tiff"));
+            ensure_output_paths_allowed(std::slice::from_ref(&out_path), file, force)?;
             let output =
                 oxml_pdf::render_pages(&layout.layout, &selected, RasterOptions { dpi, format })?;
             let RasterOutput::MultiPageTiff(tiff) = output else {
                 return Err("TIFF render did not produce one stream".into());
             };
-            let out_path = out_dir.join(format!("{stem}.tiff"));
             std::fs::create_dir_all(out_dir)?;
             let tiff_len = tiff.len();
-            stage_and_publish(&[(out_path.clone(), tiff)])?;
+            stage_and_publish(&[(out_path.clone(), tiff)], force)?;
             writeln!(
                 stdout,
                 "Pages {} -> {} ({} bytes)",
@@ -1040,8 +1049,8 @@ pub fn render(
                 })
                 .collect::<Vec<_>>();
             std::fs::create_dir_all(out_dir)?;
-            ensure_output_paths_available(&output_paths)?;
-            let mut staged = StagedOutputSet::new();
+            ensure_output_paths_allowed(&output_paths, file, force)?;
+            let mut staged = StagedOutputSet::with_replace_existing(force);
             let mut rendered = Vec::with_capacity(selected.len());
             for (page_index, out_path) in selected.iter().zip(output_paths.iter()) {
                 let one_based = page_index + 1;
@@ -1157,13 +1166,16 @@ fn render_one_raster_page(
     Ok(pages.remove(0))
 }
 
-fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)]) -> Result<()> {
-    let paths = outputs
-        .iter()
-        .map(|(path, _)| path.clone())
-        .collect::<Vec<_>>();
-    ensure_output_paths_available(&paths)?;
-    let mut staged = StagedOutputSet::new();
+/// Publishes complete outputs, replacing existing files only with `force`.
+fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)], force: bool) -> Result<()> {
+    if !force {
+        let paths = outputs
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        ensure_output_paths_available(&paths)?;
+    }
+    let mut staged = StagedOutputSet::with_replace_existing(force);
     for (path, bytes) in outputs {
         staged.stage_bytes(path, bytes)?;
     }
@@ -1342,6 +1354,7 @@ mod tests {
             &input,
             "md",
             None,
+            false,
             96,
             None,
             ImageOptions {

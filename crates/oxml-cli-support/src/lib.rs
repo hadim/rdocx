@@ -128,9 +128,75 @@ pub fn ensure_output_paths_available(paths: &[PathBuf]) -> io::Result<()> {
     Ok(())
 }
 
+/// Fails before publication when a requested output is the input file, is not
+/// a regular file, or already exists and `force` is false.
+///
+/// On Unix an output is the input when both name the same device and inode,
+/// so a relative, `..`, symlinked or case-folded spelling of the input, a path
+/// through another mount of its directory, and a hard link to it are refused
+/// as well. Other platforms compare canonical paths.
+///
+/// An existing output that is not a regular file, such as a directory, a
+/// symbolic link, a device, a FIFO or a socket, is refused even with `force`,
+/// since a replacing publication would put a regular file in its place. An
+/// output that does not exist yet cannot be the input.
+pub fn ensure_output_paths_allowed(paths: &[PathBuf], input: &Path, force: bool) -> io::Result<()> {
+    let input = file_identity(input)?;
+    let mut unique = BTreeSet::new();
+    for path in paths {
+        if !unique.insert(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("duplicate output path {}", path.display()),
+            ));
+        }
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            continue;
+        };
+        if file_identity(path).is_ok_and(|output| output == input) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("output is the input file: {}", path.display()),
+            ));
+        }
+        if !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("output is not a regular file: {}", path.display()),
+            ));
+        }
+        if !force {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "output already exists: {} (pass --force to replace it)",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Identifies the file `path` names, whatever the spelling of `path`.
+#[cfg(unix)]
+fn file_identity(path: &Path) -> io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+/// Identifies the file `path` names, whatever the spelling of `path`.
+#[cfg(not(unix))]
+fn file_identity(path: &Path) -> io::Result<PathBuf> {
+    fs::canonicalize(path)
+}
+
 /// Stages output files beside their final destinations and publishes them as a set.
 pub struct StagedOutputSet {
     staged: Vec<StagedOutput>,
+    replace_existing: bool,
 }
 
 struct StagedOutput {
@@ -140,7 +206,23 @@ struct StagedOutput {
 
 impl StagedOutputSet {
     pub fn new() -> Self {
-        Self { staged: Vec::new() }
+        Self::with_replace_existing(false)
+    }
+
+    /// Creates a set that replaces existing destinations when
+    /// `replace_existing` is true, and refuses them like `new` otherwise.
+    ///
+    /// Replacement renames each staged file over its destination, so a
+    /// destination holds either its previous or its new complete content. If a
+    /// later output fails, the outputs already published stay, since the files
+    /// they replaced cannot be restored. Callers check the destinations with
+    /// `ensure_output_paths_allowed` first, which refuses the input file and
+    /// anything that is not a regular file.
+    pub fn with_replace_existing(replace_existing: bool) -> Self {
+        Self {
+            staged: Vec::new(),
+            replace_existing,
+        }
     }
 
     pub fn stage_bytes(&mut self, final_path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -154,7 +236,7 @@ impl StagedOutputSet {
                 format!("duplicate output path {}", final_path.display()),
             ));
         }
-        if final_path.exists() {
+        if !self.replace_existing && final_path.exists() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 format!("output already exists: {}", final_path.display()),
@@ -175,13 +257,22 @@ impl StagedOutputSet {
     pub fn publish(mut self) -> io::Result<()> {
         let mut published = Vec::new();
         for staged in &self.staged {
-            match publish_staged_output(staged) {
+            let result = if self.replace_existing {
+                fs::rename(&staged.temp_path, &staged.final_path)
+            } else {
+                publish_staged_output(staged)
+            };
+            match result {
                 Ok(()) => {
                     published.push(staged.final_path.clone());
                 }
                 Err(error) => {
-                    for path in published {
-                        let _ = fs::remove_file(path);
+                    // Removing a replaced output would not bring back what it
+                    // replaced.
+                    if !self.replace_existing {
+                        for path in published {
+                            let _ = fs::remove_file(path);
+                        }
                     }
                     for staged in &self.staged {
                         let _ = fs::remove_file(&staged.temp_path);
@@ -405,6 +496,131 @@ mod tests {
 
         assert_eq!(fs::read(first).unwrap(), b"first");
         assert_eq!(fs::read(second).unwrap(), b"second");
+        assert!(temp_entries(&temp).is_empty());
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn allowed_outputs_refuse_any_spelling_of_the_input_even_when_forced() {
+        let temp = temp_dir("allowed-outputs");
+        let input = temp.join("input.docx");
+        let existing = temp.join("existing.pdf");
+        let fresh = temp.join("fresh.pdf");
+        fs::write(&input, b"input").unwrap();
+        fs::write(&existing, b"existing").unwrap();
+        fs::create_dir(temp.join("nested")).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut spellings = vec![input.clone(), temp.join("nested/../input.docx")];
+        #[cfg(unix)]
+        {
+            let link = temp.join("link.docx");
+            std::os::unix::fs::symlink(&input, &link).unwrap();
+            spellings.push(link);
+            // A hard link has its own canonical path, as a mount alias of the
+            // input's directory does, so only the file identity matches it.
+            let hard_link = temp.join("nested/hard-link.pdf");
+            fs::hard_link(&input, &hard_link).unwrap();
+            spellings.push(hard_link);
+        }
+
+        for force in [false, true] {
+            for output in &spellings {
+                let error =
+                    ensure_output_paths_allowed(std::slice::from_ref(output), &input, force)
+                        .unwrap_err();
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+                assert_eq!(
+                    error.to_string(),
+                    format!("output is the input file: {}", output.display())
+                );
+            }
+            ensure_output_paths_allowed(std::slice::from_ref(&fresh), &input, force).unwrap();
+            assert_eq!(
+                ensure_output_paths_allowed(&[fresh.clone(), fresh.clone()], &input, force)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::AlreadyExists
+            );
+        }
+        let error = ensure_output_paths_allowed(std::slice::from_ref(&existing), &input, false)
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "output already exists: {} (pass --force to replace it)",
+                existing.display()
+            )
+        );
+        ensure_output_paths_allowed(&[existing], &input, true).unwrap();
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn allowed_outputs_refuse_anything_but_a_regular_file_even_when_forced() {
+        let temp = temp_dir("allowed-special-outputs");
+        let input = temp.join("input.docx");
+        let folder = temp.join("folder.pdf");
+        fs::write(&input, b"input").unwrap();
+        fs::create_dir(&folder).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut outputs = vec![folder];
+        #[cfg(unix)]
+        {
+            // Renaming over a link would replace the link, not its target.
+            let target = temp.join("target.pdf");
+            let link = temp.join("link.pdf");
+            fs::write(&target, b"target").unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            outputs.extend([link, PathBuf::from("/dev/null")]);
+        }
+
+        for force in [false, true] {
+            for output in &outputs {
+                let error =
+                    ensure_output_paths_allowed(std::slice::from_ref(output), &input, force)
+                        .unwrap_err();
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+                assert_eq!(
+                    error.to_string(),
+                    format!("output is not a regular file: {}", output.display())
+                );
+            }
+        }
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn replacing_outputs_swap_in_complete_files_and_keep_them_when_a_later_one_fails() {
+        let temp = temp_dir("staged-replace");
+        let existing = temp.join("existing.png");
+        let fresh = temp.join("fresh.png");
+        fs::write(&existing, b"old").unwrap();
+        assert_eq!(
+            StagedOutputSet::new()
+                .stage_bytes(&existing, b"new")
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+
+        let mut staged = StagedOutputSet::with_replace_existing(true);
+        staged.stage_bytes(&existing, b"new").unwrap();
+        staged.stage_bytes(&fresh, b"fresh").unwrap();
+        staged.publish().unwrap();
+        assert_eq!(fs::read(&existing).unwrap(), b"new");
+        assert_eq!(fs::read(&fresh).unwrap(), b"fresh");
+        assert!(temp_entries(&temp).is_empty());
+
+        let blocked = temp.join("blocked.png");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("keep"), b"keep").unwrap();
+        let mut staged = StagedOutputSet::with_replace_existing(true);
+        staged.stage_bytes(&existing, b"newer").unwrap();
+        staged.stage_bytes(&blocked, b"blocked").unwrap();
+        assert!(staged.publish().is_err());
+        assert_eq!(fs::read(&existing).unwrap(), b"newer");
+        assert_eq!(fs::read(blocked.join("keep")).unwrap(), b"keep");
         assert!(temp_entries(&temp).is_empty());
         fs::remove_dir_all(&temp).unwrap();
     }

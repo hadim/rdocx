@@ -69,6 +69,52 @@ fn assert_success(output: &Output, command: &str) {
     );
 }
 
+/// Asserts that `args` refuses to replace an existing `output` and leaves it
+/// byte-identical, and that the same command with `--force` replaces it.
+fn assert_existing_output_needs_force(args: &[&str], output: &Path) {
+    fs::write(output, b"keep me").unwrap();
+    let refused = cli(args);
+    assert_eq!(refused.status.code(), Some(1), "{args:?} was not refused");
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr),
+        format!(
+            "Error: output already exists: {} (pass --force to replace it)\n",
+            output.display()
+        )
+    );
+    assert_eq!(fs::read(output).unwrap(), b"keep me");
+
+    let forced = [args, &["--force"]].concat();
+    assert_success(&cli(&forced), &forced.join(" "));
+    assert_ne!(fs::read(output).unwrap(), b"keep me");
+    assert!(
+        fs::read_dir(output.parent().unwrap())
+            .unwrap()
+            .all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            })
+    );
+}
+
+/// Asserts that `args`, whose output is `input` under some spelling, leaves
+/// the input byte-identical with and without `--force`.
+fn assert_input_is_never_replaced(args: &[&str], input: &Path, output: &str) {
+    let before = fs::read(input).unwrap();
+    for force in [&[][..], &["--force"]] {
+        let refused = cli(&[args, force].concat());
+        assert_eq!(refused.status.code(), Some(1), "{args:?} {force:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&refused.stderr),
+            format!("Error: output is the input file: {output}\n")
+        );
+        assert_eq!(fs::read(input).unwrap(), before, "{args:?} {force:?}");
+    }
+}
+
 fn fixture_document(paragraphs: &[&str]) -> Document {
     let mut document = Document::new();
     document.set_title("CLI fixture");
@@ -335,6 +381,100 @@ fn convert_writes_valid_formats_and_uses_the_shared_default_output() {
     );
     let dimensions = png_dimensions(&fs::read(png).unwrap());
     assert!(dimensions.0 > 0 && dimensions.1 > 0);
+}
+
+#[test]
+fn convert_replaces_an_existing_output_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("convert-output-policy");
+    let input = temp.path.join("source.docx");
+    write_document(&input, &["Output policy"]);
+    let source = path_text(&input);
+    let spelled = temp.path.join("pages/../source.docx");
+    fs::create_dir(temp.path.join("pages")).unwrap();
+
+    let default_pdf = temp.path.join("source.pdf");
+    assert_existing_output_needs_force(&["convert", source, "--to", "pdf"], &default_pdf);
+    for to in ["pdf", "md", "html", "png", "tiff"] {
+        let output = temp.path.join(format!("converted.{to}"));
+        assert_existing_output_needs_force(
+            &[
+                "convert",
+                source,
+                "--to",
+                to,
+                "--dpi",
+                "24",
+                "-o",
+                path_text(&output),
+            ],
+            &output,
+        );
+        for spelling in [source, path_text(&spelled)] {
+            assert_input_is_never_replaced(
+                &["convert", source, "--to", to, "--dpi", "24", "-o", spelling],
+                &input,
+                spelling,
+            );
+        }
+    }
+    #[cfg(unix)]
+    {
+        let refused = cli(&[
+            "convert",
+            source,
+            "--to",
+            "md",
+            "-o",
+            "/dev/null",
+            "--force",
+        ]);
+        assert_eq!(refused.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8_lossy(&refused.stderr),
+            "Error: output is not a regular file: /dev/null\n"
+        );
+    }
+}
+
+#[test]
+fn render_replaces_existing_pages_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("render-output-policy");
+    let input = temp.path.join("source.docx");
+    let pages = temp.path.join("pages");
+    write_document(&input, &["Output policy"]);
+    fs::create_dir(&pages).unwrap();
+    let render = [
+        "render",
+        path_text(&input),
+        "-o",
+        path_text(&pages),
+        "--dpi",
+        "24",
+    ];
+
+    assert_existing_output_needs_force(&render, &pages.join("source_page1.png"));
+    assert_existing_output_needs_force(
+        &[render.as_slice(), &["--format", "tiff"]].concat(),
+        &pages.join("source.tiff"),
+    );
+
+    // A document named like its own TIFF output, rendered into its folder.
+    let named = temp.path.join("named.tiff");
+    fs::copy(&input, &named).unwrap();
+    assert_input_is_never_replaced(
+        &[
+            "render",
+            path_text(&named),
+            "-o",
+            path_text(&temp.path),
+            "--format",
+            "tiff",
+            "--dpi",
+            "24",
+        ],
+        &named,
+        path_text(&named),
+    );
 }
 
 #[test]
