@@ -402,6 +402,49 @@ def test_whole_text_replacement_stales_descendant_handles_once():
     assert prs.slides[0].shapes[-1].text_frame.paragraphs[0].text == "after"
 
 
+def test_run_text_replaces_in_place_and_keeps_every_handle_live():
+    import rpptx
+
+    prs = _textbox_presentation(rpptx)
+    prs.slides[0].shapes[0].text_frame.paragraphs[0].add_run(" world")
+    slides = prs.slides
+    slide = slides[0]
+    shapes = slide.shapes
+    shape = shapes[0]
+    left = shape.left
+    frame = shape.text_frame
+    paragraph = frame.paragraphs[0]
+    runs = paragraph.runs
+    first, second = runs[0], runs[1]
+    font = first.font
+
+    for value in ("HELLO", "line\nfeed", "vertical\vtab", "tab\tstop", ""):
+        first.text = value
+        assert first.text == value
+        assert second.text == " world"
+        assert paragraph.text == frame.text == shape.text == value + " world"
+        assert len(runs) == 2
+        assert shape.left == left
+        assert len(slides) == len(shapes) == len(slide.shapes) == 1
+        assert font.bold is None
+
+    second.text = "world"
+    font.bold = True
+    assert (first.text, second.text, first.font.bold) == ("", "world", True)
+    fresh = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs
+    assert [run.text for run in fresh] == ["", "world"]
+
+    paragraph.text = "whole"
+    for operation in (
+        lambda: shape.left,
+        lambda: len(slide.shapes),
+        lambda: second.text,
+        lambda: font.bold,
+    ):
+        _assert_stale_after_exactly_one_bump(rpptx, operation)
+    assert prs.slides[0].shapes[0].text == "whole"
+
+
 def test_nested_group_paths_report_exact_recovery(tmp_path):
     if importlib.util.find_spec("pptx") is None:
         pytest.skip("python-pptx oracle is installed only for the differential gate")
