@@ -31247,6 +31247,157 @@ mod compare_producer_noise {
             );
         }
     }
+
+    const MARKUP_COMPATIBILITY: &str =
+        "http://schemas.openxmlformats.org/markup-compatibility/2006";
+    const RELATIONSHIPS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const WORD_2010: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
+    const WORD_2012: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+
+    fn document_with_comments_part(comments: &str) -> Document {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/comments.xml", comments.as_bytes().to_vec());
+        package.content_types.add_override(
+            "/word/comments.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(oxml_opc::relationship::rel_types::COMMENTS, "comments.xml");
+        package.set_part(
+            "/word/document.xml",
+            wrap_word_body("<w:p><w:r><w:t>Lorem ipsum.</w:t></w:r></w:p>").into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn with_part(mut document: Document, part_name: &str, xml: &str) -> Document {
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part(part_name, xml.as_bytes().to_vec());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    /// A comments, notes or header part written again by another producer,
+    /// rdocx included, keeps its content: the declaration, namespace
+    /// declarations, attribute order and empty-element form are not.
+    #[test]
+    fn a_reserialized_story_shell_is_not_a_change() {
+        // #160 section 3: the empty comments part of a Google Docs export,
+        // and the same part as a no-op save used to write it.
+        let google_docs = format!(
+            r#"<?xml version='1.0' encoding='UTF-8' standalone='yes'?>
+<w:comments xmlns:mc="{MARKUP_COMPATIBILITY}" xmlns:r="{RELATIONSHIPS}" xmlns:w="{W_NS}" xmlns:w14="{WORD_2010}" xmlns:w15="{WORD_2012}" mc:Ignorable="w14 w15"/>"#
+        );
+        let rewritten = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="{W_NS}" xmlns:r="{RELATIONSHIPS}" xmlns:mc="{MARKUP_COMPATIBILITY}" xmlns:w15="{WORD_2012}" mc:Ignorable="w14 w15"></w:comments>"#
+        );
+        let mut saved = document_with_comments_part(&google_docs);
+        let saved = Document::from_bytes(&saved.to_bytes().unwrap()).unwrap();
+        for edited in [saved, document_with_comments_part(&rewritten)] {
+            let mut compared = document_with_comments_part(&google_docs);
+            let diagnostics = compared.compare(&edited, "R", TIMESTAMP).unwrap();
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert_eq!(revision_kinds(&compared), []);
+        }
+
+        // The owner start tags in Word's order and in rdocx's, next to a
+        // separator note and a header root written again.
+        let comments = |attributes: &str, text: &str| {
+            format!(
+                r#"<w:comments xmlns:w="{W_NS}"><w:comment {attributes}><w:p><w:r><w:t>{text} comment</w:t></w:r></w:p></w:comment></w:comments>"#
+            )
+        };
+        let rdocx_order =
+            r#"w:author="Ada" w:date="2026-09-04T09:00:00Z" w:initials="AL" w:id="0""#;
+        let footnotes = format!(
+            r#"<w:footnotes xmlns:w="{W_NS}"><w:footnote w:id="-1" w:type="separator"><w:p xmlns:w="{W_NS}"><w:r><w:separator /></w:r></w:p></w:footnote><w:footnote w:id="0" w:type="continuationSeparator"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote><w:footnote w:id="1"><w:p><w:r><w:footnoteRef/><w:t xml:space="preserve"> same footnote</w:t></w:r></w:p></w:footnote></w:footnotes>"#
+        );
+        let header = format!(
+            r#"<w:hdr xmlns:r="{RELATIONSHIPS}" xmlns:w="{W_NS}"><w:p><w:r><w:t>edited header</w:t></w:r></w:p></w:hdr>"#
+        );
+        for text in ["same", "edited"] {
+            let original = document_with_comparison_stories("same");
+            let mut edited = with_part(
+                document_with_comparison_stories("same"),
+                "/word/comments.xml",
+                &comments(rdocx_order, text),
+            );
+            edited = with_part(edited, "/word/footnotes.xml", &footnotes);
+            edited = with_part(edited, "/word/header1.xml", &header);
+            let mut compared = document_with_comparison_stories("same");
+            let diagnostics = compared
+                .compare(&edited, "R", TIMESTAMP)
+                .unwrap_or_else(|error| panic!("{text}: {error}"));
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            let tracked = compared.to_bytes().unwrap();
+            let redline = comparison_part_xml(&mut compared, "/word/comments.xml");
+            assert_eq!(
+                redline.contains("<w:del ") && redline.contains("<w:ins "),
+                text == "edited",
+                "{redline}"
+            );
+            let header = comparison_part_xml(&mut compared, "/word/header1.xml");
+            assert!(header.contains("<w:ins "), "{header}");
+            for (resolve, expected) in [
+                (
+                    Document::accept_all as fn(&mut Document) -> rdocx::Result<usize>,
+                    &edited,
+                ),
+                (Document::reject_all, &original),
+            ] {
+                let mut resolved = Document::from_bytes(&tracked).unwrap();
+                resolve(&mut resolved).unwrap();
+                let diagnostics = resolved
+                    .compare(expected, "postcondition", TIMESTAMP)
+                    .unwrap();
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            }
+        }
+    }
+
+    /// A shell that differs in content still refuses the pair. A re-dated
+    /// comment waits for the redline to carry the edited comment threads.
+    #[test]
+    fn a_changed_story_shell_still_refuses() {
+        let comments = |root_child: &str, date: &str| {
+            format!(
+                r#"<w:comments xmlns:w="{W_NS}">{root_child}<w:comment w:id="0" w:author="Ada" w:initials="AL" w:date="{date}"><w:p><w:r><w:t>same comment</w:t></w:r></w:p></w:comment></w:comments>"#
+            )
+        };
+        for (edited, expected) in [
+            (
+                comments("", "2026-09-05T09:00:00Z"),
+                "comments owner shell changed at /word/comments.xml[0]",
+            ),
+            (
+                comments(
+                    r#"<x:extension xmlns:x="urn:producer"/>"#,
+                    "2026-09-04T09:00:00Z",
+                ),
+                "comments story root shell changed in /word/comments.xml",
+            ),
+        ] {
+            let edited = with_part(
+                document_with_comparison_stories("same"),
+                "/word/comments.xml",
+                &edited,
+            );
+            let mut compared = document_with_comparison_stories("same");
+            let error = compared.compare(&edited, "R", TIMESTAMP).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
 }
 
 #[test]

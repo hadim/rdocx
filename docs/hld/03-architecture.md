@@ -910,8 +910,11 @@ section properties emit property revisions that retain the original property
 sidecars. Unsupported formatting differences retain the original bytes and
 produce stable `ComparisonDiagnostic` values at the actual story path. Inputs
 with existing modeled revisions or differing story shells are rejected unless
-their story category is ignored. A content control's shell is its type and
-data binding, and a difference there is rejected too. Its `w:id` is producer
+their story category is ignored. The root and owner start tags of a comment
+or note story compare as namespace-resolved trees, so a part written again
+with other declarations, attribute order, or empty-element forms keeps its
+shell. A content control's shell is its type and data binding, and a
+difference there is rejected too. Its `w:id` is producer
 identity and ignored. Its tag, alias, lock, placeholder, and document-part
 gallery are metadata, so controls that differ only by those align, compare,
 keep the original `w:sdtPr`, and report one `content-control <name> differs`

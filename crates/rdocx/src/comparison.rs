@@ -912,8 +912,15 @@ fn compare_owned_story(
             story.part_name
         )));
     }
-    let original_skeleton = story_skeleton(original, &original_spans);
-    let edited_skeleton = story_skeleton(edited, &edited_spans);
+    let (original_skeleton, original_owners) = canonical_owned_story(original, owner_local)?;
+    let (edited_skeleton, edited_owners) = canonical_owned_story(edited, owner_local)?;
+    if original_owners.len() != original_spans.len() || edited_owners.len() != edited_spans.len() {
+        return Err(Error::Other(format!(
+            "comparison could not correlate {} story owners in {}",
+            story.kind.label(),
+            story.part_name
+        )));
+    }
     if original_skeleton != edited_skeleton {
         return Err(Error::Other(format!(
             "{} story root shell changed in {}",
@@ -925,7 +932,7 @@ fn compare_owned_story(
     for (index, (left, right)) in original_spans.iter().zip(&edited_spans).enumerate() {
         let left_xml = &original[left.clone()];
         let right_xml = &edited[right.clone()];
-        if owner_start_signature(left_xml)? != owner_start_signature(right_xml)? {
+        if original_owners[index].first() != edited_owners[index].first() {
             return Err(Error::Other(format!(
                 "{} owner shell changed at {}[{index}]",
                 story.kind.label(),
@@ -937,7 +944,7 @@ fn compare_owned_story(
             ComparisonStoryKind::Footnote | ComparisonStoryKind::Endnote
         ) && !normal_note_owner(left_xml)?
         {
-            if left_xml != right_xml {
+            if original_owners[index] != edited_owners[index] {
                 return Err(Error::Other(format!(
                     "{} separator shell changed at {}[{index}]",
                     story.kind.label(),
@@ -1956,11 +1963,118 @@ fn story_skeleton(xml: &str, spans: &[Range<usize>]) -> String {
     skeleton
 }
 
-fn owner_start_signature(xml: &str) -> Result<String> {
-    let end = xml
-        .find('>')
-        .ok_or_else(|| Error::Other("comparison owner has no start tag".to_owned()))?;
-    Ok(xml[..=end].to_owned())
+/// An owned story read so that two serializations of one tree compare equal:
+/// the part with each owner as one placeholder, then each owner, whose first
+/// token is its start tag.
+///
+/// Names resolve to their namespaces, attributes compare as a sorted set and
+/// an empty element reads as a start and an end. The XML declaration,
+/// comments, processing instructions, whitespace-only text, namespace
+/// declarations and Markup Compatibility attributes are left out. They say
+/// how the part is written, not what it holds, and the redline keeps the
+/// original bytes.
+fn canonical_owned_story(xml: &str, owner_local: &str) -> Result<(Vec<String>, Vec<Vec<String>>)> {
+    let scan_error = |error: &dyn std::fmt::Display| {
+        Error::Other(format!("comparison story shell scan failed: {error}"))
+    };
+    let mut reader = NsReader::from_reader(xml.as_bytes());
+    reader.config_mut().trim_text(false);
+    let mut skeleton = Vec::new();
+    let mut owners = Vec::<Vec<String>>::new();
+    let mut in_owner = false;
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| scan_error(&error))?;
+        let tokens = match (in_owner, owners.last_mut()) {
+            (true, Some(owner)) => owner,
+            _ => &mut skeleton,
+        };
+        let (element, empty) = match event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            Event::End(_) => {
+                tokens.push("end".to_owned());
+                depth = depth.saturating_sub(1);
+                in_owner &= depth > 1;
+                buffer.clear();
+                continue;
+            }
+            Event::Text(text) if !text.iter().all(u8::is_ascii_whitespace) => {
+                tokens.push(format!("text {:?}", String::from_utf8_lossy(&text)));
+                buffer.clear();
+                continue;
+            }
+            Event::CData(text) => {
+                tokens.push(format!("text {:?}", String::from_utf8_lossy(&text)));
+                buffer.clear();
+                continue;
+            }
+            Event::GeneralRef(reference) => {
+                tokens.push(format!(
+                    "reference {:?}",
+                    String::from_utf8_lossy(&reference)
+                ));
+                buffer.clear();
+                continue;
+            }
+            Event::Eof => break,
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        let resolver = reader.resolver();
+        let (namespace, local) = resolver.resolve_element(element.name());
+        let mut attributes = Vec::new();
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(|error| scan_error(&error))?;
+            let key = attribute.key.as_ref();
+            if key == b"xmlns" || key.starts_with(b"xmlns:") {
+                continue;
+            }
+            let (attribute_namespace, attribute_local) = resolver.resolve_attribute(attribute.key);
+            if matches!(
+                attribute_namespace,
+                ResolveResult::Bound(Namespace(uri)) if uri == oxml_core::xml::MC_NS.as_bytes()
+            ) {
+                continue;
+            }
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                .map_err(|error| scan_error(&error))?;
+            attributes.push(format!(
+                "{attribute_namespace:?} {:?} {value:?}",
+                String::from_utf8_lossy(attribute_local.as_ref())
+            ));
+        }
+        attributes.sort();
+        let start = format!(
+            "start {namespace:?} {:?} {attributes:?}",
+            String::from_utf8_lossy(local.as_ref())
+        );
+        let is_owner = depth == 1
+            && local.as_ref() == owner_local.as_bytes()
+            && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes());
+        let tokens = if is_owner {
+            skeleton.push("owner".to_owned());
+            in_owner = !empty;
+            owners.push(Vec::new());
+            owners.last_mut().expect("owner was just pushed")
+        } else {
+            tokens
+        };
+        tokens.push(start);
+        if empty {
+            tokens.push("end".to_owned());
+        } else {
+            depth += 1;
+        }
+        buffer.clear();
+    }
+    Ok((skeleton, owners))
 }
 
 fn normal_note_owner(xml: &str) -> Result<bool> {
@@ -6669,8 +6783,8 @@ fn utf8_error(error: impl std::fmt::Display) -> Error {
 mod tests {
     use super::{
         ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING,
-        attributed_run_units, comparison_postcondition_error, complex_field_result, story_document,
-        word_fragments,
+        attributed_run_units, canonical_owned_story, comparison_postcondition_error,
+        complex_field_result, story_document, word_fragments,
     };
     use crate::Document;
     use rdocx_oxml::document::BodyContent;
@@ -6790,6 +6904,27 @@ mod tests {
                 (expected.0, String::new(), expected.2)
             );
         }
+    }
+
+    #[test]
+    fn an_owned_story_shell_reads_the_same_in_every_serialization() {
+        let compatibility = oxml_core::xml::MC_NS;
+        let word = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:mc="{compatibility}" xmlns:w="{W_NS}" mc:Ignorable="w14"><w:comment w:id="0" w:author="Ada"><w:p/></w:comment>
+</w:comments>"#
+        );
+        let other = |author: &str| {
+            format!(
+                r#"<q:comments xmlns:q="{W_NS}"><!-- kept --><q:comment q:author="{author}" q:id="0"><q:p></q:p></q:comment></q:comments>"#
+            )
+        };
+        let canonical = |xml: &str| canonical_owned_story(xml, "comment").unwrap();
+        assert_eq!(canonical(&word), canonical(&other("Ada")));
+        let (skeleton, owners) = canonical(&word);
+        assert_eq!(skeleton.iter().filter(|token| *token == "owner").count(), 1);
+        assert_eq!(owners.len(), 1);
+        assert_ne!(canonical(&word), canonical(&other("Bob")));
     }
 
     #[test]
