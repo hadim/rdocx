@@ -9389,6 +9389,57 @@ fn visit_sdt(control: &CT_Sdt, visitor: &mut impl FnMut(&CT_P)) {
     }
 }
 
+/// Append a block-level paragraph to [`Document::text`] as one line.
+fn push_paragraph_line(paragraph: &CT_P, text: &mut String) {
+    text.push_str(&paragraph.text());
+    text.push('\n');
+}
+
+/// Append a table to [`Document::text`] as one line per row, rows wrapped by
+/// table-level content controls included.
+fn push_table_text(table: &CT_Tbl, text: &mut String) {
+    for index in 0..=table.rows.len() {
+        for (_, _, control) in table
+            .content_controls
+            .iter()
+            .filter(|(at, _, _)| *at == index)
+        {
+            push_control_text(control, text);
+        }
+        if let Some(row) = table.rows.get(index) {
+            push_row_text(row, text);
+        }
+    }
+}
+
+/// Append a row to [`Document::text`] as one line in which every paragraph of
+/// its cells ends with a tab, cell controls and nested tables included.
+fn push_row_text(row: &CT_Row, text: &mut String) {
+    visit_row(row, &mut |paragraph| push_cell_paragraph(paragraph, text));
+    text.push('\n');
+}
+
+fn push_cell_paragraph(paragraph: &CT_P, text: &mut String) {
+    text.push_str(&paragraph.text());
+    text.push('\t');
+}
+
+/// Append what a block, table or row content control wraps to [`Document::text`].
+fn push_control_text(control: &CT_Sdt, text: &mut String) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => push_paragraph_line(paragraph, text),
+            SdtContent::Table(table) => push_table_text(table, text),
+            SdtContent::Row(row) => push_row_text(row, text),
+            SdtContent::Cell(cell) => {
+                visit_cell(cell, &mut |paragraph| push_cell_paragraph(paragraph, text));
+            }
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+            SdtContent::ContentControl(nested) => push_control_text(nested, text),
+        }
+    }
+}
+
 fn visit_body_paragraphs_mut(content: &mut [BodyContent], visitor: &mut impl FnMut(&mut CT_P)) {
     for item in content {
         match item {
@@ -14633,28 +14684,18 @@ impl Document {
     }
 
     /// Get the plain text of body paragraphs and table cells in document order.
+    ///
+    /// A body paragraph ends with a newline. A table row is one line in which
+    /// every cell paragraph ends with a tab, paragraphs of nested tables
+    /// included. Content controls at every level contribute the paragraphs,
+    /// rows and cells they wrap at the position they occupy.
     pub fn text(&self) -> String {
         let mut result = String::new();
         for content in &self.document.body.content {
             match content {
-                BodyContent::Paragraph(paragraph) => {
-                    result.push_str(&paragraph.text());
-                    result.push('\n');
-                }
-                BodyContent::Table(table) => {
-                    for row in &table.rows {
-                        for cell in &row.cells {
-                            for content in &cell.content {
-                                if let CellContent::Paragraph(paragraph) = content {
-                                    result.push_str(&paragraph.text());
-                                    result.push('\t');
-                                }
-                            }
-                        }
-                        result.push('\n');
-                    }
-                }
-                BodyContent::ContentControl(_) => {}
+                BodyContent::Paragraph(paragraph) => push_paragraph_line(paragraph, &mut result),
+                BodyContent::Table(table) => push_table_text(table, &mut result),
+                BodyContent::ContentControl(control) => push_control_text(control, &mut result),
                 BodyContent::RawXml(_) => {}
             }
         }

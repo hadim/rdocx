@@ -12339,6 +12339,96 @@ fn namespace_classification_metadata_exists_only_for_raw_children() {
     ));
 }
 
+/// The body read walkers see through content controls (GitHub issue #160).
+mod content_control_read_walker_regressions {
+    use super::*;
+
+    fn control(tag: &str, content: &str) -> String {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#
+        )
+    }
+
+    fn table(rows: &str) -> String {
+        format!(r#"<w:tbl><w:tblPr/><w:tblGrid/>{rows}</w:tbl>"#)
+    }
+
+    fn row(cells: &str) -> String {
+        format!("<w:tr>{cells}</w:tr>")
+    }
+
+    fn cell(content: &str) -> String {
+        format!("<w:tc><w:tcPr/>{content}</w:tc>")
+    }
+
+    fn paragraph(text: &str) -> String {
+        format!(r#"<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>"#)
+    }
+
+    #[test]
+    fn text_reads_every_content_control_location_in_document_order() {
+        let body = [
+            paragraph("first"),
+            control("goog_rdk_1", &paragraph("block")),
+            table(&format!(
+                "{}{}",
+                control("rows", &row(&cell(&paragraph("wrapped row")))),
+                row(&format!(
+                    "{}{}{}{}",
+                    cell(&paragraph("plain")),
+                    control("cells", &cell(&paragraph("wrapped cell"))),
+                    cell(&control("goog_rdk_2", &paragraph("cell control"))),
+                    cell(&format!(
+                        "{}{}",
+                        table(&row(&format!(
+                            "{}{}",
+                            cell(&paragraph("inner a")),
+                            cell(&paragraph("inner b"))
+                        ))),
+                        paragraph("after inner")
+                    )),
+                ))
+            )),
+            control("outer", &control("goog_rdk_3", &paragraph("nested"))),
+            format!(
+                r#"<w:p>{}<w:r><w:t xml:space="preserve"> tail</w:t></w:r></w:p>"#,
+                control("goog_rdk_4", r#"<w:r><w:t>inline</w:t></w:r>"#)
+            ),
+            paragraph("last"),
+        ]
+        .concat();
+        let document = document_with_content_controls(&wrap_word_body(&body));
+
+        assert_eq!(
+            document.text(),
+            "first\nblock\nwrapped row\t\nplain\twrapped cell\tcell control\tinner a\tinner b\tafter inner\t\nnested\ninline tail\nlast\n"
+        );
+    }
+
+    #[test]
+    fn nested_table_cells_contribute_text_inside_their_outer_row() {
+        let body = table(&row(&format!(
+            "{}{}",
+            cell(&paragraph("outer")),
+            cell(&format!(
+                "{}{}",
+                table(&format!(
+                    "{}{}",
+                    row(&cell(&paragraph("first inner row"))),
+                    row(&cell(&paragraph("second inner row")))
+                )),
+                paragraph("after")
+            ))
+        )));
+        let document = document_with_content_controls(&wrap_word_body(&body));
+
+        assert_eq!(
+            document.text(),
+            "outer\tfirst inner row\tsecond inner row\tafter\t\n"
+        );
+    }
+}
+
 fn ordered_reader_fixture() -> &'static str {
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"

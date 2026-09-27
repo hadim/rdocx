@@ -178,6 +178,33 @@ fn text_prints_body_and_table_content_in_document_order() {
 }
 
 #[test]
+fn text_prints_paragraphs_wrapped_by_a_body_content_control() {
+    let temp = TempWorkspace::new("text-content-control");
+    let input = temp.path.join("control.docx");
+    write_document(&input, &["Body text"]);
+
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(&input).unwrap())).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap())
+        .unwrap()
+        .replacen(
+            "<w:body>",
+            r#"<w:body><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_1"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Wrapped paragraph</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+            1,
+        );
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut file = fs::File::create(&input).unwrap();
+    package.write_to(&mut file).unwrap();
+
+    let output = cli(&["text", path_text(&input)]);
+    assert_success(&output, "text");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Wrapped paragraph\nBody text\n"
+    );
+}
+
+#[test]
 fn convert_writes_valid_formats_and_uses_the_shared_default_output() {
     let temp = TempWorkspace::new("convert");
     let input = temp.path.join("source.docx");

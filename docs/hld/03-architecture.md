@@ -1358,8 +1358,10 @@ both `MathArgument` and `String`. No wrapper, trait, feature flag, or binding
 surface is introduced.
 
 `Document::text` traverses body paragraphs and table cells in document order.
-The WASM binding uses that additive facade accessor for its existing `getText`
-method and otherwise owns one complete `Document`. It never reaches into
+Nested tables and the content controls at every level contribute their
+paragraphs in place.
+The WASM binding uses `Document::text` for its existing `getText` method and
+otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.
 
 `Document::render_page_to_svg`, its option-taking counterpart, and their two
