@@ -14357,6 +14357,9 @@ impl Document {
     }
 
     /// Clone one checked direct child into a checked insertion boundary.
+    ///
+    /// Document-wide identities of the copy are made unique, and its
+    /// paragraphs and table rows drop `w14:paraId` and `w14:textId`.
     pub fn clone_content(
         &mut self,
         source_location: &ContentLocation,
@@ -14736,8 +14739,9 @@ impl Document {
     /// `table_index` counts every table in document order, including nested
     /// tables. `insert_at` may equal the row count to append. The copy keeps
     /// row properties, cell formatting, nested content, relationships, and
-    /// preserved producer XML. Document-wide identities are made unique and
-    /// comment anchors are omitted. The document is unchanged on error.
+    /// preserved producer XML. Document-wide identities are made unique, the
+    /// row and its paragraphs drop `w14:paraId` and `w14:textId`, and comment
+    /// anchors are omitted. The document is unchanged on error.
     pub fn clone_table_row(
         &mut self,
         table_index: usize,

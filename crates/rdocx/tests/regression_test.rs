@@ -14881,7 +14881,7 @@ mod table_row_identity_attribute_regressions {
             }],
             ..Default::default()
         };
-        let output = document
+        let mut output = document
             .mail_merge_rich(&data, None)
             .unwrap_or_else(|error| panic!("{error}"))
             .remove(0);
@@ -14895,6 +14895,136 @@ mod table_row_identity_attribute_regressions {
         assert_eq!(table.row_count(), 2);
         assert_eq!(table.cell(0, 0).unwrap().text(), "first");
         assert_eq!(table.cell(1, 0).unwrap().text(), "second");
+        // Every output paragraph and row is a copy of a template element, so
+        // none keeps its w14 identities. The revision-save identities stay.
+        let saved = super::document_xml(&mut output);
+        assert!(!saved.contains("MERGEFIELD"), "{saved}");
+        assert_eq!(
+            saved.matches(r#"w:rsidTr="00A1B2C4""#).count(),
+            2,
+            "{saved}"
+        );
+        assert_eq!(saved.matches(r#"w:rsidR="00B1B2B3""#).count(), 4, "{saved}");
+        assert!(!saved.contains("w14:paraId"), "{saved}");
+        assert!(!saved.contains("w14:textId"), "{saved}");
+    }
+
+    #[test]
+    fn copied_rows_and_paragraphs_drop_their_w14_identities() {
+        // Two elements must not share a `w14:paraId`, and Word assigns new
+        // w14 identities to an element that has none, so a copy drops them.
+        // The revision-save identities stay, since Word repeats them freely.
+        let cell_paragraph =
+            r#"<w:p w:rsidR="00B1B2B3" w14:paraId="3C4D5E6F" w14:textId="7A8B9C0D">"#;
+        let body_paragraph =
+            r#"<w:p w:rsidR="00C1C2C3" w14:paraId="4D5E6F70" w14:textId="0A1B2C3D">"#;
+        // A row without a cell leaves the table without a valid topology.
+        let xml = row_document_xml(ALL, "alpha")
+            .replace(&format!("<w:tr{ALL}/>"), "")
+            .replacen("<w:tc><w:p>", &format!("<w:tc>{cell_paragraph}"), 1)
+            .replacen("<w:body><w:p>", &format!("<w:body>{body_paragraph}"), 1);
+        let mut document = super::document_with_content_controls(&xml);
+        assert_eq!(document.clone_table_row(0, 0, 2).unwrap(), 2);
+        let body = super::f254_story(&document, rdocx::StoryKind::Body);
+        let source = super::f254_item(&document, &body, 0);
+        document
+            .clone_content(&source, &rdocx::ContentLocation::end(body))
+            .unwrap();
+
+        let saved = super::document_xml(&mut document);
+        assert_eq!(saved.matches("alpha").count(), 2, "{saved}");
+        assert_eq!(
+            saved.matches("Body text of section 3.1.").count(),
+            2,
+            "{saved}"
+        );
+        for (attribute, count) in [
+            (r#"w14:paraId="1A2B3C4D""#, 3),
+            (r#"w14:textId="5E6F7A8B""#, 3),
+            (r#"w:rsidTr="00A1B2C4""#, 4),
+            (r#"w:rsidDel="00A1B2C6""#, 4),
+            (r#"w14:paraId="3C4D5E6F""#, 1),
+            (r#"w14:textId="7A8B9C0D""#, 1),
+            (r#"w:rsidR="00B1B2B3""#, 2),
+            (r#"w14:paraId="4D5E6F70""#, 1),
+            (r#"w14:textId="0A1B2C3D""#, 1),
+            (r#"w:rsidR="00C1C2C3""#, 2),
+        ] {
+            assert_eq!(
+                saved.matches(attribute).count(),
+                count,
+                "{attribute}: {saved}"
+            );
+        }
+    }
+
+    #[test]
+    fn template_loop_copies_drop_their_w14_identities() {
+        // Word writes a distinct `w14:paraId` on every paragraph and row. A
+        // loop writes its body once per item, so no copy keeps them, while
+        // the revision-save identities and content outside a loop stay.
+        let paragraph = |text: &str, id: u8| {
+            format!(
+                r#"<w:p w:rsidR="00B1B2B3" w14:paraId="3C4D5E{id:02}" w14:textId="7A8B9C{id:02}"><w:r><w:t>{text}</w:t></w:r></w:p>"#
+            )
+        };
+        let row = |text: &str, id: u8| {
+            format!(
+                r#"<w:tr w:rsidR="00A1B2C3" w:rsidTr="00A1B2C4" w14:paraId="1A2B3C{id:02}" w14:textId="5E6F7A{id:02}"><w:tc>{}</w:tc></w:tr>"#,
+                paragraph(text, id + 10)
+            )
+        };
+        let body = [
+            paragraph("{% for item in items %}", 1),
+            paragraph("{{ item }}", 2),
+            paragraph("{% endfor %}", 3),
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>"#.to_owned(),
+            row("{% for item in items %}", 4),
+            row("{{ item }}", 5),
+            row("{% endfor %}", 6),
+            row("kept row", 7),
+            "</w:tbl>".to_owned(),
+            paragraph("kept paragraph", 8),
+            "<w:sectPr/>".to_owned(),
+        ]
+        .concat();
+        let mut document =
+            super::document_with_content_controls(&super::wrap_word_body(&body).replacen(
+                "<w:document ",
+                &format!(r#"<w:document xmlns:w14="{W14_NS}" "#),
+                1,
+            ));
+        document
+            .render_template(&serde_json::json!({"items": ["one", "two", "three"]}))
+            .unwrap();
+
+        let saved = super::document_xml(&mut document);
+        for item in ["one", "two", "three"] {
+            let text = format!("<w:t>{item}</w:t>");
+            assert_eq!(saved.matches(&text).count(), 2, "{item}: {saved}");
+        }
+        for (attribute, count) in [
+            // The repeated body paragraph, row and cell paragraph.
+            (r#"w14:paraId="3C4D5E02""#, 0),
+            (r#"w14:paraId="1A2B3C05""#, 0),
+            (r#"w14:paraId="3C4D5E15""#, 0),
+            (r#"w14:textId="7A8B9C02""#, 0),
+            (r#"w14:textId="5E6F7A05""#, 0),
+            (r#"w14:textId="7A8B9C15""#, 0),
+            // The row and paragraphs outside every loop.
+            (r#"w14:paraId="1A2B3C07""#, 1),
+            (r#"w14:paraId="3C4D5E17""#, 1),
+            (r#"w14:paraId="3C4D5E08""#, 1),
+            (r#"w14:textId="5E6F7A07""#, 1),
+            (r#"w:rsidTr="00A1B2C4""#, 4),
+            (r#"w:rsidR="00B1B2B3""#, 8),
+        ] {
+            assert_eq!(
+                saved.matches(attribute).count(),
+                count,
+                "{attribute}: {saved}"
+            );
+        }
     }
 }
 

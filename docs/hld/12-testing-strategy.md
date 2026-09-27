@@ -1850,7 +1850,9 @@ raise no unsupported-content or export diagnostic, and rich merge region
 markers and whole-paragraph fragment fields still resolve in paragraphs and
 rows that carry Word identities. A row or paragraph that declares `w14` itself
 under a root that does not, and a comparison of main and header stories
-against a copy whose roots declare `w14`, both write a readable part.
+against a copy whose roots declare `w14`, both write a readable part. Rows
+and paragraphs copied by `clone_table_row`, `clone_content` and template loops
+drop their w14 identities and keep their revision-save identities.
 
 The run-level page-break differential gate authors both the break-only
 paragraph written by python-docx and a break between two pieces of text. Its

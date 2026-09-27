@@ -10,7 +10,7 @@ use rdocx_oxml::header_footer::CT_HdrFtr;
 use rdocx_oxml::namespace::matches_local_name;
 use rdocx_oxml::placeholder;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
-use rdocx_oxml::text::{CT_P, RunContent};
+use rdocx_oxml::text::{CT_P, RunContent, drop_w14_paragraph_identities};
 use serde_json::Value;
 
 use crate::document::Document;
@@ -360,11 +360,22 @@ fn render_body(
     let mut render_item = |content: &mut BodyContent,
                            root: &Value,
                            scopes: &[Scope],
-                           sentinels: &mut SentinelPool| {
-        render_body_item(content, root, scopes, sentinels, &mut structural_change)
+                           sentinels: &mut SentinelPool,
+                           repeated: bool| {
+        let count = render_body_item(content, root, scopes, sentinels, &mut structural_change)?;
+        if repeated {
+            drop_copied_body_identities(content)?;
+        }
+        Ok(count)
     };
-    let (evaluated, count) =
-        evaluate_blocks(&blocks, data, &mut scopes, sentinels, &mut render_item)?;
+    let (evaluated, count) = evaluate_blocks(
+        &blocks,
+        data,
+        &mut scopes,
+        sentinels,
+        false,
+        &mut render_item,
+    )?;
     document.document.body.content = evaluated
         .into_iter()
         .map(|evaluated| evaluated.value)
@@ -433,7 +444,8 @@ fn render_table(
     let mut render_item = |item: &mut TableRowItem,
                            root: &Value,
                            scopes: &[Scope],
-                           sentinels: &mut SentinelPool| {
+                           sentinels: &mut SentinelPool,
+                           repeated: bool| {
         let mut count =
             render_nested_tables_in_row(&mut item.row, root, scopes, sentinels, structural_change)?;
         count += stage_row_scalars(&mut item.row, root, scopes, sentinels)?;
@@ -447,6 +459,12 @@ fn render_table(
             )?;
             count += stage_control_scalars(control, root, scopes, sentinels)?;
         }
+        if repeated {
+            drop_copied_row_identities(&mut item.row)?;
+            for (_, control) in &mut item.controls {
+                drop_copied_control_identities(control)?;
+            }
+        }
         Ok(count)
     };
     let (evaluated, mut count) = evaluate_blocks(
@@ -454,6 +472,7 @@ fn render_table(
         root,
         &mut local_scopes,
         sentinels,
+        false,
         &mut render_item,
     )?;
 
@@ -572,6 +591,72 @@ fn render_nested_tables_in_control(
         }
     }
     Ok(count)
+}
+
+/// Drop the w14 identities of every paragraph and table row in one loop copy.
+/// Copies must not share them, and Word assigns new ones to an element that
+/// has none. Text-box paragraphs stay in the raw XML of their drawing.
+fn drop_copied_body_identities(content: &mut BodyContent) -> Result<()> {
+    match content {
+        BodyContent::Paragraph(paragraph) => drop_copied_paragraph_identities(paragraph),
+        BodyContent::Table(table) => drop_copied_table_identities(table),
+        BodyContent::ContentControl(control) => drop_copied_control_identities(control),
+        BodyContent::RawXml(_) => Ok(()),
+    }
+}
+
+fn drop_copied_paragraph_identities(paragraph: &mut CT_P) -> Result<()> {
+    drop_w14_paragraph_identities(&mut paragraph.extra_xml)?;
+    for (_, _, _, control) in &mut paragraph.content_controls {
+        drop_copied_control_identities(control)?;
+    }
+    Ok(())
+}
+
+fn drop_copied_table_identities(table: &mut CT_Tbl) -> Result<()> {
+    for row in &mut table.rows {
+        drop_copied_row_identities(row)?;
+    }
+    for (_, _, control) in &mut table.content_controls {
+        drop_copied_control_identities(control)?;
+    }
+    Ok(())
+}
+
+fn drop_copied_row_identities(row: &mut CT_Row) -> Result<()> {
+    drop_w14_paragraph_identities(&mut row.extra_xml)?;
+    for cell in &mut row.cells {
+        drop_copied_cell_identities(cell)?;
+    }
+    for (_, _, control) in &mut row.content_controls {
+        drop_copied_control_identities(control)?;
+    }
+    Ok(())
+}
+
+fn drop_copied_cell_identities(cell: &mut CT_Tc) -> Result<()> {
+    for content in &mut cell.content {
+        match content {
+            CellContent::Paragraph(paragraph) => drop_copied_paragraph_identities(paragraph)?,
+            CellContent::Table(table) => drop_copied_table_identities(table)?,
+            CellContent::ContentControl(control) => drop_copied_control_identities(control)?,
+        }
+    }
+    Ok(())
+}
+
+fn drop_copied_control_identities(control: &mut CT_Sdt) -> Result<()> {
+    for content in &mut control.content {
+        match content {
+            SdtContent::Paragraph(paragraph) => drop_copied_paragraph_identities(paragraph)?,
+            SdtContent::Table(table) => drop_copied_table_identities(table)?,
+            SdtContent::Row(row) => drop_copied_row_identities(row)?,
+            SdtContent::Cell(cell) => drop_copied_cell_identities(cell)?,
+            SdtContent::ContentControl(nested) => drop_copied_control_identities(nested)?,
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+        }
+    }
+    Ok(())
 }
 
 fn body_marker(content: &BodyContent) -> Result<Option<Control>> {
@@ -748,15 +833,18 @@ fn blocks_have_controls<T>(blocks: &[Block<T>]) -> bool {
         .any(|block| !matches!(block, Block::Item { .. }))
 }
 
+/// Evaluate the blocks of one level. `repeated` is set inside a loop, whose
+/// body is written once per item, so every item it renders is a copy.
 fn evaluate_blocks<T: Clone, F>(
     blocks: &[Block<T>],
     root: &Value,
     scopes: &mut Vec<Scope>,
     sentinels: &mut SentinelPool,
+    repeated: bool,
     render_item: &mut F,
 ) -> Result<(Vec<Evaluated<T>>, usize)>
 where
-    F: FnMut(&mut T, &Value, &[Scope], &mut SentinelPool) -> Result<usize>,
+    F: FnMut(&mut T, &Value, &[Scope], &mut SentinelPool, bool) -> Result<usize>,
 {
     let mut output = Vec::new();
     let mut count = 0;
@@ -767,7 +855,7 @@ where
                 value,
             } => {
                 let mut value = value.clone();
-                count += render_item(&mut value, root, scopes, sentinels)?;
+                count += render_item(&mut value, root, scopes, sentinels, repeated)?;
                 output.push(Evaluated {
                     source_index: *source_index,
                     value,
@@ -791,7 +879,14 @@ where
                         deferred: true,
                     });
                     let mut validation_sentinels = SentinelPool::new(&[]);
-                    evaluate_blocks(body, root, scopes, &mut validation_sentinels, render_item)?;
+                    evaluate_blocks(
+                        body,
+                        root,
+                        scopes,
+                        &mut validation_sentinels,
+                        true,
+                        render_item,
+                    )?;
                     scopes.pop();
                 }
                 for value in values {
@@ -800,7 +895,8 @@ where
                         value,
                         deferred: false,
                     });
-                    let evaluated = evaluate_blocks(body, root, scopes, sentinels, render_item)?;
+                    let evaluated =
+                        evaluate_blocks(body, root, scopes, sentinels, true, render_item)?;
                     scopes.pop();
                     output.extend(evaluated.0);
                     count += evaluated.1;
@@ -808,13 +904,21 @@ where
             }
             Block::If { path, body } => match resolve_value(root, scopes, path)? {
                 ResolvedValue::Value(value) if is_truthy(value) => {
-                    let evaluated = evaluate_blocks(body, root, scopes, sentinels, render_item)?;
+                    let evaluated =
+                        evaluate_blocks(body, root, scopes, sentinels, repeated, render_item)?;
                     output.extend(evaluated.0);
                     count += evaluated.1;
                 }
                 ResolvedValue::Value(_) | ResolvedValue::Deferred => {
                     let mut validation_sentinels = SentinelPool::new(&[]);
-                    evaluate_blocks(body, root, scopes, &mut validation_sentinels, render_item)?;
+                    evaluate_blocks(
+                        body,
+                        root,
+                        scopes,
+                        &mut validation_sentinels,
+                        repeated,
+                        render_item,
+                    )?;
                 }
             },
         }

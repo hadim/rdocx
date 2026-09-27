@@ -1095,12 +1095,14 @@ immediately adjacent vertical merge ranges, then replace the live table.
 Existing direct table rows clone and remove through a staged `Document`
 mutation. A clone retains the complete row, cell, nested-content, relationship,
 and raw XML model, then freshens bookmark, content-control, and drawing
-identities and omits copied comment anchors. Body namespace declaration names
-are converted to fragment prefixes before freshening, including the empty
-prefix for a root default namespace. Table-level raw XML and content controls
-move with their logical row boundary. Removing a vertical-merge restart
-promotes a matching continuation below, and a table always retains one direct
-row. Invalid indexes, topology, XML, or reopen results discard the candidate.
+identities, drops the `w14:paraId` and `w14:textId` of the row and of its
+paragraphs, and omits copied comment anchors. Revision-save identities stay.
+Body namespace declaration names are converted to fragment prefixes before
+freshening, including the empty prefix for a root default namespace.
+Table-level raw XML and content controls move with their logical row boundary.
+Removing a vertical-merge restart promotes a matching continuation below, and a
+table always retains one direct row. Invalid indexes, topology, XML, or reopen
+results discard the candidate.
 
 Row and cell property readers select modeled elements and attributes by their
 bound WordprocessingML namespace. Foreign same-local children remain raw in
@@ -1343,6 +1345,9 @@ pairs nested controls within one body or table-row container before evaluation.
 The evaluator clones typed body entries and rows into candidate sequences, so
 section properties, row properties, and ordered raw-child sidecars travel with
 their owner. A row loop may clone several adjacent template rows per iteration.
+Every paragraph and table row a loop renders is a copy, so it drops the
+`w14:paraId` and `w14:textId` of its retained root-attribute record. Text-box
+paragraphs stay inside the raw XML of their drawing and keep theirs.
 The original table and its properties, grid, raw boundaries, content controls,
 and relationships remain in place. Cloned row and cell property sequences keep
 grid spans, vertical merge state, and unmodelled children byte for byte.
