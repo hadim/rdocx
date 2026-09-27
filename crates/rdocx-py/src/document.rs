@@ -1163,6 +1163,25 @@ impl PyDocument {
         Ok(count)
     }
 
+    /// Run an ordered replacement batch that publishes only when every
+    /// expected count holds, and stale live handles only when it replaced
+    /// something.
+    fn expected_replacements(
+        &mut self,
+        py: Python<'_>,
+        pairs: &[(&str, &str, Option<usize>)],
+        batch: bool,
+    ) -> PyResult<Vec<usize>> {
+        let counts = py
+            .detach(|| self.inner.try_replace_all_expected(pairs))
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, batch))?;
+        if counts.iter().any(|count| *count > 0) {
+            self.revisions.bump();
+        }
+        Ok(counts)
+    }
+
     /// Check the names and the section of one header or footer variant.
     fn section_story_target(
         &self,
@@ -2292,15 +2311,53 @@ impl PyDocument {
         self.counted_mutation(py, |document| document.reject_revision_id(id))
     }
 
+    #[pyo3(signature = (placeholder, replacement, *, expect = None))]
     fn try_replace_text(
         &mut self,
         py: Python<'_>,
         placeholder: &str,
         replacement: &str,
+        expect: Option<usize>,
     ) -> PyResult<usize> {
-        self.counted_mutation(py, |document| {
-            document.try_replace_text(placeholder, replacement)
-        })
+        if expect.is_none() {
+            return self.counted_mutation(py, |document| {
+                document.try_replace_text(placeholder, replacement)
+            });
+        }
+        let counts =
+            self.expected_replacements(py, &[(placeholder, replacement, expect)], false)?;
+        Ok(counts[0])
+    }
+
+    fn replace_all<'py>(
+        &mut self,
+        py: Python<'py>,
+        pairs: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let mut owned = Vec::new();
+        for (index, pair) in pairs.try_iter()?.enumerate() {
+            let pair = pair?;
+            let parsed = match pair.extract::<(String, String)>() {
+                Ok((placeholder, replacement)) => (placeholder, replacement, None),
+                Err(_) => pair
+                    .extract::<(String, String, Option<usize>)>()
+                    .map_err(|_| {
+                        PyTypeError::new_err(format!(
+                            "pair {index} must be an (old, new) or (old, new, expected) tuple, \
+                         where expected is a nonnegative int or None"
+                        ))
+                    })?,
+            };
+            owned.push(parsed);
+        }
+        let pairs = owned
+            .iter()
+            .map(|(placeholder, replacement, expected)| {
+                (placeholder.as_str(), replacement.as_str(), *expected)
+            })
+            .collect::<Vec<_>>();
+        let counts = self.expected_replacements(py, &pairs, true)?;
+        PyTuple::new(py, counts)
     }
 
     fn replace_all_regex(

@@ -1048,8 +1048,27 @@ The native Word facade provides additive `Document::try_replace_text` beside
 the legacy infallible `replace_text` method. The fallible method stages the
 replacement and publishes it only after namespace-safe serialization succeeds.
 The command-line `replace` operation uses this boundary, reports the stable
-serialization error, and creates no partial output. Python exposes the fallible
-method as `Document.try_replace_text`. The WASM binding keeps its infallible
+serialization error, and creates no partial output.
+`Document::try_replace_all_expected` takes ordered `(placeholder, replacement,
+expected)` pairs and returns the count of each pair. Each pair runs over the
+whole staged document after the pairs before it, so a later pair sees what an
+earlier one wrote. When a pair gives an expected count and finds another, the
+document stays unchanged and the inner result is a `ReplacementCountMismatch`
+naming the pair index, placeholder, expected count, and found count. The outer
+error is a staging failure. The legacy `replace_all` keeps its unordered map
+and panicking preflight.
+
+Python `Document.try_replace_text(placeholder, replacement, *, expect=None)`
+and `Document.replace_all(pairs)` share one contract with the rpptx binding.
+`replace_all` takes `(old, new)` or `(old, new, expected)` tuples and returns a
+tuple of counts. A count that differs from `expect` or from a pair's expected
+count raises `ReplacementCountError`, a subclass of `RdocxError` with
+`expected`, `found`, and `index` attributes, and leaves the package bytes and
+live handles unchanged. `index` names the failing pair of a batch and is
+`None` for `try_replace_text`, whose message is the one `rdocx replace
+--expect` prints. The error pickles. Zero matches without an expected count
+return zero rather than raising. A replacement advances the revision once when
+it replaced something. The WASM binding keeps its infallible
 `replacePlaceholder`, which calls `replace_text`.
 
 Literal replacement reaches the body, tables, content controls at every level,

@@ -20,6 +20,7 @@ from rdocx import (
     LayoutBackedFieldUpdateReport,
     LayoutPage,
     RGBColor,
+    ReplacementCountError,
     Paragraph,
     ParagraphCollection,
     ParagraphFormat,
@@ -205,6 +206,11 @@ def exercise_rdocx_types(path: Path) -> None:
     document.move_content(table, content_index)
     replacement_count: int = document.try_replace_text("old", "new")
     regex_count: int = document.replace_all_regex([("old", "new")])
+    expected_count: int = document.try_replace_text("old", "new", expect=1)
+    batch_counts: tuple[int, ...] = document.replace_all([("a", "b", 1), ("c", "d")])
+    count_error = ReplacementCountError("message", 1, 2, index=0)
+    assert_type(count_error.index, int | None)
+    assert_type(count_error.found, int)
     revisions: tuple[Revision, ...] = document.revisions
     accepted: int = document.accept_all()
     dated: int = document.reject_revisions_in_date_range(
