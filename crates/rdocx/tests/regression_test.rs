@@ -30385,7 +30385,7 @@ fn comparison_treats_empty_paragraph_properties_as_absent() {
 /// revision.
 mod compare_producer_noise {
     use super::*;
-    use rdocx::RevisionKind;
+    use rdocx::{ComparisonGranularity, ComparisonOptions, RevisionKind};
 
     const TIMESTAMP: &str = "2026-09-27T12:00:00Z";
 
@@ -30399,7 +30399,12 @@ mod compare_producer_noise {
 
     /// Check that accepting gives the edited side and rejecting the original,
     /// each compared again with no diagnostic and no revision.
-    fn assert_resolutions(tracked: &[u8], original: &Document, edited: &Document) {
+    fn assert_resolutions(
+        tracked: &[u8],
+        original: &Document,
+        edited: &Document,
+        options: &ComparisonOptions,
+    ) {
         for (resolve, expected) in [
             (
                 Document::accept_all as fn(&mut Document) -> rdocx::Result<usize>,
@@ -30410,7 +30415,7 @@ mod compare_producer_noise {
             let mut resolved = Document::from_bytes(tracked).unwrap();
             resolve(&mut resolved).unwrap();
             let diagnostics = resolved
-                .compare(expected, "postcondition", TIMESTAMP)
+                .compare_with_options(expected, "postcondition", TIMESTAMP, options)
                 .unwrap();
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
             assert_eq!(revision_kinds(&resolved), []);
@@ -30419,14 +30424,22 @@ mod compare_producer_noise {
 
     /// Compare two bodies and return the revision kinds and the redline.
     fn compared_kinds(original_xml: &str, edited_xml: &str) -> (Vec<RevisionKind>, String) {
+        compared_kinds_with(original_xml, edited_xml, &ComparisonOptions::default())
+    }
+
+    fn compared_kinds_with(
+        original_xml: &str,
+        edited_xml: &str,
+        options: &ComparisonOptions,
+    ) -> (Vec<RevisionKind>, String) {
         let original = document_with_content_controls(original_xml);
         let edited = document_with_content_controls(edited_xml);
         let mut compared = document_with_content_controls(original_xml);
         let diagnostics = compared
-            .compare(&edited, "R", TIMESTAMP)
+            .compare_with_options(&edited, "R", TIMESTAMP, options)
             .expect("producer noise must not refuse the pair");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_resolutions(&compared.to_bytes().unwrap(), &original, &edited);
+        assert_resolutions(&compared.to_bytes().unwrap(), &original, &edited, options);
         (revision_kinds(&compared), document_xml(&mut compared))
     }
 
@@ -30501,6 +30514,154 @@ mod compare_producer_noise {
             assert_eq!(
                 tracked.contains("<w:sdtPr>"),
                 !original.is_empty(),
+                "{tracked}"
+            );
+        }
+    }
+
+    fn replaced_copy(source_xml: &str, old: &str, new: &str) -> String {
+        let mut document = document_with_content_controls(source_xml);
+        assert_eq!(document.try_replace_text(old, new).unwrap(), 1);
+        let mut edited = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        document_xml(&mut edited)
+    }
+
+    #[test]
+    fn a_rewritten_run_keeps_its_producer_space_flag() {
+        let preserved = wrap_word_body(
+            r#"<w:p><w:r><w:t xml:space="preserve">Paragraph 1.</w:t></w:r></w:p><w:p><w:r><w:t xml:space="preserve">WORD</w:t></w:r></w:p>"#,
+        );
+        let edited = replaced_copy(&preserved, "WORD", "WORD");
+        assert!(
+            edited.contains(r#"<w:t xml:space="preserve">WORD</w:t>"#),
+            "{edited}"
+        );
+        let (kinds, _) = compared_kinds(&preserved, &edited);
+        assert_eq!(kinds, []);
+
+        let edge_space_removed = replaced_copy(
+            &wrap_word_body(r#"<w:p><w:r><w:t xml:space="preserve">WORD </w:t></w:r></w:p>"#),
+            "WORD ",
+            "WORD",
+        );
+        assert!(
+            edge_space_removed.contains(r#"<w:t xml:space="preserve">WORD</w:t>"#),
+            "{edge_space_removed}"
+        );
+    }
+
+    #[test]
+    fn the_space_flag_is_content_only_at_a_text_edge() {
+        let paragraphs = |first: &str, second: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:r>{first}</w:r></w:p><w:p><w:r>{second}</w:r></w:p>"#
+            ))
+        };
+        let paragraph = |text: &str| paragraphs("<w:t>Paragraph 1.</w:t>", text);
+        // Bookmark ends are indexed by run, so an unchanged run must stay whole.
+        let bookmarked = |text: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:bookmarkStart w:id="0" w:name="b"/><w:r>{text}</w:r><w:bookmarkEnd w:id="0"/><w:r><w:t>tail</w:t></w:r></w:p>"#
+            ))
+        };
+        let changed = &[RevisionKind::Deletion, RevisionKind::Insertion][..];
+        let unchanged = &[][..];
+        // Each case gives the kinds of the whole-run path and of the
+        // attributed path. The attributed path writes every unit with edge
+        // whitespace with the flag, so the flag is never content there.
+        let cases = [
+            (
+                paragraph(r#"<w:t xml:space="preserve">WORD</w:t>"#),
+                paragraph("<w:t>WORD</w:t>"),
+                unchanged,
+                unchanged,
+            ),
+            (
+                paragraph(r#"<w:t xml:space="preserve">two words</w:t>"#),
+                paragraph("<w:t>two words</w:t>"),
+                unchanged,
+                unchanged,
+            ),
+            (
+                paragraph("<w:t>two  words</w:t>"),
+                paragraph(r#"<w:t xml:space="preserve">two  words</w:t>"#),
+                unchanged,
+                unchanged,
+            ),
+            (
+                paragraph(r#"<w:t xml:space="preserve">WORD </w:t>"#),
+                paragraph("<w:t>WORD </w:t>"),
+                changed,
+                unchanged,
+            ),
+            (
+                bookmarked(r#"<w:t xml:space="preserve">two words </w:t>"#),
+                bookmarked("<w:t>two words </w:t>"),
+                changed,
+                unchanged,
+            ),
+            (
+                paragraph("<w:t>WORD</w:t>"),
+                paragraph("<w:t>text</w:t>"),
+                changed,
+                changed,
+            ),
+            // Google Docs flags every `w:t` and Word only where needed.
+            (
+                paragraphs(
+                    r#"<w:t xml:space="preserve">two words</w:t>"#,
+                    r#"<w:t xml:space="preserve">WORD</w:t>"#,
+                ),
+                paragraphs("<w:t>two words</w:t>", "<w:t>text</w:t>"),
+                changed,
+                changed,
+            ),
+        ];
+        for options in [
+            ComparisonOptions::default(),
+            ComparisonOptions {
+                ignore_formatting: true,
+                ..Default::default()
+            },
+            ComparisonOptions {
+                granularity: ComparisonGranularity::Word,
+                ..Default::default()
+            },
+            ComparisonOptions {
+                granularity: ComparisonGranularity::Character,
+                ..Default::default()
+            },
+        ] {
+            for (original, edited, whole_run, attributed) in &cases {
+                let expected = if options == ComparisonOptions::default() {
+                    whole_run
+                } else {
+                    attributed
+                };
+                for (left, right) in [(original, edited), (edited, original)] {
+                    let (kinds, _) = compared_kinds_with(left, right, &options);
+                    assert_eq!(kinds, *expected, "{options:?}: {left} -> {right}");
+                }
+            }
+        }
+
+        // A space split out of a text keeps reading as a space in the redline.
+        for granularity in [
+            ComparisonGranularity::Word,
+            ComparisonGranularity::Character,
+        ] {
+            let (kinds, tracked) = compared_kinds_with(
+                &paragraph("<w:t>two words</w:t>"),
+                &paragraph("<w:t>two wordy</w:t>"),
+                &ComparisonOptions {
+                    granularity,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(kinds, changed, "{granularity:?}");
+            assert!(!tracked.contains("<w:t> </w:t>"), "{tracked}");
+            assert!(
+                tracked.contains(r#"<w:t xml:space="preserve"> </w:t>"#),
                 "{tracked}"
             );
         }

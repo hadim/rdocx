@@ -153,7 +153,9 @@ fn replace_in_single_run(
         new_text.push_str(replacement);
         new_text.push_str(&t.text[byte_end..]);
         t.text = new_text;
-        t.preserve_space = t.text.starts_with(' ') || t.text.ends_with(' ');
+        // Keep the flag the producer wrote. Dropping it rewrites an unchanged
+        // run, which a later comparison against the source then reports.
+        t.preserve_space = t.preserve_space || t.text.starts_with(' ') || t.text.ends_with(' ');
     }
 }
 
@@ -176,7 +178,7 @@ fn replace_across_runs(
         new_text.push_str(&t.text[..first_byte_offset]);
         new_text.push_str(replacement);
         t.text = new_text;
-        t.preserve_space = t.text.starts_with(' ') || t.text.ends_with(' ');
+        t.preserve_space = t.preserve_space || t.text.starts_with(' ') || t.text.ends_with(' ');
     }
 
     // Handle the last run: replace from start to match end within that content item.
@@ -189,7 +191,7 @@ fn replace_across_runs(
         let ch_len = remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
         let byte_end = last_byte_offset + ch_len;
         t.text = t.text[byte_end..].to_string();
-        t.preserve_space = t.text.starts_with(' ') || t.text.ends_with(' ');
+        t.preserve_space = t.preserve_space || t.text.starts_with(' ') || t.text.ends_with(' ');
     }
 
     // Clear text content from runs strictly between first and last.
@@ -794,6 +796,35 @@ mod tests {
         assert_eq!(p.runs[0].properties.as_ref().unwrap().bold, Some(true));
         // Run 1 (now "Alice") should still be italic
         assert_eq!(p.runs[1].properties.as_ref().unwrap().italic, Some(true));
+    }
+
+    #[test]
+    fn replace_keeps_the_producer_space_flag() {
+        let mut preserved = CT_R::new("WORD");
+        if let RunContent::Text(text) = &mut preserved.content[0] {
+            text.preserve_space = true;
+        }
+        let mut p = CT_P::new();
+        p.runs.push(preserved.clone());
+        p.runs.push(preserved);
+        p.add_run("tail");
+
+        assert_eq!(replace_in_paragraph(&mut p, "WORD", "WORD"), 2);
+        assert_eq!(replace_in_paragraph(&mut p, "DWO", "D-WO"), 1);
+        assert_eq!(replace_in_paragraph(&mut p, "tail", " end"), 1);
+        let flags = p
+            .runs
+            .iter()
+            .map(|run| match &run.content[0] {
+                RunContent::Text(text) => (text.text.as_str(), text.preserve_space),
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            flags,
+            [("WORD-WO", true), ("RD", true), (" end", true)],
+            "a rewritten run keeps a producer flag and gains one at a text edge"
+        );
     }
 
     #[test]

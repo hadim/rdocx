@@ -2984,8 +2984,16 @@ fn compare_granular_paragraph(
         )));
     }
 
-    let original_run_signatures = original.runs.iter().map(run_signature).collect::<Vec<_>>();
-    let edited_run_signatures = edited.runs.iter().map(run_signature).collect::<Vec<_>>();
+    let original_run_signatures = original
+        .runs
+        .iter()
+        .map(attributed_run_signature)
+        .collect::<Vec<_>>();
+    let edited_run_signatures = edited
+        .runs
+        .iter()
+        .map(attributed_run_signature)
+        .collect::<Vec<_>>();
     if original_run_signatures == edited_run_signatures
         && original.content_controls == edited.content_controls
     {
@@ -3557,10 +3565,28 @@ fn granular_text(text: &CT_Text, options: &ComparisonOptions) -> Vec<CT_Text> {
     fragments
         .into_iter()
         .map(|value| CT_Text {
+            // A unit is written back as its own `w:t`, where edge whitespace
+            // needs the flag to survive. Whitespace in a unit then reads as
+            // whitespace whatever the source flag was.
+            preserve_space: text.preserve_space || has_edge_whitespace(&value),
             text: value,
-            preserve_space: text.preserve_space,
         })
         .collect()
+}
+
+/// The whole-run signature that agrees with the attributed units.
+///
+/// It reads the space flag the way `granular_text` writes it on every unit,
+/// so a run that differs only by the flag stays whole instead of being
+/// rewritten one unit per run, which would move run-indexed bookmark ends.
+fn attributed_run_signature(run: &CT_R) -> String {
+    let mut run = run.clone();
+    for content in &mut run.content {
+        if let RunContent::Text(text) | RunContent::DeletedText(text) = content {
+            text.preserve_space |= has_edge_whitespace(&text.text);
+        }
+    }
+    run_signature(&run)
 }
 
 fn whitespace_fragments(text: &str) -> Vec<String> {
@@ -5410,8 +5436,27 @@ fn run_content_signature(content: &RunContent) -> String {
     match content {
         RunContent::Field(_) => "field-owner".to_owned(),
         RunContent::Drawing(drawing) => format!("Drawing({:?})", drawing_signature(drawing)),
+        RunContent::Text(text) => format!("Text({:?})", text_signature(text)),
+        RunContent::DeletedText(text) => format!("DeletedText({:?})", text_signature(text)),
         content => format!("{content:?}"),
     }
+}
+
+/// The text and whether its `xml:space="preserve"` changes how it reads.
+///
+/// The flag only protects whitespace at an edge of the text. Producers write
+/// it on every `w:t` or only where needed, so elsewhere it is serialization.
+fn text_signature(text: &CT_Text) -> (&str, bool) {
+    (
+        &text.text,
+        text.preserve_space && has_edge_whitespace(&text.text),
+    )
+}
+
+/// Whether XML whitespace starts or ends the text.
+fn has_edge_whitespace(text: &str) -> bool {
+    let whitespace = |character: char| matches!(character, ' ' | '\t' | '\n' | '\r');
+    text.starts_with(whitespace) || text.ends_with(whitespace)
 }
 
 fn table_signature(table: &CT_Tbl) -> String {
