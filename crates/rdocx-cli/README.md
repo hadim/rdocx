@@ -63,7 +63,9 @@ Revision `list` reports every supported story and names the story of each
 revision. Revision `accept` and `reject` operate across every supported story
 and accept at most one selector: `--id`, `--author`, or the paired
 `--start-date` and `--end-date` RFC 3339 bounds. Omitting a selector resolves
-all modeled revisions. Every mutation, comparison, and TOC rebuild requires
+all modeled revisions. `compare` reports how many revisions it created in each
+story, and its JSON record keeps `main_story_revisions` for the main-body
+projection. Every mutation, comparison, and TOC rebuild requires
 `-o/--output`, publishes only a complete validated DOCX, and supports a
 schema-1 record through `--json`.
 

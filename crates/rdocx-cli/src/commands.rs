@@ -771,7 +771,18 @@ pub fn compare(
     let mut original_doc = Document::open(original)?;
     let edited_doc = Document::open(edited)?;
     let diagnostics = original_doc.compare(&edited_doc, author, timestamp)?;
-    let revision_count = original_doc.revisions().len();
+    let main_story_revisions = original_doc.revisions().len();
+    let revisions = original_doc.story_revisions()?;
+    let mut stories = Vec::<(&StoryId, usize)>::new();
+    for revision in &revisions {
+        match stories
+            .iter_mut()
+            .find(|(story, _)| *story == revision.story())
+        {
+            Some((_, count)) => *count += 1,
+            None => stories.push((revision.story(), 1)),
+        }
+    }
     let records = diagnostics
         .iter()
         .map(|diagnostic| {
@@ -783,14 +794,36 @@ pub fn compare(
         .collect::<Vec<_>>();
     publish_document(&mut original_doc, output)?;
     if json_output {
+        let story_records = stories
+            .iter()
+            .map(|(story, count)| {
+                let mut record = story_json(story);
+                record["revisions"] = json!(count);
+                record
+            })
+            .collect::<Vec<_>>();
         print_json(json!({
             "scope": "all-supported-stories",
-            "main_story_revisions": revision_count,
+            "revisions": revisions.len(),
+            "stories": story_records,
+            "main_story_revisions": main_story_revisions,
             "diagnostics": records,
             "output": output.display().to_string(),
         }))?;
     } else {
-        println!("Created {revision_count} main-story revision element(s)");
+        println!(
+            "Created {} revision element(s) in {} story(ies)",
+            revisions.len(),
+            stories.len()
+        );
+        for (story, count) in &stories {
+            println!(
+                "  {}\t{}\t{}\t{count}",
+                story_kind_label(story.kind()),
+                story.part_name(),
+                story.owner_index()
+            );
+        }
         println!("Diagnostics: {}", diagnostics.len());
         println!("Written to {}", output.display());
     }

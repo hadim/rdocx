@@ -752,6 +752,15 @@ fn cli_collaboration_commands_are_schema_stable_and_atomic() {
         json!({
             "schema": 1,
             "scope": "all-supported-stories",
+            "revisions": 2,
+            "stories": [
+                {
+                    "kind": "body",
+                    "part_name": "/word/document.xml",
+                    "owner_index": 0,
+                    "revisions": 2,
+                },
+            ],
             "main_story_revisions": 2,
             "diagnostics": [],
             "output": path_text(&redline),
@@ -1212,6 +1221,47 @@ fn revision_list_names_the_story_of_compared_footer_revisions() {
     assert_success(&resolved, "revision accept footer");
     let value: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
     assert_eq!(value["resolved"], records.len());
+}
+
+#[test]
+fn compare_counts_the_revisions_it_creates_in_each_story() {
+    let temp = TempWorkspace::new("footer-compare");
+    let (original, edited) = write_footer_revision_inputs(&temp);
+    let redline = temp.path.join("redline.docx");
+    let text_redline = temp.path.join("text-redline.docx");
+
+    let compared = compare_footer_inputs(&original, &edited, &redline, true);
+    assert_success(&compared, "compare footer JSON");
+    let value: serde_json::Value = serde_json::from_slice(&compared.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "all-supported-stories",
+            "revisions": 2,
+            "stories": [
+                {
+                    "kind": "footer",
+                    "part_name": "/word/footer1.xml",
+                    "owner_index": 0,
+                    "revisions": 2,
+                },
+            ],
+            "main_story_revisions": 0,
+            "diagnostics": [],
+            "output": path_text(&redline),
+        })
+    );
+
+    let compared = compare_footer_inputs(&original, &edited, &text_redline, false);
+    assert_success(&compared, "compare footer text");
+    assert_eq!(
+        String::from_utf8_lossy(&compared.stdout),
+        format!(
+            "Created 2 revision element(s) in 1 story(ies)\n  footer\t/word/footer1.xml\t0\t2\nDiagnostics: 0\nWritten to {}\n",
+            path_text(&text_redline)
+        )
+    );
 }
 
 #[test]

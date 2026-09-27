@@ -2075,13 +2075,13 @@ run-aware replacement count before staged publication. A mismatch creates no
 output and leaves an existing destination untouched. Both the selected page
 and all-page `render` paths use bundled deterministic fonts. The compiled
 surface also includes nested comment thread commands, all-story revision
-inspection, all-story filtered revision resolution, whole-run comparison, and
-TOC rebuild. Every new mutation requires an explicit output and publishes
-through the shared staged output set. Their schema-1 records state `main` or
-`all-supported-stories` scope. Revision selectors are mutually exclusive, and
-RFC 3339 start and end bounds must be paired. The complete compiled surface is
-covered by one integration binary, with fixtures constructed in code and no
-command-only test dependency.
+inspection, all-story filtered revision resolution, whole-run comparison with
+per-story revision counts, and TOC rebuild. Every new mutation requires an
+explicit output and publishes through the shared staged output set. Their
+schema-1 records state `main` or `all-supported-stories` scope. Revision
+selectors are mutually exclusive, and RFC 3339 start and end bounds must be
+paired. The complete compiled surface is covered by one integration binary,
+with fixtures constructed in code and no command-only test dependency.
 
 Rust release tags also distribute the selected CLI as prebuilt archives.
 Stable `v*` tags carry only `rdocx`, and incubating `rpptx-v*` tags carry only
