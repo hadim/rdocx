@@ -28,13 +28,21 @@ thread_local! {
 }
 
 type ControlPropertySignature<'a> = Option<(
-    Option<&'a str>,
-    Option<&'a str>,
     Option<rdocx_oxml::content_control::SdtType>,
     Option<&'a rdocx_oxml::content_control::CT_DataBinding>,
 )>;
 
+/// The content-control properties that name, protect or file a control
+/// without changing what it holds, by their `w:sdtPr` element names.
+const CONTROL_METADATA: [&str; 5] = ["tag", "alias", "lock", "placeholder", "docPartGallery"];
+
 /// A comparison difference that cannot be represented as a content revision.
+///
+/// The redline keeps the original for every diagnostic. The message starts
+/// with a stable prefix naming the difference: `formatting differs` for
+/// formatting that cannot be revised, and `content-control <name> differs`
+/// for a control's `tag`, `alias`, `lock`, `placeholder` or
+/// `docPartGallery`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComparisonDiagnostic {
     pub location: String,
@@ -3007,9 +3015,9 @@ fn compare_granular_paragraph(
         .iter()
         .map(attributed_run_signature)
         .collect::<Vec<_>>();
-    if original_run_signatures == edited_run_signatures
-        && original.content_controls == edited.content_controls
-        && original_boundaries == edited_boundaries
+    // Runs that all match stay whole even when a control differs, so a
+    // control's metadata or content never moves run-indexed markers.
+    if original_run_signatures == edited_run_signatures && original_boundaries == edited_boundaries
     {
         let properties =
             paragraph_properties_xml(original, edited, location, metadata, diagnostics)?;
@@ -3043,11 +3051,22 @@ fn compare_granular_paragraph(
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-        return replace_paragraph_properties_and_runs(
+        let output = replace_paragraph_properties_and_runs(
             original,
             original_source,
             &properties,
             &replacements,
+        )?;
+        if original.content_controls == edited.content_controls {
+            return Ok(output);
+        }
+        return compare_granular_controls(
+            original,
+            edited,
+            &output,
+            location,
+            metadata,
+            diagnostics,
         );
     }
 
@@ -3541,8 +3560,20 @@ fn interleave_granular_paragraph(
         output.push_str(exact_run.unwrap_or(replacement));
     }
     output.push_str(&source[cursor..]);
+    compare_granular_controls(original, edited, &output, location, metadata, diagnostics)
+}
 
-    let control_spans = direct_word_element_spans(&output, "sdt")?;
+/// Compare the inline controls of a paragraph whose revised runs are in
+/// `output`, which still holds the original controls.
+fn compare_granular_controls(
+    original: &CT_P,
+    edited: &CT_P,
+    output: &str,
+    location: &str,
+    metadata: &mut Metadata<'_>,
+    diagnostics: &mut Vec<ComparisonDiagnostic>,
+) -> Result<String> {
+    let control_spans = direct_word_element_spans(output, "sdt")?;
     if control_spans.len() != original.content_controls.len() {
         return Err(Error::Other(format!(
             "comparison could not correlate granular content controls at {location}"
@@ -3564,7 +3595,7 @@ fn interleave_granular_paragraph(
             &output[control_spans[index].clone()],
         )?);
     }
-    replace_direct_word_elements(&output, "sdt", &control_replacements)
+    replace_direct_word_elements(output, "sdt", &control_replacements)
 }
 
 fn attributed_run_units(runs: &[CT_R], options: &ComparisonOptions) -> Vec<AttributedRunUnit> {
@@ -4691,6 +4722,7 @@ fn compare_control_from_xml(
             "comparison cannot revise content-control properties at {location}"
         )));
     }
+    control_metadata_diagnostics(original, edited, location, diagnostics)?;
     let original_content = modeled_control_content(original);
     let edited_content = modeled_control_content(edited);
     let direct_run_or_raw =
@@ -5716,25 +5748,125 @@ fn control_signature(control: &CT_Sdt) -> String {
     )
 }
 
-/// The content-control properties that alignment, refusal and the accept and
-/// reject postconditions compare.
+/// The content-control properties that decide what a control holds, its type
+/// and data binding, which alignment, refusal and the accept and reject
+/// postconditions compare.
 ///
-/// `w:id` is left out. Producers renumber it on save and it carries no
-/// content, so a pair that differs only by it keeps the original's `w:sdtPr`.
-/// A `w:sdtPr` with none of these properties reads like no `w:sdtPr`.
+/// `w:id` is left out because producers renumber it on save, and the
+/// [`CONTROL_METADATA`] because a difference there is reported as a
+/// diagnostic. A pair that differs only by those keeps the original's
+/// `w:sdtPr`. A `w:sdtPr` with neither property reads like no `w:sdtPr`.
 fn control_property_signature(control: &CT_Sdt) -> ControlPropertySignature<'_> {
     control
         .properties
         .as_ref()
-        .map(|properties| {
-            (
-                properties.alias.as_deref(),
-                properties.tag.as_deref(),
-                properties.control_type,
-                properties.data_binding.as_ref(),
-            )
-        })
-        .filter(|signature| !matches!(signature, (None, None, None, None)))
+        .map(|properties| (properties.control_type, properties.data_binding.as_ref()))
+        .filter(|signature| !matches!(signature, (None, None)))
+}
+
+/// Report each [`CONTROL_METADATA`] property that differs between the two
+/// controls. The redline keeps the original `w:sdtPr`.
+fn control_metadata_diagnostics(
+    original: &CT_Sdt,
+    edited: &CT_Sdt,
+    location: &str,
+    diagnostics: &mut Vec<ComparisonDiagnostic>,
+) -> Result<()> {
+    if original.properties == edited.properties {
+        return Ok(());
+    }
+    let edited_values = control_metadata(edited)?;
+    for ((name, original_value), edited_value) in CONTROL_METADATA
+        .iter()
+        .zip(control_metadata(original)?)
+        .zip(edited_values)
+    {
+        if original_value != edited_value {
+            diagnostics.push(ComparisonDiagnostic {
+                location: location.to_owned(),
+                message: format!(
+                    "content-control {name} differs and the original {name} was retained"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The [`CONTROL_METADATA`] values of a control, in that order.
+///
+/// The lock, placeholder and gallery are kept as raw `w:sdtPr` children, so
+/// they are read from the serialized properties by local name.
+fn control_metadata(control: &CT_Sdt) -> Result<[Option<String>; 5]> {
+    let Some(properties) = &control.properties else {
+        return Ok(Default::default());
+    };
+    let mut values = [
+        properties.tag.clone(),
+        properties.alias.clone(),
+        None,
+        None,
+        None,
+    ];
+    let mut shell = control.clone();
+    shell.content.clear();
+    let xml = control_xml(&shell)?;
+    let mut reader = Reader::from_str(&xml);
+    let mut path = Vec::<Vec<u8>>::new();
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("comparison content-control scan failed: {error}"))
+        })?;
+        let (element, empty) = match event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            Event::End(_) => {
+                path.pop();
+                buffer.clear();
+                continue;
+            }
+            Event::Eof => break,
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        let local = element.local_name().as_ref().to_vec();
+        let parents = path.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let slot = match (parents.as_slice(), local.as_slice()) {
+            ([b"sdt", b"sdtPr"], b"lock") => Some(2),
+            ([b"sdt", b"sdtPr", b"placeholder"], b"docPart") => Some(3),
+            ([b"sdt", b"sdtPr", b"docPartObj" | b"docPartList"], b"docPartGallery") => Some(4),
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            let mut value = String::new();
+            for attribute in element.attributes() {
+                let attribute = attribute.map_err(|error| {
+                    Error::Other(format!(
+                        "comparison content-control attribute failed: {error}"
+                    ))
+                })?;
+                if attribute.key.local_name().as_ref() == b"val" {
+                    value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                        .map_err(|error| {
+                            Error::Other(format!(
+                                "comparison content-control value failed: {error}"
+                            ))
+                        })?
+                        .into_owned();
+                }
+            }
+            values[slot] = Some(value);
+        }
+        if !empty {
+            path.push(local);
+        }
+        buffer.clear();
+    }
+    Ok(values)
 }
 
 fn modeled_control_content(control: &CT_Sdt) -> Vec<&SdtContent> {

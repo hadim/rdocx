@@ -17683,16 +17683,27 @@ fn comparison_revises_nested_control_content_without_replacing_its_shell() {
         .unwrap();
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
+    // A tag is metadata: the original shell stays and the change is reported.
     let changed_shell_xml = body("old", "changed-shell");
     let changed_shell = document_with_content_controls(&changed_shell_xml);
     let mut unchanged = document_with_content_controls(&original_xml);
-    let before = unchanged.to_bytes().unwrap();
-    assert!(
-        unchanged
-            .compare(&changed_shell, "Ada", "2026-08-21T09:30:00Z")
-            .is_err()
+    let diagnostics = unchanged
+        .compare(&changed_shell, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    assert_eq!(
+        diagnostics,
+        vec![rdocx::ComparisonDiagnostic {
+            location: "body/paragraph[0]/content-control[0]".to_owned(),
+            message: "content-control tag differs and the original tag was retained".to_owned(),
+        }]
     );
-    assert_eq!(unchanged.to_bytes().unwrap(), before);
+    assert!(unchanged.revisions().is_empty());
+    let kept_xml = document_xml(&mut unchanged);
+    assert!(
+        kept_xml.contains(r#"w:val="paragraph-control""#),
+        "{kept_xml}"
+    );
+    assert!(!kept_xml.contains("changed-shell"), "{kept_xml}");
 }
 
 #[test]
@@ -30724,6 +30735,223 @@ mod compare_producer_noise {
                 !original.is_empty(),
                 "{tracked}"
             );
+        }
+    }
+
+    fn metadata_diagnostic(location: &str, property: &str) -> rdocx::ComparisonDiagnostic {
+        rdocx::ComparisonDiagnostic {
+            location: location.to_owned(),
+            message: format!(
+                "content-control {property} differs and the original {property} was retained"
+            ),
+        }
+    }
+
+    /// Compare two bodies whose controls differ by metadata and return the
+    /// revision kinds, the diagnostics and the redline.
+    ///
+    /// Accepting keeps the original metadata, so it reads like the edited
+    /// side with the same diagnostics, and rejecting gives the original back.
+    fn compared_metadata(
+        original_xml: &str,
+        edited_xml: &str,
+        options: &ComparisonOptions,
+    ) -> (Vec<RevisionKind>, Vec<rdocx::ComparisonDiagnostic>, String) {
+        let original = document_with_content_controls(original_xml);
+        let edited = document_with_content_controls(edited_xml);
+        let mut compared = document_with_content_controls(original_xml);
+        let diagnostics = compared
+            .compare_with_options(&edited, "R", TIMESTAMP, options)
+            .expect("content-control metadata must not refuse the pair");
+        let tracked = compared.to_bytes().unwrap();
+        let mut accepted = Document::from_bytes(&tracked).unwrap();
+        accepted.accept_all().unwrap();
+        assert_eq!(
+            accepted
+                .compare_with_options(&edited, "postcondition", TIMESTAMP, options)
+                .unwrap(),
+            diagnostics
+        );
+        assert_eq!(revision_kinds(&accepted), []);
+        let mut rejected = Document::from_bytes(&tracked).unwrap();
+        rejected.reject_all().unwrap();
+        assert_eq!(
+            rejected
+                .compare_with_options(&original, "postcondition", TIMESTAMP, options)
+                .unwrap(),
+            []
+        );
+        assert_eq!(revision_kinds(&rejected), []);
+        (
+            revision_kinds(&compared),
+            diagnostics,
+            document_xml(&mut compared),
+        )
+    }
+
+    /// A control's metadata names, protects or files it without changing
+    /// what it holds, and Google Docs renumbers its `goog_rdk_N` tags between
+    /// exports (#159 section 2). A difference is reported and the original
+    /// `w:sdtPr` is kept.
+    #[test]
+    fn content_control_metadata_is_reported_and_the_original_kept() {
+        let block = |properties: &str, first_entry: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:r><w:t>Before the content control.</w:t></w:r></w:p><w:sdt><w:sdtPr>{properties}</w:sdtPr><w:sdtContent><w:p><w:r><w:t>{first_entry} entry</w:t></w:r></w:p><w:p><w:r><w:t>Beta entry</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>After the content control.</w:t></w:r></w:p>"#
+            ))
+        };
+        let gallery = |value: &str| {
+            format!(
+                r#"<w:docPartObj><w:docPartGallery w:val="{value}"/><w:docPartUnique/></w:docPartObj>"#
+            )
+        };
+        let placeholder =
+            |value: &str| format!(r#"<w:placeholder><w:docPart w:val="{value}"/></w:placeholder>"#);
+        let changed = &[RevisionKind::Deletion, RevisionKind::Insertion][..];
+        for (property, original, edited) in [
+            (
+                "tag",
+                format!(
+                    r#"<w:tag w:val="goog_rdk_0"/><w:id w:val="-2000000001"/>{}"#,
+                    gallery("Table of Contents")
+                ),
+                format!(
+                    r#"<w:tag w:val="goog_rdk_3"/><w:id w:val="-2000000001"/>{}"#,
+                    gallery("Table of Contents")
+                ),
+            ),
+            (
+                "alias",
+                r#"<w:alias w:val="Contents"/>"#.to_owned(),
+                r#"<w:alias w:val="Summary"/>"#.to_owned(),
+            ),
+            (
+                "lock",
+                String::new(),
+                r#"<w:lock w:val="sdtContentLocked"/>"#.to_owned(),
+            ),
+            (
+                "placeholder",
+                placeholder("DefaultPlaceholder_1"),
+                placeholder("DefaultPlaceholder_2"),
+            ),
+            (
+                "docPartGallery",
+                gallery("Table of Contents"),
+                gallery("Custom Table of Contents"),
+            ),
+        ] {
+            for (first_entry, expected) in [("Alpha", &[][..]), ("Delta", changed)] {
+                let (kinds, diagnostics, tracked) = compared_metadata(
+                    &block(&original, "Alpha"),
+                    &block(&edited, first_entry),
+                    &ComparisonOptions::default(),
+                );
+                assert_eq!(kinds, expected, "{property}");
+                assert_eq!(
+                    diagnostics,
+                    [metadata_diagnostic("body/content-control[1]", property)]
+                );
+                assert!(
+                    tracked.contains(&format!("<w:sdtPr>{original}</w:sdtPr>")),
+                    "{tracked}"
+                );
+            }
+        }
+
+        // A renamed tag and a new lock are two diagnostics on one control.
+        let (_, diagnostics, _) = compared_metadata(
+            &block(r#"<w:tag w:val="goog_rdk_0"/>"#, "Alpha"),
+            &block(
+                r#"<w:tag w:val="goog_rdk_1"/><w:lock w:val="sdtLocked"/>"#,
+                "Alpha",
+            ),
+            &ComparisonOptions::default(),
+        );
+        assert_eq!(
+            diagnostics,
+            [
+                metadata_diagnostic("body/content-control[1]", "tag"),
+                metadata_diagnostic("body/content-control[1]", "lock"),
+            ]
+        );
+
+        // Google Docs writes a bookmark around a heading, and bookmarks are
+        // indexed by run, so the runs around the control must stay whole.
+        let inline = |tag: &str, word: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:bookmarkStart w:id="0" w:name="h.1"/><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:bookmarkEnd w:id="0"/><w:sdt><w:sdtPr><w:tag w:val="{tag}"/><w:id w:val="1"/></w:sdtPr><w:sdtContent><w:r><w:t>{word}</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t xml:space="preserve"> after.</w:t></w:r></w:p>"#
+            ))
+        };
+        for granularity in [
+            ComparisonGranularity::Run,
+            ComparisonGranularity::Word,
+            ComparisonGranularity::Character,
+        ] {
+            let options = ComparisonOptions {
+                granularity,
+                ..Default::default()
+            };
+            // "Omens" has the length of "Alpha" and none of its characters,
+            // so every granularity gives one deletion and one insertion.
+            for (word, expected) in [("Alpha", &[][..]), ("Omens", changed)] {
+                let (kinds, diagnostics, tracked) = compared_metadata(
+                    &inline("goog_rdk_0", "Alpha"),
+                    &inline("goog_rdk_5", word),
+                    &options,
+                );
+                assert_eq!(kinds, expected, "{granularity:?}");
+                assert_eq!(
+                    diagnostics,
+                    [metadata_diagnostic(
+                        "body/paragraph[0]/content-control[0]",
+                        "tag"
+                    )],
+                    "{granularity:?}"
+                );
+                assert!(
+                    tracked.contains(r#"<w:tag w:val="goog_rdk_0"/>"#),
+                    "{tracked}"
+                );
+                assert!(!tracked.contains("goog_rdk_5"), "{tracked}");
+            }
+        }
+    }
+
+    /// The control type and its data binding decide what a control holds, so
+    /// a difference in either still refuses the pair.
+    #[test]
+    fn a_content_control_type_or_binding_change_still_refuses() {
+        let control = |properties: &str| {
+            wrap_word_body(&format!(
+                r#"<w:sdt><w:sdtPr>{properties}</w:sdtPr><w:sdtContent><w:p><w:r><w:t>Alpha entry</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>After the content control.</w:t></w:r></w:p>"#
+            ))
+        };
+        let binding = |xpath: &str| {
+            format!(
+                r#"<w:dataBinding w:storeItemID="{{11111111-1111-1111-1111-111111111111}}" w:xpath="{xpath}"/><w:text/>"#
+            )
+        };
+        for (original, edited) in [
+            ("<w:text/>".to_owned(), "<w:richText/>".to_owned()),
+            (binding("/root/first"), binding("/root/second")),
+        ] {
+            let mut compared = document_with_content_controls(&control(&original));
+            let before = compared.to_bytes().unwrap();
+            let error = compared
+                .compare(
+                    &document_with_content_controls(&control(&edited)),
+                    "R",
+                    TIMESTAMP,
+                )
+                .unwrap_err();
+            assert!(
+                error.to_string().contains(
+                    "cannot revise content-control properties at body/content-control[0]"
+                ),
+                "{error}"
+            );
+            assert_eq!(compared.to_bytes().unwrap(), before);
         }
     }
 
