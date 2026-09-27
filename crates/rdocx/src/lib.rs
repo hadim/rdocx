@@ -61,9 +61,9 @@ pub use document::{
     ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
     NumberingLevelOverride, OutlineNode, PictureAnchor, PictureCrop, PictureOptions, RenderOptions,
-    Section, SectionRef, SectionStory, StoryError, StoryId, StoryItemKind, StoryItemRef,
-    StoryItemSnapshot, StoryKind, TextBoxDirection, TextBoxOptions, TextWatermarkOptions,
-    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    ReplacementCountMismatch, Section, SectionRef, SectionStory, StoryError, StoryId,
+    StoryItemKind, StoryItemRef, StoryItemSnapshot, StoryKind, TextBoxDirection, TextBoxOptions,
+    TextWatermarkOptions, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,

@@ -125,6 +125,66 @@ def test_counted_replacement_spans_runs_and_a_bad_regex_changes_nothing():
     assert document.paragraphs[0].text == "Dear Ada, bye"
 
 
+def test_counted_replacement_checks_expected_counts_before_publishing():
+    import pickle
+
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("{{a}} {{b}} {{b}} {{c}}")
+    document.set_header("{{c}} header")
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        document.replace_all([("{{a}}", "A", 1), ("{{b}}", "B", 1), ("{{c}}", "C", 2)])
+    error = raised.value
+    assert isinstance(error, rdocx.RdocxError)
+    assert (error.index, error.expected, error.found) == (1, 1, 2)
+    assert str(error) == 'pair 1: expected 1 replacement(s) of "{{b}}", found 2'
+    # Worker pools pickle exceptions to return them, so the error must survive.
+    copy = pickle.loads(pickle.dumps(error))
+    assert (type(copy), str(copy), copy.index, copy.expected, copy.found) == (
+        rdocx.ReplacementCountError,
+        str(error),
+        1,
+        1,
+        2,
+    )
+    assert document.to_bytes() == before
+    assert held.text == "{{a}} {{b}} {{b}} {{c}}"
+
+    with pytest.raises(
+        rdocx.ReplacementCountError,
+        match=r'^expected 3 replacement\(s\) of "\{\{b\}\}", found 2$',
+    ) as raised:
+        document.try_replace_text("{{b}}", "B", expect=3)
+    assert (raised.value.index, raised.value.expected, raised.value.found) == (None, 3, 2)
+    assert document.to_bytes() == before
+    assert document.try_replace_text("{{missing}}", "x", expect=0) == 0
+    assert document.replace_all([("{{missing}}", "x")]) == (0,)
+    assert document.replace_all([]) == ()
+    assert held.text == "{{a}} {{b}} {{b}} {{c}}"
+
+    # Pairs run in order, so the second one also replaces what the first wrote.
+    assert document.replace_all(
+        [("{{a}}", "{{b}}", 1), ("{{b}}", "B", 3), ("{{c}}", "C", None)]
+    ) == (1, 3, 2)
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert document.paragraphs[0].text == "B B B C"
+    assert _story_paragraph_texts(document, "header") == ["C header"]
+    assert document.try_replace_text("B", "b", expect=3) == 3
+
+    for pairs, message in (
+        ([("x",)], "pair 0 must be"),
+        ([("x", "y"), ("x", "y", -1)], "pair 1 must be"),
+        ("xy", "pair 0 must be"),
+    ):
+        with pytest.raises(TypeError, match=message):
+            document.replace_all(pairs)
+
+
 def test_update_fields_takes_a_keyword_context_and_counts_updates():
     import datetime
 

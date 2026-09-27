@@ -52,14 +52,40 @@ pub(crate) fn enum_object(py: Python<'_>, name: &str, value: i32) -> PyResult<Py
         .map(Bound::unbind)
 }
 
-fn public_error(py: Python<'_>, class_name: &str, message: String) -> PyErr {
-    let exception_type = py
-        .import("rdocx")
+fn public_exception_type<'py>(py: Python<'py>, class_name: &str) -> PyResult<Bound<'py, PyType>> {
+    py.import("rdocx")
         .and_then(|module| module.getattr(class_name))
-        .and_then(|class| class.cast_into::<PyType>().map_err(Into::into));
+        .and_then(|class| class.cast_into::<PyType>().map_err(Into::into))
+}
 
-    match exception_type {
+fn public_error(py: Python<'_>, class_name: &str, message: String) -> PyErr {
+    match public_exception_type(py, class_name) {
         Ok(class) => PyErr::from_type(class, (message,)),
+        Err(_) => PyRuntimeError::new_err(message),
+    }
+}
+
+/// A counted replacement that matched a different number of times than the
+/// caller expected. A single replacement uses the wording of
+/// `rdocx replace --expect`, and a batch names the failing pair.
+pub(crate) fn replacement_count_to_pyerr(
+    py: Python<'_>,
+    mismatch: &rdocx::ReplacementCountMismatch,
+    batch: bool,
+) -> PyErr {
+    let (message, index) = if batch {
+        (mismatch.to_string(), Some(mismatch.index))
+    } else {
+        (
+            format!(
+                "expected {} replacement(s) of \"{}\", found {}",
+                mismatch.expected, mismatch.placeholder, mismatch.found
+            ),
+            None,
+        )
+    };
+    match public_exception_type(py, "ReplacementCountError") {
+        Ok(class) => PyErr::from_type(class, (message, mismatch.expected, mismatch.found, index)),
         Err(_) => PyRuntimeError::new_err(message),
     }
 }
