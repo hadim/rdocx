@@ -1098,6 +1098,21 @@ impl PyDocument {
         }
         Ok(count)
     }
+
+    /// Check the names and the section of one header or footer variant.
+    fn section_story_target(
+        &self,
+        section_index: usize,
+        kind: &str,
+        variant: &str,
+    ) -> PyResult<(rdocx::HeaderFooterKind, rdocx::HdrFtrType)> {
+        let kind = header_footer_kind_from_name(kind)?;
+        let variant = header_footer_variant_from_name(variant)?;
+        if section_index >= self.inner.section_count() {
+            return Err(PyIndexError::new_err("section index out of range"));
+        }
+        Ok((kind, variant))
+    }
 }
 
 fn story_snapshot(story: &rdocx::StoryId) -> PyStory {
@@ -1143,6 +1158,39 @@ fn story_item_kind_from_name(name: &str) -> PyResult<rdocx::StoryItemKind> {
             "unsupported story item kind {name:?}"
         ))),
     }
+}
+
+fn header_footer_kind_from_name(name: &str) -> PyResult<rdocx::HeaderFooterKind> {
+    match name {
+        "header" => Ok(rdocx::HeaderFooterKind::Header),
+        "footer" => Ok(rdocx::HeaderFooterKind::Footer),
+        _ => Err(PyValueError::new_err(format!(
+            "kind must be header or footer, not {name:?}"
+        ))),
+    }
+}
+
+fn header_footer_variant_from_name(name: &str) -> PyResult<rdocx::HdrFtrType> {
+    // `HdrFtrType::from_str` reads every unknown name as the default variant.
+    match name {
+        "default" => Ok(rdocx::HdrFtrType::Default),
+        "first" => Ok(rdocx::HdrFtrType::First),
+        "even" => Ok(rdocx::HdrFtrType::Even),
+        _ => Err(PyValueError::new_err(format!(
+            "variant must be default, first or even, not {name:?}"
+        ))),
+    }
+}
+
+/// Extract a direct body index, naming the accepted forms on a type error.
+fn body_index_argument(value: &Bound<'_, PyAny>, message: &'static str) -> PyResult<usize> {
+    value.extract::<usize>().map_err(|error| {
+        if error.is_instance_of::<PyTypeError>(value.py()) {
+            PyTypeError::new_err(message)
+        } else {
+            error
+        }
+    })
 }
 
 fn section_snapshot(section: rdocx::SectionRef<'_>) -> PySection {
@@ -1526,6 +1574,64 @@ impl PyDocument {
             }
         }
         PyTuple::new(py, snapshots)
+    }
+
+    // The section story operations publish a reopened package, so each one
+    // advances the revision once, even when the variant already had a story.
+    fn create_section_story(
+        &mut self,
+        py: Python<'_>,
+        section_index: usize,
+        kind: &str,
+        variant: &str,
+    ) -> PyResult<PyStory> {
+        let (kind, variant) = self.section_story_target(section_index, kind, variant)?;
+        let story = py
+            .detach(|| {
+                self.inner
+                    .create_section_story(section_index, kind, variant)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(story_snapshot(&story))
+    }
+
+    fn link_section_story(
+        &mut self,
+        py: Python<'_>,
+        section_index: usize,
+        kind: &str,
+        variant: &str,
+        story: PyRef<'_, PyStory>,
+    ) -> PyResult<PyStory> {
+        let (kind, variant) = self.section_story_target(section_index, kind, variant)?;
+        let story = self.native_story(py, &story)?;
+        let linked = py
+            .detach(|| {
+                self.inner
+                    .link_section_story(section_index, kind, variant, &story)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(story_snapshot(&linked))
+    }
+
+    fn unlink_section_story(
+        &mut self,
+        py: Python<'_>,
+        section_index: usize,
+        kind: &str,
+        variant: &str,
+    ) -> PyResult<PyStory> {
+        let (kind, variant) = self.section_story_target(section_index, kind, variant)?;
+        let story = py
+            .detach(|| {
+                self.inner
+                    .unlink_section_story(section_index, kind, variant)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(story_snapshot(&story))
     }
 
     #[getter]
@@ -2072,11 +2178,21 @@ impl PyDocument {
         Py::new(py, PyParagraph::new(slf, path))
     }
 
-    fn pop_content(slf: Py<Self>, py: Python<'_>, index: usize) -> PyResult<PyContentFragment> {
-        let location = slf.borrow(py).body_location(py, index)?;
-        if index == slf.borrow(py).inner.content_count() {
-            return Err(PyIndexError::new_err("content index out of range"));
-        }
+    fn pop_content(
+        slf: Py<Self>,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+    ) -> PyResult<PyContentFragment> {
+        let location = if let Ok(item) = index.cast::<PyStoryItem>() {
+            slf.borrow(py).native_location(py, &item.borrow())?
+        } else {
+            let index = body_index_argument(index, "index must be an int or a StoryItem")?;
+            let location = slf.borrow(py).body_location(py, index)?;
+            if index == slf.borrow(py).inner.content_count() {
+                return Err(PyIndexError::new_err("content index out of range"));
+            }
+            location
+        };
         let fragment = slf
             .borrow_mut(py)
             .inner
@@ -2089,10 +2205,21 @@ impl PyDocument {
     fn insert_content(
         slf: Py<Self>,
         py: Python<'_>,
-        destination: usize,
+        destination: &Bound<'_, PyAny>,
         fragment: PyRef<'_, PyContentFragment>,
     ) -> PyResult<()> {
-        let location = slf.borrow(py).body_location(py, destination)?;
+        // A story item names the boundary before it, and a story its end.
+        let location = if let Ok(item) = destination.cast::<PyStoryItem>() {
+            slf.borrow(py).native_location(py, &item.borrow())?
+        } else if let Ok(story) = destination.cast::<PyStory>() {
+            rdocx::ContentLocation::end(slf.borrow(py).native_story(py, &story.borrow())?)
+        } else {
+            let destination = body_index_argument(
+                destination,
+                "destination must be an int, a StoryItem or a Story",
+            )?;
+            slf.borrow(py).body_location(py, destination)?
+        };
         let fragment = fragment.inner.clone();
         slf.borrow_mut(py)
             .inner

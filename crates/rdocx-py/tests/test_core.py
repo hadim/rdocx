@@ -1344,6 +1344,122 @@ def test_set_story_text_rejects_a_story_that_is_not_in_the_document():
     assert held.text == "body"
 
 
+def _two_section_document():
+    import rdocx
+
+    section = (
+        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" '
+        'w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" '
+        'w:gutter="0"/></w:sectPr>'
+    )
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    return _replace_document_body(
+        source,
+        f"<w:p><w:pPr>{section}</w:pPr><w:r><w:t>First section.</w:t></w:r></w:p>"
+        f"<w:p><w:r><w:t>Second section.</w:t></w:r></w:p>{section}",
+    )
+
+
+def _default_footer(document, section_index):
+    return next(
+        variant.story
+        for variant in document.header_footer_variants
+        if variant.section_index == section_index
+        and variant.kind == "footer"
+        and variant.variant == "default"
+    )
+
+
+def _story_part(document, story):
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        return archive.read(story.part_name.lstrip("/"))
+
+
+def test_footer_with_text_tab_and_page_fields_is_built_for_one_section():
+    import rdocx
+
+    document = _two_section_document()
+    held = document.paragraphs[0]
+    footer = document.create_section_story(1, "footer", "default")
+    assert footer.kind == "footer"
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert _default_footer(document, 0) is None
+    assert _default_footer(document, 1) == footer
+
+    # Author the paragraph in the body with the typed API, then move it.
+    paragraph = document.add_paragraph("Confidential")
+    paragraph.runs[0].add_tab()
+    document.paragraphs[2].add_run("Page ").add_field("PAGE", "1")
+    document.paragraphs[2].add_run(" of ").add_field("NUMPAGES", "1")
+    fragment = document.pop_content(document.find_content_index("Confidential"))
+    document.insert_content(footer, fragment)
+    assert [paragraph.text for paragraph in document.paragraphs] == [
+        "First section.",
+        "Second section.",
+    ]
+    assert _story_paragraph_texts(document, "footer") == ["ConfidentialPage 1 of 1"]
+
+    report = document.update_layout_backed_fields()
+    assert (report.page_fields, report.num_pages_fields) == (1, 1)
+    xml = _story_part(document, footer)
+    assert re.search(rb"<w:t>Confidential</w:t>\s*<w:tab/>", xml)
+    for instruction in (b"PAGE", b"NUMPAGES"):
+        field = re.search(
+            rb'w:instr="' + instruction + rb'"[^>]*>\s*<w:r>\s*<w:t>([^<]*)</w:t>', xml
+        )
+        assert field is not None and field.group(1) == b"2"
+    body = _document_xml(document)
+    first_section = body[: body.index(b"First section.")]
+    assert b"footerReference" not in first_section
+    assert body.count(b"footerReference") == 1
+    assert document.to_pdf().startswith(b"%PDF")
+
+
+def test_section_stories_link_unlink_and_reject_bad_names_atomically():
+    import rdocx
+
+    document = _two_section_document()
+    footer = document.create_section_story(1, "footer", "default")
+    document.add_paragraph("Footer text")
+    fragment = document.pop_content(document.find_content_index("Footer text"))
+    document.insert_content(footer, fragment)
+    before = document.to_bytes()
+    for arguments, error in (
+        ((1, "side", "default"), ValueError),
+        ((1, "footer", "odd"), ValueError),
+        ((2, "footer", "default"), IndexError),
+    ):
+        with pytest.raises(error):
+            document.create_section_story(*arguments)
+        with pytest.raises(error):
+            document.unlink_section_story(*arguments)
+        with pytest.raises(error):
+            document.link_section_story(*arguments, footer)
+    with pytest.raises(rdocx.RdocxError):
+        document.link_section_story(0, "header", "default", footer)
+    with pytest.raises(TypeError, match="destination must be an int, a StoryItem or a Story"):
+        document.insert_content("footer", fragment)
+    with pytest.raises(TypeError, match="index must be an int or a StoryItem"):
+        document.pop_content(footer)
+    assert document.to_bytes() == before
+
+    assert document.link_section_story(0, "footer", "default", footer) == footer
+    assert _default_footer(document, 0) == footer
+    copy = document.unlink_section_story(0, "footer", "default")
+    assert copy.part_name != footer.part_name
+    assert _default_footer(document, 0) == copy
+    assert _story_paragraph_texts(document, "footer") == ["Footer text", "Footer text"]
+
+    [item] = [item for item in document.story_items if item.story == copy]
+    popped = document.pop_content(item)
+    assert popped.kind == "paragraph"
+    assert [item for item in document.story_items if item.story == copy] == []
+    assert _default_footer(document, 1) == footer
+    assert _story_paragraph_texts(document, "footer") == ["Footer text"]
+
+
 def test_hyperlinks_are_added_to_paragraphs_and_stories():
     import rdocx
 
