@@ -245,9 +245,11 @@ field cache update operations. `RunPosition` and
 constructors and call shape remain unchanged.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
 `LayoutPage`, `TocRebuildReport`, and `Revision` are frozen typed snapshots.
-`Document.revisions` lists main-document revisions with a snake_case `kind`,
-while the accept and reject methods resolve revisions in every story and return
-how many they resolved. `try_replace_text` and `replace_all_regex` return their
+`Document.revisions` lists the revisions of every story that the accept and
+reject methods resolve, each with a snake_case `kind` and the `Story` that
+holds it, so its length equals the count they return. A `Revision` built
+directly keeps its four-field constructor and has no story unless one is
+passed. `try_replace_text` and `replace_all_regex` return their
 replacement counts. `update_fields` takes the native evaluation context as
 keyword arguments, reads the wall-clock fields of `now` as given, and returns
 the number of updated fields. Comments are
@@ -1173,8 +1175,9 @@ story that holds the table. It scans the parts as resolution stages them, so
 the list has one entry per revision element that `accept_all` and
 `reject_all` resolve and its length equals their count.
 `rdocx-cli revision list` exposes the main-story projection with an explicit
-scope field. Python and WASM load and save paths preserve the revision XML
-without a revision inspection method.
+scope field. Python `Document.revisions` exposes the all-story listing. WASM
+load and save paths preserve the revision XML without a revision inspection
+method.
 
 Native Word paragraph handles expose
 `Paragraph::add_run_inheriting_mark(&mut self, text)`. The method appends one
