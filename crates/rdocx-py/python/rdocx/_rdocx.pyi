@@ -13,8 +13,8 @@ __all__ = [
     "Comment", "ComparisonDiagnostic", "ContentFragment", "Document", "Font", "HeaderFooterVariant",
     "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
-    "RunRange", "Section", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style", "Table", "TableCollection",
-    "TocRebuildReport",
+    "RunRange", "Section", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style",
+    "SvgDiagnostic", "SvgRenderResult", "Table", "TableCollection", "TocRebuildReport",
 ]
 
 
@@ -105,6 +105,26 @@ class ComparisonDiagnostic:
     def location(self) -> str: ...
     @property
     def message(self) -> str: ...
+
+
+@_final
+class SvgDiagnostic:
+    def __new__(cls, *, path: str, message: str) -> SvgDiagnostic: ...
+    @property
+    def path(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+
+
+@_final
+class SvgRenderResult:
+    def __new__(
+        cls, *, svg: str, diagnostics: _Sequence[SvgDiagnostic]
+    ) -> SvgRenderResult: ...
+    @property
+    def svg(self) -> str: ...
+    @property
+    def diagnostics(self) -> tuple[SvgDiagnostic, ...]: ...
 
 
 @_final
@@ -463,8 +483,26 @@ class Document:
     def split_run(
         self, body_index: int | Paragraph, run_index: int, character_offset: int
     ) -> int: ...
-    def to_pdf(self) -> bytes: ...
+    def to_pdf(
+        self,
+        *,
+        fonts: _Sequence[tuple[str, bytes]] | None = None,
+        font_dir: _Path | None = None,
+    ) -> bytes:
+        """Render the document to PDF bytes.
+
+        ``fonts`` gives ``(family, font bytes)`` pairs and ``font_dir`` a
+        directory whose ``.ttf``, ``.otf`` and ``.ttc`` files are named after
+        their family. When either is given, layout uses only those fonts, as
+        ``rdocx convert --font-dir`` does, so a family they do not provide
+        raises ``LayoutError``. A missing ``font_dir`` raises
+        ``FileNotFoundError``.
+        """
+    def to_pdfa_deterministic(
+        self, profile: _Literal["pdfa-2b", "pdfa-3b"] = "pdfa-2b"
+    ) -> bytes: ...
     def render_page_to_png(self, page_index: int, dpi: float = 150.0) -> bytes | None: ...
+    def render_page_to_svg(self, page_index: int) -> SvgRenderResult | None: ...
     def render_all_pages(self, dpi: float = 150.0) -> list[bytes]: ...
     def render_pages(
         self,

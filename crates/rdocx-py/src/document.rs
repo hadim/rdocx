@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError};
-use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyFileNotFoundError, PyIndexError, PyNotADirectoryError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
@@ -210,6 +212,54 @@ impl PyComparisonDiagnostic {
     #[pyo3(signature = (*, location, message))]
     fn new(location: String, message: String) -> Self {
         Self { location, message }
+    }
+}
+
+#[pyclass(name = "SvgDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PySvgDiagnostic {
+    pub path: String,
+    pub message: String,
+}
+
+#[pymethods]
+impl PySvgDiagnostic {
+    #[new]
+    #[pyo3(signature = (*, path, message))]
+    fn new(path: String, message: String) -> Self {
+        Self { path, message }
+    }
+}
+
+#[pyclass(name = "SvgRenderResult", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PySvgRenderResult {
+    svg: String,
+    diagnostics: Vec<PySvgDiagnostic>,
+}
+
+#[pymethods]
+impl PySvgRenderResult {
+    #[new]
+    #[pyo3(signature = (*, svg, diagnostics))]
+    fn new(svg: String, diagnostics: Vec<PyRef<'_, PySvgDiagnostic>>) -> Self {
+        Self {
+            svg,
+            diagnostics: diagnostics
+                .iter()
+                .map(|diagnostic| (**diagnostic).clone())
+                .collect(),
+        }
+    }
+
+    #[getter]
+    fn svg(&self) -> &str {
+        &self.svg
+    }
+
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.diagnostics.iter().cloned())
     }
 }
 
@@ -1418,8 +1468,74 @@ impl PyDocument {
         Ok(boundary)
     }
 
-    fn to_pdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        py.detach(|| self.inner.to_pdf())
+    #[pyo3(signature = (*, fonts = None, font_dir = None))]
+    fn to_pdf<'py>(
+        &self,
+        py: Python<'py>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        if fonts.is_none() && font_dir.is_none() {
+            return py
+                .detach(|| self.inner.to_pdf())
+                .map(|bytes| PyBytes::new(py, &bytes))
+                .map_err(|error| rdocx_to_pyerr(py, error));
+        }
+        let mut font_files = fonts
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(family, data)| (family, data.as_bytes().to_vec()))
+            .collect::<Vec<_>>();
+        // The native loader reads a missing directory as one without fonts.
+        if let Some(font_dir) = &font_dir
+            && !font_dir.is_dir()
+        {
+            return Err(if font_dir.exists() {
+                PyNotADirectoryError::new_err(format!(
+                    "font directory {} is not a directory",
+                    font_dir.display()
+                ))
+            } else {
+                PyFileNotFoundError::new_err(format!(
+                    "font directory {} does not exist",
+                    font_dir.display()
+                ))
+            });
+        }
+        py.detach(|| {
+            if let Some(font_dir) = &font_dir {
+                font_files.extend(
+                    rdocx::Document::load_fonts_from_dir(font_dir)
+                        .into_iter()
+                        .map(|font| (font.family, font.data)),
+                );
+            }
+            let font_files = font_files
+                .iter()
+                .map(|(family, data)| (family.as_str(), data.as_slice()))
+                .collect::<Vec<_>>();
+            self.inner.to_pdf_with_fonts(&font_files)
+        })
+        .map(|bytes| PyBytes::new(py, &bytes))
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[pyo3(signature = (profile = "pdfa-2b"))]
+    fn to_pdfa_deterministic<'py>(
+        &self,
+        py: Python<'py>,
+        profile: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let profile = match profile {
+            "pdfa-2b" => rdocx::PdfConformance::PdfA2b,
+            "pdfa-3b" => rdocx::PdfConformance::PdfA3b,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "profile must be pdfa-2b or pdfa-3b, not {profile:?}"
+                )));
+            }
+        };
+        py.detach(|| self.inner.to_pdfa_deterministic(profile))
             .map(|bytes| PyBytes::new(py, &bytes))
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
@@ -1434,6 +1550,27 @@ impl PyDocument {
         py.detach(|| self.inner.render_page_to_png(page_index, dpi))
             .map(|bytes| bytes.map(|bytes| PyBytes::new(py, &bytes)))
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn render_page_to_svg(
+        &self,
+        py: Python<'_>,
+        page_index: usize,
+    ) -> PyResult<Option<PySvgRenderResult>> {
+        let rendered = py
+            .detach(|| self.inner.render_page_to_svg(page_index))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(rendered.map(|result| PySvgRenderResult {
+            svg: result.svg,
+            diagnostics: result
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| PySvgDiagnostic {
+                    path: diagnostic.path,
+                    message: diagnostic.message,
+                })
+                .collect(),
+        }))
     }
 
     #[pyo3(signature = (dpi = 150.0))]

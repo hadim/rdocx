@@ -928,8 +928,12 @@ Native Rust callers can request `PdfA2b` or `PdfA3b` through
 `Document::to_pdfa_deterministic` and
 `Presentation::to_pdfa_deterministic`. Both methods return the PDF backend's
 typed conformance error through the facade error enum. These methods are
-additive on the native pre-1.0 facades. Python, WASM, and CLI method names and
-dependency selections remain unchanged.
+additive on the native pre-1.0 facades. `rdocx` re-exports `PdfConformance`, so
+a caller can name the profile without depending on `oxml-pdf`. Python
+`Document.to_pdfa_deterministic(profile="pdfa-2b")` accepts `pdfa-2b` or
+`pdfa-3b`, raises `ValueError` for any other name, releases the GIL, and maps a
+conformance failure to `LayoutError`. WASM and CLI method names and dependency
+selections remain unchanged.
 
 The pre-1.0 shared layout API carries semantic types, `MarkedContent`, and
 informative `Figure` variants through existing non-exhaustive enums. The image
@@ -1378,14 +1382,29 @@ keyword-only `render_pages` arguments, keeps zero-based page indices, releases
 the GIL for rendering, returns `list[bytes]` for PNG or JPEG, and returns one
 `bytes` value for TIFF.
 
+Python `Document.to_pdf(*, fonts=None, font_dir=None)` keeps the plain call on
+`Document::to_pdf`. With `fonts`, a sequence of `(family, bytes)` pairs, or
+`font_dir`, a directory whose `.ttf`, `.otf`, and `.ttc` files
+`Document::load_fonts_from_dir` labels by file name, it calls
+`Document::to_pdf_with_fonts` with the given fonts first, as
+`rdocx convert --font-dir` does. That call lays out with the caller fonts only,
+so a family they do not provide, even through the automatic label aliases and
+metric-compatible names, raises `LayoutError`. The native loader reads a
+missing directory as an empty one, so the binding raises `FileNotFoundError`
+for a missing `font_dir` and `NotADirectoryError` for a file, before any
+layout. SVG and raster output take no caller fonts.
+
 Native Word SVG adds `SvgDiagnostic`, `SvgRenderResult`, and four additive
 `Document` methods. `render_page_to_svg` and
 `render_page_to_svg_with_options` reuse normal layout. Their deterministic
 counterparts reuse bundled-font-only layout. Every method takes a zero-based
 page index and returns `None` beyond the laid-out document. The result contains
 self-contained searchable SVG plus layout-first, path-specific lowering
-diagnostics. Python, WASM, CLI, Presentation, and public `oxml-pdf` APIs do not
-gain SVG methods or values.
+diagnostics. Python `Document.render_page_to_svg(page_index)` binds the normal
+layout method, releases the GIL, and returns a frozen `SvgRenderResult` with the
+SVG text and a tuple of frozen `SvgDiagnostic` values, or `None` beyond the
+last page. WASM, CLI, Presentation, and public `oxml-pdf` APIs do not gain SVG
+methods or values.
 
 Native renderers obtain the complete positioned output through
 `Document::layout` and `Document::layout_with_options`. Accepted calls return a

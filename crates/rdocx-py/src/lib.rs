@@ -16,7 +16,8 @@ use document::{
     PyBookmark, PyBoundingBox, PyComment, PyComparisonDiagnostic, PyContentFragment, PyDocument,
     PyHeaderFooterVariant, PyHyperlink, PyLayoutBackedFieldUpdateReport, PyLayoutFragment,
     PyLayoutPage, PyRevision, PyRunPosition, PyRunRange, PySection, PyStory, PyStoryItem,
-    PyStoryRunPosition, PyStoryRunRange, PyStyle, PyTocRebuildReport,
+    PyStoryRunPosition, PyStoryRunRange, PyStyle, PySvgDiagnostic, PySvgRenderResult,
+    PyTocRebuildReport,
 };
 use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
@@ -123,6 +124,8 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyStoryRunRange>()?;
     module.add_class::<PyComment>()?;
     module.add_class::<PyComparisonDiagnostic>()?;
+    module.add_class::<PySvgDiagnostic>()?;
+    module.add_class::<PySvgRenderResult>()?;
     module.add_class::<PyBoundingBox>()?;
     module.add_class::<PyLayoutFragment>()?;
     module.add_class::<PyLayoutPage>()?;
