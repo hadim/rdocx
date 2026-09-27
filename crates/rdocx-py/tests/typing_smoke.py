@@ -221,6 +221,11 @@ def exercise_rdocx_types(path: Path) -> None:
     document.set_footer("Footer")
     document.set_story_text(story_items[0], "edited")
     document.add_hyperlink_to_story(stories[0], "home", "https://example.com/")
+    section_footer: Story = document.create_section_story(0, "footer", "default")
+    linked_footer: Story = document.link_section_story(0, "footer", "first", section_footer)
+    unlinked_footer: Story = document.unlink_section_story(0, "footer", "first")
+    document.insert_content(section_footer, document.pop_content(story_items[0]))
+    document.insert_content(story_items[0], fragment)
     link_run: Run = first.add_hyperlink("docs", "https://example.com/docs")
     assert_type(story_items[0].xml, bytes)
     compatible_story_item = StoryItem(

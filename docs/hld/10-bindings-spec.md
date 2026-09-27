@@ -719,7 +719,10 @@ unchanged owner scope. The Python `Document` binds direct-body
 sources must be live direct children of the same Python document. Coordinates
 are zero-based insertion boundaries, and a popped `ContentFragment` exposes
 only its typed kind and remains reusable because insertion clones the native
-value. `try_replace_text` and `replace_all_regex` return exact native counts.
+value. `pop_content` also accepts a `StoryItem` naming a direct child of any
+story, and `insert_content` accepts a `StoryItem` for the boundary before that
+item or a `Story` for the end of that story, so a paragraph authored in the
+body can move into a header or footer. `try_replace_text` and `replace_all_regex` return exact native counts.
 Successful structural mutations stale handles once, successful replacements
 stale them only when their count is nonzero, and every rejected operation
 leaves package bytes and handle revisions unchanged. The native and Python
@@ -788,10 +791,18 @@ section and inherited state. `create_section_story`, `link_section_story`,
 addressed by the returned `StoryId` through the common story API. The facade
 also exposes `even_and_odd_headers` and `set_even_and_odd_headers`, while first
 story creation enables section `titlePg`. These are additive pre-1.0 native
-Rust APIs. Python exposes immutable inspection snapshots, and only the default
-header and footer text setters `Document.set_header` and `Document.set_footer`
-as story mutation entry points. WASM and CLI gain no corresponding binding
-surface.
+Rust APIs. Python exposes immutable inspection snapshots, the default header
+and footer text setters `Document.set_header` and `Document.set_footer`, and
+`Document.create_section_story`, `link_section_story`, and
+`unlink_section_story`. These take a section index, a `header` or `footer`
+kind, and a `default`, `first`, or `even` variant, the names
+`HeaderFooterVariant` reports, and return the resulting `Story`. An unknown
+name raises `ValueError` and a section index out of range raises `IndexError`,
+both before any change. The native operations publish a reopened package, so
+a successful call advances the revision once, even when the variant already
+had its own story. Rich story content is authored with the typed body
+API and moved with `pop_content` and `insert_content`, which accept story
+coordinates. WASM and CLI gain no corresponding binding surface.
 
 `CT_SectPr` adds typed page-number start and raw child-position state, while
 `PageFrame` adds `displayed_page_number` beside its physical `page_number`.
