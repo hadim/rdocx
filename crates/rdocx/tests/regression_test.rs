@@ -13480,6 +13480,80 @@ fn unused_fixed_prefix_declarations_do_not_reject_safe_raw_replay() {
     assert_eq!(reopened.paragraph(1).unwrap().text(), "changed");
 }
 
+#[cfg(unix)]
+#[test]
+fn path_saves_replace_the_file_by_rename_and_keep_links_and_permissions() {
+    use std::fs::{self, Permissions};
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    use std::path::Path;
+
+    let directory = std::env::temp_dir().join(format!("rdocx-atomic-save-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&directory);
+    let links = directory.join("links");
+    fs::create_dir_all(&links).unwrap();
+    let staging_files = |directory: &Path| {
+        fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "tmp"))
+            .collect::<Vec<_>>()
+    };
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+    let mut document = Document::new();
+    document.add_paragraph("replacement");
+
+    // The plain save replaces an existing file by rename and keeps its mode.
+    let destination = directory.join("existing.docx");
+    fs::write(&destination, b"previous bytes").unwrap();
+    fs::set_permissions(&destination, Permissions::from_mode(0o600)).unwrap();
+    let previous_inode = fs::metadata(&destination).unwrap().ino();
+    document.save(&destination).unwrap();
+    assert_ne!(fs::metadata(&destination).unwrap().ino(), previous_inode);
+    assert_eq!(mode(&destination), 0o600);
+    assert_eq!(
+        fs::read(&destination).unwrap(),
+        document.to_bytes().unwrap()
+    );
+
+    // A save through a symbolic link replaces the file it names and keeps the link.
+    let target = directory.join("linked.docx");
+    fs::write(&target, b"previous bytes").unwrap();
+    fs::set_permissions(&target, Permissions::from_mode(0o640)).unwrap();
+    let link = links.join("link.docx");
+    std::os::unix::fs::symlink("../linked.docx", &link).unwrap();
+    document.save(&link).unwrap();
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("../linked.docx"));
+    assert_eq!(fs::read(&target).unwrap(), document.to_bytes().unwrap());
+    assert_eq!(mode(&target), 0o640);
+
+    // The savers that already staged their output now keep the mode too.
+    let flat = directory.join("existing.xml");
+    fs::write(&flat, b"previous bytes").unwrap();
+    fs::set_permissions(&flat, Permissions::from_mode(0o600)).unwrap();
+    document.save_flat_opc(&flat).unwrap();
+    assert_eq!(
+        fs::read(&flat).unwrap(),
+        document.to_flat_opc_bytes().unwrap()
+    );
+    assert_eq!(mode(&flat), 0o600);
+
+    // A save that cannot replace its destination leaves it and no staged file.
+    let occupied = directory.join("directory.docx");
+    fs::create_dir(&occupied).unwrap();
+    assert!(document.save(&occupied).is_err());
+    assert!(occupied.is_dir());
+
+    assert!(staging_files(&directory).is_empty());
+    assert!(staging_files(&links).is_empty());
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn unused_root_default_namespace_allows_atomic_save() {
     let task_namespace = "http://schemas.microsoft.com/office/tasks/2019/documenttasks";
