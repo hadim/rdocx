@@ -32086,6 +32086,96 @@ mod f_x132_retained_namespace_owner_regressions {
     }
 }
 
+/// Each text-box paragraph is parsed on its own. The retained-attribute capture
+/// used to find the prefix of the `w:rsid*` identities Word writes on text-box
+/// runs unbound there, which dropped the text box from layout, from replacement
+/// and from templates. The anchor reader now parses the paragraph with the
+/// bindings in scope, so any bound prefix resolves for layout. Replacement and
+/// templates still parse it in a scope that names `w` without binding it.
+mod text_box_identity_attribute_regressions {
+    use rdocx::Document;
+    use rdocx_oxml::namespace::W_NS;
+
+    const IDENTITY: &str = r#" w:rsidR="00A1B2C3" w:rsidRPr="00D4E5F6""#;
+    const FOREIGN: &str = r#" x:id="00A1B2C3""#;
+
+    /// A text box as Word saves it, the DrawingML shape in `mc:Choice` and its
+    /// VML copy in `mc:Fallback`, or the bare `wp:anchor` alone.
+    fn text_box_document(run_attributes: &str, compatibility_block: bool, text: &str) -> Document {
+        let content = format!(
+            r#"<w:txbxContent><w:p><w:r{run_attributes}><w:t>{text}</w:t></w:r></w:p></w:txbxContent>"#
+        );
+        let drawing = format!(
+            r#"<w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="2743200" cy="457200"/><wp:wrapTopAndBottom/><wp:docPr id="1" name="Text Box 1"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx>{content}</wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>"#
+        );
+        let shape = if compatibility_block {
+            format!(
+                r#"<mc:AlternateContent><mc:Choice Requires="wps">{drawing}</mc:Choice><mc:Fallback><w:pict><v:shape style="position:absolute;width:216pt;height:36pt"><v:textbox>{content}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent>"#
+            )
+        } else {
+            drawing
+        };
+        super::document_with_content_controls(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:producer"><w:body><w:p><w:r><w:t>Host paragraph</w:t></w:r><w:r>{shape}</w:r></w:p></w:body></w:document>"#
+        ))
+    }
+
+    #[test]
+    fn a_text_box_is_laid_out_when_its_runs_carry_identity_attributes() {
+        // The bare anchor used to fail the document open, and the
+        // compatibility block used to lose its shape and text from layout.
+        for compatibility_block in [true, false] {
+            let page_text = |run_attributes| {
+                let document = text_box_document(run_attributes, compatibility_block, "Boxed");
+                super::f252_page_text(&document.layout_page(0).unwrap().unwrap())
+            };
+            let plain = page_text("");
+            assert!(plain.contains("Boxed"), "{plain}");
+            for run_attributes in [IDENTITY, FOREIGN] {
+                assert_eq!(
+                    page_text(run_attributes),
+                    plain,
+                    "{compatibility_block}{run_attributes}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn replacing_text_reaches_a_text_box_whose_runs_carry_identity_attributes() {
+        let replace = |run_attributes| {
+            let mut document = text_box_document(run_attributes, true, "Boxed text");
+            let count = document.try_replace_text("Boxed", "Filled").unwrap();
+            (count, super::document_xml(&mut document))
+        };
+        let (plain_count, _) = replace("");
+        let (count, saved) = replace(IDENTITY);
+        assert_eq!(count, plain_count);
+        assert_eq!(saved.matches("Filled text").count(), 2, "{saved}");
+        assert!(!saved.contains("Boxed"), "{saved}");
+        assert_eq!(
+            saved.matches(r#"w:rsidRPr="00D4E5F6""#).count(),
+            2,
+            "{saved}"
+        );
+    }
+
+    #[test]
+    fn a_template_fills_a_text_box_whose_runs_carry_identity_attributes() {
+        let data = serde_json::json!({"name": "Ada"});
+        let render = |run_attributes| {
+            let mut document = text_box_document(run_attributes, true, "Dear {{ name }}");
+            let count = document.render_template(&data).unwrap();
+            (count, super::document_xml(&mut document))
+        };
+        let (plain_count, _) = render("");
+        let (count, saved) = render(IDENTITY);
+        assert_eq!(count, plain_count);
+        assert_eq!(saved.matches("Dear Ada").count(), 2, "{saved}");
+        assert!(!saved.contains("{{"), "{saved}");
+    }
+}
+
 /// F-266a, script identity and font slot resolution.
 mod f266a_script_and_font_slot_regressions {
     use super::*;
