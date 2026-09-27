@@ -26,6 +26,7 @@ class LayoutError(RdocxError):
 
 
 from ._rdocx import (
+    Bookmark,
     BoundingBox,
     Cell,
     CellCollection,
@@ -62,6 +63,7 @@ from ._rdocx import (
 )
 
 __all__ = [
+    "Bookmark",
     "BoundingBox",
     "Cm",
     "Cell",

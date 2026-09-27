@@ -1000,6 +1000,143 @@ def test_update_layout_backed_fields_returns_owned_report():
     assert b"stale target" not in xml
 
 
+def test_pageref_to_a_bookmarked_run_range_is_filled_from_the_layout():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("See page ")
+    document.add_table(2, 2)
+    target = document.add_paragraph("The target phrase ends here.")
+    target.paragraph_format.page_break_before = True
+    index = document.find_content_index("The target phrase")
+    assert index == 2
+    assert document.split_run(index, 0, len("The target phrase")) == 1
+    range_ = rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=index, run_index=0),
+        end=rdocx.RunPosition(body_index=index, run_index=1),
+    )
+    held = document.paragraphs[0].runs[0]
+
+    bookmark_id = document.add_bookmark("target", range_)
+    assert document.bookmarks == (
+        rdocx.Bookmark(
+            id=bookmark_id,
+            name="target",
+            # The recursive range counts the four cell paragraphs of the table.
+            range=rdocx.RunRange(
+                start=rdocx.RunPosition(body_index=5, run_index=0),
+                end=rdocx.RunPosition(body_index=5, run_index=1),
+            ),
+            direct_range=range_,
+            text="The target phrase",
+            issue=None,
+        ),
+    )
+    later = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body" and item.text == "The target phrase ends here."
+    )
+    held.add_field("PAGEREF target \\h", "?")
+    # The field is a story item of its own, so later items move and go stale.
+    for stale in (lambda: held.text, lambda: document.set_story_text(later, "x")):
+        with pytest.raises(rdocx.StaleElementError):
+            stale()
+    assert document.paragraphs[0].runs[0].text == "See page "
+
+    report = document.update_layout_backed_fields()
+    assert report.page_reference_fields == 1
+    field = re.search(
+        rb'w:instr="PAGEREF target \\h"[^>]*>\s*<w:r>\s*<w:t>([^<]*)</w:t>',
+        _document_xml(document),
+    )
+    assert field is not None and field.group(1) == b"2"
+
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="already exists"):
+        document.add_bookmark("target", range_)
+    table_range = rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=1, run_index=0),
+        end=rdocx.RunPosition(body_index=1, run_index=0),
+    )
+    with pytest.raises(rdocx.RdocxError, match="is not a paragraph"):
+        document.add_bookmark("in_table", table_range)
+    run = document.paragraphs[0].runs[0]
+    with pytest.raises(rdocx.RdocxError, match="field name"):
+        run.add_field("  ")
+    assert run.text == "See page "
+    assert document.to_bytes() == before
+
+
+def test_bookmarks_report_nested_ranges_without_a_direct_range():
+    import rdocx
+
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    document = _replace_document_body(
+        source,
+        """
+        <w:sdt><w:sdtContent><w:p><w:bookmarkStart w:id="1" w:name="inside"/><w:r><w:t>Inside</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p></w:sdtContent></w:sdt>
+        <w:p><w:bookmarkStart w:id="2" w:name="open"/><w:r><w:t>Open</w:t></w:r></w:p>
+        """,
+    )
+    inside, unmatched = document.bookmarks
+    assert inside.name == "inside"
+    assert inside.range == rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=0, run_index=0),
+        end=rdocx.RunPosition(body_index=0, run_index=1),
+    )
+    assert inside.direct_range is None
+    assert inside.text == "Inside"
+    assert unmatched.range is None and unmatched.direct_range is None
+    assert unmatched.issue == "bookmark id 2 has 1 start markers and 0 end markers"
+
+
+def test_insert_toc_links_headings_and_tab_and_fields_extend_a_run():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Intro")
+    document.add_paragraph("Chapter one").style = "Heading1"
+    document.add_paragraph("Section one point one").style = "Heading2"
+    document.add_paragraph("Deep detail").style = "Heading3"
+    held = document.paragraphs[0]
+
+    before = document.to_bytes()
+    with pytest.raises(IndexError):
+        document.insert_toc(5)
+    with pytest.raises(ValueError, match="max_level"):
+        document.insert_toc(0, max_level=0)
+    assert document.to_bytes() == before
+    assert held.text == "Intro"
+
+    assert document.insert_toc(0, max_level=2) is None
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert [paragraph.text for paragraph in document.paragraphs[:3]] == [
+        "Table of Contents",
+        "Chapter one\t",
+        "Section one point one\t",
+    ]
+    assert [(link.text, link.anchor) for link in document.hyperlinks] == [
+        ("Chapter one", "_Toc1"),
+        ("Section one point one", "_Toc2"),
+    ]
+    assert [(bookmark.name, bookmark.text) for bookmark in document.bookmarks] == [
+        ("_Toc1", "Chapter one"),
+        ("_Toc2", "Section one point one"),
+    ]
+
+    run = document.paragraphs[3].runs[0]
+    run.add_tab()
+    assert run.text == "Intro\t"
+    run.add_field("PAGE", "1")
+    with pytest.raises(rdocx.StaleElementError):
+        run.text
+    xml = _document_xml(document)
+    assert b'<w:fldSimple w:instr="PAGE"' in xml
+
+
 def test_word_structure_snapshots_preserve_order_ownership_and_types():
     import rdocx
 

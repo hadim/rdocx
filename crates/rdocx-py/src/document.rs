@@ -77,6 +77,83 @@ impl From<PyRunRange> for rdocx::RunRange {
     }
 }
 
+impl From<rdocx::RunRange> for PyRunRange {
+    fn from(value: rdocx::RunRange) -> Self {
+        let position = |position: rdocx::RunPosition| PyRunPosition {
+            body_index: position.body_index,
+            run_index: position.run_index,
+        };
+        Self {
+            start: position(value.start),
+            end: position(value.end),
+        }
+    }
+}
+
+#[pyclass(name = "Bookmark", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyBookmark {
+    id: Option<i32>,
+    name: Option<String>,
+    range: Option<PyRunRange>,
+    direct_range: Option<PyRunRange>,
+    text: String,
+    issue: Option<String>,
+}
+
+#[pymethods]
+impl PyBookmark {
+    #[new]
+    #[pyo3(signature = (*, id, name, range, direct_range, text, issue))]
+    fn new(
+        id: Option<i32>,
+        name: Option<String>,
+        range: Option<PyRef<'_, PyRunRange>>,
+        direct_range: Option<PyRef<'_, PyRunRange>>,
+        text: String,
+        issue: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            range: range.map(|range| *range),
+            direct_range: direct_range.map(|range| *range),
+            text,
+            issue,
+        }
+    }
+
+    #[getter]
+    fn id(&self) -> Option<i32> {
+        self.id
+    }
+
+    #[getter]
+    fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    #[getter]
+    fn range(&self) -> Option<PyRunRange> {
+        self.range
+    }
+
+    #[getter]
+    fn direct_range(&self) -> Option<PyRunRange> {
+        self.direct_range
+    }
+
+    #[getter]
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    #[getter]
+    fn issue(&self) -> Option<&str> {
+        self.issue.as_deref()
+    }
+}
+
 #[pyclass(name = "Comment", frozen, get_all, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyComment {
@@ -1622,6 +1699,37 @@ impl PyDocument {
         Ok(removed)
     }
 
+    #[getter]
+    fn bookmarks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .bookmarks()
+                .into_iter()
+                .map(|bookmark| PyBookmark {
+                    id: bookmark.id(),
+                    name: bookmark.name().map(str::to_owned),
+                    range: bookmark.range().map(PyRunRange::from),
+                    direct_range: bookmark.direct_range().map(PyRunRange::from),
+                    text: bookmark.text().to_owned(),
+                    issue: bookmark.issue().map(str::to_owned),
+                }),
+        )
+    }
+
+    fn add_bookmark(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+        range: PyRef<'_, PyRunRange>,
+    ) -> PyResult<i32> {
+        // Bookmark markers sit between runs, so no content moves and live
+        // handles stay valid.
+        self.inner
+            .add_bookmark(name, (*range).into())
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
     fn layout<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let fragments = py
             .detach(|| {
@@ -1842,6 +1950,32 @@ impl PyDocument {
             page_reference_fields: report.page_reference_fields,
             diagnostics: report.diagnostics,
         })
+    }
+
+    #[pyo3(signature = (index, max_level = 3))]
+    fn insert_toc(&mut self, py: Python<'_>, index: usize, max_level: u32) -> PyResult<()> {
+        let before = self.inner.content_count();
+        if index > before {
+            return Err(PyIndexError::new_err("content index out of range"));
+        }
+        if !(1..=9).contains(&max_level) {
+            return Err(PyValueError::new_err("max_level must be between 1 and 9"));
+        }
+        self.inner.insert_toc(index, max_level);
+        // The native call always inserts its title paragraph, unless it
+        // cannot allocate unique heading bookmarks, and then changes nothing.
+        if self.inner.content_count() == before {
+            return Err(rdocx_to_pyerr(
+                py,
+                rdocx::Error::Other(
+                    "table of contents was not inserted because its heading bookmarks \
+                     could not be allocated"
+                        .to_owned(),
+                ),
+            ));
+        }
+        self.revisions.bump();
+        Ok(())
     }
 
     #[getter]
