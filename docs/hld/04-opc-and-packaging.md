@@ -453,9 +453,14 @@ default may be omitted without blocking a typed mutation. An unprefixed element
 that inherits it keeps the binding live and blocks modified serialization.
 Nested default declarations shadow the root declaration, including when they
 repeat the same URI, and unprefixed attributes never use a default namespace.
-Malformed or ambiguous declarations fail closed. After a successful canonical
-publication, the document refreshes its root and body namespace facts from the
-published main-story bytes so a later save applies the same classification.
+Malformed or ambiguous declarations fail closed. A story splice into the main
+part also publishes canonical XML, so it applies the same root default
+classification before it publishes. Like a modified save, it also refuses any
+declaration on `w:body`, which the canonical body drops, and a root `w`, `r` or
+`mc` declaration bound to another URI, because the canonical root rebinds those
+prefixes. After a successful canonical publication, the document refreshes its
+root and body namespace facts from the published main-story bytes so a later
+save applies the same classification.
 
 Paragraph line spacing retains the signed integer path required by
 WordprocessingML and accepts one bounded producer deviation. A plain signed
