@@ -1476,7 +1476,11 @@ collision-free comment and paragraph ids, updates the comment parts and all
 three anchors together, then invalidates layout once. `CommentRef` is a
 read-only view over the typed comment and its comments-extended thread entry.
 `StoryRunPosition` and `StoryRunRange` add checked `ContentLocation` ownership
-for body and table-cell paragraphs without changing `RunPosition`. The staged
+for body and table-cell paragraphs without changing `RunPosition`. A body
+location can also name a paragraph inside a block content control with a
+two-segment path, the control's story item then the paragraph's position among
+its paragraphs, which `Document::paragraph_story_location` returns for a
+paragraph index. The staged
 path validates both endpoints and edits cloned paragraphs before it creates
 comment relationships, so any path, run, or package failure publishes nothing.
 Replies follow paragraph-id parent linkage, resolution applies to the thread

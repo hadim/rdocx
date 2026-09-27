@@ -543,6 +543,11 @@ impl Document {
     }
 
     /// Add a dated comment over a checked body or table-cell run range.
+    ///
+    /// A body location can also name a paragraph inside a block content
+    /// control with the two-segment path that
+    /// [`Document::paragraph_story_location`] returns. Run indexes count the
+    /// runs that `Paragraph::runs` lists, as in [`Document::add_comment`].
     pub fn add_story_comment_with_date(
         &mut self,
         range: StoryRunRange,
@@ -558,7 +563,8 @@ impl Document {
         Ok(id)
     }
 
-    /// Add a comment over a checked body or table-cell run range.
+    /// Add a comment over a checked body or table-cell run range, as
+    /// [`Self::add_story_comment_with_date`] does without a date.
     pub fn add_story_comment(
         &mut self,
         range: StoryRunRange,

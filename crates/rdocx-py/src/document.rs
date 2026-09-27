@@ -390,13 +390,26 @@ pub struct PyStoryRunPosition {
 
 #[pymethods]
 impl PyStoryRunPosition {
+    /// Take a `StoryItem`, or a `Paragraph` handle, which also reaches a
+    /// paragraph inside a block content control.
     #[new]
-    #[pyo3(signature = (*, item, run_index))]
-    fn new(item: PyRef<'_, PyStoryItem>, run_index: usize) -> Self {
-        Self {
-            item: item.clone(),
-            run_index,
-        }
+    #[pyo3(signature = (*, item = None, run_index, paragraph = None))]
+    fn new(
+        py: Python<'_>,
+        item: Option<PyRef<'_, PyStoryItem>>,
+        run_index: usize,
+        paragraph: Option<PyRef<'_, PyParagraph>>,
+    ) -> PyResult<Self> {
+        let item = match (item, paragraph) {
+            (Some(item), None) => item.clone(),
+            (None, Some(paragraph)) => PyDocument::paragraph_story_item(py, &paragraph)?,
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "StoryRunPosition takes exactly one of item and paragraph",
+                ));
+            }
+        };
+        Ok(Self { item, run_index })
     }
 
     #[getter]
@@ -930,6 +943,47 @@ impl PyDocument {
             text: item.text().map(str::to_owned),
             xml: item.xml().to_vec(),
             revision: self.revisions.current(),
+        })
+    }
+
+    /// Snapshot the story item of a body paragraph handle. A paragraph
+    /// inside a block content control has no story item of its own, so it
+    /// gets the two-segment path of `paragraph_story_location` with the
+    /// paragraph text and no XML.
+    fn paragraph_story_item(py: Python<'_>, paragraph: &PyParagraph) -> PyResult<PyStoryItem> {
+        let ParagraphLocation::Body(paragraph_index) = paragraph.validate(py)? else {
+            return Err(PyValueError::new_err(
+                "StoryRunPosition does not accept a table cell paragraph handle",
+            ));
+        };
+        let document = paragraph.document.borrow(py);
+        let location = document
+            .inner
+            .paragraph_story_location(paragraph_index)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+        let [control_index, _] = location.index_path() else {
+            return document.story_item_snapshot(py, &location);
+        };
+        let control = document.story_item_snapshot(
+            py,
+            &rdocx::ContentLocation::new(
+                location.story().clone(),
+                rdocx::StoryItemKind::ContentControl,
+                vec![*control_index],
+            ),
+        )?;
+        Ok(PyStoryItem {
+            story: control.story,
+            kind: "paragraph".to_owned(),
+            index_path: location.index_path().to_vec(),
+            direct_body_index: control.direct_body_index,
+            text: document
+                .inner
+                .paragraph(paragraph_index)
+                .map(|paragraph| paragraph.text()),
+            xml: Vec::new(),
+            revision: document.revisions.current(),
         })
     }
 

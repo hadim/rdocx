@@ -1014,6 +1014,10 @@ impl Document {
     /// The operation stages bookmarks, cached entries, and deterministic page
     /// targets on an independent document. Any malformed or ambiguous source
     /// leaves the receiver unchanged.
+    ///
+    /// The cached entry paragraphs are replaced, so comment and bookmark
+    /// markers placed on them are dropped with them. A comment anchored only
+    /// there stays in the comments part without an anchor.
     pub fn rebuild_toc(&mut self) -> Result<TocRebuildReport> {
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;

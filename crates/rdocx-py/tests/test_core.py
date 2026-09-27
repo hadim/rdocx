@@ -1517,6 +1517,57 @@ def test_comment_ranges_that_cannot_be_anchored_exactly_are_refused():
     ]
 
 
+def test_story_run_position_takes_a_paragraph_handle_inside_a_block_control():
+    import rdocx
+
+    # GitHub issue #163: a paragraph inside a block content control has no
+    # story item of its own, and a handle reaches it.
+    document = _replace_document_body(
+        rdocx.Document(),
+        "<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>Control one.</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Control two.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        '<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>'
+        "<w:tr><w:tc><w:p><w:r><w:t>Cell.</w:t></w:r></w:p></w:tc></w:tr>"
+        "</w:tbl>"
+        "<w:p><w:r><w:t>Beta.</w:t></w:r></w:p>",
+    )
+    control_two = document.paragraphs[2]
+    assert control_two.text == "Control two."
+    position = rdocx.StoryRunPosition(paragraph=control_two, run_index=0)
+    assert len(position.item.index_path) == 2
+    assert position.item.text == "Control two."
+    assert position.item.direct_body_index == 1
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=position,
+            end=rdocx.StoryRunPosition(paragraph=control_two, run_index=1),
+        ),
+        author="Ada",
+        text="Here",
+    )
+    assert _anchored_texts(document, comment_id) == ["Control two."]
+    xml = _document_xml(document).decode()
+    assert xml.index("<w:sdtContent>") < xml.index("commentRangeStart")
+    assert xml.index("commentRangeEnd") < xml.index("</w:sdtContent>")
+    with pytest.raises(rdocx.StaleElementError):
+        rdocx.StoryRunPosition(paragraph=control_two, run_index=0)
+
+    beta = document.paragraphs[3]
+    beta_item = next(item for item in document.story_items if item.text == "Beta.")
+    assert rdocx.StoryRunPosition(paragraph=beta, run_index=0).item == beta_item
+
+    cell_paragraph = document.tables[0].rows[0].cells[0].paragraphs[0]
+    with pytest.raises(ValueError, match="table cell paragraph handle"):
+        rdocx.StoryRunPosition(paragraph=cell_paragraph, run_index=0)
+    with pytest.raises(TypeError, match="exactly one of item and paragraph"):
+        rdocx.StoryRunPosition(item=beta_item, paragraph=beta, run_index=0)
+    with pytest.raises(TypeError, match="exactly one of item and paragraph"):
+        rdocx.StoryRunPosition(run_index=0)
+
+
 def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     import rdocx
 

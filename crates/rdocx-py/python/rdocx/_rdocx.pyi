@@ -225,7 +225,14 @@ class StoryItem:
 
 @_final
 class StoryRunPosition:
-    def __new__(cls, *, item: StoryItem, run_index: int) -> StoryRunPosition: ...
+    @_overload
+    def __new__(
+        cls, *, item: StoryItem, run_index: int, paragraph: None = None
+    ) -> StoryRunPosition: ...
+    @_overload
+    def __new__(
+        cls, *, item: None = None, run_index: int, paragraph: Paragraph
+    ) -> StoryRunPosition: ...
     @property
     def item(self) -> StoryItem: ...
     @property

@@ -2204,6 +2204,100 @@ mod accepted_run_index_anchoring {
     }
 }
 
+/// GitHub issue #163: a comment reaches a paragraph inside a block
+/// content control through a two-segment story location.
+mod block_control_comment_positions {
+    use rdocx::{ContentLocation, Document, StoryItemKind, StoryRunPosition, StoryRunRange};
+
+    const BODY: &str = r#"<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p><w:sdt><w:sdtPr><w:alias w:val="Block"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Control one.</w:t></w:r></w:p><w:p><w:r><w:t>Control two.</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>Beta.</w:t></w:r></w:p>"#;
+
+    fn comment_on(document: &mut Document, location: &ContentLocation) -> rdocx::Result<i32> {
+        let position = |run_index| StoryRunPosition {
+            location: location.clone(),
+            run_index,
+        };
+        document.add_story_comment(
+            StoryRunRange {
+                start: position(0),
+                end: position(1),
+            },
+            "Ada",
+            None,
+            "Here",
+        )
+    }
+
+    #[test]
+    fn story_comment_reaches_a_paragraph_inside_a_block_control() {
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(BODY));
+        assert_eq!(document.paragraph(2).unwrap().text(), "Control two.");
+        let location = document.paragraph_story_location(2).unwrap().unwrap();
+        let control_item = document
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .position(|item| item.location().item_kind() == StoryItemKind::ContentControl)
+            .unwrap();
+        assert_eq!(location.index_path(), [control_item, 1]);
+
+        let id = comment_on(&mut document, &location).unwrap();
+        let xml = super::document_xml(&mut document);
+        let start = xml
+            .find(&format!(r#"<w:commentRangeStart w:id="{id}"/>"#))
+            .unwrap();
+        let end = xml
+            .find(&format!(r#"<w:commentRangeEnd w:id="{id}"/>"#))
+            .unwrap();
+        assert_eq!(super::f_x093_visible_text(&xml[start..end]), "Control two.");
+        let content = xml.find("<w:sdtContent>").unwrap();
+        let content_end = xml.find("</w:sdtContent>").unwrap();
+        assert!(content < start && end < content_end, "{xml}");
+
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.comments()[0].id(), id);
+        assert_eq!(
+            reopened.content_controls()[0].text(),
+            "Control one.Control two."
+        );
+
+        // A direct paragraph keeps the one-segment path of its story item.
+        let beta = document.paragraph_story_location(3).unwrap().unwrap();
+        assert_eq!(beta.index_path().len(), 1);
+        let id = comment_on(&mut document, &beta).unwrap();
+        let xml = super::document_xml(&mut document);
+        let start = xml
+            .find(&format!(r#"<w:commentRangeStart w:id="{id}"/>"#))
+            .unwrap();
+        let end = xml
+            .find(&format!(r#"<w:commentRangeEnd w:id="{id}"/>"#))
+            .unwrap();
+        assert_eq!(super::f_x093_visible_text(&xml[start..end]), "Beta.");
+        assert!(document.paragraph_story_location(4).unwrap().is_none());
+    }
+
+    #[test]
+    fn two_segment_positions_must_name_a_paragraph_of_a_block_control() {
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(BODY));
+        let location = document.paragraph_story_location(1).unwrap().unwrap();
+        let alpha = document.paragraph_story_location(0).unwrap().unwrap();
+        let before = document.to_bytes().unwrap();
+        for (path, reason) in [
+            (
+                vec![alpha.index_path()[0], 0],
+                "must start with a block content control",
+            ),
+            (vec![location.index_path()[0], 2], "has no paragraph 2"),
+            (vec![location.index_path()[0], 0, 0], "invalid"),
+        ] {
+            let bad =
+                ContentLocation::new(location.story().clone(), StoryItemKind::Paragraph, path);
+            let error = comment_on(&mut document, &bad).unwrap_err().to_string();
+            assert!(error.to_lowercase().contains(reason), "{error}");
+        }
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
     let mut document = f255_story_document();
     document.add_picture(b"body image", "body.png", Length::pt(1.0), Length::pt(1.0));

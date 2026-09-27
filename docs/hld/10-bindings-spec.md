@@ -241,6 +241,11 @@ field cache update operations. `RunPosition` and
 `RunRange` are constructible frozen values for zero-based half-open run ranges.
 `StoryRunPosition` and `StoryRunRange` are parallel frozen values whose
 `StoryItem` snapshots can identify direct body or table-cell paragraphs.
+`StoryRunPosition` also accepts a body `Paragraph` handle. A handle to a
+paragraph inside a block content control yields an item with the two-segment
+path of `Document::paragraph_story_location`, the control's story item index
+then the paragraph's position among the control's paragraphs, which only
+comment positions accept.
 `Document.add_comment` accepts either range form. The original direct-body
 constructors and call shape remain unchanged.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
@@ -685,7 +690,10 @@ bundled-font page targets and returns `TocRebuildReport` with entry and newly
 allocated bookmark counts plus exact retained-field diagnostics in physical
 source order. `diagnostic_count()` is derived from the owned diagnostic
 collection. A document without a TOC is unchanged and returns empty counts and
-diagnostics. `rdocx-cli toc rebuild` publishes the validated result to an
+diagnostics. The cached entry paragraphs are replaced, so comment and bookmark
+markers on them, including those in a table of contents content control, are
+dropped with them, and a comment anchored only there stays unanchored in the
+comments part. `rdocx-cli toc rebuild` publishes the validated result to an
 explicit output and reports the counts through a schema-1 main-story record.
 Python exposes the same operation and returns diagnostics as an immutable tuple
 with a derived `diagnostic_count` property. WASM does not expose this operation.
