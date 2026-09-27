@@ -6,7 +6,6 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
-use rdocx_oxml::header_footer::CT_HdrFtr;
 use rdocx_oxml::namespace::matches_local_name;
 use rdocx_oxml::placeholder;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
@@ -576,7 +575,9 @@ fn render_nested_tables_in_control(
 
 fn body_marker(content: &BodyContent) -> Result<Option<Control>> {
     match content {
-        BodyContent::Paragraph(paragraph) => marker_from_sources(&[paragraph_text(paragraph)]),
+        BodyContent::Paragraph(paragraph) => {
+            marker_from_sources(&placeholder::replaceable_texts(paragraph))
+        }
         BodyContent::Table(_) | BodyContent::RawXml(_) => Ok(None),
         BodyContent::ContentControl(control) => {
             reject_unsupported_control_sources(&control_sources(control))?;
@@ -928,7 +929,8 @@ fn stage_paragraph_scalars(
     scopes: &[Scope],
     sentinels: &mut SentinelPool,
 ) -> Result<usize> {
-    let replacements = resolve_replacements(&[paragraph_text(paragraph)], root, scopes)?;
+    let replacements =
+        resolve_replacements(&placeholder::replaceable_texts(paragraph), root, scopes)?;
     let mut count = 0;
     for replacement in replacements {
         let sentinel = sentinels.stage(&replacement.value, replacement.occurrences);
@@ -1135,33 +1137,15 @@ pub(crate) fn body_sources(document: &CT_Document) -> Vec<String> {
     let mut sources = Vec::new();
     for content in &document.body.content {
         match content {
-            BodyContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            BodyContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             BodyContent::Table(table) => collect_table(table, &mut sources),
             BodyContent::ContentControl(control) => collect_control(control, &mut sources),
             BodyContent::RawXml(_) => {}
         }
     }
     sources
-}
-
-pub(crate) fn header_footer_sources(header_footer: &CT_HdrFtr) -> Vec<String> {
-    header_footer
-        .paragraphs
-        .iter()
-        .map(paragraph_text)
-        .collect()
-}
-
-fn paragraph_text(paragraph: &CT_P) -> String {
-    paragraph
-        .runs
-        .iter()
-        .flat_map(|run| &run.content)
-        .filter_map(|content| match content {
-            RunContent::Text(text) => Some(text.text.as_str()),
-            _ => None,
-        })
-        .collect()
 }
 
 fn collect_table(table: &CT_Tbl, sources: &mut Vec<String>) {
@@ -1182,7 +1166,9 @@ fn control_sources(control: &CT_Sdt) -> Vec<String> {
 fn collect_control(control: &CT_Sdt, sources: &mut Vec<String>) {
     for content in &control.content {
         match content {
-            SdtContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            SdtContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             SdtContent::Table(table) => collect_table(table, sources),
             SdtContent::Row(row) => collect_row(row, sources),
             SdtContent::Cell(cell) => collect_cell(cell, sources),
@@ -1213,7 +1199,9 @@ fn collect_row_marker_sources(row: &CT_Row, sources: &mut Vec<String>) {
 fn collect_cell_marker_sources(cell: &CT_Tc, sources: &mut Vec<String>) {
     for content in &cell.content {
         match content {
-            CellContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            CellContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             CellContent::Table(_) => {}
             CellContent::ContentControl(control) => {
                 collect_control_marker_sources(control, sources);
@@ -1225,7 +1213,9 @@ fn collect_cell_marker_sources(cell: &CT_Tc, sources: &mut Vec<String>) {
 fn collect_control_marker_sources(control: &CT_Sdt, sources: &mut Vec<String>) {
     for content in &control.content {
         match content {
-            SdtContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            SdtContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             SdtContent::Table(_) => {}
             SdtContent::Row(row) => collect_row_marker_sources(row, sources),
             SdtContent::Cell(cell) => collect_cell_marker_sources(cell, sources),
@@ -1249,51 +1239,13 @@ fn collect_control_marker_sources(control: &CT_Sdt, sources: &mut Vec<String>) {
 fn collect_cell(cell: &CT_Tc, sources: &mut Vec<String>) {
     for content in &cell.content {
         match content {
-            CellContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            CellContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             CellContent::Table(table) => collect_table(table, sources),
             CellContent::ContentControl(control) => collect_control(control, sources),
         }
     }
-}
-
-pub(crate) fn text_box_sources(xml: &[u8]) -> Result<Vec<String>> {
-    let mut reader = Reader::from_reader(xml);
-    reader.config_mut().trim_text(false);
-    let mut sources = Vec::new();
-    let mut buffer = Vec::new();
-    let mut in_text_box = false;
-
-    loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(element))
-                if matches_local_name(element.name().as_ref(), b"txbxContent") =>
-            {
-                in_text_box = true;
-            }
-            Ok(Event::Start(element))
-                if in_text_box && matches_local_name(element.name().as_ref(), b"p") =>
-            {
-                let paragraph = CT_P::from_xml(&mut reader)?;
-                sources.push(paragraph_text(&paragraph));
-            }
-            Ok(Event::Start(element)) if in_text_box => {
-                reader
-                    .read_to_end_into(element.name(), &mut Vec::new())
-                    .map_err(template_xml_error)?;
-            }
-            Ok(Event::End(element))
-                if in_text_box && matches_local_name(element.name().as_ref(), b"txbxContent") =>
-            {
-                in_text_box = false;
-            }
-            Ok(_) => {}
-            Err(error) => return Err(template_xml_error(error)),
-        }
-        buffer.clear();
-    }
-
-    Ok(sources)
 }
 
 pub(crate) fn chart_sources(xml: &[u8]) -> Result<Vec<String>> {

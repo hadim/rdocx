@@ -16255,6 +16255,411 @@ mod text_box_replacement_keeps_every_child {
     }
 }
 
+/// Replacement skipped the text of content controls. It never entered a
+/// body-level control, read the runs of an inline control at no level, in
+/// the body, a text box or a footer, and did not reach the tables and
+/// controls of a text box either. Each location below holds its own tag,
+/// which every walker must replace exactly once.
+mod replacement_reaches_content_controls {
+    use std::collections::HashMap;
+
+    use rdocx::Document;
+    use rdocx_oxml::namespace::W_NS;
+
+    const DOCUMENT: &str = "/word/document.xml";
+    const HEADER: &str = "/word/header1.xml";
+    const FOOTER: &str = "/word/footer1.xml";
+
+    /// Every location with the part that holds it. The tag of a location is
+    /// its name in double braces and its replacement the name in brackets.
+    const LOCATIONS: [(&str, &str); 7] = [
+        ("block", DOCUMENT),
+        ("inline", DOCUMENT),
+        ("cell", DOCUMENT),
+        ("nested", DOCUMENT),
+        ("box", DOCUMENT),
+        ("box_inline", DOCUMENT),
+        ("footer_inline", FOOTER),
+    ];
+
+    /// The `w:tag` of every control, by part.
+    const CONTROL_TAGS: [(&str, &[&str]); 3] = [
+        (
+            DOCUMENT,
+            &[
+                "goog_rdk_1",
+                "goog_rdk_0",
+                "cell",
+                "outer",
+                "middle",
+                "inner",
+                "innermost",
+                "box",
+                "box-inline",
+            ],
+        ),
+        (HEADER, &["header"]),
+        (FOOTER, &["goog_rdk_2"]),
+    ];
+
+    fn tag(name: &str) -> String {
+        format!("{{{{{name}}}}}")
+    }
+
+    fn value(name: &str) -> String {
+        format!("[{name}]")
+    }
+
+    fn run(text: &str) -> String {
+        format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#)
+    }
+
+    fn paragraph(content: &str) -> String {
+        format!("<w:p>{content}</w:p>")
+    }
+
+    fn control(tag: &str, content: &str) -> String {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#
+        )
+    }
+
+    fn table(cell: &str) -> String {
+        format!(
+            r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>{cell}</w:tc></w:tr></w:tbl>"#
+        )
+    }
+
+    /// A DrawingML text box holding a block control and an inline control.
+    fn text_box() -> String {
+        let content = [
+            control("box", &paragraph(&run("Boxed {{box}}."))),
+            paragraph(&[run("Boxed "), control("box-inline", &run("{{box_inline}}"))].concat()),
+        ]
+        .concat();
+        format!(
+            r#"<w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="2743200" cy="914400"/><wp:wrapTopAndBottom/><wp:docPr id="1" name="Text Box 1"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx><w:txbxContent>{content}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>"#
+        )
+    }
+
+    /// The table and the control of the header, which the model keeps as
+    /// raw XML, before its paragraph.
+    fn header_blocks() -> [String; 2] {
+        [
+            table(&paragraph(&run("Header cell {{header_table}}."))),
+            control(
+                "header",
+                &paragraph(&run("Header control {{header_control}}.")),
+            ),
+        ]
+    }
+
+    /// The page-number control Word writes in a footer, before a paragraph
+    /// that wraps a run in a Google Docs control.
+    fn footer_block() -> String {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Page Numbers (Bottom of Page)"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>{}</w:sdtContent></w:sdt>"#,
+            paragraph(&run("Footer control {{footer_control}}."))
+        )
+    }
+
+    fn document() -> Document {
+        let body = [
+            control("goog_rdk_1", &paragraph(&run("Block {{block}}."))),
+            paragraph(
+                &[
+                    run("Body text, "),
+                    control("goog_rdk_0", &run("{{inline}}")),
+                    run(" dolor."),
+                ]
+                .concat(),
+            ),
+            table(&control("cell", &paragraph(&run("Cell {{cell}}.")))),
+            control(
+                "outer",
+                &control(
+                    "middle",
+                    &paragraph(
+                        &[
+                            run("Nested "),
+                            control("inner", &control("innermost", &run("{{nested}}"))),
+                        ]
+                        .concat(),
+                    ),
+                ),
+            ),
+            paragraph(&[run("Host "), format!("<w:r>{}</w:r>", text_box())].concat()),
+        ]
+        .concat();
+        let header = format!(
+            r#"<w:hdr xmlns:w="{W_NS}">{}{}</w:hdr>"#,
+            header_blocks().concat(),
+            paragraph(&run("Header paragraph."))
+        );
+        let footer = format!(
+            r#"<w:ftr xmlns:w="{W_NS}">{}{}</w:ftr>"#,
+            footer_block(),
+            paragraph(
+                &[
+                    run("Confidential "),
+                    control("goog_rdk_2", &run("{{footer_inline}}")),
+                ]
+                .concat()
+            )
+        );
+
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let mut references = Vec::new();
+        for (part, xml, kind, rel_type) in [
+            (
+                HEADER,
+                header,
+                "header",
+                oxml_opc::relationship::rel_types::HEADER,
+            ),
+            (
+                FOOTER,
+                footer,
+                "footer",
+                oxml_opc::relationship::rel_types::FOOTER,
+            ),
+        ] {
+            package.set_part(part, xml.into_bytes());
+            package.content_types.add_override(
+                part,
+                &format!(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}+xml"
+                ),
+            );
+            let id = package
+                .get_or_create_part_rels(DOCUMENT)
+                .add(rel_type, part.trim_start_matches("/word/"));
+            references.push(format!(
+                r#"<w:{kind}Reference w:type="default" r:id="{id}"/>"#
+            ));
+        }
+        package.set_part(
+            DOCUMENT,
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><w:body>{body}<w:sectPr>{}</w:sectPr></w:body></w:document>"#,
+                references.concat()
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn saved_parts(document: &mut Document) -> HashMap<&'static str, String> {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        [DOCUMENT, HEADER, FOOTER]
+            .into_iter()
+            .map(|part| {
+                let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+                (part, xml)
+            })
+            .collect()
+    }
+
+    /// Check that the tag of every location in `replaced` gave way to its
+    /// value once, that every other tag is still there once, that every
+    /// control kept its `w:tag`, and that the tables and controls of the
+    /// header and footer kept their bytes where nothing was replaced.
+    fn assert_replaced(parts: &HashMap<&str, String>, replaced: &[&str]) {
+        for (name, part) in LOCATIONS {
+            let xml = &parts[part];
+            if replaced.contains(&name) {
+                assert!(!xml.contains(&tag(name)), "{name}: {xml}");
+                assert_eq!(xml.matches(&value(name)).count(), 1, "{name}: {xml}");
+            } else {
+                assert_eq!(xml.matches(&tag(name)).count(), 1, "{name}: {xml}");
+            }
+        }
+        for (part, tags) in CONTROL_TAGS {
+            for tag in tags {
+                let element = format!(r#"<w:tag w:val="{tag}"/>"#);
+                assert!(parts[part].contains(&element), "{tag}: {}", parts[part]);
+            }
+        }
+        let raw_blocks = header_blocks()
+            .into_iter()
+            .map(|block| (HEADER, block))
+            .chain([(FOOTER, footer_block())]);
+        for (part, block) in raw_blocks {
+            if !replaced.iter().any(|name| block.contains(&tag(name))) {
+                assert!(parts[part].contains(&block), "{block}\n{}", parts[part]);
+            }
+        }
+    }
+
+    #[test]
+    fn every_walker_replaces_the_tag_of_every_location_once() {
+        for (name, _) in LOCATIONS {
+            let (tag, value) = (tag(name), value(name));
+            for walker in ["try_replace_text", "replace_regex", "replace_all"] {
+                let mut document = document();
+                let count = match walker {
+                    "try_replace_text" => document.try_replace_text(&tag, &value).unwrap(),
+                    "replace_regex" => document
+                        .replace_regex(&regex::escape(&tag), &value)
+                        .unwrap(),
+                    _ => document.replace_all(&HashMap::from([(tag.as_str(), value.as_str())])),
+                };
+                assert_eq!(count, 1, "{walker} at {name}");
+                assert_replaced(&saved_parts(&mut document), &[name]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_template_renders_the_tag_of_every_location() {
+        let mut document = document();
+        let data = LOCATIONS
+            .iter()
+            .map(|(name, _)| ((*name).to_owned(), serde_json::Value::from(value(name))))
+            .collect::<serde_json::Map<_, _>>();
+
+        let count = document
+            .render_template(&serde_json::Value::Object(data))
+            .unwrap();
+
+        assert_eq!(count, LOCATIONS.len());
+        let names = LOCATIONS.map(|(name, _)| name);
+        assert_replaced(&saved_parts(&mut document), &names);
+    }
+
+    /// A match that straddles a control boundary is no match. A reader sees
+    /// "alpha one" in the first paragraph and "alXpha two" in the second,
+    /// and neither changes, while the match inside the control of the third
+    /// is replaced. Direct runs on both sides of a control used to be read as
+    /// one text, which matched "alpha" in the second paragraph.
+    #[test]
+    fn a_match_that_straddles_a_control_boundary_is_not_replaced() {
+        let body = [
+            paragraph(&[run("al"), control("a", &run("pha one"))].concat()),
+            paragraph(&[run("al"), control("b", &run("X")), run("pha two")].concat()),
+            paragraph(&[run("al"), control("c", &run("alpha three"))].concat()),
+        ]
+        .concat();
+        for regex in [false, true] {
+            let mut document = super::document_with_content_controls(&super::wrap_word_body(&body));
+            let count = if regex {
+                document.replace_regex("alpha", "ALPHA").unwrap()
+            } else {
+                document.try_replace_text("alpha", "ALPHA").unwrap()
+            };
+            assert_eq!(count, 1, "regex: {regex}");
+            let texts = document
+                .paragraphs()
+                .iter()
+                .map(|paragraph| paragraph.text())
+                .collect::<Vec<_>>();
+            assert_eq!(texts, ["alpha one", "alXpha two", "alALPHA three"]);
+            let xml = super::document_xml(&mut document);
+            assert_eq!(xml.matches(">al</w:t>").count(), 3, "{xml}");
+        }
+    }
+
+    /// A quantified pattern also matches the digits after the boundary
+    /// alone, and replaced them, which left the number a reader sees half
+    /// replaced. The search now goes on after the straddling match, and
+    /// still reaches the number after the control.
+    #[test]
+    fn a_quantified_match_that_straddles_a_control_boundary_is_not_replaced() {
+        let body = paragraph(&[run("Order 12"), control("a", &run("34 end")), run(" 56")].concat());
+        for pattern in [r"\d+", r"\d{2,}"] {
+            let mut document = super::document_with_content_controls(&super::wrap_word_body(&body));
+
+            assert_eq!(
+                document.replace_regex(pattern, "N").unwrap(),
+                1,
+                "{pattern}"
+            );
+
+            assert_eq!(
+                document.paragraph(0).unwrap().text(),
+                "Order 1234 end N",
+                "{pattern}"
+            );
+        }
+    }
+
+    /// Word writes its table of contents as a body-level control whose
+    /// entries repeat the heading text. Replacement reaches them as it does
+    /// any other control, so a heading word counts once more for its entry,
+    /// and the entry still reads as its heading until the next update.
+    #[test]
+    fn a_table_of_contents_entry_is_replaced_with_its_heading() {
+        let toc = r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:hyperlink w:anchor="_Toc1" w:history="1"><w:r><w:t>Introduction</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc1 \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:hyperlink></w:p><w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:sdtContent></w:sdt>"#;
+        let heading = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:bookmarkStart w:id="0" w:name="_Toc1"/><w:r><w:t>Introduction</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>"#;
+        let mut document =
+            super::document_with_content_controls(&super::wrap_word_body(&[toc, heading].concat()));
+
+        assert_eq!(
+            document
+                .try_replace_text("Introduction", "Overview")
+                .unwrap(),
+            2
+        );
+
+        let xml = super::document_xml(&mut document);
+        assert_eq!(xml.matches(">Overview<").count(), 2, "{xml}");
+        assert!(xml.contains(r#"<w:hyperlink w:anchor="_Toc1""#), "{xml}");
+    }
+
+    /// A template tag that a control boundary splits cannot be rendered
+    /// whole, so the template is rejected rather than left half rendered.
+    #[test]
+    fn a_template_tag_that_straddles_a_control_boundary_is_an_error() {
+        let body = paragraph(&[run("{{na"), control("a", &run("me}}"))].concat());
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(&body));
+        let before = document.to_bytes().unwrap();
+
+        let error = document
+            .render_template(&serde_json::json!({"name": "Ada"}))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("invalid template"), "{error}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    /// The two shapes of the report: a Google Docs export wraps a run in a
+    /// control inside its paragraph, or a whole paragraph at body level.
+    /// Both replaced nothing. The text the paragraph reads is the text the
+    /// replacement changed.
+    #[test]
+    fn the_reported_google_docs_controls_are_replaced() {
+        let text = run("Body text, lorem alpha dolor.");
+        for body in [
+            paragraph(&text),
+            paragraph(&control("goog_rdk_0", &text)),
+            control("goog_rdk_1", &paragraph(&text)),
+        ] {
+            let mut document = super::document_with_content_controls(&super::wrap_word_body(&body));
+            assert_eq!(
+                document.paragraph(0).unwrap().text(),
+                "Body text, lorem alpha dolor."
+            );
+
+            assert_eq!(document.try_replace_text("alpha", "ALPHA").unwrap(), 1);
+
+            assert_eq!(
+                document.paragraph(0).unwrap().text(),
+                "Body text, lorem ALPHA dolor."
+            );
+            let xml = super::document_xml(&mut document);
+            assert!(xml.contains("Body text, lorem ALPHA dolor."), "{xml}");
+            assert_eq!(xml.contains("goog_rdk"), body.contains("goog_rdk"), "{xml}");
+        }
+    }
+}
+
 /// `9360 / cols` panicked when a caller asked for a zero-column table.
 #[test]
 fn zero_column_tables_do_not_panic() {
