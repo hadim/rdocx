@@ -14,6 +14,7 @@ from rdocx import (
     HeaderFooterVariant,
     Hyperlink,
     Inches,
+    Length,
     LayoutFragment,
     LayoutBackedFieldUpdateReport,
     LayoutPage,
@@ -37,6 +38,7 @@ from rdocx import (
     Table,
     TableCollection,
     TocRebuildReport,
+    WD_ROW_HEIGHT_RULE,
 )
 
 
@@ -74,6 +76,34 @@ def exercise_rdocx_types(path: Path) -> None:
     table.remove_row(0)
     cell: Cell = row.cells[0]
     cell.text = first.text
+    assert_type(table.border("top"), tuple[str, int | None, str | None] | None)
+    table.set_borders("single", size=4, color="000000")
+    table.set_border("insideV", "dashed", size=8, color="FF0000")
+    assert_type(
+        table.cell_margins,
+        tuple[Length | None, Length | None, Length | None, Length | None] | None,
+    )
+    table.set_cell_margins(top=0, right=Inches(0.1), bottom=0, left=Inches(0.1))
+    assert_type(table.grid_widths, tuple[Length, ...])
+    table.grid_widths = [Inches(1)]
+    table.set_column_width(0, Inches(2))
+    assert_type(row.height, Length | None)
+    assert_type(row.height_rule, WD_ROW_HEIGHT_RULE | None)
+    assert_type(row.cant_split, bool | None)
+    assert_type(row.is_header, bool | None)
+    row.height = Inches(0.5)
+    row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+    row.cant_split = True
+    row.is_header = None
+    assert_type(cell.shading, str | None)
+    assert_type(cell.border("bottom"), tuple[str, int | None, str | None] | None)
+    assert_type(
+        cell.margins,
+        tuple[Length | None, Length | None, Length | None, Length | None] | None,
+    )
+    cell.shading = "D9D9D9"
+    cell.set_border("bottom", "double", size=6, color="auto")
+    cell.set_margins(top=0, right=0, bottom=0, left=0)
     package_bytes: bytes = loaded.to_bytes()
     pdf_bytes: bytes = opened.to_pdf()
     pages: list[bytes] = opened.render_all_pages()

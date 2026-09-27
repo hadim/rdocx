@@ -1,6 +1,6 @@
 """Python bindings for rdocx."""
 
-from .enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
+from .enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
 from .enum.text import WD_ALIGN_PARAGRAPH, WD_UNDERLINE
 from .shared import Cm, Emu, Inches, Length, Mm, Pt, RGBColor
 
@@ -108,6 +108,7 @@ __all__ = [
     "TocRebuildReport",
     "WD_ALIGN_PARAGRAPH",
     "WD_CELL_VERTICAL_ALIGNMENT",
+    "WD_ROW_HEIGHT_RULE",
     "WD_TABLE_ALIGNMENT",
     "WD_UNDERLINE",
     "XmlError",

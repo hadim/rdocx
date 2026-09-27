@@ -19,4 +19,11 @@ class WD_CELL_VERTICAL_ALIGNMENT(IntEnum):
     BOTTOM = 3
 
 
-__all__ = ["WD_TABLE_ALIGNMENT", "WD_CELL_VERTICAL_ALIGNMENT"]
+class WD_ROW_HEIGHT_RULE(IntEnum):
+    """How a table row height is applied."""
+
+    AT_LEAST = 1
+    EXACTLY = 2
+
+
+__all__ = ["WD_TABLE_ALIGNMENT", "WD_CELL_VERTICAL_ALIGNMENT", "WD_ROW_HEIGHT_RULE"]

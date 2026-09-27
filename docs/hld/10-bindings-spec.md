@@ -199,10 +199,10 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
   limited ABI.
 - The bounded core enum inventory is pure-Python `IntEnum`:
   `WD_ALIGN_PARAGRAPH` and `WD_UNDERLINE` in `rdocx.enum.text`, plus
-  `WD_TABLE_ALIGNMENT` and `WD_CELL_VERTICAL_ALIGNMENT` in
-  `rdocx.enum.table`. All four are also top-level exports. Their checked
+  `WD_TABLE_ALIGNMENT`, `WD_CELL_VERTICAL_ALIGNMENT` and `WD_ROW_HEIGHT_RULE`
+  in `rdocx.enum.table`. All five are also top-level exports. Their checked
   integer literals cover the paragraph, run and table variants exposed by the
-  S33 facade, including `WD_ALIGN_PARAGRAPH.CENTER == 1`. Underline codes use a
+  facade, including `WD_ALIGN_PARAGRAPH.CENTER == 1`. Underline codes use a
   total binding-oriented facade value accessor rather than expanding the
   published exhaustive Rust `UnderlineStyle` enum.
 - The package layer owns `RdocxError(Exception)` as the base, with
@@ -234,6 +234,29 @@ revision once, stales every earlier structural handle, and publishes only the
 native staged result. Python index errors are rejected before mutation, while
 native topology and serialization failures use the existing `RdocxError`
 mapping. Removing the only direct row is rejected.
+
+`Table`, `Row` and `Cell` also bind the checked native formatting setters.
+`Table.set_borders(style, *, size, color)` sets every table edge and
+`set_border(edge, style, *, size, color)` sets one. The style is an
+`ST_Border` name from `none`, `single`, `thick`, `double`, `dotted`, `dashed`,
+`dotDash` and `wave`, the edge is `top`, `bottom`, `left`, `right`, `insideH`
+or `insideV`, the size is in eighths of a point and the color is six
+hexadecimal digits or `auto`. `border(edge)` reads a `(style, size, color)`
+tuple or `None`. `set_cell_margins` takes four keyword EMU lengths and
+`cell_margins` reads a `(top, right, bottom, left)` tuple of optional
+`Length` values. `grid_widths` reads and replaces every grid column, and
+`set_column_width(column, width)` changes one. Both keep the table width and
+every covering cell width in step. `Row.height` and `Row.height_rule` follow
+python-docx with `WD_ROW_HEIGHT_RULE.AT_LEAST` and `EXACTLY`. Assigning a
+height keeps an exact rule, and a rule needs a height to apply to. Unlike
+python-docx, a row whose `w:trHeight` has an `auto` rule or no value reads no
+height, and assigning one writes a minimum.
+`Row.cant_split` and `Row.is_header` are tri-state. `Cell.shading`,
+`Cell.border(edge)`, `Cell.set_border`, `Cell.margins` and `Cell.set_margins`
+are the same forms for one cell. These edits move no content, so they keep
+live handles valid and do not advance the revision. An unknown style, edge or
+rule raises `ValueError`, a value the native setter rejects raises
+`RdocxError`, and either way the document is unchanged.
 
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
@@ -957,10 +980,10 @@ cell width consistent. A cell with `gridSpan` receives the sum of its covered
 grid columns, and row-level leading and trailing omissions constrain coverage.
 Negative or zero column widths, invalid spans or coverage, and overflowing
 totals are rejected without mutation. The earlier unchecked compatibility
-setters remain available. These are additive pre-1.0 native APIs. Python,
-WASM, and CLI do not gain new table-property methods, but their owned
-`rdocx::Document` remains package-preserving when native code uses the new
-operations.
+setters remain available. These are additive pre-1.0 native APIs. WASM and CLI
+do not gain new table-property methods, and Python binds them as described
+under the Python API shape. Every binding's owned `rdocx::Document` remains
+package-preserving when native code uses the new operations.
 
 Native rows and cells also expose the additive `RowHeight`, `CellBorderEdge`,
 `CellTextDirection`, and `TableConditionalFormatting` values. Row handles have
@@ -975,8 +998,9 @@ take checked row and cell indexes. Grid omissions reconcile only untouched
 empty edge cells. Horizontal spans consume or restore only untouched empty
 cells. Vertical continuations require an equal grid range in the immediately
 preceding row. Each operation validates a cloned complete table before
-publication. These are additive pre-1.0 native APIs. Python, WASM, and CLI gain
-no row or cell methods in this story.
+publication. These are additive pre-1.0 native APIs. WASM and CLI gain no row
+or cell methods. Python binds the checked row and cell setters as described
+under the Python API shape.
 
 Row cloning and removal depend on package-wide identities, so the additive
 native operations live on `Document` as `clone_table_row(table, source,

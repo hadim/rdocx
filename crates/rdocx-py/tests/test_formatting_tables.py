@@ -4,6 +4,11 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 
+def _document_xml(document_bytes):
+    with ZipFile(BytesIO(document_bytes)) as package:
+        return package.read("word/document.xml").decode()
+
+
 def _replace_document_xml(document_bytes, old, new):
     source_bytes = BytesIO(document_bytes)
     output_bytes = BytesIO()
@@ -329,6 +334,147 @@ def test_table_rows_are_cloned_with_their_formatting_and_removed():
     with pytest.raises(RdocxError, match="at least one row"):
         reopened.tables[0].remove_row(0)
     assert [row.cells[0].text for row in reopened.tables[0].rows] == ["entry"]
+
+
+def test_table_borders_margins_and_grid_widths_round_trip():
+    from rdocx import Document, Inches, Pt
+
+    document = Document()
+    table = document.add_table(rows=2, cols=3)
+    assert table.border("top") is None
+    assert table.cell_margins is None
+    table.set_borders("single", size=4, color="000000")
+    table.set_border("insideV", "dashed", size=8, color="FF0000")
+    table.set_cell_margins(top=Pt(1), right=Pt(2), bottom=Pt(3), left=Pt(4))
+    table.grid_widths = [Inches(1), Inches(2), Inches(3)]
+    table.set_column_width(-1, Inches(1.5))
+
+    xml = _document_xml(document.to_bytes())
+    assert '<w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>' in xml
+    assert '<w:insideV w:val="dashed" w:sz="8" w:space="0" w:color="FF0000"/>' in xml
+    assert "<w:tblCellMar>" in xml
+    assert '<w:top w:w="20" w:type="dxa"/>' in xml
+    assert '<w:right w:w="40" w:type="dxa"/>' in xml
+    assert '<w:gridCol w:w="1440"/>' in xml
+    assert '<w:gridCol w:w="2160"/>' in xml
+
+    table = Document.from_bytes(document.to_bytes()).tables[0]
+    assert table.border("top") == ("single", 4, "000000")
+    assert table.border("insideH") == ("single", 4, "000000")
+    assert table.border("insideV") == ("dashed", 8, "FF0000")
+    assert table.cell_margins == (Pt(1), Pt(2), Pt(3), Pt(4))
+    assert table.grid_widths == (Inches(1), Inches(2), Inches(1.5))
+    assert table.width == Inches(4.5)
+    assert [cell.width for cell in table.rows[1].cells] == [
+        Inches(1),
+        Inches(2),
+        Inches(1.5),
+    ]
+
+
+def test_row_height_split_and_header_round_trip():
+    from rdocx import Document, Pt, WD_ROW_HEIGHT_RULE
+
+    document = Document()
+    table = document.add_table(rows=2, cols=1)
+    row = table.rows[0]
+    assert row.height is None
+    assert row.height_rule is None
+    assert row.cant_split is None
+    assert row.is_header is None
+    row.height = Pt(20)
+    assert row.height_rule == WD_ROW_HEIGHT_RULE.AT_LEAST
+    row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+    row.height = Pt(30)
+    row.cant_split = True
+    row.is_header = True
+    table.rows[1].cant_split = False
+
+    xml = _document_xml(document.to_bytes())
+    assert '<w:trHeight w:val="600" w:hRule="exact"/>' in xml
+    assert "<w:cantSplit/>" in xml
+    assert "<w:tblHeader/>" in xml
+
+    rows = Document.from_bytes(document.to_bytes()).tables[0].rows
+    assert rows[0].height == Pt(30)
+    assert rows[0].height_rule == WD_ROW_HEIGHT_RULE.EXACTLY
+    assert rows[0].cant_split is True
+    assert rows[0].is_header is True
+    assert rows[1].cant_split is False
+    assert rows[1].is_header is None
+
+    rows[0].is_header = None
+    rows[0].cant_split = None
+    assert rows[0].is_header is None
+    assert rows[0].cant_split is None
+
+
+def test_cell_shading_borders_and_margins_round_trip():
+    from rdocx import Document, Pt
+
+    document = Document()
+    cell = document.add_table(rows=1, cols=2).cell(0, 1)
+    assert cell.shading is None
+    assert cell.border("bottom") is None
+    assert cell.margins is None
+    cell.shading = "D9D9D9"
+    cell.set_border("bottom", "double", size=6, color="auto")
+    cell.set_margins(top=0, right=Pt(5), bottom=0, left=Pt(5))
+
+    xml = _document_xml(document.to_bytes())
+    assert '<w:shd w:val="clear" w:color="auto" w:fill="D9D9D9"/>' in xml
+    assert '<w:bottom w:val="double" w:sz="6" w:space="0" w:color="auto"/>' in xml
+
+    cell = Document.from_bytes(document.to_bytes()).tables[0].cell(0, 1)
+    assert cell.shading == "D9D9D9"
+    assert cell.border("bottom") == ("double", 6, "auto")
+    assert cell.border("top") is None
+    assert cell.margins == (0, Pt(5), 0, Pt(5))
+
+
+def test_invalid_table_formatting_changes_nothing_and_keeps_handles_live():
+    from rdocx import Document, RdocxError, WD_ROW_HEIGHT_RULE
+
+    document = Document()
+    table = document.add_table(rows=1, cols=2)
+    row = table.rows[0]
+    cell = row.cells[0]
+    before = document.to_bytes()
+
+    with pytest.raises(ValueError, match="border style"):
+        table.set_borders("bogus", size=4, color="000000")
+    with pytest.raises(ValueError, match="border edge"):
+        cell.set_border("middle", "single", size=4, color="000000")
+    with pytest.raises(RdocxError, match="border width"):
+        table.set_border("top", "single", size=97, color="000000")
+    with pytest.raises(RdocxError, match="border color"):
+        cell.set_border("top", "single", size=4, color="red")
+    with pytest.raises(RdocxError, match="cannot be negative"):
+        table.set_cell_margins(top=-635, right=0, bottom=0, left=0)
+    with pytest.raises(RdocxError, match="cannot be negative"):
+        cell.set_margins(top=0, right=0, bottom=0, left=-635)
+    with pytest.raises(RdocxError, match="shading color"):
+        cell.shading = "yellow"
+    with pytest.raises(RdocxError, match="exactly 2 positive column widths"):
+        table.grid_widths = [914400]
+    with pytest.raises(RdocxError, match="must be positive"):
+        table.grid_widths = [914400, 0]
+    with pytest.raises(IndexError):
+        table.set_column_width(2, 914400)
+    with pytest.raises(ValueError, match="nonnegative"):
+        table.set_column_width(0, -635)
+    with pytest.raises(RdocxError, match="cannot be negative"):
+        row.height = -635
+    with pytest.raises(ValueError, match="set height first"):
+        row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+    with pytest.raises(ValueError, match="unsupported row height rule"):
+        row.height_rule = 0
+
+    assert document.to_bytes() == before
+    table.set_borders("single", size=4, color="auto")
+    row.cant_split = True
+    cell.shading = "FFFFFF"
+    assert (row.cant_split, cell.shading) == (True, "FFFFFF")
 
 
 def test_python_paragraph_and_run_formatting_matches_native_facades():
