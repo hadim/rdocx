@@ -54,6 +54,8 @@ with open("review.pdf", "wb") as output:
 - Formatting-preserving text replacement across slides and speaker notes,
   with an optional expected count that leaves the deck unchanged on a
   mismatch.
+- Package and PresentationML validation that returns the issues
+  `rpptx validate` reports as typed values.
 - Speaker-note text plus modern comment authors, threads, replies, thread
   resolution and removal, and ordered comment movement.
 - Master, layout, placeholder, theme, shape, chart, media, and relationship

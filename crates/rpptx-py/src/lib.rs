@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyType;
 
 use oxml_py_support::{ContentPath, PathSeg, StaleElementError};
-use presentation::{PyComment, PyCommentAuthor, PyCommentReply, PyPresentation};
+use presentation::{PyComment, PyCommentAuthor, PyCommentReply, PyPresentation, PyValidationIssue};
 
 pub(crate) fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<usize> {
     let normalized = if index < 0 {
@@ -126,6 +126,7 @@ fn _rpptx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCommentAuthor>()?;
     module.add_class::<PyComment>()?;
     module.add_class::<PyCommentReply>()?;
+    module.add_class::<PyValidationIssue>()?;
     slide::register(module)?;
     shape::register(module)?;
     dml::register(module)?;

@@ -115,6 +115,39 @@ impl PyComment {
     }
 }
 
+/// One issue `Presentation::validate` reports, with the snake_case variant
+/// name and the line `rpptx validate` prints for it.
+#[pyclass(name = "ValidationIssue", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyValidationIssue {
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl From<&rpptx::ValidationIssue> for PyValidationIssue {
+    fn from(issue: &rpptx::ValidationIssue) -> Self {
+        use rpptx::ValidationIssue as Issue;
+        let kind = match issue {
+            Issue::DuplicateShapeId { .. } => "duplicate_shape_id",
+            Issue::SlideIdOutOfRange { .. } => "slide_id_out_of_range",
+            Issue::DuplicateSlideId { .. } => "duplicate_slide_id",
+            Issue::MissingContentTypeOverride { .. } => "missing_content_type_override",
+            Issue::DanglingRelationship { .. } => "dangling_relationship",
+            Issue::UnreachableRelationshipTarget { .. } => "unreachable_relationship_target",
+            Issue::EmptyTextBody { .. } => "empty_text_body",
+            Issue::DuplicatePlaceholderIdx { .. } => "duplicate_placeholder_idx",
+            Issue::OrphanMedia { .. } => "orphan_media",
+            Issue::CustomShowReference { .. } => "custom_show_reference",
+            Issue::MissingLayoutRel { .. } => "missing_layout_rel",
+            Issue::MissingThemeRel { .. } => "missing_theme_rel",
+        };
+        Self {
+            kind,
+            message: format!("{issue:?}"),
+        }
+    }
+}
+
 #[pyclass(name = "Presentation")]
 pub struct PyPresentation {
     pub(crate) inner: rpptx::Presentation,
@@ -274,6 +307,12 @@ impl PyPresentation {
             self.revisions.bump();
         }
         Ok(count)
+    }
+
+    /// Returns every package and PresentationML invariant violation.
+    fn validate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let issues = py.detach(|| self.inner.validate());
+        PyTuple::new(py, issues.iter().map(PyValidationIssue::from))
     }
 
     #[getter]

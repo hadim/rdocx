@@ -20,6 +20,7 @@ from rpptx import (
     RGBColor,
     TextFrameLayout,
     TextLineLayout,
+    ValidationIssue,
 )
 from rpptx._rpptx import (
     AdjustmentCollection,
@@ -160,6 +161,8 @@ def exercise_rpptx_types(path: Path) -> None:
         replaced = presentation.try_replace_text("checked", "typed", expect=2)
     except ReplacementCountError as error:
         replacement_counts = (error.expected, error.found)
+    issues: tuple[ValidationIssue, ...] = presentation.validate()
+    issue_lines: list[tuple[str, str]] = [(issue.kind, issue.message) for issue in issues]
     pdf_bytes: bytes = presentation.to_pdf()
     slide_png: bytes | None = presentation.render_slide_to_png(0)
     slide_pngs: list[bytes] = presentation.render_all_slides()
@@ -301,6 +304,7 @@ def exercise_rpptx_types(path: Path) -> None:
         reopened,
         replaced,
         replacement_counts,
+        issue_lines,
     )
 
 
@@ -374,3 +378,4 @@ if TYPE_CHECKING:
     TextFrame()  # type: ignore[call-arg]
     TextFrameLayout()  # type: ignore[call-arg]
     TextLineLayout()  # type: ignore[call-arg]
+    ValidationIssue()  # type: ignore[call-arg]

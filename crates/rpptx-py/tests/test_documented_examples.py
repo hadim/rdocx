@@ -2278,6 +2278,32 @@ def test_slide_resolve_and_remove_comment_match_the_cli_operations():
     assert (prs.to_bytes(), len(prs.slides)) == (before, 2)
 
 
+def test_validate_returns_the_issues_the_cli_prints_as_frozen_snapshots(tmp_path):
+    import rpptx
+
+    prs = rpptx.Presentation()
+    assert prs.validate() == ()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    for text in ("first", "second"):
+        prs.slides[0].shapes.add_textbox(0, 0, 10, 10).text = text
+    assert prs.validate() == ()
+    first, second = (shape.shape_id for shape in prs.slides[0].shapes)
+    source = tmp_path / "source.pptx"
+    broken = tmp_path / "broken.pptx"
+    prs.save(source)
+    _replace_in_slide(source, broken, f'id="{second}"', f'id="{first}"')
+
+    broken_deck = rpptx.Presentation(broken)
+    (issue,) = broken_deck.validate()
+    assert (issue.kind, issue.message) == (
+        "duplicate_shape_id",
+        f"DuplicateShapeId {{ slide: 0, id: {first} }}",
+    )
+    assert broken_deck.validate() == (issue,)
+    with pytest.raises(AttributeError):
+        issue.kind = "other"
+
+
 def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     import rpptx
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE

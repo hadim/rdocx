@@ -35,7 +35,7 @@ class ReplacementCountError(RpptxError):
 
 
 from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation
-from ._rpptx import BoundingBox, TextFrameLayout, TextLineLayout
+from ._rpptx import BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
 
 __all__ = [
     "BoundingBox",
@@ -58,5 +58,6 @@ __all__ = [
     "StaleElementError",
     "TextFrameLayout",
     "TextLineLayout",
+    "ValidationIssue",
     "XmlError",
 ]

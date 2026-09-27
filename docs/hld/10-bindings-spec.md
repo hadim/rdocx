@@ -402,6 +402,12 @@ the revision advances once when the count is nonzero. Without `expect`, zero
 matches return zero rather than raise, as the rdocx `try_replace_text` does.
 Only the CLI refuses zero matches, because it would write an unchanged copy.
 
+`Presentation.validate()` runs the native `validate` with the GIL released and
+returns a tuple of frozen `ValidationIssue` snapshots in native order. Each
+carries a `kind` that names the native variant in snake_case, such as
+`duplicate_shape_id`, and a `message` equal to the line `rpptx validate`
+prints for that issue. A clean presentation returns an empty tuple.
+
 The presentation binding exposes `to_pdf`, `render_slide_to_png`,
 `render_all_slides`, `to_notes_pdf`, and `render_all_notes` through the native
 deterministic facade. Every render call releases the GIL.

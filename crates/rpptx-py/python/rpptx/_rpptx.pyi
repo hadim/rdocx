@@ -21,7 +21,7 @@ _Path = str | _os.PathLike[str]
 _ImageFile = _Path | bytes | _IO[bytes]
 __all__ = [
     "Presentation", "CommentAuthor", "Comment", "CommentReply",
-    "BoundingBox", "TextLineLayout", "TextFrameLayout",
+    "BoundingBox", "TextLineLayout", "TextFrameLayout", "ValidationIssue",
     "SlideLayout", "SlideLayoutCollection", "Slide", "Background",
     "SlideCollection", "Shape", "ShapeCollection", "PlaceholderCollection",
     "Image", "AdjustmentCollection", "FillFormat", "LineFormat", "ColorFormat",
@@ -131,6 +131,15 @@ class TextFrameLayout:
 
 
 @_final
+class ValidationIssue:
+    def __new__(cls, *, _private: _Never) -> ValidationIssue: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+
+
+@_final
 class Presentation:
     def __new__(cls, path: _Path | None = None) -> Presentation: ...
     @staticmethod
@@ -146,6 +155,7 @@ class Presentation:
     def try_replace_text(
         self, placeholder: str, replacement: str, *, expect: int | None = None
     ) -> int: ...
+    def validate(self) -> tuple[ValidationIssue, ...]: ...
     @property
     def slide_width(self) -> _Length | None: ...
     @slide_width.setter
