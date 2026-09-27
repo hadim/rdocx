@@ -16180,6 +16180,81 @@ fn zero_width_regex_match_terminates() {
     assert!(count <= 4, "should not loop indefinitely, got {count}");
 }
 
+/// Replacement in a text box parses the paragraphs of its `w:txbxContent` and
+/// used to write back nothing else, so a hit there deleted the tables,
+/// content controls, bookmarks and empty paragraphs of that text box.
+mod text_box_replacement_keeps_every_child {
+    use rdocx::Document;
+    use rdocx_oxml::namespace::W_NS;
+
+    /// One copy of the text box: the paragraph the replacement edits, then a
+    /// table, a block content control and a bookmark around an empty
+    /// paragraph. Each copy needs its own bookmark id for the file to open.
+    fn text_box_content(text: &str, id: u32) -> String {
+        format!(
+            r#"<w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr><w:alias w:val="Signature"/><w:id w:val="{id}"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:bookmarkStart w:id="{id}" w:name="boxed{id}"/><w:p/><w:bookmarkEnd w:id="{id}"/></w:txbxContent>"#
+        )
+    }
+
+    /// A text box as Word saves it, the DrawingML shape in `mc:Choice` and its
+    /// VML copy in `mc:Fallback`, or the bare `wp:anchor` alone.
+    fn text_box_document(compatibility_block: bool) -> Document {
+        let content = text_box_content("Dear {{name}}", 7);
+        let drawing = format!(
+            r#"<w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="2743200" cy="914400"/><wp:wrapTopAndBottom/><wp:docPr id="1" name="Text Box 1"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx>{content}</wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>"#
+        );
+        let shape = if compatibility_block {
+            format!(
+                r#"<mc:AlternateContent><mc:Choice Requires="wps">{drawing}</mc:Choice><mc:Fallback><w:pict><v:shape style="position:absolute;width:216pt;height:72pt"><v:textbox>{}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent>"#,
+                text_box_content("Dear {{name}}", 8)
+            )
+        } else {
+            drawing
+        };
+        super::document_with_content_controls(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>Host paragraph</w:t></w:r><w:r>{shape}</w:r></w:p></w:body></w:document>"#
+        ))
+    }
+
+    /// Replace in both text box forms, then check that every copy holds the
+    /// edited paragraph and every other child byte for byte and in order.
+    fn assert_replacement_keeps_every_child(replace: impl Fn(&mut Document) -> usize) {
+        for (compatibility_block, ids) in [(true, &[7, 8][..]), (false, &[7][..])] {
+            let mut document = text_box_document(compatibility_block);
+            assert_eq!(replace(&mut document), ids.len(), "{compatibility_block}");
+            let saved = super::document_xml(&mut document);
+            assert_eq!(saved.matches("<w:txbxContent>").count(), ids.len());
+            for &id in ids {
+                let expected = text_box_content("Dear Ada", id);
+                assert!(saved.contains(&expected), "{expected}\n{saved}");
+            }
+        }
+    }
+
+    #[test]
+    fn replacing_text_keeps_the_tables_controls_and_bookmarks_of_a_text_box() {
+        assert_replacement_keeps_every_child(|document| {
+            document.try_replace_text("{{name}}", "Ada").unwrap()
+        });
+    }
+
+    #[test]
+    fn regex_replacement_keeps_the_tables_controls_and_bookmarks_of_a_text_box() {
+        assert_replacement_keeps_every_child(|document| {
+            document.replace_regex(r"\{\{(\w+)\}\}", "Ada").unwrap()
+        });
+    }
+
+    #[test]
+    fn a_template_keeps_the_tables_controls_and_bookmarks_of_a_text_box() {
+        assert_replacement_keeps_every_child(|document| {
+            document
+                .render_template(&serde_json::json!({"name": "Ada"}))
+                .unwrap()
+        });
+    }
+}
+
 /// `9360 / cols` panicked when a caller asked for a zero-column table.
 #[test]
 fn zero_column_tables_do_not_panic() {
