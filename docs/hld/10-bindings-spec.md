@@ -427,7 +427,11 @@ snapshots. Each comment contains an ordered tuple of frozen `CommentReply`
 snapshots, and the presentation exposes an ordered tuple of frozen
 `CommentAuthor` snapshots.
 Author, comment, and reply additions accept native GUID and RFC 3339 strings.
-Comment and reply moves retain native final-position semantics. A successful
+Comment and reply moves retain native final-position semantics.
+`Slide.resolve_comment(comment_id)` marks a thread resolved and treats a reply
+id as unknown. `Slide.remove_comment(comment_id)` removes a thread with its
+replies, or one reply. Both use the native staged operations of
+`rpptx comment resolve` and `remove`. A successful
 collaboration operation advances the global revision once. Constructor or
 native validation failure publishes no candidate and leaves existing handles
 valid.
@@ -1493,10 +1497,11 @@ The additive methods are `comment_authors`, `add_comment_author`, `comments`,
 `add_comment`, `reply_to_comment`, `resolve_comment`, `remove_comment`,
 `move_comment`, `move_reply`, `sections`, `set_sections`,
 `notes_header_footer_mut`, and `handout_header_footer_mut`. Python exposes the
-comment snapshots, additions, and moves described with the presentation
-binding, and `rpptx comment` exposes the comment operations described under
-CLIs. WASM consumers gain no collaboration or navigation methods and continue
-to preserve these package parts through their existing `Presentation` owner.
+comment snapshots, additions, moves, resolution, and removal described with the
+presentation binding, and `rpptx comment` exposes the comment operations
+described under CLIs. WASM consumers gain no collaboration or navigation
+methods and continue to preserve these package parts through their existing
+`Presentation` owner.
 
 The low-level `rpptx-oxml` model adds the approved `comments` module and
 extends existing presentation, notes, slide, relationship, and content-type

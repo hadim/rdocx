@@ -183,6 +183,8 @@ def exercise_rpptx_types(path: Path) -> None:
     )
     comments: tuple[Comment, ...] = presentation.slides[0].comments
     reply: CommentReply = comments[0].replies[0]
+    presentation.slides[0].resolve_comment(comments[0].id)
+    presentation.slides[0].remove_comment(reply.id)
     slide_width: Length | None = presentation.slide_width
     presentation.slide_height = Inches(6)
     current_slide = presentation.slides[0]

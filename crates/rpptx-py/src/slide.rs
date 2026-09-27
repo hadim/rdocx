@@ -380,6 +380,30 @@ impl PySlide {
         Ok(())
     }
 
+    /// Marks one comment thread resolved. A reply id is an unknown id.
+    fn resolve_comment(&self, comment_id: &str, py: Python<'_>) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .resolve_comment(index, comment_id)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
+    /// Removes one comment thread with its replies, or one reply.
+    fn remove_comment(&self, comment_id: &str, py: Python<'_>) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .remove_comment(index, comment_id)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
     fn move_comment(&self, from_: usize, to: usize, py: Python<'_>) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);

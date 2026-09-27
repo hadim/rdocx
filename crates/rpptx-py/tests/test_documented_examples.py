@@ -2222,6 +2222,62 @@ def test_try_replace_text_checks_the_expected_count_before_publishing():
     assert prs.slides[0].shapes[0].text == "Grace and Grace"
 
 
+def test_slide_resolve_and_remove_comment_match_the_cli_operations():
+    import rpptx
+
+    author_id = "{11111111-1111-1111-1111-111111111111}"
+    comment_id = "{22222222-2222-2222-2222-222222222222}"
+    reply_id = "{33333333-3333-3333-3333-333333333333}"
+    second_id = "{55555555-5555-5555-5555-555555555555}"
+    unknown_id = "{99999999-9999-9999-9999-999999999999}"
+    created = "2026-09-14T10:30:00Z"
+    prs = rpptx.Presentation()
+    for _ in range(2):
+        prs.slides.add_slide(prs.slide_layouts[6])
+    prs.add_comment_author(
+        id=author_id, name="Ada Lovelace", user_id="ada@example.com", provider_id="local"
+    )
+    prs.slides[0].add_comment(id=comment_id, author_id=author_id, created=created, text="Thread")
+    prs.slides[0].reply_to_comment(
+        comment_id, id=reply_id, author_id=author_id, created=created, text="Reply"
+    )
+    prs.slides[0].add_comment(id=second_id, author_id=author_id, created=created, text="Second")
+
+    slide = prs.slides[0]
+    before = prs.to_bytes()
+    for operation, comment in (
+        (slide.resolve_comment, unknown_id),
+        (slide.resolve_comment, reply_id),
+        (slide.remove_comment, unknown_id),
+        (prs.slides[1].remove_comment, comment_id),
+    ):
+        with pytest.raises(rpptx.RpptxError, match="unknown comment id"):
+            operation(comment)
+    assert prs.to_bytes() == before
+    assert [comment.status for comment in slide.comments] == [None, None]
+
+    slide.resolve_comment(comment_id)
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: slide.comments)
+    thread, second = prs.slides[0].comments
+    assert (thread.id, thread.status, second.status) == (comment_id, "resolved", None)
+    assert [(reply.id, reply.status) for reply in thread.replies] == [(reply_id, None)]
+
+    prs.slides[0].remove_comment(reply_id)
+    assert prs.slides[0].comments[0].replies == ()
+    prs.slides[0].remove_comment(comment_id)
+    assert [comment.id for comment in prs.slides[0].comments] == [second_id]
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    assert reopened.slides[0].comments == prs.slides[0].comments
+
+    # The facade keeps the emptied comments part, so duplicate still refuses.
+    prs.slides[0].remove_comment(second_id)
+    assert prs.slides[0].comments == ()
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="modern comments"):
+        prs.slides.duplicate(prs.slides[0])
+    assert (prs.to_bytes(), len(prs.slides)) == (before, 2)
+
+
 def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     import rpptx
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE
