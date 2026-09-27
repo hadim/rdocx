@@ -1,7 +1,7 @@
 //! Fill, line, and colour formats, mirroring python-pptx `pptx.dml`.
 //!
-//! Shape fills, line fills, and slide backgrounds share one fill model, so
-//! the three formats read and write through a single target.
+//! Shape fills, line fills, slide backgrounds, and table cell fills share one
+//! fill model, so the formats read and write through a single target.
 
 use oxml_py_support::ContentPath;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 
 use crate::presentation::PyPresentation;
 use crate::shape::{length, shape_mut_at, shape_ref_at, slide_index};
+use crate::table::{cell_mut_at, cell_ref_at};
 use crate::{rpptx_to_pyerr, validate_path};
 
 const MAX_LINE_WIDTH_EMU: i64 = 20_116_800;
@@ -26,12 +27,13 @@ pub(crate) enum FillTarget {
     Shape,
     Line,
     Background,
+    TableCell,
 }
 
 impl FillTarget {
     fn suffix(self) -> &'static str {
         match self {
-            Self::Shape => ".fill",
+            Self::Shape | Self::TableCell => ".fill",
             Self::Line => ".line.fill",
             Self::Background => ".background.fill",
         }
@@ -57,6 +59,10 @@ fn current_fill(
             .slide(slide_index(path)?)
             .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?
             .background_fill()
+            .cloned(),
+        FillTarget::TableCell => cell_ref_at(presentation, path)
+            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
+            .fill()
             .cloned(),
     })
 }
@@ -98,6 +104,12 @@ fn write_fill(
                 slide.remove_background();
             }
             slide.set_background(fill)
+        }
+        FillTarget::TableCell => {
+            cell_mut_at(presentation, path)
+                .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
+                .set_fill(Some(fill));
+            Ok(())
         }
     };
     result.map_err(|error| rpptx_to_pyerr(py, error))

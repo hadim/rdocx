@@ -327,6 +327,18 @@ file-like object, which is rewound first when it can seek. `remove` deletes one
 shape of a slide with the relationships and parts only it used and advances the
 revision once. Nested collections stay read-only.
 
+A table `Cell` follows python-pptx for `merge(other_cell)`, `split()`,
+`is_merge_origin`, `is_spanned`, `span_height`, and `span_width`. Merge and
+split run the native staged table operations, which keep the rectangular grid,
+so they do not advance the revision. A cell of another table raises
+`ValueError`, and a merge range that overlaps a merge or a split of a cell that
+is not a merge origin raises `RpptxError` and leaves the table unchanged.
+`Cell.fill` is a live `FillFormat` over the direct cell fill. `margin_left`,
+`margin_right`, `margin_top`, and `margin_bottom` read the `a:tcPr` margins as
+`Length` and follow the text formatting rules below. An absent margin reads
+`None` where python-pptx reports its 91440 and 45720 EMU defaults, and a value
+outside the 32-bit coordinate range raises `ValueError`.
+
 `TextFrame.autofit`
 reports `none`, `normal`, or `shape` when the body carries an explicit choice.
 `Run.font` reads the run's direct Latin name, size, and sRGB colour, while the

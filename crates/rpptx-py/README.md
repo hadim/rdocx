@@ -58,6 +58,7 @@ with open("review.pdf", "wb") as output:
 - Read speaker-note text and inspect or mutate modern comment threads.
 - Python collections with negative indexes, slices, iteration, and explicit
   stale-handle errors after structural changes.
+- Table cell merge and split, cell fills, and cell margins.
 
 ## Use it when
 

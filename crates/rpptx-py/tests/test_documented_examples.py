@@ -1983,6 +1983,111 @@ def test_fill_and_line_formats_write_what_python_pptx_reads(tmp_path):
     assert oracle[1].fill.type == pptx.enum.dml.MSO_FILL.BACKGROUND
 
 
+def _cell_records(table, rows, columns):
+    return [
+        (cell.text, cell.is_merge_origin, cell.is_spanned, cell.span_height, cell.span_width)
+        for cell in (table.cell(row, column) for row in range(rows) for column in range(columns))
+    ]
+
+
+def _python_pptx_merged_table(pptx, split):
+    deck = pptx.Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    table = slide.shapes.add_table(3, 3, 0, 0, 5_486_400, 2_743_200).table
+    for row in range(3):
+        for column in range(3):
+            table.cell(row, column).text = f"{row}{column}"
+    table.cell(0, 0).merge(table.cell(1, 1))
+    if split:
+        table.cell(0, 0).split()
+    return table
+
+
+def test_table_cells_merge_split_fill_and_margins_like_python_pptx(tmp_path):
+    import rpptx
+    from rpptx.dml.color import RGBColor
+    from rpptx.enum.dml import MSO_FILL_TYPE
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_table(3, 3, 0, 0, 5_486_400, 2_743_200)
+    prs.slides[0].shapes.add_table(1, 2, 0, 3_000_000, 100, 100)
+    table = prs.slides[0].shapes[0].table
+    for row in range(3):
+        for column in range(3):
+            table.cell(row, column).text = f"{row}{column}"
+    origin, held = table.cell(0, 0), table.cell(2, 2)
+    origin.merge(table.cell(1, 1))
+    assert (origin.is_merge_origin, origin.is_spanned, origin.span_height, origin.span_width) == (
+        True,
+        False,
+        2,
+        2,
+    )
+    assert (table.cell(1, 0).is_merge_origin, table.cell(1, 0).is_spanned) == (False, True)
+    assert (held.text, held.is_merge_origin, held.span_width) == ("22", False, 1)
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="merged cells"):
+        table.cell(1, 1).merge(table.cell(2, 2))
+    with pytest.raises(ValueError, match="other_cell from different table"):
+        held.merge(prs.slides[0].shapes[1].table.cell(0, 0))
+    with pytest.raises(rpptx.RpptxError, match="merge-origin"):
+        held.split()
+    assert prs.to_bytes() == before
+    merged = tmp_path / "merged.pptx"
+    prs.save(merged)
+    origin.split()
+    assert not any(record[1] or record[2] for record in _cell_records(table, 3, 3))
+
+    cell, other = table.cell(2, 0), table.cell(2, 1)
+    assert cell.fill.type is None
+    cell.fill.solid()
+    cell.fill.fore_color.rgb = RGBColor(0x12, 0x34, 0x56)
+    other.fill.background()
+    assert (cell.fill.type, other.fill.type) == (MSO_FILL_TYPE.SOLID, MSO_FILL_TYPE.BACKGROUND)
+    assert (cell.margin_left, cell.margin_right, cell.margin_top, cell.margin_bottom) == (None,) * 4
+    cell.margin_left = rpptx.Inches(0.25)
+    cell.margin_top = rpptx.Pt(3)
+    assert (cell.margin_left, cell.margin_top) == (rpptx.Inches(0.25), rpptx.Pt(3))
+    assert isinstance(cell.margin_left, rpptx.Length)
+    before = prs.to_bytes()
+    cell.margin_right = None
+    with pytest.raises(ValueError, match="32-bit"):
+        cell.margin_bottom = 2**31
+    assert prs.to_bytes() == before
+    cell.margin_top = None
+    assert cell.margin_top is None
+    held_fill = cell.fill
+    prs.slides.add_slide(prs.slide_layouts[6])
+    with pytest.raises(rpptx.StaleElementError, match=r"table\.cell\(2, 0\)\.fill"):
+        _ = held_fill.type
+    split = tmp_path / "split.pptx"
+    prs.save(split)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    for path, was_split in ((merged, False), (split, True)):
+        expected = _cell_records(_python_pptx_merged_table(pptx, was_split), 3, 3)
+        assert _cell_records(pptx.Presentation(path).slides[0].shapes[0].table, 3, 3) == expected
+        assert _cell_records(rpptx.Presentation(path).slides[0].shapes[0].table, 3, 3) == expected
+    oracle = pptx.Presentation(split).slides[0].shapes[0].table
+    assert oracle.cell(2, 0).fill.fore_color.rgb == pptx.dml.color.RGBColor(0x12, 0x34, 0x56)
+    assert oracle.cell(2, 1).fill.type == pptx.enum.dml.MSO_FILL.BACKGROUND
+    assert oracle.cell(2, 0).margin_left == rpptx.Inches(0.25)
+    assert (oracle.cell(2, 0).margin_right, oracle.cell(2, 0).margin_top) == (91_440, 45_720)
+
+    def build(deck):
+        written = deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_table(1, 1, 0, 0, 100, 100)
+        written = written.table.cell(0, 0)
+        written.margin_bottom = rpptx.Pt(4)
+        written.fill.solid()
+        written.fill.fore_color.rgb = pptx.dml.color.RGBColor(0xAB, 0xCD, 0xEF)
+
+    source = _python_pptx_deck(tmp_path / "python-pptx-cells.pptx", build)
+    read = rpptx.Presentation(source).slides[0].shapes[0].table.cell(0, 0)
+    assert (read.margin_left, read.margin_bottom) == (None, rpptx.Pt(4))
+    assert read.fill.fore_color.rgb == RGBColor(0xAB, 0xCD, 0xEF)
+
+
 def test_colour_edits_keep_python_pptx_brightness_transforms(tmp_path):
     import rpptx
     from rpptx.dml.color import RGBColor

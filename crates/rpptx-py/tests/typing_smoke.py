@@ -289,6 +289,29 @@ def exercise_rpptx_types(path: Path) -> None:
     )
 
 
+def exercise_rpptx_table_types(table: Table) -> None:
+    origin: Cell = table.cell(0, 0)
+    origin.merge(table.cell(1, 1))
+    spans: tuple[bool, bool, int, int] = (
+        origin.is_merge_origin,
+        origin.is_spanned,
+        origin.span_height,
+        origin.span_width,
+    )
+    origin.split()
+    cell_fill: FillFormat = origin.fill
+    cell_fill.solid()
+    origin.margin_left = Inches(0.1)
+    origin.margin_right = None
+    cell_margins: tuple[Length | None, ...] = (
+        origin.margin_left,
+        origin.margin_right,
+        origin.margin_top,
+        origin.margin_bottom,
+    )
+    (spans, cell_margins)
+
+
 def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
     frames: tuple[TextFrameLayout, ...] = presentation.text_layout()
     narrower: tuple[TextFrameLayout, ...] = presentation.text_layout(width_factor=0.95)

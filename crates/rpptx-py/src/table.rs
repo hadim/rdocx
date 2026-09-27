@@ -3,10 +3,11 @@ use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PySlice};
 
+use crate::dml::{FillTarget, PyFillFormat};
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
-use crate::shape::{shape_mut_at, shape_ref_at};
-use crate::validate_path;
+use crate::shape::{length, shape_mut_at, shape_ref_at};
+use crate::{rpptx_to_pyerr, validate_path};
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTable>()?;
@@ -29,6 +30,40 @@ fn cell_index(path: &ContentPath) -> Option<usize> {
         _ => None,
     })
 }
+
+/// Returns the path segments that name a cell's table shape.
+fn table_segments(path: &ContentPath) -> impl Iterator<Item = &PathSeg> {
+    path.segs
+        .iter()
+        .filter(|segment| !matches!(segment, PathSeg::Row(_) | PathSeg::Cell(_)))
+}
+
+pub(crate) fn cell_ref_at<'a>(
+    presentation: &'a rpptx::Presentation,
+    path: &ContentPath,
+) -> Option<rpptx::TableCellRef<'a>> {
+    shape_ref_at(presentation, path)?
+        .table()?
+        .cell(row_index(path)?, cell_index(path)?)
+}
+
+pub(crate) fn cell_mut_at<'a>(
+    presentation: &'a mut rpptx::Presentation,
+    path: &ContentPath,
+) -> Option<rpptx::TableCellMut<'a>> {
+    let (row, column) = (row_index(path)?, cell_index(path)?);
+    shape_mut_at(presentation, path)?
+        .into_table_mut()?
+        .into_cell_mut(row, column)
+}
+
+/// Left, right, top, and bottom cell margins, as the facade reports them.
+type Margins = (
+    Option<rpptx::Emu>,
+    Option<rpptx::Emu>,
+    Option<rpptx::Emu>,
+    Option<rpptx::Emu>,
+);
 
 #[pyclass(name = "Table")]
 pub struct PyTable {
@@ -231,6 +266,64 @@ pub struct PyCell {
     path: ContentPath,
 }
 
+impl PyCell {
+    fn read<T>(
+        &self,
+        py: Python<'_>,
+        read: impl FnOnce(rpptx::TableCellRef<'_>) -> T,
+    ) -> PyResult<T> {
+        let presentation = self.presentation.borrow(py);
+        validate_path(py, &presentation, &self.path, "cell", "")?;
+        cell_ref_at(&presentation.inner, &self.path)
+            .map(read)
+            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))
+    }
+
+    fn edit<T>(
+        &self,
+        py: Python<'_>,
+        edit: impl FnOnce(&mut rpptx::TableCellMut<'_>) -> T,
+    ) -> PyResult<T> {
+        let mut presentation = self.presentation.borrow_mut(py);
+        validate_path(py, &presentation, &self.path, "cell", "")?;
+        cell_mut_at(&mut presentation.inner, &self.path)
+            .map(|mut cell| edit(&mut cell))
+            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))
+    }
+
+    fn margin(
+        &self,
+        py: Python<'_>,
+        side: fn(&mut Margins) -> &mut Option<rpptx::Emu>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let mut margins = self.read(py, |cell| cell.margins())?;
+        length(py, *side(&mut margins))
+    }
+
+    /// Writes one margin and keeps the other three, leaving the package
+    /// unchanged when the value equals the stored one.
+    fn set_margin(
+        &self,
+        py: Python<'_>,
+        side: fn(&mut Margins) -> &mut Option<rpptx::Emu>,
+        value: Option<i64>,
+    ) -> PyResult<()> {
+        if value.is_some_and(|value| i32::try_from(value).is_err()) {
+            return Err(PyValueError::new_err(
+                "cell margin must fit a 32-bit EMU coordinate",
+            ));
+        }
+        let current = self.read(py, |cell| cell.margins())?;
+        let mut margins = current;
+        *side(&mut margins) = value.map(rpptx::Emu);
+        if margins == current {
+            return Ok(());
+        }
+        let (left, right, top, bottom) = margins;
+        self.edit(py, |cell| cell.set_margins(left, right, top, bottom))
+    }
+}
+
 #[pymethods]
 impl PyCell {
     #[getter]
@@ -259,5 +352,101 @@ impl PyCell {
             .and_then(|table| table.into_cell_mut(row, cell))
             .map(|mut cell| cell.set_text(value))
             .ok_or_else(|| PyIndexError::new_err("cell index out of range"))
+    }
+
+    /// Merges the rectangle between this cell and `other_cell`, moving the
+    /// text of the spanned cells into the top-left origin, as python-pptx does.
+    fn merge(&self, py: Python<'_>, other_cell: &Bound<'_, PyAny>) -> PyResult<()> {
+        let other = other_cell.extract::<PyRef<'_, PyCell>>()?;
+        other.read(py, |_| ())?;
+        if !other.presentation.is(&self.presentation)
+            || !table_segments(&other.path).eq(table_segments(&self.path))
+        {
+            return Err(PyValueError::new_err("other_cell from different table"));
+        }
+        let (Some(row), Some(column)) = (row_index(&other.path), cell_index(&other.path)) else {
+            return Err(PyIndexError::new_err("cell index is missing"));
+        };
+        self.edit(py, |cell| cell.merge_to(row, column))?
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    /// Splits this merge origin back into its grid cells.
+    fn split(&self, py: Python<'_>) -> PyResult<()> {
+        self.edit(py, |cell| cell.split())?
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    #[getter]
+    fn is_merge_origin(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |cell| cell.is_merge_origin())
+    }
+
+    #[getter]
+    fn is_spanned(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |cell| cell.is_spanned())
+    }
+
+    #[getter]
+    fn span_height(&self, py: Python<'_>) -> PyResult<u32> {
+        self.read(py, |cell| cell.span_height())
+    }
+
+    #[getter]
+    fn span_width(&self, py: Python<'_>) -> PyResult<u32> {
+        self.read(py, |cell| cell.span_width())
+    }
+
+    #[getter]
+    fn fill(&self, py: Python<'_>) -> PyResult<Py<PyFillFormat>> {
+        self.read(py, |_| ())?;
+        Py::new(
+            py,
+            PyFillFormat::new(
+                self.presentation.clone_ref(py),
+                self.path.clone(),
+                FillTarget::TableCell,
+            ),
+        )
+    }
+
+    #[getter]
+    fn margin_left(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.margin(py, |margins| &mut margins.0)
+    }
+
+    #[setter]
+    fn set_margin_left(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        self.set_margin(py, |margins| &mut margins.0, value)
+    }
+
+    #[getter]
+    fn margin_right(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.margin(py, |margins| &mut margins.1)
+    }
+
+    #[setter]
+    fn set_margin_right(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        self.set_margin(py, |margins| &mut margins.1, value)
+    }
+
+    #[getter]
+    fn margin_top(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.margin(py, |margins| &mut margins.2)
+    }
+
+    #[setter]
+    fn set_margin_top(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        self.set_margin(py, |margins| &mut margins.2, value)
+    }
+
+    #[getter]
+    fn margin_bottom(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.margin(py, |margins| &mut margins.3)
+    }
+
+    #[setter]
+    fn set_margin_bottom(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        self.set_margin(py, |margins| &mut margins.3, value)
     }
 }
