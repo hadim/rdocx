@@ -1847,6 +1847,43 @@ def test_slide_layout_hidden_and_background_round_trip_through_python_pptx(tmp_p
     assert oracle.slides[0]._element.get("show") in (None, "1")
 
 
+def test_slide_layout_assignment_retargets_the_slide_and_keeps_unplaced_placeholders(tmp_path):
+    import rpptx
+
+    source = _python_pptx_deck(
+        tmp_path / "layouts.pptx", lambda deck: deck.slides.add_slide(deck.slide_layouts[1])
+    )
+    prs = rpptx.Presentation(source)
+    for index, text in enumerate(("Title", "Body")):
+        prs.slides[0].shapes[index].text = text
+    slide = prs.slides[0]
+    body_geometry = slide.shapes[1].effective_geometry()
+    slide.slide_layout = prs.slide_layouts[5]
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: slide.slide_layout)
+    slide = prs.slides[0]
+    assert slide.slide_layout == prs.slide_layouts[5]
+    title, body = slide.shapes
+    assert title.left is None
+    assert (body.left, body.top, body.width, body.height) == body_geometry
+    assert [frame.shape_id for frame in prs.text_layout()] == [title.shape_id, body.shape_id]
+
+    prs.slides[0].slide_layout = prs.slide_layouts[0]
+    assert prs.slides[0].shapes[0].effective_geometry() == (685800, 2130425, 7772400, 1470025)
+    with pytest.raises(ValueError, match="slide layout is not in this presentation"):
+        prs.slides[0].slide_layout = rpptx.Presentation().slide_layouts[1]
+    with pytest.raises(TypeError):
+        prs.slides[0].slide_layout = 1
+    output = tmp_path / "relaid.pptx"
+    prs.save(output)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output).slides[0]
+    assert oracle.slide_layout.name == "Title Slide"
+    title, body = oracle.shapes
+    assert (title.left, title.top, title.width, title.height) == (685800, 2130425, 7772400, 1470025)
+    assert (body.left, body.top, body.width, body.height) == body_geometry
+
+
 def test_shape_geometry_name_and_rotation_setters_match_python_pptx(tmp_path):
     import rpptx
 

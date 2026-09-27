@@ -181,6 +181,8 @@ def exercise_rpptx_types(path: Path) -> None:
     slide_layout: SlideLayout = current_slide.slide_layout
     layout_index: int = presentation.slide_layouts.index(slide_layout)
     same_layout: bool = slide_layout == presentation.slide_layouts[0]
+    current_slide.slide_layout = presentation.slide_layouts[1]
+    current_slide = presentation.slides[0]
     hidden: bool = current_slide.hidden
     current_slide.hidden = True
     background: Background = current_slide.background

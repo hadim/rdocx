@@ -1969,6 +1969,68 @@ impl Presentation {
         Ok(())
     }
 
+    /// Changes the layout one slide uses, by zero-based layout index.
+    ///
+    /// The slide's layout relationship is retargeted, so its placeholders
+    /// inherit from the new layout and that layout's master. A placeholder
+    /// without a transform of its own that the new layout does not place
+    /// first receives the transform it inherited from the old layout, so it
+    /// stays where it was drawn. Placeholders of the new layout that the
+    /// slide lacks are not added. The layout may belong to another master,
+    /// whose theme and text styles the slide then follows. The change is
+    /// staged and publishes only after the staged package reopens.
+    #[cfg(feature = "render")]
+    pub fn set_slide_layout(&mut self, slide_index: usize, layout_index: usize) -> Result<()> {
+        const OPERATION: &str = "set slide layout";
+        self.require_slide_index(slide_index)?;
+        if layout_index >= self.layouts.len() {
+            return Err(Error::UnknownLayoutIndex {
+                index: layout_index,
+                layout_count: self.layouts.len(),
+            });
+        }
+        let current = self.slide_layout_index(slide_index).ok_or_else(|| {
+            invalid_slide_mutation(
+                OPERATION,
+                format!("slide {slide_index} has no layout reachable through the slide masters"),
+            )
+        })?;
+        if current == layout_index {
+            return Ok(());
+        }
+        let (old_layout, old_master) = self.layout_and_master(current)?;
+        let (new_layout, new_master) = self.layout_and_master(layout_index)?;
+        let mut staged = self.clone();
+        keep_unplaced_placeholder_transforms(
+            &mut staged.slides[slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            (old_layout, &old_master),
+            (new_layout, &new_master),
+        );
+        let slide_part = &staged.slides[slide_index].part_name;
+        let target = relative_part_target(slide_part, &staged.layouts[layout_index].part_name);
+        staged
+            .package
+            .get_part_rels_mut(slide_part)
+            .and_then(|relationships| {
+                relationships
+                    .items
+                    .iter_mut()
+                    .find(|relationship| relationship.rel_type == rel_types::SLIDE_LAYOUT)
+            })
+            .ok_or_else(|| {
+                invalid_slide_mutation(
+                    OPERATION,
+                    format!("{slide_part} has no layout relationship"),
+                )
+            })?
+            .target = target;
+        self.commit_candidate(staged)
+    }
+
     #[cfg(feature = "render")]
     fn shape_at(
         &self,
@@ -5392,6 +5454,41 @@ fn numeric_relationship_id(relationship_id: &str) -> u32 {
         .strip_prefix("rId")
         .and_then(|value| value.parse().ok())
         .unwrap_or_default()
+}
+
+/// Gives placeholders the new layout does not place the transform they inherited.
+///
+/// Only placeholders without a transform of their own are touched, and
+/// only when the old layout chain supplied one.
+#[cfg(feature = "render")]
+fn keep_unplaced_placeholder_transforms(
+    children: &mut [ShapeTreeChild],
+    old: (&CT_SlideLayout, &CT_SlideMaster),
+    new: (&CT_SlideLayout, &CT_SlideMaster),
+) {
+    for child in children {
+        let (placeholder, transform) = match child {
+            ShapeTreeChild::Shape(shape) => (
+                shape.placeholder.as_ref(),
+                &mut shape.shape_properties.transform,
+            ),
+            ShapeTreeChild::Picture(picture) => (
+                picture.placeholder.as_ref(),
+                &mut picture.shape_properties.transform,
+            ),
+            ShapeTreeChild::GroupShape(group) => {
+                keep_unplaced_placeholder_transforms(&mut group.children, old, new);
+                continue;
+            }
+            _ => continue,
+        };
+        if let Some(placeholder) = placeholder
+            && transform.is_none()
+            && inherited_xfrm(placeholder, new.0, new.1).is_none()
+        {
+            *transform = inherited_xfrm(placeholder, old.0, old.1).cloned();
+        }
+    }
 }
 
 fn is_latent_placeholder(placeholder: &CT_Placeholder) -> bool {

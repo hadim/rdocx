@@ -9924,6 +9924,171 @@ fn materialized_placeholder_geometry_keeps_the_shape_drawn_after_one_coordinate_
     ));
 }
 
+/// Adds a second master, a copy of the first whose title sits higher, with one layout.
+fn two_master_deck() -> Presentation {
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(1).unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "two-master deck");
+    let master_xml = String::from_utf8(
+        package
+            .get_part("/ppt/slideMasters/slideMaster1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let layouts_start = master_xml.find("<p:sldLayoutIdLst>").unwrap();
+    let layouts_end = master_xml.find("</p:sldLayoutIdLst>").unwrap() + "</p:sldLayoutIdLst>".len();
+    let master_xml = format!(
+        r#"{}<p:sldLayoutIdLst><p:sldLayoutId id="2147483700" r:id="rId1"/></p:sldLayoutIdLst>{}"#,
+        &master_xml[..layouts_start],
+        &master_xml[layouts_end..]
+    )
+    .replacen(
+        r#"<a:off x="457200" y="274638"/>"#,
+        r#"<a:off x="457200" y="137319"/>"#,
+        1,
+    );
+    package.set_part(
+        "/ppt/slideMasters/slideMaster2.xml",
+        master_xml.into_bytes(),
+    );
+    let mut master_relationships = oxml_opc::Relationships::new();
+    master_relationships.add(rel_types::SLIDE_LAYOUT, "../slideLayouts/slideLayout12.xml");
+    master_relationships.add(rel_types::THEME, "../theme/theme1.xml");
+    package.set_part_rels("/ppt/slideMasters/slideMaster2.xml", master_relationships);
+    let layout_xml = package
+        .get_part("/ppt/slideLayouts/slideLayout2.xml")
+        .unwrap()
+        .to_vec();
+    package.set_part("/ppt/slideLayouts/slideLayout12.xml", layout_xml);
+    let mut layout_relationships = oxml_opc::Relationships::new();
+    layout_relationships.add(rel_types::SLIDE_MASTER, "../slideMasters/slideMaster2.xml");
+    package.set_part_rels("/ppt/slideLayouts/slideLayout12.xml", layout_relationships);
+    for (part, content_type) in [
+        (
+            "/ppt/slideMasters/slideMaster2.xml",
+            content_types::SLIDE_MASTER,
+        ),
+        (
+            "/ppt/slideLayouts/slideLayout12.xml",
+            content_types::SLIDE_LAYOUT,
+        ),
+    ] {
+        package.content_types.add_override(part, content_type);
+    }
+    let mut presentation_relationships = package
+        .get_part_rels("/ppt/presentation.xml")
+        .unwrap()
+        .clone();
+    let master_id =
+        presentation_relationships.add(rel_types::SLIDE_MASTER, "slideMasters/slideMaster2.xml");
+    package.set_part_rels("/ppt/presentation.xml", presentation_relationships);
+    let presentation_xml =
+        String::from_utf8(package.get_part("/ppt/presentation.xml").unwrap().to_vec())
+            .unwrap()
+            .replacen(
+                "</p:sldMasterIdLst>",
+                &format!(
+                    r#"<p:sldMasterId id="2147483699" r:id="{master_id}"/></p:sldMasterIdLst>"#
+                ),
+                1,
+            );
+    package.set_part("/ppt/presentation.xml", presentation_xml.into_bytes());
+    Presentation::from_bytes(&package_bytes(package)).unwrap()
+}
+
+#[test]
+fn changing_a_slide_layout_retargets_it_and_keeps_unplaced_placeholders_in_place() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(1).unwrap();
+    for (index, text) in ["Title", "Body"].into_iter().enumerate() {
+        presentation
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(index)
+            .unwrap()
+            .set_text(text)
+            .unwrap();
+    }
+
+    presentation.set_slide_layout(0, 5).unwrap();
+    assert_eq!(presentation.slide_layout_index(0), Some(5));
+    assert_eq!(presentation.layout_name(5), Some("Title Only"));
+    let slide = presentation.slide(0).unwrap();
+    assert_eq!(
+        slide.shape(0).unwrap().position(),
+        None,
+        "Title Only still places the title"
+    );
+    assert_eq!(
+        (
+            slide.shape(1).unwrap().position(),
+            slide.shape(1).unwrap().size()
+        ),
+        (
+            Some((Emu(457_200), Emu(1_600_200))),
+            Some((Emu(8_229_600), Emu(4_525_963)))
+        ),
+        "the body Title Only does not place keeps where it was drawn"
+    );
+    assert_text_frames_use_effective_geometry(&presentation, 2);
+    assert!(presentation.validate().is_empty());
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "changed layout");
+    assert_eq!(
+        package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_LAYOUT)
+            .unwrap()
+            .target,
+        "../slideLayouts/slideLayout6.xml"
+    );
+
+    presentation.set_slide_layout(0, 0).unwrap();
+    for (index, geometry) in [TITLE_SLIDE_TITLE, MASTER_BODY].into_iter().enumerate() {
+        assert_eq!(
+            presentation.effective_geometry(0, &[index]).unwrap(),
+            emu_geometry(geometry)
+        );
+    }
+    let unchanged = presentation.to_bytes().unwrap();
+    presentation.set_slide_layout(0, 0).unwrap();
+    assert!(matches!(
+        presentation.set_slide_layout(0, 11),
+        Err(Error::UnknownLayoutIndex {
+            index: 11,
+            layout_count: 11
+        })
+    ));
+    assert!(matches!(
+        presentation.set_slide_layout(1, 0),
+        Err(Error::UnknownSlideIndex { index: 1, .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), unchanged);
+
+    let mut presentation = two_master_deck();
+    assert_eq!(presentation.layout_count(), 12);
+    presentation.set_slide_layout(0, 11).unwrap();
+    assert_eq!(presentation.slide_layout_index(0), Some(11));
+    for (index, geometry) in [(457_200, 137_319, 8_229_600, 1_143_000), MASTER_BODY]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(
+            presentation.effective_geometry(0, &[index]).unwrap(),
+            emu_geometry(geometry)
+        );
+    }
+    assert!(presentation.validate().is_empty());
+    assert!(
+        presentation
+            .to_pdf_deterministic()
+            .unwrap()
+            .starts_with(b"%PDF")
+    );
+}
+
 #[test]
 fn notes_and_handout_export_resolve_noncanonical_master_theme_and_media_targets() {
     let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();

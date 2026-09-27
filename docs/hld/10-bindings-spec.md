@@ -299,6 +299,9 @@ counterpart. It returns `None` when the resolved transform has no extent.
 pairs the assigned value with the bundled 16:9 size. `Slide.slide_layout`
 returns the layout the slide relates to, equal to the same entry of
 `slide_layouts`, and `SlideLayoutCollection.index` returns its position.
+Assigning a layout of the same presentation to `slide_layout` uses the native
+staged layout change and advances the revision once. A placeholder the new
+layout does not place keeps the transform it inherited.
 `Slide.hidden` reads and writes `p:sld/@show`. `Slide.background.fill` is a
 live `FillFormat` over the direct background fill that never changes the slide
 when read, and `follow_master_background` reports and sets whether the slide
