@@ -1,5 +1,6 @@
 //! Command-line access to the public `rpptx` facade.
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
@@ -305,8 +306,18 @@ fn main() {
             } => commands::comment_remove(&file, &id, &output, json),
         },
     };
+    // Standard output is line buffered, so a last line without a newline is
+    // only written, and can only fail, when it is flushed.
+    let result = result.and_then(|()| io::stdout().flush().map_err(Into::into));
     if let Err(error) = result {
-        eprintln!("Error: {error}");
-        process::exit(1);
+        // A reader that closes standard output early, as `| head` does, ends
+        // the output. That is not a failure of the command.
+        let closed_stdout = error
+            .downcast_ref::<io::Error>()
+            .is_some_and(|error| error.kind() == io::ErrorKind::BrokenPipe);
+        if !closed_stdout {
+            eprintln!("Error: {error}");
+            process::exit(1);
+        }
     }
 }

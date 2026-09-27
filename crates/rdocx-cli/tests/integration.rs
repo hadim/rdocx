@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::OpcPackage;
@@ -35,6 +36,23 @@ fn cli(args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("run rdocx CLI")
+}
+
+/// Runs the CLI while its reader takes a short prefix of standard output and
+/// then closes it, as `| head -1` does.
+fn cli_with_closed_stdout(args: &[&str]) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rdocx"))
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rdocx CLI");
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    stdout
+        .read_exact(&mut [0; 64])
+        .expect("read an output prefix");
+    drop(stdout);
+    child.wait_with_output().expect("wait for rdocx CLI")
 }
 
 fn assert_success(output: &Output, command: &str) {
@@ -175,6 +193,74 @@ fn text_prints_body_and_table_content_in_document_order() {
         String::from_utf8(output.stdout).unwrap(),
         "Body first\nLeft cell\tRight cell\t\nBody second\n"
     );
+}
+
+#[test]
+fn printing_commands_end_cleanly_when_the_reader_closes_stdout() {
+    let temp = TempWorkspace::new("closed-stdout");
+    let input = temp.path.join("long.docx");
+    // Several hundred kilobytes outgrow a default pipe buffer, so the CLI
+    // is still writing when its reader goes away.
+    let lines = (0..20_000)
+        .map(|index| format!("Line {index}, lorem ipsum dolor sit amet."))
+        .collect::<Vec<_>>();
+    write_document(
+        &input,
+        &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+
+    for args in [
+        vec!["text", path_text(&input)],
+        vec!["text", path_text(&input), "--json"],
+    ] {
+        let output = cli_with_closed_stdout(&args);
+        assert_success(&output, &args.join(" "));
+    }
+}
+
+#[test]
+fn validate_keeps_its_verdict_when_the_reader_closes_stdout() {
+    let temp = TempWorkspace::new("validate-closed-stdout");
+    let valid = temp.path.join("valid.docx");
+    let corrupt = temp.path.join("corrupt.docx");
+    write_document(&valid, &["Valid content"]);
+    // Thousands of undeclared parts make a report that outgrows a default pipe
+    // buffer, so the CLI is still writing when its reader goes away.
+    let mut package = OpcPackage::open(&valid).unwrap();
+    for index in 0..3_000 {
+        package.set_part(&format!("/word/undeclared{index}.dat"), Vec::new());
+    }
+    package.save(&corrupt).unwrap();
+
+    let output = cli_with_closed_stdout(&["validate", path_text(&corrupt)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_stdout_other_than_a_closed_pipe_is_an_error() {
+    let temp = TempWorkspace::new("full-stdout");
+    let input = temp.path.join("short.docx");
+    write_document(&input, &["No space left"]);
+    let full = fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("open /dev/full");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rdocx"))
+        .args(["text", path_text(&input)])
+        .stdout(full)
+        .output()
+        .expect("run rdocx CLI");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with("Error: "), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::relationship::rel_types;
@@ -36,6 +36,23 @@ fn cli(args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("run rpptx CLI")
+}
+
+/// Runs the CLI while its reader takes a short prefix of standard output and
+/// then closes it, as `| head -1` does.
+fn cli_with_closed_stdout(args: &[&str]) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rpptx"))
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rpptx CLI");
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    stdout
+        .read_exact(&mut [0; 64])
+        .expect("read an output prefix");
+    drop(stdout);
+    child.wait_with_output().expect("wait for rpptx CLI")
 }
 
 fn write_deck(path: &Path, texts: &[&str]) {
@@ -430,6 +447,67 @@ fn validate_rejects_corruption_and_accepts_the_pinned_corpus() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+fn printing_commands_end_cleanly_when_the_reader_closes_stdout() {
+    let temp = TempWorkspace::new("closed-stdout");
+    let deck = temp.path.join("long.pptx");
+    // Several hundred kilobytes outgrow a default pipe buffer, so the CLI
+    // is still writing when its reader goes away.
+    let text = "lorem ipsum dolor sit amet ".repeat(40);
+    write_deck(&deck, &vec![text.as_str(); 300]);
+    let deck = deck.to_str().unwrap();
+
+    for args in [vec!["text", deck], vec!["outline", deck, "--json"]] {
+        let output = cli_with_closed_stdout(&args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{args:?} failed: {stderr}");
+        assert!(stderr.is_empty(), "{args:?} wrote stderr: {stderr}");
+    }
+}
+
+#[test]
+fn validate_keeps_its_verdict_when_the_reader_closes_stdout() {
+    let temp = TempWorkspace::new("validate-closed-stdout");
+    let deck = temp.path.join("valid.pptx");
+    write_deck(&deck, &["valid"]);
+
+    // The reader goes away before the CLI has opened the deck, so the pass
+    // line meets a closed pipe.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rpptx"))
+        .args(["validate", deck.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rpptx CLI");
+    drop(child.stdout.take());
+    let output = child.wait_with_output().expect("wait for rpptx CLI");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "validate failed: {stderr}");
+    assert!(stderr.is_empty(), "validate wrote stderr: {stderr}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_stdout_other_than_a_closed_pipe_is_an_error() {
+    let temp = TempWorkspace::new("full-stdout");
+    let deck = temp.path.join("short.pptx");
+    write_deck(&deck, &["No space left"]);
+    let full = fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("open /dev/full");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rpptx"))
+        .args(["text", deck.to_str().unwrap()])
+        .stdout(full)
+        .output()
+        .expect("run rpptx CLI");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with("Error: "), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }
 
 #[test]

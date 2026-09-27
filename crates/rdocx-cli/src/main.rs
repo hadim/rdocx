@@ -2,6 +2,7 @@
 //!
 //! Inspect, convert, diff, and manipulate DOCX files from the command line.
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
@@ -499,8 +500,18 @@ fn main() {
         },
     };
 
+    // Standard output is line buffered, so a last line without a newline is
+    // only written, and can only fail, when it is flushed.
+    let result = result.and_then(|()| io::stdout().flush().map_err(Into::into));
     if let Err(e) = result {
-        eprintln!("Error: {e}");
-        process::exit(1);
+        // A reader that closes standard output early, as `| head` does, ends
+        // the output. That is not a failure of the command.
+        let closed_stdout = e
+            .downcast_ref::<io::Error>()
+            .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe);
+        if !closed_stdout {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
     }
 }
