@@ -63,6 +63,11 @@ impl FontUsage {
 /// How strongly a glyph was paired with the text it draws, weakest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Pairing {
+    /// A glyph of a rich run that draws none of its cluster's characters by
+    /// itself, such as the dots an Arabic font draws apart from their letter.
+    /// It repeats the cluster's text, which the run's `ActualText` covers, so
+    /// that every glyph of a rich run maps to Unicode.
+    Shared,
     /// The first of several glyphs that draw some characters between them
     /// in no order the font explains. It carries all of those characters.
     Group,
@@ -353,15 +358,25 @@ pub(crate) fn collect_glyph_usage(layout: &LayoutResult) -> HashMap<FontId, Font
                     remapper: GlyphRemapper::new(),
                 });
                 let chars = run.logical_text.chars().collect::<Vec<_>>();
+                let font = font_glyphs(&mut fonts, layout, run.font_id);
                 for cluster in &run.clusters {
-                    let Some(&character) = chars.get(cluster.char_start as usize) else {
+                    let characters =
+                        chars.get(cluster.char_start as usize..cluster.char_end as usize);
+                    let glyphs = run
+                        .glyph_ids
+                        .get(cluster.glyph_start as usize..cluster.glyph_end as usize);
+                    let (Some(characters), Some(glyphs)) = (characters, glyphs) else {
                         continue;
                     };
-                    for glyph in cluster.glyph_start..cluster.glyph_end {
-                        let Some(&gid) = run.glyph_ids.get(glyph as usize) else {
-                            continue;
-                        };
-                        entry.draw(gid, Some((Pairing::Position, character.to_string())));
+                    let nominal = font.nominal_glyphs(characters);
+                    let texts = pair_group(characters, glyphs, &nominal, font);
+                    // The run's ActualText carries its text, so a glyph that
+                    // draws none of the cluster's characters by itself repeats
+                    // them all, and every glyph of the run maps to Unicode.
+                    let cluster_text = characters.iter().collect::<String>();
+                    for (&gid, text) in glyphs.iter().zip(texts) {
+                        let text = text.unwrap_or_else(|| (Pairing::Shared, cluster_text.clone()));
+                        entry.draw(gid, Some(text));
                     }
                 }
             }
@@ -481,7 +496,10 @@ pub(crate) fn get_font_metrics(font_data: &FontData) -> Option<FontMetricsInfo> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxml_layout::{Color, FontManager, GlyphRun, PageFrame, Point};
+    use oxml_layout::{
+        Color, FontManager, GlyphRun, MultilingualGlyphRun, PageFrame, Point, TextDirection,
+        TextSegment,
+    };
 
     /// The bfchar entries of a ToUnicode CMap, by subset glyph id.
     fn to_unicode_entries(cmap: &[u8]) -> HashMap<u16, String> {
@@ -525,6 +543,66 @@ mod tests {
             field_source: None,
             note: None,
         })
+    }
+
+    fn multilingual_runs(fonts: &mut FontManager, text: &str) -> Vec<PositionedElement> {
+        let font_id = fonts.resolve_font(Some("Calibri"), false, false).unwrap();
+        let segment = TextSegment {
+            text: text.to_owned(),
+            direction: TextDirection::Auto,
+            source: None,
+            font_id,
+            font_size: 11.0,
+            glyph_ids: Vec::new(),
+            advances: Vec::new(),
+            width: 0.0,
+            ascent: 0.0,
+            descent: 0.0,
+            line_gap: 0.0,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            underline: None,
+            strike: false,
+            dstrike: false,
+            highlight: None,
+            baseline_offset: 0.0,
+            hyperlink_url: None,
+            field_kind: None,
+            field_source: None,
+            note: None,
+        };
+        fonts
+            .shape_multilingual_text(segment, None, TextDirection::Auto, false)
+            .unwrap()
+            .into_iter()
+            .map(|span| {
+                PositionedElement::MultilingualText(MultilingualGlyphRun {
+                    origin: Point { x: 0.0, y: 0.0 },
+                    font_id: span.font_id(),
+                    font_size: 11.0,
+                    glyph_ids: span.glyph_ids().to_vec(),
+                    x_advances: span.x_advances().to_vec(),
+                    y_advances: span.y_advances().to_vec(),
+                    x_offsets: span.x_offsets().to_vec(),
+                    y_offsets: span.y_offsets().to_vec(),
+                    clusters: span.clusters().to_vec(),
+                    logical_text: span.text().to_owned(),
+                    logical_index: span.logical_index(),
+                    source: None,
+                    script: span.script(),
+                    language: None,
+                    direction: span.direction(),
+                    bidi_level: span.bidi_level(),
+                    color: Color::BLACK,
+                    bold: false,
+                    italic: false,
+                    field_kind: None,
+                    field_source: None,
+                    note: None,
+                })
+            })
+            .collect()
     }
 
     fn layout_of(fonts: &FontManager, elements: Vec<PositionedElement>) -> LayoutResult {
@@ -697,6 +775,53 @@ mod tests {
         let space = fonts.shape_text(font_id, " ", 11.0).unwrap().glyph_ids;
         let texts = glyph_texts(&embedded_text_maps(&layout), font_id, &space);
         assert_eq!(texts, [" "]);
+    }
+
+    #[test]
+    fn a_multilingual_cluster_keeps_every_character() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        // The conjunct of "क्ष" draws three characters with one glyph. The
+        // cluster "त्रि" draws four with two, its vowel sign first and in a
+        // width variant the cmap does not give, and "कि" then pairs that
+        // variant with the vowel sign alone. The Arabic font draws the dot of
+        // "ب" apart from the letter, and draws contextual forms.
+        let mut elements = multilingual_runs(&mut fonts, "क्षत्रिय कि");
+        elements.extend(multilingual_runs(&mut fonts, "سلام ب"));
+        let layout = layout_of(&fonts, elements);
+        let maps = embedded_text_maps(&layout);
+        let mut clusters = Vec::new();
+        for element in &layout.pages[0].elements {
+            let PositionedElement::MultilingualText(run) = element else {
+                unreachable!("the page holds multilingual runs only");
+            };
+            let texts = glyph_texts(&maps, run.font_id, &run.glyph_ids);
+            let characters = run.logical_text.chars().collect::<Vec<_>>();
+            for cluster in &run.clusters {
+                let glyphs = cluster.glyph_start as usize..cluster.glyph_end as usize;
+                let source = &characters[cluster.char_start as usize..cluster.char_end as usize];
+                let texts = texts[glyphs].to_vec();
+                assert!(texts.iter().all(|text| !text.is_empty()), "{texts:?}");
+                let mut extracted = texts.concat();
+                for character in source {
+                    let at = extracted.find(*character).unwrap_or_else(|| {
+                        panic!("{character:?} of {source:?} is missing from {texts:?}")
+                    });
+                    extracted.remove(at);
+                }
+                clusters.push((source.iter().collect::<String>(), texts));
+            }
+        }
+        let texts_of = |source: &str| {
+            clusters
+                .iter()
+                .find(|(cluster, _)| cluster == source)
+                .map(|(_, texts)| texts.clone())
+                .unwrap_or_else(|| panic!("no cluster {source:?} in {clusters:?}"))
+        };
+        assert_eq!(texts_of("क्ष"), ["क्ष"]);
+        assert_eq!(texts_of("त्रि"), ["ि", "त्र"]);
+        assert_eq!(texts_of("कि"), ["ि", "क"]);
+        assert_eq!(texts_of("ب"), ["ب", "ب"]);
     }
 
     #[test]

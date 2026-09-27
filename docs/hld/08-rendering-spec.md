@@ -310,12 +310,17 @@ character by position, which keeps the pairing linear in a run the font
 explains nowhere. A plain run has no `ActualText`, so there a glyph that draws
 none of its group's characters by itself adds no ToUnicode text rather than
 repeat a character another glyph carries, and neither does a glyph left after
-the run's last character. The ToUnicode CMap holds one entry per glyph for the
-whole font, so a glyph that draws different text in different places keeps its
-strongest pairing, a GSUB ligature first, then the cmap, then an inferred
-pairing. The ligature comes first because one glyph can be both, as the Carlito
-`fi` ligature and U+FB01 are, and one literal U+FB01 must not turn every `fi`
-of the document into U+FB01.
+the run's last character. A rich run's clusters give their characters to their
+glyphs the same way, so no character of a cluster is lost. In a rich run, a
+glyph that draws none of them by itself, such as the dots an Arabic font draws
+apart from their letter, repeats the text of its cluster, which the run's
+`ActualText` covers, so every glyph of a rich run maps to Unicode. The
+ToUnicode CMap holds one entry per glyph for the whole font, so a glyph that
+draws different text in different places keeps its strongest pairing, a GSUB
+ligature first, then the cmap, then an inferred pairing. The ligature comes
+first because one glyph can be both, as the Carlito `fi` ligature and U+FB01
+are, and one literal U+FB01 must not turn every `fi` of the document into
+U+FB01.
 
 When `LayoutResult::structure` is present, the writer emits deterministic
 `BDC` and `EMC` pairs with page-local MCIDs, `/StructParents`, one parent number
