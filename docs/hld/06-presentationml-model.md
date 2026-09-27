@@ -374,19 +374,32 @@ text-frame handle.
 Table graphic frames expose concrete borrowed `TableRef` and `TableMut`
 handles through `ShapeRef::table` and `ShapeMut::table_mut`. Their cell access
 is total and returns `Option`. Table handles expose row and column counts,
-column widths, and the first-row, last-row, first-column, last-column,
-horizontal-banding, and vertical-banding flags. Cell handles expose plain text,
-typed text-frame mutation, direct fill, four optional margins, merge-origin and
-continuation state, and span height and width.
+column widths, row heights, and the first-row, last-row, first-column,
+last-column, horizontal-banding, and vertical-banding flags. Cell handles
+expose plain text, typed text-frame mutation, direct fill, four optional
+margins, the direct line of each edge, merge-origin and continuation state, and
+span height and width.
+
+```rust
+pub enum CellBorder { Left, Right, Top, Bottom }
+
+TableRef::row_height(&self, row: usize) -> Option<Emu>;
+TableMut::set_row_height(&mut self, row: usize, height: Emu) -> Result<()>;
+TableCellRef::border(&self, edge: CellBorder) -> Option<&CT_LineProperties>;
+TableCellMut::set_border(&mut self, edge: CellBorder, line: Option<CT_LineProperties>);
+```
 
 Changing a column width uses a checked sum and synchronizes the graphic-frame
-width. Merge accepts opposite rectangle corners in either order. It validates
+width. Changing a row height does the same for the frame height and requires a
+positive height. The stored height is a minimum, which PowerPoint grows to fit
+the row's text. A border is the `a:lnL`, `a:lnR`, `a:lnT`, or `a:lnB` line of
+`a:tcPr`, written in that order before the cell fill. Merge accepts opposite rectangle corners in either order. It validates
 the complete rectangle before changing state, rejects overlap with an existing
 merge, migrates typed paragraphs in row-major order, and writes the DrawingML
 origin and continuation pattern described in `05-drawingml-model.md`. Split is
 valid only on a checked merge origin. It restores span one and clears
-continuation flags without redistributing content. Fallible width, merge, and
-split operations stage and serialize a table clone before committing it, so an
+continuation flags without redistributing content. Fallible width, height,
+merge, and split operations stage and serialize a table clone before committing it, so an
 error leaves the table unchanged.
 
 `SlideMut` also exposes the direct shape construction surface:

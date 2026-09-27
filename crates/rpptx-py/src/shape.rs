@@ -361,7 +361,11 @@ impl PyShape {
         self.require_shape_properties(py, "line")?;
         Py::new(
             py,
-            PyLineFormat::new(self.presentation.clone_ref(py), self.path.clone()),
+            PyLineFormat::new(
+                self.presentation.clone_ref(py),
+                self.path.clone(),
+                FillTarget::Line,
+            ),
         )
     }
 

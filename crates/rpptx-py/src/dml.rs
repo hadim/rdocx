@@ -1,7 +1,8 @@
 //! Fill, line, and colour formats, mirroring python-pptx `pptx.dml`.
 //!
-//! Shape fills, line fills, slide backgrounds, and table cell fills share one
-//! fill model, so the formats read and write through a single target.
+//! Shape fills, line fills, slide backgrounds, table cell fills, and cell
+//! border fills share one fill model, so the formats read and write through a
+//! single target.
 
 use oxml_py_support::ContentPath;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
@@ -22,12 +23,15 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 /// The DrawingML fill one format object reads and writes.
+///
+/// `Line` and `CellBorder` also name the line a `LineFormat` reads and writes.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum FillTarget {
     Shape,
     Line,
     Background,
     TableCell,
+    CellBorder(rpptx::CellBorder),
 }
 
 impl FillTarget {
@@ -36,7 +40,57 @@ impl FillTarget {
             Self::Shape | Self::TableCell => ".fill",
             Self::Line => ".line.fill",
             Self::Background => ".background.fill",
+            Self::CellBorder(rpptx::CellBorder::Left) => ".border_left.fill",
+            Self::CellBorder(rpptx::CellBorder::Right) => ".border_right.fill",
+            Self::CellBorder(rpptx::CellBorder::Top) => ".border_top.fill",
+            Self::CellBorder(rpptx::CellBorder::Bottom) => ".border_bottom.fill",
         }
+    }
+
+    fn line_suffix(self) -> &'static str {
+        self.suffix()
+            .strip_suffix(".fill")
+            .expect("every fill suffix ends in .fill")
+    }
+}
+
+/// Reads the shape line or cell border a line target names.
+fn current_line(
+    presentation: &rpptx::Presentation,
+    path: &ContentPath,
+    target: FillTarget,
+) -> PyResult<Option<rpptx::CT_LineProperties>> {
+    Ok(match target {
+        FillTarget::CellBorder(edge) => cell_ref_at(presentation, path)
+            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
+            .border(edge)
+            .cloned(),
+        _ => shape_ref_at(presentation, path)
+            .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?
+            .line()
+            .cloned(),
+    })
+}
+
+/// Replaces the shape line or cell border a line target names.
+fn write_line(
+    py: Python<'_>,
+    presentation: &mut rpptx::Presentation,
+    path: &ContentPath,
+    target: FillTarget,
+    line: rpptx::CT_LineProperties,
+) -> PyResult<()> {
+    match target {
+        FillTarget::CellBorder(edge) => {
+            cell_mut_at(presentation, path)
+                .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
+                .set_border(edge, Some(line));
+            Ok(())
+        }
+        _ => shape_mut_at(presentation, path)
+            .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?
+            .set_line(line)
+            .map_err(|error| rpptx_to_pyerr(py, error)),
     }
 }
 
@@ -51,10 +105,9 @@ fn current_fill(
             .ok_or_else(missing)?
             .fill()
             .cloned(),
-        FillTarget::Line => shape_ref_at(presentation, path)
-            .ok_or_else(missing)?
-            .line()
-            .and_then(|line| line.fill.clone()),
+        FillTarget::Line | FillTarget::CellBorder(_) => {
+            current_line(presentation, path, target)?.and_then(|line| line.fill)
+        }
         FillTarget::Background => presentation
             .slide(slide_index(path)?)
             .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?
@@ -79,16 +132,10 @@ fn write_fill(
         FillTarget::Shape => shape_mut_at(presentation, path)
             .ok_or_else(missing)?
             .set_fill(fill),
-        FillTarget::Line => {
-            let mut line = shape_ref_at(presentation, path)
-                .ok_or_else(missing)?
-                .line()
-                .cloned()
-                .unwrap_or_default();
+        FillTarget::Line | FillTarget::CellBorder(_) => {
+            let mut line = current_line(presentation, path, target)?.unwrap_or_default();
             line.fill = Some(fill);
-            shape_mut_at(presentation, path)
-                .ok_or_else(missing)?
-                .set_line(line)
+            return write_line(py, presentation, path, target, line);
         }
         FillTarget::Background => {
             let index = slide_index(path)?;
@@ -294,16 +341,28 @@ impl PyColorFormat {
     }
 }
 
-/// A live view of the outline of one shape, picture, or connector.
+/// A live view of the outline of one shape, picture, or connector, or of one
+/// table cell border.
 #[pyclass(name = "LineFormat")]
 pub struct PyLineFormat {
     presentation: Py<PyPresentation>,
     path: ContentPath,
+    target: FillTarget,
 }
 
 impl PyLineFormat {
-    pub(crate) fn new(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
-        Self { presentation, path }
+    /// Creates a view of a shape line, with `FillTarget::Line`, or of a cell
+    /// border, with `FillTarget::CellBorder`.
+    pub(crate) fn new(
+        presentation: Py<PyPresentation>,
+        path: ContentPath,
+        target: FillTarget,
+    ) -> Self {
+        Self {
+            presentation,
+            path,
+            target,
+        }
     }
 
     fn validate(&self, py: Python<'_>) -> PyResult<()> {
@@ -312,7 +371,7 @@ impl PyLineFormat {
             &self.presentation.borrow(py),
             &self.path,
             "line",
-            ".line",
+            self.target.line_suffix(),
         )
     }
 }
@@ -328,7 +387,7 @@ impl PyLineFormat {
             PyColorFormat {
                 presentation: self.presentation.clone_ref(py),
                 path: self.path.clone(),
-                target: FillTarget::Line,
+                target: self.target,
                 solidify: true,
             },
         )
@@ -342,7 +401,7 @@ impl PyLineFormat {
             PyFillFormat::new(
                 self.presentation.clone_ref(py),
                 self.path.clone(),
-                FillTarget::Line,
+                self.target,
             ),
         )
     }
@@ -350,9 +409,7 @@ impl PyLineFormat {
     #[getter]
     fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.validate(py)?;
-        let width = shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?
-            .line()
+        let width = current_line(&self.presentation.borrow(py).inner, &self.path, self.target)?
             .and_then(|line| line.width)
             .unwrap_or(0);
         length(py, Some(rpptx::Emu(i64::from(width))))
@@ -368,16 +425,9 @@ impl PyLineFormat {
             )));
         }
         let mut presentation = self.presentation.borrow_mut(py);
-        let missing = || PyIndexError::new_err("shape index out of range");
-        let mut line = shape_ref_at(&presentation.inner, &self.path)
-            .ok_or_else(missing)?
-            .line()
-            .cloned()
-            .unwrap_or_default();
+        let mut line =
+            current_line(&presentation.inner, &self.path, self.target)?.unwrap_or_default();
         line.width = Some(width as u32);
-        shape_mut_at(&mut presentation.inner, &self.path)
-            .ok_or_else(missing)?
-            .set_line(line)
-            .map_err(|error| rpptx_to_pyerr(py, error))
+        write_line(py, &mut presentation.inner, &self.path, self.target, line)
     }
 }

@@ -7769,12 +7769,12 @@ use oxml_layout::{MediaId, PageFrame, Paint, PositionedElement, Rect, walk};
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
-    Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, ChartData,
-    ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput, EmbeddedMutationPolicy,
-    EmbeddedSignatureState, Emu, Error, Fill, HandoutLayout, MediaDiagnostic, MediaFallbackPolicy,
-    MediaKind, MediaPlaybackPhase, MediaPlaybackSettings, MediaPoster, MediaSourceInput,
-    Presentation, PresentationPackageClass, ShapeKind, ShapeRef, TextBullet, TextBulletCharacter,
-    TextBulletChoice, TextFont, TimelinePosition,
+    Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, CellBorder,
+    ChartData, ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput,
+    EmbeddedMutationPolicy, EmbeddedSignatureState, Emu, Error, Fill, HandoutLayout,
+    MediaDiagnostic, MediaFallbackPolicy, MediaKind, MediaPlaybackPhase, MediaPlaybackSettings,
+    MediaPoster, MediaSourceInput, Presentation, PresentationPackageClass, ShapeKind, ShapeRef,
+    TextBullet, TextBulletCharacter, TextBulletChoice, TextFont, TimelinePosition,
 };
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
@@ -13886,6 +13886,161 @@ fn table_mutation_rejects_invalid_ranges_without_partial_changes() {
         assert!(matches!(result, Err(Error::InvalidTableMutation { .. })));
     }
     assert_eq!(presentation.to_bytes().unwrap(), before_overlap);
+}
+
+fn table_border_line(color: &str) -> CT_LineProperties {
+    CT_LineProperties::from_xml(
+        format!(r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></a:ln>"#)
+            .as_bytes(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn row_heights_and_cell_borders_round_trip_with_the_frame_height_in_step() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let fill = Fill::from_xml(br#"<a:solidFill><a:srgbClr val="112233"/></a:solidFill>"#).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_table(2, 2, Emu(10), Emu(20), Emu(200), Emu(100))
+            .expect("add table");
+        let mut table = shape.table_mut().unwrap();
+        assert_eq!(table.row_height(1), Some(Emu(50)));
+        table.set_row_height(1, Emu(80)).unwrap();
+        for (row, height) in [(2, Emu(10)), (0, Emu(0)), (0, Emu(i64::MAX))] {
+            assert!(matches!(
+                table.set_row_height(row, height),
+                Err(Error::InvalidTableMutation { .. })
+            ));
+        }
+        assert_eq!(
+            (
+                table.row_height(0),
+                table.row_height(1),
+                table.row_height(2)
+            ),
+            (Some(Emu(50)), Some(Emu(80)), None)
+        );
+        let mut cell = table.cell_mut(0, 0).unwrap();
+        cell.set_fill(Some(fill.clone()));
+        cell.set_border(CellBorder::Bottom, Some(table_border_line("00FF00")));
+        cell.set_border(CellBorder::Left, Some(table_border_line("FF0000")));
+        cell.set_border(CellBorder::Top, Some(table_border_line("0000FF")));
+        cell.set_border(CellBorder::Top, None);
+        assert_eq!(
+            cell.border(CellBorder::Left),
+            Some(&table_border_line("FF0000"))
+        );
+    }
+
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let shape = slide.shapes().last().unwrap();
+    assert_eq!(shape.size(), Some((Emu(200), Emu(130))));
+    let table = shape.table().unwrap();
+    assert_eq!(table.row_height(1), Some(Emu(80)));
+    let cell = table.cell(0, 0).unwrap();
+    assert_eq!(
+        [
+            CellBorder::Left,
+            CellBorder::Right,
+            CellBorder::Top,
+            CellBorder::Bottom
+        ]
+        .map(|edge| cell.border(edge).cloned()),
+        [
+            Some(table_border_line("FF0000")),
+            None,
+            None,
+            Some(table_border_line("00FF00"))
+        ]
+    );
+    assert_eq!(cell.fill(), Some(&fill));
+    assert_eq!(table.cell(1, 1).unwrap().border(CellBorder::Left), None);
+
+    let package = open_opc(&saved, "row heights and cell borders");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    assert!(xml.contains(r#"<a:tr h="80">"#), "{xml}");
+    let properties = &xml[xml.find("<a:tcPr").unwrap()..];
+    let left = properties.find("<a:lnL").unwrap();
+    let bottom = properties.find("<a:lnB").unwrap();
+    let fill = properties
+        .find(r#"<a:solidFill><a:srgbClr val="112233"/>"#)
+        .unwrap();
+    assert!(left < bottom && bottom < fill, "{properties}");
+}
+
+/// Runs `script` under pinned python-pptx 1.0.2 with the saved deck path as
+/// its only argument and returns what it prints.
+fn python_pptx_1_0_2_reads(deck: &[u8], label: &str, script: &str) -> String {
+    let path = std::env::temp_dir().join(format!(
+        "rpptx-{label}-python-oracle-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&path, deck).unwrap();
+    let output = Command::new("uv")
+        .args([
+            "run",
+            "--with",
+            "python-pptx==1.0.2",
+            "python",
+            "-c",
+            script,
+        ])
+        .arg(&path)
+        .output()
+        .expect("run pinned python-pptx oracle");
+    fs::remove_file(&path).unwrap();
+    assert!(
+        output.status.success(),
+        "python-pptx oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn row_heights_and_cell_borders_read_back_in_pinned_python_pptx() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add slide");
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_table(2, 2, Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+            .unwrap();
+        let mut table = shape.table_mut().unwrap();
+        table.set_row_height(1, Emu(600_000)).unwrap();
+        let mut cell = table.cell_mut(0, 0).unwrap();
+        cell.set_border(CellBorder::Left, Some(table_border_line("FF0000")));
+        cell.set_border(CellBorder::Bottom, Some(table_border_line("00FF00")));
+    }
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "row-heights",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+from pptx.oxml.ns import qn
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+shape = Presentation(sys.argv[1]).slides[0].shapes[-1]
+print([row.height for row in shape.table.rows], shape.height)
+tcPr = shape.table.cell(0, 0)._tc.tcPr
+print([child.tag.split("}")[1] for child in tcPr])
+left = tcPr.find(qn("a:lnL"))
+print(left.get("w"), left.find(qn("a:solidFill"))[0].get("val"))
+"#,
+    );
+    assert_eq!(
+        records,
+        "[457200, 600000] 1057200\n['lnL', 'lnB']\n12700 FF0000\n"
+    );
 }
 
 #[test]

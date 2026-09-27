@@ -64,6 +64,9 @@ pub(crate) fn recovery_hint(path: &ContentPath, suffix: &str) -> String {
             PathSeg::Run(index) => public_path.push_str(&format!(".runs[{index}]")),
         }
     }
+    if let Some(row) = pending_row {
+        public_path.push_str(&format!(".table.rows[{row}]"));
+    }
     public_path.push_str(suffix);
     format!("Re-fetch it with {public_path}.")
 }

@@ -2088,6 +2088,82 @@ def test_table_cells_merge_split_fill_and_margins_like_python_pptx(tmp_path):
     assert read.fill.fore_color.rgb == RGBColor(0xAB, 0xCD, 0xEF)
 
 
+def test_table_row_heights_and_cell_borders_write_what_python_pptx_reads(tmp_path):
+    import rpptx
+    from rpptx.dml.color import RGBColor
+    from rpptx.enum.dml import MSO_FILL_TYPE
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_table(3, 2, 0, 0, rpptx.Inches(4), rpptx.Inches(3))
+    shape = prs.slides[0].shapes[0]
+    rows = shape.table.rows
+    assert len(rows) == 3
+    assert [row.height for row in rows] == [rpptx.Inches(1)] * 3
+    assert isinstance(rows[0].height, rpptx.Length)
+    held = rows[-1]
+    rows[1].height = rpptx.Inches(1.5)
+    assert (held.height, shape.height) == (rpptx.Inches(1), rpptx.Inches(3.5))
+    assert [row.height for row in rows[1:]] == [rpptx.Inches(1.5), rpptx.Inches(1)]
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="row height must be positive"):
+        rows[0].height = 0
+    with pytest.raises(IndexError):
+        _ = rows[3]
+
+    cell = shape.table.cell(0, 0)
+    left = cell.border_left
+    assert (left.width, left.color.rgb, left.fill.type) == (0, None, None)
+    assert prs.to_bytes() == before
+    left.width = rpptx.Pt(2)
+    left.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+    cell.border_bottom.fill.solid()
+    cell.border_bottom.fill.fore_color.rgb = RGBColor(0x00, 0x80, 0x00)
+    cell.fill.solid()
+    cell.fill.fore_color.rgb = RGBColor(0x11, 0x22, 0x33)
+    assert (cell.border_left.width, cell.border_left.color.rgb) == (
+        rpptx.Pt(2),
+        RGBColor(0xFF, 0x00, 0x00),
+    )
+    assert (cell.border_top.fill.type, cell.border_bottom.fill.type) == (None, MSO_FILL_TYPE.SOLID)
+    held_border = cell.border_right
+    prs.slides.add_slide(prs.slide_layouts[6])
+    with pytest.raises(rpptx.StaleElementError, match=r"table\.cell\(0, 0\)\.border_right\."):
+        _ = held_border.width
+    with pytest.raises(rpptx.StaleElementError, match=r"table\.rows\[2\]\."):
+        _ = held.height
+    output = tmp_path / "rows-borders.pptx"
+    prs.save(output)
+    xml = _package_parts(output.read_bytes())["ppt/slides/slide1.xml"].decode()
+    properties = xml[xml.index("<a:tcPr") :]
+    assert (
+        properties.index("<a:lnL")
+        < properties.index("<a:lnB")
+        < properties.index('<a:srgbClr val="112233"/>')
+    )
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    from pptx.oxml.ns import qn
+
+    oracle = pptx.Presentation(output).slides[0].shapes[0]
+    assert [row.height for row in oracle.table.rows] == [
+        rpptx.Inches(1),
+        rpptx.Inches(1.5),
+        rpptx.Inches(1),
+    ]
+    assert oracle.height == rpptx.Inches(3.5)
+    border = oracle.table.cell(0, 0)._tc.tcPr.find(qn("a:lnL"))
+    assert border.get("w") == str(rpptx.Pt(2))
+    assert border.find(qn("a:solidFill"))[0].get("val") == "FF0000"
+
+    def build(deck):
+        table = deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_table(2, 1, 0, 0, 100, 100)
+        table.table.rows[0].height = rpptx.Pt(30)
+
+    source = _python_pptx_deck(tmp_path / "python-pptx-rows.pptx", build)
+    assert rpptx.Presentation(source).slides[0].shapes[0].table.rows[0].height == rpptx.Pt(30)
+
+
 def test_colour_edits_keep_python_pptx_brightness_transforms(tmp_path):
     import rpptx
     from rpptx.dml.color import RGBColor

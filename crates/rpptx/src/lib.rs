@@ -6229,6 +6229,11 @@ impl<'a> TableRef<'a> {
         self.table.grid.columns.get(column).copied()
     }
 
+    /// Returns one stored row height in EMU.
+    pub fn row_height(&self, row: usize) -> Option<Emu> {
+        self.table.rows.get(row).map(|row| row.height)
+    }
+
     /// Returns whether first-row table styling is enabled.
     pub fn first_row(&self) -> bool {
         self.table
@@ -6327,64 +6332,74 @@ impl<'a> TableMut<'a> {
 
     /// Changes one grid width and synchronizes the containing frame width.
     pub fn set_column_width(&mut self, column: usize, width: Emu) -> Result<()> {
+        const OPERATION: &str = "set column width";
         if width.0 <= 0 {
             return Err(invalid_table_mutation(
-                "set column width",
+                OPERATION,
                 "column width must be positive".to_owned(),
             ));
         }
         if column >= self.table.grid.columns.len() {
             return Err(invalid_table_mutation(
-                "set column width",
+                OPERATION,
                 format!("column index {column} is out of range"),
             ));
         }
-        let total_width = self
-            .table
-            .grid
-            .columns
-            .iter()
-            .enumerate()
-            .try_fold(0i64, |total, (index, current)| {
-                total.checked_add(if index == column { width.0 } else { current.0 })
-            })
-            .ok_or_else(|| {
-                invalid_table_mutation(
-                    "set column width",
-                    "table width exceeds the EMU range".to_owned(),
-                )
-            })?;
-        let total_height = self
-            .table
-            .rows
-            .iter()
-            .try_fold(0i64, |total, row| total.checked_add(row.height.0))
-            .ok_or_else(|| {
-                invalid_table_mutation(
-                    "set column width",
-                    "table height exceeds the EMU range".to_owned(),
-                )
-            })?;
-        if total_width <= 0 || total_height <= 0 {
-            return Err(invalid_table_mutation(
-                "set column width",
-                "table width and height must remain positive".to_owned(),
-            ));
-        }
-
         let mut staged = self.table.clone();
         staged.grid.columns[column] = width;
+        let (total_width, total_height) = table_extent(&staged, OPERATION)?;
         staged
             .to_xml()
-            .map_err(|error| invalid_table_mutation("set column width", error.to_string()))?;
+            .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
         self.table.grid.columns[column] = width;
         let height = self
             .transform
             .extent
-            .map_or(Emu(total_height), |extent| extent.cy);
+            .map_or(total_height, |extent| extent.cy);
         self.transform.extent = Some(CT_PositiveSize2D {
-            cx: Emu(total_width),
+            cx: total_width,
             cy: height,
+        });
+        Ok(())
+    }
+
+    /// Returns one stored row height in EMU.
+    pub fn row_height(&self, row: usize) -> Option<Emu> {
+        self.table.rows.get(row).map(|row| row.height)
+    }
+
+    /// Changes one row height and synchronizes the containing frame height.
+    ///
+    /// The stored height is a minimum, as in PowerPoint, which grows a row to
+    /// fit its text when it lays the table out.
+    pub fn set_row_height(&mut self, row: usize, height: Emu) -> Result<()> {
+        const OPERATION: &str = "set row height";
+        if height.0 <= 0 {
+            return Err(invalid_table_mutation(
+                OPERATION,
+                "row height must be positive".to_owned(),
+            ));
+        }
+        if row >= self.table.rows.len() {
+            return Err(invalid_table_mutation(
+                OPERATION,
+                format!("row index {row} is out of range"),
+            ));
+        }
+        let mut staged = self.table.clone();
+        staged.rows[row].height = height;
+        let (total_width, total_height) = table_extent(&staged, OPERATION)?;
+        staged
+            .to_xml()
+            .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
+        self.table.rows[row].height = height;
+        let width = self
+            .transform
+            .extent
+            .map_or(total_width, |extent| extent.cx);
+        self.transform.extent = Some(CT_PositiveSize2D {
+            cx: width,
+            cy: total_height,
         });
         Ok(())
     }
@@ -6468,6 +6483,16 @@ impl<'a> TableMut<'a> {
     }
 }
 
+/// One edge of a table cell, drawn by the `a:lnL`, `a:lnR`, `a:lnT`, or `a:lnB`
+/// line of its `a:tcPr`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CellBorder {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
 /// A borrowed explicit table-grid cell.
 #[derive(Clone, Copy)]
 pub struct TableCellRef<'a> {
@@ -6532,6 +6557,17 @@ impl TableCellRef<'_> {
                     properties.margin_bottom,
                 )
             })
+    }
+
+    /// Returns the direct line of one cell edge, when present.
+    pub fn border(&self, edge: CellBorder) -> Option<&CT_LineProperties> {
+        let properties = self.cell.properties.as_ref()?;
+        match edge {
+            CellBorder::Left => properties.left.as_ref(),
+            CellBorder::Right => properties.right.as_ref(),
+            CellBorder::Top => properties.top.as_ref(),
+            CellBorder::Bottom => properties.bottom.as_ref(),
+        }
     }
 }
 
@@ -6601,6 +6637,29 @@ impl TableCellMut<'_> {
             properties.margin_top,
             properties.margin_bottom,
         )
+    }
+
+    /// Returns the direct line of one cell edge, when present.
+    pub fn border(&self, edge: CellBorder) -> Option<&CT_LineProperties> {
+        let properties = self.cell_ref().cell.properties.as_ref()?;
+        match edge {
+            CellBorder::Left => properties.left.as_ref(),
+            CellBorder::Right => properties.right.as_ref(),
+            CellBorder::Top => properties.top.as_ref(),
+            CellBorder::Bottom => properties.bottom.as_ref(),
+        }
+    }
+
+    /// Replaces or clears the direct line of one cell edge.
+    pub fn set_border(&mut self, edge: CellBorder, line: Option<CT_LineProperties>) {
+        let properties = self.properties_mut();
+        let slot = match edge {
+            CellBorder::Left => &mut properties.left,
+            CellBorder::Right => &mut properties.right,
+            CellBorder::Top => &mut properties.top,
+            CellBorder::Bottom => &mut properties.bottom,
+        };
+        *slot = line;
     }
 
     /// Returns whether this cell is the top-left origin of a merge.
@@ -6673,6 +6732,32 @@ fn table_properties_mut(table: &mut CT_Table) -> &mut CT_TableProperties {
     table
         .properties
         .get_or_insert_with(CT_TableProperties::default)
+}
+
+/// Returns the checked sums of a table's column widths and row heights.
+fn table_extent(table: &CT_Table, operation: &'static str) -> Result<(Emu, Emu)> {
+    let total_width = table
+        .grid
+        .columns
+        .iter()
+        .try_fold(0i64, |total, width| total.checked_add(width.0))
+        .ok_or_else(|| {
+            invalid_table_mutation(operation, "table width exceeds the EMU range".to_owned())
+        })?;
+    let total_height = table
+        .rows
+        .iter()
+        .try_fold(0i64, |total, row| total.checked_add(row.height.0))
+        .ok_or_else(|| {
+            invalid_table_mutation(operation, "table height exceeds the EMU range".to_owned())
+        })?;
+    if total_width <= 0 || total_height <= 0 {
+        return Err(invalid_table_mutation(
+            operation,
+            "table width and height must remain positive".to_owned(),
+        ));
+    }
+    Ok((Emu(total_width), Emu(total_height)))
 }
 
 fn rectangular_dimensions(table: &CT_Table) -> std::result::Result<(usize, usize), String> {

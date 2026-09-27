@@ -337,7 +337,14 @@ is not a merge origin raises `RpptxError` and leaves the table unchanged.
 `margin_right`, `margin_top`, and `margin_bottom` read the `a:tcPr` margins as
 `Length` and follow the text formatting rules below. An absent margin reads
 `None` where python-pptx reports its 91440 and 45720 EMU defaults, and a value
-outside the 32-bit coordinate range raises `ValueError`.
+outside the 32-bit coordinate range raises `ValueError`. python-pptx has no
+cell border API, so `border_left`, `border_right`, `border_top`, and
+`border_bottom` are live `LineFormat` views of `a:lnL`, `a:lnR`, `a:lnT`, and
+`a:lnB`, which reading never creates. `Table.rows` is a lazy `RowCollection`
+of `Row` handles, like `columns`. `Row.height` reads the stored height as
+`Length`, and assigning it keeps the frame height equal to the sum of the rows,
+as a column width keeps the frame width. A height that is not positive raises
+`RpptxError`. None of these writes advances the revision.
 
 `TextFrame.autofit`
 reports `none`, `normal`, or `shape` when the body carries an explicit choice.

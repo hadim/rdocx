@@ -34,6 +34,8 @@ from rpptx._rpptx import (
     Paragraph,
     ParagraphCollection,
     PlaceholderCollection,
+    Row,
+    RowCollection,
     Run,
     RunCollection,
     Shape,
@@ -309,7 +311,18 @@ def exercise_rpptx_table_types(table: Table) -> None:
         origin.margin_top,
         origin.margin_bottom,
     )
-    (spans, cell_margins)
+    rows: RowCollection = table.rows
+    row: Row = rows[0]
+    row.height = Inches(1)
+    row_heights: list[Length] = [current.height for current in rows]
+    borders: tuple[LineFormat, ...] = (
+        origin.border_left,
+        origin.border_right,
+        origin.border_top,
+        origin.border_bottom,
+    )
+    borders[0].width = Pt(1)
+    (spans, cell_margins, row_heights, rows[:])
 
 
 def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
@@ -370,6 +383,8 @@ if TYPE_CHECKING:
     Paragraph()  # type: ignore[call-arg]
     ParagraphCollection()  # type: ignore[call-arg]
     PlaceholderCollection()  # type: ignore[call-arg]
+    Row()  # type: ignore[call-arg]
+    RowCollection()  # type: ignore[call-arg]
     Run()  # type: ignore[call-arg]
     RunCollection()  # type: ignore[call-arg]
     Shape()  # type: ignore[call-arg]

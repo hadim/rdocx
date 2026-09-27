@@ -3,7 +3,7 @@ use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PySlice};
 
-use crate::dml::{FillTarget, PyFillFormat};
+use crate::dml::{FillTarget, PyFillFormat, PyLineFormat};
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
 use crate::shape::{length, shape_mut_at, shape_ref_at};
@@ -13,6 +13,8 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTable>()?;
     module.add_class::<PyColumn>()?;
     module.add_class::<PyColumnCollection>()?;
+    module.add_class::<PyRow>()?;
+    module.add_class::<PyRowCollection>()?;
     module.add_class::<PyCell>()?;
     Ok(())
 }
@@ -99,6 +101,18 @@ impl PyTable {
         Py::new(
             py,
             PyColumnCollection {
+                presentation: self.presentation.clone_ref(py),
+                path: self.path.clone(),
+            },
+        )
+    }
+
+    #[getter]
+    fn rows(&self, py: Python<'_>) -> PyResult<Py<PyRowCollection>> {
+        self.dimensions(py)?;
+        Py::new(
+            py,
+            PyRowCollection {
                 presentation: self.presentation.clone_ref(py),
                 path: self.path.clone(),
             },
@@ -260,6 +274,146 @@ impl PyColumn {
     }
 }
 
+#[pyclass(name = "RowCollection")]
+pub struct PyRowCollection {
+    presentation: Py<PyPresentation>,
+    path: ContentPath,
+}
+
+impl PyRowCollection {
+    fn len(&self, py: Python<'_>) -> PyResult<usize> {
+        validate_path(
+            py,
+            &self.presentation.borrow(py),
+            &self.path,
+            "row collection",
+            ".table.rows",
+        )?;
+        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
+            .and_then(|shape| shape.table())
+            .map(|table| table.row_count())
+            .ok_or_else(|| PyValueError::new_err("shape has no table"))
+    }
+
+    fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyRow>> {
+        let mut segments = self.path.segs.clone();
+        segments.push(PathSeg::Row(index));
+        let path = self.presentation.borrow(py).revisions.capture(segments);
+        Py::new(
+            py,
+            PyRow {
+                presentation: self.presentation.clone_ref(py),
+                path,
+            },
+        )
+    }
+}
+
+#[pymethods]
+impl PyRowCollection {
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        self.len(py)
+    }
+
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        let len = self.len(py)?;
+        if let Ok(index) = key.extract::<isize>() {
+            return Ok(self
+                .item(py, normalize_index(index, len, "row")?)?
+                .into_any());
+        }
+        if key.is_instance_of::<PySlice>() {
+            let (start, stop, step): (isize, isize, isize) =
+                key.call_method1("indices", (len,))?.extract()?;
+            let items = PyList::empty(py);
+            let mut index = start;
+            while if step > 0 { index < stop } else { index > stop } {
+                items.append(self.item(py, index as usize)?)?;
+                index += step;
+            }
+            return Ok(items.into_any().unbind());
+        }
+        Err(PyTypeError::new_err(
+            "row indices must be integers or slices",
+        ))
+    }
+
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyRowIterator>> {
+        self.len(py)?;
+        Py::new(
+            py,
+            PyRowIterator {
+                presentation: self.presentation.clone_ref(py),
+                path: self.path.clone(),
+                index: 0,
+            },
+        )
+    }
+}
+
+#[pyclass]
+struct PyRowIterator {
+    presentation: Py<PyPresentation>,
+    path: ContentPath,
+    index: usize,
+}
+
+#[pymethods]
+impl PyRowIterator {
+    fn __iter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyRow>>> {
+        let collection = PyRowCollection {
+            presentation: self.presentation.clone_ref(py),
+            path: self.path.clone(),
+        };
+        if self.index >= collection.len(py)? {
+            return Ok(None);
+        }
+        let index = self.index;
+        self.index += 1;
+        collection.item(py, index).map(Some)
+    }
+}
+
+#[pyclass(name = "Row")]
+pub struct PyRow {
+    presentation: Py<PyPresentation>,
+    path: ContentPath,
+}
+
+#[pymethods]
+impl PyRow {
+    /// The stored row height, a minimum that PowerPoint grows to fit text.
+    #[getter]
+    fn height(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        validate_path(py, &self.presentation.borrow(py), &self.path, "row", "")?;
+        let row =
+            row_index(&self.path).ok_or_else(|| PyIndexError::new_err("row index is missing"))?;
+        let height = shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
+            .and_then(|shape| shape.table())
+            .and_then(|table| table.row_height(row))
+            .ok_or_else(|| PyIndexError::new_err("row index out of range"))?;
+        length(py, Some(height))
+    }
+
+    /// Sets the row height and keeps the table frame height equal to the sum
+    /// of its rows.
+    #[setter]
+    fn set_height(&self, py: Python<'_>, height: i64) -> PyResult<()> {
+        validate_path(py, &self.presentation.borrow(py), &self.path, "row", "")?;
+        let row =
+            row_index(&self.path).ok_or_else(|| PyIndexError::new_err("row index is missing"))?;
+        shape_mut_at(&mut self.presentation.borrow_mut(py).inner, &self.path)
+            .and_then(rpptx::ShapeMut::into_table_mut)
+            .ok_or_else(|| PyValueError::new_err("shape has no table"))?
+            .set_row_height(row, rpptx::Emu(height))
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+}
+
 #[pyclass(name = "Cell")]
 pub struct PyCell {
     presentation: Py<PyPresentation>,
@@ -289,6 +443,18 @@ impl PyCell {
         cell_mut_at(&mut presentation.inner, &self.path)
             .map(|mut cell| edit(&mut cell))
             .ok_or_else(|| PyIndexError::new_err("cell index out of range"))
+    }
+
+    fn border(&self, py: Python<'_>, edge: rpptx::CellBorder) -> PyResult<Py<PyLineFormat>> {
+        self.read(py, |_| ())?;
+        Py::new(
+            py,
+            PyLineFormat::new(
+                self.presentation.clone_ref(py),
+                self.path.clone(),
+                FillTarget::CellBorder(edge),
+            ),
+        )
     }
 
     fn margin(
@@ -448,5 +614,29 @@ impl PyCell {
     #[setter]
     fn set_margin_bottom(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
         self.set_margin(py, |margins| &mut margins.3, value)
+    }
+
+    /// The `a:lnL` border as a live `LineFormat`.
+    #[getter]
+    fn border_left(&self, py: Python<'_>) -> PyResult<Py<PyLineFormat>> {
+        self.border(py, rpptx::CellBorder::Left)
+    }
+
+    /// The `a:lnR` border as a live `LineFormat`.
+    #[getter]
+    fn border_right(&self, py: Python<'_>) -> PyResult<Py<PyLineFormat>> {
+        self.border(py, rpptx::CellBorder::Right)
+    }
+
+    /// The `a:lnT` border as a live `LineFormat`.
+    #[getter]
+    fn border_top(&self, py: Python<'_>) -> PyResult<Py<PyLineFormat>> {
+        self.border(py, rpptx::CellBorder::Top)
+    }
+
+    /// The `a:lnB` border as a live `LineFormat`.
+    #[getter]
+    fn border_bottom(&self, py: Python<'_>) -> PyResult<Py<PyLineFormat>> {
+        self.border(py, rpptx::CellBorder::Bottom)
     }
 }
