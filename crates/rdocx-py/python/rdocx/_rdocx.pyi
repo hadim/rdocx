@@ -456,6 +456,30 @@ class Document:
     def comments(self) -> tuple[Comment, ...]: ...
     @property
     def sections(self) -> tuple[Section, ...]: ...
+    def update_section(
+        self,
+        index: int,
+        *,
+        orientation: _Literal["portrait", "landscape"] | None = None,
+        page_width: int | None = None,
+        page_height: int | None = None,
+        margin_top: int | None = None,
+        margin_right: int | None = None,
+        margin_bottom: int | None = None,
+        margin_left: int | None = None,
+        gutter: int | None = None,
+        column_count: int | None = None,
+        column_spacing: int | None = None,
+        page_number_start: int | None = None,
+        header_distance: int | None = None,
+        footer_distance: int | None = None,
+        different_first_page: bool | None = None,
+        break_type: _Literal[
+            "nextPage", "continuous", "evenPage", "oddPage", "nextColumn"
+        ] | None = None,
+    ) -> Section: ...
+    def insert_section(self, index: int) -> None: ...
+    def remove_section(self, index: int) -> None: ...
     @property
     def styles(self) -> tuple[Style, ...]: ...
     @property

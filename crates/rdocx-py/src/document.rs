@@ -7,6 +7,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
 
+use rdocx_oxml::{ST_PageOrientation, ST_SectionType};
+
 use crate::paragraph::{PyParagraph, PyParagraphCollection};
 use crate::rdocx_to_pyerr;
 use crate::table::{PyTable, PyTableCollection};
@@ -1087,6 +1089,25 @@ fn section_snapshot(section: rdocx::SectionRef<'_>) -> PySection {
     }
 }
 
+/// A section length the caller gave, or the section's current explicit one.
+///
+/// The native setters write paired values together, so a value given alone
+/// keeps its partner as the section has it. A partner the section never set
+/// is refused rather than invented.
+fn given_or_current_length(
+    given: Option<i64>,
+    current: Option<rdocx::Twips>,
+    name: &str,
+) -> PyResult<rdocx::Length> {
+    match (given, current) {
+        (Some(emu), _) => Ok(rdocx::Length::emu(emu)),
+        (None, Some(twips)) => Ok(rdocx::Length::twips(twips.0)),
+        (None, None) => Err(PyValueError::new_err(format!(
+            "the section has no {name} to keep, so give {name} too"
+        ))),
+    }
+}
+
 fn style_snapshot(style: rdocx::style::Style<'_>) -> PyStyle {
     PyStyle {
         style_id: style.style_id().to_owned(),
@@ -1326,6 +1347,193 @@ impl PyDocument {
             .map(section_snapshot)
             .collect::<Vec<_>>();
         PyTuple::new(py, sections)
+    }
+
+    #[pyo3(signature = (
+        index,
+        *,
+        orientation = None,
+        page_width = None,
+        page_height = None,
+        margin_top = None,
+        margin_right = None,
+        margin_bottom = None,
+        margin_left = None,
+        gutter = None,
+        column_count = None,
+        column_spacing = None,
+        page_number_start = None,
+        header_distance = None,
+        footer_distance = None,
+        different_first_page = None,
+        break_type = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn update_section(
+        &mut self,
+        py: Python<'_>,
+        index: usize,
+        orientation: Option<&str>,
+        page_width: Option<i64>,
+        page_height: Option<i64>,
+        margin_top: Option<i64>,
+        margin_right: Option<i64>,
+        margin_bottom: Option<i64>,
+        margin_left: Option<i64>,
+        gutter: Option<i64>,
+        column_count: Option<u32>,
+        column_spacing: Option<i64>,
+        page_number_start: Option<u32>,
+        header_distance: Option<i64>,
+        footer_distance: Option<i64>,
+        different_first_page: Option<bool>,
+        break_type: Option<&str>,
+    ) -> PyResult<PySection> {
+        let orientation = orientation
+            .map(|value| {
+                ST_PageOrientation::from_str(value)
+                    .map_err(|_| PyValueError::new_err("orientation must be portrait or landscape"))
+            })
+            .transpose()?;
+        let break_type = break_type
+            .map(|value| {
+                ST_SectionType::from_str(value).map_err(|_| {
+                    PyValueError::new_err(
+                        "break type must be nextPage, continuous, evenPage, oddPage or nextColumn",
+                    )
+                })
+            })
+            .transpose()?;
+        let mut section = self
+            .inner
+            .section_mut(index)
+            .ok_or_else(|| PyIndexError::new_err("section index out of range"))?;
+
+        let current = section.properties();
+        let page_size = if page_width.is_some() || page_height.is_some() {
+            Some((
+                given_or_current_length(page_width, current.page_width, "page_width")?,
+                given_or_current_length(page_height, current.page_height, "page_height")?,
+            ))
+        } else {
+            None
+        };
+        let margins = if [margin_top, margin_right, margin_bottom, margin_left]
+            .iter()
+            .any(Option::is_some)
+        {
+            Some((
+                given_or_current_length(margin_top, current.margin_top, "margin_top")?,
+                given_or_current_length(margin_right, current.margin_right, "margin_right")?,
+                given_or_current_length(margin_bottom, current.margin_bottom, "margin_bottom")?,
+                given_or_current_length(margin_left, current.margin_left, "margin_left")?,
+            ))
+        } else {
+            None
+        };
+        let columns = if column_count.is_some() || column_spacing.is_some() {
+            // Partners come from the equal-width view the snapshot reports, so
+            // a section in unequal-width tracks has none to keep, and one value
+            // given alone never rewrites its tracks.
+            let current = section.columns();
+            let count = column_count
+                .or(current.map(|(count, _)| count))
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "the section has no column_count to keep, so give column_count too",
+                    )
+                })?;
+            let spacing = given_or_current_length(
+                column_spacing,
+                current.map(|(_, spacing)| spacing.as_twips()),
+                "column_spacing",
+            )?;
+            Some((count, spacing))
+        } else {
+            None
+        };
+        let distances = if header_distance.is_some() || footer_distance.is_some() {
+            Some((
+                given_or_current_length(
+                    header_distance,
+                    current.header_distance,
+                    "header_distance",
+                )?,
+                given_or_current_length(
+                    footer_distance,
+                    current.footer_distance,
+                    "footer_distance",
+                )?,
+            ))
+        } else {
+            None
+        };
+
+        // The native setters check one value at a time, so restore the
+        // section if a later value is rejected after an earlier one applied.
+        let saved = section.properties().clone();
+        let applied = (|| -> rdocx::Result<()> {
+            if let Some((width, height)) = page_size {
+                section.set_page_size(width, height)?;
+            }
+            if let Some(orientation) = orientation {
+                section.set_orientation(orientation);
+            }
+            if let Some((top, right, bottom, left)) = margins {
+                section.set_margins(top, right, bottom, left)?;
+            }
+            if let Some(gutter) = gutter {
+                section.set_gutter(rdocx::Length::emu(gutter))?;
+            }
+            if let Some((count, spacing)) = columns {
+                section.set_columns(count, spacing)?;
+            }
+            if let Some(start) = page_number_start {
+                section.set_page_number_start(start)?;
+            }
+            if let Some((header, footer)) = distances {
+                section.set_header_footer_distance(header, footer)?;
+            }
+            if let Some(enabled) = different_first_page {
+                section.set_different_first_page(enabled);
+            }
+            if let Some(break_type) = break_type {
+                section.set_break_type(break_type);
+            }
+            Ok(())
+        })();
+        if let Err(error) = applied {
+            *section.properties_mut() = saved;
+            return Err(rdocx_to_pyerr(py, error));
+        }
+        Ok(self
+            .inner
+            .sections()
+            .nth(index)
+            .map(section_snapshot)
+            .expect("the updated section exists"))
+    }
+
+    fn insert_section(&mut self, py: Python<'_>, index: usize) -> PyResult<()> {
+        if index > self.inner.section_count() {
+            return Err(PyIndexError::new_err("section index out of range"));
+        }
+        self.inner
+            .insert_section(index)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    fn remove_section(&mut self, py: Python<'_>, index: usize) -> PyResult<()> {
+        if index >= self.inner.section_count() {
+            return Err(PyIndexError::new_err("section index out of range"));
+        }
+        self.inner
+            .remove_section(index)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
     }
 
     #[getter]

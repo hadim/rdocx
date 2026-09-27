@@ -695,6 +695,125 @@ fn legacy_section_geometry_setters_preserve_infallible_compatibility() {
     assert_eq!(section.footer_distance.unwrap().0, -5);
 }
 
+#[test]
+fn section_page_margin_setters_write_every_required_attribute() {
+    let build = |fill: bool| {
+        let mut document = Document::new();
+        document.add_paragraph("first");
+        for index in 1..4 {
+            document.insert_section(index).unwrap();
+            document.add_paragraph("next");
+        }
+        if fill {
+            let inch = Length::twips(1440);
+            let half_inch = Length::twips(720);
+            let mut section = document.section_mut(1).unwrap();
+            section.set_gutter(Length::twips(0)).unwrap();
+            let mut section = document.section_mut(2).unwrap();
+            section.set_margins(inch, inch, inch, inch).unwrap();
+            let mut section = document.section_mut(3).unwrap();
+            section
+                .set_header_footer_distance(half_inch, half_inch)
+                .unwrap();
+        }
+        document
+    };
+
+    // Each setter writes the value layout assumes for an absent one, and so
+    // does every attribute it fills in, so the pages are unchanged.
+    let mut filled = build(true);
+    assert_eq!(
+        filled.to_pdf_deterministic().unwrap(),
+        build(false).to_pdf_deterministic().unwrap()
+    );
+    let xml = String::from_utf8(document_xml(&mut filled)).unwrap();
+    let complete = concat!(
+        r#"<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440""#,
+        r#" w:gutter="0" w:header="720" w:footer="720"/>"#,
+    );
+    assert_eq!(xml.matches("<w:pgMar ").count(), 4, "{xml}");
+    assert_eq!(xml.matches(complete).count(), 4, "{xml}");
+
+    let mut section = filled.section_mut(3).unwrap();
+    section
+        .set_header_footer_distance(Length::twips(360), Length::twips(540))
+        .unwrap();
+    section
+        .set_margins(
+            Length::twips(720),
+            Length::twips(1080),
+            Length::twips(1440),
+            Length::twips(1800),
+        )
+        .unwrap();
+    assert_eq!(
+        section
+            .header_footer_distance()
+            .map(|(header, footer)| (header.to_twips(), footer.to_twips())),
+        Some((360, 540))
+    );
+    assert_eq!(section.gutter().map(Length::to_twips), Some(0));
+}
+
+/// `test_section_edits_write_the_native_body` in
+/// `crates/rdocx-py/tests/test_core.py` makes the same edits from Python and
+/// pins the same body, so CI checks that the binding writes what these native
+/// calls write.
+#[test]
+fn section_edits_write_the_body_the_python_binding_pins() {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.insert_section(1).unwrap();
+    let mut section = document.section_mut(0).unwrap();
+    section.set_orientation(ST_PageOrientation::Landscape);
+    // The values Python leaves out keep the section's own ones.
+    section
+        .set_margins(
+            Length::emu(457200),
+            Length::twips(1440),
+            Length::twips(1440),
+            Length::emu(1828800),
+        )
+        .unwrap();
+    section.set_page_number_start(3).unwrap();
+    section
+        .set_header_footer_distance(Length::twips(720), Length::emu(228600))
+        .unwrap();
+    section.set_different_first_page(true);
+    let mut section = document.section_mut(1).unwrap();
+    section
+        .set_page_size(Length::emu(7772400), Length::emu(10058400))
+        .unwrap();
+    section
+        .set_margins(
+            Length::emu(914400),
+            Length::emu(1143000),
+            Length::emu(685800),
+            Length::emu(1371600),
+        )
+        .unwrap();
+    section.set_gutter(Length::emu(127000)).unwrap();
+    section.set_columns(2, Length::emu(457200)).unwrap();
+    section.set_break_type(ST_SectionType::Continuous);
+    document.add_paragraph("second");
+
+    assert_eq!(
+        compact_body_xml(&mut document),
+        concat!(
+            r#"<w:body><w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:pPr>"#,
+            r#"<w:sectPr><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>"#,
+            r#"<w:pgMar w:top="720" w:right="1440" w:bottom="1440" w:left="2880""#,
+            r#" w:gutter="0" w:header="720" w:footer="360"/>"#,
+            r#"<w:pgNumType w:start="3"/><w:titlePg/></w:sectPr></w:pPr></w:p>"#,
+            r#"<w:p><w:r><w:t>second</w:t></w:r></w:p><w:sectPr>"#,
+            r#"<w:type w:val="continuous"/><w:pgSz w:w="12240" w:h="15840"/>"#,
+            r#"<w:pgMar w:top="1440" w:right="1800" w:bottom="1080" w:left="2160""#,
+            r#" w:gutter="200" w:header="720" w:footer="720"/>"#,
+            r#"<w:cols w:num="2" w:space="720"/></w:sectPr></w:body>"#,
+        )
+    );
+}
+
 struct F251OracleArtifacts {
     path: std::path::PathBuf,
 }

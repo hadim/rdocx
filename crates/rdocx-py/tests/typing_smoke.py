@@ -134,6 +134,17 @@ def exercise_rdocx_types(path: Path) -> None:
     )
     comments: tuple[Comment, ...] = document.comments
     sections: tuple[Section, ...] = document.sections
+    updated_section: Section = document.update_section(
+        0,
+        orientation="landscape",
+        margin_top=Inches(0.5),
+        column_count=2,
+        column_spacing=Inches(0.25),
+        different_first_page=True,
+        break_type="continuous",
+    )
+    document.insert_section(1)
+    document.remove_section(1)
     styles: tuple[Style, ...] = document.styles
     stories: tuple[Story, ...] = document.stories
     image_data: bytes | None = document.image_data("rId1")
@@ -231,6 +242,7 @@ def exercise_rdocx_types(path: Path) -> None:
         fragment_kind,
         inserted_picture,
         story_comment_id,
+        updated_section,
     )
     accepted, dated, replaced, matched, updated
 

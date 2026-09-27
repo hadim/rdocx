@@ -674,10 +674,13 @@ properties. Both handles read page size, orientation, margins, gutter,
 equal-width columns, page-number start, header and footer distance, title-page
 state, and break type. The mutable handle adds checked setters for every value,
 normalizes page dimensions when setting orientation, and rejects invalid or
-out-of-range inputs before changing any field. `Document` adds `section_count`,
-`sections`, total `section` and `section_mut` lookup, and fallible staged
-`insert_section` and `remove_section` operations. Its older final-section
-geometry convenience setters remain infallible and unchecked.
+out-of-range inputs before changing any field. The margin, gutter, and header
+and footer distance setters fill every other `w:pgMar` value the section lacks
+with the default that layout already assumes for it, so the written element
+carries all seven attributes `CT_PageMar` requires. `Document` adds
+`section_count`, `sections`, total `section` and `section_mut` lookup, and
+fallible staged `insert_section` and `remove_section` operations. Its older
+final-section geometry convenience setters remain infallible and unchecked.
 
 Native Rust also exposes non-exhaustive `HeaderFooterKind`, the existing
 `HdrFtrType`, and owned `SectionStory`. `Document::section_story` resolves one
@@ -690,16 +693,37 @@ also exposes `even_and_odd_headers` and `set_even_and_odd_headers`, while first
 story creation enables section `titlePg`. These are additive pre-1.0 native
 Rust APIs. Python exposes immutable inspection snapshots, and only the default
 header and footer text setters `Document.set_header` and `Document.set_footer`
-as mutation entry points. WASM and CLI gain no corresponding binding surface.
+as story mutation entry points. WASM and CLI gain no corresponding binding
+surface.
 
 `CT_SectPr` adds typed page-number start and raw child-position state, while
 `PageFrame` adds `displayed_page_number` beside its physical `page_number`.
 These model and handle additions are additive APIs on the published pre-1.0
 Rust crates, though exhaustive struct literals can require new fields. The
 published `CT_SectPr.header_refs` and `footer_refs` types remain
-`Vec<HdrFtrRef>` with the complete native vector surface. Python, WASM, and CLI
-gain no section mutation entry point and retain their existing package and
-render behavior.
+`Vec<HdrFtrRef>` with the complete native vector surface. WASM and CLI gain no
+section mutation entry point and retain their existing package and render
+behavior.
+
+Python `Section` values stay frozen snapshots. `Document.update_section(index,
+**values)` edits one section through the checked native setters and returns
+its new snapshot. The keywords are the snapshot's own field names, from
+`orientation` and `page_width` to `break_type`, with EMU lengths and the
+`ST_PageOrientation` and `ST_SectionType` spellings. The native setters write
+page size, the four margins, equal-width columns and the header and footer
+distances as pairs or quartets, so a value given alone keeps its partners as
+the section already has them, and a partner the section never set raises
+`ValueError` rather than being invented. Column partners come from the
+equal-width view the snapshot reports, so `column_count` or `column_spacing`
+alone raises on a section laid out in unequal-width tracks rather than
+rewriting them. Page size applies before orientation, which then normalizes
+the dimensions as the native setter does.
+The whole call is atomic: a name or partner problem raises before any change,
+and a value a native setter rejects restores the section. Section edits move
+no content, so they keep live handles valid and do not advance the revision.
+`Document.insert_section(index)` and `remove_section(index)` call the staged
+native operations, reject an out-of-range index with `IndexError`, and
+advance the revision once, because they add or merge body content.
 
 Python `Document.sections`, `styles`, `stories`, `story_items`,
 `header_footer_variants`, and `hyperlinks` return tuples of frozen typed
