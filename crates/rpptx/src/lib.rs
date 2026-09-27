@@ -22,10 +22,11 @@ use oxml_chart::CT_ChartSpace;
 pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
-pub use oxml_core::units::{Angle, Emu};
+pub use oxml_core::units::{Angle, Emu, Percent1000};
 pub use oxml_drawing::color::ColorChoice;
 #[cfg(feature = "render")]
 use oxml_drawing::color::ColorMap;
+use oxml_drawing::fill::RelativeRect;
 pub use oxml_drawing::fill::{Fill, NoFill, PatternFill, SolidFill};
 use oxml_drawing::geometry::{Guide, GuideOp, GuideOperand};
 pub use oxml_drawing::line::CT_LineProperties;
@@ -6061,6 +6062,51 @@ impl<'a> ShapeMut<'a> {
         Ok(())
     }
 
+    /// Crops a picture by left, top, right, and bottom insets of its image.
+    ///
+    /// Each inset is a share of the image, where `Percent1000(25_000)` is a
+    /// quarter, and a negative inset extends the image. An edge keeps its
+    /// stored attribute when its value is unchanged, a changed edge of zero
+    /// drops its attribute, and four zero insets add no `a:srcRect` to a
+    /// picture without one. Other shape kinds are rejected.
+    pub fn set_crop(
+        &mut self,
+        left: Percent1000,
+        top: Percent1000,
+        right: Percent1000,
+        bottom: Percent1000,
+    ) -> Result<()> {
+        const OPERATION: &str = "set crop";
+        let shape_kind = shape_kind(self.child);
+        let ShapeTreeChild::Picture(picture) = self.child else {
+            return Err(Error::UnsupportedShapeMutation {
+                operation: OPERATION,
+                shape_kind,
+            });
+        };
+        let fill = picture
+            .blip_fill
+            .as_mut()
+            .ok_or_else(|| invalid_shape_mutation(OPERATION, "picture has no p:blipFill"))?;
+        let zero = Percent1000::default();
+        if fill.source_rect.is_none() && [left, top, right, bottom] == [zero; 4] {
+            return Ok(());
+        }
+        let edge = |stored: Option<Percent1000>, value: Percent1000| {
+            if stored.unwrap_or_default() == value {
+                stored
+            } else {
+                (value != zero).then_some(value)
+            }
+        };
+        let rect = fill.source_rect.get_or_insert_with(RelativeRect::default);
+        rect.left = edge(rect.left, left);
+        rect.top = edge(rect.top, top);
+        rect.right = edge(rect.right, right);
+        rect.bottom = edge(rect.bottom, bottom);
+        Ok(())
+    }
+
     /// Inserts or replaces one finite preset-geometry adjustment.
     pub fn set_adjust_value(&mut self, name: &str, value: f64) -> Result<()> {
         if !value.is_finite() {
@@ -7436,6 +7482,28 @@ impl<'a> ShapeRef<'a> {
     /// Returns the direct line of a shape, picture, or connector.
     pub fn line(&self) -> Option<&'a CT_LineProperties> {
         shape_properties(self.child)?.line.as_ref()
+    }
+
+    /// Returns a picture's `a:srcRect` crop as left, top, right, and bottom
+    /// insets of its image, reading an absent edge as zero.
+    ///
+    /// Other shape kinds return `None`.
+    pub fn crop(&self) -> Option<(Percent1000, Percent1000, Percent1000, Percent1000)> {
+        let ShapeTreeChild::Picture(picture) = self.child else {
+            return None;
+        };
+        let rect = picture
+            .blip_fill
+            .as_ref()
+            .and_then(|fill| fill.source_rect.as_ref());
+        Some(rect.map_or_else(Default::default, |rect| {
+            (
+                rect.left.unwrap_or_default(),
+                rect.top.unwrap_or_default(),
+                rect.right.unwrap_or_default(),
+                rect.bottom.unwrap_or_default(),
+            )
+        }))
     }
 
     /// Serialises the child as a self-contained element.

@@ -318,7 +318,13 @@ the effective preset adjustments, normalized so that 1.0 is 100000, and
 assignment truncates as python-pptx does. `xml` returns the element serialized
 on its own as bytes. A picture's `image` is a frozen `Image` snapshot with
 `blob`, `content_type`, and the python-pptx `ext`, and `replace_image` changes
-only that picture through the native staged replacement.
+only that picture through the native staged replacement. `crop_left`,
+`crop_top`, `crop_right`, and `crop_bottom` read and write the picture's
+`a:srcRect` insets as python-pptx floats, where 0.25 is a quarter of the image.
+A missing edge reads 0.0, a write rounds half to even as python-pptx does and
+changes nothing when the value is unchanged, and a value that is not finite or
+outside the `ST_Percentage` range raises `ValueError`. Other shape kinds raise
+`ValueError`, and crop writes do not advance the revision.
 
 `ShapeCollection.add_shape` accepts a DrawingML preset name or an `MSO_SHAPE`
 member. `add_connector` follows the python-pptx signature, `add_group_shape`

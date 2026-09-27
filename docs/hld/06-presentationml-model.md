@@ -284,6 +284,7 @@ ShapeRef::shape_type(&self) -> Option<ShapeType>;
 ShapeRef::rotation(&self) -> Option<Angle>;
 ShapeRef::fill(&self) -> Option<&Fill>;
 ShapeRef::line(&self) -> Option<&CT_LineProperties>;
+ShapeRef::crop(&self) -> Option<(Percent1000, Percent1000, Percent1000, Percent1000)>;
 ShapeRef::adjustments(&self) -> Result<Vec<(String, f64)>>;
 ShapeRef::xml(&self) -> Result<Vec<u8>>;
 ```
@@ -306,7 +307,8 @@ a literal `val` guide of the same name in the shape's own `a:avLst`. Only
 ordinary shapes with preset geometry have adjustments. `xml` serializes a
 typed child on its own with the prefixes it uses declared. Alternate content
 returns its preserved bytes, which may rely on prefixes only the slide root
-declares.
+declares. `crop` reads a picture's `a:srcRect` insets in left, top, right,
+bottom order, with zero for an absent edge, and is `None` for other kinds.
 
 `slide_mut(index)` exposes a borrowed `SlideMut` handle. Its `shape(index)`
 method retains read access, while `shape_mut(index)` returns a `ShapeMut` for an
@@ -316,7 +318,11 @@ children only. The selected `mc:Fallback` view remains read-only.
 Position, size, rotation, and name setters support ordinary shapes, pictures,
 graphic frames, groups, and connectors. Fill and line setters support ordinary
 shapes, pictures, and connectors because those kinds own typed shape
-properties. Adjustment mutation supports finite values on preset geometry.
+properties. `ShapeMut::set_crop(left, top, right, bottom)` writes the
+`a:srcRect` of a picture between its blip and fill mode. It keeps the stored
+attribute of an unchanged edge, drops a changed edge of zero, and adds no
+element when a picture without one gets four zero insets. Adjustment mutation
+supports finite values on preset geometry.
 Unsupported shape kinds and unsupported geometry return concrete facade
 errors. Indexed access remains total and returns `Option`.
 

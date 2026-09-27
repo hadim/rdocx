@@ -7773,8 +7773,8 @@ use rpptx::{
     ChartData, ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput,
     EmbeddedMutationPolicy, EmbeddedSignatureState, Emu, Error, Fill, HandoutLayout,
     MediaDiagnostic, MediaFallbackPolicy, MediaKind, MediaPlaybackPhase, MediaPlaybackSettings,
-    MediaPoster, MediaSourceInput, Presentation, PresentationPackageClass, ShapeKind, ShapeRef,
-    TextBullet, TextBulletCharacter, TextBulletChoice, TextFont, TimelinePosition,
+    MediaPoster, MediaSourceInput, Percent1000, Presentation, PresentationPackageClass, ShapeKind,
+    ShapeRef, TextBullet, TextBulletCharacter, TextBulletChoice, TextFont, TimelinePosition,
 };
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
@@ -22725,6 +22725,166 @@ fn replacing_a_picture_with_an_svg_alternate_is_rejected_without_change() {
             .contains("second image")
     );
     assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn picture_crop_round_trips_and_rewrites_only_the_changed_edges() {
+    let zero = Percent1000(0);
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation
+        .add_picture(
+            0,
+            &f226_blue_pixel_png(),
+            "crop.png",
+            Emu(0),
+            Emu(0),
+            Some(Emu(100)),
+            Some(Emu(100)),
+        )
+        .unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(10), Emu(10))
+        .unwrap();
+    let slide = presentation.slide(0).unwrap();
+    assert_eq!(
+        slide.shape(0).unwrap().crop(),
+        Some((zero, zero, zero, zero))
+    );
+    assert_eq!(slide.shape(1).unwrap().crop(), None);
+    let before = presentation.to_bytes().unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        slide
+            .shape_mut(0)
+            .unwrap()
+            .set_crop(zero, zero, zero, zero)
+            .unwrap();
+        assert!(matches!(
+            slide
+                .shape_mut(1)
+                .unwrap()
+                .set_crop(Percent1000(1), zero, zero, zero),
+            Err(Error::UnsupportedShapeMutation { .. })
+        ));
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_crop(
+            Percent1000(25_000),
+            zero,
+            Percent1000(-10_000),
+            Percent1000(12_500),
+        )
+        .unwrap();
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(reopened.validate().is_empty(), "{:?}", reopened.validate());
+    assert_eq!(
+        reopened.slide(0).unwrap().shape(0).unwrap().crop(),
+        Some((
+            Percent1000(25_000),
+            zero,
+            Percent1000(-10_000),
+            Percent1000(12_500)
+        ))
+    );
+    let picture =
+        String::from_utf8(reopened.slide(0).unwrap().shape(0).unwrap().xml().unwrap()).unwrap();
+    let blip = picture.find("<a:blip ").unwrap();
+    let crop = picture
+        .find(r#"<a:srcRect l="25000" r="-10000" b="12500"/>"#)
+        .unwrap();
+    let stretch = picture.find("<a:stretch>").unwrap();
+    assert!(blip < crop && crop < stretch, "{picture}");
+
+    let explicit = r#"<p:pic><p:nvPicPr><p:cNvPr id="40" name="Cropped"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:srcRect l="0" t="5000" r="0"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#;
+    let mut presentation = with_first_slide_children(&presentation, explicit, &[]);
+    let crop_xml = |presentation: &Presentation| {
+        let xml = String::from_utf8(
+            presentation
+                .slide(0)
+                .unwrap()
+                .shape(2)
+                .unwrap()
+                .xml()
+                .unwrap(),
+        )
+        .unwrap();
+        let start = xml.find("<a:srcRect").unwrap();
+        xml[start..start + xml[start..].find("/>").unwrap() + 2].to_owned()
+    };
+    let crop = |presentation: &mut Presentation, left: i32, top: i32| {
+        presentation
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(2)
+            .unwrap()
+            .set_crop(Percent1000(left), Percent1000(top), zero, zero)
+            .unwrap();
+    };
+    crop(&mut presentation, 10_000, 5_000);
+    assert_eq!(
+        crop_xml(&presentation),
+        r#"<a:srcRect l="10000" t="5000" r="0"/>"#
+    );
+    crop(&mut presentation, 0, 0);
+    assert_eq!(crop_xml(&presentation), r#"<a:srcRect r="0"/>"#);
+    assert_eq!(
+        presentation.slide(0).unwrap().shape(2).unwrap().crop(),
+        Some((zero, zero, zero, zero))
+    );
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn picture_crop_reads_back_in_pinned_python_pptx() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation
+        .add_picture(
+            0,
+            &f226_blue_pixel_png(),
+            "crop.png",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        )
+        .unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_crop(
+            Percent1000(25_000),
+            Percent1000(0),
+            Percent1000(-10_000),
+            Percent1000(12_500),
+        )
+        .unwrap();
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "picture-crop",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+picture = Presentation(sys.argv[1]).slides[0].shapes[0]
+print(picture.crop_left, picture.crop_top, picture.crop_right, picture.crop_bottom)
+"#,
+    );
+    assert_eq!(records, "0.25 0.0 -0.1 0.125\n");
 }
 
 #[test]

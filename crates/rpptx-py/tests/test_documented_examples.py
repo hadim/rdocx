@@ -2232,6 +2232,65 @@ def test_pictures_accept_bytes_and_file_objects_and_replace_their_image(tmp_path
     assert [oracle[index].image.blob for index in range(3)] == [blue, jpeg, jpeg]
 
 
+def test_picture_crop_matches_python_pptx_in_both_directions(tmp_path):
+    import rpptx
+
+    header = struct.pack(">IIBBBBB", 2, 1, 8, 2, 0, 0, 0)
+    red_then_blue = (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(bytes((0, 0xFF, 0, 0, 0, 0, 0xFF))))
+        + _png_chunk(b"IEND", b"")
+    )
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_picture(red_then_blue, 0, 0, rpptx.Inches(2), rpptx.Inches(1))
+    prs.slides[0].shapes.add_textbox(0, 0, 10, 10)
+    picture = prs.slides[0].shapes[0]
+    assert (picture.crop_left, picture.crop_top, picture.crop_right, picture.crop_bottom) == (0.0,) * 4
+    before = prs.to_bytes()
+    picture.crop_right = 0.0
+    assert prs.to_bytes() == before
+    uncropped = prs.render_slide_to_png(0, dpi=36.0)
+    held = prs.slides[0].shapes[0]
+    picture.crop_left = 0.5
+    picture.crop_bottom = -0.125
+    assert (held.crop_left, held.crop_bottom) == (0.5, -0.125)
+    assert prs.render_slide_to_png(0, dpi=36.0) != uncropped
+    cropped = prs.to_bytes()
+    for bad in (float("nan"), float("inf"), 21474.83648 + 1):
+        with pytest.raises(ValueError, match="crop must be a finite fraction"):
+            picture.crop_top = bad
+    textbox = prs.slides[0].shapes[1]
+    with pytest.raises(ValueError, match="shape is not a picture"):
+        _ = textbox.crop_left
+    with pytest.raises(ValueError, match="shape is not a picture"):
+        textbox.crop_left = 0.1
+    assert prs.to_bytes() == cropped
+    output = tmp_path / "cropped.pptx"
+    prs.save(output)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output).slides[0].shapes[0]
+    assert (oracle.crop_left, oracle.crop_top, oracle.crop_right, oracle.crop_bottom) == (
+        0.5,
+        0.0,
+        0.0,
+        -0.125,
+    )
+
+    def build(deck):
+        written = deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_picture(
+            io.BytesIO(_tiny_png()), 0, 0
+        )
+        written.crop_top = 0.2
+        written.crop_right = 1 / 3
+
+    source = _python_pptx_deck(tmp_path / "python-pptx-crop.pptx", build)
+    read = rpptx.Presentation(source).slides[0].shapes[0]
+    assert (read.crop_left, read.crop_top, read.crop_right) == (0.0, 0.2, 0.33333)
+
+
 def test_shapes_and_slides_are_removed_and_reordered_with_stale_handles(tmp_path):
     import rpptx
 

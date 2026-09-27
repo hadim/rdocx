@@ -325,6 +325,19 @@ def exercise_rpptx_table_types(table: Table) -> None:
     (spans, cell_margins, row_heights, rows[:])
 
 
+def exercise_rpptx_picture_crop_types(picture: Shape) -> None:
+    picture.crop_left = 0.25
+    picture.crop_top = 0
+    crop: tuple[float, float, float, float] = (
+        picture.crop_left,
+        picture.crop_top,
+        picture.crop_right,
+        picture.crop_bottom,
+    )
+    picture.crop_right = crop[0]
+    picture.crop_bottom = -0.1
+
+
 def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
     frames: tuple[TextFrameLayout, ...] = presentation.text_layout()
     narrower: tuple[TextFrameLayout, ...] = presentation.text_layout(width_factor=0.95)
