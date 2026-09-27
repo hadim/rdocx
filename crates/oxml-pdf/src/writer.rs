@@ -34,7 +34,7 @@ impl AlphaStates {
     fn new(pages: &[Arc<oxml_layout::PageFrame>], alloc: &mut impl FnMut() -> Ref) -> Self {
         let mut keys = BTreeSet::new();
         for page in pages {
-            collect_alpha_keys(&page.elements, &mut keys);
+            collect_page_alpha_keys(page, &mut keys);
         }
 
         let entries: Vec<AlphaEntry> = keys
@@ -62,7 +62,7 @@ impl AlphaStates {
 
     fn page_entries(&self, page: &oxml_layout::PageFrame) -> Vec<&AlphaEntry> {
         let mut keys = BTreeSet::new();
-        collect_alpha_keys(&page.elements, &mut keys);
+        collect_page_alpha_keys(page, &mut keys);
         keys.into_iter()
             .filter_map(|key| self.by_key.get(&key).map(|index| &self.entries[*index]))
             .collect()
@@ -77,6 +77,13 @@ fn alpha_key(alpha: f64) -> Option<u32> {
     };
     let normalized = if normalized == 0.0 { 0.0 } else { normalized };
     (normalized < 1.0).then(|| normalized.to_bits())
+}
+
+fn collect_page_alpha_keys(page: &oxml_layout::PageFrame, keys: &mut BTreeSet<u32>) {
+    if let Some(Paint::Solid(color)) = &page.background {
+        insert_alpha(keys, color.a);
+    }
+    collect_alpha_keys(&page.elements, keys);
 }
 
 fn collect_alpha_keys(elements: &[PositionedElement], keys: &mut BTreeSet<u32>) {
@@ -127,6 +134,8 @@ fn insert_alpha(keys: &mut BTreeSet<u32>, alpha: f64) {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum GradientTarget {
+    /// The page background, registered at leaf 0 of its page.
+    Background,
     Fill,
     Stroke,
 }
@@ -171,6 +180,16 @@ impl GradientRegistry {
                 e: 0.0,
                 f: page.height,
             };
+            if let Some(background) = &page.background {
+                registry.collect(
+                    background,
+                    page_idx,
+                    0,
+                    GradientTarget::Background,
+                    page_flip,
+                    alloc,
+                );
+            }
             walk(&page.elements, &mut |element, transform| {
                 let current_idx = leaf_idx;
                 leaf_idx += 1;
@@ -1035,6 +1054,7 @@ fn build_page_content(
     let page_height = page.height as f32;
     content.save_state();
     content.transform([1.0, 0.0, 0.0, -1.0, 0.0, page_height]);
+    emit_background(&mut content, page_idx, page, resources);
 
     let mut state = EmitState {
         page_idx,
@@ -1058,6 +1078,40 @@ fn build_page_content(
 
     content.restore_state();
     content.finish().to_vec()
+}
+
+/// Paint the page background under every element, as the rasteriser does.
+fn emit_background(
+    content: &mut Content,
+    page_idx: usize,
+    page: &oxml_layout::PageFrame,
+    resources: PageContentResources<'_>,
+) {
+    // Tile paint resolves to nothing, exactly as it does for a path fill.
+    let Some(paint) = page.background.as_ref().and_then(|background| {
+        resolve_paint(
+            background,
+            page_idx,
+            0,
+            GradientTarget::Background,
+            resources.gradients,
+        )
+    }) else {
+        return;
+    };
+    // A tagged page marks this decorative paint as an artifact.
+    let tagged = resources.structure.is_some();
+    if tagged {
+        content.begin_marked_content(Name(b"Artifact"));
+    }
+    content.save_state();
+    set_fill_paint(content, paint, resources.alpha_states);
+    content.rect(0.0, 0.0, page.width as f32, page.height as f32);
+    content.fill_nonzero();
+    content.restore_state();
+    if tagged {
+        content.end_marked_content();
+    }
 }
 
 struct EmitState<'a> {
@@ -1960,7 +2014,10 @@ mod tests {
     }
 
     fn content_for(elements: Vec<PositionedElement>) -> String {
-        let page = page_with(elements);
+        content_for_page(page_with(elements), None)
+    }
+
+    fn content_for_page(page: PageFrame, structure: Option<&DocumentStructure>) -> String {
         let mut next_ref = 100;
         let page = Arc::new(page);
         let alpha_states = AlphaStates::new(std::slice::from_ref(&page), &mut || {
@@ -1973,6 +2030,13 @@ mod tests {
             next_ref += 1;
             reference
         });
+        let structure = structure.and_then(|structure| {
+            PreparedStructure::new(structure, std::slice::from_ref(&page), &mut || {
+                let reference = Ref::new(next_ref);
+                next_ref += 1;
+                reference
+            })
+        });
         String::from_utf8(build_page_content(
             0,
             &page,
@@ -1982,7 +2046,7 @@ mod tests {
                 image_map: &HashMap::new(),
                 alpha_states: &alpha_states,
                 gradients: &gradients,
-                structure: None,
+                structure: structure.as_ref(),
             },
         ))
         .expect("PDF content operators are ASCII")
@@ -3353,6 +3417,140 @@ mod tests {
 
         assert!(pdf.contains("/Rect [72 677 172 692]"), "{pdf}");
         assert_eq!(pdf.matches("/Subtype /Link").count(), 1, "{pdf}");
+    }
+
+    fn page_with_background(background: Paint) -> PageFrame {
+        let mut page = page_with(vec![alpha_rect(1.0)]);
+        page.background = Some(background);
+        page
+    }
+
+    fn radial_gradient() -> Paint {
+        Paint::Radial {
+            center: Point { x: 50.0, y: 50.0 },
+            radius: 40.0,
+            focal: Point { x: 50.0, y: 50.0 },
+            stops: gradient_stops(),
+            extend: (false, false),
+        }
+    }
+
+    #[test]
+    fn solid_page_background_fills_the_page_before_its_content() {
+        let red = Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        let content = content_for_page(page_with_background(Paint::Solid(red)), None);
+
+        assert!(
+            content.starts_with("q\n1 0 0 -1 0 792 cm\nq\n1 0 0 rg\n0 0 612 792 re\nf\nQ\n"),
+            "{content}"
+        );
+        let background = content
+            .find("0 0 612 792 re")
+            .expect("background rectangle");
+        let child = content.find("0 0 10 10 re").expect("child rectangle");
+        assert!(background < child, "{content}");
+    }
+
+    #[test]
+    fn gradient_page_background_fills_the_page_with_its_pattern_first() {
+        for (background, shading) in [
+            (linear_gradient(), "/ShadingType 2"),
+            (radial_gradient(), "/ShadingType 3"),
+        ] {
+            let content = content_for_page(page_with_background(background.clone()), None);
+            assert!(
+                content.starts_with(
+                    "q\n1 0 0 -1 0 792 cm\nq\n/Pattern cs\n/P0 scn\n0 0 612 792 re\nf\nQ\n"
+                ),
+                "{content}"
+            );
+
+            let layout = LayoutResult::new(
+                vec![page_with_background(background).into()],
+                Vec::new(),
+                None,
+                Vec::new(),
+            );
+            let pdf = String::from_utf8_lossy(&write_pdf(&layout)).into_owned();
+            assert!(pdf.contains("/Pattern <<\n      /P0"), "{pdf}");
+            assert!(pdf.contains("/Matrix [1 0 0 -1 0 792]"), "{pdf}");
+            assert!(pdf.contains(shading), "{pdf}");
+        }
+    }
+
+    #[test]
+    fn translucent_page_background_selects_a_registered_alpha_state() {
+        let background = Paint::Solid(Color {
+            r: 0.0,
+            g: 0.0,
+            b: 1.0,
+            a: 0.5,
+        });
+        let content = content_for_page(page_with_background(background.clone()), None);
+        assert!(
+            content.starts_with("q\n1 0 0 -1 0 792 cm\nq\n0 0 1 rg\n/GS0 gs\n0 0 612 792 re"),
+            "{content}"
+        );
+
+        let layout = LayoutResult::new(
+            vec![page_with_background(background).into()],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        let pdf = String::from_utf8_lossy(&write_pdf(&layout)).into_owned();
+        assert!(pdf.contains("/GS0"), "{pdf}");
+        assert!(pdf.contains("/ca 0.5"), "{pdf}");
+    }
+
+    #[test]
+    fn tile_page_background_leaves_the_content_unchanged() {
+        let tile = Paint::Tile {
+            image: MediaId(1),
+            tile: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            transform: Transform::IDENTITY,
+        };
+
+        assert_eq!(
+            content_for_page(page_with_background(tile), None),
+            content_for(vec![alpha_rect(1.0)])
+        );
+    }
+
+    #[test]
+    fn tagged_page_background_is_an_artifact() {
+        let paragraph = StructureId::new(2).unwrap();
+        let mut page = page_with(vec![PositionedElement::MarkedContent {
+            structure: Some(paragraph),
+            children: vec![alpha_rect(1.0)],
+        }]);
+        page.background = Some(Paint::Solid(Color::WHITE));
+        let structure = DocumentStructure {
+            root: StructureId::new(1).unwrap(),
+            nodes: vec![
+                structure_node(1, StructureRole::Document, vec![paragraph]),
+                structure_node(2, StructureRole::Paragraph, Vec::new()),
+            ],
+        };
+        let content = content_for_page(page, Some(&structure));
+
+        assert!(
+            content.starts_with(
+                "q\n1 0 0 -1 0 792 cm\n/Artifact BMC\nq\n1 1 1 rg\n0 0 612 792 re\nf\nQ\nEMC\n"
+            ),
+            "{content}"
+        );
+        assert!(content.contains("/MCID 0"), "{content}");
     }
 
     #[test]
