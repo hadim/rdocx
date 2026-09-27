@@ -246,8 +246,10 @@ paragraph inside a block content control yields an item with the two-segment
 path of `Document::paragraph_story_location`, the control's story item index
 then the paragraph's position among the control's paragraphs, which only
 comment positions accept.
-`Document.add_comment` accepts either range form. The original direct-body
-constructors and call shape remain unchanged.
+`Document.add_comment` accepts either range form.
+`Document.add_comment_on_text` comments on the zero-based occurrence of an
+exact text in the main story without run index bookkeeping. The original
+direct-body constructors and call shape remain unchanged.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
 `LayoutPage`, `TocRebuildReport`, and `Revision` are frozen typed snapshots.
 `Document.revisions` lists main-document revisions with a snake_case `kind`,
@@ -1007,6 +1009,16 @@ Native Word callers can inspect comments through `Document::comments` and
 author threads through `add_comment`, `reply_to`, `resolve_comment`, and
 `remove_comment`. The additive native `add_comment_with_date` and
 `reply_to_with_date` methods accept an optional validated RFC 3339 timestamp.
+The additive native `add_comment_on_text` anchors a comment on the zero-based,
+non-overlapping, case-sensitive occurrence of a literal text in main-story
+paragraphs, through tables and block content controls. It splits the runs at
+both ends of the match, anchors the runs between the splits like
+`add_comment`, and refuses a missing occurrence or a match that cannot be
+anchored exactly without changing the document. Tabs and breaks have no width
+in the literal text, and a match whose range would also show text that the
+literal text leaves out, such as a field result, is not exact. Python exposes
+it with keyword `author`, `text`, `occurrence`, `initials` and `date`
+arguments.
 The Python `add_comment` and `reply_to` methods expose the same value as the
 optional `date` keyword. Omission writes no date and remains deterministic.
 Returned ids keep naming the same comment or reply after rdocx save and reopen,

@@ -479,6 +479,16 @@ class Document:
         initials: str | None = None,
         date: str | None = None,
     ) -> int: ...
+    def add_comment_on_text(
+        self,
+        anchor: str,
+        *,
+        author: str,
+        text: str,
+        occurrence: int = 0,
+        initials: str | None = None,
+        date: str | None = None,
+    ) -> int: ...
     def reply_to(
         self, parent_id: int, *, author: str, text: str, date: str | None = None
     ) -> int: ...

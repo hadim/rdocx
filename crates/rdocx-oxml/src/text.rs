@@ -4109,6 +4109,109 @@ impl CT_P {
         }
     }
 
+    /// Return the literal text of the accepted-view runs, the text that
+    /// split offsets count. Tabs, breaks and other non-text content have no
+    /// width.
+    #[doc(hidden)]
+    pub fn accepted_literal_text(&self) -> String {
+        accepted_paragraph_runs(self)
+            .into_iter()
+            .flat_map(|run| run.content.iter().map(CT_R::literal_text))
+            .collect()
+    }
+
+    /// Return the text of every `t` element, in any namespace, between the
+    /// range markers of comment `id`, or `None` when this paragraph does not
+    /// hold both markers.
+    ///
+    /// Unlike [`Self::accepted_literal_text`], this includes the text of
+    /// preserved children that the accepted view leaves out, such as a
+    /// `w:fldSimple` result, so it is the text the commented range shows.
+    #[doc(hidden)]
+    pub fn comment_range_text(&self, id: i32) -> Option<String> {
+        let mut xml = Vec::new();
+        self.to_xml(&mut Writer::new(&mut xml)).ok()?;
+        let is_marker = |element: &BytesStart<'_>, local: &[u8]| {
+            matches_local_name(element.name().as_ref(), local)
+                && element
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| matches_local_name(attribute.key.as_ref(), b"id"))
+                    .and_then(|attribute| std::str::from_utf8(&attribute.value).ok()?.parse().ok())
+                    == Some(id)
+        };
+        let mut reader = Reader::from_reader(xml.as_slice());
+        let mut buffer = Vec::new();
+        let mut text = None::<String>;
+        loop {
+            match reader.read_event_into(&mut buffer).ok()? {
+                Event::Start(element) | Event::Empty(element)
+                    if is_marker(&element, b"commentRangeStart") =>
+                {
+                    text = Some(String::new());
+                }
+                Event::Start(element) | Event::Empty(element)
+                    if is_marker(&element, b"commentRangeEnd") =>
+                {
+                    return text;
+                }
+                Event::Start(element) if matches_local_name(element.name().as_ref(), b"t") => {
+                    let content = crate::xml_text::read_element_text(&mut reader, element.name());
+                    if let Some(text) = text.as_mut() {
+                        text.push_str(&content);
+                    }
+                }
+                Event::Eof => return None,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    /// Split accepted-view runs so that the non-empty literal text span
+    /// `[start, end)`, in Unicode scalar values of
+    /// [`Self::accepted_literal_text`], covers whole runs, and return the run
+    /// boundaries around it.
+    #[doc(hidden)]
+    pub fn split_accepted_literal_span(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) -> Result<(usize, usize)> {
+        let lengths = accepted_paragraph_runs(self)
+            .into_iter()
+            .map(CT_R::literal_len)
+            .collect::<Vec<_>>();
+        // The run holding one literal character and its offset in that run.
+        let locate = |character: usize| {
+            let mut run_start = 0;
+            lengths.iter().enumerate().find_map(|(index, len)| {
+                let found = (character < run_start + len).then_some((index, character - run_start));
+                run_start += len;
+                found
+            })
+        };
+        let outside = || {
+            OxmlError::InvalidValue(format!(
+                "literal span {start}..{end} is not inside the paragraph text"
+            ))
+        };
+        let ((start_run, start_offset), (end_run, end_offset)) = match end.checked_sub(1) {
+            Some(last) if start < end => (
+                locate(start).ok_or_else(outside)?,
+                locate(last).ok_or_else(outside)?,
+            ),
+            _ => return Err(outside()),
+        };
+        // The end goes first, so the start run keeps its index.
+        let path = self.accepted_run_paths()[end_run].clone();
+        let end_boundary = self.split_accepted_run(&path, end_run, end_offset + 1)?;
+        let path = self.accepted_run_paths()[start_run].clone();
+        let start_boundary = self.split_accepted_run(&path, start_run, start_offset)?;
+        // A split inside the start run adds one run before the end boundary.
+        Ok((start_boundary, end_boundary + usize::from(start_offset > 0)))
+    }
+
     pub(crate) fn split_accepted_run_segments(
         &mut self,
         path: &[AcceptedRunPathSegment],

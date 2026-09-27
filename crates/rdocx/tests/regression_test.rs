@@ -1914,7 +1914,7 @@ mod accepted_run_index_anchoring {
     }
 
     /// The `w:t` text of an XML slice that may cross element boundaries.
-    fn slice_text(xml: &str) -> String {
+    pub(super) fn slice_text(xml: &str) -> String {
         let mut text = String::new();
         let mut rest = xml;
         while let Some(index) = rest.find("<w:t") {
@@ -2112,6 +2112,14 @@ mod accepted_run_index_anchoring {
         assert_eq!(marker_counts(&xml), [1; 3], "{xml}");
         let (_, anchored) = anchored_xml(&mut document, next);
         assert_eq!(slice_text(&anchored), "before ");
+
+        // A comment on text inside the control is removed as cleanly.
+        let on_text = document
+            .add_comment_on_text("B", 0, "Ada", None, "Here", None)
+            .unwrap();
+        assert_eq!(marker_counts(&super::document_xml(&mut document)), [2; 3]);
+        assert!(document.remove_comment(on_text).unwrap());
+        assert_eq!(marker_counts(&super::document_xml(&mut document)), [1; 3]);
     }
 
     #[test]
@@ -2295,6 +2303,171 @@ mod block_control_comment_positions {
             assert!(error.to_lowercase().contains(reason), "{error}");
         }
         assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
+/// GitHub issue #163: `add_comment_on_text` anchors a comment on a
+/// piece of text without index bookkeeping.
+mod comment_on_text {
+    use rdocx::Document;
+
+    fn issue_fixture() -> Document {
+        let mut document = Document::new();
+        document.add_paragraph("Alpha paragraph before the table.");
+        document
+            .add_table(1, 1)
+            .row(0)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .set_text("cell");
+        document.add_paragraph("Beta paragraph after the table.");
+        document.add_paragraph("Gamma paragraph at the end.");
+        document
+    }
+
+    /// The paragraph text around the markers of comment `id`, split as
+    /// before, inside and after the range.
+    fn anchored(document: &mut Document, id: i32) -> [String; 3] {
+        let xml = super::document_xml(document);
+        let start = xml
+            .find(&format!(r#"<w:commentRangeStart w:id="{id}"/>"#))
+            .unwrap();
+        let end = xml
+            .find(&format!(r#"<w:commentRangeEnd w:id="{id}"/>"#))
+            .unwrap();
+        let paragraph_start = xml[..start].rfind("<w:p>").unwrap();
+        let paragraph_end = end + xml[end..].find("</w:p>").unwrap();
+        [
+            super::accepted_run_index_anchoring::slice_text(&xml[paragraph_start..start]),
+            super::accepted_run_index_anchoring::slice_text(&xml[start..end]),
+            super::accepted_run_index_anchoring::slice_text(&xml[end..paragraph_end]),
+        ]
+    }
+
+    fn comment(document: &mut Document, anchor: &str, occurrence: usize) -> rdocx::Result<i32> {
+        document.add_comment_on_text(anchor, occurrence, "Ada", None, "Here", None)
+    }
+
+    #[test]
+    fn comment_on_text_anchors_the_requested_occurrence_after_a_table() {
+        let mut document = issue_fixture();
+        let id = comment(&mut document, "Beta", 0).unwrap();
+        assert_eq!(
+            anchored(&mut document, id),
+            ["", "Beta", " paragraph after the table."]
+        );
+
+        // Zero-based and in document order: Alpha, then Beta.
+        let mut document = issue_fixture();
+        let id = comment(&mut document, "paragraph", 1).unwrap();
+        assert_eq!(
+            anchored(&mut document, id),
+            ["Beta ", "paragraph", " after the table."]
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.comments()[0].text(), "Here");
+        assert_eq!(
+            reopened.paragraphs()[1].text(),
+            "Beta paragraph after the table."
+        );
+
+        // Matches do not overlap, and a table cell is searched too.
+        let mut document = issue_fixture();
+        document.add_paragraph("aaaa");
+        let id = comment(&mut document, "aa", 1).unwrap();
+        assert_eq!(anchored(&mut document, id), ["aa", "aa", ""]);
+        let id = comment(&mut document, "cell", 0).unwrap();
+        assert_eq!(anchored(&mut document, id), ["", "cell", ""]);
+    }
+
+    #[test]
+    fn comment_on_text_splits_runs_and_keeps_their_formatting() {
+        let mut document = Document::new();
+        let mut paragraph = document.add_paragraph("");
+        paragraph.add_run("Hello ").bold(true);
+        paragraph.add_run("world").italic(true);
+        let id = comment(&mut document, "lo wo", 0).unwrap();
+        assert_eq!(anchored(&mut document, id), ["Hel", "lo wo", "rld"]);
+        let paragraph = document.paragraph(0).unwrap();
+        let runs = paragraph
+            .runs()
+            .filter(|run| !run.text().is_empty())
+            .map(|run| (run.text(), run.is_bold(), run.is_italic()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            runs,
+            [
+                ("Hel".to_owned(), true, false),
+                ("lo ".to_owned(), true, false),
+                ("wo".to_owned(), false, true),
+                ("rld".to_owned(), false, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_on_text_refuses_a_range_that_would_show_a_field_result() {
+        // The literal text `AB after tail xy` leaves out the tab, the
+        // `w:fldSimple` result `7` and the complex field result `9`.
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(
+            r#"<w:p><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>7</w:t></w:r></w:fldSimple><w:r><w:t xml:space="preserve"> tail x</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> NUMPAGES </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>9</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>y</w:t></w:r></w:p>"#,
+        ));
+        let before = document.to_bytes().unwrap();
+        for (anchor, reason) in [
+            (
+                "after tail",
+                r#"cannot be anchored exactly: its range would show "after7 tail""#,
+            ),
+            (
+                "xy",
+                r#"cannot be anchored exactly: its range would show "x9y""#,
+            ),
+            ("7", "has no occurrence 0"),
+            ("x9y", "has no occurrence 0"),
+        ] {
+            let error = comment(&mut document, anchor, 0).unwrap_err();
+            assert!(error.to_string().contains(reason), "{anchor}: {error}");
+        }
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        // A tab has no width, and a range next to a field leaves it out.
+        let id = comment(&mut document, "AB", 0).unwrap();
+        assert_eq!(anchored(&mut document, id), ["", "AB", " after7 tail x9y"]);
+        let id = comment(&mut document, " after", 0).unwrap();
+        assert_eq!(anchored(&mut document, id)[1], " after");
+        let id = comment(&mut document, " tail x", 0).unwrap();
+        assert_eq!(anchored(&mut document, id)[1], " tail x");
+    }
+
+    #[test]
+    fn comment_on_text_reaches_controls_and_refuses_what_it_cannot_anchor() {
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(
+            r#"<w:p><w:r><w:t xml:space="preserve">before </w:t></w:r><w:sdt><w:sdtContent><w:r><w:t>TARGET</w:t></w:r></w:sdtContent></w:sdt></w:p><w:sdt><w:sdtContent><w:p><w:r><w:t>Inside a block control.</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+        ));
+        let before = document.to_bytes().unwrap();
+        for (anchor, occurrence, reason) in [
+            ("missing", 0, "has no occurrence 0"),
+            ("target", 0, "has no occurrence 0"),
+            ("TARGET", 1, "has no occurrence 1"),
+            ("", 0, "must not be empty"),
+            ("e TAR", 0, "crosses the edge of an inline content control"),
+        ] {
+            let error = comment(&mut document, anchor, occurrence).unwrap_err();
+            assert!(error.to_string().contains(reason), "{anchor}: {error}");
+        }
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let id = comment(&mut document, "ARG", 0).unwrap();
+        let xml = super::document_xml(&mut document);
+        let start = xml.find("<w:commentRangeStart").unwrap();
+        assert!(xml.find("<w:sdtContent>").unwrap() < start, "{xml}");
+        assert_eq!(anchored(&mut document, id)[1], "ARG");
+        let id = comment(&mut document, "block", 0).unwrap();
+        assert_eq!(
+            anchored(&mut document, id),
+            ["Inside a ", "block", " control."]
+        );
     }
 }
 

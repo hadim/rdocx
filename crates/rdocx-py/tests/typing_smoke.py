@@ -90,6 +90,9 @@ def exercise_rdocx_types(path: Path) -> None:
         initials=None,
         date="2026-09-16T10:15:30Z",
     )
+    text_comment_id: int = document.add_comment_on_text(
+        "review", author="Ada", text="here", occurrence=0, initials=None, date=None
+    )
     reply_id: int = document.reply_to(
         comment_id,
         author="Grace",

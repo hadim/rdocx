@@ -1568,6 +1568,62 @@ def test_story_run_position_takes_a_paragraph_handle_inside_a_block_control():
         rdocx.StoryRunPosition(run_index=0)
 
 
+def test_add_comment_on_text_anchors_the_occurrence_after_a_table():
+    import rdocx
+
+    # GitHub issue #163 asks for a helper that comments on a piece of text.
+    # This is the fixture of the issue.
+    def fixture():
+        document = rdocx.Document()
+        document.add_paragraph("Alpha paragraph before the table.")
+        document.add_table(1, 1).cell(0, 0).text = "cell"
+        document.add_paragraph("Beta paragraph after the table.")
+        document.add_paragraph("Gamma paragraph at the end.")
+        return document
+
+    document = fixture()
+    held = document.paragraphs[1]
+    comment_id = document.add_comment_on_text("Beta", author="Ada", text="Here")
+    assert _anchored_texts(document, comment_id) == ["Beta"]
+    assert [run.text for run in document.paragraphs[1].runs if run.text] == [
+        "Beta",
+        " paragraph after the table.",
+    ]
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+
+    document = fixture()
+    comment_id = document.add_comment_on_text(
+        "paragraph",
+        author="Ada",
+        text="Second",
+        occurrence=1,
+        initials="AL",
+        date="2026-09-27T10:00:00Z",
+    )
+    assert _anchored_texts(document, comment_id) == ["paragraph"]
+    assert [run.text for run in document.paragraphs[1].runs if run.text] == [
+        "Beta ",
+        "paragraph",
+        " after the table.",
+    ]
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    [comment] = reopened.comments
+    assert (comment.text, comment.initials, comment.date) == (
+        "Second",
+        "AL",
+        "2026-09-27T10:00:00Z",
+    )
+
+    before = document.to_bytes()
+    for anchor, occurrence in (("beta", 0), ("paragraph", 3), ("", 0)):
+        with pytest.raises(rdocx.RdocxError):
+            document.add_comment_on_text(
+                anchor, author="Ada", text="x", occurrence=occurrence
+            )
+    assert document.to_bytes() == before
+
+
 def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     import rdocx
 

@@ -13,6 +13,7 @@ use rdocx_oxml::text::{CT_P, RangeAnchor};
 #[cfg(test)]
 use rdocx_oxml::text::{CT_R, CommentRangeMarker, HyperlinkSpan, RunContent};
 
+use crate::document::visit_body_paragraphs_mut;
 use crate::{ContentLocation, Document, Error, Result};
 
 pub(crate) const COMMENTS_EXTENDED_REL_TYPE: &str =
@@ -643,33 +644,7 @@ impl Document {
 
         self.ensure_comment_models()?;
         self.ensure_comment_relationships()?;
-        let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
-        let mut comment_paragraph = CT_P::new();
-        comment_paragraph.add_run(text);
-        self.comments
-            .as_mut()
-            .expect("comment model was initialized")
-            .comments
-            .push(CT_Comment {
-                id,
-                author: Some(author.to_owned()),
-                date: date.map(str::to_owned),
-                initials: initials.map(str::to_owned),
-                paragraphs: vec![comment_paragraph],
-                paragraph_ids: vec![Some(para_id.clone())],
-                extra_attributes: Vec::new(),
-                extra_xml: Vec::new(),
-            });
-        self.comments_extended
-            .as_mut()
-            .expect("comments-extended model was initialized")
-            .comments
-            .push(CT_CommentEx {
-                para_id,
-                para_id_parent: None,
-                done: None,
-                extra_attributes: Vec::new(),
-            });
+        self.push_comment_definition(id, author, initials, text, date)?;
         self.identifiers = identifiers;
         self.comments_dirty = true;
         self.invalidate_layout();
@@ -690,8 +665,139 @@ impl Document {
         self.ensure_comment_relationships()?;
         let mut identifiers = self.identifiers.clone();
         let id = identifiers.reserve_comment_id()?;
-        let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
+        self.push_comment_definition(id, author, initials, text, date)?;
+        anchor_body_range(
+            &mut self.document.body.content,
+            range,
+            RangeAnchor::Comment(id),
+            "comment",
+        )?;
+        self.identifiers = identifiers;
+        self.comments_dirty = true;
+        self.invalidate_layout();
+        Ok(id)
+    }
 
+    /// Add a comment on the `occurrence`-th match of `anchor`, counted from
+    /// zero, in the main story.
+    ///
+    /// Matches are case-sensitive and non-overlapping, in document order
+    /// through body paragraphs, tables and block content controls, and one
+    /// match never spans two paragraphs. They are found in the literal run
+    /// text that [`Document::split_run`] offsets count, so tabs and breaks
+    /// have no width. The runs at both ends of the match are split and the
+    /// comment is anchored on the runs between the splits as
+    /// [`Self::add_comment`] anchors a run range. `date`, when present, must
+    /// be an RFC 3339 timestamp. A missing occurrence or a match that cannot
+    /// be anchored exactly is an error and leaves the document unchanged. A
+    /// match is not exact when its range would also show text that the
+    /// literal text leaves out, such as the result of a field between two of
+    /// its runs.
+    pub fn add_comment_on_text(
+        &mut self,
+        anchor: &str,
+        occurrence: usize,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
+        let mut candidate = self.clone_for_staging();
+        let id = candidate
+            .add_comment_on_text_staged(anchor, occurrence, author, initials, text, date)?;
+        candidate.flush_dirty_related_story_models()?;
+        self.commit_staged_mutation(candidate);
+        Ok(id)
+    }
+
+    fn add_comment_on_text_staged(
+        &mut self,
+        anchor: &str,
+        occurrence: usize,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
+        validate_comment_date(date)?;
+        if anchor.is_empty() {
+            return Err(Error::Other(
+                "comment anchor text must not be empty".to_owned(),
+            ));
+        }
+        self.ensure_comment_models()?;
+        self.ensure_comment_relationships()?;
+        let mut identifiers = self.identifiers.clone();
+        let id = identifiers.reserve_comment_id()?;
+        let mut remaining = occurrence;
+        let mut anchored = None;
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            if anchored.is_some() {
+                return;
+            }
+            let literal = paragraph.accepted_literal_text();
+            let matches = literal
+                .match_indices(anchor)
+                .map(|(byte, _)| byte)
+                .collect::<Vec<_>>();
+            let Some(byte) = matches.get(remaining) else {
+                remaining -= matches.len();
+                return;
+            };
+            let start = literal[..*byte].chars().count();
+            let end = start + anchor.chars().count();
+            anchored = Some(
+                paragraph
+                    .split_accepted_literal_span(start, end)
+                    .map_err(|error| {
+                        Error::Other(format!("comment anchor text cannot be split: {error}"))
+                    })
+                    .and_then(|(start, end)| {
+                        anchor_paragraph_range(
+                            paragraph,
+                            Some(start),
+                            Some(end),
+                            RangeAnchor::Comment(id),
+                            "comment",
+                        )
+                    })
+                    .and_then(|()| {
+                        // Preserved children such as `w:fldSimple` are not in
+                        // the literal text, but the range shows their text.
+                        let shown = paragraph.comment_range_text(id).unwrap_or_default();
+                        if shown == anchor {
+                            Ok(())
+                        } else {
+                            Err(Error::Other(format!(
+                                "comment anchor text {anchor:?} occurrence {occurrence} cannot be anchored exactly: its range would show {shown:?}"
+                            )))
+                        }
+                    }),
+            );
+        });
+        anchored.ok_or_else(|| {
+            Error::Other(format!(
+                "comment anchor text {anchor:?} has no occurrence {occurrence}"
+            ))
+        })??;
+        self.push_comment_definition(id, author, initials, text, date)?;
+        self.identifiers = identifiers;
+        self.comments_dirty = true;
+        self.invalidate_layout();
+        Ok(id)
+    }
+
+    /// Append comment `id`, holding one text paragraph, and its thread entry
+    /// to the comment models, which must already exist.
+    fn push_comment_definition(
+        &mut self,
+        id: i32,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<()> {
+        let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
         let mut paragraph = CT_P::new();
         paragraph.add_run(text);
         self.comments
@@ -718,17 +824,7 @@ impl Document {
                 done: None,
                 extra_attributes: Vec::new(),
             });
-
-        anchor_body_range(
-            &mut self.document.body.content,
-            range,
-            RangeAnchor::Comment(id),
-            "comment",
-        )?;
-        self.identifiers = identifiers;
-        self.comments_dirty = true;
-        self.invalidate_layout();
-        Ok(id)
+        Ok(())
     }
 
     /// Add a reply linked to the selected comment paragraph.

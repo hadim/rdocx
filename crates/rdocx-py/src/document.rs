@@ -1636,6 +1636,30 @@ impl PyDocument {
         Ok(id)
     }
 
+    /// Comment on the `occurrence`-th match of `anchor`, counted from zero,
+    /// in the main story. Matching is case-sensitive, non-overlapping and
+    /// within one paragraph. A match whose range would also show other text,
+    /// such as a field result, raises.
+    #[pyo3(signature = (anchor, *, author, text, occurrence = 0, initials = None, date = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_comment_on_text(
+        &mut self,
+        anchor: &str,
+        author: &str,
+        text: &str,
+        occurrence: usize,
+        initials: Option<&str>,
+        date: Option<&str>,
+        py: Python<'_>,
+    ) -> PyResult<i32> {
+        let id = self
+            .inner
+            .add_comment_on_text(anchor, occurrence, author, initials, text, date)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(id)
+    }
+
     #[pyo3(signature = (parent_id, *, author, text, date = None))]
     fn reply_to(
         &mut self,

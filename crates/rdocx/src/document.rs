@@ -9389,7 +9389,10 @@ fn visit_sdt(control: &CT_Sdt, visitor: &mut impl FnMut(&CT_P)) {
     }
 }
 
-fn visit_body_paragraphs_mut(content: &mut [BodyContent], visitor: &mut impl FnMut(&mut CT_P)) {
+pub(crate) fn visit_body_paragraphs_mut(
+    content: &mut [BodyContent],
+    visitor: &mut impl FnMut(&mut CT_P),
+) {
     for item in content {
         match item {
             BodyContent::Paragraph(paragraph) => visit_paragraph_mut(paragraph, visitor),
