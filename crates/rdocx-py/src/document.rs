@@ -1275,17 +1275,50 @@ impl PyDocument {
         }
     }
 
+    #[pyo3(signature = (
+        edited,
+        author,
+        timestamp,
+        *,
+        granularity = "run",
+        ignore_formatting = false,
+        ignore_whitespace = false,
+        ignore_fields = false,
+        ignore_comments = false,
+        ignored_stories = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
     fn compare<'py>(
         &mut self,
         edited: &PyDocument,
         author: &str,
         timestamp: &str,
         py: Python<'py>,
+        granularity: &str,
+        ignore_formatting: bool,
+        ignore_whitespace: bool,
+        ignore_fields: bool,
+        ignore_comments: bool,
+        ignored_stories: Option<Vec<String>>,
     ) -> PyResult<Bound<'py, PyTuple>> {
         let (diagnostics, changed) = py
             .detach(|| {
+                let options = rdocx::ComparisonOptions {
+                    granularity: parse_comparison_granularity(granularity)?,
+                    ignore_formatting,
+                    ignore_whitespace,
+                    ignore_fields,
+                    ignore_comments,
+                    ignored_stories: ignored_stories
+                        .iter()
+                        .flatten()
+                        .map(|name| parse_comparison_story(name))
+                        .collect::<rdocx::Result<_>>()?,
+                };
                 let before = self.inner.to_bytes()?;
-                let diagnostics = self.inner.compare(&edited.inner, author, timestamp)?;
+                let diagnostics =
+                    self.inner
+                        .compare_with_options(&edited.inner, author, timestamp, &options)?;
                 let changed = self.inner.to_bytes()? != before;
                 Ok::<_, rdocx::Error>((diagnostics, changed))
             })
@@ -1975,6 +2008,34 @@ fn parse_raster_format(
         "tif" | "tiff" => Ok(rdocx::RasterFormat::Tiff),
         other => Err(rdocx::Error::Other(format!(
             "unknown raster format {other:?}, expected png, jpeg, or tiff"
+        ))),
+    }
+}
+
+fn parse_comparison_granularity(name: &str) -> rdocx::Result<rdocx::ComparisonGranularity> {
+    match name {
+        "run" => Ok(rdocx::ComparisonGranularity::Run),
+        "word" => Ok(rdocx::ComparisonGranularity::Word),
+        "character" => Ok(rdocx::ComparisonGranularity::Character),
+        other => Err(rdocx::Error::Other(format!(
+            "unknown comparison granularity {other:?}, expected run, word, or character"
+        ))),
+    }
+}
+
+/// Story names follow `Story.kind`, so `body` selects the main story.
+fn parse_comparison_story(name: &str) -> rdocx::Result<rdocx::ComparisonStoryKind> {
+    match name {
+        "body" => Ok(rdocx::ComparisonStoryKind::Main),
+        "header" => Ok(rdocx::ComparisonStoryKind::Header),
+        "footer" => Ok(rdocx::ComparisonStoryKind::Footer),
+        "comment" => Ok(rdocx::ComparisonStoryKind::Comment),
+        "text_box" => Ok(rdocx::ComparisonStoryKind::TextBox),
+        "footnote" => Ok(rdocx::ComparisonStoryKind::Footnote),
+        "endnote" => Ok(rdocx::ComparisonStoryKind::Endnote),
+        other => Err(rdocx::Error::Other(format!(
+            "unknown comparison story {other:?}, expected body, header, footer, comment, \
+             text_box, footnote, or endnote"
         ))),
     }
 }
