@@ -59,12 +59,13 @@ Comment `add` ranges use zero-based body paragraph and run boundaries. The
 start is inclusive and the end is exclusive. Comment replies, resolution, and
 removal select a decimal comment id.
 
-Revision `list` reports the main story. Revision `accept` and `reject` operate
-across every supported story and accept at most one selector: `--id`,
-`--author`, or the paired `--start-date` and `--end-date` RFC 3339 bounds.
-Omitting a selector resolves all modeled revisions. Every mutation, comparison,
-and TOC rebuild requires `-o/--output`, publishes only a complete validated
-DOCX, and supports a schema-1 record through `--json`.
+Revision `list` reports every supported story and names the story of each
+revision. Revision `accept` and `reject` operate across every supported story
+and accept at most one selector: `--id`, `--author`, or the paired
+`--start-date` and `--end-date` RFC 3339 bounds. Omitting a selector resolves
+all modeled revisions. Every mutation, comparison, and TOC rebuild requires
+`-o/--output`, publishes only a complete validated DOCX, and supports a
+schema-1 record through `--json`.
 
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,

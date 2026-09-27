@@ -1174,10 +1174,9 @@ snapshot adds the `StoryId` of its Word story, with table cells folded into the
 story that holds the table. It scans the parts as resolution stages them, so
 the list has one entry per revision element that `accept_all` and
 `reject_all` resolve and its length equals their count.
-`rdocx-cli revision list` exposes the main-story projection with an explicit
-scope field. Python `Document.revisions` exposes the all-story listing. WASM
-load and save paths preserve the revision XML without a revision inspection
-method.
+`rdocx-cli revision list` and Python `Document.revisions` expose this all-story
+listing. WASM load and save paths preserve the revision XML without a revision
+inspection method.
 
 Native Word paragraph handles expose
 `Paragraph::add_run_inheriting_mark(&mut self, text)`. The method appends one
@@ -2075,7 +2074,7 @@ unlaid items retain an empty fragment list. `replace --expect N` checks the
 run-aware replacement count before staged publication. A mismatch creates no
 output and leaves an existing destination untouched. Both the selected page
 and all-page `render` paths use bundled deterministic fonts. The compiled
-surface also includes nested comment thread commands, main-story revision
+surface also includes nested comment thread commands, all-story revision
 inspection, all-story filtered revision resolution, whole-run comparison, and
 TOC rebuild. Every new mutation requires an explicit output and publishes
 through the shared staged output set. Their schema-1 records state `main` or

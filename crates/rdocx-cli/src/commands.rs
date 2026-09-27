@@ -7,6 +7,7 @@ use oxml_cli_support::{
 };
 use rdocx::{
     BodyItemRef, Document, RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
+    StoryId, StoryKind,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -666,10 +667,10 @@ pub fn comment_remove(file: &Path, id: i32, output: &Path, json_output: bool) ->
     )
 }
 
-/// List modeled revisions from the main story.
+/// List modeled revisions from every supported story.
 pub fn revision_list(file: &Path, json_output: bool) -> Result<()> {
     let doc = Document::open(file)?;
-    let revisions = doc.revisions();
+    let revisions = doc.story_revisions()?;
     let records = revisions
         .iter()
         .map(|revision| {
@@ -678,24 +679,28 @@ pub fn revision_list(file: &Path, json_output: bool) -> Result<()> {
                 "author": revision.author(),
                 "timestamp": revision.timestamp(),
                 "kind": revision_kind_label(revision.kind()),
+                "story": story_json(revision.story()),
             })
         })
         .collect::<Vec<_>>();
     if json_output {
         print_json(json!({
-            "scope": "main",
+            "scope": "all-supported-stories",
             "revisions": records,
         }))?;
     } else if revisions.is_empty() {
-        println!("(no revisions in main story)");
+        println!("(no revisions)");
     } else {
         for revision in revisions {
             println!(
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 revision.id(),
                 revision.author(),
                 revision.timestamp().unwrap_or(""),
-                revision_kind_label(revision.kind())
+                revision_kind_label(revision.kind()),
+                story_kind_label(revision.story().kind()),
+                revision.story().part_name(),
+                revision.story().owner_index()
             );
         }
     }
@@ -861,6 +866,28 @@ fn revision_kind_label(kind: RevisionKind) -> &'static str {
         RevisionKind::TablePropertyChange => "table-property-change",
         RevisionKind::SectionPropertyChange => "section-property-change",
     }
+}
+
+fn story_kind_label(kind: StoryKind) -> &'static str {
+    match kind {
+        StoryKind::Body => "body",
+        StoryKind::TableCell => "table-cell",
+        StoryKind::Header => "header",
+        StoryKind::Footer => "footer",
+        StoryKind::Footnote => "footnote",
+        StoryKind::Endnote => "endnote",
+        StoryKind::Comment => "comment",
+        StoryKind::TextBox => "text-box",
+        _ => "unknown",
+    }
+}
+
+fn story_json(story: &StoryId) -> Value {
+    json!({
+        "kind": story_kind_label(story.kind()),
+        "part_name": story.part_name(),
+        "owner_index": story.owner_index(),
+    })
 }
 
 fn publish_document(doc: &mut Document, output: &Path) -> Result<()> {
