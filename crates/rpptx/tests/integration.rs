@@ -9697,6 +9697,233 @@ fn text_layout_lines_match_the_glyph_runs_the_renderer_draws() {
     assert_eq!(matched + rotated_runs, drawn.len());
 }
 
+const MASTER_TITLE: (i64, i64, i64, i64) = (457_200, 274_638, 8_229_600, 1_143_000);
+const MASTER_BODY: (i64, i64, i64, i64) = (457_200, 1_600_200, 8_229_600, 4_525_963);
+const MASTER_SLIDE_NUMBER: (i64, i64, i64, i64) = (6_553_200, 6_356_350, 2_133_600, 365_125);
+const TITLE_SLIDE_TITLE: (i64, i64, i64, i64) = (685_800, 2_130_425, 7_772_400, 1_470_025);
+const TITLE_SLIDE_SUBTITLE: (i64, i64, i64, i64) = (1_371_600, 3_886_200, 6_400_800, 1_752_600);
+
+/// A geometry as `Presentation::effective_geometry` reports it.
+fn emu_geometry((left, top, width, height): (i64, i64, i64, i64)) -> Option<(Emu, Emu, Emu, Emu)> {
+    Some((Emu(left), Emu(top), Emu(width), Emu(height)))
+}
+
+/// One text-bearing slide shape with a `p:nvPr` payload and an `a:xfrm` payload.
+fn geometry_shape(id: u32, placeholder: &str, transform: &str) -> String {
+    format!(
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="Shape {id}"/><p:cNvSpPr/><p:nvPr>{placeholder}</p:nvPr></p:nvSpPr><p:spPr>{transform}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>Shape {id}</a:t></a:r></a:p></p:txBody></p:sp>"#
+    )
+}
+
+fn geometry_transform((x, y, cx, cy): (i64, i64, i64, i64)) -> String {
+    format!(r#"<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>"#)
+}
+
+/// Asserts that every text frame is drawn at the shape's effective geometry.
+fn assert_text_frames_use_effective_geometry(presentation: &Presentation, expected_frames: usize) {
+    let frames = presentation.text_layout_deterministic(1.0).unwrap();
+    assert_eq!(frames.len(), expected_frames);
+    for frame in frames {
+        let index = presentation
+            .slide(frame.slide_index)
+            .unwrap()
+            .shapes()
+            .position(|shape| shape.non_visual_id() == frame.shape_id)
+            .unwrap();
+        let (left, top, width, height) = presentation
+            .effective_geometry(frame.slide_index, &[index])
+            .unwrap()
+            .unwrap();
+        let drawn = frame.layout.frame;
+        for (points, emu) in [
+            (drawn.x, left),
+            (drawn.y, top),
+            (drawn.width, width),
+            (drawn.height, height),
+        ] {
+            assert!((points - emu.0 as f64 / 12_700.0).abs() < 1e-9, "{frame:?}");
+        }
+    }
+}
+
+#[test]
+fn effective_geometry_follows_the_placeholder_chain_as_rendering_does() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(1).unwrap();
+    presentation.add_slide(0).unwrap();
+    let expected = [
+        [MASTER_TITLE, MASTER_BODY],
+        [TITLE_SLIDE_TITLE, TITLE_SLIDE_SUBTITLE],
+    ];
+    for (slide_index, geometries) in expected.into_iter().enumerate() {
+        for (shape_index, geometry) in geometries.into_iter().enumerate() {
+            let shape = presentation
+                .slide(slide_index)
+                .unwrap()
+                .shape(shape_index)
+                .unwrap();
+            assert_eq!((shape.position(), shape.size()), (None, None));
+            assert_eq!(
+                presentation
+                    .effective_geometry(slide_index, &[shape_index])
+                    .unwrap(),
+                emu_geometry(geometry)
+            );
+            presentation
+                .slide_mut(slide_index)
+                .unwrap()
+                .shape_mut(shape_index)
+                .unwrap()
+                .set_text("Drawn")
+                .unwrap();
+        }
+    }
+    assert_text_frames_use_effective_geometry(&presentation, 4);
+
+    let picture_placeholder = r#"<p:ph type="pic" idx="21"/>"#;
+    let layout_picture = (1_000_000, 2_000_000, 3_000_000, 4_000_000);
+    let slide_shapes = [
+        geometry_shape(2, r#"<p:ph type="sldNum" idx="99"/>"#, ""),
+        r#"<p:pic><p:nvPicPr><p:cNvPr id="3" name="Picture 3"/><p:cNvPicPr/><p:nvPr><p:ph type="pic" idx="21"/></p:nvPr></p:nvPicPr><p:blipFill/><p:spPr/></p:pic>"#.to_owned(),
+        geometry_shape(4, r#"<p:ph type="body" idx="77"/>"#, ""),
+        geometry_shape(5, "", ""),
+        geometry_shape(6, picture_placeholder, r#"<a:xfrm><a:off x="5" y="6"/></a:xfrm>"#),
+        geometry_shape(7, picture_placeholder, r#"<a:xfrm><a:ext cx="8" cy="9"/></a:xfrm>"#),
+        format!(
+            r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="8" name="Group 8"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{}</p:grpSp>"#,
+            geometry_shape(9, picture_placeholder, "")
+        ),
+    ]
+    .join("");
+    let presentation = text_layout_deck(
+        &slide_shapes,
+        &geometry_shape(20, picture_placeholder, &geometry_transform(layout_picture)),
+    );
+    for (path, expected) in [
+        (&[0][..], emu_geometry(MASTER_SLIDE_NUMBER)),
+        (&[1], emu_geometry(layout_picture)),
+        (&[2], None),
+        (&[3], None),
+        (&[4], None),
+        (&[5], emu_geometry((0, 0, 8, 9))),
+        (&[6, 0], emu_geometry(layout_picture)),
+    ] {
+        assert_eq!(
+            presentation.effective_geometry(0, path).unwrap(),
+            expected,
+            "{path:?}"
+        );
+    }
+    for path in [&[][..], &[7], &[6, 1], &[0, 0]] {
+        assert!(matches!(
+            presentation.effective_geometry(0, path),
+            Err(Error::InvalidShapeMutation { .. })
+        ));
+    }
+    assert!(matches!(
+        presentation.effective_geometry(1, &[0]),
+        Err(Error::UnknownSlideIndex { index: 1, .. })
+    ));
+}
+
+#[test]
+fn materialized_placeholder_geometry_keeps_the_shape_drawn_after_one_coordinate_changes() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(1).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("Moved title")
+        .unwrap();
+    let move_title = |presentation: &mut Presentation| {
+        presentation
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(0)
+            .unwrap()
+            .set_position(Emu(548_640), Emu(274_638))
+            .unwrap();
+    };
+
+    let mut unmaterialized = presentation.clone();
+    move_title(&mut unmaterialized);
+    assert_eq!(unmaterialized.effective_geometry(0, &[0]).unwrap(), None);
+    assert_text_frames_use_effective_geometry(&unmaterialized, 0);
+
+    presentation.materialize_geometry(0, &[0]).unwrap();
+    let title = presentation.slide(0).unwrap().shape(0).unwrap();
+    assert_eq!(
+        (title.position(), title.size()),
+        (
+            Some((Emu(457_200), Emu(274_638))),
+            Some((Emu(8_229_600), Emu(1_143_000)))
+        )
+    );
+    let materialized = presentation.to_bytes().unwrap();
+    presentation.materialize_geometry(0, &[0]).unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), materialized);
+    move_title(&mut presentation);
+    assert_eq!(
+        presentation.effective_geometry(0, &[0]).unwrap(),
+        emu_geometry((548_640, 274_638, 8_229_600, 1_143_000))
+    );
+    assert_text_frames_use_effective_geometry(&presentation, 1);
+
+    let picture_placeholder = r#"<p:ph type="pic" idx="21"/>"#;
+    let slide_shapes = [
+        geometry_shape(2, picture_placeholder, ""),
+        geometry_shape(3, picture_placeholder, r#"<a:xfrm><a:off x="5" y="6"/></a:xfrm>"#),
+        geometry_shape(4, picture_placeholder, r#"<a:xfrm><a:ext cx="8" cy="9"/></a:xfrm>"#),
+        geometry_shape(5, "", ""),
+        geometry_shape(6, r#"<p:ph type="body" idx="77"/>"#, ""),
+        format!(
+            r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="7" name="Group 7"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{}</p:grpSp>"#,
+            geometry_shape(8, picture_placeholder, "")
+        ),
+    ]
+    .join("");
+    let layout_shape = geometry_shape(
+        20,
+        picture_placeholder,
+        r#"<a:xfrm rot="5400000" flipH="1"><a:off x="1000000" y="2000000"/><a:ext cx="3000000" cy="4000000"/></a:xfrm>"#,
+    );
+    let mut presentation = text_layout_deck(&slide_shapes, &layout_shape);
+    for path in [&[0][..], &[1], &[2], &[3], &[4], &[5, 0]] {
+        presentation.materialize_geometry(0, path).unwrap();
+    }
+    let slide = presentation.slide(0).unwrap();
+    let geometry = |shape: ShapeRef<'_>| (shape.position(), shape.size(), shape.rotation());
+    let layout_offset = Some((Emu(1_000_000), Emu(2_000_000)));
+    let layout_extent = Some((Emu(3_000_000), Emu(4_000_000)));
+    assert_eq!(
+        geometry(slide.shape(0).unwrap()),
+        (layout_offset, layout_extent, Some(Angle(5_400_000))),
+        "a placeholder without a transform copies the inherited one whole"
+    );
+    assert_eq!(
+        geometry(slide.shape(1).unwrap()),
+        (Some((Emu(5), Emu(6))), layout_extent, Some(Angle(0)))
+    );
+    assert_eq!(
+        geometry(slide.shape(2).unwrap()),
+        (layout_offset, Some((Emu(8), Emu(9))), Some(Angle(0)))
+    );
+    assert_eq!(geometry(slide.shape(3).unwrap()), (None, None, None));
+    assert_eq!(geometry(slide.shape(4).unwrap()), (None, None, None));
+    assert_eq!(
+        geometry(slide.shape(5).unwrap().child(0).unwrap()),
+        (layout_offset, layout_extent, Some(Angle(5_400_000)))
+    );
+    let xml = String::from_utf8(slide.shape(0).unwrap().xml().unwrap()).unwrap();
+    assert!(xml.contains(r#"<a:xfrm rot="5400000" flipH="1">"#), "{xml}");
+    assert!(matches!(
+        presentation.materialize_geometry(0, &[6]),
+        Err(Error::InvalidShapeMutation { .. })
+    ));
+}
+
 #[test]
 fn notes_and_handout_export_resolve_noncanonical_master_theme_and_media_targets() {
     let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();

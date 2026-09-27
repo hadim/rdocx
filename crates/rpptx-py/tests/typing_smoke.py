@@ -194,6 +194,7 @@ def exercise_rpptx_types(path: Path) -> None:
     shape.top = Inches(2)
     shape.width = Inches(3)
     shape.height = Inches(1)
+    geometry: tuple[Length, Length, Length, Length] | None = shape.effective_geometry()
     shape.name = "Typed"
     shape.rotation = 15.0
     rotation: float = shape.rotation

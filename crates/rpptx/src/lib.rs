@@ -75,7 +75,7 @@ use rpptx_layout::timeline::{ResolvedTimelineSlide, evaluate_media_playback};
 use rpptx_layout::{
     ChartResource, FlattenedItem, FlattenedSource, ResolveCtx, ResolvedAutofit, ResolvedContent,
     ResolvedSlide, ResolvedSlideTextDirections, ScopedChartResources, ScopedHyperlinkTargets,
-    ScopedMediaFailures, ScopedMediaIds,
+    ScopedMediaFailures, ScopedMediaIds, inherited_xfrm,
 };
 pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
 use rpptx_oxml::comments::{CommentAuthorList, CommentList};
@@ -1887,6 +1887,139 @@ impl Presentation {
         self.layouts
             .iter()
             .position(|layout| layout.part_name.eq_ignore_ascii_case(&layout_part))
+    }
+
+    /// Returns one slide shape's effective offset and extent in EMU.
+    ///
+    /// `shape_path` holds the shape's index in the slide's shape tree, then
+    /// its index within each enclosing group. The shape's own transform wins
+    /// whole. A placeholder without one inherits the transform of its layout
+    /// placeholder, then of that placeholder's master counterpart, as
+    /// rendering resolves it. The result is `(left, top, width, height)`, and
+    /// a missing offset reads as zero, as rendering draws it. `None` means
+    /// the resolved transform has no extent, so the shape is not drawn.
+    /// [`ShapeRef::position`] and [`ShapeRef::size`] keep reporting only the
+    /// shape's own values. An empty `shape_path` or one that names no shape
+    /// is [`Error::InvalidShapeMutation`], as a missing picture is for
+    /// [`Self::picture_image`].
+    #[cfg(feature = "render")]
+    pub fn effective_geometry(
+        &self,
+        slide_index: usize,
+        shape_path: &[usize],
+    ) -> Result<Option<(Emu, Emu, Emu, Emu)>> {
+        let child = self
+            .shape_at(slide_index, shape_path, "read effective geometry")?
+            .child;
+        let own = shape_transform(child);
+        let inherited = match (own, shape_placeholder(child)) {
+            (None, Some(placeholder)) => self.inherited_transform(slide_index, placeholder)?,
+            _ => None,
+        };
+        Ok(own.or(inherited.as_ref()).and_then(|transform| {
+            let offset = transform.offset.unwrap_or_default();
+            let extent = transform.extent?;
+            Some((offset.x, offset.y, extent.cx, extent.cy))
+        }))
+    }
+
+    /// Writes a placeholder's inherited geometry onto the shape itself.
+    ///
+    /// `shape_path` is read as in [`Self::effective_geometry`]. A placeholder
+    /// whose own transform lacks an offset or an extent takes the missing
+    /// part from the transform it inherits, and one without a transform
+    /// copies the inherited transform whole, rotation and flips included.
+    /// [`ShapeMut::set_position`] or [`ShapeMut::set_size`] then changes one
+    /// pair while the shape keeps the other, and [`ShapeMut::set_rotation`]
+    /// changes the angle while it keeps both, where an incomplete transform
+    /// would make rendering skip the shape. Shapes that are not placeholders,
+    /// placeholders with a complete transform and placeholders that inherit
+    /// none are left unchanged.
+    #[cfg(feature = "render")]
+    pub fn materialize_geometry(&mut self, slide_index: usize, shape_path: &[usize]) -> Result<()> {
+        const OPERATION: &str = "materialize geometry";
+        let child = self.shape_at(slide_index, shape_path, OPERATION)?.child;
+        let own = shape_transform(child);
+        if own.is_some_and(|own| own.offset.is_some() && own.extent.is_some()) {
+            return Ok(());
+        }
+        let Some(placeholder) = shape_placeholder(child) else {
+            return Ok(());
+        };
+        let Some(inherited) = self.inherited_transform(slide_index, placeholder)? else {
+            return Ok(());
+        };
+        let mut materialized = own.cloned().unwrap_or_else(|| inherited.clone());
+        materialized.offset = materialized.offset.or(inherited.offset);
+        materialized.extent = materialized.extent.or(inherited.extent);
+        let mut indices = shape_path.iter();
+        let mut shape = indices
+            .next()
+            .and_then(|index| slide_mut(&mut self.slides[slide_index]).into_shape_mut(*index));
+        for index in indices {
+            shape = shape.and_then(|shape| shape.into_child_mut(*index));
+        }
+        let mut shape = shape.ok_or_else(|| {
+            invalid_shape_mutation(
+                OPERATION,
+                format!("slide {slide_index} has no editable shape at path {shape_path:?}"),
+            )
+        })?;
+        *shape.transform_mut(OPERATION)? = materialized;
+        Ok(())
+    }
+
+    #[cfg(feature = "render")]
+    fn shape_at(
+        &self,
+        slide_index: usize,
+        shape_path: &[usize],
+        operation: &'static str,
+    ) -> Result<ShapeRef<'_>> {
+        self.require_slide_index(slide_index)?;
+        let slide = slide_ref(&self.slides[slide_index]);
+        let mut indices = shape_path.iter();
+        let mut shape = indices.next().and_then(|index| slide.shape(*index));
+        for index in indices {
+            shape = shape.and_then(|shape| shape.child(*index));
+        }
+        shape.ok_or_else(|| {
+            invalid_shape_mutation(
+                operation,
+                format!("slide {slide_index} has no shape at path {shape_path:?}"),
+            )
+        })
+    }
+
+    /// Returns the transform a slide placeholder inherits through its layout.
+    #[cfg(feature = "render")]
+    fn inherited_transform(
+        &self,
+        slide_index: usize,
+        placeholder: &CT_Placeholder,
+    ) -> Result<Option<CT_Transform2D>> {
+        let Some(layout_index) = self.slide_layout_index(slide_index) else {
+            return Ok(None);
+        };
+        let (layout, master) = self.layout_and_master(layout_index)?;
+        Ok(inherited_xfrm(placeholder, layout, &master).cloned())
+    }
+
+    #[cfg(feature = "render")]
+    fn layout_and_master(&self, layout_index: usize) -> Result<(&CT_SlideLayout, CT_SlideMaster)> {
+        let record = &self.layouts[layout_index];
+        let master_part =
+            related_internal_part(&self.package, &record.part_name, rel_types::SLIDE_MASTER)?
+                .ok_or_else(|| Error::MalformedPart {
+                    part_name: record.part_name.clone(),
+                    message: "layout has no slide master relationship".to_owned(),
+                })?;
+        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
+            .map_err(|error| Error::MalformedPart {
+                part_name: master_part,
+                message: error.to_string(),
+            })?;
+        Ok((&record.layout, master))
     }
 
     /// Returns modern PowerPoint comment authors in producer order.
