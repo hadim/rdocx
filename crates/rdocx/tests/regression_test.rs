@@ -1763,6 +1763,52 @@ mod direct_body_index_coordinates {
         assert!(error.to_string().contains("out of range"), "{error}");
         assert_eq!(document.to_bytes().unwrap(), before);
     }
+
+    #[test]
+    fn bookmark_direct_range_reports_the_index_add_bookmark_took() {
+        let mut document = document_from_body(&format!(
+            "{}{TABLE}{CONTROL}{}",
+            paragraph("Alpha."),
+            paragraph("Beta paragraph.")
+        ));
+        let beta = document.find_content_index("Beta").unwrap();
+        assert_eq!(beta, 3);
+        document.add_bookmark("beta", one_run_range(beta)).unwrap();
+
+        let bookmark = document.bookmarks().remove(0);
+        assert_eq!(bookmark.text(), "Beta paragraph.");
+        assert_eq!(bookmark.direct_range(), Some(one_run_range(beta)));
+        // range() keeps the recursive paragraph ordinal that REF numbering
+        // reads: Alpha, the four cells and the two control paragraphs.
+        assert_eq!(bookmark.range().unwrap().start.body_index, 7);
+    }
+
+    #[test]
+    fn bookmark_direct_range_is_none_when_a_marker_is_nested() {
+        let marked = |id: u32, name: &str, text: &str| {
+            format!(
+                r#"<w:p><w:bookmarkStart w:id="{id}" w:name="{name}"/><w:r><w:t>{text}</w:t></w:r><w:bookmarkEnd w:id="{id}"/></w:p>"#
+            )
+        };
+        let document = document_from_body(&format!(
+            r#"<w:p><w:bookmarkStart w:id="3" w:name="mixed"/><w:r><w:t>Alpha.</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>{}</w:tc></w:tr></w:tbl><w:sdt><w:sdtContent>{}<w:p><w:r><w:t>Control end.</w:t></w:r><w:bookmarkEnd w:id="3"/></w:p></w:sdtContent></w:sdt>{}"#,
+            marked(1, "cell", "In a cell."),
+            marked(2, "control", "In a control."),
+            marked(4, "direct", "Direct.")
+        ));
+        let bookmarks = document.bookmarks();
+        let named = |name: &str| {
+            bookmarks
+                .iter()
+                .find(|bookmark| bookmark.name() == Some(name))
+                .unwrap()
+        };
+        for name in ["cell", "control", "mixed"] {
+            assert!(named(name).range().is_some(), "{name}: {:?}", named(name));
+            assert_eq!(named(name).direct_range(), None, "{name}");
+        }
+        assert_eq!(named("direct").direct_range(), Some(one_run_range(3)));
+    }
 }
 
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {

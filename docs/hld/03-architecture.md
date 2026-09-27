@@ -1502,7 +1502,9 @@ half-open `RunRange` boundary as comments. `Document::bookmarks` returns
 immutable correlated summaries in typed main-story paragraph order through
 tables and block content controls. A reported body index is that recursive
 paragraph ordinal, and its run index is the accepted-view boundary used to
-extract bookmark text. Marker encounter order resolves direction when start
+extract bookmark text. `BookmarkRef::direct_range` reports the same range with
+the direct body child index of `RunPosition` when both markers sit in direct
+body paragraphs, and `None` otherwise. Marker encounter order resolves direction when start
 and end share one accepted boundary, so end before start remains reversed and
 start before end is a valid empty range. Isolated projection refresh after a
 run, comment, or bookmark edit carries the original Word namespace aliases.

@@ -1034,7 +1034,13 @@ preserve a document already redacted through the native facade.
 Native Word callers use `Document::bookmarks` for immutable `BookmarkRef`
 summaries and `Document::add_bookmark` for atomic insertion over the existing
 top-level half-open `RunRange`. A summary exposes an optional id, name, range,
-current text, and marker issue. Insertion validates the Word name and both
+direct range, current text, and marker issue. The range counts paragraphs
+recursively through tables and block content controls. The direct range uses
+the `RunPosition` body index that `add_bookmark` takes and is present only when
+both markers sit in direct body paragraphs. Its run indexes stay the
+accepted-view boundaries of the range, which equal the run indexes
+`add_bookmark` takes only in a paragraph without inline content controls or
+tracked insertions. Insertion validates the Word name and both
 boundaries, rejects duplicate or producer-reserved names, and returns the
 allocated nonnegative id. The shared recursive `Field` model retains the
 complete `REF` and `PAGEREF` instruction, target argument, cached display,

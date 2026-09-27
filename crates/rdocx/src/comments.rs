@@ -61,6 +61,7 @@ pub struct BookmarkRef {
     id: Option<i32>,
     name: Option<String>,
     range: Option<RunRange>,
+    direct_range: Option<RunRange>,
     text: String,
     issue: Option<String>,
 }
@@ -75,8 +76,26 @@ impl BookmarkRef {
     }
 
     /// Return the accepted-view half-open range reported by `Document::bookmarks`.
+    ///
+    /// Its body index is the paragraph ordinal counted recursively through
+    /// tables and block content controls, which field numbering reads.
+    /// [`Self::direct_range`] reports the direct body child index instead.
     pub fn range(&self) -> Option<RunRange> {
         self.range
+    }
+
+    /// Return the same range with the direct body child index that
+    /// `RunPosition`, `Document::add_bookmark` and
+    /// `Document::find_content_index` use.
+    ///
+    /// It is `None` when either marker sits in a table cell or a block content
+    /// control, which have no direct body index. Run indexes are the same
+    /// accepted-view boundaries as [`Self::range`]. They equal the
+    /// `RunPosition` run index that `Document::add_bookmark` and
+    /// `Document::add_comment` take only in a paragraph without inline
+    /// content controls or tracked insertions.
+    pub fn direct_range(&self) -> Option<RunRange> {
+        self.direct_range
     }
 
     pub fn text(&self) -> &str {
@@ -257,10 +276,13 @@ impl Document {
     ///
     /// Reported body indexes count typed paragraphs recursively through tables and
     /// block content controls. Reported run indexes use accepted-view run boundaries.
+    /// `BookmarkRef::direct_range` also reports the direct body child index when
+    /// both markers sit in direct body paragraphs.
     pub fn bookmarks(&self) -> Vec<BookmarkRef> {
         #[derive(Clone)]
         struct Marker {
             position: RunPosition,
+            direct_position: Option<RunPosition>,
             start: bool,
             id: Option<i32>,
             name: Option<String>,
@@ -268,14 +290,28 @@ impl Document {
 
         let mut markers = Vec::new();
         let mut paragraphs = Vec::new();
-        collect_main_story_paragraphs(&self.document.body.content, &mut paragraphs);
-        for (body_index, paragraph) in paragraphs.into_iter().enumerate() {
+        for (direct_index, item) in self.document.body.content.iter().enumerate() {
+            let mut item_paragraphs = Vec::new();
+            collect_main_story_paragraphs(std::slice::from_ref(item), &mut item_paragraphs);
+            let direct_index = matches!(item, BodyContent::Paragraph(_)).then_some(direct_index);
+            paragraphs.extend(
+                item_paragraphs
+                    .into_iter()
+                    .map(|paragraph| (paragraph, direct_index)),
+            );
+        }
+        for (body_index, (paragraph, direct_index)) in paragraphs.into_iter().enumerate() {
             for marker in &paragraph.bookmark_markers {
+                let run_index = marker.projected_run_index();
                 markers.push(Marker {
                     position: RunPosition {
                         body_index,
-                        run_index: marker.projected_run_index(),
+                        run_index,
                     },
+                    direct_position: direct_index.map(|body_index| RunPosition {
+                        body_index,
+                        run_index,
+                    }),
                     start: marker.is_start(),
                     id: marker.id(),
                     name: marker.name().map(str::to_owned),
@@ -295,6 +331,7 @@ impl Document {
                         id: None,
                         name: marker.name.clone(),
                         range: None,
+                        direct_range: None,
                         text: String::new(),
                         issue: Some("bookmark marker has a malformed or missing id".to_owned()),
                     },
@@ -344,6 +381,12 @@ impl Document {
                     (Some(candidate), None)
                 }
             };
+            let direct_range = range.and_then(|_| {
+                Some(RunRange {
+                    start: markers[starts[0]].direct_position?,
+                    end: markers[ends[0]].direct_position?,
+                })
+            });
             let text = range
                 .map(|_| {
                     bookmark_range_text(
@@ -361,6 +404,7 @@ impl Document {
                     id: Some(id),
                     name,
                     range,
+                    direct_range,
                     text,
                     issue,
                 },
@@ -386,6 +430,7 @@ impl Document {
                     bookmark.name.as_deref().unwrap_or("")
                 ));
                 bookmark.range = None;
+                bookmark.direct_range = None;
                 bookmark.text.clear();
             }
         }
