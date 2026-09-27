@@ -2178,6 +2178,50 @@ def test_presentation_from_bytes_opens_like_a_path_and_rejects_other_bytes(tmp_p
         rpptx.Presentation.from_bytes(b"not a package")
 
 
+def test_try_replace_text_checks_the_expected_count_before_publishing():
+    import pickle
+
+    import rpptx
+
+    prs = _textbox_presentation(rpptx)
+    prs.slides[0].shapes[0].text = "NAME and NAME"
+    prs.slides[0].shapes.add_table(1, 1, 0, 0, 100, 100).table.cell(0, 0).text = "NAME"
+    prs.slides[0].notes_text = "Notes for NAME"
+    held = prs.slides[0].shapes[0]
+    before = prs.to_bytes()
+
+    with pytest.raises(rpptx.ReplacementCountError) as raised:
+        prs.try_replace_text("NAME", "Ada", expect=3)
+    error = raised.value
+    assert isinstance(error, rpptx.RpptxError)
+    assert str(error) == 'expected 3 replacement(s) of "NAME", found 4'
+    assert (error.expected, error.found) == (3, 4)
+    # Worker pools pickle exceptions, so the counts must survive the trip.
+    copied = pickle.loads(pickle.dumps(error))
+    assert (str(copied), copied.expected, copied.found) == (str(error), 3, 4)
+    assert prs.to_bytes() == before
+    assert held.text == "NAME and NAME"
+
+    assert prs.try_replace_text("MISSING", "x") == 0
+    assert prs.try_replace_text("MISSING", "x", expect=0) == 0
+    with pytest.raises(rpptx.ReplacementCountError, match="found 0"):
+        prs.try_replace_text("MISSING", "x", expect=1)
+    with pytest.raises(rpptx.RpptxError, match="placeholder must not be empty"):
+        prs.try_replace_text("", "x")
+    assert prs.to_bytes() == before
+    assert held.text == "NAME and NAME"
+
+    assert prs.try_replace_text("NAME", "Ada", expect=4) == 4
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: held.text)
+    shapes = prs.slides[0].shapes
+    assert (shapes[0].text, shapes[1].table.cell(0, 0).text) == ("Ada and Ada", "Ada")
+    assert prs.slides[0].notes_text == "Notes for Ada"
+    held = prs.slides[0].shapes[0]
+    assert prs.try_replace_text("Ada", "Grace") == 4
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: held.text)
+    assert prs.slides[0].shapes[0].text == "Grace and Grace"
+
+
 def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     import rpptx
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE

@@ -391,6 +391,17 @@ place and do not advance the revision. `rpptx` and `rpptx.enum.text` export
   value in place, keeping transforms such as `a:alpha`, replaces any other
   colour, and `None` removes the direct fill.
 
+`Presentation.try_replace_text(placeholder, replacement, *, expect=None)`
+runs the native staged literal replacement over slides and speaker notes with
+the GIL released and returns its count. When `expect` is given, the
+replacement runs on a clone, and a count that differs raises
+`ReplacementCountError`, an `RpptxError` subclass that carries `expected` and
+`found` and words its message like `rpptx replace --expect`. The presentation
+and its revision then stay unchanged. Otherwise the replacement is kept, and
+the revision advances once when the count is nonzero. Without `expect`, zero
+matches return zero rather than raise, as the rdocx `try_replace_text` does.
+Only the CLI refuses zero matches, because it would write an unchanged copy.
+
 The presentation binding exposes `to_pdf`, `render_slide_to_png`,
 `render_all_slides`, `to_notes_pdf`, and `render_all_notes` through the native
 deterministic facade. Every render call releases the GIL.

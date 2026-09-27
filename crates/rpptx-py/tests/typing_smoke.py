@@ -16,6 +16,7 @@ from rpptx import (
     PP_ALIGN,
     Presentation,
     Pt,
+    ReplacementCountError,
     RGBColor,
     TextFrameLayout,
     TextLineLayout,
@@ -153,6 +154,12 @@ def exercise_rpptx_types(path: Path) -> None:
             current_shape.has_text_frame
     package_bytes: bytes = presentation.to_bytes()
     reopened: Presentation = Presentation.from_bytes(package_bytes)
+    replaced: int = presentation.try_replace_text("typed", "checked")
+    replacement_counts: tuple[int, int] = (0, 0)
+    try:
+        replaced = presentation.try_replace_text("checked", "typed", expect=2)
+    except ReplacementCountError as error:
+        replacement_counts = (error.expected, error.found)
     pdf_bytes: bytes = presentation.to_pdf()
     slide_png: bytes | None = presentation.render_slide_to_png(0)
     slide_pngs: list[bytes] = presentation.render_all_slides()
@@ -290,6 +297,8 @@ def exercise_rpptx_types(path: Path) -> None:
         image.ext,
         duplicated,
         reopened,
+        replaced,
+        replacement_counts,
     )
 
 

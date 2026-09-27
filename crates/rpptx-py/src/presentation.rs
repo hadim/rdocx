@@ -8,7 +8,7 @@ use smallvec::smallvec;
 use crate::layout::PyTextFrameLayout;
 use crate::shape::length;
 use crate::slide::{PySlideCollection, PySlideLayoutCollection};
-use crate::{rpptx_to_pyerr, rpptx_value_to_pyerr};
+use crate::{replacement_count_to_pyerr, rpptx_to_pyerr, rpptx_value_to_pyerr};
 
 /// The bundled 16:9 slide size, paired with the first dimension set on a deck
 /// that has no `p:sldSz`.
@@ -234,6 +234,46 @@ impl PyPresentation {
             .detach(|| self.inner.notes_page_pngs_deterministic(dpi))
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         PyList::new(py, notes.iter().map(|page| PyBytes::new(py, page)))
+    }
+
+    /// Replaces literal text in slides and speaker notes and returns the count.
+    ///
+    /// With `expect`, the replacement runs on a clone, so a count that
+    /// differs raises and leaves the presentation and its revision as they
+    /// were. Without it, the staged facade call runs in place. The revision
+    /// advances once only when something was replaced.
+    #[pyo3(signature = (placeholder, replacement, *, expect = None))]
+    fn try_replace_text(
+        &mut self,
+        py: Python<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let count = match expect {
+            None => py
+                .detach(|| self.inner.try_replace_text(placeholder, replacement))
+                .map_err(|error| rpptx_to_pyerr(py, error))?,
+            Some(expected) => {
+                let (candidate, count) = py
+                    .detach(|| {
+                        let mut candidate = self.inner.clone();
+                        candidate
+                            .try_replace_text(placeholder, replacement)
+                            .map(|count| (candidate, count))
+                    })
+                    .map_err(|error| rpptx_to_pyerr(py, error))?;
+                if count != expected {
+                    return Err(replacement_count_to_pyerr(py, placeholder, expected, count));
+                }
+                self.inner = candidate;
+                count
+            }
+        };
+        if count > 0 {
+            self.revisions.bump();
+        }
+        Ok(count)
     }
 
     #[getter]

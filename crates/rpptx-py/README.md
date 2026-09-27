@@ -51,6 +51,9 @@ with open("review.pdf", "wb") as output:
 - Slide layouts, slides, placeholders, shapes, text frames, paragraphs, runs,
   pictures, preset shapes, and tables.
 - Deterministic PDF and PNG output for slides and speaker notes.
+- Formatting-preserving text replacement across slides and speaker notes,
+  with an optional expected count that leaves the deck unchanged on a
+  mismatch.
 - Speaker-note text plus modern comment authors, threads, replies, and ordered
   comment movement.
 - Master, layout, placeholder, theme, shape, chart, media, and relationship
