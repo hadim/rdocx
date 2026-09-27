@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import TYPE_CHECKING, assert_type
+from typing import TYPE_CHECKING, Literal, assert_type
 
 from rdocx import (
     BoundingBox,
@@ -104,6 +104,13 @@ def exercise_rdocx_types(path: Path) -> None:
     cell.shading = "D9D9D9"
     cell.set_border("bottom", "double", size=6, color="auto")
     cell.set_margins(top=0, right=0, bottom=0, left=0)
+    inserted_table: Table = document.insert_table(0, 2, 2)
+    inserted_table.set_cell_grid_span(0, 0, 2)
+    inserted_table.set_cell_grid_span(0, -1, None)
+    inserted_table.set_cell_vertical_merge(0, 0, "restart")
+    inserted_table.set_cell_vertical_merge(1, 0, None)
+    assert_type(cell.grid_span, int)
+    assert_type(cell.vertical_merge, Literal["restart", "continue"] | None)
     package_bytes: bytes = loaded.to_bytes()
     pdf_bytes: bytes = opened.to_pdf()
     pages: list[bytes] = opened.render_all_pages()

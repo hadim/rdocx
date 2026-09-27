@@ -477,6 +477,165 @@ def test_invalid_table_formatting_changes_nothing_and_keeps_handles_live():
     assert (row.cant_split, cell.shading) == (True, "FFFFFF")
 
 
+def test_insert_table_at_a_body_index_returns_the_new_table():
+    from rdocx import Document, StaleElementError
+
+    seed = Document()
+    seed.add_table(rows=1, cols=1).cell(0, 0).text = "in control"
+    seed.add_paragraph("after")
+    document = Document.from_bytes(
+        _replace_document_xml(
+            _replace_document_xml(seed.to_bytes(), b"<w:tbl>", b"<w:sdt><w:sdtContent><w:tbl>"),
+            b"</w:tbl>",
+            b"</w:tbl></w:sdtContent></w:sdt>",
+        )
+    )
+    held = document.tables[0]
+    before = document.to_bytes()
+    with pytest.raises(IndexError, match="content index out of range"):
+        document.insert_table(3, 1, 1)
+    assert document.to_bytes() == before
+
+    inserted = document.insert_table(1, 2, 2)
+    with pytest.raises(StaleElementError):
+        _ = held.rows
+    assert document.find_content_index(inserted) == 1
+    assert len(inserted.rows) == 2
+    inserted.cell(1, 1).text = "inserted"
+
+    reopened = Document.from_bytes(document.to_bytes())
+    body = [
+        (item.kind, item.text)
+        for item in reopened.story_items
+        if item.direct_body_index is not None
+    ]
+    assert body == [("content_control", None), ("table", None), ("paragraph", "after")]
+    assert [table.cell(0, 0).text for table in reopened.tables] == ["in control", ""]
+    assert reopened.tables[1].cell(1, 1).text == "inserted"
+
+
+def test_cells_merge_through_the_checked_table_operations():
+    from rdocx import Document, RdocxError, StaleElementError
+
+    document = Document()
+    table = document.add_table(rows=3, cols=3)
+    held = table.cell(0, 2)
+    table.set_cell_grid_span(0, 0, 2)
+    with pytest.raises(StaleElementError):
+        _ = held.text
+
+    table = document.tables[0]
+    assert [len(row.cells) for row in table.rows] == [2, 3, 3]
+    assert [cell.grid_span for cell in table.rows[0].cells] == [2, 1]
+    last = table.cell(0, -1)
+    table.set_cell_vertical_merge(0, -1, "restart")
+    table.set_cell_vertical_merge(1, -1, "continue")
+    assert last.vertical_merge == "restart"
+    assert [row.cells[-1].vertical_merge for row in table.rows] == [
+        "restart",
+        "continue",
+        None,
+    ]
+
+    xml = _document_xml(document.to_bytes())
+    assert '<w:gridSpan w:val="2"/>' in xml
+    assert '<w:vMerge w:val="restart"/>' in xml
+    assert "<w:vMerge/>" in xml
+
+    table.cell(1, 1).text = "full"
+    table = document.tables[0]
+    before = document.to_bytes()
+    with pytest.raises(RdocxError, match="nonempty cell"):
+        table.set_cell_grid_span(1, 0, 2)
+    with pytest.raises(RdocxError, match="no matching cell above"):
+        table.set_cell_vertical_merge(1, 0, "continue")
+    with pytest.raises(RdocxError, match="exceeds the row grid"):
+        table.set_cell_grid_span(0, 0, 4)
+    with pytest.raises(ValueError, match="vertical merge"):
+        table.set_cell_vertical_merge(1, 0, "sideways")
+    with pytest.raises(IndexError):
+        table.set_cell_grid_span(3, 0, 2)
+    assert document.to_bytes() == before
+
+    table.set_cell_vertical_merge(1, -1, None)
+    table.set_cell_grid_span(0, 0, None)
+    reopened = Document.from_bytes(document.to_bytes()).tables[0]
+    assert [len(row.cells) for row in reopened.rows] == [3, 3, 3]
+    assert reopened.cell(1, -1).vertical_merge is None
+
+
+def test_table_acceptance_workflow_writes_the_native_body():
+    # table_acceptance_workflow_writes_the_body_the_python_binding_pins in
+    # crates/rdocx/tests/integration_test.rs pins the same body for the native
+    # calls, so CI checks that these calls write what the native ones write.
+    from rdocx import Document, WD_ROW_HEIGHT_RULE
+
+    document = Document()
+    document.add_paragraph("before")
+    document.add_paragraph("after")
+    table = document.insert_table(1, 3, 3)
+    table.set_cell_grid_span(0, 0, 2)
+    table = document.tables[0]
+    table.set_cell_vertical_merge(1, 2, "restart")
+    table.set_cell_vertical_merge(2, 2, "continue")
+    table.set_borders("single", size=4, color="000000")
+    table.set_border("insideV", "dashed", size=8, color="FF0000")
+    table.set_cell_margins(top=0, right=63500, bottom=12700, left=127000)
+    table.grid_widths = [1371600, 1828800, 1828800]
+    table.set_column_width(-1, 914400)
+    cell = table.cell(1, 0)
+    cell.shading = "D9D9D9"
+    cell.set_margins(top=12700, right=0, bottom=25400, left=6350)
+    cell.set_border("bottom", "double", size=6, color="auto")
+    row = table.rows[0]
+    row.height = 254000
+    row.cant_split = True
+    row.is_header = True
+    table.rows[1].height = 381000
+    table.rows[1].height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+
+    xml = _document_xml(document.to_bytes())
+    body = xml[xml.index("<w:body>") : xml.index("</w:body>") + len("</w:body>")]
+    assert "".join(line.strip() for line in body.splitlines()) == (
+        '<w:body><w:p><w:r><w:t>before</w:t></w:r></w:p><w:tbl><w:tblPr>'
+        '<w:tblW w:w="6480" w:type="dxa"/><w:tblBorders>'
+        '<w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        '<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        '<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        '<w:insideV w:val="dashed" w:sz="8" w:space="0" w:color="FF0000"/>'
+        '</w:tblBorders><w:tblCellMar><w:top w:w="0" w:type="dxa"/>'
+        '<w:left w:w="200" w:type="dxa"/><w:bottom w:w="20" w:type="dxa"/>'
+        '<w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>'
+        '<w:tblGrid><w:gridCol w:w="2160"/><w:gridCol w:w="2880"/>'
+        '<w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:trPr><w:cantSplit/>'
+        '<w:trHeight w:val="400" w:hRule="atLeast"/><w:tblHeader/></w:trPr>'
+        '<w:tc><w:tcPr><w:tcW w:w="5040" w:type="dxa"/>'
+        '<w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr>'
+        '<w:tcW w:w="1440" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>'
+        '<w:tr><w:trPr><w:trHeight w:val="600" w:hRule="exact"/></w:trPr>'
+        '<w:tc><w:tcPr><w:tcW w:w="2160" w:type="dxa"/><w:tcBorders>'
+        '<w:bottom w:val="double" w:sz="6" w:space="0" w:color="auto"/>'
+        '</w:tcBorders>'
+        '<w:shd w:val="clear" w:color="auto" w:fill="D9D9D9"/><w:tcMar>'
+        '<w:top w:w="20" w:type="dxa"/><w:left w:w="10" w:type="dxa"/>'
+        '<w:bottom w:w="40" w:type="dxa"/><w:right w:w="0" w:type="dxa"/>'
+        '</w:tcMar></w:tcPr><w:p/></w:tc><w:tc><w:tcPr>'
+        '<w:tcW w:w="2880" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc>'
+        '<w:tcPr><w:tcW w:w="1440" w:type="dxa"/>'
+        '<w:vMerge w:val="restart"/></w:tcPr><w:p/></w:tc></w:tr><w:tr>'
+        '<w:tc><w:tcPr><w:tcW w:w="2160" w:type="dxa"/></w:tcPr><w:p/>'
+        '</w:tc><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/></w:tcPr>'
+        '<w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="1440" w:type="dxa"/>'
+        '<w:vMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p><w:r>'
+        '<w:t>after</w:t></w:r></w:p><w:sectPr>'
+        '<w:pgSz w:w="12240" w:h="15840"/>'
+        '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"'
+        ' w:gutter="0" w:header="720" w:footer="720"/></w:sectPr></w:body>'
+    )
+
+
 def test_python_paragraph_and_run_formatting_matches_native_facades():
     from rdocx import Document
 

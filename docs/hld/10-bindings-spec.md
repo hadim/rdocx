@@ -258,6 +258,21 @@ live handles valid and do not advance the revision. An unknown style, edge or
 rule raises `ValueError`, a value the native setter rejects raises
 `RdocxError`, and either way the document is unchanged.
 
+`Document.insert_table(index, rows, cols)` inserts a table at a direct body
+index, rejects an index past the end with `IndexError` before mutation, and
+returns a handle to the new table. Table handles count every table in
+document order, including those inside block content controls, so the handle
+is resolved from the inserted body position rather than assumed. Cells merge
+through the checked table operations, never through the unchecked cell span
+setter. `Table.set_cell_grid_span(row, col, span)` spans columns and absorbs
+or restores untouched empty cells, and `None` or `1` removes the span.
+`Table.set_cell_vertical_merge(row, col, merge)` writes `restart`, `continue`
+or `None` after validating the whole merge topology. Both take the possibly
+negative indexes `Table.cell` takes. A grid span that absorbs or restores
+cells advances the revision once, because later cell indexes move, while a
+vertical merge keeps live handles valid. `Cell.grid_span` reads the span with
+the python-docx default of 1 and `Cell.vertical_merge` reads the merge state.
+
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
 field cache update operations. `RunPosition` and
@@ -999,8 +1014,8 @@ empty edge cells. Horizontal spans consume or restore only untouched empty
 cells. Vertical continuations require an equal grid range in the immediately
 preceding row. Each operation validates a cloned complete table before
 publication. These are additive pre-1.0 native APIs. WASM and CLI gain no row
-or cell methods. Python binds the checked row and cell setters as described
-under the Python API shape.
+or cell methods. Python binds the checked row and cell setters and the span
+and vertical merge operations, as described under the Python API shape.
 
 Row cloning and removal depend on package-wide identities, so the additive
 native operations live on `Document` as `clone_table_row(table, source,

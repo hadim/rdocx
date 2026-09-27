@@ -186,6 +186,24 @@ fn row_height_parts(value: rdocx::RowHeight) -> (rdocx::Length, bool) {
     }
 }
 
+fn vertical_merge_from_name(value: Option<&str>) -> PyResult<Option<rdocx::VMerge>> {
+    match value {
+        None => Ok(None),
+        Some("restart") => Ok(Some(rdocx::VMerge::Restart)),
+        Some("continue") => Ok(Some(rdocx::VMerge::Continue)),
+        Some(_) => Err(PyValueError::new_err(
+            "vertical merge must be restart, continue or None",
+        )),
+    }
+}
+
+fn vertical_merge_name(value: rdocx::VMerge) -> &'static str {
+    match value {
+        rdocx::VMerge::Restart => "restart",
+        rdocx::VMerge::Continue => "continue",
+    }
+}
+
 #[pyclass(name = "TableCollection")]
 pub struct PyTableCollection {
     document: Py<PyDocument>,
@@ -296,8 +314,7 @@ impl PyTable {
         self.document.bind(py).is(document.bind(py))
     }
 
-    /// Apply one checked native table edit that moves no content, so live
-    /// handles stay valid.
+    /// Apply one checked native table edit without advancing the revision.
     fn edit<T>(
         &self,
         py: Python<'_>,
@@ -310,6 +327,23 @@ impl PyTable {
             .table_mut(index)
             .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
         edit(&mut table).map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    /// Resolve possibly negative row and cell indexes against this table.
+    fn cell_coordinates(&self, py: Python<'_>, row: isize, col: isize) -> PyResult<(usize, usize)> {
+        let table_index = self.validate(py)?;
+        let document = self.document.borrow(py);
+        let table = document
+            .inner
+            .table(table_index)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let row = normalize_index(row, table.row_count(), "row")?;
+        let col = normalize_index(
+            col,
+            table.row(row).map(|row| row.cell_count()).unwrap_or(0),
+            "cell",
+        )?;
+        Ok((row, col))
     }
 }
 
@@ -325,19 +359,9 @@ impl PyTable {
     }
 
     fn cell(&self, py: Python<'_>, row: isize, col: isize) -> PyResult<Py<PyCell>> {
-        let table_index = self.validate(py)?;
-        let document = self.document.borrow(py);
-        let table = document
-            .inner
-            .table(table_index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        let row = normalize_index(row, table.row_count(), "row")?;
-        let col = normalize_index(
-            col,
-            table.row(row).map(|row| row.cell_count()).unwrap_or(0),
-            "cell",
-        )?;
-        let path = document.revisions.capture(smallvec![
+        let (row, col) = self.cell_coordinates(py, row, col)?;
+        let table_index = table_index(&self.path)?;
+        let path = self.document.borrow(py).revisions.capture(smallvec![
             PathSeg::Body(table_index),
             PathSeg::Row(row),
             PathSeg::Cell(col)
@@ -532,6 +556,41 @@ impl PyTable {
             ));
         }
         Ok(())
+    }
+
+    #[pyo3(signature = (row, col, span))]
+    fn set_cell_grid_span(
+        &self,
+        py: Python<'_>,
+        row: isize,
+        col: isize,
+        span: Option<u32>,
+    ) -> PyResult<()> {
+        let (row, col) = self.cell_coordinates(py, row, col)?;
+        let cells = |table: &mut rdocx::Table<'_>| table.row(row).map(|row| row.cell_count());
+        let changed = self.edit(py, |table| {
+            let before = cells(table);
+            table.set_cell_grid_span_checked(row, col, span)?;
+            Ok(cells(table) != before)
+        })?;
+        // Absorbed or restored cells shift the indexes after this one.
+        if changed {
+            self.document.borrow_mut(py).revisions.bump();
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (row, col, merge))]
+    fn set_cell_vertical_merge(
+        &self,
+        py: Python<'_>,
+        row: isize,
+        col: isize,
+        merge: Option<&str>,
+    ) -> PyResult<()> {
+        let merge = vertical_merge_from_name(merge)?;
+        let (row, col) = self.cell_coordinates(py, row, col)?;
+        self.edit(py, |table| table.set_cell_vertical_merge(row, col, merge))
     }
 
     #[pyo3(signature = (index, at = None))]
@@ -1100,6 +1159,16 @@ impl PyCell {
             .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
             .set_vertical_alignment(value);
         Ok(())
+    }
+
+    #[getter]
+    fn grid_span(&self, py: Python<'_>) -> PyResult<u32> {
+        self.read(py, |cell| cell.grid_span().unwrap_or(1))
+    }
+
+    #[getter]
+    fn vertical_merge(&self, py: Python<'_>) -> PyResult<Option<&'static str>> {
+        self.read(py, |cell| cell.v_merge().copied().map(vertical_merge_name))
     }
 
     #[getter]

@@ -1881,6 +1881,31 @@ impl PyDocument {
         Py::new(py, PyParagraph::new(slf, path))
     }
 
+    #[pyo3(signature = (index, rows, cols))]
+    fn insert_table(
+        slf: Py<Self>,
+        py: Python<'_>,
+        index: usize,
+        rows: usize,
+        cols: usize,
+    ) -> PyResult<Py<PyTable>> {
+        let path = {
+            let mut document = slf.borrow_mut(py);
+            if index > document.inner.content_count() {
+                return Err(PyIndexError::new_err("content index out of range"));
+            }
+            document.inner.insert_table(index, rows, cols);
+            // Table handles count every table in document order, including
+            // those inside block content controls, so find the new one.
+            let table = (0..document.inner.table_count())
+                .find(|table| document.inner.content_index_of_table(*table) == Some(index))
+                .expect("an inserted body table has a table index");
+            document.revisions.bump();
+            document.revisions.capture(smallvec![PathSeg::Body(table)])
+        };
+        Py::new(py, PyTable::new(slf, path))
+    }
+
     fn pop_content(slf: Py<Self>, py: Python<'_>, index: usize) -> PyResult<PyContentFragment> {
         let location = slf.borrow(py).body_location(py, index)?;
         if index == slf.borrow(py).inner.content_count() {
