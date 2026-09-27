@@ -16256,10 +16256,10 @@ mod text_box_replacement_keeps_every_child {
 }
 
 /// Replacement skipped the text of content controls. It never entered a
-/// body-level control, read the runs of an inline control at no level, in
-/// the body, a text box or a footer, and did not reach the tables and
-/// controls of a text box either. Each location below holds its own tag,
-/// which every walker must replace exactly once.
+/// body-level control, read the runs of an inline control at no level, and
+/// reached neither the tables and controls of a header or footer nor those
+/// of a text box. Each location below holds its own tag, which every walker
+/// must replace exactly once.
 mod replacement_reaches_content_controls {
     use std::collections::HashMap;
 
@@ -16272,13 +16272,16 @@ mod replacement_reaches_content_controls {
 
     /// Every location with the part that holds it. The tag of a location is
     /// its name in double braces and its replacement the name in brackets.
-    const LOCATIONS: [(&str, &str); 7] = [
+    const LOCATIONS: [(&str, &str); 10] = [
         ("block", DOCUMENT),
         ("inline", DOCUMENT),
         ("cell", DOCUMENT),
         ("nested", DOCUMENT),
         ("box", DOCUMENT),
         ("box_inline", DOCUMENT),
+        ("header_table", HEADER),
+        ("header_control", HEADER),
+        ("footer_control", FOOTER),
         ("footer_inline", FOOTER),
     ];
 
@@ -16342,14 +16345,20 @@ mod replacement_reaches_content_controls {
         )
     }
 
+    /// The runs of a header or footer block that the model keeps as raw XML.
+    /// The first one ends in a space, as "Page " does before a page number.
+    fn raw_block_runs(text: &str, name: &str) -> String {
+        paragraph(&[run(text), run(&format!("{}.", tag(name)))].concat())
+    }
+
     /// The table and the control of the header, which the model keeps as
     /// raw XML, before its paragraph.
     fn header_blocks() -> [String; 2] {
         [
-            table(&paragraph(&run("Header cell {{header_table}}."))),
+            table(&raw_block_runs("Header cell ", "header_table")),
             control(
                 "header",
-                &paragraph(&run("Header control {{header_control}}.")),
+                &raw_block_runs("Header control ", "header_control"),
             ),
         ]
     }
@@ -16359,7 +16368,7 @@ mod replacement_reaches_content_controls {
     fn footer_block() -> String {
         format!(
             r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Page Numbers (Bottom of Page)"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>{}</w:sdtContent></w:sdt>"#,
-            paragraph(&run("Footer control {{footer_control}}."))
+            raw_block_runs("Footer control ", "footer_control")
         )
     }
 
@@ -16469,8 +16478,9 @@ mod replacement_reaches_content_controls {
 
     /// Check that the tag of every location in `replaced` gave way to its
     /// value once, that every other tag is still there once, that every
-    /// control kept its `w:tag`, and that the tables and controls of the
-    /// header and footer kept their bytes where nothing was replaced.
+    /// control kept its `w:tag`, and that the header and footer kept their
+    /// blocks in order, byte for byte where nothing was replaced, and the
+    /// edge spaces of their text everywhere.
     fn assert_replaced(parts: &HashMap<&str, String>, replaced: &[&str]) {
         for (name, part) in LOCATIONS {
             let xml = &parts[part];
@@ -16487,6 +16497,16 @@ mod replacement_reaches_content_controls {
                 assert!(parts[part].contains(&element), "{tag}: {}", parts[part]);
             }
         }
+        for (part, markers) in [
+            (
+                HEADER,
+                ["Header cell", "Header control", "Header paragraph."],
+            ),
+            (FOOTER, ["docPartGallery", "Footer control", "Confidential"]),
+        ] {
+            let positions = markers.map(|marker| parts[part].find(marker).unwrap());
+            assert!(positions.is_sorted(), "{part}: {}", parts[part]);
+        }
         let raw_blocks = header_blocks()
             .into_iter()
             .map(|block| (HEADER, block))
@@ -16495,6 +16515,13 @@ mod replacement_reaches_content_controls {
             if !replaced.iter().any(|name| block.contains(&tag(name))) {
                 assert!(parts[part].contains(&block), "{block}\n{}", parts[part]);
             }
+        }
+        for (part, text) in [
+            (HEADER, ">Header cell </w:t>"),
+            (HEADER, ">Header control </w:t>"),
+            (FOOTER, ">Footer control </w:t>"),
+        ] {
+            assert!(parts[part].contains(text), "{text}\n{}", parts[part]);
         }
     }
 
@@ -16611,6 +16638,59 @@ mod replacement_reaches_content_controls {
         let xml = super::document_xml(&mut document);
         assert_eq!(xml.matches(">Overview<").count(), 2, "{xml}");
         assert!(xml.contains(r#"<w:hyperlink w:anchor="_Toc1""#), "{xml}");
+    }
+
+    /// A table that declares a namespace on its start tag came back from a
+    /// replacement in a header or a text box without the declaration, so
+    /// the saved part used an unbound prefix. A table that declares it on a
+    /// cell cannot be rewritten, so it keeps its bytes and counts nothing.
+    #[test]
+    fn a_rewritten_table_keeps_the_namespaces_it_declares() {
+        use quick_xml::events::Event as XmlEvent;
+        use quick_xml::name::ResolveResult;
+
+        let w14 = r#" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+        let table = |table: &str, cell: &str, text: &str| {
+            format!(
+                r#"<w:tbl{table}><w:tblGrid/><w:tr><w:tc{cell}><w:p w14:paraId="0000ABCD"><w:r><w:t>{text}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#
+            )
+        };
+        let on_cell = table("", w14, "cell {{x}}");
+        let tables = [table(w14, "", "table {{x}}"), on_cell.clone()].concat();
+        let mut header = super::document_with_header_story(&format!(
+            r#"<w:hdr xmlns:w="{W_NS}">{tables}</w:hdr>"#
+        ));
+        let mut text_box = super::document_with_content_controls(&format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>{tables}</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#
+        ));
+
+        assert_eq!(header.try_replace_text("{{x}}", "Y").unwrap(), 1);
+        assert_eq!(text_box.try_replace_text("{{x}}", "Y").unwrap(), 1);
+
+        for xml in [
+            super::header_story_xml(&mut header),
+            super::document_xml(&mut text_box),
+        ] {
+            // Every element and attribute prefix resolves.
+            let mut reader = quick_xml::NsReader::from_str(&xml);
+            loop {
+                let (namespace, event) = reader.read_resolved_event().unwrap();
+                assert!(!matches!(namespace, ResolveResult::Unknown(_)), "{xml}");
+                match event {
+                    XmlEvent::Start(element) | XmlEvent::Empty(element) => {
+                        for attribute in element.attributes() {
+                            let key = attribute.unwrap().key;
+                            let (namespace, _) = reader.resolver().resolve_attribute(key);
+                            assert!(!matches!(namespace, ResolveResult::Unknown(_)), "{xml}");
+                        }
+                    }
+                    XmlEvent::Eof => break,
+                    _ => {}
+                }
+            }
+            assert!(xml.contains(">table Y<"), "{xml}");
+            assert!(xml.contains(&on_cell), "{xml}");
+        }
     }
 
     /// A template tag that a control boundary splits cannot be rendered

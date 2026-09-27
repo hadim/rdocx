@@ -606,6 +606,10 @@ fn namespace_use(xml: &[u8]) -> Option<NamespaceUse> {
 }
 
 /// Replace all occurrences of `placeholder` in a header or footer.
+///
+/// Reaches its paragraphs and those of the tables and block content controls
+/// it keeps as raw XML. A raw element the replacement changed is written back
+/// in its place, and the others keep their bytes.
 pub fn replace_in_header_footer(hf: &mut CT_HdrFtr, placeholder: &str, replacement: &str) -> usize {
     edit_header_footer(hf, &mut |paragraph| {
         replace_in_paragraph(paragraph, placeholder, replacement)
@@ -627,6 +631,9 @@ fn edit_header_footer(hf: &mut CT_HdrFtr, edit: &mut dyn FnMut(&mut CT_P) -> usi
     let mut count = 0;
     for paragraph in &mut hf.paragraphs {
         count += edit(paragraph);
+    }
+    for raw in &mut hf.extra_xml {
+        count += edit_raw_block(raw, &hf.word_prefixes, edit);
     }
     count
 }
@@ -1201,6 +1208,63 @@ mod tests {
         let count = replace_in_header_footer(&mut hf, "{{company}}", "Acme Corp");
         assert_eq!(count, 1);
         assert_eq!(hf.text(), "Company: Acme Corp");
+    }
+
+    /// The tables and block content controls of a header are raw XML in the
+    /// model, and replacement used to skip them. One the replacement changes
+    /// is written back in its place, and one it does not change keeps its
+    /// bytes, under the prefix the part uses.
+    #[test]
+    fn replace_in_header_footer_reaches_its_tables_and_controls() {
+        let untouched = r#"<q:sdt><q:sdtPr><q:tag q:val="kept"/></q:sdtPr><q:sdtContent><q:p><q:r><q:t>no tag</q:t></q:r></q:p></q:sdtContent></q:sdt>"#;
+        let xml = format!(
+            r#"<q:hdr xmlns:q="{W_NS}"><q:tbl><q:tblGrid/><q:tr><q:tc><q:p><q:r><q:t>cell {{{{x}}}}</q:t></q:r></q:p></q:tc></q:tr></q:tbl><q:p><q:r><q:t>paragraph {{{{x}}}}</q:t></q:r></q:p><q:sdt><q:sdtPr><q:tag q:val="control"/></q:sdtPr><q:sdtContent><q:p><q:r><q:t>control {{{{x}}}}</q:t></q:r></q:p></q:sdtContent></q:sdt>{untouched}</q:hdr>"#
+        );
+        let parsed = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(
+            header_footer_replaceable_texts(&parsed),
+            ["paragraph {{x}}", "cell {{x}}", "control {{x}}", "no tag"]
+        );
+
+        let re = regex::Regex::new(r"\{\{x\}\}").unwrap();
+        for regex in [false, true] {
+            let mut hf = parsed.clone();
+            let count = if regex {
+                replace_regex_in_header_footer(&mut hf, &re, "Y")
+            } else {
+                replace_in_header_footer(&mut hf, "{{x}}", "Y")
+            };
+            assert_eq!(count, 3);
+            let written = String::from_utf8(hf.to_xml_header().unwrap()).unwrap();
+            assert!(!written.contains("{{x}}"), "{written}");
+            let positions = ["cell Y", "paragraph Y", "control Y", untouched].map(|marker| {
+                written
+                    .find(marker)
+                    .unwrap_or_else(|| panic!("{marker}: {written}"))
+            });
+            assert!(positions.is_sorted(), "{written}");
+        }
+    }
+
+    /// A header rewrites its raw tables as a text box does, see
+    /// `replace_in_textbox_keeps_the_namespaces_its_tables_declare`. A cell
+    /// that declares a namespace the root binds the same way is replaced.
+    #[test]
+    fn replace_in_header_footer_keeps_the_namespaces_its_tables_declare() {
+        let on_cell = table_declaring_w14(false, "cell {{x}}");
+        let tables = [table_declaring_w14(true, "table {{x}}"), on_cell.clone()].concat();
+        let w14 = r#" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+        for (root, expected) in [("", 1), (w14, 2)] {
+            let xml = format!(r#"<w:hdr xmlns:w="{W_NS}"{root}>{tables}</w:hdr>"#);
+            let mut hf = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+
+            assert_eq!(replace_in_header_footer(&mut hf, "{{x}}", "Y"), expected);
+
+            let written = String::from_utf8(hf.to_xml_header().unwrap()).unwrap();
+            assert_every_prefix_is_bound(&written);
+            assert!(written.contains(">table Y<"), "{written}");
+            assert_eq!(written.contains(&on_cell), expected == 1, "{written}");
+        }
     }
 
     #[test]

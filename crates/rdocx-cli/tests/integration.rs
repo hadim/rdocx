@@ -346,7 +346,8 @@ fn cli_replace_reports_namespace_preflight_errors_without_panicking() {
 /// `rdocx replace --expect 1` found none of the text that Google Docs and
 /// Word keep in content controls: a run wrapped inside its paragraph, a
 /// paragraph wrapped at body level, a control in a table cell, nested
-/// controls and a control in a text box.
+/// controls, a control in a text box, and the table and controls of a
+/// header or footer.
 #[test]
 fn replace_with_expect_counts_the_text_of_content_controls_everywhere() {
     let temp = TempWorkspace::new("replace-content-controls");
@@ -420,7 +421,16 @@ fn replace_with_expect_counts_the_text_of_content_controls_everywhere() {
         .write_to(&mut fs::File::create(&input).unwrap())
         .unwrap();
 
-    for name in ["inline", "block", "cell", "nested", "box"] {
+    for name in [
+        "inline",
+        "block",
+        "cell",
+        "nested",
+        "box",
+        "header_table",
+        "header_control",
+        "footer_control",
+    ] {
         let tag = format!("{{{{{name}}}}}");
         let replaced = temp.path.join(format!("{name}.docx"));
         let output = cli(&[
