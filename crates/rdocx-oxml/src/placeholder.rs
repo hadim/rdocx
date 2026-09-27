@@ -17,6 +17,7 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
     }
 
     let mut total = 0;
+    let mut emptied = Vec::new();
 
     // Byte offset in the concatenated paragraph text at which to look for the
     // next match. Resuming *after* the text we just inserted is what keeps this
@@ -72,13 +73,8 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
                 last_run,
                 replacement,
             );
+            emptied.extend(first_run + 1..=last_run);
         }
-
-        // Remove runs that became completely empty (no content at all).
-        para.runs.retain(|r| !r.content.is_empty());
-
-        // Update hyperlink spans to account for removed runs.
-        reindex_hyperlinks(para);
 
         // Text before `byte_start` is untouched and the replacement now
         // occupies `byte_start..byte_start + replacement.len()`, so this stays
@@ -88,7 +84,30 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
         total += 1;
     }
 
+    remove_emptied_runs(para, emptied);
     total
+}
+
+/// Remove the runs at `candidates` that the replacement left without any
+/// content, keeping every anchor of the paragraph on the boundary that
+/// remains. A run that was empty before is kept.
+fn remove_emptied_runs(para: &mut CT_P, candidates: Vec<usize>) {
+    let mut removed = vec![false; para.runs.len()];
+    for index in candidates {
+        // A run keeps the attributes of its start tag, such as `w:rsidR`, as
+        // a raw record, which does not make it worth keeping once empty.
+        let run = &para.runs[index];
+        removed[index] = run.content.is_empty()
+            && run
+                .extra_xml_positions
+                .iter()
+                .filter(|position| CT_R::raw_child_is_root_attributes(**position))
+                .count()
+                == run.extra_xml.len();
+    }
+    if removed.contains(&true) {
+        para.remove_runs(&removed);
+    }
 }
 
 /// A mapping from character position in the concatenated text to its source run and content item.
@@ -208,27 +227,6 @@ fn replace_across_runs(
                 true
             }
         });
-    }
-}
-
-/// Re-index hyperlink spans after runs may have been removed.
-fn reindex_hyperlinks(para: &mut CT_P) {
-    // After retain, run indices may have shifted. We rebuild by checking
-    // which runs still exist. Since retain preserves order and only removes
-    // empty runs, the relative order is maintained. However, hyperlink spans
-    // referenced by index need adjustment.
-    //
-    // For simplicity: we decrement indices for each removed slot.
-    // But since we already called retain, the runs are already compacted.
-    // We need to adjust hyperlinks based on the new run count.
-    //
-    // The simplest correct approach: hyperlinks that referenced removed runs
-    // get their range clamped/invalidated.
-    para.hyperlinks.retain(|hl| hl.run_start < para.runs.len());
-    for hl in &mut para.hyperlinks {
-        if hl.run_end > para.runs.len() {
-            hl.run_end = para.runs.len();
-        }
     }
 }
 
@@ -532,6 +530,7 @@ pub fn replace_many_in_chart_xml(
 /// Returns the number of replacements made.
 pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacement: &str) -> usize {
     let mut total = 0;
+    let mut emptied = Vec::new();
 
     // See `replace_in_paragraph`: resume after the inserted text so a
     // replacement that itself matches the pattern cannot loop forever.
@@ -598,14 +597,14 @@ pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacemen
                 last_run,
                 &expanded_replacement,
             );
+            emptied.extend(first_run + 1..=last_run);
         }
 
-        para.runs.retain(|r| !r.content.is_empty());
-        reindex_hyperlinks(para);
         search_from = byte_start + expanded_replacement.len();
         total += 1;
     }
 
+    remove_emptied_runs(para, emptied);
     total
 }
 
@@ -705,6 +704,7 @@ pub fn replace_regex_in_header_footer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::namespace::{MC_NS, W_NS};
     use crate::properties::CT_RPr;
 
     fn make_para(texts: &[&str]) -> CT_P {
@@ -798,6 +798,68 @@ mod tests {
             [("WORD-WO", true), ("RD", true), (" end", true)],
             "a rewritten run keeps a producer flag and gains one at a text edge"
         );
+    }
+
+    fn paragraph_xml(paragraph: &CT_P) -> String {
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        paragraph.to_xml(&mut writer).unwrap();
+        String::from_utf8(writer.into_inner()).unwrap()
+    }
+
+    /// A match across runs removes the runs it empties. The anchors after
+    /// them are kept by run index, and used to slide one run later, past the
+    /// text they preceded. A ruby annotation slid onto the run after its base.
+    #[test]
+    fn removing_emptied_runs_keeps_later_anchors_in_place() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:r><w:t>{{{{na</w:t></w:r><w:r><w:t>me}}}}</w:t></w:r><w:bookmarkStart w:id="1" w:name="mark"/><w:commentRangeStart w:id="2"/><w:sdt><w:sdtPr><w:tag w:val="kept"/></w:sdtPr><w:sdtContent><w:r><w:t>control</w:t></w:r></w:sdtContent></w:sdt><w:proofErr w:type="spellStart"/><w:ruby><w:rt><w:r><w:t>ann</w:t></w:r></w:rt><w:rubyBase><w:r><w:t>BASE</w:t></w:r></w:rubyBase></w:ruby><w:r><w:t>x</w:t></w:r><w:bookmarkEnd w:id="1"/><w:commentRangeEnd w:id="2"/></w:p>"#
+        );
+        let re = regex::Regex::new(r"\{\{name\}\}").unwrap();
+        for regex in [false, true] {
+            let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+            let count = if regex {
+                replace_regex_in_paragraph(&mut p, &re, "Bob")
+            } else {
+                replace_in_paragraph(&mut p, "{{name}}", "Bob")
+            };
+            assert_eq!(count, 1);
+            assert_eq!(p.runs.len(), 3);
+            let xml = paragraph_xml(&p);
+            let positions = [
+                ">Bob<",
+                "bookmarkStart",
+                "commentRangeStart",
+                "<w:sdt>",
+                "proofErr",
+                "<w:ruby>",
+                ">BASE<",
+                "</w:ruby>",
+                ">x<",
+                "bookmarkEnd",
+                "commentRangeEnd",
+            ]
+            .map(|marker| {
+                xml.find(marker)
+                    .unwrap_or_else(|| panic!("{marker}: {xml}"))
+            });
+            assert!(positions.is_sorted(), "{xml}");
+        }
+    }
+
+    /// A run whose only child is raw XML, such as a drawing Word writes in
+    /// `mc:AlternateContent`, has no typed content, and neither has an
+    /// empty run. A match anywhere in the paragraph used to remove both.
+    #[test]
+    fn replace_keeps_the_runs_it_did_not_empty() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}" xmlns:mc="{MC_NS}"><w:r><w:t>Hello {{{{name}}}}</w:t></w:r><w:r><w:rPr><w:b/></w:rPr></w:r><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing/></mc:Choice><mc:Fallback><w:pict/></mc:Fallback></mc:AlternateContent></w:r></w:p>"#
+        );
+        let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+
+        assert_eq!(replace_in_paragraph(&mut p, "{{name}}", "Ada"), 1);
+
+        assert_eq!(p.runs.len(), 3);
+        assert!(paragraph_xml(&p).contains("<mc:AlternateContent>"));
     }
 
     #[test]

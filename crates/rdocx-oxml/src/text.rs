@@ -4320,10 +4320,19 @@ impl CT_P {
         if removed.iter().all(|remove| !remove) {
             return;
         }
+        self.remove_runs(&removed);
+    }
+
+    /// Remove the direct runs flagged in `removed` and move every run-boundary
+    /// projection onto the boundary that remains. Raw children, comment
+    /// markers, bookmarks and controls of the boundaries that collapse into
+    /// one keep their order, and a hyperlink or a ruby annotation left
+    /// without runs is dropped.
+    pub(crate) fn remove_runs(&mut self, removed: &[bool]) {
         let removed_run_addresses = self
             .runs
             .iter()
-            .zip(&removed)
+            .zip(removed)
             .filter_map(|(run, remove)| remove.then_some(std::ptr::from_ref(run)))
             .collect::<Vec<_>>();
         let removed_projected_indices = accepted_paragraph_runs(self)
@@ -4470,6 +4479,12 @@ impl CT_P {
             *position = boundary_map[old_boundary];
             *raw_before = raw_prefixes[old_boundary] + (*raw_before).min(raw_counts[old_boundary]);
         }
+        for ruby in &mut self.rubies {
+            ruby.base_start = boundary_map[ruby.base_start.min(old_run_count)];
+            ruby.base_end = boundary_map[ruby.base_end.min(old_run_count)];
+        }
+        // An annotation over no base run is not written, so drop it.
+        self.rubies.retain(|ruby| ruby.base_start < ruby.base_end);
         let old_hyperlinks = std::mem::take(&mut self.hyperlinks);
         let mut hyperlink_map = vec![None; old_hyperlinks.len()];
         for (old_index, mut hyperlink) in old_hyperlinks.into_iter().enumerate() {
@@ -4517,7 +4532,7 @@ impl CT_P {
             .runs
             .drain(..)
             .zip(removed)
-            .filter_map(|(run, remove)| (!remove).then_some(run))
+            .filter_map(|(run, remove)| (!*remove).then_some(run))
             .collect();
         let _ = self.refresh_bookmark_projection();
     }
