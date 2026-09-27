@@ -11,6 +11,7 @@ use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
 use rdocx_oxml::namespace::W_NS;
 use rdocx_oxml::properties::CT_PPr;
+use rdocx_oxml::shared::ST_PageOrientation;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblPr, CT_Tc, CT_TrPr, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, CT_Text, RunContent};
 use sha2::{Digest, Sha256};
@@ -4002,8 +4003,22 @@ fn nonempty_paragraph_properties(mut properties: CT_PPr) -> Option<CT_PPr> {
 }
 
 fn paragraph_properties_differ(original: Option<&CT_PPr>, edited: Option<&CT_PPr>) -> bool {
-    original.cloned().and_then(nonempty_paragraph_properties)
-        != edited.cloned().and_then(nonempty_paragraph_properties)
+    let modeled = |properties: Option<&CT_PPr>| {
+        properties.cloned().and_then(|mut properties| {
+            if let Some(section) = properties.sect_pr.as_mut() {
+                clear_default_orientation(section);
+            }
+            nonempty_paragraph_properties(properties)
+        })
+    };
+    modeled(original) != modeled(edited)
+}
+
+/// Portrait is the schema default, which the section writer omits.
+fn clear_default_orientation(section: &mut rdocx_oxml::document::CT_SectPr) {
+    if section.orientation == Some(ST_PageOrientation::Portrait) {
+        section.orientation = None;
+    }
 }
 
 fn section_properties_xml(
@@ -4033,6 +4048,8 @@ fn section_properties_xml(
     original_modeled.change = None;
     let mut edited_modeled = edited.clone();
     edited_modeled.change = None;
+    clear_default_orientation(&mut original_modeled);
+    clear_default_orientation(&mut edited_modeled);
     if original_modeled == edited_modeled {
         return section_property_xml(original);
     }
@@ -5810,6 +5827,9 @@ fn paragraph_formatting(paragraph: &CT_P) -> Option<CT_PPr> {
         properties.numbering_revision_position = None;
         properties.change = None;
         properties.revision_xml.clear();
+        if let Some(section) = properties.sect_pr.as_mut() {
+            clear_default_orientation(section);
+        }
         properties
     })
 }

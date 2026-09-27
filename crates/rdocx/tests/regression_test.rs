@@ -30666,6 +30666,55 @@ mod compare_producer_noise {
             );
         }
     }
+
+    fn page_body(orientation: &str) -> String {
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t>Paragraph 1, lorem ipsum dolor sit amet.</w:t></w:r></w:p><w:p><w:r><w:t>WORD</w:t></w:r></w:p><w:p><w:r><w:t>Paragraph 3, lorem ipsum dolor sit amet.</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"{orientation}/></w:sectPr>"#
+        ))
+    }
+
+    #[test]
+    fn the_default_page_orientation_is_not_a_section_change() {
+        let portrait = page_body(r#" w:orient="portrait""#);
+        let edited = replaced_copy(&portrait, "3, lorem", "3, LOREM");
+        assert!(!edited.contains("w:orient"), "{edited}");
+        let (kinds, _) = compared_kinds(&portrait, &edited);
+        assert_eq!(kinds, [RevisionKind::Deletion, RevisionKind::Insertion]);
+
+        let (kinds, _) = compared_kinds(&portrait, &page_body(""));
+        assert_eq!(kinds, []);
+        let (kinds, _) = compared_kinds(&page_body(""), &portrait);
+        assert_eq!(kinds, []);
+
+        let (kinds, tracked) = compared_kinds(&portrait, &page_body(r#" w:orient="landscape""#));
+        assert_eq!(kinds, [RevisionKind::SectionPropertyChange]);
+        assert!(tracked.contains(r#"w:orient="landscape""#), "{tracked}");
+
+        // A bookmark makes the section-break paragraph take the complex path,
+        // as Google Docs writes around headings.
+        let bookmarked_break = |orientation: &str, heading: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"{orientation}/></w:sectPr></w:pPr><w:bookmarkStart w:id="0" w:name="h.1"/><w:r><w:t>{heading}</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p><w:p><w:r><w:t>Second section.</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>"#
+            ))
+        };
+        let portrait = r#" w:orient="portrait""#;
+        for (original, edited) in [(portrait, ""), ("", portrait)] {
+            let (kinds, _) = compared_kinds(
+                &bookmarked_break(original, "Heading"),
+                &bookmarked_break(edited, "Heading"),
+            );
+            assert_eq!(kinds, [], "{original:?} -> {edited:?}");
+            let (kinds, _) = compared_kinds(
+                &bookmarked_break(original, "Heading"),
+                &bookmarked_break(edited, "Title"),
+            );
+            assert_eq!(
+                kinds,
+                [RevisionKind::Deletion, RevisionKind::Insertion],
+                "{original:?} -> {edited:?}"
+            );
+        }
+    }
 }
 
 #[test]
