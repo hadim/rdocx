@@ -15104,6 +15104,101 @@ fn picture_alpha_mod_fix_matches_presentation_renderers() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// A one-slide blank deck whose parts of `content_type` carry `background`,
+/// in place of their own `p:bg` or ahead of their shape tree.
+fn blank_deck_with_background(content_type: &str, background: &str) -> Vec<u8> {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "background fixture");
+    let parts = package
+        .content_types
+        .overrides
+        .iter()
+        .filter(|(_, part_type)| *part_type == content_type)
+        .map(|(part, _)| part.clone())
+        .collect::<Vec<_>>();
+    assert!(!parts.is_empty(), "no {content_type} part");
+    for part in parts {
+        let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+        let xml = match (xml.find("<p:bg>"), xml.find("</p:bg>")) {
+            (Some(start), Some(end)) => format!(
+                "{}{background}{}",
+                &xml[..start],
+                &xml[end + "</p:bg>".len()..]
+            ),
+            _ => xml.replacen("<p:spTree", &format!("{background}<p:spTree"), 1),
+        };
+        package.set_part(&part, xml.into_bytes());
+    }
+    package_bytes(package)
+}
+
+fn saved_slide_xml(presentation: &Presentation) -> String {
+    let package = open_opc(&presentation.to_bytes().unwrap(), "saved slide");
+    let part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, part_type)| (part_type == content_types::SLIDE).then_some(part))
+        .unwrap();
+    String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap()
+}
+
+#[test]
+fn gradient_backgrounds_without_angle_or_path_open_render_and_round_trip() {
+    let stops = r#"<a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst>"#;
+    let linear = format!(
+        r#"<p:bg><p:bgPr><a:gradFill rotWithShape="1">{stops}<a:lin scaled="0"/></a:gradFill><a:effectLst/></p:bgPr></p:bg>"#
+    );
+    let presentation =
+        Presentation::from_bytes(&blank_deck_with_background(content_types::SLIDE, &linear))
+            .expect("open a linear gradient without @ang");
+    let (input, layout) = presentation.render_deterministic().unwrap();
+    assert!(
+        input.slides[0].diagnostics.is_empty(),
+        "{:?}",
+        input.slides[0].diagnostics
+    );
+    let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    let rgb = |x: u32, y: u32| {
+        let pixel = pixmap.pixel(x, y).unwrap();
+        (pixel.red(), pixel.green(), pixel.blue())
+    };
+    let (right, bottom) = (pixmap.width() - 5, pixmap.height() - 5);
+    let (top_left, top_right) = (rgb(5, 5), rgb(right, 5));
+    // A missing angle is 0 degrees, so colour varies left to right only.
+    assert!(top_left.0 > 200 && top_left.2 < 55, "{top_left:?}");
+    assert!(top_right.2 > 200 && top_right.0 < 55, "{top_right:?}");
+    assert_eq!(rgb(5, bottom), top_left);
+    assert_eq!(rgb(right, bottom), top_right);
+    let saved = saved_slide_xml(&presentation);
+    assert!(saved.contains(r#"<a:lin scaled="0"/>"#), "{saved}");
+
+    let path = format!(
+        r#"<p:bg><p:bgPr><a:gradFill rotWithShape="1">{stops}<a:path><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill><a:effectLst/></p:bgPr></p:bg>"#
+    );
+    let presentation =
+        Presentation::from_bytes(&blank_deck_with_background(content_types::SLIDE, &path))
+            .expect("open a path gradient without @path");
+    let (input, _) = presentation.render_deterministic().unwrap();
+    assert_eq!(
+        input.slides[0]
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        ["unsupported background rectangle path gradient"]
+    );
+    let saved = saved_slide_xml(&presentation);
+    assert!(
+        saved.contains(
+            r#"<a:path><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path>"#
+        ),
+        "{saved}"
+    );
+}
+
 #[test]
 fn picture_sniffs_bytes_when_extension_is_misleading() {
     let png = png_header(5, 4);
