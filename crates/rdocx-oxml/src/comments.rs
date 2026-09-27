@@ -119,12 +119,24 @@ impl CT_Comments {
             Some("yes"),
         )))?;
 
+        // Retained root attributes keep their source order. The fixed `w` and
+        // `w14` declarations are added ahead of them only when the source
+        // lacks them, so a producer declaration listed in `mc:Ignorable`
+        // stays on the root whether or not a paragraph id still uses it.
+        let declared = |name: &str| {
+            self.root_attributes
+                .iter()
+                .any(|(candidate, _)| candidate == name)
+        };
         let mut root = BytesStart::new("w:comments");
-        root.push_attribute(("xmlns:w", W_NS));
-        if self
-            .comments
-            .iter()
-            .any(|comment| comment.paragraph_ids.iter().any(Option::is_some))
+        if !declared("xmlns:w") {
+            root.push_attribute(("xmlns:w", W_NS));
+        }
+        if !declared("xmlns:w14")
+            && self
+                .comments
+                .iter()
+                .any(|comment| comment.paragraph_ids.iter().any(Option::is_some))
         {
             root.push_attribute(("xmlns:w14", W14_NS));
         }
@@ -344,10 +356,14 @@ fn push_preserved_attributes(
     root: bool,
 ) {
     for (name, value) in attributes {
-        if root && (name == "xmlns:w" || name == "xmlns:w14") {
-            continue;
-        }
-        start.push_attribute((name.as_str(), value.as_str()));
+        // The serializer writes the fixed `w` and `w14` prefixes, so their
+        // root declarations bind the namespaces it writes.
+        let value = match name.as_str() {
+            "xmlns:w" if root => W_NS,
+            "xmlns:w14" if root => W14_NS,
+            _ => value.as_str(),
+        };
+        start.push_attribute((name.as_str(), value));
     }
 }
 
@@ -464,5 +480,60 @@ mod tests {
         let output = String::from_utf8(comments.to_xml().unwrap()).unwrap();
         assert!(output.contains("w14:paraId=\"0000000A\""));
         assert!(!output.contains("w14:paraId=\"foreign\""));
+    }
+
+    /// #160: an empty Word comments root that lists `w14` in `mc:Ignorable`
+    /// lost the `w14` declaration once a comment without a paragraph id was
+    /// written into it, and the kept declarations moved behind `xmlns:w`.
+    #[test]
+    fn rewritten_root_keeps_its_declarations_in_source_order() {
+        let comment = |para_id: Option<&str>| {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run("note");
+            CT_Comment {
+                id: 0,
+                author: Some("Ada".to_owned()),
+                date: None,
+                initials: None,
+                paragraphs: vec![paragraph],
+                paragraph_ids: vec![para_id.map(str::to_owned)],
+                extra_attributes: Vec::new(),
+                extra_xml: Vec::new(),
+            }
+        };
+        let word_root = concat!(
+            r#"<w:comments xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" "#,
+            r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" "#,
+            r#"xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" "#,
+            r#"mc:Ignorable="w14 w15">"#,
+        );
+        let mut comments = CT_Comments::from_xml(word_root.replace('>', "/>").as_bytes()).unwrap();
+        comments.comments.push(comment(None));
+        let output = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+        assert!(
+            output.contains(&format!("{word_root}<w:comment ")),
+            "{output}"
+        );
+
+        // Declarations the serializer needs and the source lacks come first.
+        let aliased_root = concat!(
+            r#"<comments xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" "#,
+            r#"xmlns:p14="http://schemas.microsoft.com/office/word/2010/wordml" "#,
+            r#"mc:Ignorable="p14"/>"#,
+        );
+        let mut comments = CT_Comments::from_xml(aliased_root.as_bytes()).unwrap();
+        comments.comments.push(comment(Some("0000000A")));
+        let output = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+        let expected = concat!(
+            r#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" "#,
+            r#"xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" "#,
+            r#"xmlns:p14="http://schemas.microsoft.com/office/word/2010/wordml" "#,
+            r#"mc:Ignorable="p14"><w:comment "#,
+        );
+        assert!(output.contains(expected), "{output}");
     }
 }

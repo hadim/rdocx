@@ -30574,7 +30574,8 @@ fn no_op_save_preserves_every_unchanged_part() {
 
 /// Part roots written by Word and Google Docs survive a save (#160, section
 /// 3). An unchanged comments part keeps its bytes, so a document compares
-/// against its own save.
+/// against its own save. A root that a save rewrites keeps `mc:Ignorable`
+/// and a declaration for every prefix it lists.
 mod producer_part_roots_survive_save {
     use super::*;
     use rdocx::RevisionKind;
@@ -30624,6 +30625,27 @@ mod producer_part_roots_survive_save {
     fn part(package: &[u8], name: &str) -> String {
         let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(package)).unwrap();
         String::from_utf8(package.get_part(name).unwrap().to_vec()).unwrap()
+    }
+
+    /// The start tag of the root element of `xml`.
+    fn root_tag(xml: &str) -> &str {
+        let after_declaration = xml.find("?>").map_or(0, |end| end + 2);
+        let start = after_declaration + xml[after_declaration..].find('<').unwrap();
+        &xml[start..=start + xml[start..].find('>').unwrap()]
+    }
+
+    /// `root` keeps `mc:Ignorable="{ignorable}"` and declares every prefix it lists.
+    fn assert_ignorable_declared(root: &str, ignorable: &str) {
+        assert!(
+            root.contains(&format!(r#"mc:Ignorable="{ignorable}""#)),
+            "{root}"
+        );
+        for prefix in ignorable.split_whitespace() {
+            assert!(
+                root.contains(&format!("xmlns:{prefix}=")),
+                "{prefix}: {root}"
+            );
+        }
     }
 
     /// The parts whose bytes differ between two packages with the same parts.
@@ -30738,6 +30760,19 @@ mod producer_part_roots_survive_save {
             revision_kinds(&source, &edited),
             [RevisionKind::Deletion, RevisionKind::Insertion]
         );
+    }
+
+    /// Removing the last comment leaves no paragraph id, and the rewritten
+    /// root used to drop the `w14` declaration that `mc:Ignorable` lists.
+    #[test]
+    fn rewritten_comments_root_keeps_every_declaration_in_source_order() {
+        let (source, comments) = word_comment_package();
+        let mut document = Document::from_bytes(&source).unwrap();
+        assert!(document.remove_comment(0).unwrap());
+        let xml = part(&document.to_bytes().unwrap(), "/word/comments.xml");
+        assert!(!xml.contains("w:comment "), "{xml}");
+        assert_eq!(root_tag(&xml), root_tag(&comments));
+        assert_ignorable_declared(root_tag(&xml), "w14 w15");
     }
 }
 
