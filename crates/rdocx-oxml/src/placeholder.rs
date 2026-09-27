@@ -311,9 +311,13 @@ pub fn replace_in_header_footer(hf: &mut CT_HdrFtr, placeholder: &str, replaceme
 
 /// Replace placeholders in text boxes and shapes within a raw XML part.
 ///
-/// Walks the XML, finds `w:txbxContent` elements at any depth, parses their
-/// child `w:p` elements using `CT_P::from_xml`, performs replacement, and
-/// re-serializes back. Returns the modified XML and replacement count.
+/// Walks the XML, finds `w:txbxContent` elements at any depth outside another
+/// text box, parses their child `w:p` elements using `CT_P::from_xml`,
+/// performs replacement, and re-serializes the paragraphs it changed. Every
+/// other child of the text box, such as a table, a content control, a
+/// bookmark or a paragraph without a match, is copied through verbatim in its
+/// place. A text box nested inside another one is kept as it is, not edited.
+/// Returns the modified XML and replacement count.
 pub fn replace_in_xml_part(
     xml: &[u8],
     placeholder: &str,
@@ -331,11 +335,11 @@ pub fn replace_many_in_xml_part(
     xml: &[u8],
     replacements: &[(&str, &str)],
 ) -> crate::error::Result<(Vec<u8>, usize)> {
-    rewrite_text_boxes(xml, &mut |paragraphs| {
+    rewrite_text_boxes(xml, &mut |paragraph| {
         replacements
             .iter()
             .map(|(placeholder, replacement)| {
-                replace_in_paragraphs(paragraphs, placeholder, replacement)
+                replace_in_paragraph(paragraph, placeholder, replacement)
             })
             .sum()
     })
@@ -350,18 +354,22 @@ pub fn replace_regex_in_xml_part(
     re: &regex::Regex,
     replacement: &str,
 ) -> crate::error::Result<(Vec<u8>, usize)> {
-    rewrite_text_boxes(xml, &mut |paragraphs| {
-        replace_regex_in_paragraphs(paragraphs, re, replacement)
+    rewrite_text_boxes(xml, &mut |paragraph| {
+        replace_regex_in_paragraph(paragraph, re, replacement)
     })
 }
 
-/// Walk `xml`, handing the paragraphs of each `w:txbxContent` element to
-/// `edit`, and re-serialise. Returns the rewritten XML and the summed count.
+/// Walk `xml`, handing each paragraph of a `w:txbxContent` element to `edit`
+/// and re-serialising it in place when `edit` counts a change. Every other
+/// paragraph and child of the text box is copied through verbatim. Returns the
+/// rewritten XML and the summed count.
 fn rewrite_text_boxes(
     xml: &[u8],
-    edit: &mut dyn FnMut(&mut Vec<CT_P>) -> usize,
+    edit: &mut dyn FnMut(&mut CT_P) -> usize,
 ) -> crate::error::Result<(Vec<u8>, usize)> {
+    use crate::error::OxmlError;
     use crate::namespace::matches_local_name;
+    use crate::raw_xml::capture_element;
     use quick_xml::events::Event;
     use quick_xml::{Reader, Writer};
 
@@ -376,50 +384,18 @@ fn rewrite_text_boxes(
         match reader.read_event_into(&mut buf) {
             Ok(Event::Eof) => break,
             Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"txbxContent") => {
-                // We found a txbxContent element. Collect its contents as raw XML,
-                // parse paragraphs, do replacement, and re-serialize.
+                // We found a txbxContent element. Parse and edit each paragraph
+                // and copy every other child through verbatim, in document order.
                 writer.write_event(Event::Start(e.clone()))?;
 
-                // Read all events inside txbxContent
-                let mut depth = 1u32;
                 let mut inner_buf = Vec::new();
-
-                // Collect paragraphs from inside txbxContent
-                let mut paragraphs: Vec<CT_P> = Vec::new();
 
                 loop {
                     match reader.read_event_into(&mut inner_buf) {
                         Ok(Event::Start(ref ie)) => {
-                            if matches_local_name(ie.name().as_ref(), b"p") && depth == 1 {
+                            if matches_local_name(ie.name().as_ref(), b"p") {
                                 // Parse this paragraph: collect its XML, then parse via CT_P
-                                let mut para_writer = Writer::new(Vec::new());
-                                // Write the opening <w:p> tag
-                                para_writer.write_event(Event::Start(ie.clone()))?;
-                                let mut pdepth = 1u32;
-                                let mut pbuf = Vec::new();
-                                loop {
-                                    match reader.read_event_into(&mut pbuf) {
-                                        Ok(Event::Start(ref pe)) => {
-                                            pdepth += 1;
-                                            para_writer.write_event(Event::Start(pe.clone()))?;
-                                        }
-                                        Ok(Event::End(ref pe)) => {
-                                            pdepth -= 1;
-                                            para_writer.write_event(Event::End(pe.clone()))?;
-                                            if pdepth == 0 {
-                                                break;
-                                            }
-                                        }
-                                        Ok(ref ev) => {
-                                            para_writer.write_event(ev.clone())?;
-                                        }
-                                        Err(e) => return Err(e.into()),
-                                    }
-                                    pbuf.clear();
-                                }
-                                let para_xml = para_writer.into_inner();
-
-                                // Parse the paragraph
+                                let para_xml = capture_element(&mut reader, ie)?;
                                 let mut para_reader = Reader::from_reader(para_xml.as_slice());
                                 para_reader.config_mut().trim_text(true);
                                 let mut prbuf = Vec::new();
@@ -436,42 +412,39 @@ fn rewrite_text_boxes(
                                     }
                                     prbuf.clear();
                                 }
-                                let para = CT_P::from_xml(&mut para_reader)?;
-                                paragraphs.push(para);
+                                let mut para = CT_P::from_xml(&mut para_reader)?;
+                                let count = edit(&mut para);
+                                if count == 0 {
+                                    // Nothing changed, so the paragraph keeps its
+                                    // bytes, start-tag attributes included.
+                                    writer.get_mut().extend_from_slice(&para_xml);
+                                } else {
+                                    para.to_xml(&mut writer)?;
+                                }
+                                total_count += count;
                             } else {
-                                depth += 1;
-                                // Non-paragraph element inside txbxContent; skip it
-                                reader.read_to_end_into(ie.name(), &mut Vec::new())?;
-                                depth -= 1;
+                                // A table, a content control or any other element
+                                // the edit does not reach stays as it was.
+                                let raw = capture_element(&mut reader, ie)?;
+                                writer.get_mut().extend_from_slice(&raw);
                             }
                         }
-                        Ok(Event::End(ref ie)) => {
-                            if matches_local_name(ie.name().as_ref(), b"txbxContent") && depth == 1
-                            {
-                                break;
-                            }
-                            depth -= 1;
+                        // Every child element is consumed whole, so the first end
+                        // tag at this level closes the txbxContent element.
+                        Ok(Event::End(ie)) => {
+                            writer.write_event(Event::End(ie))?;
+                            break;
                         }
-                        Ok(_) => {
-                            // Whitespace/text at top level of txbxContent, skip
+                        Ok(Event::Eof) => {
+                            return Err(OxmlError::MissingElement("w:txbxContent end".to_owned()));
                         }
+                        // Empty elements such as `<w:p/>` or a bookmark, whitespace,
+                        // comments and processing instructions.
+                        Ok(ev) => writer.write_event(ev)?,
                         Err(e) => return Err(e.into()),
                     }
                     inner_buf.clear();
                 }
-
-                // Hand the collected paragraphs to the caller's edit function
-                total_count += edit(&mut paragraphs);
-
-                // Re-serialize paragraphs into the writer
-                for p in &paragraphs {
-                    p.to_xml(&mut writer)?;
-                }
-
-                // Write closing txbxContent tag
-                writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
-                    "w:txbxContent",
-                )))?;
             }
             Ok(ev) => {
                 writer.write_event(ev)?;
@@ -947,6 +920,59 @@ mod tests {
         assert_eq!(count, 1);
         let result_str = String::from_utf8(result).unwrap();
         assert!(result_str.contains("Company: Acme"));
+    }
+
+    /// A text box whose paragraphs sit among a table, a block content
+    /// control, a bookmark, an empty paragraph, a comment and whitespace.
+    /// A second text box without a placeholder follows. The walker rewrites
+    /// every text box of the part, so that one must come back unchanged too.
+    /// The paragraphs without a placeholder keep their identity attributes.
+    const TEXT_BOX_WITH_EVERY_KIND_OF_CHILD: &str = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body><w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>
+<w:p w:rsidR="00A1B2C3" w14:paraId="1234ABCD" w14:textId="77AA88BB"><w:r><w:t>Title</w:t></w:r></w:p>
+<w:p><w:r><w:t>Hello {{name}}</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><!--kept-->
+<w:sdt><w:sdtPr><w:alias w:val="Signature"/><w:id w:val="42"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:bookmarkStart w:id="7" w:name="boxed"/><w:p/><w:bookmarkEnd w:id="7"/><w:p><w:r><w:t>{{name}} again</w:t></w:r></w:p>
+</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>other cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p w:rsidR="00A1B2C3" w14:paraId="5678CDEF" w14:textId="77AA88BC"><w:r><w:t>No placeholder here</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#;
+
+    #[test]
+    fn replace_in_textbox_keeps_every_other_child_in_order() {
+        let xml = TEXT_BOX_WITH_EVERY_KIND_OF_CHILD;
+        let expected = xml.replace("{{name}}", "Alice");
+
+        let (result, count) = replace_in_xml_part(xml.as_bytes(), "{{name}}", "Alice").unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(String::from_utf8(result).unwrap(), expected);
+
+        let re = regex::Regex::new(r"\{\{name\}\}").unwrap();
+        let (result, count) = replace_regex_in_xml_part(xml.as_bytes(), &re, "Alice").unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(String::from_utf8(result).unwrap(), expected);
+    }
+
+    /// The end tag used to be written as `w:txbxContent` whatever prefix the
+    /// start tag carried, which left the part ill-formed.
+    #[test]
+    fn replace_in_textbox_closes_it_with_its_own_prefix() {
+        let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:pict><v:shape><v:textbox><q:txbxContent xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Hello {{name}}</w:t></w:r></w:p></q:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#;
+
+        let (result, count) = replace_in_xml_part(xml.as_bytes(), "{{name}}", "Alice").unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(
+            String::from_utf8(result).unwrap(),
+            xml.replace("{{name}}", "Alice")
+        );
+    }
+
+    /// A text box cut short used to keep the walker reading past the end of
+    /// the part forever.
+    #[test]
+    fn replace_in_unterminated_textbox_is_an_error() {
+        for tail in ["<w:p/>", "<w:p><w:r><w:t>Hello {{name}}"] {
+            let xml = format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:pict><w:txbxContent>{tail}"#
+            );
+            assert!(replace_in_xml_part(xml.as_bytes(), "{{name}}", "Alice").is_err());
+        }
     }
 
     #[test]
