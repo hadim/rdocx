@@ -427,6 +427,10 @@ rewriting the raw subtree bytes. Prefix aliases, nested shadows, and ordinary
 namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
+The main document, header, and footer roots also retain their other
+attributes, such as `mc:Ignorable`, in source order. A typed rewrite writes
+them after every namespace declaration it keeps, so a compatibility attribute
+survives the rewrite and every prefix it lists stays declared.
 
 Modeled paragraph, run, and section-property owners retain every ordered root
 attribute, including producer identity, revision-session, foreign, and

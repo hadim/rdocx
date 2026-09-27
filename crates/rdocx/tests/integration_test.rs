@@ -18829,6 +18829,7 @@ mod advanced_table_authoring_and_geometry {
             extra_namespaces: Vec::new(),
             background_xml: None,
             background_extra_xml: Vec::new(),
+            root_attributes: Vec::new(),
         });
         let media = rdocx_layout::MediaRegistry::new(&input.images);
         let mut fonts =

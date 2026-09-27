@@ -30585,6 +30585,14 @@ mod producer_part_roots_survive_save {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
         oxml_opc::relationship::rel_types::COMMENTS,
     );
+    const HEADER: (&str, &str) = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        oxml_opc::relationship::rel_types::HEADER,
+    );
+    const FOOTER: (&str, &str) = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        oxml_opc::relationship::rel_types::FOOTER,
+    );
     /// The root declarations of the reproduction in #160, as Word writes them.
     const WORD_ROOT: &str = concat!(
         r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" "#,
@@ -30773,6 +30781,86 @@ mod producer_part_roots_survive_save {
         assert!(!xml.contains("w:comment "), "{xml}");
         assert_eq!(root_tag(&xml), root_tag(&comments));
         assert_ignorable_declared(root_tag(&xml), "w14 w15");
+    }
+
+    /// The mirror case noted in PR #154: an edited `document.xml` lost
+    /// `mc:Ignorable` while its body kept every `w14:paraId`.
+    #[test]
+    fn edited_main_document_keeps_mc_ignorable_while_its_body_uses_w14() {
+        let document = format!(
+            concat!(
+                "{}<w:document {}><w:body>",
+                "<w:p w14:paraId=\"1A2B3C4D\" w14:textId=\"77777777\"><w:r><w:t>Lorem ipsum dolor.</w:t></w:r></w:p>",
+                "<w:p w14:paraId=\"2A2B3C4D\" w14:textId=\"77777777\"><w:r><w:t>Second paragraph.</w:t></w:r></w:p>",
+                "<w:sectPr/></w:body></w:document>",
+            ),
+            DECLARATION, WORD_ROOT
+        );
+        let source = package_with(Some(&document), &[]);
+
+        let edited = edited_save(&source, "Lorem", "LOREM", 1);
+        let xml = part(&edited, "/word/document.xml");
+        assert_ignorable_declared(root_tag(&xml), "w14 w15");
+        assert!(xml.contains(r#"w14:paraId="2A2B3C4D""#), "{xml}");
+        assert_eq!(
+            revision_kinds(&source, &edited),
+            [RevisionKind::Deletion, RevisionKind::Insertion]
+        );
+
+        let again = edited_save(&edited, "Second", "SECOND", 1);
+        assert_eq!(
+            root_tag(&part(&again, "/word/document.xml")),
+            root_tag(&xml)
+        );
+    }
+
+    /// A replacement in a header or footer rewrites its part, and the
+    /// rewritten root dropped `mc:Ignorable`.
+    #[test]
+    fn rewritten_header_and_footer_keep_mc_ignorable_and_its_declarations() {
+        let document = format!(
+            concat!(
+                "{}<w:document {}><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p>",
+                "<w:sectPr><w:headerReference w:type=\"default\" r:id=\"rIdHeader\"/>",
+                "<w:footerReference w:type=\"default\" r:id=\"rIdFooter\"/></w:sectPr>",
+                "</w:body></w:document>",
+            ),
+            DECLARATION, WORD_ROOT
+        );
+        let story = |root: &str, text: &str| {
+            format!(
+                concat!(
+                    "{}<w:{} {}><w:p w14:paraId=\"3A2B3C4D\" w14:textId=\"77777777\">",
+                    "<w:r><w:t>{}</w:t></w:r></w:p></w:{}>",
+                ),
+                DECLARATION, root, WORD_ROOT, text, root
+            )
+        };
+        let source = package_with(
+            Some(&document),
+            &[
+                (
+                    "rIdHeader",
+                    "/word/header1.xml",
+                    HEADER,
+                    &story("hdr", "Header margin"),
+                ),
+                (
+                    "rIdFooter",
+                    "/word/footer1.xml",
+                    FOOTER,
+                    &story("ftr", "Footer margin"),
+                ),
+            ],
+        );
+
+        let edited = edited_save(&source, "margin", "MARGIN", 2);
+        for name in ["/word/header1.xml", "/word/footer1.xml"] {
+            let xml = part(&edited, name);
+            assert!(xml.contains("MARGIN"), "{xml}");
+            assert_ignorable_declared(root_tag(&xml), "w14 w15");
+            assert!(xml.contains(r#"w14:paraId="3A2B3C4D""#), "{xml}");
+        }
     }
 }
 
@@ -31657,6 +31745,7 @@ mod advanced_table_geometry_regressions {
                 extra_namespaces: Vec::new(),
                 background_xml: None,
                 background_extra_xml: Vec::new(),
+                root_attributes: Vec::new(),
             },
             styles: CT_Styles::new_default(),
             numbering: None,
