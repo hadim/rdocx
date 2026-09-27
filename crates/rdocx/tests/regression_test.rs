@@ -8618,6 +8618,134 @@ fn toc_rebuild_accepts_several_defaults_of_one_style_type_and_follows_the_layout
     );
 }
 
+#[test]
+fn toc_rebuild_accepts_identity_attributes_on_the_instruction_paragraph_runs() {
+    // Word writes `w:rsidR` and `w:rsidRPr` on the runs it saves, Google Docs
+    // `w:rsidR`, `w:rsidDel` and `w:rsidRPr`. The rebuild parses the
+    // instruction paragraph out of its part, and the retained-attribute
+    // capture used to see its `w` prefix unbound and fail the whole rebuild.
+    // Any other prefix the part binds failed the same way.
+    let titles = [
+        ("Heading1", "Chapter 1"),
+        ("Heading2", "Section 1.1"),
+        ("Heading1", "Chapter 2"),
+        ("Heading2", "Section 2.1"),
+        ("Heading1", "Chapter 3"),
+        ("Heading2", "Section 3.1"),
+    ];
+    let body = |field: &str, entry: &str, lead: &str, packed: bool, control: bool| {
+        let begin = r#"<w:fldChar w:fldCharType="begin"/>"#;
+        let instruction =
+            r#"<w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText>"#;
+        let separate = r#"<w:fldChar w:fldCharType="separate"/>"#;
+        let field_code = if packed {
+            format!("<w:r{field}>{begin}{instruction}{separate}</w:r>")
+        } else {
+            [begin, instruction, separate]
+                .map(|child| format!("<w:r{field}>{child}</w:r>"))
+                .concat()
+        };
+        let mut xml = String::new();
+        for (index, (_, title)) in titles.iter().enumerate() {
+            xml.push_str("<w:p>");
+            if index == 0 {
+                xml.push_str(lead);
+                xml.push_str(&field_code);
+            }
+            xml.push_str(&format!(
+                "<w:r{entry}><w:t>{title}</w:t><w:tab/><w:t>1</w:t></w:r>"
+            ));
+            if index + 1 == titles.len() {
+                xml.push_str(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
+            }
+            xml.push_str("</w:p>");
+        }
+        if control {
+            xml = format!(
+                r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>{xml}</w:sdtContent></w:sdt>"#
+            );
+        }
+        for (style, title) in titles {
+            xml.push_str(&format!(
+                r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{title}</w:t></w:r></w:p><w:p><w:r><w:t>Body text.</w:t></w:r></w:p>"#
+            ));
+        }
+        xml
+    };
+    let check = |label: &str, xml: &str, kept: usize| {
+        let mut document = document_with_field_parts(xml, None, None);
+        let report = document
+            .rebuild_toc()
+            .unwrap_or_else(|error| panic!("{label}: {error}"));
+        assert_eq!(report.entry_count, 6, "{label}");
+        assert!(report.diagnostics.is_empty(), "{label}: {report:?}");
+
+        // The rebuilt entries replace the cached ones, so only the runs before
+        // `separate` still carry an identity, and each keeps it. The rebuild
+        // keeps their bytes, so no run start tag gains a declaration.
+        let saved = document_xml(&mut document);
+        assert_eq!(
+            saved.matches(r#"="00A1B2C3""#).count(),
+            kept,
+            "{label}: {saved}"
+        );
+        assert!(
+            saved
+                .split("<w:r ")
+                .skip(1)
+                .all(|tag| !tag[..tag.find('>').unwrap()].contains("xmlns")),
+            "{label}: {saved}"
+        );
+        assert_eq!(
+            saved.matches(r#"<w:pStyle w:val="TOC"#).count(),
+            6,
+            "{label}: {saved}"
+        );
+    };
+    let rsid_r = r#" w:rsidR="00A1B2C3""#;
+    let rsid_rpr = r#" w:rsidRPr="00A1B2C3""#;
+    let rsid_del = r#" w:rsidDel="00A1B2C3""#;
+    let lead = r#"<w:r w:rsidR="00A1B2C3"><w:t xml:space="preserve">Contents </w:t></w:r>"#;
+    for (label, field, entry, lead, packed, control, kept) in [
+        ("no attribute", "", "", "", false, false, 0),
+        ("entry runs", "", rsid_r, "", false, false, 0),
+        ("w:rsidR field runs", rsid_r, "", "", false, false, 3),
+        ("w:rsidRPr field runs", rsid_rpr, "", "", false, false, 3),
+        ("w:rsidDel field runs", rsid_del, "", "", false, false, 3),
+        ("packed field run", rsid_r, "", "", true, false, 1),
+        ("block control", rsid_r, "", "", false, true, 3),
+        ("packed in a block control", rsid_r, "", "", true, true, 1),
+        ("run before begin", "", "", lead, false, false, 1),
+    ] {
+        let xml = wrap_word_body(&body(field, entry, lead, packed, control));
+        check(label, &xml, kept);
+    }
+    for (label, declaration, field) in [
+        (
+            "foreign prefix",
+            r#"xmlns:x="urn:producer""#.to_owned(),
+            r#" x:id="00A1B2C3""#,
+        ),
+        (
+            "w14 prefix",
+            r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#.to_owned(),
+            r#" w14:id="00A1B2C3""#,
+        ),
+        (
+            "second Word alias",
+            format!(r#"xmlns:wx="{W_NS}""#),
+            r#" wx:rsidRPr="00A1B2C3""#,
+        ),
+    ] {
+        let xml = wrap_word_body(&body(field, "", "", false, false)).replacen(
+            "<w:document ",
+            &format!("<w:document {declaration} "),
+            1,
+        );
+        check(label, &xml, 3);
+    }
+}
+
 const ONE_HEADING_TOC_BODY: &str = r#"
     <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
     <w:p><w:r><w:t>stale</w:t></w:r></w:p>

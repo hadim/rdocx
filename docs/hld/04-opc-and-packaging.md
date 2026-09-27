@@ -447,6 +447,11 @@ root that owns the element already declares it and the authored identity write
 makes the same assumption. Together these keep a reopened save byte identical
 to the save it was read from.
 
+A paragraph cut out of its part and parsed on its own carries none of the
+declarations of its part. The table-of-contents rebuild adds the bindings the
+instruction paragraph inherits to its start tag before it parses it, so every
+run attribute resolves as it does inside the part.
+
 An unknown default namespace declared on the document root is classified by
 its effective lexical scope before canonical serialization. An unused root
 default may be omitted without blocking a typed mutation. An unprefixed element
