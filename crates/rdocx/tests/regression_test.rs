@@ -13522,6 +13522,9 @@ fn used_root_default_namespace_still_fails_atomically() {
     assert_eq!(document.to_bytes().unwrap(), before);
 }
 
+const ISSUE_157_UNUSED_ROOT_DEFAULT: &str =
+    r#" xmlns="http://schemas.microsoft.com/office/tasks/2019/documenttasks""#;
+
 /// A Google Docs shaped main part: extra root namespace declarations, an
 /// optional `goog_rdk_0` block content control and a one-cell table.
 fn issue_157_document(root_declarations: &str, content_control: bool, producer: &str) -> Document {
@@ -13538,6 +13541,43 @@ fn issue_157_document(root_declarations: &str, content_control: bool, producer: 
     ))
 }
 
+fn issue_157_paragraph_summary(paragraph: &ParagraphRef<'_>) -> String {
+    let has_picture = paragraph.runs().any(|run| {
+        run.items()
+            .any(|item| matches!(item, RunItemRef::Drawing(drawing) if drawing.is_inline()))
+    });
+    if has_picture {
+        "picture".to_owned()
+    } else {
+        format!("p:{}", paragraph.text())
+    }
+}
+
+fn issue_157_body_summary(document: &Document) -> Vec<String> {
+    document
+        .body_items()
+        .map(|item| match item {
+            BodyItemRef::Paragraph(paragraph) => issue_157_paragraph_summary(&paragraph),
+            BodyItemRef::ContentControl(control) => format!(
+                "sdt:{}:{}",
+                control.tag().unwrap_or_default(),
+                control.text()
+            ),
+            BodyItemRef::Table(table) => format!(
+                "table:{}",
+                table
+                    .cell(0, 0)
+                    .unwrap()
+                    .paragraphs()
+                    .map(|paragraph| issue_157_paragraph_summary(&paragraph))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ),
+            BodyItemRef::UnsupportedXml(raw) => format!("raw:{}", String::from_utf8_lossy(raw)),
+        })
+        .collect()
+}
+
 fn issue_157_insert_picture(
     document: &mut Document,
     story: &StoryId,
@@ -13551,6 +13591,68 @@ fn issue_157_insert_picture(
         Some(Length::pt(12.0)),
         Some(Length::pt(8.0)),
     )
+}
+
+#[test]
+fn story_picture_splice_beside_content_control_ignores_unused_root_default() {
+    // A story splice publishes canonical main-part XML without the unused
+    // root default. The flush that follows must classify those bytes, not
+    // the declarations of the part they replaced.
+    for (root_default, content_control) in [(true, true), (false, true), (true, false)] {
+        let case = format!("root default {root_default}, content control {content_control}");
+        let root_declarations = if root_default {
+            ISSUE_157_UNUSED_ROOT_DEFAULT
+        } else {
+            ""
+        };
+        let mut document = issue_157_document(root_declarations, content_control, "");
+        let body = f254_story(&document, StoryKind::Body);
+        let anchor = document
+            .story_items(&body)
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                if content_control {
+                    item.kind() == StoryItemKind::ContentControl
+                } else {
+                    item.text().unwrap().as_deref() == Some("Inside the control.")
+                }
+            })
+            .unwrap()
+            .location()
+            .clone();
+        let after = issue_157_insert_picture(&mut document, &body, Some(&anchor))
+            .unwrap_or_else(|error| panic!("{case}: picture after the anchor: {error}"));
+        assert_eq!(after.item_kind(), StoryItemKind::Paragraph, "{case}");
+
+        let cell = f254_story(&document, StoryKind::TableCell);
+        issue_157_insert_picture(&mut document, &cell, None)
+            .unwrap_or_else(|error| panic!("{case}: picture in the table cell: {error}"));
+        let cell = f254_story(&document, StoryKind::TableCell);
+        document
+            .add_hyperlink_to_story(&cell, "link", "https://example.invalid/issue-157")
+            .unwrap_or_else(|error| panic!("{case}: hyperlink in the table cell: {error}"));
+        let body = f254_story(&document, StoryKind::Body);
+        issue_157_insert_picture(&mut document, &body, None)
+            .unwrap_or_else(|error| panic!("{case}: appended picture: {error}"));
+
+        let anchor = if content_control {
+            "sdt:goog_rdk_0:Inside the control."
+        } else {
+            "p:Inside the control."
+        };
+        let expected = [
+            "p:Before the control.",
+            anchor,
+            "picture",
+            "table:p:cell|picture|p:link",
+            "picture",
+        ];
+        assert_eq!(issue_157_body_summary(&document), expected, "{case}");
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(issue_157_body_summary(&reopened), expected, "{case}");
+    }
 }
 
 #[test]

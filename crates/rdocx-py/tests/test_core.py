@@ -9,7 +9,7 @@ import zlib
 import pytest
 
 
-def _replace_document_body(document, body):
+def _replace_document_body(document, body, root_default=None):
     source = io.BytesIO(document.to_bytes())
     result = io.BytesIO()
     with zipfile.ZipFile(source) as source_zip:
@@ -20,6 +20,9 @@ def _replace_document_body(document, body):
                     start = data.index(b"<w:body>") + len(b"<w:body>")
                     end = data.index(b"</w:body>")
                     data = data[:start] + body.encode() + data[end:]
+                    if root_default:
+                        root = f'<w:document xmlns="{root_default}" '
+                        data = data.replace(b"<w:document ", root.encode(), 1)
                 result_zip.writestr(info, data)
     return type(document).from_bytes(result.getvalue())
 
@@ -349,6 +352,43 @@ def _one_pixel_png():
         + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
         + chunk(b"IEND", b"")
     )
+
+
+def test_add_picture_beside_a_content_control_ignores_an_unused_root_default():
+    import rdocx
+
+    body = (
+        "<w:p><w:r><w:t>Before the control.</w:t></w:r></w:p>"
+        '<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_0"/></w:sdtPr><w:sdtContent>'
+        "<w:p><w:r><w:t>Inside the control.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        "<w:p><w:r><w:t>After the control.</w:t></w:r></w:p><w:sectPr/>"
+    )
+    tasks = "http://schemas.microsoft.com/office/tasks/2019/documenttasks"
+    for root_default in (None, tasks):
+        document = _replace_document_body(rdocx.Document(), body, root_default)
+        control = next(
+            item
+            for item in document.story_items
+            if item.story.kind == "body" and item.kind == "content_control"
+        )
+        size = {"width": rdocx.Inches(1), "height": rdocx.Inches(1)}
+        after = document.add_picture(_one_pixel_png(), "x.png", after=control, **size)
+        appended = document.add_picture(_one_pixel_png(), "x.png", **size)
+        assert after.kind == appended.kind == "paragraph"
+
+        xml = _document_xml(rdocx.Document.from_bytes(document.to_bytes()))
+        assert xml.count(b"<w:drawing>") == 2
+        positions = [
+            xml.index(b"Before the control."),
+            xml.index(b'<w:tag w:val="goog_rdk_0"/>'),
+            xml.index(b"Inside the control."),
+            xml.index(b"</w:sdt>"),
+            xml.index(b"<w:drawing>"),
+            xml.index(b"After the control."),
+            xml.rindex(b"<w:drawing>"),
+        ]
+        assert positions == sorted(positions)
 
 
 def _relationship_target(document, part_name, relationship_id):

@@ -458,9 +458,9 @@ part also publishes canonical XML, so it applies the same root default
 classification before it publishes. Like a modified save, it also refuses any
 declaration on `w:body`, which the canonical body drops, and a root `w`, `r` or
 `mc` declaration bound to another URI, because the canonical root rebinds those
-prefixes. After a successful canonical publication, the document refreshes its
-root and body namespace facts from the published main-story bytes so a later
-save applies the same classification.
+prefixes. After a successful canonical publication, by a save or by a story
+splice, the document refreshes its root and body namespace facts from the
+published main-story bytes so a later save applies the same classification.
 
 Paragraph line spacing retains the signed integer path required by
 WordprocessingML and accepts one bounded producer deviation. A plain signed

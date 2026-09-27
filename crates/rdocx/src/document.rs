@@ -6616,8 +6616,12 @@ fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) 
                 "cannot serialize a modified document with a shadowed `{prefix}` namespace"
             )));
         }
+        let namespace_scopes = document_namespace_scopes(&xml)?;
         document.document = CT_Document::from_xml(&xml)?;
         document.package.set_part(part_name, xml);
+        document.root_namespace_declarations = namespace_scopes.root_declarations;
+        document.body_namespace_declarations = namespace_scopes.body_declarations;
+        document.body_namespace_bindings = namespace_scopes.body_bindings;
     } else if document.comments_part_name.as_deref() == Some(part_name) {
         document.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(&xml)?);
         document.package.set_part(part_name, xml);
