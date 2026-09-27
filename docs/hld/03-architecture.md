@@ -1424,8 +1424,9 @@ otherwise owns one complete `Document`. It never reaches into
 deterministic variants expose one zero-based page as self-contained searchable
 SVG. Out-of-range pages return `None`. `SvgRenderResult` carries the SVG and
 ordered `SvgDiagnostic` values, with layout diagnostics before recursive
-lowering diagnostics. These additive methods are native Rust only. Python,
-WASM, CLI, Presentation, and the public `oxml-pdf` surface remain unchanged.
+lowering diagnostics. Python binds the normal-layout method as
+`Document.render_page_to_svg`. WASM, CLI, Presentation, and the public
+`oxml-pdf` surface remain unchanged.
 
 `Document::from_html` and `Document::open_html` are additive native facade
 constructors. They return the converted document with stable path-aware

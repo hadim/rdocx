@@ -97,7 +97,7 @@ pub use oxml_opc::PackageReadLimits;
 pub use oxml_opc::{
     CoveredRelationship, SignatureIssue, SignatureReport, SignerCertificateIdentity,
 };
-pub use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
+pub use oxml_pdf::{PdfConformance, RasterFormat, RasterOptions, RasterOutput};
 pub use paragraph::{
     Alignment, BorderStyle, DropCap, FrameAnchor, FrameWrap, HyperlinkItemRef, HyperlinkRef,
     Paragraph, ParagraphBorderEdge, ParagraphBorderRef, ParagraphFrame, ParagraphItemRef,

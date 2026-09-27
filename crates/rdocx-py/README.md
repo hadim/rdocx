@@ -50,8 +50,9 @@ with open("report.pdf", "wb") as output:
   equations, drawings, comments, and metadata.
 - Tracked comparison, main-body comment threads, bookmarks, revision
   resolution, and TOC insertion and rebuilding.
-- Deterministic layout fragments, page geometry, and PDF, PNG, JPEG, and TIFF
-  output through the native document engine.
+- Deterministic layout fragments, page geometry, and PDF, PDF/A, SVG, PNG,
+  JPEG, and TIFF output through the native document engine, with caller fonts
+  or a font directory for PDF.
 - Python collections with negative indexes, slices, iteration, and explicit
   stale-handle errors after structural changes.
 

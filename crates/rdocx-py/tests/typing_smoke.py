@@ -37,6 +37,8 @@ from rdocx import (
     StoryRunPosition,
     StoryRunRange,
     Style,
+    SvgDiagnostic,
+    SvgRenderResult,
     Table,
     TableCollection,
     TocRebuildReport,
@@ -118,6 +120,12 @@ def exercise_rdocx_types(path: Path) -> None:
     pdf_bytes: bytes = opened.to_pdf()
     pages: list[bytes] = opened.render_all_pages()
     maybe_page: bytes | None = opened.render_page_to_png(0)
+    font_pdf: bytes = opened.to_pdf(fonts=[("Carlito", b"font")], font_dir=path)
+    archival_pdf: bytes = opened.to_pdfa_deterministic("pdfa-3b")
+    svg_page: SvgRenderResult | None = opened.render_page_to_svg(0)
+    if svg_page is not None:
+        assert_type(svg_page.svg, str)
+        svg_diagnostics: tuple[SvgDiagnostic, ...] = svg_page.diagnostics
     document.save(path)
     document.remove_content(0)
     position = RunPosition(body_index=0, run_index=0)

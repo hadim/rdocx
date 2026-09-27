@@ -1,6 +1,7 @@
 import concurrent.futures
 import io
 import os
+import re
 import shutil
 import statistics
 import struct
@@ -245,6 +246,77 @@ def test_render_pages_accepts_keyword_options_and_zero_based_pages():
         document.render_pages("jpeg")
 
 
+def _caller_font_document():
+    from rdocx import Document
+
+    document = Document()
+    run = document.add_paragraph("Monospaced caller face").runs[0]
+    run.font.name = "Rdocx Test Face"
+    return document
+
+
+def _pdf_base_fonts(pdf):
+    return set(re.findall(rb"/BaseFont\s*/([^\s/>]+)", pdf))
+
+
+def test_to_pdf_takes_caller_fonts_as_bytes_or_from_a_directory(tmp_path):
+    from rdocx import LayoutError
+
+    mono = Path(__file__).resolve().parents[2] / "oxml-layout" / "fonts"
+    mono = mono / "LiberationMono-Regular.ttf"
+    document = _caller_font_document()
+    assert b"LiberationMono" not in _pdf_base_fonts(document.to_pdf())
+
+    pdf = document.to_pdf(fonts=[("Rdocx Test Face", mono.read_bytes())])
+    assert b"LiberationMono" in _pdf_base_fonts(pdf)
+
+    # A directory font takes its family name from the file name.
+    shutil.copy(mono, tmp_path / "Rdocx Test Face.ttf")
+    assert b"LiberationMono" in _pdf_base_fonts(document.to_pdf(font_dir=tmp_path))
+    assert b"LiberationMono" in _pdf_base_fonts(document.to_pdf(font_dir=str(tmp_path)))
+
+    # Caller fonts replace every other source, as `rdocx convert --font-dir` does.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(LayoutError, match="No font found for family 'Rdocx Test Face'"):
+        document.to_pdf(font_dir=empty)
+    with pytest.raises(FileNotFoundError, match="font directory .*missing does not exist"):
+        document.to_pdf(font_dir=tmp_path / "missing")
+    with pytest.raises(NotADirectoryError, match="is not a directory"):
+        document.to_pdf(font_dir=tmp_path / "Rdocx Test Face.ttf")
+    with pytest.raises(TypeError):
+        document.to_pdf(fonts=[("Rdocx Test Face", "not bytes")])
+
+
+def test_render_page_to_svg_returns_the_page_and_its_diagnostics():
+    from rdocx import SvgDiagnostic, SvgRenderResult
+
+    document = _caller_font_document()
+
+    page = document.render_page_to_svg(0)
+    assert isinstance(page, SvgRenderResult)
+    assert page.svg.startswith("<svg ")
+    assert "Monospaced" in page.svg
+    assert all(isinstance(diagnostic, SvgDiagnostic) for diagnostic in page.diagnostics)
+    assert document.render_page_to_svg(1) is None
+    snapshot = SvgRenderResult(
+        svg="<svg/>", diagnostics=[SvgDiagnostic(path="pages[0]", message="omitted")]
+    )
+    assert snapshot.diagnostics == (SvgDiagnostic(path="pages[0]", message="omitted"),)
+
+
+def test_to_pdfa_deterministic_writes_the_requested_profile():
+    document = _caller_font_document()
+
+    part_two = document.to_pdfa_deterministic()
+    assert part_two.startswith(b"%PDF-")
+    assert b"<pdfaid:part>2</pdfaid:part>" in part_two
+    assert document.to_pdfa_deterministic("pdfa-2b") == part_two
+    assert b"<pdfaid:part>3</pdfaid:part>" in document.to_pdfa_deterministic("pdfa-3b")
+    with pytest.raises(ValueError, match="profile must be pdfa-2b or pdfa-3b"):
+        document.to_pdfa_deterministic("pdfa-1b")
+
+
 def test_render_errors_reacquire_and_map_cleanly():
     from rdocx import LayoutError, RdocxError
 
@@ -329,6 +401,20 @@ def test_render_page_to_png_releases_gil_for_python_worker():
     page = _assert_releases_gil(lambda: document.render_page_to_png(0, dpi=72.0))
 
     assert page.startswith(PNG_SIGNATURE)
+
+
+def test_font_svg_and_pdfa_renders_release_gil_for_python_worker(tmp_path):
+    document = _nontrivial_document(13)
+    fonts = Path(__file__).resolve().parents[2] / "oxml-layout" / "fonts"
+    shutil.copy(fonts / "Carlito-Regular.ttf", tmp_path)
+
+    pdf = _assert_releases_gil(lambda: document.to_pdf(font_dir=tmp_path))
+    page = _assert_releases_gil(lambda: document.render_page_to_svg(0))
+    archival = _assert_releases_gil(document.to_pdfa_deterministic)
+
+    assert pdf.startswith(b"%PDF-")
+    assert page is not None and page.svg.startswith("<svg ")
+    assert archival.startswith(b"%PDF-")
 
 
 def test_render_all_pages_releases_gil_for_python_worker():
