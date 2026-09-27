@@ -468,7 +468,10 @@ template walkers still parse such a paragraph in the default scope, which names
 a Word prefix that the scope names without a binding to the WordprocessingML
 namespace, and an explicit binding always wins. A run attribute under any other
 prefix, such as `w14`, a foreign namespace or a second WordprocessingML alias,
-still fails those two walkers.
+still fails those two walkers. The replacement walker parses a text-box
+paragraph without its start tag. It writes an edited paragraph back under a
+start tag that carries the attributes it was read with, identities and local
+declarations included, since the paragraph returns to the scope it came from.
 
 An unknown default namespace declared on the document root is classified by
 its effective lexical scope before canonical serialization. An unused root

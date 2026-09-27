@@ -32521,6 +32521,20 @@ mod text_box_identity_attribute_regressions {
     }
 
     #[test]
+    fn replacing_text_keeps_the_identities_of_the_text_box_paragraph() {
+        // The replacement parses a text-box paragraph without its start tag,
+        // so the paragraph it edited used to lose its own identities.
+        let paragraph = r#"<w:p w:rsidR="00A1B2C3" w14:paraId="1A2B3C4D" w14:textId="5E6F7A8B">"#;
+        let mut document = super::document_with_content_controls(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>Host paragraph</w:t></w:r><w:r><w:pict><v:shape style="position:absolute;width:216pt;height:36pt"><v:textbox><w:txbxContent>{paragraph}<w:r{IDENTITY}><w:t>Boxed text</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#
+        ));
+        assert_eq!(document.try_replace_text("Boxed", "Filled").unwrap(), 1);
+        let saved = super::document_xml(&mut document);
+        assert!(saved.contains("Filled text"), "{saved}");
+        assert!(saved.contains(paragraph), "{saved}");
+    }
+
+    #[test]
     fn a_template_fills_a_text_box_whose_runs_carry_identity_attributes() {
         let data = serde_json::json!({"name": "Ada"});
         let render = |run_attributes| {
