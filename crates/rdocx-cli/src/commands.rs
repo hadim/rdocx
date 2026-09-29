@@ -139,7 +139,6 @@ fn inspect_json(file: &Path, doc: &Document, style_ids: Vec<String>) -> Result<V
 /// footnotes, endnotes, and comments.
 pub fn text(file: &Path, json_output: bool) -> Result<()> {
     let doc = Document::open(file)?;
-    let stories = other_stories(&doc)?;
     if json_output {
         let document = parsed_main_document(file)?;
         let mut paragraphs = Vec::new();
@@ -157,7 +156,15 @@ pub fn text(file: &Path, json_output: bool) -> Result<()> {
                 BodyContent::RawXml(_) => {}
             }
         }
+        let stories = readable_stories(file, &doc);
+        // Without the other stories the record covers the main story only.
+        let scope = if stories.is_some() {
+            "all-supported-stories"
+        } else {
+            "main"
+        };
         let stories = stories
+            .unwrap_or_default()
             .iter()
             .map(|story| {
                 let items = story
@@ -176,13 +183,14 @@ pub fn text(file: &Path, json_output: bool) -> Result<()> {
             })
             .collect::<Vec<_>>();
         print_json(json!({
-            "scope": "all-supported-stories",
+            "scope": scope,
             "revision_view": "accepted",
             "paragraphs": paragraphs,
             "stories": stories,
         }))?;
     } else {
         print!("{}", doc.text());
+        let stories = readable_stories(file, &doc).unwrap_or_default();
         for (kind, part_name, texts) in story_parts(&stories) {
             println!("--- {} ({part_name}) ---", story_kind_name(kind));
             for text in texts {
@@ -200,6 +208,54 @@ struct StoryText {
     story: StoryId,
     items: Vec<(Vec<usize>, &'static str, String)>,
 }
+
+/// Read the other stories for a text view that already has its body.
+///
+/// A story part that cannot be read, such as a truncated header or a header
+/// relationship to a missing part, does not cost the body. The view prints
+/// one warning on stderr, naming the part when it can, and lists no other
+/// story. `validate` reports the same part as an error.
+fn readable_stories(file: &Path, doc: &Document) -> Option<Vec<StoryText>> {
+    let error = match other_stories(doc) {
+        Ok(stories) => return Some(stories),
+        Err(error) => error,
+    };
+    let malformed = oxml_opc::OpcPackage::open(file)
+        .ok()
+        .and_then(|package| malformed_story_part(&package));
+    eprintln!(
+        "Warning: other stories left out: {}",
+        malformed.unwrap_or_else(|| error.to_string())
+    );
+    None
+}
+
+/// Name the first story part of the main document that is not well-formed
+/// XML, with the reason.
+fn malformed_story_part(package: &oxml_opc::OpcPackage) -> Option<String> {
+    let doc_part = package.main_document_part()?;
+    let rels = package.get_part_rels(&doc_part)?;
+    rels.items
+        .iter()
+        .filter(|rel| {
+            rel.target_mode.as_deref() != Some("External")
+                && STORY_RELATIONSHIPS.contains(&rel.rel_type.as_str())
+        })
+        .find_map(|rel| {
+            let part_name = oxml_opc::OpcPackage::resolve_rel_target(&doc_part, &rel.target);
+            let detail = xml_style_references(package.get_part(&part_name)?).err()?;
+            Some(format!("part {part_name} is not well-formed XML: {detail}"))
+        })
+}
+
+/// The relationships from the main document to its other story parts.
+const STORY_RELATIONSHIPS: [&str; 5] = [
+    rel_types::HEADER,
+    rel_types::FOOTER,
+    rel_types::FOOTNOTES,
+    rel_types::ENDNOTES,
+    rel_types::COMMENTS,
+];
 
 /// Read every story but the main body and its table cells, which the body
 /// view already covers, in [`Document::stories`] order.
@@ -597,12 +653,16 @@ pub fn convert(
         }
         "html" => {
             let mut html = doc.to_html();
-            push_html_stories(&mut html, &other_stories(&doc)?);
+            if let Some(stories) = readable_stories(file, &doc) {
+                push_html_stories(&mut html, &stories);
+            }
             std::fs::write(&output_path, html)?;
         }
         "md" | "markdown" => {
             let mut md = doc.to_markdown();
-            push_markdown_stories(&mut md, &other_stories(&doc)?);
+            if let Some(stories) = readable_stories(file, &doc) {
+                push_markdown_stories(&mut md, &stories);
+            }
             std::fs::write(&output_path, md)?;
         }
         "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
@@ -1467,14 +1527,7 @@ pub fn validate(file: &Path) -> Result<bool> {
                 continue;
             }
             let target = oxml_opc::OpcPackage::resolve_rel_target(&doc_part, &rel.target);
-            let story = matches!(
-                rel.rel_type.as_str(),
-                rel_types::HEADER
-                    | rel_types::FOOTER
-                    | rel_types::FOOTNOTES
-                    | rel_types::ENDNOTES
-                    | rel_types::COMMENTS
-            );
+            let story = STORY_RELATIONSHIPS.contains(&rel.rel_type.as_str());
             if !parts.iter().any(|(known, _)| *known == target) {
                 parts.push((target, story));
             }

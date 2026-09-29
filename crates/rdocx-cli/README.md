@@ -107,9 +107,12 @@ block content control of its stories follows on one line, table cells
 included, with the accepted-view text of Python `StoryItem.text`. A part
 without any text, such as an empty header variant, is left out. A text box
 that Word writes twice, DrawingML in `mc:Choice` and a VML copy in
-`mc:Fallback`, is never read from the copy. A story part that is not
-well-formed XML stops `text` and the Markdown and HTML conversions with an
-error, and `validate` names that part.
+`mc:Fallback`, is never read from the copy. When a story part cannot be read,
+such as a truncated header or a header relationship to a missing part, `text`
+and the Markdown and HTML conversions keep the body, print one warning on
+stderr that names the part when it can, list no other story, and exit
+successfully. `text --json` then states `main` scope. `validate` reports that
+part as an error.
 
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,
