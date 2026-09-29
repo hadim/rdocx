@@ -1397,26 +1397,29 @@ def test_paragraph_text_setter_replaces_runs_and_keeps_format_and_comments():
     assert document.tables[0].rows[0].cells[0].text == "cell"
 
 
-def test_paragraph_text_setter_rejects_a_paragraph_ending_a_multi_paragraph_field():
+def test_paragraph_text_setter_rejects_every_paragraph_of_a_multi_paragraph_field():
     import rdocx
 
     document = _replace_document_body(
         rdocx.Document(),
         '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
-        '<w:r><w:instrText xml:space="preserve"> TOC </w:instrText></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> TOC \\o "1-3"</w:instrText></w:r></w:p>'
+        '<w:p><w:r><w:instrText xml:space="preserve"> \\h </w:instrText></w:r>'
         '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
         "<w:r><w:t>Entry</w:t></w:r></w:p>"
         "<w:p><w:r><w:t>Last entry</w:t></w:r>"
         '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>',
     )
-    held = document.paragraphs[1]
+    held = list(document.paragraphs)
+    texts = [paragraph.text for paragraph in held]
     before = document.to_bytes()
 
-    with pytest.raises(rdocx.RdocxError, match="field"):
-        held.text = "Rewritten"
+    for paragraph in held:
+        with pytest.raises(rdocx.RdocxError, match="field"):
+            paragraph.text = "Rewritten"
 
     assert document.to_bytes() == before
-    assert held.text == "Last entry"
+    assert [paragraph.text for paragraph in held] == texts
 
 
 _CORE_RELATIONSHIP = (

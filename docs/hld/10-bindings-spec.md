@@ -242,15 +242,21 @@ hyperlinks, fields, pictures, content controls, tracked changes and other
 inline children give way to one run without direct formatting. A tab becomes
 `w:tab`, and a line feed or a carriage return becomes `w:br`. Empty text or
 `None` leaves no run, as `add_paragraph("")` does. Unlike python-docx, comment
-ranges and bookmarks found anywhere in the paragraph are kept. Their starts move
-before the new run, their ends after it, and each comment reference follows in
-its own run, so a comment or bookmark over part of the old text covers the new
-text and no anchor loses its partner. A paragraph holding only one end of a
-field that spans paragraphs, such as a table of contents, is rejected with
-`RdocxError`, since dropping that end would unbalance the field. A successful
-assignment advances the revision once and stales every earlier handle, the
-assigned paragraph included, as `Cell.text` does. A rejected one changes
-nothing. `Document::set_story_text` keeps its own behavior.
+ranges, bookmarks and permission ranges found anywhere in the paragraph are
+kept. Their starts move before the new run, their ends after it, and each
+comment reference follows in its own run, so a range over part of the old text
+covers the new text and no anchor loses its partner. Bookmarks are rebuilt from
+their ID and name, and permission markers keep their source XML. Two kinds of
+paragraph are rejected with `RdocxError`, since dropping part of them would
+unbalance the rest of the document. The first is a paragraph whose field
+characters and field code do not balance within it, such as any paragraph of a
+table of contents that spans several paragraphs. The second is a paragraph
+holding only one end of a tracked move range or a custom XML revision range.
+When both ends of such a range are in the paragraph, both are dropped with the
+tracked change they mark. A successful assignment advances the revision once
+and stales every earlier handle, the assigned paragraph included, as
+`Cell.text` does. A rejected one changes nothing.
+`Document::set_story_text` keeps its own behavior.
 
 `Paragraph.style` accepts a style ID the package defines or, as python-docx
 does, a style name, and writes the resolved ID. The ID is tried first, so a
