@@ -235,6 +235,23 @@ native staged result. Python index errors are rejected before mutation, while
 native topology and serialization failures use the existing `RdocxError`
 mapping. Removing the only direct row is rejected.
 
+`Paragraph.text` is writable, in body and table-cell paragraphs, through the
+native `Paragraph::set_text`, which follows the python-docx setter. The
+paragraph keeps its properties and the attributes of `w:p`, while its runs,
+hyperlinks, fields, pictures, content controls, tracked changes and other
+inline children give way to one run without direct formatting. A tab becomes
+`w:tab`, and a line feed or a carriage return becomes `w:br`. Empty text or
+`None` leaves no run, as `add_paragraph("")` does. Unlike python-docx, comment
+ranges and bookmarks found anywhere in the paragraph are kept. Their starts move
+before the new run, their ends after it, and each comment reference follows in
+its own run, so a comment or bookmark over part of the old text covers the new
+text and no anchor loses its partner. A paragraph holding only one end of a
+field that spans paragraphs, such as a table of contents, is rejected with
+`RdocxError`, since dropping that end would unbalance the field. A successful
+assignment advances the revision once and stales every earlier handle, the
+assigned paragraph included, as `Cell.text` does. A rejected one changes
+nothing. `Document::set_story_text` keeps its own behavior.
+
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
 field cache update operations. `RunPosition` and

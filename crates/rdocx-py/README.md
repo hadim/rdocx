@@ -43,6 +43,8 @@ with open("report.pdf", "wb") as output:
 
 - File and byte-based DOCX input and output.
 - Paragraphs, runs, fonts, tables, rows, cells, sections, and styles.
+- Paragraph text replacement that keeps paragraph formatting, comments, and
+  bookmarks.
 - Rich headers, footers, related stories, and resolved hyperlinks.
 - Complete paragraph and run formatting, multilingual and vertical typography,
   conditional and floating tables, section semantics, settings, fields, forms,

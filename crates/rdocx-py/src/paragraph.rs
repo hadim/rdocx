@@ -193,6 +193,44 @@ impl PyParagraph {
         .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
     }
 
+    // Replace the content with one run holding `text`, keeping the paragraph
+    // properties, comments and bookmarks. `None` is empty text. A success
+    // advances the revision, so every earlier handle, this one included, is
+    // stale.
+    #[setter]
+    fn set_text(&self, py: Python<'_>, text: Option<&str>) -> PyResult<()> {
+        let location = self.validate(py)?;
+        let text = text.unwrap_or_default();
+        let mut document = self.document.borrow_mut(py);
+        let result = match location {
+            ParagraphLocation::Body(index) => document
+                .inner
+                .paragraph_mut(index)
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                .set_text(text),
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => {
+                let mut table = document
+                    .inner
+                    .table_mut(table)
+                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+                let mut cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+                cell.paragraph_mut(paragraph)
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                    .set_text(text)
+            }
+        };
+        result.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        document.revisions.bump();
+        Ok(())
+    }
+
     #[getter]
     fn runs(&self, py: Python<'_>) -> PyResult<Py<PyRunCollection>> {
         self.validate(py)?;

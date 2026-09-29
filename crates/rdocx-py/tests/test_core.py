@@ -1348,3 +1348,72 @@ def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     assert b"pixel.png" not in xml
     assert f'w:id="{comment_id}"'.encode() in xml
     assert b"cell text" in xml
+
+
+def test_paragraph_text_setter_replaces_runs_and_keeps_format_and_comments():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Alpha ")
+    document.paragraphs[0].add_run("beta").font.bold = True
+    document.paragraphs[0].style = "Heading1"
+    document.paragraphs[0].alignment = rdocx.WD_ALIGN_PARAGRAPH.CENTER
+    comment_id = document.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=1),
+            end=rdocx.RunPosition(body_index=0, run_index=2),
+        ),
+        author="Ada",
+        text="Bold?",
+    )
+    paragraph = document.paragraphs[0]
+    run = paragraph.runs[0]
+
+    paragraph.text = "Omega\tone\ntwo"
+
+    for stale in (lambda: paragraph.text, lambda: run.text):
+        with pytest.raises(rdocx.StaleElementError):
+            stale()
+    paragraph = document.paragraphs[0]
+    assert paragraph.text == "Omega\tone\ntwo"
+    assert paragraph.style == "Heading1"
+    assert paragraph.alignment == rdocx.WD_ALIGN_PARAGRAPH.CENTER
+    assert paragraph.runs[0].text == "Omega\tone\ntwo"
+    assert paragraph.runs[0].font.bold is None
+    xml = re.sub(r">\s+<", "><", _document_xml(document).decode())
+    assert "<w:t>Omega</w:t><w:tab/><w:t>one</w:t><w:br/><w:t>two</w:t>" in xml
+    start = xml.index(f'<w:commentRangeStart w:id="{comment_id}"/>')
+    end = xml.index(f'<w:commentRangeEnd w:id="{comment_id}"/>')
+    assert start < xml.index("Omega") < end
+    assert f'<w:commentReference w:id="{comment_id}"/>' in xml[end:]
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [comment.text for comment in reopened.comments] == ["Bold?"]
+
+    reopened.paragraphs[0].text = None
+    assert reopened.paragraphs[0].text == ""
+
+    document.add_table(1, 1)
+    document.tables[0].rows[0].cells[0].paragraphs[0].text = "cell"
+    assert document.tables[0].rows[0].cells[0].text == "cell"
+
+
+def test_paragraph_text_setter_rejects_a_paragraph_ending_a_multi_paragraph_field():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> TOC </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:t>Entry</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Last entry</w:t></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>',
+    )
+    held = document.paragraphs[1]
+    before = document.to_bytes()
+
+    with pytest.raises(rdocx.RdocxError, match="field"):
+        held.text = "Rewritten"
+
+    assert document.to_bytes() == before
+    assert held.text == "Last entry"

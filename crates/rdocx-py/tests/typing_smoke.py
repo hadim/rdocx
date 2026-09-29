@@ -46,6 +46,9 @@ def exercise_rdocx_types(path: Path) -> None:
     loaded: Document = Document.from_bytes(b"")
     paragraph: Paragraph = document.add_paragraph("typed")
     run: Run = paragraph.add_run(" run")
+    paragraph.text = None
+    paragraph.text = "retyped\tline"
+    assert_type(paragraph.text, str)
     paragraph.style = "Heading1"
     paragraph.numbering = (1, 2)
     assert_type(paragraph.style, str)
