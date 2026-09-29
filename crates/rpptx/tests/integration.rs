@@ -5955,16 +5955,16 @@ fn animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest() {
             timestamps: vec![0, 100, 200, 300, 400, 500],
             frame_hashes: vec![
                 4_894_345_659_775_260_357,
-                14_975_209_435_305_666_729,
-                11_017_240_483_202_348_157,
+                6_182_286_987_453_888_369,
+                13_510_962_248_632_293_461,
                 4_894_345_659_775_260_357,
-                12_281_991_332_647_577_373,
-                439_196_692_808_906_197,
+                4_350_559_588_561_512_901,
+                4_200_447_167_577_390_285,
             ],
             loop_repetitions: gif::Repeat::Finite(2),
             width: 96,
             height: 54,
-            container_hash: 1_682_901_777_930_996_407,
+            container_hash: 5_365_094_422_666_602_990,
         }
     );
 
@@ -7883,7 +7883,7 @@ const F124_ARTIFACT_SHA256: &str =
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_CURRENT_ARTIFACT_SHA256: &str =
-    "249c70db36c4fab392a585988a25f8285ead01dfe56dba2b1d6f3d32b7a0e553";
+    "e40d7c24c63b720a3223b07bcf6c7b5d0a3877b262756a98fc05442e9b581b8b";
 const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 10",
     "F-116 slide 02",
@@ -14646,6 +14646,57 @@ fn picture_without_explicit_size_uses_native_dimensions() {
     assert_eq!(transform.offset.unwrap().y, Emu(20));
     assert_eq!(transform.extent.unwrap().cx, Emu(406_400));
     assert_eq!(transform.extent.unwrap().cy, Emu(203_200));
+}
+
+#[test]
+fn added_pictures_carry_a_rectangle_geometry_after_their_transform() {
+    let png = valid_one_pixel_png();
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    presentation
+        .add_picture(
+            0,
+            &png,
+            "pixel.png",
+            Emu(10),
+            Emu(20),
+            Some(Emu(30)),
+            Some(Emu(40)),
+        )
+        .expect("add picture");
+    presentation
+        .add_media(
+            0,
+            MediaKind::Video,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: b"\0\0\0\x18ftypisom-geometry",
+                filename: "clip.mp4",
+                content_type: "video/mp4",
+            }),
+            MediaPoster {
+                bytes: &png,
+                filename: "poster.png",
+            },
+            Emu(50),
+            Emu(60),
+            Emu(70),
+            Emu(80),
+            MediaPlaybackSettings::default(),
+        )
+        .expect("add video");
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "added picture geometry");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<p:pic>").expect("added picture");
+    let end = start + xml[start..].find("</p:pic>").unwrap() + "</p:pic>".len();
+    assert_eq!(
+        &xml[start..end],
+        r#"<p:pic><p:nvPicPr><p:cNvPr id="2" name="Picture 2"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="10" y="20"/><a:ext cx="30" cy="40"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
+    );
+    assert!(xml[end..].contains(
+        r#"<p:spPr><a:xfrm><a:off x="50" y="60"/><a:ext cx="70" cy="80"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>"#
+    ));
 }
 
 #[test]
