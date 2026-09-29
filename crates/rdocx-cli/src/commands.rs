@@ -5,7 +5,12 @@ use std::path::{Path, PathBuf};
 use oxml_cli_support::{
     StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
 };
+use oxml_opc::relationship::rel_types;
+use quick_xml::XmlVersion;
 use quick_xml::escape::escape;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::NsReader;
 use rdocx::{
     BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
     RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange, StoryId, StoryItemKind,
@@ -13,6 +18,7 @@ use rdocx::{
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
+use rdocx_oxml::namespace::W_NS;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R};
 use serde_json::{Value, json};
@@ -1405,11 +1411,11 @@ fn validate_dpi(dpi: f64) -> Result<()> {
 ///
 /// Returns `Ok(false)` when a structural error was found, so the caller can
 /// exit non-zero — a validator that always succeeds cannot gate anything in CI.
+/// A related part that is not well-formed XML and a paragraph, character, or
+/// table style id that no style defines are structural errors too.
 /// Advisory findings (empty paragraphs, missing metadata) are reported but do
 /// not affect the exit status.
 pub fn validate(file: &Path) -> Result<bool> {
-    let doc = Document::open(file)?;
-
     let mut errors: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
@@ -1447,6 +1453,76 @@ pub fn validate(file: &Path) -> Result<bool> {
         }
     }
 
+    // Every XML part the main document relates to must be well formed. The
+    // style ids that its story parts name are checked once the document opens.
+    let mut style_references = Vec::new();
+    if let Some(doc_part) = package.main_document_part() {
+        let mut parts = vec![(doc_part.clone(), true)];
+        for rel in package
+            .get_part_rels(&doc_part)
+            .iter()
+            .flat_map(|rels| &rels.items)
+        {
+            if rel.target_mode.as_deref() == Some("External") {
+                continue;
+            }
+            let target = oxml_opc::OpcPackage::resolve_rel_target(&doc_part, &rel.target);
+            let story = matches!(
+                rel.rel_type.as_str(),
+                rel_types::HEADER
+                    | rel_types::FOOTER
+                    | rel_types::FOOTNOTES
+                    | rel_types::ENDNOTES
+                    | rel_types::COMMENTS
+            );
+            if !parts.iter().any(|(known, _)| *known == target) {
+                parts.push((target, story));
+            }
+        }
+        for (part_name, story) in parts {
+            let is_xml = package
+                .content_types
+                .content_type_for(&part_name)
+                .is_some_and(|content_type| {
+                    content_type.ends_with("+xml") || content_type.ends_with("/xml")
+                });
+            let Some(xml) = package.get_part(&part_name).filter(|_| is_xml) else {
+                continue;
+            };
+            match xml_style_references(xml) {
+                Err(detail) => {
+                    errors.push(format!("part {part_name} is not well-formed XML: {detail}"));
+                }
+                Ok(references) if story => style_references.extend(
+                    references
+                        .into_iter()
+                        .map(|(kind, style_id)| (kind, style_id, part_name.clone())),
+                ),
+                Ok(_) => {}
+            }
+        }
+    }
+
+    // A malformed part can keep the document from opening. The errors found
+    // so far explain why, so they are reported together with the failure.
+    let doc = match Document::open(file) {
+        Ok(doc) => doc,
+        Err(error) if !errors.is_empty() => {
+            errors.push(format!("the document does not open: {error}"));
+            return Ok(report_validation(file, &errors, &warnings));
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    // Word falls back to the default style for a style id that no style
+    // defines, so the style that the document names is silently lost.
+    for (kind, style_id, part_name) in style_references {
+        let issue = format!("{kind} style {style_id:?} used in {part_name} is not defined");
+        if doc.style(&style_id).is_none() && !errors.contains(&issue) {
+            errors.push(issue);
+        }
+    }
+
     // --- Advisory findings ---
 
     if doc.content_count() == 0 {
@@ -1481,11 +1557,14 @@ pub fn validate(file: &Path) -> Result<bool> {
         warnings.push("Missing document author".to_string());
     }
 
-    // --- Report ---
+    Ok(report_validation(file, &errors, &warnings))
+}
 
+/// Print the validation findings and return whether no error was found.
+fn report_validation(file: &Path, errors: &[String], warnings: &[String]) -> bool {
     if errors.is_empty() && warnings.is_empty() {
         println!("OK — no issues found in {}", file.display());
-        return Ok(true);
+        return true;
     }
 
     if !errors.is_empty() {
@@ -1501,7 +1580,88 @@ pub fn validate(file: &Path) -> Result<bool> {
         }
     }
 
-    Ok(errors.is_empty())
+    errors.is_empty()
+}
+
+/// Read `xml` as one well-formed element tree and return the paragraph,
+/// character, and table style ids it names. The ids inside a tracked property
+/// change are left out, because they record the formatting before the change.
+fn xml_style_references(xml: &[u8]) -> std::result::Result<Vec<(&'static str, String)>, String> {
+    let mut reader = NsReader::from_reader(xml);
+    // One entry per open element: whether it is a tracked property change.
+    let mut open = Vec::new();
+    let mut roots = 0usize;
+    let mut references = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
+            Ok(read) => read,
+            Err(error) => return Err(format!("{error} at byte {}", reader.error_position())),
+        };
+        let is_word =
+            matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes());
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                if open.is_empty() {
+                    roots += 1;
+                    if roots > 1 {
+                        return Err("the part has more than one root element".to_owned());
+                    }
+                }
+                let local_name = element.local_name();
+                let kind = match local_name.as_ref() {
+                    b"pStyle" => Some("paragraph"),
+                    b"rStyle" => Some("character"),
+                    b"tblStyle" => Some("table"),
+                    _ => None,
+                };
+                if let Some(kind) = kind.filter(|_| is_word && !open.contains(&true))
+                    && let Some(style_id) = word_value(&reader, element)?
+                {
+                    references.push((kind, style_id));
+                }
+                if matches!(event, Event::Start(_)) {
+                    open.push(is_word && local_name.as_ref().ends_with(b"PrChange"));
+                }
+            }
+            Event::End(_) => {
+                open.pop();
+            }
+            Event::Text(text) if open.is_empty() && !text.iter().all(u8::is_ascii_whitespace) => {
+                return Err("the part has text outside its root element".to_owned());
+            }
+            Event::Eof if roots == 0 => return Err("the part has no root element".to_owned()),
+            Event::Eof if !open.is_empty() => {
+                return Err(format!(
+                    "the part ends inside {} unclosed element(s)",
+                    open.len()
+                ));
+            }
+            Event::Eof => return Ok(references),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+/// Return the `w:val` attribute of a WordprocessingML element.
+fn word_value(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+) -> std::result::Result<Option<String>, String> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| error.to_string())?;
+        let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
+        if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes())
+            && local_name.as_ref() == b"val"
+        {
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                .map_err(|error| error.to_string())?;
+            return Ok(Some(value.into_owned()));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]

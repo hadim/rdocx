@@ -12,7 +12,7 @@ and produces fixed or flow output without an Office host.
 - Deterministic point-space body layout fragments for shell automation.
 - PDF, HTML, Markdown, PNG, JPEG, and multi-page TIFF conversion.
 - Page-range rendering, guarded literal replacement, diffing, and validation
-  verdicts.
+  verdicts that check every related part and every style id.
 - Comment thread inspection and mutation with explicit body run ranges and
   optional RFC 3339 dates.
 - Tracked revision inspection, filtered resolution, table-of-contents rebuilds,
@@ -109,7 +109,7 @@ without any text, such as an empty header variant, is left out. A text box
 that Word writes twice, DrawingML in `mc:Choice` and a VML copy in
 `mc:Fallback`, is never read from the copy. A story part that is not
 well-formed XML stops `text` and the Markdown and HTML conversions with an
-error.
+error, and `validate` names that part.
 
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,
@@ -125,6 +125,15 @@ block content control with its story `index_path`, its `kind`, and its `text`.
 `convert --to md` and `convert --to html` append the same stories after the
 body, one section per part under a bold label. They leave comments out,
 because comments annotate a document rather than belong to it.
+
+`validate` exits unsuccessfully when a relationship of the main document points
+at a missing part, when a part has no declared content type, when an XML part
+that the main document relates to is not well formed, or when the main
+document, a header, a footer, the notes, or the comments name a paragraph,
+character, or table style id that no style defines. Word silently falls back
+to the default style for such an id. A style id inside a tracked property
+change is not checked, because it records the formatting before the change.
+Empty paragraphs, heading level gaps, and missing metadata are warnings.
 
 `layout --json` uses bundled deterministic fonts. It lists every direct body
 item, including preserved items that have no fragments. Each laid-out fragment
