@@ -2542,7 +2542,10 @@ a `stories` array with the Python `Story.kind` name, part name, owner index,
 and items of each story. Each item carries its story `index_path`, its kind,
 and its accepted-view text.
 `convert` to Markdown or HTML appends the same parts after the body under a
-bold label, and leaves comments out as review annotations. `validate` checks
+bold label, and leaves comments out as review annotations. A story part that
+cannot be read leaves the body of these views intact. They print one stderr
+warning that names the part when it can, list no other story, keep a zero exit
+status, and `text --json` states `main` scope. `validate` checks
 that every XML part the main document relates to is well formed, and that the
 paragraph, character, and table style ids named in the main document, headers,
 footers, notes, and comments are defined. Both are errors. A style id inside a

@@ -739,6 +739,69 @@ fn text_views_never_read_the_fallback_copy_of_a_word_text_box() {
 }
 
 #[test]
+fn text_views_keep_the_body_when_a_story_part_cannot_be_read() {
+    let temp = TempWorkspace::new("text-unreadable-story");
+    let valid = temp.path.join("valid.docx");
+    let mut document = fixture_document(&["Body text"]);
+    document.set_header("Head");
+    document.save(&valid).unwrap();
+    let header = header_part_name(&valid);
+
+    // Half of the header part, and a header relationship to a missing part.
+    let truncated = temp.path.join("truncated.docx");
+    let mut package = OpcPackage::open(&valid).unwrap();
+    let xml = package.get_part(&header).unwrap().to_vec();
+    package.set_part(&header, xml[..xml.len() / 2].to_vec());
+    package.save(&truncated).unwrap();
+    let missing = temp.path.join("missing.docx");
+    let mut package = OpcPackage::open(&valid).unwrap();
+    package.remove_part(&header).unwrap();
+    package.save(&missing).unwrap();
+
+    for (input, reason) in [
+        (
+            &truncated,
+            format!("part {header} is not well-formed XML: "),
+        ),
+        (&missing, format!("missing part {header}")),
+    ] {
+        let warned = |output: &Output| {
+            assert_eq!(output.status.code(), Some(0), "{reason}");
+            let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+            assert_eq!(stderr.lines().count(), 1, "{stderr}");
+            assert!(
+                stderr.starts_with("Warning: other stories left out: ") && stderr.contains(&reason),
+                "{stderr}"
+            );
+            String::from_utf8(output.stdout.clone()).unwrap()
+        };
+
+        assert_eq!(warned(&cli(&["text", path_text(input)])), "Body text\n");
+
+        let value: Value =
+            serde_json::from_str(&warned(&cli(&["text", path_text(input), "--json"]))).unwrap();
+        assert_eq!(value["scope"], "main");
+        assert_eq!(value["stories"], json!([]));
+        assert_eq!(value["paragraphs"][0]["text"], "Body text");
+
+        for format in ["md", "html"] {
+            let output_path = input.with_extension(format);
+            warned(&cli(&[
+                "convert",
+                path_text(input),
+                "--to",
+                format,
+                "-o",
+                path_text(&output_path),
+            ]));
+            let converted = fs::read_to_string(&output_path).unwrap();
+            assert!(converted.contains("Body text"), "{converted}");
+            assert!(!converted.contains("Head"), "{converted}");
+        }
+    }
+}
+
+#[test]
 fn convert_writes_valid_formats_and_uses_the_shared_default_output() {
     let temp = TempWorkspace::new("convert");
     let input = temp.path.join("source.docx");
