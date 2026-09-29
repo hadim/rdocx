@@ -8,7 +8,7 @@ use smallvec::smallvec;
 use crate::layout::PyTextFrameLayout;
 use crate::shape::length;
 use crate::slide::{PySlideCollection, PySlideLayoutCollection};
-use crate::{rpptx_to_pyerr, rpptx_value_to_pyerr};
+use crate::{replacement_count_to_pyerr, rpptx_to_pyerr, rpptx_value_to_pyerr};
 
 /// The bundled 16:9 slide size, paired with the first dimension set on a deck
 /// that has no `p:sldSz`.
@@ -115,6 +115,39 @@ impl PyComment {
     }
 }
 
+/// One issue `Presentation::validate` reports, with the snake_case variant
+/// name and the line `rpptx validate` prints for it.
+#[pyclass(name = "ValidationIssue", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyValidationIssue {
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl From<&rpptx::ValidationIssue> for PyValidationIssue {
+    fn from(issue: &rpptx::ValidationIssue) -> Self {
+        use rpptx::ValidationIssue as Issue;
+        let kind = match issue {
+            Issue::DuplicateShapeId { .. } => "duplicate_shape_id",
+            Issue::SlideIdOutOfRange { .. } => "slide_id_out_of_range",
+            Issue::DuplicateSlideId { .. } => "duplicate_slide_id",
+            Issue::MissingContentTypeOverride { .. } => "missing_content_type_override",
+            Issue::DanglingRelationship { .. } => "dangling_relationship",
+            Issue::UnreachableRelationshipTarget { .. } => "unreachable_relationship_target",
+            Issue::EmptyTextBody { .. } => "empty_text_body",
+            Issue::DuplicatePlaceholderIdx { .. } => "duplicate_placeholder_idx",
+            Issue::OrphanMedia { .. } => "orphan_media",
+            Issue::CustomShowReference { .. } => "custom_show_reference",
+            Issue::MissingLayoutRel { .. } => "missing_layout_rel",
+            Issue::MissingThemeRel { .. } => "missing_theme_rel",
+        };
+        Self {
+            kind,
+            message: format!("{issue:?}"),
+        }
+    }
+}
+
 #[pyclass(name = "Presentation")]
 pub struct PyPresentation {
     pub(crate) inner: rpptx::Presentation,
@@ -161,6 +194,13 @@ impl PyPresentation {
                 .map(Self::from_presentation)
                 .map_err(|error| rpptx_to_pyerr(py, error)),
         }
+    }
+
+    #[staticmethod]
+    fn from_bytes(bytes: &[u8], py: Python<'_>) -> PyResult<Self> {
+        rpptx::Presentation::from_bytes(bytes)
+            .map(Self::from_presentation)
+            .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
     fn save(&self, path: PathBuf, py: Python<'_>) -> PyResult<()> {
@@ -227,6 +267,52 @@ impl PyPresentation {
             .detach(|| self.inner.notes_page_pngs_deterministic(dpi))
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         PyList::new(py, notes.iter().map(|page| PyBytes::new(py, page)))
+    }
+
+    /// Replaces literal text in slides and speaker notes and returns the count.
+    ///
+    /// With `expect`, the replacement runs on a clone, so a count that
+    /// differs raises and leaves the presentation and its revision as they
+    /// were. Without it, the staged facade call runs in place. The revision
+    /// advances once only when something was replaced.
+    #[pyo3(signature = (placeholder, replacement, *, expect = None))]
+    fn try_replace_text(
+        &mut self,
+        py: Python<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let count = match expect {
+            None => py
+                .detach(|| self.inner.try_replace_text(placeholder, replacement))
+                .map_err(|error| rpptx_to_pyerr(py, error))?,
+            Some(expected) => {
+                let (candidate, count) = py
+                    .detach(|| {
+                        let mut candidate = self.inner.clone();
+                        candidate
+                            .try_replace_text(placeholder, replacement)
+                            .map(|count| (candidate, count))
+                    })
+                    .map_err(|error| rpptx_to_pyerr(py, error))?;
+                if count != expected {
+                    return Err(replacement_count_to_pyerr(py, placeholder, expected, count));
+                }
+                self.inner = candidate;
+                count
+            }
+        };
+        if count > 0 {
+            self.revisions.bump();
+        }
+        Ok(count)
+    }
+
+    /// Returns every package and PresentationML invariant violation.
+    fn validate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let issues = py.detach(|| self.inner.validate());
+        PyTuple::new(py, issues.iter().map(PyValidationIssue::from))
     }
 
     #[getter]

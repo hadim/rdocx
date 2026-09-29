@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyType;
 
 use oxml_py_support::{ContentPath, PathSeg, StaleElementError};
-use presentation::{PyComment, PyCommentAuthor, PyCommentReply, PyPresentation};
+use presentation::{PyComment, PyCommentAuthor, PyCommentReply, PyPresentation, PyValidationIssue};
 
 pub(crate) fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<usize> {
     let normalized = if index < 0 {
@@ -27,13 +27,30 @@ pub(crate) fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<
     Ok(normalized as usize)
 }
 
-fn public_error(py: Python<'_>, class_name: &str, message: String) -> PyErr {
-    let exception_type = py
-        .import("rpptx")
+fn public_exception_type<'py>(py: Python<'py>, class_name: &str) -> PyResult<Bound<'py, PyType>> {
+    py.import("rpptx")
         .and_then(|module| module.getattr(class_name))
-        .and_then(|class| class.cast_into::<PyType>().map_err(Into::into));
-    match exception_type {
+        .and_then(|class| class.cast_into::<PyType>().map_err(Into::into))
+}
+
+fn public_error(py: Python<'_>, class_name: &str, message: String) -> PyErr {
+    match public_exception_type(py, class_name) {
         Ok(class) => PyErr::from_type(class, (message,)),
+        Err(_) => PyRuntimeError::new_err(message),
+    }
+}
+
+/// A counted replacement that matched a different number of times than the
+/// caller expected, worded like `rpptx replace --expect`.
+pub(crate) fn replacement_count_to_pyerr(
+    py: Python<'_>,
+    placeholder: &str,
+    expected: usize,
+    found: usize,
+) -> PyErr {
+    let message = format!("expected {expected} replacement(s) of \"{placeholder}\", found {found}");
+    match public_exception_type(py, "ReplacementCountError") {
+        Ok(class) => PyErr::from_type(class, (message, expected, found)),
         Err(_) => PyRuntimeError::new_err(message),
     }
 }
@@ -109,6 +126,7 @@ fn _rpptx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCommentAuthor>()?;
     module.add_class::<PyComment>()?;
     module.add_class::<PyCommentReply>()?;
+    module.add_class::<PyValidationIssue>()?;
     slide::register(module)?;
     shape::register(module)?;
     dml::register(module)?;

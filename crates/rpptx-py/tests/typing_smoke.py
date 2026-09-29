@@ -16,9 +16,11 @@ from rpptx import (
     PP_ALIGN,
     Presentation,
     Pt,
+    ReplacementCountError,
     RGBColor,
     TextFrameLayout,
     TextLineLayout,
+    ValidationIssue,
 )
 from rpptx._rpptx import (
     AdjustmentCollection,
@@ -152,6 +154,15 @@ def exercise_rpptx_types(path: Path) -> None:
         for current_shape in current_slide.shapes:
             current_shape.has_text_frame
     package_bytes: bytes = presentation.to_bytes()
+    reopened: Presentation = Presentation.from_bytes(package_bytes)
+    replaced: int = presentation.try_replace_text("typed", "checked")
+    replacement_counts: tuple[int, int] = (0, 0)
+    try:
+        replaced = presentation.try_replace_text("checked", "typed", expect=2)
+    except ReplacementCountError as error:
+        replacement_counts = (error.expected, error.found)
+    issues: tuple[ValidationIssue, ...] = presentation.validate()
+    issue_lines: list[tuple[str, str]] = [(issue.kind, issue.message) for issue in issues]
     pdf_bytes: bytes = presentation.to_pdf()
     slide_png: bytes | None = presentation.render_slide_to_png(0)
     slide_pngs: list[bytes] = presentation.render_all_slides()
@@ -175,6 +186,8 @@ def exercise_rpptx_types(path: Path) -> None:
     )
     comments: tuple[Comment, ...] = presentation.slides[0].comments
     reply: CommentReply = comments[0].replies[0]
+    presentation.slides[0].resolve_comment(comments[0].id)
+    presentation.slides[0].remove_comment(reply.id)
     slide_width: Length | None = presentation.slide_width
     presentation.slide_height = Inches(6)
     current_slide = presentation.slides[0]
@@ -227,6 +240,7 @@ def exercise_rpptx_types(path: Path) -> None:
     picture.replace_image(b"")
     picture.replace_image(path)
     presentation.slides[0].shapes.remove(group)
+    duplicated: Slide = presentation.slides.duplicate(presentation.slides[0])
     presentation.slides.move(0, -1)
     presentation.slides.remove(presentation.slides[0])
     presentation.save(path)
@@ -286,6 +300,11 @@ def exercise_rpptx_types(path: Path) -> None:
         blob,
         image.content_type,
         image.ext,
+        duplicated,
+        reopened,
+        replaced,
+        replacement_counts,
+        issue_lines,
     )
 
 
@@ -359,3 +378,4 @@ if TYPE_CHECKING:
     TextFrame()  # type: ignore[call-arg]
     TextFrameLayout()  # type: ignore[call-arg]
     TextLineLayout()  # type: ignore[call-arg]
+    ValidationIssue()  # type: ignore[call-arg]
