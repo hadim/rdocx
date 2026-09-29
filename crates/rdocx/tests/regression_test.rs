@@ -31371,6 +31371,440 @@ fn comparison_treats_empty_paragraph_properties_as_absent() {
     assert!(document_xml(&mut empty).contains("<w:pPrChange"));
 }
 
+/// Producer serialization that `compare()` must read as equivalent content.
+///
+/// None of it is content, so none of it may refuse a pair or become a
+/// revision.
+mod compare_producer_noise {
+    use super::*;
+    use rdocx::{ComparisonGranularity, ComparisonOptions, RevisionKind};
+
+    const TIMESTAMP: &str = "2026-09-27T12:00:00Z";
+
+    fn revision_kinds(document: &Document) -> Vec<RevisionKind> {
+        document
+            .revisions()
+            .iter()
+            .map(|revision| revision.kind())
+            .collect()
+    }
+
+    /// Check that accepting gives the edited side and rejecting the original,
+    /// each compared again with no diagnostic and no revision.
+    fn assert_resolutions(
+        tracked: &[u8],
+        original: &Document,
+        edited: &Document,
+        options: &ComparisonOptions,
+    ) {
+        for (resolve, expected) in [
+            (
+                Document::accept_all as fn(&mut Document) -> rdocx::Result<usize>,
+                edited,
+            ),
+            (Document::reject_all, original),
+        ] {
+            let mut resolved = Document::from_bytes(tracked).unwrap();
+            resolve(&mut resolved).unwrap();
+            let diagnostics = resolved
+                .compare_with_options(expected, "postcondition", TIMESTAMP, options)
+                .unwrap();
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert_eq!(revision_kinds(&resolved), []);
+        }
+    }
+
+    /// Compare two bodies and return the revision kinds and the redline.
+    fn compared_kinds(original_xml: &str, edited_xml: &str) -> (Vec<RevisionKind>, String) {
+        compared_kinds_with(original_xml, edited_xml, &ComparisonOptions::default())
+    }
+
+    fn compared_kinds_with(
+        original_xml: &str,
+        edited_xml: &str,
+        options: &ComparisonOptions,
+    ) -> (Vec<RevisionKind>, String) {
+        let original = document_with_content_controls(original_xml);
+        let edited = document_with_content_controls(edited_xml);
+        let mut compared = document_with_content_controls(original_xml);
+        let diagnostics = compared
+            .compare_with_options(&edited, "R", TIMESTAMP, options)
+            .expect("producer noise must not refuse the pair");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_resolutions(&compared.to_bytes().unwrap(), &original, &edited, options);
+        (revision_kinds(&compared), document_xml(&mut compared))
+    }
+
+    fn table_of_contents_control(id: Option<&str>, first_entry: &str) -> String {
+        let id = id.map_or_else(String::new, |value| format!(r#"<w:id w:val="{value}"/>"#));
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t>Before the content control.</w:t></w:r></w:p><w:sdt><w:sdtPr>{id}<w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{first_entry} entry</w:t></w:r></w:p><w:p><w:r><w:t>Beta entry</w:t></w:r></w:p><w:p><w:r><w:t>Gamma entry</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>After the content control.</w:t></w:r></w:p>"#
+        ))
+    }
+
+    fn google_docs_inline_control(id: &str, word: &str) -> String {
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_0"/><w:id w:val="{id}"/></w:sdtPr><w:sdtContent><w:r><w:t>{word}</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t xml:space="preserve"> after.</w:t></w:r></w:p>"#
+        ))
+    }
+
+    #[test]
+    fn a_content_control_identity_is_not_content() {
+        for (original, edited, kept_id) in [
+            (None, Some("-2000000001"), None),
+            (Some("-2000000001"), None, Some("-2000000001")),
+            (Some("11"), Some("12"), Some("11")),
+        ] {
+            let (kinds, tracked) = compared_kinds(
+                &table_of_contents_control(original, "Alpha"),
+                &table_of_contents_control(edited, "Alpha"),
+            );
+            assert_eq!(kinds, [], "{original:?} -> {edited:?}");
+            let ids = [original, edited]
+                .into_iter()
+                .flatten()
+                .filter(|id| tracked.contains(&format!(r#"<w:id w:val="{id}"/>"#)))
+                .collect::<Vec<_>>();
+            assert_eq!(ids, kept_id.into_iter().collect::<Vec<_>>(), "{tracked}");
+
+            let (kinds, tracked) = compared_kinds(
+                &table_of_contents_control(original, "Alpha"),
+                &table_of_contents_control(edited, "Delta"),
+            );
+            assert_eq!(
+                kinds,
+                [RevisionKind::Deletion, RevisionKind::Insertion],
+                "{original:?} -> {edited:?}"
+            );
+            assert_eq!(tracked.matches("<w:sdtPr>").count(), 1, "{tracked}");
+        }
+
+        let (kinds, _) = compared_kinds(
+            &google_docs_inline_control("-1854911024", "Alpha"),
+            &google_docs_inline_control("1374263513", "Alpha"),
+        );
+        assert_eq!(kinds, []);
+        let (kinds, tracked) = compared_kinds(
+            &google_docs_inline_control("-1854911024", "Alpha"),
+            &google_docs_inline_control("1374263513", "Delta"),
+        );
+        assert_eq!(kinds, [RevisionKind::Deletion, RevisionKind::Insertion]);
+        assert!(
+            tracked.contains(r#"<w:id w:val="-1854911024"/>"#),
+            "{tracked}"
+        );
+
+        let bare_control = |properties: &str| {
+            wrap_word_body(&format!(
+                r#"<w:sdt>{properties}<w:sdtContent><w:p><w:r><w:t>Alpha entry</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>After the content control.</w:t></w:r></w:p>"#
+            ))
+        };
+        let id_only = r#"<w:sdtPr><w:id w:val="5"/></w:sdtPr>"#;
+        for (original, edited) in [("", id_only), (id_only, "")] {
+            let (kinds, tracked) = compared_kinds(&bare_control(original), &bare_control(edited));
+            assert_eq!(kinds, [], "{original:?} -> {edited:?}");
+            assert_eq!(
+                tracked.contains("<w:sdtPr>"),
+                !original.is_empty(),
+                "{tracked}"
+            );
+        }
+    }
+
+    fn replaced_copy(source_xml: &str, old: &str, new: &str) -> String {
+        let mut document = document_with_content_controls(source_xml);
+        assert_eq!(document.try_replace_text(old, new).unwrap(), 1);
+        let mut edited = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        document_xml(&mut edited)
+    }
+
+    #[test]
+    fn a_rewritten_run_keeps_its_producer_space_flag() {
+        let preserved = wrap_word_body(
+            r#"<w:p><w:r><w:t xml:space="preserve">Paragraph 1.</w:t></w:r></w:p><w:p><w:r><w:t xml:space="preserve">WORD</w:t></w:r></w:p>"#,
+        );
+        let edited = replaced_copy(&preserved, "WORD", "WORD");
+        assert!(
+            edited.contains(r#"<w:t xml:space="preserve">WORD</w:t>"#),
+            "{edited}"
+        );
+        let (kinds, _) = compared_kinds(&preserved, &edited);
+        assert_eq!(kinds, []);
+
+        let edge_space_removed = replaced_copy(
+            &wrap_word_body(r#"<w:p><w:r><w:t xml:space="preserve">WORD </w:t></w:r></w:p>"#),
+            "WORD ",
+            "WORD",
+        );
+        assert!(
+            edge_space_removed.contains(r#"<w:t xml:space="preserve">WORD</w:t>"#),
+            "{edge_space_removed}"
+        );
+    }
+
+    #[test]
+    fn the_space_flag_is_content_only_at_a_text_edge() {
+        let paragraphs = |first: &str, second: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:r>{first}</w:r></w:p><w:p><w:r>{second}</w:r></w:p>"#
+            ))
+        };
+        let paragraph = |text: &str| paragraphs("<w:t>Paragraph 1.</w:t>", text);
+        // Bookmark ends are indexed by run, so an unchanged run must stay whole.
+        let bookmarked = |text: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:bookmarkStart w:id="0" w:name="b"/><w:r>{text}</w:r><w:bookmarkEnd w:id="0"/><w:r><w:t>tail</w:t></w:r></w:p>"#
+            ))
+        };
+        let changed = &[RevisionKind::Deletion, RevisionKind::Insertion][..];
+        let unchanged = &[][..];
+        // Each case gives the kinds of the whole-run path and of the
+        // attributed path. The attributed path writes every unit with edge
+        // whitespace with the flag, so the flag is never content there.
+        let cases = [
+            (
+                paragraph(r#"<w:t xml:space="preserve">WORD</w:t>"#),
+                paragraph("<w:t>WORD</w:t>"),
+                unchanged,
+                unchanged,
+            ),
+            (
+                paragraph(r#"<w:t xml:space="preserve">two words</w:t>"#),
+                paragraph("<w:t>two words</w:t>"),
+                unchanged,
+                unchanged,
+            ),
+            (
+                paragraph("<w:t>two  words</w:t>"),
+                paragraph(r#"<w:t xml:space="preserve">two  words</w:t>"#),
+                unchanged,
+                unchanged,
+            ),
+            (
+                paragraph(r#"<w:t xml:space="preserve">WORD </w:t>"#),
+                paragraph("<w:t>WORD </w:t>"),
+                changed,
+                unchanged,
+            ),
+            (
+                bookmarked(r#"<w:t xml:space="preserve">two words </w:t>"#),
+                bookmarked("<w:t>two words </w:t>"),
+                changed,
+                unchanged,
+            ),
+            (
+                paragraph("<w:t>WORD</w:t>"),
+                paragraph("<w:t>text</w:t>"),
+                changed,
+                changed,
+            ),
+            // Google Docs flags every `w:t` and Word only where needed.
+            (
+                paragraphs(
+                    r#"<w:t xml:space="preserve">two words</w:t>"#,
+                    r#"<w:t xml:space="preserve">WORD</w:t>"#,
+                ),
+                paragraphs("<w:t>two words</w:t>", "<w:t>text</w:t>"),
+                changed,
+                changed,
+            ),
+        ];
+        for options in [
+            ComparisonOptions::default(),
+            ComparisonOptions {
+                ignore_formatting: true,
+                ..Default::default()
+            },
+            ComparisonOptions {
+                granularity: ComparisonGranularity::Word,
+                ..Default::default()
+            },
+            ComparisonOptions {
+                granularity: ComparisonGranularity::Character,
+                ..Default::default()
+            },
+        ] {
+            for (original, edited, whole_run, attributed) in &cases {
+                let expected = if options == ComparisonOptions::default() {
+                    whole_run
+                } else {
+                    attributed
+                };
+                for (left, right) in [(original, edited), (edited, original)] {
+                    let (kinds, _) = compared_kinds_with(left, right, &options);
+                    assert_eq!(kinds, *expected, "{options:?}: {left} -> {right}");
+                }
+            }
+        }
+
+        // A space split out of a text keeps reading as a space in the redline.
+        for granularity in [
+            ComparisonGranularity::Word,
+            ComparisonGranularity::Character,
+        ] {
+            let (kinds, tracked) = compared_kinds_with(
+                &paragraph("<w:t>two words</w:t>"),
+                &paragraph("<w:t>two wordy</w:t>"),
+                &ComparisonOptions {
+                    granularity,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(kinds, changed, "{granularity:?}");
+            assert!(!tracked.contains("<w:t> </w:t>"), "{tracked}");
+            assert!(
+                tracked.contains(r#"<w:t xml:space="preserve"> </w:t>"#),
+                "{tracked}"
+            );
+        }
+    }
+
+    fn page_body(orientation: &str) -> String {
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t>Paragraph 1, lorem ipsum dolor sit amet.</w:t></w:r></w:p><w:p><w:r><w:t>WORD</w:t></w:r></w:p><w:p><w:r><w:t>Paragraph 3, lorem ipsum dolor sit amet.</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"{orientation}/></w:sectPr>"#
+        ))
+    }
+
+    #[test]
+    fn the_default_page_orientation_is_not_a_section_change() {
+        let portrait = page_body(r#" w:orient="portrait""#);
+        let edited = replaced_copy(&portrait, "3, lorem", "3, LOREM");
+        assert!(!edited.contains("w:orient"), "{edited}");
+        let (kinds, _) = compared_kinds(&portrait, &edited);
+        assert_eq!(kinds, [RevisionKind::Deletion, RevisionKind::Insertion]);
+
+        let (kinds, _) = compared_kinds(&portrait, &page_body(""));
+        assert_eq!(kinds, []);
+        let (kinds, _) = compared_kinds(&page_body(""), &portrait);
+        assert_eq!(kinds, []);
+
+        let (kinds, tracked) = compared_kinds(&portrait, &page_body(r#" w:orient="landscape""#));
+        assert_eq!(kinds, [RevisionKind::SectionPropertyChange]);
+        assert!(tracked.contains(r#"w:orient="landscape""#), "{tracked}");
+
+        // A bookmark makes the section-break paragraph take the complex path,
+        // as Google Docs writes around headings.
+        let bookmarked_break = |orientation: &str, heading: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"{orientation}/></w:sectPr></w:pPr><w:bookmarkStart w:id="0" w:name="h.1"/><w:r><w:t>{heading}</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p><w:p><w:r><w:t>Second section.</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>"#
+            ))
+        };
+        let portrait = r#" w:orient="portrait""#;
+        for (original, edited) in [(portrait, ""), ("", portrait)] {
+            let (kinds, _) = compared_kinds(
+                &bookmarked_break(original, "Heading"),
+                &bookmarked_break(edited, "Heading"),
+            );
+            assert_eq!(kinds, [], "{original:?} -> {edited:?}");
+            let (kinds, _) = compared_kinds(
+                &bookmarked_break(original, "Heading"),
+                &bookmarked_break(edited, "Title"),
+            );
+            assert_eq!(
+                kinds,
+                [RevisionKind::Deletion, RevisionKind::Insertion],
+                "{original:?} -> {edited:?}"
+            );
+        }
+    }
+
+    fn document_with_footer(footer_paragraph: &str) -> Document {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part(
+            "/word/footer1.xml",
+            format!(r#"<w:ftr xmlns:w="{W_NS}">{footer_paragraph}</w:ftr>"#).into_bytes(),
+        );
+        package.content_types.add_override(
+            "/word/footer1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        );
+        let footer_id = package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(oxml_opc::relationship::rel_types::FOOTER, "footer1.xml");
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>Lorem ipsum dolor sit amet.</w:t></w:r></w:p><w:sectPr><w:footerReference w:type="default" r:id="{footer_id}"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn page_field(packed: bool, cached: bool) -> String {
+        let parts = [
+            r#"<w:fldChar w:fldCharType="begin"/>"#,
+            r#"<w:instrText xml:space="preserve"> PAGE </w:instrText>"#,
+            r#"<w:fldChar w:fldCharType="separate"/>"#,
+            if cached { "<w:t>1</w:t>" } else { "" },
+            r#"<w:fldChar w:fldCharType="end"/>"#,
+        ];
+        let field = if packed {
+            format!("<w:r>{}</w:r>", parts.concat())
+        } else {
+            parts
+                .iter()
+                .filter(|part| !part.is_empty())
+                .map(|part| format!("<w:r>{part}</w:r>"))
+                .collect()
+        };
+        format!(r#"<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r>{field}</w:p>"#)
+    }
+
+    /// Compare a footer field against its copy refreshed by `update_page_fields`.
+    fn refreshed_field_comparison(packed: bool, cached: bool) -> String {
+        let source = document_with_footer(&page_field(packed, cached))
+            .to_bytes()
+            .unwrap();
+        let mut refreshed = Document::from_bytes(&source).unwrap();
+        refreshed.update_page_fields().unwrap();
+        let refreshed = Document::from_bytes(&refreshed.to_bytes().unwrap()).unwrap();
+        let mut compared = Document::from_bytes(&source).unwrap();
+        let diagnostics = compared
+            .compare(&refreshed, "R", TIMESTAMP)
+            .unwrap_or_else(|error| panic!("packed={packed} cached={cached}: {error}"));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_resolutions(
+            &compared.to_bytes().unwrap(),
+            &Document::from_bytes(&source).unwrap(),
+            &refreshed,
+            &ComparisonOptions::default(),
+        );
+        comparison_part_xml(&mut compared, "/word/footer1.xml")
+    }
+
+    #[test]
+    fn a_packed_field_compares_like_the_same_field_split_into_runs() {
+        let separate = r#"<w:fldChar w:fldCharType="separate"/></w:r>"#;
+        let result_and_end = |footer: &str| footer[footer.find(separate).unwrap()..].to_owned();
+        for (cached, deleted) in [(true, "<w:r><w:delText>1</w:delText></w:r>"), (false, "")] {
+            let split = refreshed_field_comparison(false, cached);
+            let packed = refreshed_field_comparison(true, cached);
+            assert_eq!(
+                result_and_end(&split),
+                format!(
+                    r#"{separate}<w:del w:id="0" w:author="R" w:date="{TIMESTAMP}">{deleted}</w:del><w:ins w:id="1" w:author="R" w:date="{TIMESTAMP}"><w:r><w:t>1</w:t></w:r></w:ins><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>"#
+                ),
+                "cached={cached}"
+            );
+            assert_eq!(
+                result_and_end(&packed),
+                result_and_end(&split),
+                "cached={cached}"
+            );
+            assert!(
+                packed.contains(r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>"#),
+                "{packed}"
+            );
+        }
+    }
+}
+
 #[test]
 fn unmodelled_property_changes_report_a_diagnostic() {
     for (original, edited, expected_location) in [

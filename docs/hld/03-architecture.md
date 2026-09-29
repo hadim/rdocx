@@ -910,9 +910,12 @@ section properties emit property revisions that retain the original property
 sidecars. Unsupported formatting differences retain the original bytes and
 produce stable `ComparisonDiagnostic` values at the actual story path. Inputs
 with existing modeled revisions or differing story and control shells are
-rejected unless their story category is ignored. Attributed text alignment
-retains owner, formatting, content position, and raw-child boundaries, then
-coalesces adjacent equal-owner edits into minimal revision wrappers.
+rejected unless their story category is ignored. A content control's `w:id`
+is producer identity and not part of its shell, so controls that differ only
+by it align, compare, and keep the original `w:sdtPr`. Attributed text
+alignment retains owner, formatting, content position, and raw-child
+boundaries, then coalesces adjacent equal-owner edits into minimal revision
+wrappers.
 When a main story gains a trailing run of paragraphs, comparison marks the
 original final paragraph boundary once, marks each intermediate inserted
 paragraph boundary once, and leaves the final inserted paragraph mark as the

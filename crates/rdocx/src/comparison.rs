@@ -11,6 +11,7 @@ use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
 use rdocx_oxml::namespace::W_NS;
 use rdocx_oxml::properties::CT_PPr;
+use rdocx_oxml::shared::ST_PageOrientation;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblPr, CT_Tc, CT_TrPr, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, CT_Text, RunContent};
 use sha2::{Digest, Sha256};
@@ -29,7 +30,6 @@ thread_local! {
 type ControlPropertySignature<'a> = Option<(
     Option<&'a str>,
     Option<&'a str>,
-    Option<i32>,
     Option<rdocx_oxml::content_control::SdtType>,
     Option<&'a rdocx_oxml::content_control::CT_DataBinding>,
 )>;
@@ -2985,8 +2985,16 @@ fn compare_granular_paragraph(
         )));
     }
 
-    let original_run_signatures = original.runs.iter().map(run_signature).collect::<Vec<_>>();
-    let edited_run_signatures = edited.runs.iter().map(run_signature).collect::<Vec<_>>();
+    let original_run_signatures = original
+        .runs
+        .iter()
+        .map(attributed_run_signature)
+        .collect::<Vec<_>>();
+    let edited_run_signatures = edited
+        .runs
+        .iter()
+        .map(attributed_run_signature)
+        .collect::<Vec<_>>();
     if original_run_signatures == edited_run_signatures
         && original.content_controls == edited.content_controls
     {
@@ -3558,10 +3566,28 @@ fn granular_text(text: &CT_Text, options: &ComparisonOptions) -> Vec<CT_Text> {
     fragments
         .into_iter()
         .map(|value| CT_Text {
+            // A unit is written back as its own `w:t`, where edge whitespace
+            // needs the flag to survive. Whitespace in a unit then reads as
+            // whitespace whatever the source flag was.
+            preserve_space: text.preserve_space || has_edge_whitespace(&value),
             text: value,
-            preserve_space: text.preserve_space,
         })
         .collect()
+}
+
+/// The whole-run signature that agrees with the attributed units.
+///
+/// It reads the space flag the way `granular_text` writes it on every unit,
+/// so a run that differs only by the flag stays whole instead of being
+/// rewritten one unit per run, which would move run-indexed bookmark ends.
+fn attributed_run_signature(run: &CT_R) -> String {
+    let mut run = run.clone();
+    for content in &mut run.content {
+        if let RunContent::Text(text) | RunContent::DeletedText(text) = content {
+            text.preserve_space |= has_edge_whitespace(&text.text);
+        }
+    }
+    run_signature(&run)
 }
 
 fn whitespace_fragments(text: &str) -> Vec<String> {
@@ -3977,8 +4003,22 @@ fn nonempty_paragraph_properties(mut properties: CT_PPr) -> Option<CT_PPr> {
 }
 
 fn paragraph_properties_differ(original: Option<&CT_PPr>, edited: Option<&CT_PPr>) -> bool {
-    original.cloned().and_then(nonempty_paragraph_properties)
-        != edited.cloned().and_then(nonempty_paragraph_properties)
+    let modeled = |properties: Option<&CT_PPr>| {
+        properties.cloned().and_then(|mut properties| {
+            if let Some(section) = properties.sect_pr.as_mut() {
+                clear_default_orientation(section);
+            }
+            nonempty_paragraph_properties(properties)
+        })
+    };
+    modeled(original) != modeled(edited)
+}
+
+/// Portrait is the schema default, which the section writer omits.
+fn clear_default_orientation(section: &mut rdocx_oxml::document::CT_SectPr) {
+    if section.orientation == Some(ST_PageOrientation::Portrait) {
+        section.orientation = None;
+    }
 }
 
 fn section_properties_xml(
@@ -4008,6 +4048,8 @@ fn section_properties_xml(
     original_modeled.change = None;
     let mut edited_modeled = edited.clone();
     edited_modeled.change = None;
+    clear_default_orientation(&mut original_modeled);
+    clear_default_orientation(&mut edited_modeled);
     if original_modeled == edited_modeled {
         return section_property_xml(original);
     }
@@ -5099,22 +5141,67 @@ fn deleted_text_xml(xml: &str) -> String {
 }
 
 fn complex_field_result(xml: &str) -> Result<(String, String, String)> {
-    let separate = xml
-        .find("fldCharType=\"separate\"")
-        .or_else(|| xml.find("fldCharType='separate'"))
+    let separate = field_character(xml, 0, "separate")
         .ok_or_else(|| Error::Other("complex field source has no separate boundary".to_owned()))?;
-    let (_, result_start) = containing_run(xml, separate)?;
-    let end_marker = xml[result_start..]
-        .find("fldCharType=\"end\"")
-        .or_else(|| xml[result_start..].find("fldCharType='end'"))
-        .map(|offset| result_start + offset)
+    // A producer may pack a whole field in one run, as Google Docs writes page
+    // fields. Ending a run after `separate` and starting one at `end` reads it
+    // as the same field written one run per part.
+    let xml = split_field_run(xml, separate, true)?;
+    let (_, result_start) = containing_run(&xml, separate)?;
+    let end_marker = field_character(&xml, result_start, "end")
         .ok_or_else(|| Error::Other("complex field source has no end boundary".to_owned()))?;
-    let (result_end, _) = containing_run(xml, end_marker)?;
+    let xml = split_field_run(&xml, end_marker, false)?;
+    // The split may have moved the `end` character further along.
+    let end_marker = field_character(&xml, result_start, "end")
+        .ok_or_else(|| Error::Other("complex field source has no end boundary".to_owned()))?;
+    let (result_end, _) = containing_run(&xml, end_marker)?;
     Ok((
         xml[..result_start].to_owned(),
         xml[result_start..result_end].to_owned(),
         xml[result_end..].to_owned(),
     ))
+}
+
+fn field_character(xml: &str, from: usize, kind: &str) -> Option<usize> {
+    let tail = &xml[from..];
+    tail.find(&format!("fldCharType=\"{kind}\""))
+        .or_else(|| tail.find(&format!("fldCharType='{kind}'")))
+        .map(|offset| from + offset)
+}
+
+/// Split the run holding the field character at `marker` so that the
+/// character ends its run (`after`) or starts it.
+///
+/// Both runs repeat the original start tag and run properties. A run with no
+/// content on that side of the character is returned unchanged.
+fn split_field_run(xml: &str, marker: usize, after: bool) -> Result<String> {
+    let (run_start, run_end) = containing_run(xml, marker)?;
+    let run = &xml[run_start..run_end];
+    let children = direct_element_spans(run)?;
+    let character = children
+        .iter()
+        .position(|child| child.contains(&(marker - run_start)))
+        .ok_or_else(|| Error::Other("complex field character is not a run child".to_owned()))?;
+    let is_properties = |child: &Range<usize>| {
+        let mut reader = Reader::from_reader(run[child.clone()].as_bytes());
+        matches!(
+            reader.read_event(),
+            Ok(Event::Start(element) | Event::Empty(element))
+                if element.local_name().as_ref() == b"rPr"
+        )
+    };
+    let first_content = usize::from(children.first().is_some_and(is_properties));
+    let split = if after { character + 1 } else { character };
+    if split <= first_content || split >= children.len() {
+        return Ok(xml.to_owned());
+    }
+    let head = &run[..children[first_content].start];
+    let close = run
+        .rfind("</")
+        .map(|at| &run[at..])
+        .ok_or_else(|| Error::Other("complex field run has no end tag".to_owned()))?;
+    let at = run_start + children[split].start;
+    Ok(format!("{}{close}{head}{}", &xml[..at], &xml[at..]))
 }
 
 fn containing_run(xml: &str, at: usize) -> Result<(usize, usize)> {
@@ -5411,8 +5498,27 @@ fn run_content_signature(content: &RunContent) -> String {
     match content {
         RunContent::Field(_) => "field-owner".to_owned(),
         RunContent::Drawing(drawing) => format!("Drawing({:?})", drawing_signature(drawing)),
+        RunContent::Text(text) => format!("Text({:?})", text_signature(text)),
+        RunContent::DeletedText(text) => format!("DeletedText({:?})", text_signature(text)),
         content => format!("{content:?}"),
     }
+}
+
+/// The text and whether its `xml:space="preserve"` changes how it reads.
+///
+/// The flag only protects whitespace at an edge of the text. Producers write
+/// it on every `w:t` or only where needed, so elsewhere it is serialization.
+fn text_signature(text: &CT_Text) -> (&str, bool) {
+    (
+        &text.text,
+        text.preserve_space && has_edge_whitespace(&text.text),
+    )
+}
+
+/// Whether XML whitespace starts or ends the text.
+fn has_edge_whitespace(text: &str) -> bool {
+    let whitespace = |character: char| matches!(character, ' ' | '\t' | '\n' | '\r');
+    text.starts_with(whitespace) || text.ends_with(whitespace)
 }
 
 fn table_signature(table: &CT_Tbl) -> String {
@@ -5478,16 +5584,25 @@ fn control_signature(control: &CT_Sdt) -> String {
     )
 }
 
+/// The content-control properties that alignment, refusal and the accept and
+/// reject postconditions compare.
+///
+/// `w:id` is left out. Producers renumber it on save and it carries no
+/// content, so a pair that differs only by it keeps the original's `w:sdtPr`.
+/// A `w:sdtPr` with none of these properties reads like no `w:sdtPr`.
 fn control_property_signature(control: &CT_Sdt) -> ControlPropertySignature<'_> {
-    control.properties.as_ref().map(|properties| {
-        (
-            properties.alias.as_deref(),
-            properties.tag.as_deref(),
-            properties.id,
-            properties.control_type,
-            properties.data_binding.as_ref(),
-        )
-    })
+    control
+        .properties
+        .as_ref()
+        .map(|properties| {
+            (
+                properties.alias.as_deref(),
+                properties.tag.as_deref(),
+                properties.control_type,
+                properties.data_binding.as_ref(),
+            )
+        })
+        .filter(|signature| !matches!(signature, (None, None, None, None)))
 }
 
 fn modeled_control_content(control: &CT_Sdt) -> Vec<&SdtContent> {
@@ -5757,6 +5872,9 @@ fn paragraph_formatting(paragraph: &CT_P) -> Option<CT_PPr> {
         properties.numbering_revision_position = None;
         properties.change = None;
         properties.revision_xml.clear();
+        if let Some(section) = properties.sect_pr.as_mut() {
+            clear_default_orientation(section);
+        }
         properties
     })
 }
@@ -6287,7 +6405,8 @@ fn utf8_error(error: impl std::fmt::Display) -> Error {
 mod tests {
     use super::{
         ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING,
-        attributed_run_units, comparison_postcondition_error, story_document, word_fragments,
+        attributed_run_units, comparison_postcondition_error, complex_field_result, story_document,
+        word_fragments,
     };
     use crate::Document;
     use rdocx_oxml::document::BodyContent;
@@ -6377,6 +6496,36 @@ mod tests {
                 .sum::<usize>(),
             1
         );
+    }
+
+    #[test]
+    fn a_packed_field_result_is_read_as_one_run_per_part() {
+        for w in ["w", "q"] {
+            let shell = format!(r#"<{w}:r {w}:rsidR="00AB12CD"><{w}:rPr><{w}:b/></{w}:rPr>"#);
+            let close = format!("</{w}:r>");
+            let character = |kind: &str| format!(r#"<{w}:fldChar {w}:fldCharType="{kind}"/>"#);
+            let (begin, separate, end) =
+                (character("begin"), character("separate"), character("end"));
+            let code = format!("<{w}:instrText>PAGE</{w}:instrText>");
+            let result = format!("<{w}:t>1</{w}:t>");
+            let expected = (
+                format!("{shell}{begin}{code}{separate}{close}"),
+                format!("{shell}{result}{close}"),
+                format!("{shell}{end}{close}"),
+            );
+            for field in [
+                format!("{shell}{begin}{code}{separate}{result}{end}{close}"),
+                format!("{shell}{begin}{code}{separate}{close}{shell}{result}{end}{close}"),
+                format!("{}{}{}", expected.0, expected.1, expected.2),
+            ] {
+                assert_eq!(complex_field_result(&field).unwrap(), expected, "{field}");
+            }
+            let uncached = format!("{shell}{begin}{code}{separate}{end}{close}");
+            assert_eq!(
+                complex_field_result(&uncached).unwrap(),
+                (expected.0, String::new(), expected.2)
+            );
+        }
     }
 
     #[test]
