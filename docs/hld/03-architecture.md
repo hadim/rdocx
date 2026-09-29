@@ -844,10 +844,10 @@ loop retain their source `numId` and level, which keeps one continuous list
 without allocating definitions. Numbering references are validated before
 evaluation. Loop variables form lexical scopes, and dotted lookup searches the
 innermost scope before the root value. Structural controls are limited to the
-main body and its tables. Headers, footers, text boxes, and chart labels retain
-scalar-only replacement through the existing Word placeholder mapper. A
-successful render commits the staged document and package together and
-invalidates both layout caches once.
+main body and its tables. Headers, footers, footnotes, endnotes, text boxes, and
+chart labels retain scalar-only replacement through the existing Word
+placeholder mapper. A successful render commits the staged document and package
+together and invalidates both layout caches once.
 
 The content-control model owns one recursive `CT_Sdt` grammar at block, row,
 cell, paragraph, and run placement boundaries. It reports tag, alias, numeric

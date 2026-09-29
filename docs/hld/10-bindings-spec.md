@@ -868,6 +868,19 @@ The command-line `replace` operation uses this boundary, reports the stable
 serialization error, and creates no partial output. Python and WASM bindings
 gain no corresponding method.
 
+Literal replacement reaches the body, tables, content controls at every level,
+headers, footers, footnotes, endnotes, text boxes, and chart labels. Regex
+replacement reaches the same stories except chart labels. Every normal note of
+the relationship-resolved footnotes and endnotes parts is searched, its tables
+and block controls included. The separator, continuation
+separator, and continuation notice entries are not, and neither is an untyped
+entry at id 0 or below, as the typed notes reader and the story walkers read
+them. A notes part is rewritten only when a note changed, and then only the
+changed children of that note are serialized again. A match inside a tracked
+insertion or move destination is replaced inside it, and deleted text is never
+matched. The Rust facade, Python `try_replace_text` and `replace_all_regex`,
+the WASM replacement method, and `rdocx replace --expect` share these counts.
+
 The native presentation facade provides the same staged boundary through
 `Presentation::try_replace_text`, with exact counts across slides and speaker
 notes. `rpptx replace` refuses an existing destination, including its input,

@@ -459,6 +459,84 @@ fn replace_with_expect_counts_the_text_of_content_controls_everywhere() {
     }
 }
 
+/// `rdocx replace --expect` counts what a reader sees in a footnote, an
+/// endnote and a tracked insertion, and neither the separators of the notes
+/// parts nor deleted text.
+#[test]
+fn replace_with_expect_counts_notes_and_tracked_insertions() {
+    let temp = TempWorkspace::new("replace-notes");
+    let input = temp.path.join("notes.docx");
+    let replaced = temp.path.join("replaced.docx");
+    write_document(&input, &["seed"]);
+
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let notes = |kind: &str| {
+        format!(
+            r#"<w:{kind}s xmlns:w="{word}"><w:{kind} w:type="separator" w:id="-1"><w:p><w:r><w:t>NEEDLE</w:t></w:r></w:p></w:{kind}><w:{kind} w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:{kind}><w:{kind} w:id="1"><w:p><w:r><w:{kind}Ref/></w:r><w:r><w:t xml:space="preserve"> Note NEEDLE.</w:t></w:r></w:p></w:{kind}></w:{kind}s>"#
+        )
+    };
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(&input).unwrap())).unwrap();
+    for (kind, rel_type) in [
+        ("footnote", rel_types::FOOTNOTES),
+        ("endnote", rel_types::ENDNOTES),
+    ] {
+        let part = format!("/word/{kind}s.xml");
+        package.set_part(&part, notes(kind).into_bytes());
+        package.content_types.add_override(
+            &part,
+            &format!("application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}s+xml"),
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_type, &format!("{kind}s.xml"));
+    }
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{word}"><w:body><w:p><w:r><w:t xml:space="preserve">Tracked: </w:t></w:r><w:ins w:id="901" w:author="Editor" w:date="2026-01-01T00:00:00Z"><w:r><w:t>ins NEEDLE</w:t></w:r></w:ins><w:del w:id="902" w:author="Editor" w:date="2026-01-01T00:00:00Z"><w:r><w:delText xml:space="preserve">del NEEDLE</w:delText></w:r></w:del><w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:endnoteReference w:id="1"/></w:r></w:p><w:sectPr/></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    package
+        .write_to(&mut fs::File::create(&input).unwrap())
+        .unwrap();
+
+    let replace = |expect: &str| {
+        cli(&[
+            "replace",
+            path_text(&input),
+            "--placeholder",
+            "NEEDLE",
+            "--value",
+            "X",
+            "--expect",
+            expect,
+            "--output",
+            path_text(&replaced),
+        ])
+    };
+    let output = replace("4");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("found 3"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = replace("3");
+    assert_success(&output, "replace --expect 3");
+    let package = OpcPackage::open(&replaced).unwrap();
+    let part = |name: &str| String::from_utf8(package.get_part(name).unwrap().to_vec()).unwrap();
+    let body = part("/word/document.xml");
+    assert!(body.contains(">ins X</w:t></w:r></w:ins>"), "{body}");
+    assert!(body.contains(">del NEEDLE</w:delText>"), "{body}");
+    for kind in ["footnote", "endnote"] {
+        let xml = part(&format!("/word/{kind}s.xml"));
+        assert_eq!(xml, notes(kind).replace("Note NEEDLE", "Note X"), "{kind}");
+    }
+}
+
 #[test]
 fn validate_exit_status_is_a_verdict() {
     let temp = TempWorkspace::new("validate");

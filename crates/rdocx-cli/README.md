@@ -81,6 +81,8 @@ fragment on each occupied page.
 
 `replace --expect N` publishes only when the run-aware replacement count is
 exactly `N`. A mismatch exits unsuccessfully without creating or replacing the
-requested output.
+requested output. The count covers the text a reader sees in the body, tables,
+content controls, headers, footers, footnotes, endnotes, text boxes, and tracked
+insertions. Deleted text and the separators of the notes parts are not counted.
 
 Run `rdocx --help` or `rdocx <command> --help` for the complete option set.

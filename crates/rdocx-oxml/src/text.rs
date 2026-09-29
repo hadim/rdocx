@@ -8383,7 +8383,7 @@ fn required_word_i32_attribute(
     )))
 }
 
-fn optional_word_attribute(
+pub(crate) fn optional_word_attribute(
     element: &BytesStart<'_>,
     local: &[u8],
     word_prefixes: &[String],

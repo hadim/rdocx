@@ -16740,6 +16740,354 @@ mod replacement_reaches_content_controls {
     }
 }
 
+/// Replacement never read the footnotes and endnotes parts, and did not
+/// read the runs of a tracked insertion, which `Paragraph::text` shows, so
+/// the text a reader sees there could not be replaced. The fixture holds a
+/// token once in every story a reader sees, as the skills suite builds it,
+/// and once more in a deletion, which a reader does not see.
+mod replacement_reaches_notes_and_tracked_insertions {
+    use std::collections::HashMap;
+
+    use rdocx::Document;
+    use rdocx_oxml::namespace::W_NS;
+
+    const DOCUMENT: &str = "/word/document.xml";
+    const FOOTNOTES: &str = "/word/footnotes.xml";
+    const ENDNOTES: &str = "/word/endnotes.xml";
+    const PARTS: [&str; 6] = [
+        DOCUMENT,
+        "/word/header1.xml",
+        "/word/footer1.xml",
+        "/word/footer2.xml",
+        FOOTNOTES,
+        ENDNOTES,
+    ];
+
+    /// The body, a cell, an inline and a block control, a tracked insertion,
+    /// a text box, the header, the default and first-page footers, a footer
+    /// table, a footnote and an endnote.
+    const VISIBLE: usize = 12;
+
+    const INSERTION: &str = r#"<w:ins w:id="901" w:author="Editor" w:date="2026-01-01T00:00:00Z">"#;
+
+    fn run(text: &str) -> String {
+        format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#)
+    }
+
+    fn paragraph(content: &str) -> String {
+        format!("<w:p>{content}</w:p>")
+    }
+
+    fn table(cells: &[&str]) -> String {
+        let cells = cells
+            .iter()
+            .map(|content| format!("<w:tc>{}</w:tc>", paragraph(content)))
+            .collect::<String>();
+        format!(
+            r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr>{cells}</w:tr></w:tbl>"#
+        )
+    }
+
+    fn control(tag: &str, content: &str) -> String {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#
+        )
+    }
+
+    /// A notes part as Word writes it: the separator, the continuation
+    /// separator, and note 1.
+    fn notes(kind: &str, text: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:{kind}s xmlns:w="{W_NS}"><w:{kind} w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:{kind}><w:{kind} w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:{kind}><w:{kind} w:id="1"><w:p><w:r><w:{kind}Ref/></w:r>{}</w:p></w:{kind}></w:{kind}s>"#,
+            run(&format!(" {text}"))
+        )
+    }
+
+    /// The tracked paragraph: "Tracked: ", then `token` in an insertion and
+    /// in a deletion.
+    fn tracked(token: &str) -> String {
+        paragraph(&format!(
+            r#"{}{INSERTION}<w:r><w:t>ins {token}</w:t></w:r></w:ins><w:del w:id="902" w:author="Editor" w:date="2026-01-01T00:00:00Z"><w:r><w:delText xml:space="preserve">del {token}</w:delText></w:r></w:del>"#,
+            run("Tracked: ")
+        ))
+    }
+
+    /// The fixture, with the tracked paragraph or without it.
+    fn document(token: &str, with_revisions: bool) -> Document {
+        let body = [
+            paragraph(&run(&format!("Body {token} one."))),
+            table(&["", &run(&format!("Cell {token}"))]),
+            paragraph(&[run("Inline control: "), control("goog_rdk_9", &run(&format!("sdt {token}")))].concat()),
+            control("goog_rdk_8", &paragraph(&run(&format!("Block control {token}")))),
+            if with_revisions { tracked(token) } else { String::new() },
+            paragraph(&[
+                run("Footnote here"),
+                r#"<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="1"/></w:r><w:r><w:endnoteReference w:id="1"/></w:r>"#.to_owned(),
+                format!(
+                    r#"<w:r><w:pict><v:shape style="width:100pt;height:50pt"><v:textbox><w:txbxContent>{}</w:txbxContent></v:textbox></v:shape></w:pict></w:r>"#,
+                    paragraph(&run(&format!("Text box {token}")))
+                ),
+            ].concat()),
+        ]
+        .concat();
+        let story = |root: &str, content: String| {
+            format!(r#"<w:{root} xmlns:w="{W_NS}">{content}</w:{root}>"#)
+        };
+        let parts = [
+            (
+                "header1.xml",
+                story("hdr", paragraph(&run(&format!("Header {token}")))),
+                oxml_opc::relationship::rel_types::HEADER,
+                "header",
+                Some(r#"<w:headerReference w:type="default" r:id="{id}"/>"#),
+            ),
+            (
+                "footer1.xml",
+                story(
+                    "ftr",
+                    [
+                        paragraph(&run(&format!("Footer {token}"))),
+                        table(&[&run(&format!("Footer cell {token}"))]),
+                    ]
+                    .concat(),
+                ),
+                oxml_opc::relationship::rel_types::FOOTER,
+                "footer",
+                Some(r#"<w:footerReference w:type="default" r:id="{id}"/>"#),
+            ),
+            (
+                "footer2.xml",
+                story("ftr", paragraph(&run(&format!("First footer {token}")))),
+                oxml_opc::relationship::rel_types::FOOTER,
+                "footer",
+                Some(r#"<w:footerReference w:type="first" r:id="{id}"/>"#),
+            ),
+            (
+                "footnotes.xml",
+                notes("footnote", &format!("Footnote {token}.")),
+                oxml_opc::relationship::rel_types::FOOTNOTES,
+                "footnotes",
+                None,
+            ),
+            (
+                "endnotes.xml",
+                notes("endnote", &format!("Endnote {token}.")),
+                oxml_opc::relationship::rel_types::ENDNOTES,
+                "endnotes",
+                None,
+            ),
+        ];
+
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let mut references = String::new();
+        for (target, xml, rel_type, kind, reference) in parts {
+            let part = format!("/word/{target}");
+            package.set_part(&part, xml.into_bytes());
+            package.content_types.add_override(
+                &part,
+                &format!(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}+xml"
+                ),
+            );
+            let id = package
+                .get_or_create_part_rels(DOCUMENT)
+                .add(rel_type, target);
+            if let Some(reference) = reference {
+                references.push_str(&reference.replace("{id}", &id));
+            }
+        }
+        package.set_part(
+            DOCUMENT,
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml"><w:body>{body}<w:sectPr>{references}<w:titlePg/></w:sectPr></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn saved_parts(document: &mut Document) -> HashMap<&'static str, String> {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        PARTS
+            .into_iter()
+            .map(|part| {
+                let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+                (part, xml)
+            })
+            .collect()
+    }
+
+    fn paragraph_texts(document: &Document) -> Vec<String> {
+        document
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect()
+    }
+
+    /// Every walker replaces the token once in each story a reader sees, the
+    /// notes and the insertion included. The deletion keeps it, the
+    /// insertion keeps its id, author and date, the references keep their
+    /// ids, and the notes parts change only in the text of note 1.
+    #[test]
+    fn every_walker_replaces_the_notes_and_the_tracked_insertion() {
+        for walker in [
+            "try_replace_text",
+            "replace_regex",
+            "replace_all",
+            "replace_all_regex",
+        ] {
+            let mut document = document("NEEDLE", true);
+            let count = match walker {
+                "try_replace_text" => document.try_replace_text("NEEDLE", "X").unwrap(),
+                "replace_regex" => document.replace_regex("NEEDLE", "X").unwrap(),
+                "replace_all" => document.replace_all(&HashMap::from([("NEEDLE", "X")])),
+                _ => document
+                    .replace_all_regex(&[("NEEDLE".to_owned(), "X".to_owned())])
+                    .unwrap(),
+            };
+
+            assert_eq!(count, VISIBLE, "{walker}");
+            let parts = saved_parts(&mut document);
+            for (part, xml) in &parts {
+                let left = usize::from(*part == DOCUMENT);
+                assert_eq!(
+                    xml.matches("NEEDLE").count(),
+                    left,
+                    "{walker} {part}: {xml}"
+                );
+            }
+            let body = &parts[DOCUMENT];
+            for expected in [
+                format!("{INSERTION}<w:r><w:t>ins X</w:t></w:r></w:ins>"),
+                ">del NEEDLE</w:delText>".to_owned(),
+                r#"<w:footnoteReference w:id="1"/>"#.to_owned(),
+                r#"<w:endnoteReference w:id="1"/>"#.to_owned(),
+            ] {
+                assert!(body.contains(&expected), "{walker} {expected}: {body}");
+            }
+            assert_eq!(
+                parts[FOOTNOTES],
+                notes("footnote", "Footnote X."),
+                "{walker}"
+            );
+            assert_eq!(parts[ENDNOTES], notes("endnote", "Endnote X."), "{walker}");
+            assert_eq!(
+                document.footnotes(),
+                [(1, " Footnote X.".to_owned())],
+                "{walker}"
+            );
+            assert!(
+                paragraph_texts(&document).contains(&"Tracked: ins X".to_owned()),
+                "{walker}"
+            );
+        }
+    }
+
+    /// `Paragraph::text` shows the text of the insertion, and that text is
+    /// replaced inside it. A match across its boundary is no match.
+    #[test]
+    fn the_text_a_reader_sees_in_an_insertion_is_replaced() {
+        let mut document = document("NEEDLE", true);
+        assert!(paragraph_texts(&document).contains(&"Tracked: ins NEEDLE".to_owned()));
+
+        assert_eq!(document.try_replace_text("Tracked: ins", "-").unwrap(), 0);
+        assert_eq!(document.try_replace_text("ins NEEDLE", "ins X").unwrap(), 1);
+
+        assert!(paragraph_texts(&document).contains(&"Tracked: ins X".to_owned()));
+        let body = &saved_parts(&mut document)[DOCUMENT];
+        let insertion = format!("{INSERTION}<w:r><w:t>ins X</w:t></w:r></w:ins>");
+        assert!(body.contains(&insertion), "{body}");
+    }
+
+    /// A notes part without a match keeps its bytes, and so does a note
+    /// without a match in a part that changes.
+    #[test]
+    fn untouched_notes_keep_their_bytes() {
+        let mut document = document("NEEDLE", true);
+
+        assert_eq!(
+            document.try_replace_text("Body NEEDLE", "Body X").unwrap(),
+            1
+        );
+        let parts = saved_parts(&mut document);
+        assert_eq!(parts[FOOTNOTES], notes("footnote", "Footnote NEEDLE."));
+        assert_eq!(parts[ENDNOTES], notes("endnote", "Endnote NEEDLE."));
+
+        assert_eq!(
+            document
+                .try_replace_text("Footnote NEEDLE", "Footnote X")
+                .unwrap(),
+            1
+        );
+        let parts = saved_parts(&mut document);
+        assert_eq!(parts[FOOTNOTES], notes("footnote", "Footnote X."));
+        assert_eq!(parts[ENDNOTES], notes("endnote", "Endnote NEEDLE."));
+    }
+
+    /// A template reads its tags in the notes and in the insertion, as the
+    /// replacement reaches them, and renders them. The tag of the deletion
+    /// stays, as a reader does not see it.
+    #[test]
+    fn a_template_renders_the_tags_of_the_notes_and_the_insertion() {
+        let mut document = document("{{name}}", true);
+
+        let count = document
+            .render_template(&serde_json::json!({"name": "Ada"}))
+            .unwrap();
+
+        assert_eq!(count, VISIBLE);
+        let parts = saved_parts(&mut document);
+        for (part, xml) in &parts {
+            let left = usize::from(*part == DOCUMENT);
+            assert_eq!(xml.matches("{{name}}").count(), left, "{part}: {xml}");
+        }
+        assert_eq!(parts[FOOTNOTES], notes("footnote", "Footnote Ada."));
+        assert!(parts[DOCUMENT].contains(">del {{name}}</w:delText>"));
+    }
+
+    /// Comparing a file with its replaced copy marks the words replaced in
+    /// the body, the footnote and the endnote as revisions of each story.
+    #[test]
+    fn a_file_compares_with_its_replaced_copy() {
+        let mut original = document("NEEDLE", false);
+        let mut replaced = document("NEEDLE", false);
+        let pairs = HashMap::from([
+            ("Body NEEDLE", "Body X"),
+            ("Footnote NEEDLE", "Footnote X"),
+            ("Endnote NEEDLE", "Endnote X"),
+        ]);
+        assert_eq!(replaced.replace_all(&pairs), 3);
+
+        original
+            .compare(&replaced, "Ada", "2026-09-29T00:00:00Z")
+            .unwrap();
+
+        let parts = saved_parts(&mut original);
+        for (part, before, after) in [
+            (DOCUMENT, "Body NEEDLE one.", "Body X one."),
+            (FOOTNOTES, " Footnote NEEDLE.", " Footnote X."),
+            (ENDNOTES, " Endnote NEEDLE.", " Endnote X."),
+        ] {
+            let xml = &parts[part];
+            for expected in [
+                format!(">{before}</w:delText></w:r></w:del>"),
+                format!(">{after}</w:t></w:r></w:ins>"),
+            ] {
+                assert!(xml.contains(&expected), "{part} {expected}: {xml}");
+            }
+        }
+    }
+}
+
 /// `9360 / cols` panicked when a caller asked for a zero-column table.
 #[test]
 fn zero_column_tables_do_not_panic() {
