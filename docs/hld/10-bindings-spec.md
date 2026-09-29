@@ -275,27 +275,30 @@ common Word styles that `Document::add_common_styles` adds.
 
 `Document.add_style(name, style_type="paragraph")` creates a paragraph,
 character or table style through the native `add_style`, as python-docx's
-`styles.add_style` does, and returns its `Style` snapshot. The ID is the name
-without its spaces, the rule Word and python-docx share, with python-docx's
-exceptions for Word's lowercase built-in names `caption` and `heading 1` to
-`heading 9`. The `style_id` keyword overrides it. `based_on` and `next_style`
+`styles.add_style` does, and returns its `Style` snapshot. The ID keeps the
+ASCII letters, digits and hyphens of the name, as Word derives one, so `Q&A`
+gives `QA` and `Note (draft)` gives `Notedraft`. A name with none of them, such
+as a Japanese one, gets the first unused of `a`, `a0`, `a1` and so on. The
+exceptions python-docx makes for Word's lowercase built-in names `caption` and
+`heading 1` to `heading 9` still give `Caption` and `Heading1` to `Heading9`.
+The `style_id` keyword overrides the derived ID. `based_on` and `next_style`
 accept an ID or a name, resolved as `Paragraph.style` resolves one among the
-styles of the new style's type, or among paragraph styles for `next_style`.
-The formatting keywords are the font name, size, bold, italic and colour, and
-the spacing before and after, left, right and first-line indentation in EMU.
-They are written as the `Font` and `ParagraphFormat` setters write them on
-content, and a negative first-line indentation becomes a hanging one. A base
-or next style that no style names raises `KeyError`. A duplicate ID, a name
-another style has regardless of case, an unknown type, a base or next style of
-another type, and paragraph formatting on a character style raise `ValueError`.
-Both are raised before any change. `remove_style` and `set_default_style`
-resolve a style of any type the same way. `remove_style` returns `False` when
-no style has the ID or name, and `set_default_style` raises `KeyError` then and
-otherwise makes the style the default of its type. The native refusals, such
-as removing a style that content or another style names, raise `RdocxError`. Python does not bind
-the native `set_style`, whose property merge cannot remove the theme font or
-theme colour that a Word style carries, so existing styles keep their
-formatting.
+styles of the new style's type, or among paragraph styles for `next_style`. The
+formatting keywords are the font name, size, bold, italic and colour, and the
+spacing before and after, left, right and first-line indentation in EMU. They
+are written as the `Font` and `ParagraphFormat` setters write them on content,
+and a negative first-line indentation becomes a hanging one. A base or next
+style that no style names raises `KeyError`. A duplicate ID, a name another
+style has regardless of case, an unknown type, a base or next style of another
+type, and paragraph formatting on a character style raise `ValueError`. Both
+are raised before any change. `remove_style` and `set_default_style` resolve a
+style of any type the same way. `remove_style` returns `False` when no style
+has the ID or name, and `set_default_style` raises `KeyError` then and
+otherwise makes the style the default of its type. The native refusals, such as
+removing a style that content or another style names, raise `RdocxError`.
+Python does not bind the native `set_style`, whose property merge cannot remove
+the theme font or theme colour that a Word style carries, so existing styles
+keep their formatting.
 
 `ListLevel` is a constructible frozen value with a `format` checked against
 the standard `w:numFmt` names through `ListNumberFormat::from_name`, the level

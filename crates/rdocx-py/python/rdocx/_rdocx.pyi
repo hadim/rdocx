@@ -560,7 +560,9 @@ class Document:
     ) -> Style:
         """Create a style as python-docx's `styles.add_style` does.
 
-        The ID is the name without its spaces unless `style_id` is given.
+        Unless `style_id` is given, the ID keeps the ASCII letters, digits and
+        hyphens of the name, as Word derives one, or is `a`, `a0` and so on
+        when none is left.
         `based_on` and `next_style` take an ID or a name. Lengths and the font
         size are EMU. Raises `KeyError` when a base or next style names no
         style, and `ValueError` for a duplicate ID or name or any other

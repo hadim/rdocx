@@ -567,6 +567,35 @@ def test_add_style_derives_the_word_id_and_writes_its_formatting(tmp_path):
     assert oracle.paragraph_format.first_line_indent == -Inches(0.25)
 
 
+def test_add_style_derives_word_ids_that_survive_save_and_reopen(tmp_path):
+    from rdocx import Document
+
+    expected = {
+        "Q&A": "QA",
+        "Note (draft)": "Notedraft",
+        "My-Style.v2": "My-Stylev2",
+        "\u00dcberschrift Eigen": "berschriftEigen",
+        'A "q" <x>': "Aqx",
+        "\u898b\u51fa\u3057 \u30ab\u30b9\u30bf\u30e0": "a",
+        "\u5225\u306e\u30b9\u30bf\u30a4\u30eb": "a0",
+    }
+    document = Document()
+    for name, style_id in expected.items():
+        assert document.add_style(name, based_on="Normal").style_id == style_id
+        document.add_paragraph(name).style = style_id
+
+    path = tmp_path / "ids.docx"
+    document.save(path)
+    reopened = Document(path)
+    assert set(expected.values()) <= {style.style_id for style in reopened.styles}
+    assert [paragraph.style for paragraph in reopened.paragraphs] == list(
+        expected.values()
+    )
+    docx = pytest.importorskip("docx")
+    oracle = {style.style_id for style in docx.Document(str(path)).styles}
+    assert set(expected.values()) <= oracle
+
+
 def test_add_style_rejects_bad_input_without_changing_the_document():
     from rdocx import Document
 

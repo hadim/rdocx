@@ -827,15 +827,34 @@ impl StyleFormatting {
     }
 }
 
-/// The style ID python-docx and Word derive from a style name: the name
-/// without its spaces, except that Word's lowercase built-in names `caption`
-/// and `heading 1` to `heading 9` keep their capitalised IDs.
-fn style_id_from_name(name: &str) -> String {
+/// The style ID Word derives from a style name: the name's ASCII letters,
+/// digits and hyphens, so "Q&A" gives `QA`. A name with none of them, such as
+/// a Japanese one, gets the first of `a`, `a0`, `a1` and so on that `document`
+/// does not use, as Word numbers them. As in python-docx, Word's lowercase
+/// built-in names `caption` and `heading 1` to `heading 9` keep their
+/// capitalised IDs.
+fn style_id_from_name(document: &rdocx::Document, name: &str) -> String {
     match (name, name.strip_prefix("heading ")) {
-        ("caption", _) => "Caption".to_owned(),
-        (_, Some(level)) if matches!(level.as_bytes(), [b'1'..=b'9']) => format!("Heading{level}"),
-        _ => name.replace(' ', ""),
+        ("caption", _) => return "Caption".to_owned(),
+        (_, Some(level)) if matches!(level.as_bytes(), [b'1'..=b'9']) => {
+            return format!("Heading{level}");
+        }
+        _ => {}
     }
+    let kept = name
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .collect::<String>();
+    if !kept.is_empty() {
+        return kept;
+    }
+    let mut fallback = "a".to_owned();
+    let mut number = 0;
+    while document.style(&fallback).is_some() {
+        fallback = format!("a{number}");
+        number += 1;
+    }
+    fallback
 }
 
 #[pymethods]
@@ -1862,7 +1881,8 @@ impl PyDocument {
                 ));
             }
         };
-        let style_id = style_id.map_or_else(|| style_id_from_name(name), str::to_owned);
+        let style_id =
+            style_id.map_or_else(|| style_id_from_name(&self.inner, name), str::to_owned);
         if name.trim().is_empty() || style_id.trim().is_empty() {
             return Err(PyValueError::new_err(
                 "a style name and style ID cannot be blank",
