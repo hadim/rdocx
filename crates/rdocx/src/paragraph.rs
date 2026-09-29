@@ -837,6 +837,10 @@ pub struct Paragraph<'a> {
 impl<'a> Paragraph<'a> {
     /// Get the combined text of all runs, with the text of the runs inside
     /// smart tags, inline custom XML elements and simple fields.
+    ///
+    /// No run handle addresses the text of those wrappers, so an offset
+    /// into this text is an offset into the joined text of the runs only
+    /// when the paragraph holds none of them.
     pub fn text(&self) -> String {
         self.inner.accepted_text()
     }
@@ -2524,6 +2528,10 @@ pub struct ParagraphRef<'a> {
 impl<'a> ParagraphRef<'a> {
     /// Get the combined text of all runs, with the text of the runs inside
     /// smart tags, inline custom XML elements and simple fields.
+    ///
+    /// No run handle addresses the text of those wrappers, so an offset
+    /// into this text is an offset into the joined text of the runs only
+    /// when the paragraph holds none of them.
     pub fn text(&self) -> String {
         self.inner.accepted_text()
     }

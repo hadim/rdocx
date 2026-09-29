@@ -157,11 +157,13 @@ fn replace_matches(para: &mut CT_P, next_match: &mut MatchFinder<'_>) -> usize {
         // on a char boundary of the rebuilt text.
         search_from = byte_start + replacement.len();
 
+        if let Some(index) = runs[first_run].wrapper {
+            wrappers[index].matches += 1;
+        }
         total += 1;
     }
 
-    remove_emptied_runs(para, wrappers, &runs, emptied);
-    total
+    total - remove_emptied_runs(para, wrappers, &runs, emptied)
 }
 
 /// A run of the text a replacement reads.
@@ -185,7 +187,9 @@ struct Wrapper {
     /// The wrapper whose content holds this one, or None for the paragraph.
     parent: Option<usize>,
     source: WrapperSource,
-    changed: bool,
+    /// The matches replaced in its runs and in the wrappers written back
+    /// into it.
+    matches: usize,
 }
 
 /// Where the source of a [`Wrapper`] is in the paragraph that holds it.
@@ -292,7 +296,7 @@ fn wrapper_text_runs(raw: &[u8], prefixes: &[String], source: WrapperSource, wal
             content: CT_P::new(),
             parent: walk.wrapper,
             source,
-            changed: false,
+            matches: 0,
         });
         let parent = walk.wrapper.replace(index);
         paragraph_text_runs(&content, &mut Vec::new(), walk);
@@ -370,10 +374,7 @@ fn edit_run(
     edit: impl FnOnce(&mut CT_R),
 ) {
     let paragraph = match run.wrapper {
-        Some(index) => {
-            wrappers[index].changed = true;
-            &mut wrappers[index].content
-        }
+        Some(index) => &mut wrappers[index].content,
         None => para,
     };
     if let Some(mut edited) = paragraph.accepted_run(&run.path).cloned() {
@@ -511,13 +512,16 @@ fn replace_across_runs(
 /// Remove the runs at `candidates` (indices into `runs`) that the replacement
 /// left without any content, keeping every anchor of the paragraph and of
 /// its content controls on the boundary that remains, and write each changed
-/// wrapper back into the paragraph that holds it.
+/// wrapper back into the paragraph that holds it. Returns the matches that
+/// were replaced in a wrapper whose source could not take its new content,
+/// and are therefore not in the paragraph.
 fn remove_emptied_runs(
     para: &mut CT_P,
     mut wrappers: Vec<Wrapper>,
     runs: &[TextRun],
     mut candidates: Vec<usize>,
-) {
+) -> usize {
+    let mut lost = 0;
     candidates.sort_unstable();
     candidates.dedup();
     // A wrapper holds only wrappers read after it, so writing them back in
@@ -533,18 +537,18 @@ fn remove_emptied_runs(
                 .filter(|candidate| runs[**candidate].wrapper == Some(index))
                 .map(|candidate| &runs[*candidate].path),
         );
-        if !wrapper.changed {
+        if wrapper.matches == 0 {
             continue;
         }
         let parent = match wrapper.parent {
-            Some(parent) => {
-                wrappers[parent].changed = true;
-                &mut wrappers[parent].content
-            }
+            Some(parent) => &mut wrappers[parent].content,
             None => &mut *para,
         };
-        let written = write_wrapper_back(parent, &wrapper.source, &content);
-        debug_assert!(written, "wrapper source is stale");
+        if !write_wrapper_back(parent, &wrapper.source, &content) {
+            lost += wrapper.matches;
+        } else if let Some(parent) = wrapper.parent {
+            wrappers[parent].matches += wrapper.matches;
+        }
     }
     remove_paragraph_emptied_runs(
         para,
@@ -553,6 +557,7 @@ fn remove_emptied_runs(
             .filter(|candidate| runs[**candidate].wrapper.is_none())
             .map(|candidate| &runs[*candidate].path),
     );
+    lost
 }
 
 /// Write `content` back as the content of the wrapper at `source` in
@@ -1935,6 +1940,49 @@ mod tests {
                 r#"<w:fldSimple w:instr=" DOCPROPERTY Title "><w:r><w:rPr><w:b/></w:rPr><w:t>MID</w:t></w:r></w:fldSimple>"#
             )
         );
+    }
+
+    /// A wrapper that names WordprocessingML with another prefix than `w`,
+    /// in its own tag or in its content, is not read, since its content
+    /// would be written back with `w`. It keeps its bytes.
+    #[test]
+    fn wrappers_named_with_another_word_prefix_are_not_read() {
+        for wrapper in [
+            r#"<x:fldSimple x:instr=" TITLE "><x:r><x:t>MID</x:t></x:r></x:fldSimple>"#,
+            r#"<x:smartTag x:element="place"><x:r><x:t>MID</x:t></x:r></x:smartTag>"#,
+            r#"<x:customXml x:element="item"><x:r><x:t>MID</x:t></x:r></x:customXml>"#,
+            r#"<w:smartTag w:element="place"><x:r><x:t>MID</x:t></x:r></w:smartTag>"#,
+        ] {
+            let source = format!(
+                r#"<w:p xmlns:w="{W_NS}" xmlns:x="{W_NS}"><w:r><w:t xml:space="preserve">before </w:t></w:r>{wrapper}<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>"#
+            );
+            let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+            assert_eq!(p.accepted_text(), "before  after", "{wrapper}");
+
+            assert_eq!(replace_in_paragraph(&mut p, "MID", "X"), 0);
+            assert_eq!(replace_in_paragraph(&mut p, "before", "B"), 1);
+            assert!(paragraph_xml(&p).contains(wrapper), "{wrapper}");
+        }
+    }
+
+    /// A match replaced in a wrapper whose source cannot take the new
+    /// content is not counted, and neither is one in a wrapper written back
+    /// into it.
+    #[test]
+    fn a_match_in_a_wrapper_that_is_not_written_back_is_not_counted() {
+        let content = r#"<w:r><w:t xml:space="preserve">MID </w:t></w:r><w:smartTag w:element="place"><w:r><w:t>MID</w:t></w:r></w:smartTag>"#;
+        let mut p = wrapped(WRAPPERS[2], content);
+        let TextWalk {
+            runs, mut wrappers, ..
+        } = text_runs(&p);
+        assert_eq!(wrappers.len(), 2);
+        wrappers[0].matches = 1;
+        wrappers[1].matches = 1;
+        wrappers[0].source = WrapperSource::Raw(usize::MAX);
+        let before = paragraph_xml(&p);
+
+        assert_eq!(remove_emptied_runs(&mut p, wrappers, &runs, Vec::new()), 2);
+        assert_eq!(paragraph_xml(&p), before);
     }
 
     /// A notes part with the separators Word writes, a continuation notice,

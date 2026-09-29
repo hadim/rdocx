@@ -126,14 +126,17 @@ part as an error.
 has a zero-based `body_index`, a typed zero-based path within that body item,
 its direct style and numbering, and accepted-view runs. Its `text` also holds
 the text inside smart tags, inline custom XML elements, and simple fields,
-which `runs` does not list. Run `formatting` is
-`null` when no direct run properties exist. Otherwise it records nullable
-direct bold, italic, strike, underline, font, point size, colour, highlight,
-language, and character style values. The record has `all-supported-stories`
-scope, and its `stories` array lists the other stories as plain `text` does,
-one entry per story with its Python `Story.kind` name as `kind`, its
-`part_name`, its `owner_index`, and `items`. Each item is a direct paragraph or
-block content control with its story `index_path`, its `kind`, and its `text`.
+which `runs` does not list, so offsets into `text` are not offsets into the
+joined text of `runs` when a paragraph holds one of them. Plain `rdocx text`
+prints the same paragraph text, the text inside these wrappers included. Run
+`formatting` is `null` when no direct run properties exist. Otherwise it records
+nullable direct bold, italic, strike, underline, font, point size, colour,
+highlight, language, and character style values. The record has
+`all-supported-stories` scope, and its `stories` array lists the other stories
+as plain `text` does, one entry per story with its Python `Story.kind` name as
+`kind`, its `part_name`, its `owner_index`, and `items`. Each item is a direct
+paragraph or block content control with its story `index_path`, its `kind`,
+and its `text`.
 
 `convert --to md` and `convert --to html` append the same stories after the
 body, one section per part under a bold label. They leave comments out,

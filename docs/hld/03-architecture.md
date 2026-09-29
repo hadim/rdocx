@@ -1298,7 +1298,11 @@ its start tag, its changed content, and its end tag, so its attributes and a
 field instruction keep their bytes, and a wrapper without a match keeps all of
 them. For a simple field, the replaced text is its cached result, which is what
 a reader sees until Word updates the field. A wrapper inside a content control,
-a revision, or a hyperlink is not read.
+a revision, or a hyperlink is not read. Neither is a wrapper that names
+WordprocessingML with another prefix than `w`, or uses a prefix bound outside
+it, since its content is written back with `w` and a paragraph that declares
+such a prefix could no longer be identified on save. A match replaced in a
+wrapper that cannot be written back is not counted.
 
 `ContentFragment` owns one paragraph, table, block content control, or removed
 preserved node. Insert, remove, clone, and move resolve canonical

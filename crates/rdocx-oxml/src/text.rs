@@ -3793,7 +3793,7 @@ pub(crate) fn boundary_owners(paragraph: &CT_P, boundary: usize) -> Vec<Boundary
     owners.into_iter().map(|(_, owner)| owner).collect()
 }
 
-/// Whether `raw` is a smart tag or an inline custom XML element with
+/// Whether `raw` is a `w:smartTag` or an inline `w:customXml` element with
 /// content, read with the conventional `w` prefix and those it declares.
 fn is_run_wrapper(raw: &[u8]) -> bool {
     let mut reader = Reader::from_reader(raw);
@@ -3804,16 +3804,19 @@ fn is_run_wrapper(raw: &[u8]) -> bool {
     let Ok(prefixes) = word_prefixes_at(&start, &["w".to_owned()]) else {
         return false;
     };
-    is_word_element(start.name().as_ref(), b"smartTag", &prefixes)
-        || is_word_element(start.name().as_ref(), b"customXml", &prefixes)
+    start.name().as_ref().starts_with(b"w:")
+        && (is_word_element(start.name().as_ref(), b"smartTag", &prefixes)
+            || is_word_element(start.name().as_ref(), b"customXml", &prefixes))
 }
 
 /// The content of a smart tag, an inline custom XML element or a simple
 /// field, parsed as a paragraph from its preserved source `raw` in the scope
 /// of the Word prefixes `inherited`. Its runs are the text a reader sees
-/// inside the wrapper. None for any other element, and for a wrapper whose
-/// content [`with_run_wrapper_content`] could not write back, because `w`
-/// does not name WordprocessingML there.
+/// inside the wrapper. None for any other element, and for a wrapper that
+/// names WordprocessingML with another prefix than `w`, in its own tag or
+/// in its content. [`with_run_wrapper_content`] writes that content with
+/// `w`, which would leave a paragraph that declares such a prefix
+/// unidentifiable when the document is saved.
 pub(crate) fn run_wrapper_paragraph(raw: &[u8], inherited: &[String]) -> Option<CT_P> {
     let mut reader = Reader::from_reader(raw);
     let mut buffer = Vec::new();
@@ -3821,10 +3824,11 @@ pub(crate) fn run_wrapper_paragraph(raw: &[u8], inherited: &[String]) -> Option<
         return None;
     };
     let prefixes = word_prefixes_at(&start, inherited).ok()?;
-    if !["smartTag", "customXml", "fldSimple"]
-        .iter()
-        .any(|local| is_word_element(start.name().as_ref(), local.as_bytes(), &prefixes))
-        || !prefixes.iter().any(|prefix| prefix == "w")
+    if !start.name().as_ref().starts_with(b"w:")
+        || !["smartTag", "customXml", "fldSimple"]
+            .iter()
+            .any(|local| is_word_element(start.name().as_ref(), local.as_bytes(), &prefixes))
+        || !names_word_only_with_w(raw, inherited)
     {
         return None;
     }
@@ -3840,6 +3844,74 @@ pub(crate) fn run_wrapper_paragraph(raw: &[u8], inherited: &[String]) -> Option<
     };
     CT_P::from_xml_with_prefixes_and_root(&mut paragraph_reader, &prefixes, Some(&paragraph_start))
         .ok()
+}
+
+/// Whether `raw` names WordprocessingML only with the `w` prefix, and every
+/// other prefix of its elements and attributes is declared inside it, in the
+/// scope of the Word prefixes `inherited`. A prefix bound outside it could
+/// name WordprocessingML as well.
+fn names_word_only_with_w(raw: &[u8], inherited: &[String]) -> bool {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    // The Word prefixes, and the prefixes declared inside `raw`, in scope.
+    let mut scopes: Vec<(Vec<String>, Vec<Vec<u8>>)> = vec![(inherited.to_vec(), Vec::new())];
+    loop {
+        let (start, empty) = match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(start)) => (start, false),
+            Ok(Event::Empty(start)) => (start, true),
+            Ok(Event::End(_)) => {
+                scopes.pop();
+                buffer.clear();
+                continue;
+            }
+            Ok(Event::Eof) => return true,
+            Ok(_) => {
+                buffer.clear();
+                continue;
+            }
+            Err(_) => return false,
+        };
+        let Some((inherited, declared)) = scopes.last() else {
+            return false;
+        };
+        let Ok(prefixes) = word_prefixes_at(&start, inherited) else {
+            return false;
+        };
+        let mut declared = declared.clone();
+        let mut used = vec![prefix_of(start.name().as_ref()).unwrap_or_default()];
+        for attribute in start.attributes() {
+            let Ok(attribute) = attribute else {
+                return false;
+            };
+            let key = attribute.key.as_ref();
+            if key == b"xmlns" {
+                declared.push(Vec::new());
+            } else if let Some(prefix) = key.strip_prefix(b"xmlns:") {
+                declared.push(prefix.to_vec());
+            } else if let Some(prefix) = prefix_of(key) {
+                used.push(prefix);
+            }
+        }
+        let is_word = |prefix: &[u8]| prefixes.iter().any(|word| word.as_bytes() == prefix);
+        if !used.iter().all(|prefix| match prefix.as_slice() {
+            b"w" => is_word(b"w"),
+            b"xml" => true,
+            other => declared.iter().any(|name| name == other) && !is_word(other),
+        }) {
+            return false;
+        }
+        if !empty {
+            scopes.push((prefixes, declared));
+        }
+        buffer.clear();
+    }
+}
+
+/// The prefix of a qualified `name`, if it has one.
+fn prefix_of(name: &[u8]) -> Option<Vec<u8>> {
+    name.iter()
+        .position(|byte| *byte == b':')
+        .map(|separator| name[..separator].to_vec())
 }
 
 /// The source `raw` of a wrapper that [`run_wrapper_paragraph`] read, with
