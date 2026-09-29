@@ -116,6 +116,9 @@ struct ParsedP14Media {
 
 impl CT_Picture {
     /// Creates a relationship-backed picture with canonical non-visual shells.
+    ///
+    /// The picture carries a rectangle preset geometry, as PowerPoint draws
+    /// nothing for a picture whose shape properties have no geometry.
     pub fn new(
         id: u32,
         name: &str,
@@ -128,13 +131,16 @@ impl CT_Picture {
         let transform_xml = std::str::from_utf8(&transform_xml)?;
         Self::from_xml(
             format!(
-                r#"<p:pic xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:nvPicPr><p:cNvPr id="{id}" name="{name}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="{relationship_id}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>{transform_xml}</p:spPr></p:pic>"#
+                r#"<p:pic xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:nvPicPr><p:cNvPr id="{id}" name="{name}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="{relationship_id}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>{transform_xml}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
             )
             .as_bytes(),
         )
     }
 
     /// Creates a media picture with standard and Office 2010 relationships.
+    ///
+    /// Its poster frame carries the same rectangle preset geometry as a
+    /// picture made by [`CT_Picture::new`].
     #[allow(clippy::too_many_arguments)]
     pub fn new_media(
         id: u32,
@@ -174,7 +180,7 @@ impl CT_Picture {
         };
         Self::from_xml(
             format!(
-                r#"<p:pic xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}" xmlns:p14="{P14_NS}"><p:nvPicPr><p:cNvPr id="{id}" name="{name}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr><a:{media_tag} r:link="{source_relationship_id}"/><p:extLst><p:ext uri="{{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}}"><p14:media r:{extension_attribute}="{microsoft_relationship_id}"{trim}</p:ext></p:extLst></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="{poster_relationship_id}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>{transform_xml}</p:spPr></p:pic>"#
+                r#"<p:pic xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}" xmlns:p14="{P14_NS}"><p:nvPicPr><p:cNvPr id="{id}" name="{name}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr><a:{media_tag} r:link="{source_relationship_id}"/><p:extLst><p:ext uri="{{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}}"><p14:media r:{extension_attribute}="{microsoft_relationship_id}"{trim}</p:ext></p:extLst></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="{poster_relationship_id}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>{transform_xml}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
             )
             .as_bytes(),
         )
@@ -1582,6 +1588,9 @@ mod tests {
         let shape_properties = text.find("<p:spPr").unwrap();
         assert!(non_visual < blip_fill);
         assert!(blip_fill < shape_properties);
+        assert!(
+            text.contains("</a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr>")
+        );
 
         let reparsed = CT_Picture::from_xml(&xml).unwrap();
         assert_eq!(reparsed.non_visual_id(), Some(7));
@@ -1592,6 +1601,14 @@ mod tests {
         assert_eq!(
             reparsed.shape_properties.transform,
             picture.shape_properties.transform
+        );
+        assert_eq!(
+            reparsed
+                .shape_properties
+                .preset_geometry
+                .as_ref()
+                .map(|geometry| geometry.preset.as_str()),
+            Some("rect")
         );
     }
 }
