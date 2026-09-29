@@ -40,7 +40,9 @@ Text boxes use a WPS DrawingML primary branch with exact rotation and vertical
 direction, plus a self-contained VML fallback whose shape type, text spacing,
 and vertical flow agree with the selected option. Unsupported producer
 `AlternateContent` remains opaque unless the facade authors that complete
-fragment itself.
+fragment itself. A Word text box in a run's `AlternateContent` is read as a
+story from its first text-box Choice, and replacement edits every copy of it,
+see `03-architecture.md` and `10-bindings-spec.md`.
 
 Cross-document body-fragment import treats each selected picture or chart
 drawing as the root of a part-local relationship closure. It assigns fresh

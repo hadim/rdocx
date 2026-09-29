@@ -1245,6 +1245,19 @@ the text box pass rewrites like any other text box. The Rust facade, Python
 `try_replace_text`, `replace_all` and `replace_all_regex`, the WASM replacement
 method, and `rdocx replace --expect` share these counts.
 
+Every Word replacement, literal, regular expression, or template, edits every
+copy of a text box that Word writes in `mc:AlternateContent`. The count is that
+of the first `mc:Choice` that holds a text box, the DrawingML copy that layout
+draws and the story walkers read. The VML `mc:Fallback` and any later Choice
+are edited whatever they hold, a Fallback that a story edit left behind its
+Choice included, and never counted. A replacement can therefore change a
+Fallback and report 0. When no Choice holds a text box, a Fallback text box is
+replaced and counted as any other text box. Replacement handles
+`mc:AlternateContent` at any depth outside another text box, while the story
+walkers read it only as a child of a run. A story edit of such a text box
+changes the Choice only, see `03-architecture.md`. `redact_text` removes the
+literal from every copy and still counts each copy.
+
 The native presentation facade provides the same staged boundary through
 `Presentation::try_replace_text`, with exact counts across slides and speaker
 notes. `rpptx replace` refuses an existing destination, including its input,

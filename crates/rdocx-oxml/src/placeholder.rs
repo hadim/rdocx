@@ -756,7 +756,10 @@ fn edit_header_footer(hf: &mut CT_HdrFtr, edit: &mut dyn FnMut(&mut CT_P) -> usi
 /// performs replacement, and re-serializes the children it changed. Every
 /// other child of the text box, such as a bookmark or a paragraph without a
 /// match, is copied through verbatim in its place. A text box nested inside
-/// another one is kept as it is, not edited. Returns the modified XML and
+/// another one is kept as it is, not edited. Word writes a text box twice in
+/// `mc:AlternateContent`, as DrawingML in `mc:Choice` and as VML in
+/// `mc:Fallback`. Every copy is edited, and a match counts once, from the
+/// first Choice that holds a text box. Returns the modified XML and
 /// replacement count.
 pub fn replace_in_xml_part(
     xml: &[u8],
@@ -775,7 +778,7 @@ pub fn replace_many_in_xml_part(
     xml: &[u8],
     replacements: &[(&str, &str)],
 ) -> crate::error::Result<(Vec<u8>, usize)> {
-    rewrite_text_boxes(xml, &mut |paragraph| {
+    rewrite_text_boxes(xml, true, &mut |paragraph| {
         replacements
             .iter()
             .map(|(placeholder, replacement)| {
@@ -794,17 +797,18 @@ pub fn replace_regex_in_xml_part(
     re: &regex::Regex,
     replacement: &str,
 ) -> crate::error::Result<(Vec<u8>, usize)> {
-    rewrite_text_boxes(xml, &mut |paragraph| {
+    rewrite_text_boxes(xml, true, &mut |paragraph| {
         replace_regex_in_paragraph(paragraph, re, replacement)
     })
 }
 
 /// The texts a replacement in the text boxes of a raw XML part matches
-/// against, see [`replaceable_texts`].
+/// against and counts, see [`replaceable_texts`]. The copies of a text box
+/// that Word writes twice, see [`replace_in_xml_part`], are left out.
 #[doc(hidden)]
 pub fn xml_part_replaceable_texts(xml: &[u8]) -> crate::error::Result<Vec<String>> {
     let mut texts = Vec::new();
-    rewrite_text_boxes(xml, &mut |paragraph| {
+    rewrite_text_boxes(xml, false, &mut |paragraph| {
         texts.extend(replaceable_texts(paragraph));
         0
     })?;
@@ -816,14 +820,36 @@ pub fn xml_part_replaceable_texts(xml: &[u8]) -> crate::error::Result<Vec<String
 /// re-serialising a child in place when `edit` counts a change in it. Every
 /// other child of the text box is copied through verbatim. A table or a
 /// control is parsed with the namespaces the part declares around it, such as
-/// the `w14` of `w14:paraId` that Word declares on the root. Returns the
+/// the `w14` of `w14:paraId` that Word declares on the root. A text box that
+/// Word writes twice is counted once, and its copies are handed to `edit`
+/// only with `edit_copies`, see [`rewrite_alternate_content`]. Returns the
 /// rewritten XML and the summed count.
 fn rewrite_text_boxes(
     xml: &[u8],
+    edit_copies: bool,
+    edit: &mut dyn FnMut(&mut CT_P) -> usize,
+) -> crate::error::Result<(Vec<u8>, usize)> {
+    use crate::namespace::{MC_NS, R_NS};
+
+    // The bindings `CT_P::from_xml` assumes for a paragraph cut out of the part.
+    let part_prefixes = [
+        "w".to_owned(),
+        format!("\0r\0{R_NS}"),
+        format!("\0mc\0{MC_NS}"),
+    ];
+    rewrite_text_boxes_within(xml, &part_prefixes, edit_copies, edit)
+}
+
+/// [`rewrite_text_boxes`] over `xml`, an element cut out of a part where the
+/// bindings `inherited` are in scope.
+fn rewrite_text_boxes_within(
+    xml: &[u8],
+    inherited: &[String],
+    edit_copies: bool,
     edit: &mut dyn FnMut(&mut CT_P) -> usize,
 ) -> crate::error::Result<(Vec<u8>, usize)> {
     use crate::error::OxmlError;
-    use crate::namespace::{MC_NS, R_NS, matches_local_name};
+    use crate::namespace::matches_local_name;
     use crate::raw_xml::capture_element;
     use quick_xml::events::Event;
     use quick_xml::{Reader, Writer};
@@ -834,20 +860,15 @@ fn rewrite_text_boxes(
     let mut writer = Writer::new(Vec::new());
     let mut buf = Vec::new();
     let mut total_count = 0;
-    // The bindings `CT_P::from_xml` assumes for a paragraph cut out of the part,
-    // and those the elements open around the current position declare.
-    let part_prefixes = vec![
-        "w".to_owned(),
-        format!("\0r\0{R_NS}"),
-        format!("\0mc\0{MC_NS}"),
-    ];
+    // The bindings the elements open around the current position declare.
     let mut scopes: Vec<Vec<String>> = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Eof) => break,
             Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"txbxContent") => {
-                let word_prefixes = word_prefixes_at(e, scopes.last().unwrap_or(&part_prefixes))?;
+                let word_prefixes =
+                    word_prefixes_at(e, scopes.last().map_or(inherited, Vec::as_slice))?;
                 // We found a txbxContent element. Parse and edit each paragraph
                 // and copy every other child through verbatim, in document order.
                 writer.write_event(Event::Start(e.clone()))?;
@@ -913,10 +934,19 @@ fn rewrite_text_boxes(
                     inner_buf.clear();
                 }
             }
+            Ok(Event::Start(ref e))
+                if matches_local_name(e.name().as_ref(), b"AlternateContent") =>
+            {
+                let scope = scopes.last().map_or(inherited, Vec::as_slice);
+                let raw = capture_element(&mut reader, e)?;
+                let (rewritten, count) = rewrite_alternate_content(&raw, scope, edit_copies, edit)?;
+                writer.get_mut().extend_from_slice(&rewritten);
+                total_count += count;
+            }
             Ok(Event::Start(e)) => {
                 scopes.push(word_prefixes_at(
                     &e,
-                    scopes.last().unwrap_or(&part_prefixes),
+                    scopes.last().map_or(inherited, Vec::as_slice),
                 )?);
                 writer.write_event(Event::Start(e))?;
             }
@@ -1104,6 +1134,80 @@ fn is_note_a_reader_writes(start: &quick_xml::events::BytesStart<'_>, prefixes: 
         && optional_word_attribute(start, b"id", prefixes)
             .and_then(|id| id.parse::<i32>().ok())
             .is_some_and(|id| id > 0)
+}
+
+/// [`rewrite_text_boxes`] over `raw`, an `mc:AlternateContent` element, with
+/// a text box that Word writes twice counted once.
+///
+/// Word writes a text box as a DrawingML shape in `mc:Choice` and a VML copy
+/// of it in `mc:Fallback`. The first Choice that holds a text box, the one
+/// layout draws, is edited and counted. Every branch after it, the Fallback
+/// or another Choice, is a copy. With `edit_copies`, a copy is edited too,
+/// whatever it holds, so that a reader of the VML sees the same change, and
+/// it is never counted. Without it, a copy keeps its bytes. When no Choice
+/// holds a text box, a picture for example, every branch is walked and
+/// counted as any other markup.
+fn rewrite_alternate_content(
+    raw: &[u8],
+    inherited: &[String],
+    edit_copies: bool,
+    edit: &mut dyn FnMut(&mut CT_P) -> usize,
+) -> crate::error::Result<(Vec<u8>, usize)> {
+    use crate::namespace::matches_local_name;
+    use crate::raw_xml::capture_element;
+    use quick_xml::events::Event;
+    use quick_xml::{Reader, Writer};
+
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::new());
+    let mut buf = Vec::new();
+    let Event::Start(start) = reader.read_event_into(&mut buf)? else {
+        return Ok((raw.to_vec(), 0));
+    };
+    let prefixes = word_prefixes_at(&start, inherited)?;
+    writer.write_event(Event::Start(start.into_owned()))?;
+    buf.clear();
+    // Whether a Choice that holds a text box, the counted one, was read.
+    let mut counted_choice = false;
+    let mut total_count = 0;
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Eof => break,
+            Event::Start(ref branch_start) => {
+                let branch = capture_element(&mut reader, branch_start)?;
+                if counted_choice {
+                    let copy = if edit_copies {
+                        rewrite_text_boxes_within(&branch, &prefixes, edit_copies, edit)?.0
+                    } else {
+                        branch
+                    };
+                    writer.get_mut().extend_from_slice(&copy);
+                } else {
+                    // The walk hands the edit only the paragraphs of text
+                    // boxes, so any paragraph it hands over tells that the
+                    // branch holds one.
+                    let mut holds_text_box = false;
+                    let (rewritten, count) = rewrite_text_boxes_within(
+                        &branch,
+                        &prefixes,
+                        edit_copies,
+                        &mut |paragraph| {
+                            holds_text_box = true;
+                            edit(paragraph)
+                        },
+                    )?;
+                    counted_choice = holds_text_box
+                        && matches_local_name(branch_start.name().as_ref(), b"Choice");
+                    writer.get_mut().extend_from_slice(&rewritten);
+                    total_count += count;
+                }
+            }
+            event => writer.write_event(event)?,
+        }
+        buf.clear();
+    }
+    Ok((writer.into_inner(), total_count))
 }
 
 /// Replace placeholders in chart XML parts.
@@ -1851,6 +1955,149 @@ mod tests {
         assert_eq!(count, 1);
         let result_str = String::from_utf8(result).unwrap();
         assert!(result_str.contains("Company: Acme"));
+    }
+
+    fn drawing_text_box(text: &str) -> String {
+        format!(
+            r#"<w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx><w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>"#
+        )
+    }
+
+    fn vml_text_box(text: &str) -> String {
+        format!(
+            r#"<w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict>"#
+        )
+    }
+
+    fn choice(content: &str) -> String {
+        format!(
+            r#"<mc:Choice xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" Requires="wps">{content}</mc:Choice>"#
+        )
+    }
+
+    fn fallback(content: &str) -> String {
+        format!("<mc:Fallback>{content}</mc:Fallback>")
+    }
+
+    /// A body paragraph whose run holds `branches` in `mc:AlternateContent`.
+    fn alternate_content_part(branches: &str) -> String {
+        format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:mc="{MC_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><mc:AlternateContent>{branches}</mc:AlternateContent></w:r></w:p></w:body></w:document>"#
+        )
+    }
+
+    /// A text box as Word writes it, with `choice` in the DrawingML copy and
+    /// `fallback` in the VML one.
+    fn word_text_box_part(choice_text: &str, fallback_text: &str) -> String {
+        alternate_content_part(
+            &[
+                choice(&drawing_text_box(choice_text)),
+                fallback(&vml_text_box(fallback_text)),
+            ]
+            .concat(),
+        )
+    }
+
+    /// Every way to replace in the text boxes of a part, with its count.
+    fn replace_in_every_way(xml: &str) -> [(String, usize); 3] {
+        let re = regex::Regex::new(r"\{\{x\}\}").unwrap();
+        [
+            replace_in_xml_part(xml.as_bytes(), "{{x}}", "Y").unwrap(),
+            replace_many_in_xml_part(xml.as_bytes(), &[("{{x}}", "Y"), ("absent", "Z")]).unwrap(),
+            replace_regex_in_xml_part(xml.as_bytes(), &re, "Y").unwrap(),
+        ]
+        .map(|(written, count)| (String::from_utf8(written).unwrap(), count))
+    }
+
+    /// Word writes a text box twice, the DrawingML shape in `mc:Choice` and a
+    /// VML copy in `mc:Fallback`. Both copies are edited, and a match counts
+    /// once. The texts a template reads hold it once too.
+    #[test]
+    fn a_text_box_word_writes_twice_is_counted_once() {
+        let xml = word_text_box_part("Box {{x}}", "Box {{x}}");
+
+        assert_eq!(
+            xml_part_replaceable_texts(xml.as_bytes()).unwrap(),
+            ["Box {{x}}"]
+        );
+        for (written, count) in replace_in_every_way(&xml) {
+            assert_eq!(count, 1, "{written}");
+            assert_eq!(written, word_text_box_part("Box Y", "Box Y"));
+        }
+    }
+
+    /// The Fallback is edited whatever it holds, so that a copy a story edit
+    /// left behind the Choice still gets every later replacement, and it is
+    /// never counted. The texts a template reads leave it out.
+    #[test]
+    fn a_fallback_is_edited_and_never_counted() {
+        for (choice_text, fallback_text, expected_choice, expected_fallback, expected_count) in [
+            ("A {{x}}", "B {{x}}", "A Y", "B Y", 1),
+            ("Box {{x}}", "Old {{x}} {{x}}", "Box Y", "Old Y Y", 1),
+            ("Box {{x}} {{x}}", "Old {{x}}", "Box Y Y", "Old Y", 2),
+            ("Box", "Old {{x}}", "Box", "Old Y", 0),
+        ] {
+            let xml = word_text_box_part(choice_text, fallback_text);
+
+            assert_eq!(
+                xml_part_replaceable_texts(xml.as_bytes()).unwrap(),
+                [choice_text]
+            );
+            let expected = word_text_box_part(expected_choice, expected_fallback);
+            for (written, count) in replace_in_every_way(&xml) {
+                assert_eq!(count, expected_count, "{written}");
+                assert_eq!(written, expected);
+            }
+        }
+    }
+
+    /// With several Choice branches, the first one that holds a text box is
+    /// counted, as layout draws the first Choice drawing. A Choice after it
+    /// is a copy, edited as the Fallback is and never counted.
+    #[test]
+    fn the_first_choice_that_holds_a_text_box_is_counted() {
+        let picture = r#"<w:drawing><wp:inline><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"/></a:graphic></wp:inline></w:drawing>"#;
+        let part = |first: &str, second: &str, copy: &str| {
+            alternate_content_part(
+                &[
+                    choice(picture),
+                    choice(&drawing_text_box(first)),
+                    choice(&drawing_text_box(second)),
+                    fallback(&vml_text_box(copy)),
+                ]
+                .concat(),
+            )
+        };
+        let xml = part("First {{x}}", "Second {{x}}", "Box {{x}}");
+
+        assert_eq!(
+            xml_part_replaceable_texts(xml.as_bytes()).unwrap(),
+            ["First {{x}}"]
+        );
+        for (written, count) in replace_in_every_way(&xml) {
+            assert_eq!(count, 1, "{written}");
+            assert_eq!(written, part("First Y", "Second Y", "Box Y"));
+        }
+    }
+
+    /// When the Choice holds no text box, a picture for example, the text
+    /// box of the Fallback is the only one and counts as before.
+    #[test]
+    fn a_fallback_beside_a_choice_without_a_text_box_is_counted() {
+        let picture = r#"<w:drawing><wp:inline><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"/></a:graphic></wp:inline></w:drawing>"#;
+        let part = |text: &str| {
+            alternate_content_part(&[choice(picture), fallback(&vml_text_box(text))].concat())
+        };
+        let xml = part("Box {{x}}");
+
+        assert_eq!(
+            xml_part_replaceable_texts(xml.as_bytes()).unwrap(),
+            ["Box {{x}}"]
+        );
+        for (written, count) in replace_in_every_way(&xml) {
+            assert_eq!(count, 1, "{written}");
+            assert_eq!(written, part("Box Y"));
+        }
     }
 
     /// A text box whose paragraphs sit among a table, a block content

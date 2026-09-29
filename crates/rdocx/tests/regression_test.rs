@@ -18263,11 +18263,12 @@ mod text_box_replacement_keeps_every_child {
     }
 
     /// Replace in both text box forms, then check that every copy holds the
-    /// edited paragraph and every other child byte for byte and in order.
+    /// edited paragraph and every other child byte for byte and in order. The
+    /// two copies of the compatibility block count as one match.
     fn assert_replacement_keeps_every_child(replace: impl Fn(&mut Document) -> usize) {
         for (compatibility_block, ids) in [(true, &[7, 8][..]), (false, &[7][..])] {
             let mut document = text_box_document(compatibility_block);
-            assert_eq!(replace(&mut document), ids.len(), "{compatibility_block}");
+            assert_eq!(replace(&mut document), 1, "{compatibility_block}");
             let saved = super::document_xml(&mut document);
             assert_eq!(saved.matches("<w:txbxContent>").count(), ids.len());
             for &id in ids {
@@ -18298,6 +18299,372 @@ mod text_box_replacement_keeps_every_child {
                 .render_template(&serde_json::json!({"name": "Ada"}))
                 .unwrap()
         });
+    }
+}
+
+/// Word writes a text box twice, the DrawingML shape in `mc:Choice` and a VML
+/// copy in `mc:Fallback`. The story walkers skipped the whole
+/// `mc:AlternateContent`, so such a text box was no story, and replacement
+/// edited both copies and counted every match twice.
+mod text_boxes_word_writes_twice {
+    use quick_xml::events::Event;
+    use rdocx::{Document, StoryId, StoryItemKind, StoryKind};
+    use rdocx_oxml::namespace::W_NS;
+
+    const WPS_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+
+    /// The DrawingML text box of Word, holding `text`.
+    fn drawing_text_box(text: &str) -> String {
+        format!(
+            r#"<w:drawing><wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="1270000" cy="635000"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="10" name="Text Box 10"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="{WPS_NS}"><wps:wsp xmlns:wps="{WPS_NS}"><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>"#
+        )
+    }
+
+    /// The VML copy of the text box, holding `text`.
+    fn vml_text_box(text: &str) -> String {
+        format!(
+            r#"<w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" style="width:100pt;height:50pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict>"#
+        )
+    }
+
+    /// The two copies of a text box in `mc:AlternateContent`, as Word writes
+    /// them.
+    fn alternate_content(choice: &str, fallback: &str) -> String {
+        format!(
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:wps="{WPS_NS}" Requires="wps">{choice}</mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+        )
+    }
+
+    /// A body paragraph with a run of its own and a run holding `shape`.
+    fn document_with_shape(shape: &str) -> Document {
+        super::document_with_content_controls(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>Anchor paragraph</w:t></w:r><w:r>{shape}</w:r></w:p></w:body></w:document>"#
+        ))
+    }
+
+    /// A text box as Word writes it, the same text in both copies.
+    fn word_text_box_document(text: &str) -> Document {
+        document_with_shape(&alternate_content(
+            &drawing_text_box(text),
+            &vml_text_box(text),
+        ))
+    }
+
+    /// Every story item as the story kind, the item kind and the text.
+    fn story_items(document: &Document) -> Vec<(StoryKind, StoryItemKind, Option<String>)> {
+        document
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .map(|item| {
+                (
+                    item.location().story().kind(),
+                    item.location().item_kind(),
+                    item.text().map(str::to_owned),
+                )
+            })
+            .collect()
+    }
+
+    /// The one text-box story of the document.
+    fn text_box_story(document: &Document) -> StoryId {
+        let stories = document.stories().unwrap();
+        let text_boxes = stories
+            .iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+            .collect::<Vec<_>>();
+        assert_eq!(text_boxes.len(), 1, "{stories:?}");
+        text_boxes[0].clone()
+    }
+
+    fn text_box_items(document: &Document) -> Vec<(StoryItemKind, Option<String>, Vec<u8>)> {
+        document
+            .story_items(&text_box_story(document))
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item.kind(),
+                    item.text().unwrap(),
+                    item.xml().unwrap().to_vec(),
+                )
+            })
+            .collect()
+    }
+
+    /// The text box is one story, read from the Choice, with the paragraph
+    /// items of a text box written without `mc:AlternateContent`. The body
+    /// lists its own paragraph only, as it did.
+    #[test]
+    fn a_word_text_box_is_one_story_read_from_its_choice() {
+        let document = word_text_box_document("Box NEEDLE");
+
+        assert_eq!(
+            story_items(&document),
+            [
+                (
+                    StoryKind::Body,
+                    StoryItemKind::Paragraph,
+                    Some("Anchor paragraph".to_owned())
+                ),
+                (
+                    StoryKind::TextBox,
+                    StoryItemKind::Paragraph,
+                    Some("Box NEEDLE".to_owned())
+                ),
+            ]
+        );
+        let bare = document_with_shape(&drawing_text_box("Box NEEDLE"));
+        assert_eq!(text_box_items(&document), text_box_items(&bare));
+    }
+
+    fn saved_text_boxes(document: &mut Document) -> String {
+        let saved = super::document_xml(document);
+        let start = saved.find("<mc:AlternateContent").unwrap();
+        let end = saved.find("</mc:AlternateContent>").unwrap();
+        saved[start..end + "</mc:AlternateContent>".len()].to_owned()
+    }
+
+    /// The text of every `w:txbxContent` of the saved main part, in order.
+    fn saved_text_box_texts(document: &mut Document) -> Vec<String> {
+        let saved = super::document_xml(document);
+        let mut reader = quick_xml::Reader::from_str(&saved);
+        let mut texts = Vec::new();
+        let (mut in_text_box, mut in_text) = (false, false);
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(element) => match element.local_name().as_ref() {
+                    b"txbxContent" => {
+                        in_text_box = true;
+                        texts.push(String::new());
+                    }
+                    local_name => in_text = in_text_box && local_name == b"t",
+                },
+                Event::End(element) => {
+                    in_text = false;
+                    in_text_box &= element.local_name().as_ref() != b"txbxContent";
+                }
+                Event::Text(text) if in_text => {
+                    texts.last_mut().unwrap().push_str(&text.decode().unwrap());
+                }
+                Event::Eof => return texts,
+                _ => {}
+            }
+        }
+    }
+
+    /// A replacement entry point, returning its count.
+    type Replace = fn(&mut Document) -> usize;
+
+    /// Replacement edits both copies, so that a reader of the VML sees the
+    /// same text, and counts each match once.
+    #[test]
+    fn a_word_text_box_is_replaced_in_both_copies_and_counted_once() {
+        let replacements: [(&str, Replace); 4] = [
+            ("try_replace_text", |document| {
+                document.try_replace_text("NEEDLE", "X").unwrap()
+            }),
+            ("replace_regex", |document| {
+                document.replace_regex("NEE+DLE", "X").unwrap()
+            }),
+            ("replace_all_regex", |document| {
+                document
+                    .replace_all_regex(&[("NEEDLE".to_owned(), "X".to_owned())])
+                    .unwrap()
+            }),
+            ("replace_all", |document| {
+                document.replace_all(&std::collections::HashMap::from([("NEEDLE", "X")]))
+            }),
+        ];
+        for (name, replace) in replacements {
+            let mut document = word_text_box_document("Box NEEDLE");
+            assert_eq!(replace(&mut document), 1, "{name}");
+            assert_eq!(
+                saved_text_boxes(&mut document),
+                alternate_content(&drawing_text_box("Box X"), &vml_text_box("Box X")),
+                "{name}"
+            );
+        }
+    }
+
+    /// A template counts its tags against the texts it reads, so the text box
+    /// holds its tag once there too, and both copies are rendered.
+    #[test]
+    fn a_template_renders_both_copies_of_a_word_text_box() {
+        let mut document = word_text_box_document("Box {{name}}");
+
+        let count = document
+            .render_template(&serde_json::json!({"name": "Ada"}))
+            .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(
+            saved_text_boxes(&mut document),
+            alternate_content(&drawing_text_box("Box Ada"), &vml_text_box("Box Ada"))
+        );
+    }
+
+    /// Word never writes a Fallback whose text box is not a copy of the
+    /// Choice. Such a Fallback is edited all the same, and the count is the
+    /// Choice's.
+    #[test]
+    fn a_fallback_that_is_no_copy_of_its_choice_is_edited_without_being_counted() {
+        for (fallback, expected_fallback) in
+            [("Old NEEDLE NEEDLE", "Old X X"), ("Old text", "Old text")]
+        {
+            let mut document = document_with_shape(&alternate_content(
+                &drawing_text_box("Box NEEDLE"),
+                &vml_text_box(fallback),
+            ));
+
+            assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 1);
+
+            assert_eq!(
+                saved_text_boxes(&mut document),
+                alternate_content(&drawing_text_box("Box X"), &vml_text_box(expected_fallback))
+            );
+        }
+    }
+
+    /// A story edit changes the Choice only, so the Fallback keeps the text
+    /// it had. A later replacement still reaches that Fallback, and counts
+    /// the matches of the Choice alone.
+    #[test]
+    fn a_replacement_after_a_story_edit_reaches_the_fallback() {
+        let mut document = word_text_box_document("Box NEEDLE");
+        let paragraph = super::f254_item(&document, &text_box_story(&document), 0);
+        document.set_story_text(&paragraph, "Edited text").unwrap();
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["Edited text", "Box NEEDLE"]
+        );
+
+        assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 0);
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["Edited text", "Box X"]
+        );
+
+        let mut document = word_text_box_document("Box NEEDLE");
+        let mut paragraph = rdocx_oxml::text::CT_P::new();
+        paragraph.add_run("Second NEEDLE");
+        document
+            .insert_content(
+                &rdocx::ContentLocation::end(text_box_story(&document)),
+                rdocx::ContentFragment::paragraph(paragraph).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["Box NEEDLESecond NEEDLE", "Box NEEDLE"]
+        );
+
+        assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 2);
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["Box XSecond X", "Box X"]
+        );
+    }
+
+    /// A text box that `add_text_box_to_story` authors has the same two
+    /// copies, and a replacement after a story edit reaches its Fallback too.
+    #[test]
+    fn a_replacement_after_a_story_edit_reaches_an_authored_fallback() {
+        let mut document = Document::new();
+        document.add_paragraph("Host");
+        let body = super::f254_story(&document, StoryKind::Body);
+        let zero = rdocx::Length::pt(0.0);
+        let options = rdocx::TextBoxOptions {
+            width: rdocx::Length::pt(144.0),
+            height: rdocx::Length::pt(54.0),
+            anchor: rdocx::PictureAnchor {
+                horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                horizontal_offset: zero,
+                horizontal_alignment: None,
+                vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                vertical_offset: zero,
+                vertical_alignment: None,
+                wrap: rdocx::DrawingWrap::TopAndBottom,
+                distance_top: zero,
+                distance_bottom: zero,
+                distance_left: zero,
+                distance_right: zero,
+                relative_height: 1,
+                behind_text: false,
+            },
+            rotation_degrees: 0.0,
+            text_direction: rdocx::TextBoxDirection::Horizontal,
+            fill_color: None,
+        };
+        document
+            .add_text_box_to_story(&body, "Hello NEEDLE", options)
+            .unwrap();
+        let paragraph = super::f254_item(&document, &text_box_story(&document), 0);
+        document.set_story_text(&paragraph, "Edited").unwrap();
+
+        assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 0);
+        assert_eq!(saved_text_box_texts(&mut document), ["Edited", "Hello X"]);
+    }
+
+    /// With several Choice branches, the text box is read from the first one
+    /// that holds one, as layout draws the first Choice drawing. A later
+    /// Choice is a copy, edited as the Fallback is, and neither listed nor
+    /// counted.
+    #[test]
+    fn the_first_choice_that_holds_a_text_box_is_read_and_counted() {
+        let mut document = document_with_shape(&format!(
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:w16x="urn:unknown:w16x" xmlns:wps="{WPS_NS}" Requires="w16x">{}</mc:Choice><mc:Choice xmlns:wps="{WPS_NS}" Requires="wps">{}</mc:Choice><mc:Fallback>{}</mc:Fallback></mc:AlternateContent>"#,
+            drawing_text_box("First NEEDLE"),
+            drawing_text_box("Second NEEDLE")
+                .replace("Box 10\"", "Box 11\"")
+                .replace("id=\"10\"", "id=\"11\""),
+            vml_text_box("Box NEEDLE"),
+        ));
+
+        assert_eq!(
+            story_items(&document),
+            [
+                (
+                    StoryKind::Body,
+                    StoryItemKind::Paragraph,
+                    Some("Anchor paragraph".to_owned())
+                ),
+                (
+                    StoryKind::TextBox,
+                    StoryItemKind::Paragraph,
+                    Some("First NEEDLE".to_owned())
+                ),
+            ]
+        );
+        assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 1);
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["First X", "Second X", "Box X"]
+        );
+    }
+
+    /// When the Choice holds no text box, a picture here, the text box of the
+    /// Fallback is the only one. The story walkers list neither it nor the
+    /// picture, and replacement counts it, as before.
+    #[test]
+    fn a_fallback_text_box_beside_a_picture_is_unchanged() {
+        let picture = r#"<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="10" cy="10"/><wp:docPr id="11" name="Picture 11"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="11" name="Picture 11"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill/><pic:spPr/></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#;
+        let mut document =
+            document_with_shape(&alternate_content(picture, &vml_text_box("Box NEEDLE")));
+
+        assert_eq!(
+            story_items(&document),
+            [(
+                StoryKind::Body,
+                StoryItemKind::Paragraph,
+                Some("Anchor paragraph".to_owned())
+            )]
+        );
+        assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 1);
+        assert_eq!(
+            saved_text_boxes(&mut document),
+            alternate_content(picture, &vml_text_box("Box X"))
+        );
     }
 }
 

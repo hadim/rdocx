@@ -756,6 +756,53 @@ fn cli_replace_reports_namespace_preflight_errors_without_panicking() {
     assert!(!output_path.exists());
 }
 
+/// Word writes a text box twice, as DrawingML in `mc:Choice` and as VML in
+/// `mc:Fallback`. `rdocx replace --expect 1` failed on it with `found 2`.
+#[test]
+fn replace_with_expect_counts_a_word_text_box_once() {
+    let temp = TempWorkspace::new("replace-word-text-box");
+    let input = temp.path.join("text-box.docx");
+    let replaced = temp.path.join("replaced.docx");
+    write_document(&input, &["seed"]);
+
+    let copy = r#"<w:txbxContent><w:p><w:r><w:t>Box NEEDLE</w:t></w:r></w:p></w:txbxContent>"#;
+    let text_box = format!(
+        r#"<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx>{copy}</wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox>{copy}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>"#
+    );
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(&input).unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>Anchor paragraph</w:t></w:r>{text_box}</w:p></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    package
+        .write_to(&mut fs::File::create(&input).unwrap())
+        .unwrap();
+
+    let output = cli(&[
+        "replace",
+        path_text(&input),
+        "--placeholder",
+        "NEEDLE",
+        "--value",
+        "X",
+        "--expect",
+        "1",
+        "--output",
+        path_text(&replaced),
+    ]);
+    assert_success(&output, "replace");
+
+    let package = OpcPackage::open(&replaced).unwrap();
+    let saved =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    assert!(!saved.contains("NEEDLE"), "{saved}");
+    assert_eq!(saved.matches(">Box X<").count(), 2, "{saved}");
+}
+
 /// `rdocx replace --expect 1` found none of the text that Google Docs and
 /// Word keep in content controls: a run wrapped inside its paragraph, a
 /// paragraph wrapped at body level, a control in a table cell, nested
