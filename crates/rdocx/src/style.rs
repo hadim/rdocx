@@ -6,7 +6,7 @@ use rdocx_oxml::borders::CT_BorderEdge;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::{ST_Border, ST_Jc};
 use rdocx_oxml::styles::{CT_Style, CT_Styles, CT_TblStylePr, StyleType, TableStyleRegion};
-use rdocx_oxml::table::{CT_TblBorders, CT_TblPr, CT_TcPr, CT_TrPr};
+use rdocx_oxml::table::{CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TcPr, CT_TrPr};
 use rdocx_oxml::units::{HalfPoint, Twips};
 
 use crate::{Error, Result};
@@ -533,10 +533,12 @@ impl StyleBuilder {
 
 /// The Word built-in styles `Document::add_common_styles` adds, in order.
 ///
-/// Each carries the IDs, names, UI metadata and formatting Word's Office theme
-/// writes, with the theme colours and fonts resolved to literal values the way
-/// the default `Heading1` already is. `Table Grid` carries its borders but not
-/// its `Normal Table` base, which a new document does not define.
+/// Each carries the ID, name, UI priority, visibility flags and paragraph and
+/// run formatting Word writes for it under the Office theme, with the theme
+/// colours written as literal values the way the default `Heading1` has them.
+/// No font is named, so the text keeps the document default font. `Table Grid`
+/// has no `Normal Table` base, which a new document does not define, so it
+/// carries that base's cell margins itself.
 pub(crate) fn common_styles() -> Vec<CT_Style> {
     let spacing = |before: Option<i32>, after: i32, line: Option<i32>| CT_PPr {
         space_before: before.map(Twips),
@@ -566,7 +568,7 @@ pub(crate) fn common_styles() -> Vec<CT_Style> {
     ];
     let mut styles = Vec::new();
     for (level, (size, color, italic)) in (2u32..).zip(headings) {
-        styles.push(
+        let heading =
             StyleBuilder::paragraph(&format!("Heading{level}"), &format!("heading {level}"))
                 .based_on("Normal")
                 .next_style("Normal")
@@ -579,8 +581,13 @@ pub(crate) fn common_styles() -> Vec<CT_Style> {
                     outline_lvl: Some(level - 1),
                     ..spacing(Some(40), 0, None)
                 })
-                .run_properties(text(size, color, italic)),
-        );
+                .run_properties(text(size, color, italic));
+        // Word hides heading 4 and deeper until they are used.
+        styles.push(if level >= 4 {
+            heading.semi_hidden(true)
+        } else {
+            heading
+        });
     }
     let border = || {
         Some(CT_BorderEdge {
@@ -646,6 +653,7 @@ pub(crate) fn common_styles() -> Vec<CT_Style> {
             .based_on("Normal")
             .next_style("Normal")
             .priority(35)
+            .semi_hidden(true)
             .unhide_when_used(true)
             .quick_format(true)
             .paragraph_properties(spacing(None, 200, Some(240)))
@@ -662,6 +670,12 @@ pub(crate) fn common_styles() -> Vec<CT_Style> {
                     inside_h: border(),
                     inside_v: border(),
                     ..CT_TblBorders::default()
+                }),
+                cell_margin: Some(CT_TblCellMar {
+                    top: Some(Twips(0)),
+                    left: Some(Twips(108)),
+                    bottom: Some(Twips(0)),
+                    right: Some(Twips(108)),
                 }),
                 ..CT_TblPr::default()
             }),

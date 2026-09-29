@@ -9641,13 +9641,42 @@ fn common_styles_are_added_once_and_leave_unstyled_layout_unchanged() {
     assert_eq!(heading.based_on(), Some("Normal"));
     assert_eq!(heading.next_style(), Some("Normal"));
     assert_eq!(heading.paragraph_properties().unwrap().outline_lvl, Some(1));
-    assert_eq!(document.style("Caption").unwrap().name(), Some("caption"));
+    assert_eq!(heading.semi_hidden(), None);
+    assert_eq!(
+        document.style("Heading4").unwrap().semi_hidden(),
+        Some(true)
+    );
+    let caption = document.style("Caption").unwrap();
+    assert_eq!(caption.name(), Some("caption"));
+    assert_eq!(caption.semi_hidden(), Some(true));
     let grid = document.style("TableGrid").unwrap();
     assert_eq!(grid.style_type(), rdocx::StyleType::Table);
-    let borders = grid.table_properties().unwrap().borders.as_ref().unwrap();
+    let grid_properties = grid.table_properties().unwrap();
+    let borders = grid_properties.borders.as_ref().unwrap();
     assert_eq!(borders.inside_v.as_ref().unwrap().val, ST_Border::Single);
+    // Without a `Normal Table` base, Word would give the cells no side padding.
+    assert_eq!(
+        grid_properties.cell_margin,
+        Some(CT_TblCellMar {
+            top: Some(rdocx::Twips(0)),
+            left: Some(rdocx::Twips(108)),
+            bottom: Some(rdocx::Twips(0)),
+            right: Some(rdocx::Twips(108)),
+        })
+    );
 
     let saved = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(saved.clone())).unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    let grid_xml = &styles[styles.find(r#"w:styleId="TableGrid""#).unwrap()..];
+    for margin in [
+        r#"<w:top w:w="0" w:type="dxa"/>"#,
+        r#"<w:left w:w="108" w:type="dxa"/>"#,
+        r#"<w:bottom w:w="0" w:type="dxa"/>"#,
+        r#"<w:right w:w="108" w:type="dxa"/>"#,
+    ] {
+        assert!(grid_xml.contains(margin), "{margin}");
+    }
     assert_eq!(document.add_common_styles().unwrap(), 0);
     assert_eq!(document.to_bytes().unwrap(), saved);
     let reopened = Document::from_bytes(&saved).unwrap();

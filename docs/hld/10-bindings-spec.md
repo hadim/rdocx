@@ -565,10 +565,13 @@ Both profiles define the same two styles, `Normal` and `Heading1`.
 `Document::add_common_styles` adds the Word built-in styles most documents use
 and python-docx's default template defines: `heading 2` to `heading 9`,
 `Title`, `Subtitle`, `No Spacing`, `Quote`, `List Paragraph`, `caption` and
-`Table Grid`. Each has Word's IDs, names, UI metadata and Office theme
-formatting, with theme colours resolved to literal values as in the default
-`Heading1`. `Table Grid` has no `Normal Table` base, since a new document
-defines none. A style whose ID, or whose name regardless of case, the document
+`Table Grid`. Each has the ID, name, UI priority, visibility flags and
+paragraph and run formatting Word writes for it under the Office theme, with
+theme colours written as literal values as in the default `Heading1`. None
+names a font. `Table Grid` has no `Normal Table` base, since a new document
+defines none, so it carries that base's cell margins itself, 108 twips left and
+right. Without them Word gives its cells no side padding and the text touches
+the grid. A style whose ID, or whose name regardless of case, the document
 already defines is skipped, and the call returns how many it added. None is a
 default style, so content that names none of them lays out as before. A
 document without a `Normal` paragraph style is rejected unchanged.
