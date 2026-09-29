@@ -14729,6 +14729,45 @@ mod tests {
         );
     }
 
+    /// A keep-with-next chain takes its page from the blocks after it, so a
+    /// warm edit to the chain or to the paragraph ending it lays out as a
+    /// fresh engine does, wherever the chain falls against the first page
+    /// end, which comes near paragraph 30 here.
+    #[test]
+    fn keep_next_chain_warm_edits_equal_fresh_layout() {
+        for chain_start in 24..34 {
+            let mut input = make_input_with_text("");
+            input.document.body.content.clear();
+            for index in 0..70 {
+                let mut paragraph = CT_P::new();
+                if index == chain_start || index == chain_start + 1 {
+                    paragraph.properties.get_or_insert_default().keep_next = Some(true);
+                }
+                if index == chain_start + 2 {
+                    paragraph.add_run(&"paragraph ending the chain ".repeat(12));
+                } else {
+                    paragraph.add_run(&format!("ordinary prose paragraph {index:03} stable line"));
+                }
+                input.document.body.add_paragraph(paragraph);
+            }
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine.layout(&input).expect("prime keep-with-next chain");
+            for edited in [chain_start + 2, chain_start + 1, chain_start] {
+                let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[edited]
+                else {
+                    panic!("chain body entry is a paragraph");
+                };
+                paragraph.add_run(&" edited".repeat(12));
+                let warm = engine.layout(&input).expect("warm chain edit");
+                let fresh = Engine::new_deterministic()
+                    .expect("bundled fonts load")
+                    .layout(&input)
+                    .expect("fresh chain edit");
+                assert_layout_results_equal(&warm, &fresh);
+            }
+        }
+    }
+
     #[test]
     fn restart_candidate_uses_available_aggregate_cache_budget() {
         let mut input = make_input_with_text("aggregate candidate");

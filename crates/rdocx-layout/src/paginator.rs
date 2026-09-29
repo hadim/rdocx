@@ -3212,20 +3212,13 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         }
     }
 
-    // Check keep-with-next
-    if para.keep_next && block_idx + 1 < blocks.len() {
-        let next = &blocks[block_idx + 1];
-        let next_first = next.paragraph().map_or_else(
-            || {
-                next.table().map_or(0.0, |table| {
-                    table.rows.first().map_or(0.0, |row| row.height)
-                })
-            },
-            |paragraph| paragraph.lines.first().map_or(0.0, |line| line.height),
-        );
-        if pager.cursor_y + space_before + para.content_height() + next_first
-            > pager.available_height_for(&para.lines)
-            && pager.has_content()
+    // Keep with next: the paragraph moves to the next page unless the whole
+    // keep-with-next chain it starts fits below it. A chain no page could hold
+    // stays where it is, since moving it would only leave a page behind.
+    if para.keep_next && pager.has_content() {
+        let chain = keep_next_chain_height(para.block, block_idx, blocks, pager);
+        if chain <= pager.content_height
+            && pager.cursor_y + space_before + chain > pager.available_height_for(&para.lines)
         {
             pager.advance_flow_before(block_idx);
             if pager.stopped_at.is_some() {
@@ -3302,6 +3295,62 @@ fn paginate_paragraph<B: LayoutBlockLike>(
     pager.cursor_y += para.space_after;
     pager.previous_space_after = para.space_after;
     pager.mark_content();
+}
+
+/// Height a keep-with-next chain needs below the space before its first
+/// paragraph, as Word keeps it on one page: that paragraph, every following
+/// paragraph that also keeps with its next, the spacing between them, and then
+/// the opening of the block that ends the chain. That opening is a table's
+/// first row, or the lines a paragraph's own pagination cannot leave alone at
+/// the foot of a page: all of them under keep-lines or when there are two or
+/// fewer, two under widow control, else one, and never past a page break
+/// inside it. A page break before a block ends the chain without it, and the
+/// walk stops once the chain is taller than a page.
+fn keep_next_chain_height<B: LayoutBlockLike>(
+    para: &ParagraphBlock,
+    block_idx: usize,
+    blocks: &[B],
+    pager: &Pager,
+) -> f64 {
+    let mut height = para.content_height();
+    let mut space_after = para.space_after;
+    for next in &blocks[block_idx + 1..] {
+        if next.page_break_before() || height > pager.content_height {
+            break;
+        }
+        let Some(paragraph) = next.paragraph() else {
+            if let Some(table) = next.table() {
+                height += space_after + table.rows.first().map_or(0.0, |row| row.height);
+            }
+            break;
+        };
+        height += if pager.geometry.do_not_use_html_paragraph_auto_spacing {
+            space_after + paragraph.space_before
+        } else {
+            space_after.max(paragraph.space_before)
+        };
+        let page_break = forced_page_split(&paragraph.lines);
+        if paragraph.keep_next && page_break.is_none() {
+            height += paragraph.content_height();
+            space_after = paragraph.space_after;
+            continue;
+        }
+        let opening = if paragraph.keep_lines || paragraph.lines.len() <= 2 {
+            paragraph.lines.len()
+        } else if paragraph.widow_control {
+            2
+        } else {
+            1
+        };
+        let opening = page_break.map_or(opening, |split_at| opening.min(split_at));
+        height += paragraph.content_offset_top
+            + paragraph.lines[..opening]
+                .iter()
+                .map(|line| line.height)
+                .sum::<f64>();
+        break;
+    }
+    height
 }
 
 /// Return the line boundary immediately after the first page break that has a

@@ -33653,3 +33653,152 @@ mod table_row_border_and_margin_regressions {
         );
     }
 }
+
+mod keep_with_next_regressions {
+    use rdocx::{Document, Length};
+
+    const BODY: &str = "Sed ut perspiciatis unde omnis iste natus error sit voluptatem \
+        accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo \
+        inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo \
+        enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia \
+        consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.";
+
+    /// A paragraph on an exact line, with its spacing set directly.
+    fn add_line(document: &mut Document, text: &str, line: f64, after: f64) {
+        let mut paragraph = document.add_paragraph(text);
+        paragraph.set_line_spacing(line);
+        paragraph.set_space_before(Length::pt(0.0));
+        paragraph.set_space_after(Length::pt(after));
+    }
+
+    /// `count` single-line fillers of 14 points, 14 * `count` points in all.
+    fn fillers(count: usize) -> Document {
+        let mut document = Document::new();
+        for index in 0..count {
+            add_line(&mut document, &format!("Filler {index:02}"), 14.0, 0.0);
+        }
+        document
+    }
+
+    /// An 18 point heading line in the Heading 1 style, which keeps with next.
+    fn add_heading(document: &mut Document, text: &str, after: f64) {
+        add_line(document, text, 18.0, after);
+        let last = document.content_count() - 1;
+        document
+            .paragraph_mut(last)
+            .expect("the heading was just added")
+            .set_style("Heading1");
+    }
+
+    /// The physical page each body item from `first` on starts on.
+    fn pages_from(document: &Document, first: usize) -> Vec<usize> {
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        (first..document.content_count())
+            .map(|index| {
+                result
+                    .body_layout_fragments(index)
+                    .expect("body index is in range")[0]
+                    .physical_page
+            })
+            .collect()
+    }
+
+    /// The 648 point page holds 44 fillers (616 points) and an 18 point
+    /// heading. The next line would still fit under the heading, but not under
+    /// its 6 points after, so the body opens page 2 and the heading goes with
+    /// it. Layout left out the space after and kept the heading on page 1.
+    #[test]
+    fn a_heading_follows_its_next_line_past_its_own_space_after() {
+        let mut document = fillers(44);
+        add_heading(&mut document, "Heading", 6.0);
+        add_line(&mut document, BODY, 14.0, 0.0);
+        assert_eq!(pages_from(&document, 44), vec![2, 2]);
+
+        // Without the space after, the heading and the first line fit.
+        let mut document = fillers(44);
+        add_heading(&mut document, "Heading", 0.0);
+        let mut body = document.add_paragraph(BODY);
+        body.set_line_spacing(14.0);
+        body.set_space_before(Length::pt(0.0));
+        body.set_space_after(Length::pt(0.0));
+        body.set_widow_control(false);
+        assert_eq!(pages_from(&document, 44), vec![1, 1]);
+    }
+
+    /// One line of the next paragraph fits under the heading, but widow
+    /// control does not leave a single line at the foot of the page, so that
+    /// paragraph opens page 2 and the heading, kept with next by direct
+    /// formatting here, goes with it. Layout measured the next paragraph's
+    /// first line only.
+    #[test]
+    fn a_kept_paragraph_follows_a_widow_controlled_next_paragraph() {
+        let build = |widow_control: bool| {
+            let mut document = fillers(44);
+            add_line(&mut document, "Kept with next", 18.0, 0.0);
+            document
+                .paragraph_mut(44)
+                .expect("the kept paragraph was just added")
+                .set_keep_with_next(true);
+            add_line(&mut document, BODY, 14.0, 0.0);
+            document
+                .paragraph_mut(45)
+                .expect("the body was just added")
+                .set_widow_control(widow_control);
+            document
+        };
+        assert_eq!(pages_from(&build(true), 44), vec![2, 2]);
+        // Without widow control the body leaves its first line on page 1.
+        assert_eq!(pages_from(&build(false), 44), vec![1, 1]);
+    }
+
+    /// Two headings that keep with next and the body after them share a page:
+    /// the whole chain moves when the body's first line does not fit. Layout
+    /// checked each heading against the paragraph after it only, which left
+    /// the first heading alone at the foot of page 1.
+    #[test]
+    fn a_chain_of_kept_paragraphs_moves_as_one() {
+        let mut document = fillers(43);
+        add_heading(&mut document, "Heading", 0.0);
+        add_heading(&mut document, "Subheading", 0.0);
+        add_line(&mut document, BODY, 14.0, 0.0);
+        assert_eq!(pages_from(&document, 43), vec![2, 2, 2]);
+
+        // A chain no page can hold stays where it is instead of leaving a
+        // page behind.
+        let mut document = fillers(43);
+        for index in 0..40 {
+            add_heading(&mut document, &format!("Heading {index:02}"), 0.0);
+        }
+        add_line(&mut document, BODY, 14.0, 0.0);
+        assert_eq!(pages_from(&document, 43)[0], 1);
+    }
+
+    /// A paragraph that keeps with next stays with the first row of the table
+    /// after it, whose exact 24 point row fits under the paragraph but not
+    /// under its 8 points after.
+    #[test]
+    fn a_kept_paragraph_follows_the_first_row_of_a_table() {
+        let mut document = fillers(43);
+        add_line(&mut document, "Kept with next", 18.0, 8.0);
+        document
+            .paragraph_mut(43)
+            .expect("the kept paragraph was just added")
+            .set_keep_with_next(true);
+        {
+            let mut table = document.add_table(2, 1);
+            for row in 0..2 {
+                table
+                    .cell(row, 0)
+                    .expect("cell exists")
+                    .set_text(&format!("Row {row}"));
+                table
+                    .row(row)
+                    .expect("row exists")
+                    .set_height_exact(Length::pt(24.0));
+            }
+        }
+        assert_eq!(pages_from(&document, 43), vec![2, 2]);
+    }
+}
