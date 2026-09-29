@@ -915,6 +915,48 @@ fn replace_output_extension_selects_the_package_class() {
 }
 
 #[test]
+fn replace_refuses_a_macro_free_output_for_a_vba_input() {
+    let temp = TempWorkspace::new("replace-vba");
+    let fixture = temp.path.join("fixture.pptx");
+    let source = temp.path.join("macros.pptm");
+    write_deck(&fixture, &["Hello {{name}}"]);
+    let mut package = OpcPackage::open(&fixture).unwrap();
+    fs::remove_file(&fixture).unwrap();
+    package
+        .get_or_create_part_rels("/ppt/presentation.xml")
+        .add(rel_types::VBA_PROJECT, "vbaProject.bin");
+    package.set_part("/ppt/vbaProject.bin", b"vba-project".to_vec());
+    package.content_types.add_override(
+        "/ppt/vbaProject.bin",
+        "application/vnd.ms-office.vbaProject",
+    );
+    package.content_types.add_override(
+        "/ppt/presentation.xml",
+        content_types::PRESENTATION_MACRO_ENABLED,
+    );
+    package.save(&source).unwrap();
+
+    let output = temp.path.join("deck.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("VBA project"));
+    let entries: Vec<_> = fs::read_dir(&temp.path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [source.file_name().unwrap()]);
+}
+
+#[test]
 fn rpptx_replace_is_guarded_counted_and_includes_notes() {
     let temp = TempWorkspace::new("guarded-replace");
     let source = temp.path.join("source.pptx");

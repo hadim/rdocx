@@ -3620,9 +3620,9 @@ mod flat_opc_package_class_tests {
             content_types::WORD_TEMPLATE_MACRO_ENABLED
         );
 
-        let mut template =
-            Document::from_bytes(&package_bytes(&source_package(WordPackageClass::Template)))
-                .unwrap();
+        let mut vba_free = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::MacroEnabledDocument,
+        ));
         for (extension, class) in [
             ("DOCX", WordPackageClass::Document),
             ("docm", WordPackageClass::MacroEnabledDocument),
@@ -3630,11 +3630,9 @@ mod flat_opc_package_class_tests {
             ("dotm", WordPackageClass::MacroEnabledTemplate),
         ] {
             let path = directory.join(format!("converted.{extension}"));
-            template.save(&path).unwrap();
+            vba_free.save(&path).unwrap();
             assert_eq!(main_content_type(&path), content_type(class), "{extension}");
-            let package = OpcPackage::open(&path).unwrap();
-            assert_eq!(package.get_part("/word/vbaProject.bin"), Some(VBA_BYTES));
-            let bytes = template.to_bytes_for_path(&path).unwrap();
+            let bytes = vba_free.to_bytes_for_path(&path).unwrap();
             assert_eq!(
                 Document::from_bytes(&bytes)
                     .unwrap()
@@ -3644,22 +3642,51 @@ mod flat_opc_package_class_tests {
             );
         }
         let other_path = directory.join("converted.bin");
-        template.save(&other_path).unwrap();
-        assert_eq!(main_content_type(&other_path), content_types::WORD_TEMPLATE);
+        vba_free.save(&other_path).unwrap();
         assert_eq!(
-            template.package_class().unwrap(),
-            WordPackageClass::Template
+            main_content_type(&other_path),
+            content_types::WORD_DOCUMENT_MACRO_ENABLED
+        );
+        assert_eq!(
+            vba_free.package_class().unwrap(),
+            WordPackageClass::MacroEnabledDocument
         );
 
-        let mut macro_enabled = Document::from_bytes(&package_bytes(&source_package(
-            WordPackageClass::MacroEnabledDocument,
-        )))
-        .unwrap();
-        for extension in ["docx", "dotx"] {
-            let path = directory.join(format!("macro.{extension}"));
-            assert!(macro_enabled.save(&path).is_err(), "{extension}");
-            assert!(!path.exists(), "{extension}");
-            assert!(macro_enabled.to_bytes_for_path(&path).is_err());
+        for (class, same_class, refused) in [
+            (WordPackageClass::Template, "dotx", &["docx"][..]),
+            (
+                WordPackageClass::MacroEnabledDocument,
+                "docm",
+                &["docx", "dotx"][..],
+            ),
+        ] {
+            let mut document =
+                Document::from_bytes(&package_bytes(&source_package(class))).unwrap();
+            let same_class_path = directory.join(format!("vba-same.{same_class}"));
+            document.save(&same_class_path).unwrap();
+            assert_eq!(main_content_type(&same_class_path), content_type(class));
+            let converted_path = directory.join("vba-converted.dotm");
+            document.save(&converted_path).unwrap();
+            assert_eq!(
+                main_content_type(&converted_path),
+                content_types::WORD_TEMPLATE_MACRO_ENABLED
+            );
+            assert_eq!(
+                OpcPackage::open(&converted_path)
+                    .unwrap()
+                    .get_part("/word/vbaProject.bin"),
+                Some(VBA_BYTES)
+            );
+            for extension in refused {
+                let path = directory.join(format!("vba-refused.{extension}"));
+                let error = document.save(&path).unwrap_err();
+                assert!(
+                    error.to_string().contains("VBA project"),
+                    "{class:?} {extension}: {error}"
+                );
+                assert!(!path.exists(), "{class:?} {extension}");
+                assert!(document.to_bytes_for_path(&path).is_err());
+            }
         }
         std::fs::remove_dir_all(directory).unwrap();
     }

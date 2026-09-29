@@ -87,7 +87,7 @@ document.save("approved.docx")?;
 
 `save` writes the package class that a `.docx`, `.docm`, `.dotx`, or `.dotm`
 path names, so a `.dotx` template saved as `.docx` declares a document. A
-macro-enabled package cannot be saved under a macro-free extension.
+package that carries a VBA project cannot change to a macro-free extension.
 
 ### Render and export
 

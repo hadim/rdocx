@@ -471,9 +471,11 @@ copy without removing executable or opaque parts. `Document::save` and
 `to_bytes_for_path` write the class that a `.docx`, `.docm`, `.dotx`, or
 `.dotm` extension names, compared without regard to case, so a template saved
 as `.docx` declares a document. `to_bytes`, and a save to any other extension,
-retain the opened class. A macro-free extension for a macro-enabled package
-fails before anything is written, because the executable parts would remain in
-a file that claims to carry none. `from_flat_opc_bytes`, its
+retain the opened class. When the class changes, a macro-free extension fails
+before anything is written if the main part carries a `vbaProject`
+relationship, whatever the source class, because the project would remain in a
+file that claims to carry none. A macro-enabled package without one converts.
+`from_flat_opc_bytes`, its
 limits overload, `open_flat_opc`, `to_flat_opc_bytes`, and `save_flat_opc`
 provide bounded strict Flat OPC interchange through the same `Document` and
 `OpcPackage` owners. These are additive pre-1.0 native APIs. The Python

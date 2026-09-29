@@ -66,8 +66,8 @@ Omitting a selector resolves all modeled revisions. Every mutation, comparison,
 and TOC rebuild requires `-o/--output`, publishes only a complete validated
 DOCX, and supports a schema-1 record through `--json`. A `.docx`, `.docm`,
 `.dotx`, or `.dotm` output extension selects the package class the output
-declares, so a template edited into `report.docx` is written as a document. A
-macro-enabled input cannot be written to a macro-free extension.
+declares, so a template edited into `report.docx` is written as a document. An
+input that carries a VBA project cannot change to a macro-free extension.
 
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,

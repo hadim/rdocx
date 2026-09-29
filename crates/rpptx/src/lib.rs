@@ -1112,11 +1112,17 @@ impl Presentation {
         if target == current {
             return self.to_bytes();
         }
-        if current.is_macro_enabled() && !target.is_macro_enabled() {
+        let carries_vba = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .is_some_and(|relationships| {
+                relationships.get_by_type(rel_types::VBA_PROJECT).is_some()
+            });
+        if carries_vba && !target.is_macro_enabled() {
             return Err(invalid_presentation_mutation(
                 "save",
                 format!(
-                    "a macro-enabled presentation cannot be written as {}: the extension names a macro-free class, save it as .pptm, .potm, or .ppsm",
+                    "{} cannot be written: the presentation carries a VBA project and the extension names a macro-free class, save it as .pptm, .potm, or .ppsm",
                     path.as_ref().display()
                 ),
             ));
@@ -1559,11 +1565,12 @@ impl Presentation {
     ///
     /// A `.pptx`, `.pptm`, `.potx`, `.potm`, `.ppsx`, or `.ppsm` extension
     /// selects the main part content type, so a template saved as `.pptx`
-    /// declares a presentation. Any other extension keeps the opened class. A
-    /// macro-enabled package cannot be saved under a macro-free extension,
-    /// because its executable parts would remain in a file that claims to
-    /// carry none. Use [`Presentation::save_as_package_class`] for that
-    /// conversion.
+    /// declares a presentation. Any other extension keeps the opened class.
+    /// When the class changes, a presentation part that carries a VBA project
+    /// cannot be saved under a macro-free extension, because the project
+    /// would remain in a file that claims to carry none.
+    /// [`Presentation::save_as_package_class`] performs that conversion
+    /// explicitly and keeps the VBA part.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         debug_assert!(
             self.validate().is_empty(),

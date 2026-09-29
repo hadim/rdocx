@@ -337,6 +337,48 @@ fn replace_output_extension_selects_the_package_class() {
 }
 
 #[test]
+fn replace_refuses_a_macro_free_output_for_a_vba_input() {
+    let temp = TempWorkspace::new("replace-vba");
+    let input = temp.path.join("macros.docm");
+    let replaced = temp.path.join("report.docx");
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(
+        fixture_document(&["Hello {{name}}"]).to_bytes().unwrap(),
+    ))
+    .unwrap();
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::VBA_PROJECT, "vbaProject.bin");
+    package.set_part("/word/vbaProject.bin", b"vba-project".to_vec());
+    package.content_types.add_override(
+        "/word/vbaProject.bin",
+        "application/vnd.ms-office.vbaProject",
+    );
+    package.content_types.add_override(
+        "/word/document.xml",
+        "application/vnd.ms-word.document.macroEnabled.main+xml",
+    );
+    package.save(&input).unwrap();
+
+    let output = cli(&[
+        "replace",
+        path_text(&input),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        path_text(&replaced),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("VBA project"));
+    let entries: Vec<_> = fs::read_dir(&temp.path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [input.file_name().unwrap()]);
+}
+
+#[test]
 fn cli_replace_reports_namespace_preflight_errors_without_panicking() {
     let temp = TempWorkspace::new("replace-namespace-error");
     let input = temp.path.join("used-default.docx");

@@ -12961,23 +12961,74 @@ fn save_writes_the_package_class_that_the_path_extension_names() {
         PresentationPackageClass::Template
     );
 
-    let macro_enabled = Presentation::from_bytes(&package_bytes(f223_fixture_package(
-        PresentationPackageClass::MacroEnabledPresentation,
-    )))
-    .unwrap();
-    for extension in ["pptx", "potx", "ppsx"] {
-        let path = directory.join(format!("macro.{extension}"));
-        assert!(
-            matches!(
-                macro_enabled.save(&path),
-                Err(Error::InvalidPresentationMutation {
-                    operation: "save",
-                    ..
-                })
-            ),
+    let mut vba_free_package = f223_fixture_package(PresentationPackageClass::Presentation);
+    vba_free_package
+        .content_types
+        .add_override(PRESENTATION_PART, content_types::PRESENTATION_MACRO_ENABLED);
+    let vba_free = Presentation::from_bytes(&package_bytes(vba_free_package)).unwrap();
+    for (extension, class) in [
+        ("pptx", PresentationPackageClass::Presentation),
+        ("potx", PresentationPackageClass::Template),
+        ("ppsx", PresentationPackageClass::Slideshow),
+    ] {
+        let path = directory.join(format!("vba-free.{extension}"));
+        vba_free.save(&path).unwrap();
+        assert_eq!(
+            main_content_type(&path),
+            f223_content_type(class),
             "{extension}"
         );
-        assert!(!path.exists(), "{extension}");
+    }
+
+    for (class, same_class, refused) in [
+        (
+            PresentationPackageClass::Template,
+            "potx",
+            &["pptx", "ppsx"][..],
+        ),
+        (
+            PresentationPackageClass::MacroEnabledPresentation,
+            "pptm",
+            &["pptx", "potx", "ppsx"][..],
+        ),
+    ] {
+        let mut package = embedded_fixture_package(false);
+        package
+            .content_types
+            .add_override(PRESENTATION_PART, f223_content_type(class));
+        let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let same_class_path = directory.join(format!("vba-same.{same_class}"));
+        presentation.save(&same_class_path).unwrap();
+        assert_eq!(
+            main_content_type(&same_class_path),
+            f223_content_type(class)
+        );
+        let converted_path = directory.join("vba-converted.potm");
+        presentation.save(&converted_path).unwrap();
+        assert_eq!(
+            main_content_type(&converted_path),
+            content_types::PRESENTATION_TEMPLATE_MACRO_ENABLED
+        );
+        assert_eq!(
+            OpcPackage::open(&converted_path)
+                .unwrap()
+                .get_part("/custom/vbaProject.bin"),
+            Some(b"vba-executable".as_slice())
+        );
+        for extension in refused {
+            let path = directory.join(format!("vba-refused.{extension}"));
+            assert!(
+                matches!(
+                    presentation.save(&path),
+                    Err(Error::InvalidPresentationMutation {
+                        operation: "save",
+                        message,
+                    }) if message.contains("VBA project")
+                ),
+                "{class:?} {extension}"
+            );
+            assert!(!path.exists(), "{class:?} {extension}");
+        }
     }
     fs::remove_dir_all(directory).unwrap();
 }

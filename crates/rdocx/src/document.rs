@@ -12009,10 +12009,11 @@ impl Document {
     ///
     /// A `.docx`, `.docm`, `.dotx`, or `.dotm` extension selects the main
     /// part content type, so a template saved as `.docx` declares a document.
-    /// Any other extension keeps the opened class. A macro-enabled package
-    /// cannot be saved under a macro-free extension, because its executable
-    /// parts would remain in a file that claims to carry none. Use
-    /// [`Document::save_as_package_class`] for that conversion.
+    /// Any other extension keeps the opened class. When the class changes, a
+    /// main part that carries a VBA project cannot be saved under a
+    /// macro-free extension, because the project would remain in a file that
+    /// claims to carry none. [`Document::save_as_package_class`] performs
+    /// that conversion explicitly and keeps the VBA part.
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let path = path.as_ref();
         if let Some(class) = self.package_class_for_path(path)? {
@@ -12064,9 +12065,15 @@ impl Document {
         if current == Some(target) {
             return Ok(None);
         }
-        if current.is_some_and(WordPackageClass::is_macro_enabled) && !target.is_macro_enabled() {
+        let carries_vba =
+            self.package
+                .get_part_rels(&self.doc_part_name)
+                .is_some_and(|relationships| {
+                    relationships.get_by_type(rel_types::VBA_PROJECT).is_some()
+                });
+        if carries_vba && !target.is_macro_enabled() {
             return Err(Error::Other(format!(
-                "cannot save a macro-enabled Word package as {}: the extension names a macro-free class, save it as .docm or .dotm",
+                "cannot save {}: the document carries a VBA project and the extension names a macro-free class, save it as .docm or .dotm",
                 path.display()
             )));
         }
