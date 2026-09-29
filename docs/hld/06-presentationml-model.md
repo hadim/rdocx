@@ -576,13 +576,13 @@ part's exact main content type. `PresentationPackageClass` maps those six
 values. `save` and `to_bytes_for_path` write the class that a `.pptx`, `.pptm`,
 `.potx`, `.potm`, `.ppsx`, or `.ppsm` extension names, compared without regard
 to case, so a template saved as `.pptx` declares a presentation. `to_bytes`,
-and a save to any other extension, retain the opened class. When the class
-changes, a macro-free extension fails before anything is written if the
-presentation part carries a `vbaProject` relationship, whatever the source
-class, because the project would remain in a file that claims to carry none. A
-macro-enabled package without one converts.
-`to_bytes_as` and `save_as_package_class` stay the explicit conversion. They
-change only the staged output override and leave the live facade unchanged.
+`save_encrypted`, and a save to any other extension retain the opened class.
+When the class changes, a macro-free extension fails before anything is written
+if the presentation part carries a `vbaProject` relationship, whatever the
+source class, because the project would remain in a file that claims to carry
+none. A macro-enabled package without one converts. `to_bytes_as` and
+`save_as_package_class` stay the explicit conversion. They change only the
+staged output override and leave the live facade unchanged.
 `Presentation::save_as_show()` remains a compatibility wrapper for ordinary
 PPSX output. A class conversion preserves executable payloads and relationships
 and records retained package signature evidence as invalidated. The CLI

@@ -465,22 +465,23 @@ content resolves to an empty slice, while an invalid body index resolves to
 `None`.
 
 Native Rust also exposes `WordPackageClass` for DOCX, DOCM, DOTX, and DOTM.
-`Document::package_class` reads the exact main-part override.
-`to_bytes_as` and `save_as_package_class` select an output class on a staged
-copy without removing executable or opaque parts. `Document::save` and
-`to_bytes_for_path` write the class that a `.docx`, `.docm`, `.dotx`, or
-`.dotm` extension names, compared without regard to case, so a template saved
-as `.docx` declares a document. `to_bytes`, and a save to any other extension,
-retain the opened class. When the class changes, a macro-free extension fails
-before anything is written if the main part carries a `vbaProject`
-relationship, whatever the source class, because the project would remain in a
-file that claims to carry none. A macro-enabled package without one converts.
-`from_flat_opc_bytes`, its
+`Document::package_class` reads the exact main-part override. `to_bytes_as` and
+`save_as_package_class` select an output class on a staged copy without
+removing executable or opaque parts. `Document::save` and `to_bytes_for_path`
+write the class that a `.docx`, `.docm`, `.dotx`, or `.dotm` extension names,
+compared without regard to case, so a template saved as `.docx` declares a
+document. `to_bytes`, `save_encrypted`, the Flat OPC saves, and a save to any
+other extension retain the opened class. A class change is published through a
+temporary file and a rename, while a save that keeps the class writes the path
+in place. When the class changes, a macro-free extension fails before anything
+is written if the main part carries a `vbaProject` relationship, whatever the
+source class, because the project would remain in a file that claims to carry
+none. A macro-enabled package without one converts. `from_flat_opc_bytes`, its
 limits overload, `open_flat_opc`, `to_flat_opc_bytes`, and `save_flat_opc`
 provide bounded strict Flat OPC interchange through the same `Document` and
 `OpcPackage` owners. These are additive pre-1.0 native APIs. The Python
-`Document.save` and `Presentation.save` methods and the package outputs of
-both CLIs follow the same extension rule, because they go through `save` or
+`Document.save` and `Presentation.save` methods and the package outputs of both
+CLIs follow the same extension rule, because they go through `save` or
 `to_bytes_for_path`. WASM saves take no path and retain the opened class. No
 binding gains a class selector or a Flat OPC entry point.
 
@@ -1958,9 +1959,9 @@ backend, rasteriser, or host font discovery. The `render` feature adds only
 artifact must remain below 1,000,000 bytes after deterministic gzip.
 
 Modern presentation package-class inspection and output selection remain
-native Rust APIs. Python, WASM, and CLI callers continue to preserve the
-source main content type through their existing byte or path save operations,
-but they gain no package-class selector in this milestone.
+native Rust APIs. Python and CLI path saves write the class that the output
+extension names, while byte saves and WASM preserve the source main content
+type, and none of them gains a package-class selector in this milestone.
 Pull-request CI target-checks the default wrapper with the locked workspace
 graph and runs its package-preserving inline test in Node.
 

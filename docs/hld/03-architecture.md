@@ -1116,8 +1116,9 @@ breaks, and selected alternate-content fallbacks remain traversal boundaries
 so the facade preserves their unmodelled or separately typed XML.
 
 The facade also owns modern PresentationML package identity. The exact main
-part content type distinguishes PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Normal
-serialization preserves that source class. An explicit output conversion
+part content type distinguishes PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Byte
+serialization preserves that source class, while a path save writes the class
+that its PowerPoint extension names. An explicit output conversion
 changes only a staged content-type override, retains opaque executable parts
 and relationships, and invalidates retained package signature evidence when
 the signed table changes. Binary `.ppt` never enters this OPC path.

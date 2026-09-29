@@ -12009,11 +12009,15 @@ impl Document {
     ///
     /// A `.docx`, `.docm`, `.dotx`, or `.dotm` extension selects the main
     /// part content type, so a template saved as `.docx` declares a document.
-    /// Any other extension keeps the opened class. When the class changes, a
+    /// Any other extension keeps the opened class, and `save_encrypted` and
+    /// the Flat OPC saves ignore the extension. When the class changes, a
     /// main part that carries a VBA project cannot be saved under a
     /// macro-free extension, because the project would remain in a file that
     /// claims to carry none. [`Document::save_as_package_class`] performs
     /// that conversion explicitly and keeps the VBA part.
+    ///
+    /// A save that changes the class writes a temporary file and renames it
+    /// over `path`. A save that keeps the class writes `path` in place.
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let path = path.as_ref();
         if let Some(class) = self.package_class_for_path(path)? {

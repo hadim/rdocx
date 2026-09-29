@@ -1565,8 +1565,9 @@ impl Presentation {
     ///
     /// A `.pptx`, `.pptm`, `.potx`, `.potm`, `.ppsx`, or `.ppsm` extension
     /// selects the main part content type, so a template saved as `.pptx`
-    /// declares a presentation. Any other extension keeps the opened class.
-    /// When the class changes, a presentation part that carries a VBA project
+    /// declares a presentation. Any other extension keeps the opened class,
+    /// and `save_encrypted` ignores the extension. When the class changes, a
+    /// presentation part that carries a VBA project
     /// cannot be saved under a macro-free extension, because the project
     /// would remain in a file that claims to carry none.
     /// [`Presentation::save_as_package_class`] performs that conversion
