@@ -15104,6 +15104,209 @@ fn picture_alpha_mod_fix_matches_presentation_renderers() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// A one-slide blank deck whose parts of `content_type` carry `background`,
+/// in place of their own `p:bg` or ahead of their shape tree.
+fn blank_deck_with_background(content_type: &str, background: &str) -> Vec<u8> {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "background fixture");
+    let parts = package
+        .content_types
+        .overrides
+        .iter()
+        .filter(|(_, part_type)| *part_type == content_type)
+        .map(|(part, _)| part.clone())
+        .collect::<Vec<_>>();
+    assert!(!parts.is_empty(), "no {content_type} part");
+    for part in parts {
+        let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+        let xml = match (xml.find("<p:bg>"), xml.find("</p:bg>")) {
+            (Some(start), Some(end)) => format!(
+                "{}{background}{}",
+                &xml[..start],
+                &xml[end + "</p:bg>".len()..]
+            ),
+            _ => xml.replacen("<p:spTree", &format!("{background}<p:spTree"), 1),
+        };
+        package.set_part(&part, xml.into_bytes());
+    }
+    package_bytes(package)
+}
+
+fn saved_slide_xml(presentation: &Presentation) -> String {
+    let package = open_opc(&presentation.to_bytes().unwrap(), "saved slide");
+    let part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, part_type)| (part_type == content_types::SLIDE).then_some(part))
+        .unwrap();
+    String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap()
+}
+
+#[test]
+fn gradient_backgrounds_without_angle_or_path_open_render_and_round_trip() {
+    let stops = r#"<a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst>"#;
+    let linear = format!(
+        r#"<p:bg><p:bgPr><a:gradFill rotWithShape="1">{stops}<a:lin scaled="0"/></a:gradFill><a:effectLst/></p:bgPr></p:bg>"#
+    );
+    let presentation =
+        Presentation::from_bytes(&blank_deck_with_background(content_types::SLIDE, &linear))
+            .expect("open a linear gradient without @ang");
+    let (input, layout) = presentation.render_deterministic().unwrap();
+    assert!(
+        input.slides[0].diagnostics.is_empty(),
+        "{:?}",
+        input.slides[0].diagnostics
+    );
+    let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    let rgb = |x: u32, y: u32| {
+        let pixel = pixmap.pixel(x, y).unwrap();
+        (pixel.red(), pixel.green(), pixel.blue())
+    };
+    let (right, bottom) = (pixmap.width() - 5, pixmap.height() - 5);
+    let (top_left, top_right) = (rgb(5, 5), rgb(right, 5));
+    // A missing angle is 0 degrees, so colour varies left to right only.
+    assert!(top_left.0 > 200 && top_left.2 < 55, "{top_left:?}");
+    assert!(top_right.2 > 200 && top_right.0 < 55, "{top_right:?}");
+    assert_eq!(rgb(5, bottom), top_left);
+    assert_eq!(rgb(right, bottom), top_right);
+    let saved = saved_slide_xml(&presentation);
+    assert!(saved.contains(r#"<a:lin scaled="0"/>"#), "{saved}");
+
+    // The PDF fills the page with the same gradient before any slide content,
+    // as a pattern whose axial shading runs left to right from red to blue.
+    let pdf = lopdf::Document::load_mem(&presentation.to_pdf_deterministic().unwrap()).unwrap();
+    let page = *pdf.get_pages().values().next().unwrap();
+    let operations = pdf.get_and_decode_page_content(page).unwrap().operations;
+    let operators = operations
+        .iter()
+        .take(8)
+        .map(|operation| operation.operator.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(operators, ["q", "cm", "q", "cs", "scn", "re", "f", "Q"]);
+    let dictionary = |object| pdf.dereference(object).unwrap().1.as_dict().unwrap();
+    let numbers = |object: &lopdf::Object| {
+        object
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_float().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let resources = dictionary(pdf.get_dictionary(page).unwrap().get(b"Resources").unwrap());
+    let patterns = dictionary(resources.get(b"Pattern").unwrap());
+    let pattern = dictionary(
+        patterns
+            .get(operations[4].operands[0].as_name().unwrap())
+            .unwrap(),
+    );
+    let shading = dictionary(pattern.get(b"Shading").unwrap());
+    assert_eq!(shading.get(b"ShadingType").unwrap().as_i64().unwrap(), 2);
+    let axis = numbers(shading.get(b"Coords").unwrap());
+    assert!(
+        (axis[1] - axis[3]).abs() < 1e-3 && axis[0] < axis[2],
+        "{axis:?}"
+    );
+    let intervals = dictionary(shading.get(b"Function").unwrap())
+        .get(b"Functions")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(intervals.len(), 1);
+    let interval = dictionary(&intervals[0]);
+    assert_eq!(numbers(interval.get(b"C0").unwrap()), [1.0, 0.0, 0.0]);
+    assert_eq!(numbers(interval.get(b"C1").unwrap()), [0.0, 0.0, 1.0]);
+
+    let path = format!(
+        r#"<p:bg><p:bgPr><a:gradFill rotWithShape="1">{stops}<a:path><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill><a:effectLst/></p:bgPr></p:bg>"#
+    );
+    let presentation =
+        Presentation::from_bytes(&blank_deck_with_background(content_types::SLIDE, &path))
+            .expect("open a path gradient without @path");
+    let (input, _) = presentation.render_deterministic().unwrap();
+    assert_eq!(
+        input.slides[0]
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        ["unsupported background rectangle path gradient"]
+    );
+    let saved = saved_slide_xml(&presentation);
+    assert!(
+        saved.contains(
+            r#"<a:path><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path>"#
+        ),
+        "{saved}"
+    );
+}
+
+#[test]
+fn solid_backgrounds_from_slide_layout_and_master_reach_pdf_and_png() {
+    let background = r#"<p:bg><p:bgPr><a:solidFill><a:srgbClr val="7B1E3A"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>"#;
+    let expected = [0x7B_u8, 0x1E, 0x3A];
+    for owner in [
+        content_types::SLIDE,
+        content_types::SLIDE_LAYOUT,
+        content_types::SLIDE_MASTER,
+    ] {
+        let presentation =
+            Presentation::from_bytes(&blank_deck_with_background(owner, background)).unwrap();
+        let png = presentation
+            .slide_png_deterministic(0, 72.0)
+            .unwrap()
+            .unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+        let corner = pixmap.pixel(5, 5).unwrap();
+        assert_eq!(
+            [corner.red(), corner.green(), corner.blue()],
+            expected,
+            "{owner} PNG"
+        );
+
+        let pdf = lopdf::Document::load_mem(&presentation.to_pdf_deterministic().unwrap()).unwrap();
+        let page = *pdf.get_pages().values().next().unwrap();
+        let media_box = pdf
+            .get_dictionary(page)
+            .unwrap()
+            .get(b"MediaBox")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_float().unwrap())
+            .collect::<Vec<_>>();
+        let operations = pdf.get_and_decode_page_content(page).unwrap().operations;
+        let operators = operations
+            .iter()
+            .take(7)
+            .map(|operation| operation.operator.as_str())
+            .collect::<Vec<_>>();
+        // The background fills the whole page before any slide content.
+        assert_eq!(
+            operators,
+            ["q", "cm", "q", "rg", "re", "f", "Q"],
+            "{owner} PDF"
+        );
+        let numbers = |index: usize| {
+            operations[index]
+                .operands
+                .iter()
+                .map(|value| value.as_float().unwrap())
+                .collect::<Vec<_>>()
+        };
+        for (component, byte) in numbers(3).into_iter().zip(expected) {
+            assert!(
+                (component * 255.0 - f32::from(byte)).abs() < 0.5,
+                "{owner} PDF fill {component}"
+            );
+        }
+        assert_eq!(numbers(4), media_box, "{owner} PDF rectangle");
+    }
+}
+
 #[test]
 fn picture_sniffs_bytes_when_extension_is_misleading() {
     let png = png_header(5, 4);
