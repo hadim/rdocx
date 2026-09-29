@@ -7883,7 +7883,7 @@ const F124_ARTIFACT_SHA256: &str =
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_CURRENT_ARTIFACT_SHA256: &str =
-    "249c70db36c4fab392a585988a25f8285ead01dfe56dba2b1d6f3d32b7a0e553";
+    "53952a6c7fef07777b5f2c2049a019b53203ca257b7186112e3b60968635dff6";
 const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 10",
     "F-116 slide 02",
