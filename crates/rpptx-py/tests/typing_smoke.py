@@ -343,6 +343,16 @@ def exercise_rpptx_z_order_types(slide: Slide) -> None:
     slide.shapes.move(0, -1)
 
 
+def exercise_rpptx_group_population_types(group: Shape) -> None:
+    members: ShapeCollection = group.shapes
+    textbox: Shape = members.add_textbox(0, 0, Inches(1), Inches(1))
+    nested: Shape = group.shapes.add_group_shape()
+    nested.shapes.add_shape("rect", 0, 0, Inches(1), Inches(1))
+    group.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, Inches(1), Inches(1))
+    group.shapes.add_table(1, 2, 0, 0, Inches(2), Inches(1))
+    group.shapes.add_picture(io.BytesIO(b""), 0, 0)
+
+
 def exercise_rpptx_hyperlink_types(run: Run) -> None:
     hyperlink: Hyperlink = run.hyperlink
     hyperlink.address = "https://example.com"

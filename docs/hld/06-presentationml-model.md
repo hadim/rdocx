@@ -466,6 +466,47 @@ succeeds. The picture receives a tree-wide allocated id and deterministic name,
 then its canonical `p:nvPicPr`, relationship-backed `p:blipFill`, and typed
 `p:spPr` shell append at top z-order.
 
+The owning facade also borrows the shape collection of a slide or of one group
+on it, which populates groups with the same constructors:
+
+```rust
+pub fn shapes_mut(&mut self, slide_index: usize, group: &[usize]) -> Option<ShapesMut<'_>>;
+
+impl ShapesMut<'_> {
+    pub fn add_textbox(&mut self, left: Emu, top: Emu, width: Emu, height: Emu) -> Result<ShapeMut<'_>>;
+    pub fn add_shape(&mut self, preset: &str, left: Emu, top: Emu, width: Emu, height: Emu) -> Result<ShapeMut<'_>>;
+    pub fn add_connector(&mut self, connector: ConnectorType, begin_x: Emu, begin_y: Emu, end_x: Emu, end_y: Emu) -> Result<ShapeMut<'_>>;
+    pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>>;
+    pub fn add_table(&mut self, rows: usize, columns: usize, left: Emu, top: Emu, width: Emu, height: Emu) -> Result<ShapeMut<'_>>;
+    pub fn add_picture(&mut self, image_data: &[u8], image_filename: &str, left: Emu, top: Emu, width: Option<Emu>, height: Option<Emu>) -> Result<ShapeMut<'_>>;
+}
+```
+
+`group` holds one z-order index per nesting level from the slide's own shapes
+down to the group, and an empty path names the slide's own shapes. A missing
+slide or a path that does not end at a group returns `None`. Each constructor
+builds the member the `SlideMut` or `add_picture` constructor builds, with a
+`p:cNvPr` id unused across the whole slide, groups included, and
+`CT_GroupShape::append_child` places it after the group's last member and
+before preserved schema-final content such as `p:extLst`. Coordinates are in
+the collection's own space, the member space of a group.
+
+After each addition, the group and then every group enclosing it are refit to
+the union of their members' own offsets and extents, as python-pptx
+`recalculate_extents` does. `a:chOff` and `a:chExt` become the union, and
+`a:off` and `a:ext` follow through the group's current mapping from member
+space to its parent, so a member drawn before the addition stays where it was
+drawn. A group without all four values maps members unchanged, so a new group
+ends with four equal values, as python-pptx writes them, and its members keep
+their slide coordinates. python-pptx instead sets `a:off` to `a:chOff`, which
+moves the members of a group that was moved or resized after it was built.
+Member rotation does not widen the union, as in python-pptx. A member without
+an offset and extent, such as a new empty group, does not count, so an empty
+group gets no invented transform until its own first member arrives.
+Rendering composes the mapping of each enclosing group, the identity for a
+fitted new group, and a member's position and size read its own `a:off` and
+`a:ext` in member space.
+
 The owning facade also reads and replaces a picture's image and removes
 shapes:
 

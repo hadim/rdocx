@@ -23353,6 +23353,342 @@ print([shape.name for shape in Presentation(sys.argv[1]).slides[0].shapes])
     assert_eq!(records, "['Text', 'Blue', 'Red']\n");
 }
 
+/// Returns the saved first slide, so a test reads the XML a reader sees.
+fn saved_first_slide(presentation: &Presentation) -> CT_Slide {
+    let package = open_opc(&presentation.to_bytes().unwrap(), "group members");
+    CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap()
+}
+
+/// Returns `a:off`, `a:ext`, `a:chOff`, and `a:chExt` of one group, in order.
+fn group_frame(child: &ShapeTreeChild) -> [i64; 8] {
+    let ShapeTreeChild::GroupShape(group) = child else {
+        panic!("expected a group");
+    };
+    let transform = group.group_transform().expect("a fitted group transform");
+    let (offset, extent) = (transform.offset.unwrap(), transform.extent.unwrap());
+    let (child_offset, child_extent) = (
+        transform.child_offset.unwrap(),
+        transform.child_extent.unwrap(),
+    );
+    [
+        offset.x.0,
+        offset.y.0,
+        extent.cx.0,
+        extent.cy.0,
+        child_offset.x.0,
+        child_offset.y.0,
+        child_extent.cx.0,
+        child_extent.cy.0,
+    ]
+}
+
+fn collect_shape_ids(children: &[ShapeTreeChild], ids: &mut Vec<u32>) {
+    for child in children {
+        ids.extend(child.non_visual_id());
+        if let ShapeTreeChild::GroupShape(group) = child {
+            collect_shape_ids(&group.children, ids);
+        }
+    }
+}
+
+#[test]
+fn a_new_group_holds_added_members_and_fits_their_union() {
+    const INCH: i64 = 914_400;
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let group = presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_group_shape()
+        .unwrap()
+        .kind();
+    assert_eq!(group, ShapeKind::Group);
+    presentation
+        .shapes_mut(0, &[0])
+        .unwrap()
+        .add_textbox(Emu(INCH), Emu(INCH), Emu(INCH), Emu(INCH))
+        .unwrap();
+    let slide = saved_first_slide(&presentation);
+    let children = &slide.common_slide_data.shape_tree.children;
+    assert_eq!(children.len(), 1);
+    assert_eq!(group_frame(&children[0]), [INCH; 8]);
+    assert!(presentation.validate().is_empty());
+
+    let mut shapes = presentation.shapes_mut(0, &[0]).unwrap();
+    shapes
+        .add_shape("rect", Emu(2 * INCH), Emu(457_200), Emu(INCH), Emu(INCH))
+        .unwrap();
+    shapes
+        .add_connector(
+            ConnectorType::Straight,
+            Emu(3_000_000),
+            Emu(2_000_000),
+            Emu(2_800_000),
+            Emu(2_500_000),
+        )
+        .unwrap();
+    shapes
+        .add_table(
+            1,
+            2,
+            Emu(INCH),
+            Emu(2_600_000),
+            Emu(1_000_000),
+            Emu(400_000),
+        )
+        .unwrap();
+    let picture = shapes
+        .add_picture(
+            &valid_one_pixel_png(),
+            "dot.png",
+            Emu(100_000),
+            Emu(100_000),
+            Some(Emu(50_000)),
+            None,
+        )
+        .unwrap();
+    assert_eq!(picture.kind(), ShapeKind::Picture);
+    shapes.add_group_shape().unwrap();
+    presentation
+        .shapes_mut(0, &[0, 5])
+        .unwrap()
+        .add_shape(
+            "ellipse",
+            Emu(4_000_000),
+            Emu(3_500_000),
+            Emu(500_000),
+            Emu(500_000),
+        )
+        .unwrap();
+
+    let slide = presentation.slide(0).unwrap();
+    let group = slide.shape(0).unwrap();
+    let kinds = group
+        .children()
+        .map(|shape| shape.kind())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        [
+            ShapeKind::Shape,
+            ShapeKind::Shape,
+            ShapeKind::Connector,
+            ShapeKind::GraphicFrame,
+            ShapeKind::Picture,
+            ShapeKind::Group,
+        ]
+    );
+    assert_eq!(group.child(5).unwrap().child_count(), 1);
+    assert_eq!(
+        group.child(0).unwrap().position(),
+        Some((Emu(INCH), Emu(INCH)))
+    );
+
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert!(reopened.validate().is_empty(), "{:?}", reopened.validate());
+    let slide = saved_first_slide(&reopened);
+    let children = &slide.common_slide_data.shape_tree.children;
+    assert_eq!(
+        group_frame(&children[0]),
+        [
+            100_000, 100_000, 4_400_000, 3_900_000, 100_000, 100_000, 4_400_000, 3_900_000
+        ]
+    );
+    let ShapeTreeChild::GroupShape(outer) = &children[0] else {
+        panic!("expected the outer group");
+    };
+    assert_eq!(
+        group_frame(&outer.children[5]),
+        [
+            4_000_000, 3_500_000, 500_000, 500_000, 4_000_000, 3_500_000, 500_000, 500_000
+        ]
+    );
+    let mut ids = Vec::new();
+    collect_shape_ids(children, &mut ids);
+    assert_eq!(ids.len(), 8);
+    assert_eq!(ids.iter().collect::<HashSet<_>>().len(), 8, "{ids:?}");
+    let xml = String::from_utf8(
+        open_opc(&bytes, "group members")
+            .get_part("/ppt/slides/slide1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let group_properties = xml.find("<p:grpSpPr><a:xfrm>").unwrap();
+    let first_member = xml.find(r#"name="TextBox "#).unwrap();
+    assert!(group_properties < first_member);
+    for prefix in ["TextBox", "Shape", "Connector", "Table", "Picture", "Group"] {
+        assert!(xml.contains(&format!(r#"name="{prefix} "#)), "{prefix}");
+    }
+}
+
+#[test]
+fn adding_to_a_moved_and_scaled_group_keeps_its_members_in_place() {
+    let red_at = |presentation: &Presentation, x: u32, y: u32| {
+        let png = presentation
+            .slide_png_deterministic(0, 72.0)
+            .unwrap()
+            .unwrap();
+        let pixel = tiny_skia::Pixmap::decode_png(&png)
+            .unwrap()
+            .pixel(x, y)
+            .unwrap();
+        (pixel.red(), pixel.green(), pixel.blue()) == (255, 0, 0)
+    };
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_group_shape()
+        .unwrap();
+    presentation
+        .shapes_mut(0, &[0])
+        .unwrap()
+        .add_shape(
+            "rect",
+            Emu(1_270_000),
+            Emu(1_270_000),
+            Emu(635_000),
+            Emu(635_000),
+        )
+        .unwrap()
+        .set_fill(
+            Fill::from_xml(br#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#).unwrap(),
+        )
+        .unwrap();
+    // One point is 12700 EMU and one pixel at 72 DPI, so the square covers
+    // pixels 100 to 150 on both axes until the group moves.
+    assert!(red_at(&presentation, 125, 125));
+
+    // Moving and resizing a group in PowerPoint changes only a:off and a:ext.
+    // The member keeps its coordinates and the group maps them at scale two.
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut group = slide.shape_mut(0).unwrap();
+    group.set_position(Emu(1_905_000), Emu(1_270_000)).unwrap();
+    group.set_size(Emu(1_270_000), Emu(1_270_000)).unwrap();
+    assert!(red_at(&presentation, 240, 190));
+    assert!(!red_at(&presentation, 125, 125));
+
+    presentation
+        .shapes_mut(0, &[0])
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(635_000), Emu(635_000))
+        .unwrap();
+    let slide = saved_first_slide(&presentation);
+    assert_eq!(
+        group_frame(&slide.common_slide_data.shape_tree.children[0]),
+        [
+            -635_000, -1_270_000, 3_810_000, 3_810_000, 0, 0, 1_905_000, 1_905_000
+        ]
+    );
+    assert!(red_at(&presentation, 240, 190));
+    assert!(!red_at(&presentation, 125, 125));
+    assert!(presentation.validate().is_empty());
+}
+
+#[test]
+fn group_shape_collections_reject_paths_that_are_not_groups_without_change() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide.add_group_shape().unwrap();
+    slide.add_textbox(Emu(0), Emu(0), Emu(10), Emu(10)).unwrap();
+    presentation
+        .shapes_mut(0, &[0])
+        .unwrap()
+        .add_textbox(Emu(5), Emu(5), Emu(10), Emu(10))
+        .unwrap();
+    assert!(presentation.shapes_mut(1, &[]).is_none());
+    assert!(presentation.shapes_mut(0, &[1]).is_none());
+    assert!(presentation.shapes_mut(0, &[2]).is_none());
+    assert!(presentation.shapes_mut(0, &[0, 0]).is_none());
+
+    let before = presentation.to_bytes().unwrap();
+    let mut shapes = presentation.shapes_mut(0, &[0]).unwrap();
+    assert!(matches!(
+        shapes.add_shape("not-a-preset", Emu(1), Emu(2), Emu(3), Emu(4)),
+        Err(Error::InvalidShapeMutation {
+            operation: "add shape",
+            ..
+        })
+    ));
+    assert!(matches!(
+        shapes.add_table(0, 1, Emu(1), Emu(2), Emu(3), Emu(4)),
+        Err(Error::InvalidTableMutation { .. })
+    ));
+    assert!(
+        shapes
+            .add_picture(b"not an image", "broken.png", Emu(0), Emu(0), None, None)
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    presentation
+        .shapes_mut(0, &[])
+        .unwrap()
+        .add_textbox(Emu(1), Emu(2), Emu(3), Emu(4))
+        .unwrap();
+    let slide = presentation.slide(0).unwrap();
+    assert_eq!(slide.shapes().len(), 3);
+    assert_eq!(slide.shape(0).unwrap().child_count(), 1);
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn populated_groups_read_back_in_pinned_python_pptx() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_group_shape()
+        .unwrap();
+    let mut shapes = presentation.shapes_mut(0, &[0]).unwrap();
+    shapes
+        .add_textbox(Emu(914_400), Emu(914_400), Emu(914_400), Emu(914_400))
+        .unwrap()
+        .set_text("inside")
+        .unwrap();
+    shapes.add_group_shape().unwrap();
+    presentation
+        .shapes_mut(0, &[0, 1])
+        .unwrap()
+        .add_shape(
+            "rect",
+            Emu(2_743_200),
+            Emu(457_200),
+            Emu(914_400),
+            Emu(914_400),
+        )
+        .unwrap();
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "groups",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+group = Presentation(sys.argv[1]).slides[0].shapes[0]
+nested = group.shapes[1]
+for shape in (group, group.shapes[0], nested, nested.shapes[0]):
+    print(int(shape.shape_type), shape.left, shape.top, shape.width, shape.height)
+print(group.shapes[0].text_frame.text)
+"#,
+    );
+    assert_eq!(
+        records,
+        "6 914400 457200 2743200 1371600\n\
+         17 914400 914400 914400 914400\n\
+         6 2743200 457200 914400 914400\n\
+         1 2743200 457200 914400 914400\n\
+         inside\n"
+    );
+}
+
 #[test]
 fn setting_notes_text_creates_the_notes_slide_and_a_missing_notes_master() {
     let mut presentation = Presentation::new().unwrap();

@@ -622,10 +622,30 @@ impl PyShapeCollection {
             .any(|segment| matches!(segment, PathSeg::Shape(_)))
         {
             return Err(PyValueError::new_err(
-                "nested shape collections are read-only",
+                "nested shape collections cannot remove or move shapes",
             ));
         }
         Ok(())
+    }
+
+    /// Adds one shape to the slide or group this collection holds, advances
+    /// the revision once, and returns the new shape captured at it.
+    fn add(
+        &self,
+        py: Python<'_>,
+        add: impl FnOnce(&mut rpptx::ShapesMut<'_>) -> rpptx::Result<()>,
+    ) -> PyResult<Py<PyShape>> {
+        let slide_index = self.validate(py)?;
+        let index = self.len(py)?;
+        let group = shape_indices(&self.path).collect::<Vec<_>>();
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut shapes = presentation
+            .inner
+            .shapes_mut(slide_index, &group)
+            .ok_or_else(|| PyValueError::new_err("shape is not a group"))?;
+        add(&mut shapes).map_err(|error| rpptx_to_pyerr(py, error))?;
+        drop(presentation);
+        self.capture_added(py, index)
     }
 
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyShape>> {
@@ -722,22 +742,16 @@ impl PyShapeCollection {
         width: i64,
         height: i64,
     ) -> PyResult<Py<PyShape>> {
-        self.require_slide_root()?;
-        let slide_index = self.validate(py)?;
-        let index = self.len(py)?;
-        self.presentation
-            .borrow_mut(py)
-            .inner
-            .slide_mut(slide_index)
-            .expect("validated slide")
-            .add_textbox(
-                rpptx::Emu(left),
-                rpptx::Emu(top),
-                rpptx::Emu(width),
-                rpptx::Emu(height),
-            )
-            .map_err(|error| rpptx_to_pyerr(py, error))?;
-        self.capture_added(py, index)
+        self.add(py, |shapes| {
+            shapes
+                .add_textbox(
+                    rpptx::Emu(left),
+                    rpptx::Emu(top),
+                    rpptx::Emu(width),
+                    rpptx::Emu(height),
+                )
+                .map(drop)
+        })
     }
 
     fn add_shape(
@@ -749,7 +763,6 @@ impl PyShapeCollection {
         width: i64,
         height: i64,
     ) -> PyResult<Py<PyShape>> {
-        self.require_slide_root()?;
         let preset = if shape_type.is_instance_of::<PyString>() {
             shape_type.extract::<String>()?
         } else {
@@ -761,22 +774,17 @@ impl PyShapeCollection {
                 .getattr("xml_value")?
                 .extract::<String>()?
         };
-        let slide_index = self.validate(py)?;
-        let index = self.len(py)?;
-        self.presentation
-            .borrow_mut(py)
-            .inner
-            .slide_mut(slide_index)
-            .expect("validated slide")
-            .add_shape(
-                &preset,
-                rpptx::Emu(left),
-                rpptx::Emu(top),
-                rpptx::Emu(width),
-                rpptx::Emu(height),
-            )
-            .map_err(|error| rpptx_to_pyerr(py, error))?;
-        self.capture_added(py, index)
+        self.add(py, |shapes| {
+            shapes
+                .add_shape(
+                    &preset,
+                    rpptx::Emu(left),
+                    rpptx::Emu(top),
+                    rpptx::Emu(width),
+                    rpptx::Emu(height),
+                )
+                .map(drop)
+        })
     }
 
     fn add_connector(
@@ -788,44 +796,28 @@ impl PyShapeCollection {
         end_x: i64,
         end_y: i64,
     ) -> PyResult<Py<PyShape>> {
-        self.require_slide_root()?;
         let connector = match connector_type {
             1 => rpptx::ConnectorType::Straight,
             2 => rpptx::ConnectorType::Elbow,
             3 => rpptx::ConnectorType::Curve,
             _ => return Err(PyValueError::new_err("unsupported MSO_CONNECTOR value")),
         };
-        let slide_index = self.validate(py)?;
-        let index = self.len(py)?;
-        self.presentation
-            .borrow_mut(py)
-            .inner
-            .slide_mut(slide_index)
-            .expect("validated slide")
-            .add_connector(
-                connector,
-                rpptx::Emu(begin_x),
-                rpptx::Emu(begin_y),
-                rpptx::Emu(end_x),
-                rpptx::Emu(end_y),
-            )
-            .map_err(|error| rpptx_to_pyerr(py, error))?;
-        self.capture_added(py, index)
+        self.add(py, |shapes| {
+            shapes
+                .add_connector(
+                    connector,
+                    rpptx::Emu(begin_x),
+                    rpptx::Emu(begin_y),
+                    rpptx::Emu(end_x),
+                    rpptx::Emu(end_y),
+                )
+                .map(drop)
+        })
     }
 
-    /// Appends an empty group. Populating groups is not supported yet.
+    /// Appends an empty group, which its own `shapes` collection populates.
     fn add_group_shape(&mut self, py: Python<'_>) -> PyResult<Py<PyShape>> {
-        self.require_slide_root()?;
-        let slide_index = self.validate(py)?;
-        let index = self.len(py)?;
-        self.presentation
-            .borrow_mut(py)
-            .inner
-            .slide_mut(slide_index)
-            .expect("validated slide")
-            .add_group_shape()
-            .map_err(|error| rpptx_to_pyerr(py, error))?;
-        self.capture_added(py, index)
+        self.add(py, |shapes| shapes.add_group_shape().map(drop))
     }
 
     /// Removes one shape of this slide and the package parts only it used.
@@ -879,24 +871,18 @@ impl PyShapeCollection {
         width: i64,
         height: i64,
     ) -> PyResult<Py<PyShape>> {
-        self.require_slide_root()?;
-        let slide_index = self.validate(py)?;
-        let index = self.len(py)?;
-        self.presentation
-            .borrow_mut(py)
-            .inner
-            .slide_mut(slide_index)
-            .expect("validated slide")
-            .add_table(
-                rows,
-                cols,
-                rpptx::Emu(left),
-                rpptx::Emu(top),
-                rpptx::Emu(width),
-                rpptx::Emu(height),
-            )
-            .map_err(|error| rpptx_to_pyerr(py, error))?;
-        self.capture_added(py, index)
+        self.add(py, |shapes| {
+            shapes
+                .add_table(
+                    rows,
+                    cols,
+                    rpptx::Emu(left),
+                    rpptx::Emu(top),
+                    rpptx::Emu(width),
+                    rpptx::Emu(height),
+                )
+                .map(drop)
+        })
     }
 
     #[pyo3(signature = (image_file, left, top, width = None, height = None))]
@@ -909,24 +895,20 @@ impl PyShapeCollection {
         width: Option<i64>,
         height: Option<i64>,
     ) -> PyResult<Py<PyShape>> {
-        self.require_slide_root()?;
-        let slide_index = self.validate(py)?;
-        let index = self.len(py)?;
+        self.validate(py)?;
         let (bytes, filename) = image_bytes(image_file)?;
-        self.presentation
-            .borrow_mut(py)
-            .inner
-            .add_picture(
-                slide_index,
-                &bytes,
-                &filename,
-                rpptx::Emu(left),
-                rpptx::Emu(top),
-                width.map(rpptx::Emu),
-                height.map(rpptx::Emu),
-            )
-            .map_err(|error| rpptx_to_pyerr(py, error))?;
-        self.capture_added(py, index)
+        self.add(py, |shapes| {
+            shapes
+                .add_picture(
+                    &bytes,
+                    &filename,
+                    rpptx::Emu(left),
+                    rpptx::Emu(top),
+                    width.map(rpptx::Emu),
+                    height.map(rpptx::Emu),
+                )
+                .map(drop)
+        })
     }
 }
 

@@ -62,6 +62,8 @@ with open("review.pdf", "wb") as output:
   heights.
 - Picture crop, read and written as in python-pptx.
 - Shape z-order through `slide.shapes.move(from_, to)`.
+- Group members added through `group.shapes`, with the group refit to its
+  members as in python-pptx.
 - Run hyperlinks, read, added, retargeted, and removed as in python-pptx.
 
 ## Use it when

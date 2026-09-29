@@ -1658,6 +1658,13 @@ impl CT_GroupShape {
         self.non_visual_group_properties.non_visual_name.as_deref()
     }
 
+    /// Appends one member before preserved schema-final group content.
+    pub fn append_child(&mut self, child: ShapeTreeChild) -> &mut ShapeTreeChild {
+        self.raw_children.shift_boundaries_from(self.children.len());
+        self.children.push(child);
+        self.children.last_mut().expect("group child was appended")
+    }
+
     /// Parses a complete recursive `p:grpSp` element.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let parsed = parse_group(xml, &[], GroupKind::GroupShape)?;
@@ -2339,6 +2346,23 @@ mod style_tests {
         assert!(group.children.is_empty());
         assert!(group.group_transform().is_none());
         assert_eq!(CT_GroupShape::from_xml(xml.as_bytes()).unwrap(), group);
+    }
+
+    #[test]
+    fn group_members_append_before_preserved_schema_final_content() {
+        let xml = br#"<p:grpSp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:nvGrpSpPr><p:cNvPr id="4" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="5" name="First"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:extLst><p:ext uri="{kept}"/></p:extLst></p:grpSp>"#;
+        let mut group = CT_GroupShape::from_xml(xml).unwrap();
+        let appended = group.append_child(ShapeTreeChild::GroupShape(Box::new(
+            CT_GroupShape::new_empty(6, "Nested"),
+        )));
+        assert_eq!(appended.non_visual_id(), Some(6));
+
+        let written = String::from_utf8(group.to_xml().unwrap()).unwrap();
+        let first = written.find(r#"id="5""#).unwrap();
+        let nested = written.find(r#"id="6""#).unwrap();
+        let extension = written.find("<p:extLst>").unwrap();
+        assert!(first < nested && nested < extension, "{written}");
+        assert_eq!(CT_GroupShape::from_xml(written.as_bytes()).unwrap(), group);
     }
 
     #[test]
