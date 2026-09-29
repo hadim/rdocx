@@ -367,7 +367,8 @@ MEASUREMENT_COLUMNS = (
 )
 MEASUREMENT_DATE = "2026-09-19"
 ARCHIVE_REMEASUREMENT_DATES = {
-    "rdocx": "2026-09-26",
+    "rdocx": "2026-09-29",
+    "rdocx-cli": "2026-09-29",
     "rdocx-layout": "2026-09-26",
     "rdocx-oxml": "2026-09-29",
     "rpptx": "2026-09-26",
@@ -384,12 +385,12 @@ ARCHIVE_MEASUREMENTS = {
     "oxml-opc": (92_122, 355_510, 12),
     "oxml-pdf": (66_015, 304_432, 14),
     "oxml-sml": (12_511, 49_803, 6),
-    "rdocx": (1_104_100, 6_548_342, 36),
-    "rdocx-cli": (35_147, 149_734, 8),
+    "rdocx": (1_107_065, 6_565_343, 36),
+    "rdocx-cli": (35_820, 153_384, 8),
     "rdocx-html": (15_486, 63_894, 11),
     "rdocx-layout": (255_752, 1_385_701, 15),
     "rdocx-opc": (3_655, 9_668, 6),
-    "rdocx-oxml": (376_219, 2_414_866, 32),
+    "rdocx-oxml": (380_183, 2_433_262, 32),
     "rdocx-pdf": (8_111, 26_758, 6),
     "rpptx": (407_658, 2_122_094, 16),
     "rpptx-chart": (6_648, 21_136, 6),
