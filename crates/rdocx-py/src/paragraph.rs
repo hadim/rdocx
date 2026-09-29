@@ -1,5 +1,5 @@
 use oxml_py_support::{ContentPath, PathSeg};
-use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PySlice};
 use smallvec::smallvec;
@@ -50,6 +50,50 @@ pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocati
         }),
         (_, None, None) => Ok(ParagraphLocation::Body(paragraph)),
         _ => Err(PyRuntimeError::new_err("paragraph path is incomplete")),
+    }
+}
+
+/// Resolve a paragraph style given by ID, or by name as python-docx accepts,
+/// to the ID the package defines.
+///
+/// The ID is tried first, so a value read from `Paragraph.style` always
+/// assigns the same style. A name then matches exactly before it matches
+/// regardless of case, which is how "Heading 1" finds Word's "heading 1".
+/// Each step looks at paragraph styles only, so a character style cannot hide
+/// a paragraph style of that name. As in python-docx, a value naming no style
+/// raises `KeyError` and one naming only a style of another type raises
+/// `ValueError`.
+fn paragraph_style_id(document: &rdocx::Document, value: &str) -> PyResult<String> {
+    let styles = document.styles();
+    let lowered = value.to_lowercase();
+    let resolve = |paragraph_only: bool| {
+        let candidates = || {
+            styles.iter().filter(move |style| {
+                !paragraph_only || style.style_type() == rdocx::StyleType::Paragraph
+            })
+        };
+        candidates()
+            .find(|style| style.style_id() == value)
+            .or_else(|| candidates().find(|style| style.name() == Some(value)))
+            .or_else(|| {
+                candidates().find(|style| {
+                    style
+                        .name()
+                        .is_some_and(|name| name.to_lowercase() == lowered)
+                })
+            })
+    };
+    if let Some(style) = resolve(true) {
+        return Ok(style.style_id().to_owned());
+    }
+    match resolve(false) {
+        Some(style) => Err(PyValueError::new_err(format!(
+            "style '{value}' is a {} style, not a paragraph style",
+            style.style_type().to_str()
+        ))),
+        None => Err(PyKeyError::new_err(format!(
+            "no style with ID or name '{value}'"
+        ))),
     }
 }
 
@@ -193,6 +237,44 @@ impl PyParagraph {
         .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
     }
 
+    // Replace the content with one run holding `text`, keeping the paragraph
+    // properties, comments and bookmarks. `None` is empty text. A success
+    // advances the revision, so every earlier handle, this one included, is
+    // stale.
+    #[setter]
+    fn set_text(&self, py: Python<'_>, text: Option<&str>) -> PyResult<()> {
+        let location = self.validate(py)?;
+        let text = text.unwrap_or_default();
+        let mut document = self.document.borrow_mut(py);
+        let result = match location {
+            ParagraphLocation::Body(index) => document
+                .inner
+                .paragraph_mut(index)
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                .set_text(text),
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => {
+                let mut table = document
+                    .inner
+                    .table_mut(table)
+                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+                let mut cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+                cell.paragraph_mut(paragraph)
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                    .set_text(text)
+            }
+        };
+        result.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        document.revisions.bump();
+        Ok(())
+    }
+
     #[getter]
     fn runs(&self, py: Python<'_>) -> PyResult<Py<PyRunCollection>> {
         self.validate(py)?;
@@ -299,6 +381,9 @@ impl PyParagraph {
     #[setter]
     fn set_style(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
         let location = self.validate(py)?;
+        let value = value
+            .map(|value| paragraph_style_id(&self.document.borrow(py).inner, &value))
+            .transpose()?;
         crate::formatting::apply_paragraph_update(
             py,
             &self.document,

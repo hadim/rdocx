@@ -931,7 +931,9 @@ struct ReusableEngineContext {
     charts: HashMap<String, std::result::Result<Box<oxml_chart::CT_ChartSpace>, String>>,
     chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet,
     chart_color_map: oxml_drawing::color::ColorMap,
-    core_properties: Option<rdocx_oxml::core_properties::CoreProperties>,
+    /// Boxed, because every `Document` holds two engines inline and debug
+    /// builds keep many copies of `Document` on deep stacks.
+    core_properties: Option<Box<rdocx_oxml::core_properties::CoreProperties>>,
     hyperlink_urls: HashMap<String, String>,
     footnotes: Option<rdocx_oxml::footnotes::CT_Footnotes>,
     endnotes: Option<rdocx_oxml::footnotes::CT_Footnotes>,
@@ -1027,7 +1029,7 @@ impl ReusableEngineContext {
             charts: input.charts.clone(),
             chart_theme: input.chart_theme.clone(),
             chart_color_map: input.chart_color_map.clone(),
-            core_properties: input.core_properties.clone(),
+            core_properties: input.core_properties.clone().map(Box::new),
             hyperlink_urls: input.hyperlink_urls.clone(),
             footnotes: input.footnotes.clone(),
             endnotes: input.endnotes.clone(),
@@ -1104,7 +1106,7 @@ impl ReusableEngineContext {
             && self.charts == input.charts
             && self.chart_theme == input.chart_theme
             && self.chart_color_map == input.chart_color_map
-            && self.core_properties == input.core_properties
+            && self.core_properties.as_deref() == input.core_properties.as_ref()
             && self.hyperlink_urls == input.hyperlink_urls
             && self.theme == input.theme
             && self.caller_font_aliases == caller_font_aliases

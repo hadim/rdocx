@@ -4929,7 +4929,9 @@ pub struct Document {
     body_namespace_bindings: Vec<(String, String)>,
     pub(crate) styles: CT_Styles,
     pub(crate) numbering: Option<CT_Numbering>,
-    pub(crate) core_properties: Option<CoreProperties>,
+    /// Boxed, because debug builds keep many copies of `Document` on deep
+    /// stacks, and the fifteen-field model would otherwise grow every one.
+    pub(crate) core_properties: Option<Box<CoreProperties>>,
     pub(crate) application_properties: Option<AppProperties>,
     pub(crate) custom_properties: Option<CustomProperties>,
     /// Package part containing the core properties, resolved from `_rels/.rels`.
@@ -10567,7 +10569,7 @@ impl Document {
             WordCreationProfile::WordCompatible(class) => (class, true),
         };
         let settings = compatible.then(CT_Settings::new);
-        let core_properties = compatible.then(CoreProperties::default);
+        let core_properties = compatible.then(Box::<CoreProperties>::default);
         let application_properties = compatible.then(default_application_properties);
         let mut package = if compatible {
             new_word_compatible_package(
@@ -10576,7 +10578,7 @@ impl Document {
                 &styles,
                 settings.as_ref().expect("compatible settings exist"),
                 core_properties
-                    .as_ref()
+                    .as_deref()
                     .expect("compatible core properties exist"),
                 application_properties
                     .as_ref()
@@ -11986,7 +11988,8 @@ impl Document {
         let core_properties = core_properties_part_name
             .as_deref()
             .and_then(|part| package.get_part(part))
-            .and_then(|xml| CoreProperties::from_xml(xml).ok());
+            .and_then(|xml| CoreProperties::from_xml(xml).ok())
+            .map(Box::new);
 
         let application_properties_part_name = package
             .package_rels
@@ -12615,7 +12618,7 @@ impl Document {
         // Serialize core properties to the package relationship's target.
         if let Some(core_xml) = self
             .core_properties
-            .as_ref()
+            .as_deref()
             .map(CoreProperties::to_xml)
             .transpose()?
         {
@@ -12625,7 +12628,7 @@ impl Document {
                 .get_part(&core_part)
                 .and_then(|xml| CoreProperties::from_xml(xml).ok())
                 .as_ref()
-                != self.core_properties.as_ref();
+                != self.core_properties.as_deref();
             if changed {
                 self.package.set_part(&core_part, core_xml);
             }
@@ -20863,21 +20866,21 @@ impl Document {
 
     /// Return the complete core-properties model.
     pub fn core_properties(&self) -> Option<&CoreProperties> {
-        self.core_properties.as_ref()
+        self.core_properties.as_deref()
     }
 
     /// Replace the complete core-properties model.
     pub fn set_core_properties(&mut self, properties: CoreProperties) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.reserve_core_properties_bundle()?;
-        candidate.core_properties = Some(properties);
+        candidate.core_properties = Some(Box::new(properties));
         self.commit_staged_mutation(candidate);
         Ok(())
     }
 
     /// Remove the complete core-properties part and its package relationship.
     pub fn remove_core_properties(&mut self) -> Result<Option<CoreProperties>> {
-        let Some(properties) = self.core_properties.clone() else {
+        let Some(properties) = self.core_properties.as_deref().cloned() else {
             return Ok(None);
         };
         let mut candidate = self.clone_for_staging();
@@ -21107,8 +21110,7 @@ impl Document {
     }
 
     fn ensure_core_properties(&mut self) -> &mut CoreProperties {
-        self.core_properties
-            .get_or_insert_with(CoreProperties::default)
+        self.core_properties.get_or_insert_default()
     }
 
     // ---- Document Merging ----
@@ -23076,7 +23078,7 @@ impl Document {
             charts,
             chart_theme,
             chart_color_map: oxml_drawing::color::ColorMap::default(),
-            core_properties: self.core_properties.clone(),
+            core_properties: self.core_properties.as_deref().cloned(),
             hyperlink_urls,
             footnotes,
             endnotes,

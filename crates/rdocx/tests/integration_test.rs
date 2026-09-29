@@ -2443,6 +2443,7 @@ mod settings_and_properties_tests {
                 last_modified_by: Some("Example reviewer".to_owned()),
                 created: Some("2026-09-07T00:00:00Z".to_owned()),
                 modified: Some("2026-09-07T01:00:00Z".to_owned()),
+                ..Default::default()
             })
             .unwrap();
         let mut application = AppProperties::default();
@@ -2540,6 +2541,38 @@ mod settings_and_properties_tests {
         assert_eq!(removed.default_tab_stop(), None);
         assert_eq!(removed.character_spacing_control(), None);
         assert_eq!(removed.theme_font_language(), None);
+    }
+
+    #[test]
+    fn every_core_property_survives_reopen_and_a_later_title_change() {
+        let text = |value: &str| Some(value.to_owned());
+        let properties = CoreProperties {
+            title: text("Draft title"),
+            category: text("Reports"),
+            content_status: text("Draft"),
+            identifier: text("DOC-7"),
+            language: text("en-GB"),
+            last_printed: text("2026-09-01T08:00:00Z"),
+            revision: text("4"),
+            version: text("1.2"),
+            ..Default::default()
+        };
+        let mut document =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        assert_eq!(document.core_properties(), None);
+        document.set_core_properties(properties.clone()).unwrap();
+
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.core_properties(), Some(&properties));
+        reopened.set_title("Final title");
+        let reopened = Document::from_bytes(&reopened.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.core_properties(),
+            Some(&CoreProperties {
+                title: text("Final title"),
+                ..properties
+            })
+        );
     }
 
     #[test]

@@ -66,6 +66,13 @@ pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
                 "last_modified_by": core.and_then(|value| value.last_modified_by.as_deref()),
                 "created": core.and_then(|value| value.created.as_deref()),
                 "modified": core.and_then(|value| value.modified.as_deref()),
+                "category": core.and_then(|value| value.category.as_deref()),
+                "content_status": core.and_then(|value| value.content_status.as_deref()),
+                "identifier": core.and_then(|value| value.identifier.as_deref()),
+                "language": core.and_then(|value| value.language.as_deref()),
+                "last_printed": core.and_then(|value| value.last_printed.as_deref()),
+                "revision": core.and_then(|value| value.revision.as_deref()),
+                "version": core.and_then(|value| value.version.as_deref()),
             },
             "slide_details": slides,
         }))?;
@@ -106,6 +113,27 @@ pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
         }
         if let Some(value) = core.modified.as_deref() {
             writeln!(stdout, "  Modified: {value}")?;
+        }
+        if let Some(value) = core.category.as_deref() {
+            println!("  Category: {value}");
+        }
+        if let Some(value) = core.content_status.as_deref() {
+            println!("  Content status: {value}");
+        }
+        if let Some(value) = core.identifier.as_deref() {
+            println!("  Identifier: {value}");
+        }
+        if let Some(value) = core.language.as_deref() {
+            println!("  Language: {value}");
+        }
+        if let Some(value) = core.last_printed.as_deref() {
+            println!("  Last printed: {value}");
+        }
+        if let Some(value) = core.revision.as_deref() {
+            println!("  Revision: {value}");
+        }
+        if let Some(value) = core.version.as_deref() {
+            println!("  Version: {value}");
         }
         if core == &rpptx::CoreProperties::default() {
             writeln!(stdout, "  (none)")?;

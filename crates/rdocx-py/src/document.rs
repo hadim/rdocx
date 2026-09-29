@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError};
 use pyo3::exceptions::{
-    PyFileNotFoundError, PyIndexError, PyNotADirectoryError, PyTypeError, PyValueError,
+    PyFileNotFoundError, PyIndexError, PyNotADirectoryError, PyOverflowError, PyTypeError,
+    PyValueError,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
@@ -939,6 +940,341 @@ impl PyLayoutBackedFieldUpdateReport {
     }
 }
 
+/// One text field of the native core-properties model.
+type CoreField = fn(&mut rdocx::CoreProperties) -> &mut Option<String>;
+
+/// The longest text python-docx accepts for a core property.
+const CORE_TEXT_LIMIT: usize = 255;
+
+/// Read a W3CDTF date as python-docx does: a date and time, a date, a year and
+/// month, or a year in the first nineteen characters, then an optional
+/// `+hh:mm` or `-hh:mm` offset. Anything after the time that is not an offset,
+/// such as `Z` or fractional seconds, is ignored.
+fn w3cdtf_fields(value: &str) -> Option<([u32; 6], i32)> {
+    let split = value
+        .char_indices()
+        .nth(19)
+        .map_or(value.len(), |(index, _)| index);
+    let (stamp, offset) = value.split_at(split);
+    let bytes = stamp.as_bytes();
+    let number = |start: usize, end: usize| {
+        let digits = bytes.get(start..end)?;
+        digits
+            .iter()
+            .all(u8::is_ascii_digit)
+            .then(|| stamp[start..end].parse().ok())
+            .flatten()
+    };
+    let separators = |expected: &[(usize, u8)]| {
+        expected
+            .iter()
+            .all(|(index, byte)| bytes.get(*index) == Some(byte))
+    };
+    let fields = match bytes.len() {
+        19 if separators(&[(4, b'-'), (7, b'-'), (10, b'T'), (13, b':'), (16, b':')]) => [
+            number(0, 4)?,
+            number(5, 7)?,
+            number(8, 10)?,
+            number(11, 13)?,
+            number(14, 16)?,
+            number(17, 19)?,
+        ],
+        10 if separators(&[(4, b'-'), (7, b'-')]) => {
+            [number(0, 4)?, number(5, 7)?, number(8, 10)?, 0, 0, 0]
+        }
+        7 if separators(&[(4, b'-')]) => [number(0, 4)?, number(5, 7)?, 1, 0, 0, 0],
+        4 => [number(0, 4)?, 1, 1, 0, 0, 0],
+        _ => return None,
+    };
+    let minutes = if offset.len() == 6 {
+        let offset = offset.as_bytes();
+        let sign = match offset[0] {
+            b'+' => 1,
+            b'-' => -1,
+            _ => return None,
+        };
+        if offset[3] != b':'
+            || ![1, 2, 4, 5]
+                .iter()
+                .all(|index| offset[*index].is_ascii_digit())
+        {
+            return None;
+        }
+        let digit = |index: usize| i32::from(offset[index] - b'0');
+        sign * ((digit(1) * 10 + digit(2)) * 60 + digit(4) * 10 + digit(5))
+    } else {
+        0
+    };
+    Some((fields, minutes))
+}
+
+/// Convert a stored W3CDTF date to an aware UTC `datetime`, or `None` when it
+/// cannot be read, has an offset of a day or more, or falls outside the
+/// `datetime` range once converted to UTC.
+fn w3cdtf_to_datetime(py: Python<'_>, value: &str) -> PyResult<Option<Py<PyAny>>> {
+    let Some(([year, month, day, hour, minute, second], offset)) = w3cdtf_fields(value) else {
+        return Ok(None);
+    };
+    let datetime = py.import("datetime")?;
+    let timezone = datetime.getattr("timezone")?;
+    let utc = timezone.getattr("utc")?;
+    let delta = datetime
+        .getattr("timedelta")?
+        .call((0, i64::from(offset) * 60), None)?;
+    let constructor = datetime.getattr("datetime")?;
+    let stamp = timezone
+        .call1((delta,))
+        .and_then(|zone| constructor.call1((year, month, day, hour, minute, second, 0, zone)))
+        .and_then(|stamp| stamp.call_method1("astimezone", (utc,)));
+    match stamp {
+        Ok(stamp) => Ok(Some(stamp.unbind())),
+        Err(error)
+            if error.is_instance_of::<PyValueError>(py)
+                || error.is_instance_of::<PyOverflowError>(py) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Write a `datetime` as a UTC W3CDTF date. A naive value is taken as UTC, as
+/// python-docx does, and an aware one is converted to UTC first.
+fn datetime_to_w3cdtf(value: &Bound<'_, PyAny>) -> PyResult<String> {
+    let datetime = value.py().import("datetime")?;
+    if !value.is_instance(&datetime.getattr("datetime")?)? {
+        return Err(PyTypeError::new_err(
+            "a core property date must be a datetime.datetime",
+        ));
+    }
+    let value = if value.call_method0("utcoffset")?.is_none() {
+        value.clone()
+    } else {
+        value.call_method1(
+            "astimezone",
+            (datetime.getattr("timezone")?.getattr("utc")?,),
+        )?
+    };
+    let field = |name: &str| value.getattr(name)?.extract::<u32>();
+    Ok(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        field("year")?,
+        field("month")?,
+        field("day")?,
+        field("hour")?,
+        field("minute")?,
+        field("second")?,
+    ))
+}
+
+/// The package core properties (`docProps/core.xml`) under python-docx's
+/// attribute names.
+///
+/// Text properties read as an empty string when absent, `revision` as zero,
+/// and dates as `None`. Assigning `None` or empty text removes a property.
+/// A write replaces the native model and creates the part, its package
+/// relationship and its content type when the document has none. It changes
+/// no content, so handles stay valid.
+#[pyclass(name = "CoreProperties")]
+pub struct PyCoreProperties {
+    document: Py<PyDocument>,
+}
+
+impl PyCoreProperties {
+    fn read(&self, py: Python<'_>, field: CoreField) -> Option<String> {
+        let document = self.document.borrow(py);
+        let mut properties = document.inner.core_properties()?.clone();
+        field(&mut properties).take()
+    }
+
+    fn write(&self, py: Python<'_>, field: CoreField, value: Option<String>) -> PyResult<()> {
+        let mut document = self.document.borrow_mut(py);
+        let mut properties = document
+            .inner
+            .core_properties()
+            .cloned()
+            .unwrap_or_default();
+        let value = value.filter(|value| !value.is_empty());
+        if *field(&mut properties) == value {
+            return Ok(());
+        }
+        *field(&mut properties) = value;
+        document
+            .inner
+            .set_core_properties(properties)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn text(&self, py: Python<'_>, field: CoreField) -> String {
+        self.read(py, field).unwrap_or_default()
+    }
+
+    fn set_text(&self, py: Python<'_>, field: CoreField, value: Option<String>) -> PyResult<()> {
+        if value
+            .as_deref()
+            .is_some_and(|value| value.chars().count() > CORE_TEXT_LIMIT)
+        {
+            return Err(PyValueError::new_err(format!(
+                "a core property holds at most {CORE_TEXT_LIMIT} characters"
+            )));
+        }
+        self.write(py, field, value)
+    }
+
+    fn date(&self, py: Python<'_>, field: CoreField) -> PyResult<Option<Py<PyAny>>> {
+        match self.read(py, field) {
+            Some(value) => w3cdtf_to_datetime(py, &value),
+            None => Ok(None),
+        }
+    }
+
+    fn set_date(
+        &self,
+        py: Python<'_>,
+        field: CoreField,
+        value: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let value = value
+            .filter(|value| !value.is_none())
+            .map(datetime_to_w3cdtf)
+            .transpose()?;
+        self.write(py, field, value)
+    }
+}
+
+#[pymethods]
+impl PyCoreProperties {
+    #[getter]
+    fn author(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.creator)
+    }
+    #[setter]
+    fn set_author(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.creator, value)
+    }
+    #[getter]
+    fn category(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.category)
+    }
+    #[setter]
+    fn set_category(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.category, value)
+    }
+    #[getter]
+    fn comments(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.description)
+    }
+    #[setter]
+    fn set_comments(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.description, value)
+    }
+    #[getter]
+    fn content_status(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.content_status)
+    }
+    #[setter]
+    fn set_content_status(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.content_status, value)
+    }
+    #[getter]
+    fn created(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.date(py, |properties| &mut properties.created)
+    }
+    #[setter]
+    fn set_created(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.set_date(py, |properties| &mut properties.created, value)
+    }
+    #[getter]
+    fn identifier(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.identifier)
+    }
+    #[setter]
+    fn set_identifier(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.identifier, value)
+    }
+    #[getter]
+    fn keywords(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.keywords)
+    }
+    #[setter]
+    fn set_keywords(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.keywords, value)
+    }
+    #[getter]
+    fn language(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.language)
+    }
+    #[setter]
+    fn set_language(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.language, value)
+    }
+    #[getter]
+    fn last_modified_by(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.last_modified_by)
+    }
+    #[setter]
+    fn set_last_modified_by(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.last_modified_by, value)
+    }
+    #[getter]
+    fn last_printed(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.date(py, |properties| &mut properties.last_printed)
+    }
+    #[setter]
+    fn set_last_printed(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.set_date(py, |properties| &mut properties.last_printed, value)
+    }
+    #[getter]
+    fn modified(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.date(py, |properties| &mut properties.modified)
+    }
+    #[setter]
+    fn set_modified(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.set_date(py, |properties| &mut properties.modified, value)
+    }
+    #[getter]
+    fn revision(&self, py: Python<'_>) -> i64 {
+        self.read(py, |properties| &mut properties.revision)
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .map_or(0, |value| value.max(0))
+    }
+    #[setter]
+    fn set_revision(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        if value.is_some_and(|value| value < 1) {
+            return Err(PyValueError::new_err("revision must be a positive integer"));
+        }
+        self.write(
+            py,
+            |properties| &mut properties.revision,
+            value.map(|value| value.to_string()),
+        )
+    }
+    #[getter]
+    fn subject(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.subject)
+    }
+    #[setter]
+    fn set_subject(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.subject, value)
+    }
+    #[getter]
+    fn title(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.title)
+    }
+    #[setter]
+    fn set_title(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.title, value)
+    }
+    #[getter]
+    fn version(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.version)
+    }
+    #[setter]
+    fn set_version(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.version, value)
+    }
+}
+
 #[pyclass(name = "Document")]
 pub struct PyDocument {
     pub(crate) inner: rdocx::Document,
@@ -1446,6 +1782,11 @@ impl PyDocument {
         py.detach(|| self.inner.to_bytes())
             .map(|bytes| PyBytes::new(py, &bytes))
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[getter]
+    fn core_properties(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyCoreProperties>> {
+        Py::new(py, PyCoreProperties { document: slf })
     }
 
     #[getter]

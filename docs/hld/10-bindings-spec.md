@@ -273,6 +273,44 @@ cells advances the revision once, because later cell indexes move, while a
 vertical merge keeps live handles valid. `Cell.grid_span` reads the span with
 the python-docx default of 1 and `Cell.vertical_merge` reads the merge state.
 
+`Paragraph.text` is writable, in body and table-cell paragraphs, through the
+native `Paragraph::set_text`, which follows the python-docx setter. The
+paragraph keeps its properties and the attributes of `w:p`, while its runs,
+hyperlinks, fields, pictures, content controls, tracked changes and other
+inline children give way to one run without direct formatting. A tab becomes
+`w:tab`, and a line feed or a carriage return becomes `w:br`. Empty text or
+`None` leaves no run, as `add_paragraph("")` does. Unlike python-docx, comment
+ranges, bookmarks and permission ranges found anywhere in the paragraph are
+kept. Their starts move before the new run, their ends after it, and each
+comment reference follows in its own run, so a range over part of the old text
+covers the new text and no anchor loses its partner. Bookmarks are rebuilt from
+their ID and name, and permission markers keep their source XML. Two kinds of
+paragraph are rejected with `RdocxError`, since dropping part of them would
+unbalance the rest of the document. The first is a paragraph whose field
+characters and field code do not balance within it, such as any paragraph of a
+table of contents that spans several paragraphs. The second is a paragraph
+holding only one end of a tracked move range or a custom XML revision range.
+When both ends of such a range are in the paragraph, both are dropped with the
+tracked change they mark. A successful assignment advances the revision once
+and stales every earlier handle, the assigned paragraph included, as
+`Cell.text` does. A rejected one changes nothing.
+`Document::set_story_text` keeps its own behavior.
+
+`Paragraph.style` accepts a style ID the package defines or, as python-docx
+does, a style name, and writes the resolved ID. Among paragraph styles only,
+the ID is tried first, so a value read back always assigns the same style,
+then the exact name, then the name regardless of case, so `Heading 1` finds
+Word's `heading 1`. A character style therefore cannot hide a paragraph style
+of the same name. As in python-docx, a value that names no style raises
+`KeyError`, and one that names only a character, table or numbering style
+raises `ValueError`, both before any change. Assigning a style is a value-only
+mutation and keeps handles valid. The run style, table style and numbering
+setters still write their value unchecked. This changes behavior on documents
+that lack the style. `rdocx.Document()` defines only `Normal` and `Heading1`,
+so `p.style = "Heading2"` on a new document used to store an undefined style,
+which `rebuild_toc` even read as a level-two heading, and now raises
+`KeyError`.
+
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
 field cache update operations. `RunPosition` and
@@ -663,6 +701,24 @@ maps absent or unmodelled producer forms to `None`. Mutating a duplicate or
 malformed form reports the existing XML error without changing package bytes.
 This is additive pre-1.0 native and Python API. WASM and CLI do not gain new
 entry points and otherwise receive preserved package behavior.
+
+Python exposes the core properties as `Document.core_properties`, a
+`CoreProperties` handle with the python-docx attribute names `author`,
+`category`, `comments`, `content_status`, `created`, `identifier`, `keywords`,
+`language`, `last_modified_by`, `last_printed`, `modified`, `revision`,
+`subject`, `title` and `version`. `author` maps to `dc:creator` and `comments`
+to `dc:description`. Text properties read as an empty string when absent and
+accept at most 255 characters, as in python-docx. `revision` reads as an
+integer, zero when absent or unreadable, and accepts only a positive integer.
+The three dates read as timezone-aware UTC `datetime` values, parsed from
+W3CDTF as python-docx parses them, and accept a `datetime`, a naive one being
+taken as UTC. A date that cannot be read, has an offset of a day or more, or
+leaves the `datetime` range in UTC reads as `None` rather than raising. Assigning `None` or empty text removes a property. Each
+assignment replaces the native model through `Document::set_core_properties`,
+which creates `docProps/core.xml` with its package relationship and content
+type when the document has none. It changes no content, so the revision and
+every handle stay valid. A value of the wrong type raises `TypeError` and an
+out-of-range one `ValueError`, both before any change.
 
 Native Word mutations share one private document identifier owner. Existing
 method signatures stay unchanged, but fallible operations can report imported,
