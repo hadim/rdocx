@@ -3298,6 +3298,7 @@ struct DynamicTocSpan {
     result_end_position: TocRunPosition,
     end_run_end: usize,
     start_paragraph_name: String,
+    start_paragraph_namespaces: BTreeMap<String, String>,
     separator_wrapper_names: Vec<String>,
     instruction_runs: Vec<DynamicInstructionRun>,
     end_paragraph_start: usize,
@@ -3317,6 +3318,7 @@ struct DynamicFieldScan {
     result_start: Option<usize>,
     result_start_position: Option<TocRunPosition>,
     start_paragraph_name: Option<String>,
+    start_paragraph_namespaces: BTreeMap<String, String>,
     separator_wrapper_names: Vec<String>,
     instruction_runs: Vec<DynamicInstructionRun>,
 }
@@ -4638,6 +4640,7 @@ fn update_dynamic_field_stack(
             result_start: None,
             result_start_position: None,
             start_paragraph_name: None,
+            start_paragraph_namespaces: BTreeMap::new(),
             separator_wrapper_names: Vec::new(),
             instruction_runs: Vec::new(),
         }),
@@ -4687,6 +4690,7 @@ fn update_dynamic_field_stack(
                 }
             });
             field.start_paragraph_name = Some(para.qualified_name.clone());
+            field.start_paragraph_namespaces = para.inherited_namespaces.clone();
             let paragraph_position = elements
                 .iter()
                 .position(|element| std::ptr::eq(element, para))
@@ -4802,6 +4806,7 @@ fn update_dynamic_field_stack(
                 start_paragraph_name: field.start_paragraph_name.ok_or_else(|| {
                     Error::Other("table of contents field is missing its separator".to_owned())
                 })?,
+                start_paragraph_namespaces: field.start_paragraph_namespaces,
                 separator_wrapper_names: field.separator_wrapper_names,
                 instruction_runs: field.instruction_runs,
                 end_paragraph_start: end_para.start,
@@ -4851,7 +4856,15 @@ fn parse_dynamic_toc_field(xml: &[u8], span: &DynamicTocSpan) -> Result<Field> {
         .start_paragraph_name
         .split_once(':')
         .map_or("w", |(prefix, _)| prefix);
-    let mut source = xml[span.instruction_paragraph_start..span.result_start].to_vec();
+    // The instruction paragraph is cut out of its part, so its start tag gets
+    // the declarations it inherits there. Every run in it then resolves the
+    // prefixes it resolved when the document was read.
+    let mut source = Vec::new();
+    append_with_inherited_namespaces(
+        &mut source,
+        &xml[span.instruction_paragraph_start..span.result_start],
+        &span.start_paragraph_namespaces,
+    )?;
     source.extend_from_slice(
         format!("<{prefix}:r><{prefix}:fldChar {prefix}:fldCharType=\"end\"/></{prefix}:r>")
             .as_bytes(),
@@ -4881,11 +4894,15 @@ fn parse_dynamic_toc_field(xml: &[u8], span: &DynamicTocSpan) -> Result<Field> {
             buffer.clear();
         }
     };
-    parse_paragraph(&source)?;
+    CT_P::from_xml_fragment(&source)?;
 
     let mut projected = format!("<w:p xmlns:w=\"{W_NS}\">").into_bytes();
     for run in &span.instruction_runs {
-        append_instruction_run_with_namespaces(&mut projected, &xml[run.start..run.end], run)?;
+        append_with_inherited_namespaces(
+            &mut projected,
+            &xml[run.start..run.end],
+            &run.inherited_namespaces,
+        )?;
     }
     projected.extend_from_slice(b"<w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>");
     let paragraph = parse_paragraph(&projected)?;
@@ -4906,10 +4923,10 @@ fn parse_dynamic_toc_field(xml: &[u8], span: &DynamicTocSpan) -> Result<Field> {
         })
 }
 
-fn append_instruction_run_with_namespaces(
+fn append_with_inherited_namespaces(
     output: &mut Vec<u8>,
     raw: &[u8],
-    run: &DynamicInstructionRun,
+    inherited_namespaces: &BTreeMap<String, String>,
 ) -> Result<()> {
     let mut reader = quick_xml::Reader::from_reader(raw);
     reader.config_mut().trim_text(false);
@@ -4917,7 +4934,7 @@ fn append_instruction_run_with_namespaces(
     let (insertion, local_namespaces) =
         match reader.read_event_into(&mut buffer).map_err(|error| {
             Error::Other(format!(
-                "invalid table of contents instruction run: {error}"
+                "invalid table of contents instruction XML: {error}"
             ))
         })? {
             Event::Start(start) | Event::Empty(start) => {
@@ -4925,7 +4942,7 @@ fn append_instruction_run_with_namespaces(
                 for attribute in start.attributes() {
                     let attribute = attribute.map_err(|error| {
                         Error::Other(format!(
-                            "invalid table of contents instruction run: {error}"
+                            "invalid table of contents instruction XML: {error}"
                         ))
                     })?;
                     let key = attribute.key.as_ref();
@@ -4945,12 +4962,12 @@ fn append_instruction_run_with_namespaces(
             }
             _ => {
                 return Err(Error::Other(
-                    "table of contents instruction run has no start tag".to_owned(),
+                    "table of contents instruction XML has no start tag".to_owned(),
                 ));
             }
         };
     output.extend_from_slice(&raw[..insertion]);
-    for (prefix, namespace) in &run.inherited_namespaces {
+    for (prefix, namespace) in inherited_namespaces {
         if prefix == "xml" || local_namespaces.contains(prefix) {
             continue;
         }

@@ -447,6 +447,18 @@ root that owns the element already declares it and the authored identity write
 makes the same assumption. Together these keep a reopened save byte identical
 to the save it was read from.
 
+A paragraph cut out of its part and parsed on its own carries none of the
+declarations of its part. The table-of-contents rebuild adds the bindings the
+instruction paragraph inherits to its start tag before it parses it, so every
+run attribute resolves as it does inside the part. The text-box anchor reader
+does the same for each text-box paragraph. The text-box replacement and
+template walkers still parse such a paragraph in the default scope, which names
+`w` as the Word prefix without binding it. For that scope the capture resolves
+a Word prefix that the scope names without a binding to the WordprocessingML
+namespace, and an explicit binding always wins. A run attribute under any other
+prefix, such as `w14`, a foreign namespace or a second WordprocessingML alias,
+still fails those two walkers.
+
 An unknown default namespace declared on the document root is classified by
 its effective lexical scope before canonical serialization. An unused root
 default may be omitted without blocking a typed mutation. An unprefixed element

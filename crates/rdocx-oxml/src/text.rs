@@ -53,7 +53,19 @@ pub(crate) fn capture_root_attribute_record(
     start: &BytesStart<'_>,
     prefixes: &[String],
 ) -> Result<Option<Vec<u8>>> {
-    let bindings = namespace_bindings(prefixes);
+    let mut bindings = namespace_bindings(prefixes);
+    // A plain scope entry names a Word prefix. `word_prefixes_at` adds one
+    // only beside its binding, but the default scope of the public `from_xml`
+    // entrypoints, `CT_P::from_xml` among them, names `w` by convention and
+    // binds nothing. A caller that parses a paragraph cut out of its part in
+    // that scope, as the text-box replacement and template walkers do, reaches
+    // this capture with it, so the Word prefix resolves here instead of
+    // failing on the first `w:rsidR`. An explicit binding always wins.
+    for prefix in prefixes {
+        if !prefix.starts_with('\0') && !bindings.iter().any(|(bound, _)| bound == prefix) {
+            bindings.push((prefix.clone(), crate::namespace::W_NS.to_owned()));
+        }
+    }
     let mut attributes = Vec::new();
     let mut expanded = HashSet::new();
     let mut used_prefixes = Vec::new();
@@ -8720,6 +8732,54 @@ mod tests {
         let record =
             capture_root_attribute_record(&start, &["w".to_owned()]).expect("capture succeeds");
         assert!(record.is_none(), "{record:?}");
+    }
+
+    #[test]
+    fn a_run_identity_resolves_the_word_prefix_the_default_scope_names() {
+        // `CT_P::from_xml` names `w` as the Word prefix without binding it,
+        // which is the scope a paragraph cut out of its part can be parsed in.
+        // A run identity under it used to fail the paragraph as unbound.
+        let paragraph = parse_paragraph(
+            r#"<w:r w:rsidR="00A1B2C3" w:rsidRPr="00D4E5F6"><w:t>entry</w:t></w:r>"#,
+        );
+        assert_eq!(paragraph.text(), "entry");
+        let mut output = Vec::new();
+        paragraph.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains(r#"<w:r w:rsidR="00A1B2C3" w:rsidRPr="00D4E5F6""#),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn the_default_word_prefix_records_what_its_explicit_binding_records() {
+        // The fallback must produce the record a part that binds `w` produces,
+        // must never override an explicit binding, and must not reach a
+        // prefix the scope does not name as Word.
+        let start = BytesStart::from_content(r#"w:r w:rsidR="00A1B2C3""#, "w:r".len());
+        let default_scope = capture_root_attribute_record(&start, &["w".to_owned()]).unwrap();
+        let bound = capture_root_attribute_record(
+            &start,
+            &[format!("\0w\0{}", crate::namespace::W_NS), "w".to_owned()],
+        )
+        .unwrap();
+        assert!(default_scope.is_some());
+        assert_eq!(default_scope, bound);
+
+        let rebound =
+            capture_root_attribute_record(&start, &["w".to_owned(), "\0w\0urn:other".to_owned()])
+                .unwrap()
+                .unwrap();
+        let rebound = String::from_utf8(rebound).unwrap();
+        assert!(rebound.contains(r#"xmlns:w="urn:other""#), "{rebound}");
+
+        let foreign = BytesStart::from_content(r#"w:r x:id="1""#, "w:r".len());
+        let error = capture_root_attribute_record(&foreign, &["w".to_owned()]).unwrap_err();
+        assert!(
+            error.to_string().contains("prefix `x` is unbound"),
+            "{error}"
+        );
     }
 
     #[test]

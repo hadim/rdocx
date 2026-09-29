@@ -8855,6 +8855,134 @@ fn toc_rebuild_accepts_several_defaults_of_one_style_type_and_follows_the_layout
     );
 }
 
+#[test]
+fn toc_rebuild_accepts_identity_attributes_on_the_instruction_paragraph_runs() {
+    // Word writes `w:rsidR` and `w:rsidRPr` on the runs it saves, Google Docs
+    // `w:rsidR`, `w:rsidDel` and `w:rsidRPr`. The rebuild parses the
+    // instruction paragraph out of its part, and the retained-attribute
+    // capture used to see its `w` prefix unbound and fail the whole rebuild.
+    // Any other prefix the part binds failed the same way.
+    let titles = [
+        ("Heading1", "Chapter 1"),
+        ("Heading2", "Section 1.1"),
+        ("Heading1", "Chapter 2"),
+        ("Heading2", "Section 2.1"),
+        ("Heading1", "Chapter 3"),
+        ("Heading2", "Section 3.1"),
+    ];
+    let body = |field: &str, entry: &str, lead: &str, packed: bool, control: bool| {
+        let begin = r#"<w:fldChar w:fldCharType="begin"/>"#;
+        let instruction =
+            r#"<w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText>"#;
+        let separate = r#"<w:fldChar w:fldCharType="separate"/>"#;
+        let field_code = if packed {
+            format!("<w:r{field}>{begin}{instruction}{separate}</w:r>")
+        } else {
+            [begin, instruction, separate]
+                .map(|child| format!("<w:r{field}>{child}</w:r>"))
+                .concat()
+        };
+        let mut xml = String::new();
+        for (index, (_, title)) in titles.iter().enumerate() {
+            xml.push_str("<w:p>");
+            if index == 0 {
+                xml.push_str(lead);
+                xml.push_str(&field_code);
+            }
+            xml.push_str(&format!(
+                "<w:r{entry}><w:t>{title}</w:t><w:tab/><w:t>1</w:t></w:r>"
+            ));
+            if index + 1 == titles.len() {
+                xml.push_str(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
+            }
+            xml.push_str("</w:p>");
+        }
+        if control {
+            xml = format!(
+                r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>{xml}</w:sdtContent></w:sdt>"#
+            );
+        }
+        for (style, title) in titles {
+            xml.push_str(&format!(
+                r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{title}</w:t></w:r></w:p><w:p><w:r><w:t>Body text.</w:t></w:r></w:p>"#
+            ));
+        }
+        xml
+    };
+    let check = |label: &str, xml: &str, kept: usize| {
+        let mut document = document_with_field_parts(xml, None, None);
+        let report = document
+            .rebuild_toc()
+            .unwrap_or_else(|error| panic!("{label}: {error}"));
+        assert_eq!(report.entry_count, 6, "{label}");
+        assert!(report.diagnostics.is_empty(), "{label}: {report:?}");
+
+        // The rebuilt entries replace the cached ones, so only the runs before
+        // `separate` still carry an identity, and each keeps it. The rebuild
+        // keeps their bytes, so no run start tag gains a declaration.
+        let saved = document_xml(&mut document);
+        assert_eq!(
+            saved.matches(r#"="00A1B2C3""#).count(),
+            kept,
+            "{label}: {saved}"
+        );
+        assert!(
+            saved
+                .split("<w:r ")
+                .skip(1)
+                .all(|tag| !tag[..tag.find('>').unwrap()].contains("xmlns")),
+            "{label}: {saved}"
+        );
+        assert_eq!(
+            saved.matches(r#"<w:pStyle w:val="TOC"#).count(),
+            6,
+            "{label}: {saved}"
+        );
+    };
+    let rsid_r = r#" w:rsidR="00A1B2C3""#;
+    let rsid_rpr = r#" w:rsidRPr="00A1B2C3""#;
+    let rsid_del = r#" w:rsidDel="00A1B2C3""#;
+    let lead = r#"<w:r w:rsidR="00A1B2C3"><w:t xml:space="preserve">Contents </w:t></w:r>"#;
+    for (label, field, entry, lead, packed, control, kept) in [
+        ("no attribute", "", "", "", false, false, 0),
+        ("entry runs", "", rsid_r, "", false, false, 0),
+        ("w:rsidR field runs", rsid_r, "", "", false, false, 3),
+        ("w:rsidRPr field runs", rsid_rpr, "", "", false, false, 3),
+        ("w:rsidDel field runs", rsid_del, "", "", false, false, 3),
+        ("packed field run", rsid_r, "", "", true, false, 1),
+        ("block control", rsid_r, "", "", false, true, 3),
+        ("packed in a block control", rsid_r, "", "", true, true, 1),
+        ("run before begin", "", "", lead, false, false, 1),
+    ] {
+        let xml = wrap_word_body(&body(field, entry, lead, packed, control));
+        check(label, &xml, kept);
+    }
+    for (label, declaration, field) in [
+        (
+            "foreign prefix",
+            r#"xmlns:x="urn:producer""#.to_owned(),
+            r#" x:id="00A1B2C3""#,
+        ),
+        (
+            "w14 prefix",
+            r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#.to_owned(),
+            r#" w14:id="00A1B2C3""#,
+        ),
+        (
+            "second Word alias",
+            format!(r#"xmlns:wx="{W_NS}""#),
+            r#" wx:rsidRPr="00A1B2C3""#,
+        ),
+    ] {
+        let xml = wrap_word_body(&body(field, "", "", false, false)).replacen(
+            "<w:document ",
+            &format!("<w:document {declaration} "),
+            1,
+        );
+        check(label, &xml, 3);
+    }
+}
+
 const ONE_HEADING_TOC_BODY: &str = r#"
     <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
     <w:p><w:r><w:t>stale</w:t></w:r></w:p>
@@ -32819,6 +32947,96 @@ mod f_x132_retained_namespace_owner_regressions {
             1,
             "{saved_xml}"
         );
+    }
+}
+
+/// Each text-box paragraph is parsed on its own. The retained-attribute capture
+/// used to find the prefix of the `w:rsid*` identities Word writes on text-box
+/// runs unbound there, which dropped the text box from layout, from replacement
+/// and from templates. The anchor reader now parses the paragraph with the
+/// bindings in scope, so any bound prefix resolves for layout. Replacement and
+/// templates still parse it in a scope that names `w` without binding it.
+mod text_box_identity_attribute_regressions {
+    use rdocx::Document;
+    use rdocx_oxml::namespace::W_NS;
+
+    const IDENTITY: &str = r#" w:rsidR="00A1B2C3" w:rsidRPr="00D4E5F6""#;
+    const FOREIGN: &str = r#" x:id="00A1B2C3""#;
+
+    /// A text box as Word saves it, the DrawingML shape in `mc:Choice` and its
+    /// VML copy in `mc:Fallback`, or the bare `wp:anchor` alone.
+    fn text_box_document(run_attributes: &str, compatibility_block: bool, text: &str) -> Document {
+        let content = format!(
+            r#"<w:txbxContent><w:p><w:r{run_attributes}><w:t>{text}</w:t></w:r></w:p></w:txbxContent>"#
+        );
+        let drawing = format!(
+            r#"<w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="2743200" cy="457200"/><wp:wrapTopAndBottom/><wp:docPr id="1" name="Text Box 1"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx>{content}</wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>"#
+        );
+        let shape = if compatibility_block {
+            format!(
+                r#"<mc:AlternateContent><mc:Choice Requires="wps">{drawing}</mc:Choice><mc:Fallback><w:pict><v:shape style="position:absolute;width:216pt;height:36pt"><v:textbox>{content}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent>"#
+            )
+        } else {
+            drawing
+        };
+        super::document_with_content_controls(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:producer"><w:body><w:p><w:r><w:t>Host paragraph</w:t></w:r><w:r>{shape}</w:r></w:p></w:body></w:document>"#
+        ))
+    }
+
+    #[test]
+    fn a_text_box_is_laid_out_when_its_runs_carry_identity_attributes() {
+        // The bare anchor used to fail the document open, and the
+        // compatibility block used to lose its shape and text from layout.
+        for compatibility_block in [true, false] {
+            let page_text = |run_attributes| {
+                let document = text_box_document(run_attributes, compatibility_block, "Boxed");
+                super::f252_page_text(&document.layout_page(0).unwrap().unwrap())
+            };
+            let plain = page_text("");
+            assert!(plain.contains("Boxed"), "{plain}");
+            for run_attributes in [IDENTITY, FOREIGN] {
+                assert_eq!(
+                    page_text(run_attributes),
+                    plain,
+                    "{compatibility_block}{run_attributes}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn replacing_text_reaches_a_text_box_whose_runs_carry_identity_attributes() {
+        let replace = |run_attributes| {
+            let mut document = text_box_document(run_attributes, true, "Boxed text");
+            let count = document.try_replace_text("Boxed", "Filled").unwrap();
+            (count, super::document_xml(&mut document))
+        };
+        let (plain_count, _) = replace("");
+        let (count, saved) = replace(IDENTITY);
+        assert_eq!(count, plain_count);
+        assert_eq!(saved.matches("Filled text").count(), 2, "{saved}");
+        assert!(!saved.contains("Boxed"), "{saved}");
+        assert_eq!(
+            saved.matches(r#"w:rsidRPr="00D4E5F6""#).count(),
+            2,
+            "{saved}"
+        );
+    }
+
+    #[test]
+    fn a_template_fills_a_text_box_whose_runs_carry_identity_attributes() {
+        let data = serde_json::json!({"name": "Ada"});
+        let render = |run_attributes| {
+            let mut document = text_box_document(run_attributes, true, "Dear {{ name }}");
+            let count = document.render_template(&data).unwrap();
+            (count, super::document_xml(&mut document))
+        };
+        let (plain_count, _) = render("");
+        let (count, saved) = render(IDENTITY);
+        assert_eq!(count, plain_count);
+        assert_eq!(saved.matches("Dear Ada").count(), 2, "{saved}");
+        assert!(!saved.contains("{{"), "{saved}");
     }
 }
 

@@ -1184,6 +1184,30 @@ def test_word_default_toc_switch_rebuilds_and_reports_ordered_diagnostics():
         report.diagnostics = ()
 
 
+def test_rebuild_toc_accepts_identity_attributes_on_the_field_runs():
+    import rdocx
+
+    # Word writes w:rsidR and w:rsidRPr on the runs it saves, and Google Docs
+    # exports write them on every run, the runs of the TOC field code included.
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    document = _replace_document_body(
+        source,
+        """
+        <w:p><w:r w:rsidR="00A1B2C3"><w:fldChar w:fldCharType="begin"/></w:r><w:r w:rsidRPr="00A1B2C3"><w:instrText>TOC \\o "1-1"</w:instrText></w:r><w:r w:rsidDel="00A1B2C3"><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>
+        """,
+    )
+
+    assert document.rebuild_toc() == rdocx.TocRebuildReport(
+        entry_count=1, bookmark_count=1, diagnostics=()
+    )
+    saved = _document_xml(document)
+    for identity in (b'w:rsidR="00A1B2C3"', b'w:rsidRPr="00A1B2C3"', b'w:rsidDel="00A1B2C3"'):
+        assert identity in saved
+
+
 def test_update_page_fields_writes_layout_page_numbers():
     import rdocx
 
