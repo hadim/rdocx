@@ -33765,14 +33765,17 @@ mod keep_with_next_regressions {
         add_line(&mut document, BODY, 14.0, 0.0);
         assert_eq!(pages_from(&document, 43), vec![2, 2, 2]);
 
-        // A chain no page can hold stays where it is instead of leaving a
-        // page behind.
+        // A chain no page can hold still leaves from its first heading, as in
+        // Word, and then breaks where page 2 ends: 36 headings of 18 points
+        // fill its 648 points.
         let mut document = fillers(43);
         for index in 0..40 {
             add_heading(&mut document, &format!("Heading {index:02}"), 0.0);
         }
         add_line(&mut document, BODY, 14.0, 0.0);
-        assert_eq!(pages_from(&document, 43)[0], 1);
+        let mut expected = vec![2; 36];
+        expected.resize(41, 3);
+        assert_eq!(pages_from(&document, 43), expected);
     }
 
     /// A paragraph that keeps with next stays with the first row of the table

@@ -2255,6 +2255,15 @@ impl<'a> Pager<'a> {
         self.finish_page_before(next_block_index);
     }
 
+    /// Move the flow on for a keep-with-next chain, without a restart
+    /// checkpoint. The blocks after the boundary chose it, so a restart there
+    /// would keep it after an edit to those blocks no longer calls for it.
+    fn advance_flow_for_chain(&mut self) {
+        if !self.advance_column_track() {
+            self.finish_page_outright();
+        }
+    }
+
     /// End the page before `next_block_index`, whatever column the body is in.
     fn finish_page_before(&mut self, next_block_index: usize) {
         self.finish_page_outright();
@@ -3212,18 +3221,18 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         }
     }
 
-    // Keep with next: the paragraph moves to the next page unless the whole
-    // keep-with-next chain it starts fits below it. A chain no page could hold
-    // stays where it is, since moving it would only leave a page behind.
-    if para.keep_next && pager.has_content() {
+    // Keep with next: the first paragraph of a keep-with-next chain moves to
+    // the next page unless the whole chain fits below it, as in Word. The
+    // paragraphs after it follow it, so a chain no page could hold breaks
+    // where the page ends.
+    let first_of_chain = !block_idx
+        .checked_sub(1)
+        .and_then(|previous| blocks[previous].paragraph())
+        .is_some_and(|previous| previous.keep_next);
+    if para.keep_next && first_of_chain && pager.has_content() {
         let chain = keep_next_chain_height(para.block, block_idx, blocks, pager);
-        if chain <= pager.content_height
-            && pager.cursor_y + space_before + chain > pager.available_height_for(&para.lines)
-        {
-            pager.advance_flow_before(block_idx);
-            if pager.stopped_at.is_some() {
-                return;
-            }
+        if pager.cursor_y + space_before + chain > pager.available_height_for(&para.lines) {
+            pager.advance_flow_for_chain();
         }
     }
 

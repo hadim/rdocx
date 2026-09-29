@@ -14729,41 +14729,54 @@ mod tests {
         );
     }
 
-    /// A keep-with-next chain takes its page from the blocks after it, so a
-    /// warm edit to the chain or to the paragraph ending it lays out as a
-    /// fresh engine does, wherever the chain falls against the first page
-    /// end, which comes near paragraph 30 here.
+    /// A paragraph that keeps with next takes its page from the chain after
+    /// it, so a warm edit that grows or shrinks any paragraph of a chain lays
+    /// out as a fresh engine does, wherever the chain falls against the first
+    /// page end, which comes near paragraph 30 here.
     #[test]
     fn keep_next_chain_warm_edits_equal_fresh_layout() {
-        for chain_start in 24..34 {
+        let lines = |count: usize| "paragraph of a keep-with-next chain ".repeat(4 * count);
+        let (two, four) = (lines(1), lines(2));
+        // Paragraphs `chain_start` and the one after it keep with next, and
+        // `texts[2]` ends the chain.
+        let chain_input = |chain_start: usize, texts: [&str; 3]| {
             let mut input = make_input_with_text("");
             input.document.body.content.clear();
-            for index in 0..70 {
+            for index in 0..70_usize {
                 let mut paragraph = CT_P::new();
-                if index == chain_start || index == chain_start + 1 {
-                    paragraph.properties.get_or_insert_default().keep_next = Some(true);
-                }
-                if index == chain_start + 2 {
-                    paragraph.add_run(&"paragraph ending the chain ".repeat(12));
+                if let Some(member @ 0..=2) = index.checked_sub(chain_start) {
+                    if member < 2 {
+                        paragraph.properties.get_or_insert_default().keep_next = Some(true);
+                    }
+                    paragraph.add_run(texts[member]);
                 } else {
-                    paragraph.add_run(&format!("ordinary prose paragraph {index:03} stable line"));
+                    paragraph.add_run(&format!("ordinary prose paragraph {index:03} line"));
                 }
                 input.document.body.add_paragraph(paragraph);
             }
+            input
+        };
+        let assert_warm_edit = |before: LayoutInput, after: LayoutInput| {
             let mut engine = Engine::new_deterministic().expect("bundled fonts load");
-            engine.layout(&input).expect("prime keep-with-next chain");
-            for edited in [chain_start + 2, chain_start + 1, chain_start] {
-                let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[edited]
-                else {
-                    panic!("chain body entry is a paragraph");
-                };
-                paragraph.add_run(&" edited".repeat(12));
-                let warm = engine.layout(&input).expect("warm chain edit");
-                let fresh = Engine::new_deterministic()
-                    .expect("bundled fonts load")
-                    .layout(&input)
-                    .expect("fresh chain edit");
-                assert_layout_results_equal(&warm, &fresh);
+            engine.layout(&before).expect("prime keep-with-next chain");
+            let warm = engine.layout(&after).expect("warm chain edit");
+            let fresh = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout(&after)
+                .expect("fresh chain edit");
+            assert_layout_results_equal(&warm, &fresh);
+        };
+        let original = [two.as_str(), two.as_str(), four.as_str()];
+        for chain_start in 26..33 {
+            for member in 0..3 {
+                for text in ["one line", four.as_str()] {
+                    let mut edited = original;
+                    edited[member] = text;
+                    assert_warm_edit(
+                        chain_input(chain_start, original),
+                        chain_input(chain_start, edited),
+                    );
+                }
             }
         }
     }
