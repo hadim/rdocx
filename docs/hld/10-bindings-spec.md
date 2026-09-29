@@ -366,20 +366,55 @@ the effective preset adjustments, normalized so that 1.0 is 100000, and
 assignment truncates as python-pptx does. `xml` returns the element serialized
 on its own as bytes. A picture's `image` is a frozen `Image` snapshot with
 `blob`, `content_type`, and the python-pptx `ext`, and `replace_image` changes
-only that picture through the native staged replacement.
+only that picture through the native staged replacement. `crop_left`,
+`crop_top`, `crop_right`, and `crop_bottom` read and write the picture's
+`a:srcRect` insets as python-pptx floats, where 0.25 is a quarter of the image.
+A missing edge reads 0.0, a write rounds half to even as python-pptx does and
+changes nothing when the value is unchanged, and a value that is not finite or
+outside the `ST_Percentage` range raises `ValueError`. Other shape kinds raise
+`ValueError`, and crop writes do not advance the revision.
 
 `ShapeCollection.add_shape` accepts a DrawingML preset name or an `MSO_SHAPE`
 member. `add_connector` follows the python-pptx signature, `add_group_shape`
 appends an empty group, and `add_picture` accepts a path, bytes, or a binary
 file-like object, which is rewound first when it can seek. `remove` deletes one
 shape of a slide with the relationships and parts only it used and advances the
-revision once. Nested collections stay read-only.
+revision once. `move(from_, to)` changes the z-order like
+`SlideCollection.move`, so the shape ends up at index `to` and draws above the
+shapes before it, and advances the revision once. python-pptx has no z-order
+API. Nested collections stay read-only.
+
+A table `Cell` follows python-pptx for `merge(other_cell)`, `split()`,
+`is_merge_origin`, `is_spanned`, `span_height`, and `span_width`. Merge and
+split run the native staged table operations, which keep the rectangular grid,
+so they do not advance the revision. A cell of another table raises
+`ValueError`, and a merge range that overlaps a merge or a split of a cell that
+is not a merge origin raises `RpptxError` and leaves the table unchanged.
+`Cell.fill` is a live `FillFormat` over the direct cell fill. `margin_left`,
+`margin_right`, `margin_top`, and `margin_bottom` read the `a:tcPr` margins as
+`Length` and follow the text formatting rules below. An absent margin reads
+`None` where python-pptx reports its 91440 and 45720 EMU defaults, and a value
+outside the 32-bit coordinate range raises `ValueError`. python-pptx has no
+cell border API, so `border_left`, `border_right`, `border_top`, and
+`border_bottom` are live `LineFormat` views of `a:lnL`, `a:lnR`, `a:lnT`, and
+`a:lnB`, which reading never creates. `Table.rows` is a lazy `RowCollection`
+of `Row` handles, like `columns`. `Row.height` reads the stored height as
+`Length`, and assigning it keeps the frame height equal to the sum of the rows,
+as a column width keeps the frame width. A height that is not positive raises
+`RpptxError`. None of these writes advances the revision.
 
 `TextFrame.autofit`
 reports `none`, `normal`, or `shape` when the body carries an explicit choice.
 `Run.font` reads the run's direct Latin name, size, and sRGB colour, while the
 `Run.text` setter replaces only that run's text and preserves its typed and
-unmodelled properties.
+unmodelled properties. `Run.hyperlink` returns a live `Hyperlink` whose
+`address` reads the target of the run's `a:hlinkClick`, or `None`. Assigning
+an address goes through the native `set_run_hyperlink`, which reuses the
+slide's relationship to the same address and removes the old relationship
+once nothing on the slide names it, so retargeting does not grow the part.
+`None` or an empty string removes the hyperlink, as in python-pptx, an address
+with a control character raises `RpptxError`, and the write does not advance
+the revision.
 
 Text formatting follows python-pptx names and value types. Every property
 reads the direct value only, `None` when the element or attribute is absent,

@@ -7834,12 +7834,12 @@ use oxml_layout::{MediaId, PageFrame, Paint, PositionedElement, Rect, walk};
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
-    Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, ChartData,
-    ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput, EmbeddedMutationPolicy,
-    EmbeddedSignatureState, Emu, Error, Fill, HandoutLayout, MediaDiagnostic, MediaFallbackPolicy,
-    MediaKind, MediaPlaybackPhase, MediaPlaybackSettings, MediaPoster, MediaSourceInput,
-    Presentation, PresentationPackageClass, ShapeKind, ShapeRef, TextBullet, TextBulletCharacter,
-    TextBulletChoice, TextFont, TimelinePosition,
+    Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, CellBorder,
+    ChartData, ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput,
+    EmbeddedMutationPolicy, EmbeddedSignatureState, Emu, Error, Fill, HandoutLayout,
+    MediaDiagnostic, MediaFallbackPolicy, MediaKind, MediaPlaybackPhase, MediaPlaybackSettings,
+    MediaPoster, MediaSourceInput, Percent1000, Presentation, PresentationPackageClass, ShapeKind,
+    ShapeRef, TextBullet, TextBulletCharacter, TextBulletChoice, TextFont, TimelinePosition,
 };
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
@@ -14028,6 +14028,161 @@ fn table_mutation_rejects_invalid_ranges_without_partial_changes() {
     assert_eq!(presentation.to_bytes().unwrap(), before_overlap);
 }
 
+fn table_border_line(color: &str) -> CT_LineProperties {
+    CT_LineProperties::from_xml(
+        format!(r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></a:ln>"#)
+            .as_bytes(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn row_heights_and_cell_borders_round_trip_with_the_frame_height_in_step() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let fill = Fill::from_xml(br#"<a:solidFill><a:srgbClr val="112233"/></a:solidFill>"#).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_table(2, 2, Emu(10), Emu(20), Emu(200), Emu(100))
+            .expect("add table");
+        let mut table = shape.table_mut().unwrap();
+        assert_eq!(table.row_height(1), Some(Emu(50)));
+        table.set_row_height(1, Emu(80)).unwrap();
+        for (row, height) in [(2, Emu(10)), (0, Emu(0)), (0, Emu(i64::MAX))] {
+            assert!(matches!(
+                table.set_row_height(row, height),
+                Err(Error::InvalidTableMutation { .. })
+            ));
+        }
+        assert_eq!(
+            (
+                table.row_height(0),
+                table.row_height(1),
+                table.row_height(2)
+            ),
+            (Some(Emu(50)), Some(Emu(80)), None)
+        );
+        let mut cell = table.cell_mut(0, 0).unwrap();
+        cell.set_fill(Some(fill.clone()));
+        cell.set_border(CellBorder::Bottom, Some(table_border_line("00FF00")));
+        cell.set_border(CellBorder::Left, Some(table_border_line("FF0000")));
+        cell.set_border(CellBorder::Top, Some(table_border_line("0000FF")));
+        cell.set_border(CellBorder::Top, None);
+        assert_eq!(
+            cell.border(CellBorder::Left),
+            Some(&table_border_line("FF0000"))
+        );
+    }
+
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let shape = slide.shapes().last().unwrap();
+    assert_eq!(shape.size(), Some((Emu(200), Emu(130))));
+    let table = shape.table().unwrap();
+    assert_eq!(table.row_height(1), Some(Emu(80)));
+    let cell = table.cell(0, 0).unwrap();
+    assert_eq!(
+        [
+            CellBorder::Left,
+            CellBorder::Right,
+            CellBorder::Top,
+            CellBorder::Bottom
+        ]
+        .map(|edge| cell.border(edge).cloned()),
+        [
+            Some(table_border_line("FF0000")),
+            None,
+            None,
+            Some(table_border_line("00FF00"))
+        ]
+    );
+    assert_eq!(cell.fill(), Some(&fill));
+    assert_eq!(table.cell(1, 1).unwrap().border(CellBorder::Left), None);
+
+    let package = open_opc(&saved, "row heights and cell borders");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    assert!(xml.contains(r#"<a:tr h="80">"#), "{xml}");
+    let properties = &xml[xml.find("<a:tcPr").unwrap()..];
+    let left = properties.find("<a:lnL").unwrap();
+    let bottom = properties.find("<a:lnB").unwrap();
+    let fill = properties
+        .find(r#"<a:solidFill><a:srgbClr val="112233"/>"#)
+        .unwrap();
+    assert!(left < bottom && bottom < fill, "{properties}");
+}
+
+/// Runs `script` under pinned python-pptx 1.0.2 with the saved deck path as
+/// its only argument and returns what it prints.
+fn python_pptx_1_0_2_reads(deck: &[u8], label: &str, script: &str) -> String {
+    let path = std::env::temp_dir().join(format!(
+        "rpptx-{label}-python-oracle-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&path, deck).unwrap();
+    let output = Command::new("uv")
+        .args([
+            "run",
+            "--with",
+            "python-pptx==1.0.2",
+            "python",
+            "-c",
+            script,
+        ])
+        .arg(&path)
+        .output()
+        .expect("run pinned python-pptx oracle");
+    fs::remove_file(&path).unwrap();
+    assert!(
+        output.status.success(),
+        "python-pptx oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn row_heights_and_cell_borders_read_back_in_pinned_python_pptx() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add slide");
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_table(2, 2, Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+            .unwrap();
+        let mut table = shape.table_mut().unwrap();
+        table.set_row_height(1, Emu(600_000)).unwrap();
+        let mut cell = table.cell_mut(0, 0).unwrap();
+        cell.set_border(CellBorder::Left, Some(table_border_line("FF0000")));
+        cell.set_border(CellBorder::Bottom, Some(table_border_line("00FF00")));
+    }
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "row-heights",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+from pptx.oxml.ns import qn
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+shape = Presentation(sys.argv[1]).slides[0].shapes[-1]
+print([row.height for row in shape.table.rows], shape.height)
+tcPr = shape.table.cell(0, 0)._tc.tcPr
+print([child.tag.split("}")[1] for child in tcPr])
+left = tcPr.find(qn("a:lnL"))
+print(left.get("w"), left.find(qn("a:solidFill"))[0].get("val"))
+"#,
+    );
+    assert_eq!(
+        records,
+        "[457200, 600000] 1057200\n['lnL', 'lnB']\n12700 FF0000\n"
+    );
+}
+
 #[test]
 fn table_mutation_preserves_unmodelled_xml_and_schema_order() {
     let fixture = table_mutation_fixture_bytes();
@@ -14441,6 +14596,204 @@ fn paragraph_run_font_and_bullet_properties_round_trip() {
     assert_eq!(properties.font_size, Some(1_800));
     assert_eq!(properties.bold, Some(true));
     assert_eq!(properties.latin.as_ref().unwrap().typeface, "Carlito");
+}
+
+fn two_run_text_box() -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_textbox(Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+        .unwrap();
+    shape.set_text("first").unwrap();
+    shape
+        .text_frame()
+        .unwrap()
+        .paragraph_mut(0)
+        .unwrap()
+        .add_run(" second");
+    presentation
+}
+
+fn run_hyperlink_id(presentation: &Presentation, run: usize) -> Option<String> {
+    presentation
+        .slide(0)
+        .unwrap()
+        .shape(0)
+        .unwrap()
+        .text_frame()
+        .unwrap()
+        .paragraph(0)
+        .unwrap()
+        .run(run)
+        .unwrap()
+        .properties()
+        .and_then(|properties| properties.hyperlink_click.as_ref())
+        .and_then(|hyperlink| hyperlink.relationship_id.clone())
+}
+
+fn slide_hyperlink_targets(presentation: &Presentation) -> Vec<(String, String)> {
+    open_opc(&presentation.to_bytes().unwrap(), "slide hyperlinks")
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .get_all_by_type(rel_types::HYPERLINK)
+        .into_iter()
+        .map(|relationship| {
+            assert_eq!(relationship.target_mode.as_deref(), Some("External"));
+            (relationship.id.clone(), relationship.target.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn run_hyperlinks_reuse_resolve_and_prune_their_relationships() {
+    let mut presentation = two_run_text_box();
+    let id = first_slide_shape_id(&presentation, 0);
+    let before = presentation.to_bytes().unwrap();
+    for address in ["", "https://example.com/\nnext", "\u{FFFE}"] {
+        assert!(matches!(
+            presentation.set_run_hyperlink(0, id, 0, 0, Some(address)),
+            Err(Error::InvalidShapeMutation { .. })
+        ));
+    }
+    for (slide, shape, paragraph, run) in [
+        (1, id, 0, 0),
+        (0, id + 1, 0, 0),
+        (0, id, 1, 0),
+        (0, id, 0, 2),
+    ] {
+        assert!(
+            presentation
+                .set_run_hyperlink(slide, shape, paragraph, run, Some("https://example.com/a"))
+                .is_err()
+        );
+    }
+    presentation.set_run_hyperlink(0, id, 0, 0, None).unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    let a = "https://example.com/a?x=1&y=2";
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some(a))
+        .unwrap();
+    presentation
+        .set_run_hyperlink(0, id, 0, 1, Some(a))
+        .unwrap();
+    let first = run_hyperlink_id(&presentation, 0).unwrap();
+    assert_eq!(run_hyperlink_id(&presentation, 1), Some(first.clone()));
+    assert_eq!(presentation.hyperlink_address(0, &first), Some(a));
+    assert_eq!(
+        slide_hyperlink_targets(&presentation),
+        [(first.clone(), a.to_owned())]
+    );
+    let linked = presentation.to_bytes().unwrap();
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some(a))
+        .unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), linked);
+
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some("https://example.com/b"))
+        .unwrap();
+    let second = run_hyperlink_id(&presentation, 0).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(slide_hyperlink_targets(&presentation).len(), 2);
+    presentation.set_run_hyperlink(0, id, 0, 1, None).unwrap();
+    assert_eq!(run_hyperlink_id(&presentation, 1), None);
+    assert_eq!(presentation.hyperlink_address(0, &first), None);
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some("https://example.com/c"))
+        .unwrap();
+    let third = run_hyperlink_id(&presentation, 0).unwrap();
+    assert_eq!(
+        slide_hyperlink_targets(&presentation),
+        [(third.clone(), "https://example.com/c".to_owned())]
+    );
+    let layout = open_opc(&presentation.to_bytes().unwrap(), "hyperlink layout")
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .get_by_type(rel_types::SLIDE_LAYOUT)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        presentation.hyperlink_address(0, &layout.id),
+        Some(layout.target.as_str())
+    );
+    assert_eq!(presentation.hyperlink_address(1, &third), None);
+
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(reopened.validate().is_empty(), "{:?}", reopened.validate());
+    assert_eq!(
+        (
+            run_hyperlink_id(&reopened, 0),
+            run_hyperlink_id(&reopened, 1)
+        ),
+        (Some(third.clone()), None)
+    );
+    assert_eq!(
+        reopened.hyperlink_address(0, &third),
+        Some("https://example.com/c")
+    );
+
+    let grouped = r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="50" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="51" name="Inner"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>inner</a:t></a:r></a:p></p:txBody></p:sp></p:grpSp>"#;
+    let mut grouped = with_first_slide_children(&reopened, grouped, &[]);
+    grouped
+        .set_run_hyperlink(0, 51, 0, 0, Some("https://example.com/c"))
+        .unwrap();
+    assert_eq!(slide_hyperlink_targets(&grouped).len(), 1);
+    let duplicate = format!(
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="Duplicate"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>x</a:t></a:r></a:p></p:txBody></p:sp>"#
+    );
+    let mut duplicated = with_first_slide_children(&reopened, &duplicate, &[]);
+    assert!(
+        duplicated
+            .set_run_hyperlink(0, id, 0, 0, None)
+            .unwrap_err()
+            .to_string()
+            .contains("not unique")
+    );
+
+    let sounding = r#"<p:sp><p:nvSpPr><p:cNvPr id="60" name="Sounding"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr><a:hlinkClick r:id="rId80"><a:snd r:embed="rId90" name="click"/></a:hlinkClick></a:rPr><a:t>click</a:t></a:r></a:p></p:txBody></p:sp>"#;
+    let mut sounding = with_first_slide_children(
+        &reopened,
+        sounding,
+        &[
+            ("rId80", rel_types::HYPERLINK, "https://example.com/sound"),
+            ("rId90", rel_types::AUDIO, "../media/click.wav"),
+        ],
+    );
+    sounding.set_run_hyperlink(0, 60, 0, 0, None).unwrap();
+    let relationships = open_opc(&sounding.to_bytes().unwrap(), "click sound")
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .clone();
+    assert!(relationships.get_by_id("rId80").is_none());
+    assert!(relationships.get_by_id("rId90").is_none());
+    assert!(relationships.get_by_id(&third).is_some());
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn run_hyperlinks_read_back_in_pinned_python_pptx() {
+    let mut presentation = two_run_text_box();
+    let id = first_slide_shape_id(&presentation, 0);
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some("https://example.com/a?x=1&y=2"))
+        .unwrap();
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "run-hyperlinks",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+runs = Presentation(sys.argv[1]).slides[0].shapes[0].text_frame.paragraphs[0].runs
+print([run.hyperlink.address for run in runs])
+"#,
+    );
+    assert_eq!(records, "['https://example.com/a?x=1&y=2', None]\n");
 }
 
 fn plain_shape_fixture_bytes(from: &str, to: &str) -> Vec<u8> {
@@ -22916,6 +23269,166 @@ fn replacing_a_picture_with_an_svg_alternate_is_rejected_without_change() {
 }
 
 #[test]
+fn picture_crop_round_trips_and_rewrites_only_the_changed_edges() {
+    let zero = Percent1000(0);
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation
+        .add_picture(
+            0,
+            &f226_blue_pixel_png(),
+            "crop.png",
+            Emu(0),
+            Emu(0),
+            Some(Emu(100)),
+            Some(Emu(100)),
+        )
+        .unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(10), Emu(10))
+        .unwrap();
+    let slide = presentation.slide(0).unwrap();
+    assert_eq!(
+        slide.shape(0).unwrap().crop(),
+        Some((zero, zero, zero, zero))
+    );
+    assert_eq!(slide.shape(1).unwrap().crop(), None);
+    let before = presentation.to_bytes().unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        slide
+            .shape_mut(0)
+            .unwrap()
+            .set_crop(zero, zero, zero, zero)
+            .unwrap();
+        assert!(matches!(
+            slide
+                .shape_mut(1)
+                .unwrap()
+                .set_crop(Percent1000(1), zero, zero, zero),
+            Err(Error::UnsupportedShapeMutation { .. })
+        ));
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_crop(
+            Percent1000(25_000),
+            zero,
+            Percent1000(-10_000),
+            Percent1000(12_500),
+        )
+        .unwrap();
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(reopened.validate().is_empty(), "{:?}", reopened.validate());
+    assert_eq!(
+        reopened.slide(0).unwrap().shape(0).unwrap().crop(),
+        Some((
+            Percent1000(25_000),
+            zero,
+            Percent1000(-10_000),
+            Percent1000(12_500)
+        ))
+    );
+    let picture =
+        String::from_utf8(reopened.slide(0).unwrap().shape(0).unwrap().xml().unwrap()).unwrap();
+    let blip = picture.find("<a:blip ").unwrap();
+    let crop = picture
+        .find(r#"<a:srcRect l="25000" r="-10000" b="12500"/>"#)
+        .unwrap();
+    let stretch = picture.find("<a:stretch>").unwrap();
+    assert!(blip < crop && crop < stretch, "{picture}");
+
+    let explicit = r#"<p:pic><p:nvPicPr><p:cNvPr id="40" name="Cropped"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:srcRect l="0" t="5000" r="0"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#;
+    let mut presentation = with_first_slide_children(&presentation, explicit, &[]);
+    let crop_xml = |presentation: &Presentation| {
+        let xml = String::from_utf8(
+            presentation
+                .slide(0)
+                .unwrap()
+                .shape(2)
+                .unwrap()
+                .xml()
+                .unwrap(),
+        )
+        .unwrap();
+        let start = xml.find("<a:srcRect").unwrap();
+        xml[start..start + xml[start..].find("/>").unwrap() + 2].to_owned()
+    };
+    let crop = |presentation: &mut Presentation, left: i32, top: i32| {
+        presentation
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(2)
+            .unwrap()
+            .set_crop(Percent1000(left), Percent1000(top), zero, zero)
+            .unwrap();
+    };
+    crop(&mut presentation, 10_000, 5_000);
+    assert_eq!(
+        crop_xml(&presentation),
+        r#"<a:srcRect l="10000" t="5000" r="0"/>"#
+    );
+    crop(&mut presentation, 0, 0);
+    assert_eq!(crop_xml(&presentation), r#"<a:srcRect r="0"/>"#);
+    assert_eq!(
+        presentation.slide(0).unwrap().shape(2).unwrap().crop(),
+        Some((zero, zero, zero, zero))
+    );
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn picture_crop_reads_back_in_pinned_python_pptx() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation
+        .add_picture(
+            0,
+            &f226_blue_pixel_png(),
+            "crop.png",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        )
+        .unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_crop(
+            Percent1000(25_000),
+            Percent1000(0),
+            Percent1000(-10_000),
+            Percent1000(12_500),
+        )
+        .unwrap();
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "picture-crop",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+picture = Presentation(sys.argv[1]).slides[0].shapes[0]
+print(picture.crop_left, picture.crop_top, picture.crop_right, picture.crop_bottom)
+"#,
+    );
+    assert_eq!(records, "0.25 0.0 -0.1 0.125\n");
+}
+
+#[test]
 fn removing_a_shape_deletes_only_relationships_and_parts_nothing_else_uses() {
     let png = f226_blue_pixel_png();
     let jpeg = valid_template_jpeg();
@@ -23086,6 +23599,101 @@ fn removing_a_shape_detaches_connectors_and_rejects_animated_targets_without_cha
     let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
     assert_eq!(reopened.slide(0).unwrap().shapes().len(), 3);
     assert_eq!(first_slide_shape_id(&reopened, 1), group);
+}
+
+fn z_order_fixture() -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    for (name, color) in [("Red", "FF0000"), ("Blue", "0000FF")] {
+        let mut shape = slide
+            .add_shape("rect", Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+            .unwrap();
+        shape.set_name(name).unwrap();
+        shape
+            .set_fill(
+                Fill::from_xml(
+                    format!(r#"<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>"#).as_bytes(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    presentation
+}
+
+#[test]
+fn moving_a_shape_changes_the_draw_order_and_keeps_every_shape_id() {
+    let mut presentation = z_order_fixture();
+    let ids = |presentation: &Presentation| {
+        presentation
+            .slide(0)
+            .unwrap()
+            .shapes()
+            .map(|shape| shape.non_visual_id().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let top_color = |presentation: &Presentation| {
+        let png = presentation
+            .slide_png_deterministic(0, 72.0)
+            .unwrap()
+            .unwrap();
+        let pixel = tiny_skia::Pixmap::decode_png(&png)
+            .unwrap()
+            .pixel(36, 36)
+            .unwrap();
+        (pixel.red(), pixel.green(), pixel.blue())
+    };
+    let original = ids(&presentation);
+    assert_eq!(top_color(&presentation), (0, 0, 255));
+
+    presentation.move_shape(0, 1, 0).unwrap();
+    assert_eq!(ids(&presentation), [original[1], original[0]]);
+    assert_eq!(top_color(&presentation), (255, 0, 0));
+    let moved = presentation.to_bytes().unwrap();
+    assert!(matches!(
+        presentation.move_shape(0, 0, 2),
+        Err(Error::InvalidSlideMutation { .. })
+    ));
+    assert!(matches!(
+        presentation.move_shape(1, 0, 0),
+        Err(Error::UnknownSlideIndex { .. })
+    ));
+    presentation.move_shape(0, 1, 1).unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), moved);
+
+    let reopened = Presentation::from_bytes(&moved).unwrap();
+    assert!(reopened.validate().is_empty(), "{:?}", reopened.validate());
+    assert_eq!(ids(&reopened), [original[1], original[0]]);
+    assert_eq!(top_color(&reopened), (255, 0, 0));
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn moved_shapes_read_back_in_pinned_python_pptx_order() {
+    let mut presentation = z_order_fixture();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(10), Emu(10))
+        .unwrap()
+        .set_name("Text")
+        .unwrap();
+    presentation.move_shape(0, 2, 0).unwrap();
+    presentation.move_shape(0, 1, 2).unwrap();
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "z-order",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+print([shape.name for shape in Presentation(sys.argv[1]).slides[0].shapes])
+"#,
+    );
+    assert_eq!(records, "['Text', 'Blue', 'Red']\n");
 }
 
 #[test]
