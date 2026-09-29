@@ -60,6 +60,9 @@ with open("review.pdf", "wb") as output:
   stale-handle errors after structural changes.
 - Table cell merge and split, cell fills, margins, and borders, and row
   heights.
+- Table rows and columns added with `table.rows.add_row()` and
+  `table.columns.add_column()` and removed with `remove`, keeping merged cells
+  and the frame size in step.
 - Picture crop, read and written as in python-pptx.
 - Shape z-order through `slide.shapes.move(from_, to)`.
 - Run hyperlinks, read, added, retargeted, and removed as in python-pptx.

@@ -326,6 +326,16 @@ def exercise_rpptx_table_types(table: Table) -> None:
     (spans, cell_margins, row_heights, rows[:])
 
 
+def exercise_rpptx_table_structure_types(table: Table) -> None:
+    appended: Row = table.rows.add_row()
+    inserted: Row = table.rows.add_row(0)
+    table.rows.remove(table.rows[-1])
+    column: Column = table.columns.add_column()
+    table.columns.add_column(index=-1)
+    table.columns.remove(table.columns[0])
+    (appended, inserted, column)
+
+
 def exercise_rpptx_picture_crop_types(picture: Shape) -> None:
     picture.crop_left = 0.25
     picture.crop_top = 0

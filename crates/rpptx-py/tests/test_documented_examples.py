@@ -2241,6 +2241,150 @@ def test_table_row_heights_and_cell_borders_write_what_python_pptx_reads(tmp_pat
     assert rpptx.Presentation(source).slides[0].shapes[0].table.rows[0].height == rpptx.Pt(30)
 
 
+def _python_pptx_options_table(deck):
+    """Build the slide 4 table of the rdocx-skills deck fixture."""
+    from pptx.dml.color import RGBColor
+    from pptx.util import Inches, Pt
+
+    rows = (
+        ("", "A. Repair", "B. Refurbish", "C. Replace deck"),
+        ("Cost (EUR)", "46,000", "212,000", "690,000"),
+        ("Closure", "2 weeks", "7 weeks", "5 months"),
+        ("Next major work", "2031", "2040", "2055"),
+    )
+    slide = deck.slides.add_slide(deck.slide_layouts[5])
+    slide.shapes.title.text = "Three options"
+    frame = slide.shapes.add_table(4, 4, Inches(0.5), Inches(1.5), Inches(9), Inches(2.4))
+    for row_index, row in enumerate(rows):
+        for column_index, value in enumerate(row):
+            cell = frame.table.cell(row_index, column_index)
+            cell.text = value
+            for run in cell.text_frame.paragraphs[0].runs:
+                run.font.size = Pt(15)
+            if row_index == 0:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(0x3E, 0x4A, 0x59)
+
+
+def test_table_rows_and_columns_are_added_and_removed_like_python_pptx_add_tr(tmp_path):
+    import rpptx
+    from rpptx.dml.color import RGBColor
+
+    source = _python_pptx_deck(tmp_path / "options.pptx", _python_pptx_options_table)
+    prs = rpptx.Presentation(source)
+    held_cell = prs.slides[0].shapes[1].table.cell(3, 0)
+    rows = prs.slides[0].shapes[1].table.rows
+    row = rows.add_row()
+    assert type(row).__name__ == "Row"
+    assert row.height == rpptx.Inches(0.6)
+    for operation in (lambda: held_cell.text, lambda: len(rows)):
+        _assert_stale_after_exactly_one_bump(rpptx, operation)
+    shape = prs.slides[0].shapes[1]
+    assert (shape.width, shape.height) == (rpptx.Inches(9), rpptx.Inches(3))
+    table = shape.table
+    assert [len(table.rows), len(table.columns)] == [5, 4]
+    assert [table.cell(4, column).text for column in range(4)] == [""] * 4
+    table.cell(4, 0).text = "Risk"
+
+    top = table.rows.add_row(0)
+    table = prs.slides[0].shapes[1].table
+    assert (top.height, table.cell(1, 1).text) == (rpptx.Inches(0.6), "A. Repair")
+    assert table.cell(0, 1).fill.fore_color.rgb == RGBColor(0x3E, 0x4A, 0x59)
+    table.rows.remove(table.rows[0])
+
+    column = prs.slides[0].shapes[1].table.columns.add_column(-1)
+    assert column.width == rpptx.Inches(2.25)
+    column.width = rpptx.Inches(1)
+    shape = prs.slides[0].shapes[1]
+    assert (shape.width, shape.height) == (rpptx.Inches(10), rpptx.Inches(3))
+    table = shape.table
+    assert [table.cell(1, index).text for index in range(5)] == [
+        "Cost (EUR)",
+        "46,000",
+        "212,000",
+        "",
+        "690,000",
+    ]
+
+    before = prs.to_bytes()
+    other = rpptx.Presentation(source).slides[0].shapes[1].table
+    with pytest.raises(IndexError, match="row index out of range"):
+        table.rows.add_row(6)
+    with pytest.raises(IndexError, match="column index out of range"):
+        table.columns.add_column(-6)
+    with pytest.raises(ValueError, match="row is not in this collection"):
+        table.rows.remove(other.rows[0])
+    with pytest.raises(ValueError, match="column is not in this collection"):
+        table.columns.remove(other.columns[0])
+    with pytest.raises(TypeError):
+        table.rows.remove(table.columns[0])
+    assert prs.to_bytes() == before
+    held_row = table.rows[0]
+    prs.slides.add_slide(prs.slide_layouts[6])
+    with pytest.raises(rpptx.StaleElementError, match=r"table\.rows\[0\]\."):
+        prs.slides[0].shapes[1].table.rows.remove(held_row)
+    prs.slides.remove(prs.slides[1])
+    output = tmp_path / "rows-columns.pptx"
+    prs.save(output)
+    xml = _package_parts(output.read_bytes())["ppt/slides/slide1.xml"].decode()
+    appended = xml[xml.rindex("<a:tr ") : xml.index("</a:tbl>")]
+    assert appended.count('<a:endParaRPr sz="1500"/>') == 5
+    assert appended.startswith('<a:tr h="548640"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p>')
+    assert '<a:r><a:rPr sz="1500"/><a:t>Risk</a:t></a:r>' in appended
+    assert appended.index("Risk") < appended.index("<a:tcPr/>") < appended.index("</a:tc>")
+
+    def measured(deck):
+        _python_pptx_options_table(deck)
+        deck.slides[0].shapes[1].height = rpptx.Inches(3)
+
+    measured_source = _python_pptx_deck(tmp_path / "measured.pptx", measured)
+    measured_deck = rpptx.Presentation(measured_source)
+    measured_deck.slides[0].shapes[1].table.rows.add_row()
+    assert measured_deck.slides[0].shapes[1].height == rpptx.Inches(3.6)
+    measured_table = measured_deck.slides[0].shapes[1].table
+    measured_table.rows.remove(measured_table.rows[0])
+    assert measured_deck.slides[0].shapes[1].height == rpptx.Inches(3)
+
+    single = rpptx.Presentation()
+    single.slides.add_slide(single.slide_layouts[6]).shapes.add_table(1, 2, 0, 0, 200, 100)
+    table = single.slides[0].shapes[0].table
+    with pytest.raises(rpptx.RpptxError, match="at least one row"):
+        table.rows.remove(table.rows[0])
+    table.columns.remove(table.columns[1])
+    table = single.slides[0].shapes[0].table
+    with pytest.raises(rpptx.RpptxError, match="at least one column"):
+        table.columns.remove(table.columns[0])
+    assert single.slides[0].shapes[0].width == 100
+
+    merged = rpptx.Presentation()
+    merged.slides.add_slide(merged.slide_layouts[6]).shapes.add_table(3, 3, 0, 0, 300, 300)
+    table = merged.slides[0].shapes[0].table
+    table.cell(0, 0).merge(table.cell(1, 1))
+    table.rows.add_row(1)
+    table = merged.slides[0].shapes[0].table
+    table.columns.add_column(1)
+    table = merged.slides[0].shapes[0].table
+    origin = table.cell(0, 0)
+    assert (origin.span_height, origin.span_width) == (3, 3)
+    table.rows.remove(table.rows[0])
+    table = merged.slides[0].shapes[0].table
+    assert (table.cell(0, 0).span_height, table.cell(0, 0).is_merge_origin) == (2, True)
+    merged_output = tmp_path / "merged-rows.pptx"
+    merged.save(merged_output)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output).slides[0].shapes[1]
+    assert (len(oracle.table.rows), len(oracle.table.columns)) == (5, 5)
+    assert oracle.height == sum(row.height for row in oracle.table.rows) == rpptx.Inches(3)
+    assert oracle.width == sum(column.width for column in oracle.table.columns)
+    assert [cell.text for cell in oracle.table.rows[4].cells] == ["Risk", "", "", "", ""]
+    assert oracle.table.cell(4, 0).text_frame.paragraphs[0].runs[0].font.size == pptx.util.Pt(15)
+    assert oracle.table.cell(4, 1)._tc.txBody.p_lst[0].endParaRPr.get("sz") == "1500"
+    oracle = pptx.Presentation(merged_output).slides[0].shapes[0].table
+    assert (oracle.cell(0, 0).span_height, oracle.cell(0, 0).span_width) == (2, 3)
+    assert oracle.cell(1, 2).is_spanned and not oracle.cell(2, 0).is_spanned
+
+
 def test_colour_edits_keep_python_pptx_brightness_transforms(tmp_path):
     import rpptx
     from rpptx.dml.color import RGBColor

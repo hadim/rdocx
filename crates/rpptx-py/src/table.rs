@@ -33,6 +33,51 @@ fn cell_index(path: &ContentPath) -> Option<usize> {
     })
 }
 
+/// Resolves the index a new row or column gets, as `list.insert` does, where
+/// `None` or the length appends, but raises for an index outside `-len..=len`.
+fn insertion_index(index: Option<isize>, len: usize, kind: &str) -> PyResult<usize> {
+    let Some(index) = index else {
+        return Ok(len);
+    };
+    let resolved = if index < 0 {
+        len as isize + index
+    } else {
+        index
+    };
+    if resolved < 0 || resolved > len as isize {
+        return Err(PyIndexError::new_err(format!("{kind} index out of range")));
+    }
+    Ok(resolved as usize)
+}
+
+/// Applies one row or column edit to the table at `path` and advances the
+/// revision, because every row, column, and cell handle names an index.
+fn restructure(
+    py: Python<'_>,
+    presentation: &Py<PyPresentation>,
+    path: &ContentPath,
+    edit: impl FnOnce(&mut rpptx::TableMut<'_>) -> rpptx::Result<()>,
+) -> PyResult<()> {
+    let mut presentation = presentation.borrow_mut(py);
+    let mut table = shape_mut_at(&mut presentation.inner, path)
+        .and_then(rpptx::ShapeMut::into_table_mut)
+        .ok_or_else(|| PyValueError::new_err("shape has no table"))?;
+    edit(&mut table).map_err(|error| rpptx_to_pyerr(py, error))?;
+    presentation.revisions.bump();
+    Ok(())
+}
+
+/// Returns the index a row or column handle names when it belongs to the
+/// table at `table_path`.
+fn member_index(
+    table_path: &ContentPath,
+    member_path: &ContentPath,
+    index: fn(&PathSeg) -> Option<usize>,
+) -> Option<usize> {
+    let (last, table) = member_path.segs.split_last()?;
+    (table == table_path.segs.as_slice()).then(|| index(last))?
+}
+
 /// Returns the path segments that name a cell's table shape.
 fn table_segments(path: &ContentPath) -> impl Iterator<Item = &PathSeg> {
     path.segs
@@ -212,6 +257,46 @@ impl PyColumnCollection {
             },
         )
     }
+
+    /// Inserts a grid column before `index`, or appends one, and returns it.
+    ///
+    /// The column copies the width and cell formatting, without the text, of
+    /// the column left of it, or of the first column when it becomes the
+    /// first, and the table frame grows by its width. The revision advances
+    /// once.
+    #[pyo3(signature = (index=None))]
+    fn add_column(&self, py: Python<'_>, index: Option<isize>) -> PyResult<Py<PyColumn>> {
+        let index = insertion_index(index, self.len(py)?, "column")?;
+        restructure(py, &self.presentation, &self.path, |table| {
+            table.insert_column(index)
+        })?;
+        self.item(py, index)
+    }
+
+    /// Removes one column of this table and shrinks the table frame by its
+    /// width. The revision advances once.
+    fn remove(&self, py: Python<'_>, column: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.len(py)?;
+        let column = column.extract::<PyRef<'_, PyColumn>>()?;
+        if !column.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err("column is not in this collection"));
+        }
+        validate_path(
+            py,
+            &self.presentation.borrow(py),
+            &column.path,
+            "column",
+            "",
+        )?;
+        let index = member_index(&self.path, &column.path, |segment| match segment {
+            PathSeg::Cell(index) => Some(*index),
+            _ => None,
+        })
+        .ok_or_else(|| PyValueError::new_err("column is not in this collection"))?;
+        restructure(py, &self.presentation, &self.path, |table| {
+            table.remove_column(index)
+        })
+    }
 }
 
 #[pyclass]
@@ -348,6 +433,39 @@ impl PyRowCollection {
                 index: 0,
             },
         )
+    }
+
+    /// Inserts a row before `index`, or appends one, and returns it.
+    ///
+    /// The row copies the height and cell formatting, without the text, of
+    /// the row above it, or of the first row when it becomes the first, and
+    /// the table frame grows by its height. The revision advances once.
+    #[pyo3(signature = (index=None))]
+    fn add_row(&self, py: Python<'_>, index: Option<isize>) -> PyResult<Py<PyRow>> {
+        let index = insertion_index(index, self.len(py)?, "row")?;
+        restructure(py, &self.presentation, &self.path, |table| {
+            table.insert_row(index)
+        })?;
+        self.item(py, index)
+    }
+
+    /// Removes one row of this table and shrinks the table frame by its
+    /// height. The revision advances once.
+    fn remove(&self, py: Python<'_>, row: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.len(py)?;
+        let row = row.extract::<PyRef<'_, PyRow>>()?;
+        if !row.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err("row is not in this collection"));
+        }
+        validate_path(py, &self.presentation.borrow(py), &row.path, "row", "")?;
+        let index = member_index(&self.path, &row.path, |segment| match segment {
+            PathSeg::Row(index) => Some(*index),
+            _ => None,
+        })
+        .ok_or_else(|| PyValueError::new_err("row is not in this collection"))?;
+        restructure(py, &self.presentation, &self.path, |table| {
+            table.remove_row(index)
+        })
     }
 }
 
