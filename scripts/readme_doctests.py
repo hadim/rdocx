@@ -391,11 +391,11 @@ ARCHIVE_MEASUREMENTS = {
     "rdocx-opc": (3_655, 9_668, 6),
     "rdocx-oxml": (367_500, 2_380_047, 32),
     "rdocx-pdf": (8_111, 26_758, 6),
-    "rpptx": (418_726, 2_178_550, 16),
+    "rpptx": (420_821, 2_188_482, 16),
     "rpptx-chart": (6_648, 21_136, 6),
     "rpptx-cli": (36_709, 159_585, 8),
     "rpptx-layout": (79_109, 458_112, 11),
-    "rpptx-oxml": (154_277, 1_047_901, 20),
+    "rpptx-oxml": (154_422, 1_048_510, 20),
     "rpptx-render": (59_928, 329_994, 8),
 }
 PACKAGE_VERSIONS = {
