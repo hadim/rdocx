@@ -704,7 +704,9 @@ pub fn xml_part_replaceable_texts(xml: &[u8]) -> crate::error::Result<Vec<String
 /// Walk `xml`, handing each paragraph of a `w:txbxContent` element to `edit`,
 /// those of its tables and block content controls included, and
 /// re-serialising a child in place when `edit` counts a change in it. Every
-/// other child of the text box is copied through verbatim. Returns the
+/// other child of the text box is copied through verbatim. A table or a
+/// control is parsed with the namespaces the part declares around it, such as
+/// the `w14` of `w14:paraId` that Word declares on the root. Returns the
 /// rewritten XML and the summed count.
 fn rewrite_text_boxes(
     xml: &[u8],
@@ -722,17 +724,20 @@ fn rewrite_text_boxes(
     let mut writer = Writer::new(Vec::new());
     let mut buf = Vec::new();
     let mut total_count = 0;
-    // The bindings `CT_P::from_xml` assumes for a paragraph cut out of the part.
-    let word_prefixes = [
+    // The bindings `CT_P::from_xml` assumes for a paragraph cut out of the part,
+    // and those the elements open around the current position declare.
+    let part_prefixes = vec![
         "w".to_owned(),
         format!("\0r\0{R_NS}"),
         format!("\0mc\0{MC_NS}"),
     ];
+    let mut scopes: Vec<Vec<String>> = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Eof) => break,
             Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"txbxContent") => {
+                let word_prefixes = word_prefixes_at(e, scopes.last().unwrap_or(&part_prefixes))?;
                 // We found a txbxContent element. Parse and edit each paragraph
                 // and copy every other child through verbatim, in document order.
                 writer.write_event(Event::Start(e.clone()))?;
@@ -796,6 +801,17 @@ fn rewrite_text_boxes(
                     }
                     inner_buf.clear();
                 }
+            }
+            Ok(Event::Start(e)) => {
+                scopes.push(word_prefixes_at(
+                    &e,
+                    scopes.last().unwrap_or(&part_prefixes),
+                )?);
+                writer.write_event(Event::Start(e))?;
+            }
+            Ok(Event::End(e)) => {
+                scopes.pop();
+                writer.write_event(Event::End(e))?;
             }
             Ok(ev) => {
                 writer.write_event(ev)?;
@@ -1454,6 +1470,41 @@ mod tests {
         assert_every_prefix_is_bound(&result);
         assert!(result.contains(">table Ada<"), "{result}");
         assert!(result.contains(&on_cell), "{result}");
+    }
+
+    /// Word declares `w14` on the root and writes `w14:paraId` on every
+    /// paragraph. A table or a control of a text box was parsed without the
+    /// root's declarations, so the prefix was unbound, the typed parsers
+    /// refused it, and its text was never replaced.
+    #[test]
+    fn replace_in_textbox_reaches_tables_and_controls_using_prefixes_declared_above_it() {
+        let w14 = r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+        let paragraph = |text: &str| {
+            format!(r#"<w:p w14:paraId="0000ABCD"><w:r><w:t>{text}</w:t></w:r></w:p>"#)
+        };
+        let content = format!(
+            r#"<w:tbl><w:tblGrid/><w:tr><w:tc>{}</w:tc></w:tr></w:tbl><w:sdt><w:sdtContent>{}</w:sdtContent></w:sdt>"#,
+            paragraph("cell {{name}}"),
+            paragraph("control {{name}}")
+        );
+        for (on_root, on_pict) in [(w14, ""), ("", w14)] {
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}" {on_root} xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:pict {on_pict}><v:shape><v:textbox><w:txbxContent>{content}</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#
+            );
+
+            let (result, count) = replace_in_xml_part(xml.as_bytes(), "{{name}}", "Ada").unwrap();
+
+            assert_eq!(count, 2, "{result:?}");
+            let result = String::from_utf8(result).unwrap();
+            assert_every_prefix_is_bound(&result);
+            assert!(result.contains(">cell Ada<"), "{result}");
+            assert!(result.contains(">control Ada<"), "{result}");
+            assert_eq!(
+                result.matches(r#"w14:paraId="0000ABCD""#).count(),
+                2,
+                "{result}"
+            );
+        }
     }
 
     /// The end tag used to be written as `w:txbxContent` whatever prefix the
