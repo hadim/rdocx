@@ -479,7 +479,25 @@ shape of a slide with the relationships and parts only it used and advances the
 revision once. `move(from_, to)` changes the z-order like
 `SlideCollection.move`, so the shape ends up at index `to` and draws above the
 shapes before it, and advances the revision once. python-pptx has no z-order
-API. Nested collections stay read-only.
+API.
+
+A group's `shapes` collection has the same `add_textbox`, `add_shape`,
+`add_connector`, `add_group_shape`, `add_table`, and `add_picture` through the
+native `ShapesMut`, so groups nest to any depth. A member takes a `p:cNvPr` id
+unused across the slide, and the group, then every group enclosing it, is refit
+to the union of its members as python-pptx does, so members of a new group keep
+their slide coordinates. An addition to a group advances the revision once,
+like any addition, so the group handle and its collection go stale and the
+returned member is captured at the new revision. The next addition re-fetches
+the group, for example through `prs.slides[0].shapes[0].shapes`.
+A group added inside a group has the zero `a:xfrm` python-pptx writes, so its
+`left`, `top`, `width`, and `height` read zero until its first member arrives,
+while a group added to a slide's own shapes reads `None`. `add_group_shape` has
+no python-pptx `shapes` argument for moving existing shapes into the new group.
+Adding to the collection of a shape that is not a group raises `ValueError`
+before any image is read, and so does adding to a group inside an
+`mc:AlternateContent` fallback, which stays read-only. `remove` and `move` on a
+nested collection raise `ValueError` too.
 
 A table `Cell` follows python-pptx for `merge(other_cell)`, `split()`,
 `is_merge_origin`, `is_spanned`, `span_height`, and `span_width`. Merge and

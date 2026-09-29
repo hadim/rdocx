@@ -15,6 +15,8 @@ presentation, notes, handout, PDF, and animation outputs.
 - Add, remove, move, duplicate, and transfer slides.
 - Author and edit text, pictures, shapes, groups, tables, charts, comments,
   SmartArt text, and media.
+- Populate groups, nested to any depth, with text boxes, preset shapes,
+  connectors, groups, tables, and pictures.
 - Produce PDF, PDF/A, resolved slide frames, notes, handouts, and animations.
 - Import HTML, ODP, and PDF through explicit facade APIs.
 - Resolve master, layout, placeholder, theme, chart, SmartArt, media, notes,
