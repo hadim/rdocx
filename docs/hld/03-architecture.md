@@ -909,13 +909,25 @@ form changes replace that complete owner. Supported run, paragraph, table, and
 section properties emit property revisions that retain the original property
 sidecars. Unsupported formatting differences retain the original bytes and
 produce stable `ComparisonDiagnostic` values at the actual story path. Inputs
-with existing modeled revisions or differing story and control shells are
-rejected unless their story category is ignored. A content control's `w:id`
-is producer identity and not part of its shell, so controls that differ only
-by it align, compare, and keep the original `w:sdtPr`. Attributed text
-alignment retains owner, formatting, content position, and raw-child
-boundaries, then coalesces adjacent equal-owner edits into minimal revision
-wrappers.
+with existing modeled revisions or differing story shells are rejected unless
+their story category is ignored. The root and owner start tags of a comment
+or note story compare as namespace-resolved trees, so a part written again
+with other declarations, attribute order, or empty-element forms keeps its
+shell. A content control's shell is its type and data binding, and a
+difference there is rejected too. Its `w:id` is producer
+identity and ignored. Its tag, alias, lock, placeholder, and document-part
+gallery are metadata, so controls that differ only by those align, compare,
+keep the original `w:sdtPr`, and report one `content-control <name> differs`
+diagnostic per property. Attributed text alignment retains owner,
+formatting, content position, and raw-child boundaries, then coalesces
+adjacent equal-owner edits into minimal revision wrappers. That alignment
+runs separately between consecutive hyperlink and inline-control boundaries,
+so no text matches across a shell and words inserted or deleted beside a
+shell move it. Text inserted between two boundaries with no original run
+between them, such as before a hyperlink that opens its paragraph, has no
+original bytes to go between and refuses the pair. When every run of a
+paragraph matches, the runs stay whole and only the differing inline
+controls are compared.
 When a main story gains a trailing run of paragraphs, comparison marks the
 original final paragraph boundary once, marks each intermediate inserted
 paragraph boundary once, and leaves the final inserted paragraph mark as the

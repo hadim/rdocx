@@ -18675,16 +18675,27 @@ fn comparison_revises_nested_control_content_without_replacing_its_shell() {
         .unwrap();
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
+    // A tag is metadata: the original shell stays and the change is reported.
     let changed_shell_xml = body("old", "changed-shell");
     let changed_shell = document_with_content_controls(&changed_shell_xml);
     let mut unchanged = document_with_content_controls(&original_xml);
-    let before = unchanged.to_bytes().unwrap();
-    assert!(
-        unchanged
-            .compare(&changed_shell, "Ada", "2026-08-21T09:30:00Z")
-            .is_err()
+    let diagnostics = unchanged
+        .compare(&changed_shell, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    assert_eq!(
+        diagnostics,
+        vec![rdocx::ComparisonDiagnostic {
+            location: "body/paragraph[0]/content-control[0]".to_owned(),
+            message: "content-control tag differs and the original tag was retained".to_owned(),
+        }]
     );
-    assert_eq!(unchanged.to_bytes().unwrap(), before);
+    assert!(unchanged.revisions().is_empty());
+    let kept_xml = document_xml(&mut unchanged);
+    assert!(
+        kept_xml.contains(r#"w:val="paragraph-control""#),
+        "{kept_xml}"
+    );
+    assert!(!kept_xml.contains("changed-shell"), "{kept_xml}");
 }
 
 #[test]
@@ -18751,6 +18762,52 @@ fn comparison_deletes_text_without_corrupting_tabs() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn comparison_deletes_field_results_without_corrupting_tabs() {
+    let field = |instruction: &str, result: &str| {
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Page</w:t><w:tab/><w:t>{result}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#
+        ))
+    };
+    // A refreshed result, then a new instruction that replaces the field.
+    for (original_xml, edited_xml) in [
+        (field("PAGE", "1"), field("PAGE", "2")),
+        (field("PAGE", "1"), field("NUMPAGES", "1")),
+    ] {
+        let original = document_with_content_controls(&original_xml);
+        let edited = document_with_content_controls(&edited_xml);
+        let mut compared = document_with_content_controls(&original_xml);
+        compared
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap();
+        let tracked = document_xml(&mut compared);
+        let deleted = &tracked[tracked.find("<w:del ").unwrap()..tracked.find("</w:del>").unwrap()];
+        assert!(
+            deleted.contains("<w:delText>Page</w:delText><w:tab/>"),
+            "{tracked}"
+        );
+        assert!(!tracked.contains("delTextab"), "{tracked}");
+
+        let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        accepted.accept_all().unwrap();
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        rejected.reject_all().unwrap();
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(document_xml(&mut rejected).contains("<w:t>Page</w:t><w:tab/>"));
+    }
 }
 
 #[test]
@@ -25090,6 +25147,214 @@ fn granular_hyperlink_edits_preserve_the_owner_shell() {
         !raw_boundary_xml.contains("<w:del ") && !raw_boundary_xml.contains("<w:ins "),
         "{raw_boundary_xml}"
     );
+}
+
+/// Words inserted or deleted outside a hyperlink or an inline control move
+/// its boundaries, which the word and character paths follow (#161).
+#[test]
+fn granular_edits_beside_a_shell_move_its_boundaries() {
+    let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    let link = |text: &str| {
+        format!(r#"<w:hyperlink w:anchor="target"><w:r><w:t>{text}</w:t></w:r></w:hyperlink>"#)
+    };
+    let control = |text: &str| {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="keep"/></w:sdtPr><w:sdtContent><w:r><w:t>{text}</w:t></w:r></w:sdtContent></w:sdt>"#
+        )
+    };
+    let paragraph = |parts: &[String]| wrap_word_body(&format!("<w:p>{}</w:p>", parts.concat()));
+    let compare = |original_xml: &str, edited_xml: &str, options: &rdocx::ComparisonOptions| {
+        let mut tracked = document_with_content_controls(original_xml);
+        tracked
+            .compare_with_options(
+                &document_with_content_controls(edited_xml),
+                "Ada",
+                "2026-09-04T09:00:00Z",
+                options,
+            )
+            .map(|diagnostics| {
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+                tracked
+            })
+    };
+    // The redline, after checking that accepting and rejecting it give the
+    // edited and the original side with no revision left.
+    let redline = |original_xml: &str, edited_xml: &str, options: &rdocx::ComparisonOptions| {
+        let mut tracked = compare(original_xml, edited_xml, options)
+            .unwrap_or_else(|error| panic!("{:?}: {edited_xml}: {error}", options.granularity));
+        let bytes = tracked.to_bytes().unwrap();
+        for (resolve, expected_xml) in [
+            (
+                Document::accept_all as fn(&mut Document) -> rdocx::Result<usize>,
+                edited_xml,
+            ),
+            (Document::reject_all, original_xml),
+        ] {
+            let mut resolved = Document::from_bytes(&bytes).unwrap();
+            resolve(&mut resolved).unwrap();
+            let diagnostics = resolved
+                .compare_with_options(
+                    &document_with_content_controls(expected_xml),
+                    "postcondition",
+                    "2026-09-04T09:01:00Z",
+                    options,
+                )
+                .unwrap();
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert!(resolved.revisions().is_empty(), "{expected_xml}");
+        }
+        document_xml(&mut tracked)
+    };
+    let cases = [
+        // Word writes an inserted word in a run of its own, other producers
+        // in the run it extends.
+        (
+            vec![run("see "), link("site")],
+            vec![run("please see "), link("site")],
+        ),
+        (
+            vec![run("see "), link("site")],
+            vec![run("please "), run("see "), link("site")],
+        ),
+        (
+            vec![run("please see "), link("site")],
+            vec![run("see "), link("site")],
+        ),
+        // At character granularity the "s" of "see" must not match the one
+        // of "site".
+        (vec![run("see "), link("site")], vec![link("site")]),
+        (
+            vec![run("see "), link("site")],
+            vec![run("see "), link("site"), run(" now")],
+        ),
+        (
+            vec![run("see "), link("site"), run(", now")],
+            vec![run("see "), link("site"), run(" today, now")],
+        ),
+        (
+            vec![run("see "), link("site"), run("now")],
+            vec![run("see "), link("site"), run("right now")],
+        ),
+        (
+            vec![link("one"), run(" and "), link("two")],
+            vec![link("one"), run(" and also "), link("two")],
+        ),
+        (
+            vec![run("see "), control("field"), run(" now")],
+            vec![run("please see "), control("field"), run(" now")],
+        ),
+        (
+            vec![run("see "), control("field"), run(" now")],
+            vec![run("please "), run("see "), control("field"), run(" now")],
+        ),
+        // The spaces on both sides of a control must not match each other.
+        (
+            vec![run("Enter "), control("field"), run(" today")],
+            vec![run("Enter it "), control("field"), run(" today")],
+        ),
+        (
+            vec![run("Your name "), control("field"), run(" here")],
+            vec![run("Your name is "), control("field"), run(" here")],
+        ),
+        (
+            vec![run("see "), control("field"), run(" now")],
+            vec![run("see the "), control("field"), run(" now")],
+        ),
+        (
+            vec![run("see the "), control("field"), run(" now")],
+            vec![run("see "), control("field"), run(" now")],
+        ),
+        (
+            vec![run("see "), control("field"), run("now")],
+            vec![run("see "), control("field"), run("right now")],
+        ),
+        (
+            vec![run("see "), control("field"), run(" now")],
+            vec![run("see "), control("field")],
+        ),
+    ];
+    for granularity in [
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Character,
+    ] {
+        let options = rdocx::ComparisonOptions {
+            granularity,
+            ..Default::default()
+        };
+        for (original, edited) in &cases {
+            let xml = redline(&paragraph(original), &paragraph(edited), &options);
+            for (open, close) in [("<w:hyperlink ", "</w:hyperlink>"), ("<w:sdt>", "</w:sdt>")] {
+                assert_eq!(
+                    xml.matches(open).count(),
+                    original.concat().matches(open).count(),
+                    "{xml}"
+                );
+                for (start, _) in xml.match_indices(open) {
+                    let shell = &xml[start..start + xml[start..].find(close).unwrap()];
+                    assert!(
+                        !shell.contains("<w:ins ") && !shell.contains("<w:del "),
+                        "{xml}"
+                    );
+                }
+            }
+        }
+
+        // Text inserted at the start of a hyperlink goes inside it, and a
+        // word moved into a hyperlink is deleted outside and inserted inside.
+        for (original, edited, deleted_after) in [
+            (
+                paragraph(&[run("see "), link("site")]),
+                paragraph(&[run("see "), link("my site")]),
+                false,
+            ),
+            (
+                paragraph(&[link("see"), run(" site")]),
+                paragraph(&[link("see site")]),
+                true,
+            ),
+        ] {
+            let xml = redline(&original, &edited, &options);
+            let (open, close) = (
+                xml.find("<w:hyperlink ").unwrap(),
+                xml.find("</w:hyperlink>").unwrap(),
+            );
+            let (before, shell, after) = (&xml[..open], &xml[open..close], &xml[close..]);
+            assert!(
+                shell.contains("<w:ins ") && !shell.contains("<w:del "),
+                "{xml}"
+            );
+            assert!(
+                !before.contains("<w:ins ") && !before.contains("<w:del "),
+                "{xml}"
+            );
+            assert!(!after.contains("<w:ins "), "{xml}");
+            assert_eq!(after.contains("<w:del "), deleted_after, "{xml}");
+        }
+
+        // Text between two shells with no original run between them, or
+        // before a hyperlink that opens its paragraph, has no original bytes
+        // to be written between.
+        for (original, edited) in [
+            (
+                paragraph(&[link("one"), link("two")]),
+                paragraph(&[link("one"), run(" and "), link("two")]),
+            ),
+            (
+                paragraph(&[link("site")]),
+                paragraph(&[run("see "), link("site")]),
+            ),
+        ] {
+            let error = compare(&original, &edited, &options)
+                .err()
+                .unwrap_or_else(|| panic!("{granularity:?}: {edited}"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("cannot revise paragraph boundary structures at body/paragraph[0]"),
+                "{error}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -31795,6 +32060,223 @@ mod compare_producer_noise {
         }
     }
 
+    fn metadata_diagnostic(location: &str, property: &str) -> rdocx::ComparisonDiagnostic {
+        rdocx::ComparisonDiagnostic {
+            location: location.to_owned(),
+            message: format!(
+                "content-control {property} differs and the original {property} was retained"
+            ),
+        }
+    }
+
+    /// Compare two bodies whose controls differ by metadata and return the
+    /// revision kinds, the diagnostics and the redline.
+    ///
+    /// Accepting keeps the original metadata, so it reads like the edited
+    /// side with the same diagnostics, and rejecting gives the original back.
+    fn compared_metadata(
+        original_xml: &str,
+        edited_xml: &str,
+        options: &ComparisonOptions,
+    ) -> (Vec<RevisionKind>, Vec<rdocx::ComparisonDiagnostic>, String) {
+        let original = document_with_content_controls(original_xml);
+        let edited = document_with_content_controls(edited_xml);
+        let mut compared = document_with_content_controls(original_xml);
+        let diagnostics = compared
+            .compare_with_options(&edited, "R", TIMESTAMP, options)
+            .expect("content-control metadata must not refuse the pair");
+        let tracked = compared.to_bytes().unwrap();
+        let mut accepted = Document::from_bytes(&tracked).unwrap();
+        accepted.accept_all().unwrap();
+        assert_eq!(
+            accepted
+                .compare_with_options(&edited, "postcondition", TIMESTAMP, options)
+                .unwrap(),
+            diagnostics
+        );
+        assert_eq!(revision_kinds(&accepted), []);
+        let mut rejected = Document::from_bytes(&tracked).unwrap();
+        rejected.reject_all().unwrap();
+        assert_eq!(
+            rejected
+                .compare_with_options(&original, "postcondition", TIMESTAMP, options)
+                .unwrap(),
+            []
+        );
+        assert_eq!(revision_kinds(&rejected), []);
+        (
+            revision_kinds(&compared),
+            diagnostics,
+            document_xml(&mut compared),
+        )
+    }
+
+    /// A control's metadata names, protects or files it without changing
+    /// what it holds, and Google Docs renumbers its `goog_rdk_N` tags between
+    /// exports (#159 section 2). A difference is reported and the original
+    /// `w:sdtPr` is kept.
+    #[test]
+    fn content_control_metadata_is_reported_and_the_original_kept() {
+        let block = |properties: &str, first_entry: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:r><w:t>Before the content control.</w:t></w:r></w:p><w:sdt><w:sdtPr>{properties}</w:sdtPr><w:sdtContent><w:p><w:r><w:t>{first_entry} entry</w:t></w:r></w:p><w:p><w:r><w:t>Beta entry</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>After the content control.</w:t></w:r></w:p>"#
+            ))
+        };
+        let gallery = |value: &str| {
+            format!(
+                r#"<w:docPartObj><w:docPartGallery w:val="{value}"/><w:docPartUnique/></w:docPartObj>"#
+            )
+        };
+        let placeholder =
+            |value: &str| format!(r#"<w:placeholder><w:docPart w:val="{value}"/></w:placeholder>"#);
+        let changed = &[RevisionKind::Deletion, RevisionKind::Insertion][..];
+        for (property, original, edited) in [
+            (
+                "tag",
+                format!(
+                    r#"<w:tag w:val="goog_rdk_0"/><w:id w:val="-2000000001"/>{}"#,
+                    gallery("Table of Contents")
+                ),
+                format!(
+                    r#"<w:tag w:val="goog_rdk_3"/><w:id w:val="-2000000001"/>{}"#,
+                    gallery("Table of Contents")
+                ),
+            ),
+            (
+                "alias",
+                r#"<w:alias w:val="Contents"/>"#.to_owned(),
+                r#"<w:alias w:val="Summary"/>"#.to_owned(),
+            ),
+            (
+                "lock",
+                String::new(),
+                r#"<w:lock w:val="sdtContentLocked"/>"#.to_owned(),
+            ),
+            (
+                "placeholder",
+                placeholder("DefaultPlaceholder_1"),
+                placeholder("DefaultPlaceholder_2"),
+            ),
+            (
+                "docPartGallery",
+                gallery("Table of Contents"),
+                gallery("Custom Table of Contents"),
+            ),
+        ] {
+            for (first_entry, expected) in [("Alpha", &[][..]), ("Delta", changed)] {
+                let (kinds, diagnostics, tracked) = compared_metadata(
+                    &block(&original, "Alpha"),
+                    &block(&edited, first_entry),
+                    &ComparisonOptions::default(),
+                );
+                assert_eq!(kinds, expected, "{property}");
+                assert_eq!(
+                    diagnostics,
+                    [metadata_diagnostic("body/content-control[1]", property)]
+                );
+                assert!(
+                    tracked.contains(&format!("<w:sdtPr>{original}</w:sdtPr>")),
+                    "{tracked}"
+                );
+            }
+        }
+
+        // A renamed tag and a new lock are two diagnostics on one control.
+        let (_, diagnostics, _) = compared_metadata(
+            &block(r#"<w:tag w:val="goog_rdk_0"/>"#, "Alpha"),
+            &block(
+                r#"<w:tag w:val="goog_rdk_1"/><w:lock w:val="sdtLocked"/>"#,
+                "Alpha",
+            ),
+            &ComparisonOptions::default(),
+        );
+        assert_eq!(
+            diagnostics,
+            [
+                metadata_diagnostic("body/content-control[1]", "tag"),
+                metadata_diagnostic("body/content-control[1]", "lock"),
+            ]
+        );
+
+        // Google Docs writes a bookmark around a heading, and bookmarks are
+        // indexed by run, so the runs around the control must stay whole.
+        let inline = |tag: &str, word: &str| {
+            wrap_word_body(&format!(
+                r#"<w:p><w:bookmarkStart w:id="0" w:name="h.1"/><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:bookmarkEnd w:id="0"/><w:sdt><w:sdtPr><w:tag w:val="{tag}"/><w:id w:val="1"/></w:sdtPr><w:sdtContent><w:r><w:t>{word}</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t xml:space="preserve"> after.</w:t></w:r></w:p>"#
+            ))
+        };
+        for granularity in [
+            ComparisonGranularity::Run,
+            ComparisonGranularity::Word,
+            ComparisonGranularity::Character,
+        ] {
+            let options = ComparisonOptions {
+                granularity,
+                ..Default::default()
+            };
+            // "Omens" has the length of "Alpha" and none of its characters,
+            // so every granularity gives one deletion and one insertion.
+            for (word, expected) in [("Alpha", &[][..]), ("Omens", changed)] {
+                let (kinds, diagnostics, tracked) = compared_metadata(
+                    &inline("goog_rdk_0", "Alpha"),
+                    &inline("goog_rdk_5", word),
+                    &options,
+                );
+                assert_eq!(kinds, expected, "{granularity:?}");
+                assert_eq!(
+                    diagnostics,
+                    [metadata_diagnostic(
+                        "body/paragraph[0]/content-control[0]",
+                        "tag"
+                    )],
+                    "{granularity:?}"
+                );
+                assert!(
+                    tracked.contains(r#"<w:tag w:val="goog_rdk_0"/>"#),
+                    "{tracked}"
+                );
+                assert!(!tracked.contains("goog_rdk_5"), "{tracked}");
+            }
+        }
+    }
+
+    /// The control type and its data binding decide what a control holds, so
+    /// a difference in either still refuses the pair.
+    #[test]
+    fn a_content_control_type_or_binding_change_still_refuses() {
+        let control = |properties: &str| {
+            wrap_word_body(&format!(
+                r#"<w:sdt><w:sdtPr>{properties}</w:sdtPr><w:sdtContent><w:p><w:r><w:t>Alpha entry</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>After the content control.</w:t></w:r></w:p>"#
+            ))
+        };
+        let binding = |xpath: &str| {
+            format!(
+                r#"<w:dataBinding w:storeItemID="{{11111111-1111-1111-1111-111111111111}}" w:xpath="{xpath}"/><w:text/>"#
+            )
+        };
+        for (original, edited) in [
+            ("<w:text/>".to_owned(), "<w:richText/>".to_owned()),
+            (binding("/root/first"), binding("/root/second")),
+        ] {
+            let mut compared = document_with_content_controls(&control(&original));
+            let before = compared.to_bytes().unwrap();
+            let error = compared
+                .compare(
+                    &document_with_content_controls(&control(&edited)),
+                    "R",
+                    TIMESTAMP,
+                )
+                .unwrap_err();
+            assert!(
+                error.to_string().contains(
+                    "cannot revise content-control properties at body/content-control[0]"
+                ),
+                "{error}"
+            );
+            assert_eq!(compared.to_bytes().unwrap(), before);
+        }
+    }
+
     fn replaced_copy(source_xml: &str, old: &str, new: &str) -> String {
         let mut document = document_with_content_controls(source_xml);
         assert_eq!(document.try_replace_text(old, new).unwrap(), 1);
@@ -32085,6 +32567,157 @@ mod compare_producer_noise {
                 packed.contains(r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>"#),
                 "{packed}"
             );
+        }
+    }
+
+    const MARKUP_COMPATIBILITY: &str =
+        "http://schemas.openxmlformats.org/markup-compatibility/2006";
+    const RELATIONSHIPS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const WORD_2010: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
+    const WORD_2012: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+
+    fn document_with_comments_part(comments: &str) -> Document {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/comments.xml", comments.as_bytes().to_vec());
+        package.content_types.add_override(
+            "/word/comments.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(oxml_opc::relationship::rel_types::COMMENTS, "comments.xml");
+        package.set_part(
+            "/word/document.xml",
+            wrap_word_body("<w:p><w:r><w:t>Lorem ipsum.</w:t></w:r></w:p>").into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn with_part(mut document: Document, part_name: &str, xml: &str) -> Document {
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part(part_name, xml.as_bytes().to_vec());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    /// A comments, notes or header part written again by another producer,
+    /// rdocx included, keeps its content: the declaration, namespace
+    /// declarations, attribute order and empty-element form are not.
+    #[test]
+    fn a_reserialized_story_shell_is_not_a_change() {
+        // #160 section 3: the empty comments part of a Google Docs export,
+        // and the same part as a no-op save used to write it.
+        let google_docs = format!(
+            r#"<?xml version='1.0' encoding='UTF-8' standalone='yes'?>
+<w:comments xmlns:mc="{MARKUP_COMPATIBILITY}" xmlns:r="{RELATIONSHIPS}" xmlns:w="{W_NS}" xmlns:w14="{WORD_2010}" xmlns:w15="{WORD_2012}" mc:Ignorable="w14 w15"/>"#
+        );
+        let rewritten = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="{W_NS}" xmlns:r="{RELATIONSHIPS}" xmlns:mc="{MARKUP_COMPATIBILITY}" xmlns:w15="{WORD_2012}" mc:Ignorable="w14 w15"></w:comments>"#
+        );
+        let mut saved = document_with_comments_part(&google_docs);
+        let saved = Document::from_bytes(&saved.to_bytes().unwrap()).unwrap();
+        for edited in [saved, document_with_comments_part(&rewritten)] {
+            let mut compared = document_with_comments_part(&google_docs);
+            let diagnostics = compared.compare(&edited, "R", TIMESTAMP).unwrap();
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert_eq!(revision_kinds(&compared), []);
+        }
+
+        // The owner start tags in Word's order and in rdocx's, next to a
+        // separator note and a header root written again.
+        let comments = |attributes: &str, text: &str| {
+            format!(
+                r#"<w:comments xmlns:w="{W_NS}"><w:comment {attributes}><w:p><w:r><w:t>{text} comment</w:t></w:r></w:p></w:comment></w:comments>"#
+            )
+        };
+        let rdocx_order =
+            r#"w:author="Ada" w:date="2026-09-04T09:00:00Z" w:initials="AL" w:id="0""#;
+        let footnotes = format!(
+            r#"<w:footnotes xmlns:w="{W_NS}"><w:footnote w:id="-1" w:type="separator"><w:p xmlns:w="{W_NS}"><w:r><w:separator /></w:r></w:p></w:footnote><w:footnote w:id="0" w:type="continuationSeparator"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote><w:footnote w:id="1"><w:p><w:r><w:footnoteRef/><w:t xml:space="preserve"> same footnote</w:t></w:r></w:p></w:footnote></w:footnotes>"#
+        );
+        let header = format!(
+            r#"<w:hdr xmlns:r="{RELATIONSHIPS}" xmlns:w="{W_NS}"><w:p><w:r><w:t>edited header</w:t></w:r></w:p></w:hdr>"#
+        );
+        for text in ["same", "edited"] {
+            let original = document_with_comparison_stories("same");
+            let mut edited = with_part(
+                document_with_comparison_stories("same"),
+                "/word/comments.xml",
+                &comments(rdocx_order, text),
+            );
+            edited = with_part(edited, "/word/footnotes.xml", &footnotes);
+            edited = with_part(edited, "/word/header1.xml", &header);
+            let mut compared = document_with_comparison_stories("same");
+            let diagnostics = compared
+                .compare(&edited, "R", TIMESTAMP)
+                .unwrap_or_else(|error| panic!("{text}: {error}"));
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            let tracked = compared.to_bytes().unwrap();
+            let redline = comparison_part_xml(&mut compared, "/word/comments.xml");
+            assert_eq!(
+                redline.contains("<w:del ") && redline.contains("<w:ins "),
+                text == "edited",
+                "{redline}"
+            );
+            let header = comparison_part_xml(&mut compared, "/word/header1.xml");
+            assert!(header.contains("<w:ins "), "{header}");
+            for (resolve, expected) in [
+                (
+                    Document::accept_all as fn(&mut Document) -> rdocx::Result<usize>,
+                    &edited,
+                ),
+                (Document::reject_all, &original),
+            ] {
+                let mut resolved = Document::from_bytes(&tracked).unwrap();
+                resolve(&mut resolved).unwrap();
+                let diagnostics = resolved
+                    .compare(expected, "postcondition", TIMESTAMP)
+                    .unwrap();
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            }
+        }
+    }
+
+    /// A shell that differs in content still refuses the pair. A re-dated
+    /// comment waits for the redline to carry the edited comment threads.
+    #[test]
+    fn a_changed_story_shell_still_refuses() {
+        let comments = |root_child: &str, date: &str| {
+            format!(
+                r#"<w:comments xmlns:w="{W_NS}">{root_child}<w:comment w:id="0" w:author="Ada" w:initials="AL" w:date="{date}"><w:p><w:r><w:t>same comment</w:t></w:r></w:p></w:comment></w:comments>"#
+            )
+        };
+        for (edited, expected) in [
+            (
+                comments("", "2026-09-05T09:00:00Z"),
+                "comments owner shell changed at /word/comments.xml[0]",
+            ),
+            (
+                comments(
+                    r#"<x:extension xmlns:x="urn:producer"/>"#,
+                    "2026-09-04T09:00:00Z",
+                ),
+                "comments story root shell changed in /word/comments.xml",
+            ),
+        ] {
+            let edited = with_part(
+                document_with_comparison_stories("same"),
+                "/word/comments.xml",
+                &edited,
+            );
+            let mut compared = document_with_comparison_stories("same");
+            let error = compared.compare(&edited, "R", TIMESTAMP).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
         }
     }
 }

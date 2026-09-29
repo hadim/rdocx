@@ -28,13 +28,21 @@ thread_local! {
 }
 
 type ControlPropertySignature<'a> = Option<(
-    Option<&'a str>,
-    Option<&'a str>,
     Option<rdocx_oxml::content_control::SdtType>,
     Option<&'a rdocx_oxml::content_control::CT_DataBinding>,
 )>;
 
+/// The content-control properties that name, protect or file a control
+/// without changing what it holds, by their `w:sdtPr` element names.
+const CONTROL_METADATA: [&str; 5] = ["tag", "alias", "lock", "placeholder", "docPartGallery"];
+
 /// A comparison difference that cannot be represented as a content revision.
+///
+/// The redline keeps the original for every diagnostic. The message starts
+/// with a stable prefix naming the difference: `formatting differs` for
+/// formatting that cannot be revised, and `content-control <name> differs`
+/// for a control's `tag`, `alias`, `lock`, `placeholder` or
+/// `docPartGallery`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComparisonDiagnostic {
     pub location: String,
@@ -920,8 +928,15 @@ fn compare_owned_story(
             story.part_name
         )));
     }
-    let original_skeleton = story_skeleton(original, &original_spans);
-    let edited_skeleton = story_skeleton(edited, &edited_spans);
+    let (original_skeleton, original_owners) = canonical_owned_story(original, owner_local)?;
+    let (edited_skeleton, edited_owners) = canonical_owned_story(edited, owner_local)?;
+    if original_owners.len() != original_spans.len() || edited_owners.len() != edited_spans.len() {
+        return Err(Error::Other(format!(
+            "comparison could not correlate {} story owners in {}",
+            story.kind.label(),
+            story.part_name
+        )));
+    }
     if original_skeleton != edited_skeleton {
         return Err(Error::Other(format!(
             "{} story root shell changed in {}",
@@ -933,7 +948,7 @@ fn compare_owned_story(
     for (index, (left, right)) in original_spans.iter().zip(&edited_spans).enumerate() {
         let left_xml = &original[left.clone()];
         let right_xml = &edited[right.clone()];
-        if owner_start_signature(left_xml)? != owner_start_signature(right_xml)? {
+        if original_owners[index].first() != edited_owners[index].first() {
             return Err(Error::Other(format!(
                 "{} owner shell changed at {}[{index}]",
                 story.kind.label(),
@@ -945,7 +960,7 @@ fn compare_owned_story(
             ComparisonStoryKind::Footnote | ComparisonStoryKind::Endnote
         ) && !normal_note_owner(left_xml)?
         {
-            if left_xml != right_xml {
+            if original_owners[index] != edited_owners[index] {
                 return Err(Error::Other(format!(
                     "{} separator shell changed at {}[{index}]",
                     story.kind.label(),
@@ -1964,11 +1979,118 @@ fn story_skeleton(xml: &str, spans: &[Range<usize>]) -> String {
     skeleton
 }
 
-fn owner_start_signature(xml: &str) -> Result<String> {
-    let end = xml
-        .find('>')
-        .ok_or_else(|| Error::Other("comparison owner has no start tag".to_owned()))?;
-    Ok(xml[..=end].to_owned())
+/// An owned story read so that two serializations of one tree compare equal:
+/// the part with each owner as one placeholder, then each owner, whose first
+/// token is its start tag.
+///
+/// Names resolve to their namespaces, attributes compare as a sorted set and
+/// an empty element reads as a start and an end. The XML declaration,
+/// comments, processing instructions, whitespace-only text, namespace
+/// declarations and Markup Compatibility attributes are left out. They say
+/// how the part is written, not what it holds, and the redline keeps the
+/// original bytes.
+fn canonical_owned_story(xml: &str, owner_local: &str) -> Result<(Vec<String>, Vec<Vec<String>>)> {
+    let scan_error = |error: &dyn std::fmt::Display| {
+        Error::Other(format!("comparison story shell scan failed: {error}"))
+    };
+    let mut reader = NsReader::from_reader(xml.as_bytes());
+    reader.config_mut().trim_text(false);
+    let mut skeleton = Vec::new();
+    let mut owners = Vec::<Vec<String>>::new();
+    let mut in_owner = false;
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| scan_error(&error))?;
+        let tokens = match (in_owner, owners.last_mut()) {
+            (true, Some(owner)) => owner,
+            _ => &mut skeleton,
+        };
+        let (element, empty) = match event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            Event::End(_) => {
+                tokens.push("end".to_owned());
+                depth = depth.saturating_sub(1);
+                in_owner &= depth > 1;
+                buffer.clear();
+                continue;
+            }
+            Event::Text(text) if !text.iter().all(u8::is_ascii_whitespace) => {
+                tokens.push(format!("text {:?}", String::from_utf8_lossy(&text)));
+                buffer.clear();
+                continue;
+            }
+            Event::CData(text) => {
+                tokens.push(format!("text {:?}", String::from_utf8_lossy(&text)));
+                buffer.clear();
+                continue;
+            }
+            Event::GeneralRef(reference) => {
+                tokens.push(format!(
+                    "reference {:?}",
+                    String::from_utf8_lossy(&reference)
+                ));
+                buffer.clear();
+                continue;
+            }
+            Event::Eof => break,
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        let resolver = reader.resolver();
+        let (namespace, local) = resolver.resolve_element(element.name());
+        let mut attributes = Vec::new();
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(|error| scan_error(&error))?;
+            let key = attribute.key.as_ref();
+            if key == b"xmlns" || key.starts_with(b"xmlns:") {
+                continue;
+            }
+            let (attribute_namespace, attribute_local) = resolver.resolve_attribute(attribute.key);
+            if matches!(
+                attribute_namespace,
+                ResolveResult::Bound(Namespace(uri)) if uri == oxml_core::xml::MC_NS.as_bytes()
+            ) {
+                continue;
+            }
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                .map_err(|error| scan_error(&error))?;
+            attributes.push(format!(
+                "{attribute_namespace:?} {:?} {value:?}",
+                String::from_utf8_lossy(attribute_local.as_ref())
+            ));
+        }
+        attributes.sort();
+        let start = format!(
+            "start {namespace:?} {:?} {attributes:?}",
+            String::from_utf8_lossy(local.as_ref())
+        );
+        let is_owner = depth == 1
+            && local.as_ref() == owner_local.as_bytes()
+            && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes());
+        let tokens = if is_owner {
+            skeleton.push("owner".to_owned());
+            in_owner = !empty;
+            owners.push(Vec::new());
+            owners.last_mut().expect("owner was just pushed")
+        } else {
+            tokens
+        };
+        tokens.push(start);
+        if empty {
+            tokens.push("end".to_owned());
+        } else {
+            depth += 1;
+        }
+        buffer.clear();
+    }
+    Ok((skeleton, owners))
 }
 
 fn normal_note_owner(xml: &str) -> Result<bool> {
@@ -2991,15 +3113,27 @@ fn compare_granular_paragraph(
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
+    let control_slots = |paragraph: &CT_P| {
+        paragraph
+            .content_controls
+            .iter()
+            .map(|(_, raw_before, markers_before, _)| (*raw_before, *markers_before))
+            .collect::<Vec<_>>()
+    };
+    let boundary_error = || {
+        Error::Other(format!(
+            "comparison cannot revise paragraph boundary structures at {location}"
+        ))
+    };
     if hyperlink_shells(original, metadata.options) != hyperlink_shells(edited, metadata.options)
         || (!metadata.options.ignore_comments && original.comment_ranges != edited.comment_ranges)
         || original.bookmark_markers != edited.bookmark_markers
-        || paragraph_control_boundaries(original) != paragraph_control_boundaries(edited)
+        || control_slots(original) != control_slots(edited)
     {
-        return Err(Error::Other(format!(
-            "comparison cannot revise paragraph boundary structures at {location}"
-        )));
+        return Err(boundary_error());
     }
+    let original_boundaries = shell_run_boundaries(original);
+    let edited_boundaries = shell_run_boundaries(edited);
 
     let original_run_signatures = original
         .runs
@@ -3011,8 +3145,9 @@ fn compare_granular_paragraph(
         .iter()
         .map(attributed_run_signature)
         .collect::<Vec<_>>();
-    if original_run_signatures == edited_run_signatures
-        && original.content_controls == edited.content_controls
+    // Runs that all match stay whole even when a control differs, so a
+    // control's metadata or content never moves run-indexed markers.
+    if original_run_signatures == edited_run_signatures && original_boundaries == edited_boundaries
     {
         let properties =
             paragraph_properties_xml(original, edited, location, metadata, diagnostics)?;
@@ -3046,11 +3181,22 @@ fn compare_granular_paragraph(
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-        return replace_paragraph_properties_and_runs(
+        let output = replace_paragraph_properties_and_runs(
             original,
             original_source,
             &properties,
             &replacements,
+        )?;
+        if original.content_controls == edited.content_controls {
+            return Ok(output);
+        }
+        return compare_granular_controls(
+            original,
+            edited,
+            &output,
+            location,
+            metadata,
+            diagnostics,
         );
     }
 
@@ -3066,7 +3212,23 @@ fn compare_granular_paragraph(
         .collect::<Vec<_>>();
 
     let properties = paragraph_properties_xml(original, edited, location, metadata, diagnostics)?;
-    let aligned = align(&original_signatures, &edited_signatures);
+    let Some(cuts) = shell_unit_cuts(
+        &original_units,
+        &edited_units,
+        original_boundaries.into_iter().zip(edited_boundaries),
+    ) else {
+        return Err(boundary_error());
+    };
+    let (aligned, segments) = align_between_shells(&original_signatures, &edited_signatures, &cuts);
+    // The original run each shell segment starts at, before which the
+    // redline copies the original bytes, shell tags included.
+    let segment_runs = std::iter::once(0)
+        .chain(cuts.iter().map(|&(cut, _)| {
+            original_units
+                .get(cut)
+                .map_or(original.runs.len(), |unit| unit.owner)
+        }))
+        .collect::<Vec<_>>();
     if !metadata.options.ignore_fields {
         validate_field_alignment(
             &aligned,
@@ -3091,10 +3253,12 @@ fn compare_granular_paragraph(
         &edited_signatures,
     );
     let mut grouped_alignment = Vec::with_capacity(grouped.len());
+    let mut grouped_segment_runs = Vec::with_capacity(grouped.len());
     let mut replacements = Vec::with_capacity(grouped.len());
     for (action, members) in grouped {
         let first = aligned[members.start];
         grouped_alignment.push(first);
+        grouped_segment_runs.push(segment_runs[segments[members.start]]);
         let left_indices = members
             .clone()
             .filter_map(|index| aligned[index].0)
@@ -3155,6 +3319,7 @@ fn compare_granular_paragraph(
         &original_units,
         &edited_units,
         &grouped_alignment,
+        &grouped_segment_runs,
         &replacements,
         &properties,
         location,
@@ -3163,13 +3328,15 @@ fn compare_granular_paragraph(
     )
 }
 
+/// The hyperlink owners without their place in the paragraph, which
+/// [`shell_unit_cuts`] follows through the unit alignment.
 fn hyperlink_shells(paragraph: &CT_P, options: &ComparisonOptions) -> Vec<String> {
     paragraph
         .hyperlinks
         .iter()
         .map(|link| {
             format!(
-                "{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{}:{}",
+                "{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
                 link.rel_id,
                 link.anchor,
                 link.tooltip,
@@ -3177,11 +3344,93 @@ fn hyperlink_shells(paragraph: &CT_P, options: &ComparisonOptions) -> Vec<String
                 link.extra_attributes,
                 hyperlink_raw_boundaries(paragraph, link, options),
                 link.preserved_raw_before,
-                policy_run_boundary(paragraph, link.run_start, options),
-                policy_run_boundary(paragraph, link.run_end, options)
             )
         })
         .collect()
+}
+
+/// The run boundaries of the shells that the attributed path keeps from the
+/// original: where each hyperlink starts and ends and where each inline
+/// control sits.
+fn shell_run_boundaries(paragraph: &CT_P) -> Vec<usize> {
+    paragraph
+        .hyperlinks
+        .iter()
+        .flat_map(|link| [link.run_start, link.run_end])
+        .chain(paragraph.content_controls.iter().map(|(at, ..)| *at))
+        .collect()
+}
+
+/// The `(original, edited)` unit indices where the shell boundaries fall, in
+/// document order, for `(original, edited)` run boundaries.
+///
+/// The units between two consecutive boundaries form a segment, and the
+/// redline copies the original bytes before the first run of a segment,
+/// shell tags included, before anything of that segment, so each boundary
+/// moves with the words inserted or deleted around it. `None` when the
+/// shells are not in the same order on both sides, or when the edited side
+/// writes a unit between two boundaries that fall between the same two
+/// original runs, because the original bytes there are not split. Ignorable
+/// and empty units are left out, as in the accept and reject postconditions.
+fn shell_unit_cuts(
+    original_units: &[AttributedRunUnit],
+    edited_units: &[AttributedRunUnit],
+    boundaries: impl IntoIterator<Item = (usize, usize)>,
+) -> Option<Vec<(usize, usize)>> {
+    let mut boundaries = boundaries.into_iter().collect::<Vec<_>>();
+    boundaries.sort_unstable();
+    if boundaries.windows(2).any(|pair| pair[0].1 > pair[1].1) {
+        return None;
+    }
+    let cuts = boundaries
+        .into_iter()
+        .map(|(original, edited)| {
+            (
+                original_units.partition_point(|unit| unit.owner < original),
+                edited_units.partition_point(|unit| unit.owner < edited),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut start = (0, 0);
+    cuts.iter()
+        .all(|&end| {
+            let writable = start.0 < end.0
+                || edited_units[start.1..end.1]
+                    .iter()
+                    .all(|unit| unit_is_ignorable(unit) || unit_is_empty(unit));
+            start = end;
+            writable
+        })
+        .then_some(cuts)
+}
+
+/// The unit alignment made segment by segment between the shell boundaries
+/// at `cuts`, so no unit is matched across a hyperlink or an inline control,
+/// and the segment of each pair.
+#[allow(clippy::type_complexity)]
+fn align_between_shells(
+    original: &[String],
+    edited: &[String],
+    cuts: &[(usize, usize)],
+) -> (Vec<(Option<usize>, Option<usize>)>, Vec<usize>) {
+    let mut aligned = Vec::with_capacity(original.len().max(edited.len()));
+    let mut segments = Vec::with_capacity(aligned.capacity());
+    let mut start = (0, 0);
+    for (segment, &end) in cuts
+        .iter()
+        .chain(std::iter::once(&(original.len(), edited.len())))
+        .enumerate()
+    {
+        for (left, right) in align(&original[start.0..end.0], &edited[start.1..end.1]) {
+            aligned.push((
+                left.map(|index| index + start.0),
+                right.map(|index| index + start.1),
+            ));
+            segments.push(segment);
+        }
+        start = end;
+    }
+    (aligned, segments)
 }
 
 fn hyperlink_raw_boundaries(
@@ -3363,6 +3612,7 @@ fn interleave_granular_paragraph(
     original_units: &[AttributedRunUnit],
     edited_units: &[AttributedRunUnit],
     aligned: &[(Option<usize>, Option<usize>)],
+    segment_runs: &[usize],
     replacements: &[String],
     properties: &str,
     location: &str,
@@ -3386,14 +3636,20 @@ fn interleave_granular_paragraph(
         (None, true) => {}
     }
     let spans = modeled_paragraph_run_spans(original, &source)?;
-    if spans.len() != original.runs.len() || aligned.len() != replacements.len() {
+    if spans.len() != original.runs.len()
+        || aligned.len() != replacements.len()
+        || aligned.len() != segment_runs.len()
+    {
         return Err(Error::Other(format!(
             "comparison could not correlate granular run owners at {location}"
         )));
     }
-    let insertion_boundary = spans
-        .first()
-        .map_or_else(|| paragraph_close_start(&source), |span| Ok(span.start))?;
+    let run_start = |run: usize| {
+        spans
+            .get(run)
+            .map_or_else(|| paragraph_close_start(&source), |span| Ok(span.start))
+    };
+    let insertion_boundary = run_start(0)?;
     let mut output = source[..insertion_boundary].to_owned();
     let mut cursor = insertion_boundary;
     let mut consumed_owner = None;
@@ -3405,7 +3661,16 @@ fn interleave_granular_paragraph(
     for unit in edited_units {
         edited_owner_units[unit.owner] += 1;
     }
-    for ((left, right), replacement) in aligned.iter().zip(replacements) {
+    for (((left, right), replacement), &segment_run) in
+        aligned.iter().zip(replacements).zip(segment_runs)
+    {
+        // Text inserted at the start of a shell segment comes after the
+        // shell tags that open it.
+        let segment_start = run_start(segment_run)?;
+        if segment_start > cursor {
+            output.push_str(&source[cursor..segment_start]);
+            cursor = segment_start;
+        }
         let mut exact_run = None;
         if let Some(unit) = left.map(|index| &original_units[index])
             && consumed_owner != Some(unit.owner)
@@ -3425,8 +3690,20 @@ fn interleave_granular_paragraph(
         output.push_str(exact_run.unwrap_or(replacement));
     }
     output.push_str(&source[cursor..]);
+    compare_granular_controls(original, edited, &output, location, metadata, diagnostics)
+}
 
-    let control_spans = direct_word_element_spans(&output, "sdt")?;
+/// Compare the inline controls of a paragraph whose revised runs are in
+/// `output`, which still holds the original controls.
+fn compare_granular_controls(
+    original: &CT_P,
+    edited: &CT_P,
+    output: &str,
+    location: &str,
+    metadata: &mut Metadata<'_>,
+    diagnostics: &mut Vec<ComparisonDiagnostic>,
+) -> Result<String> {
+    let control_spans = direct_word_element_spans(output, "sdt")?;
     if control_spans.len() != original.content_controls.len() {
         return Err(Error::Other(format!(
             "comparison could not correlate granular content controls at {location}"
@@ -3448,7 +3725,7 @@ fn interleave_granular_paragraph(
             &output[control_spans[index].clone()],
         )?);
     }
-    replace_direct_word_elements(&output, "sdt", &control_replacements)
+    replace_direct_word_elements(output, "sdt", &control_replacements)
 }
 
 fn attributed_run_units(runs: &[CT_R], options: &ComparisonOptions) -> Vec<AttributedRunUnit> {
@@ -4575,6 +4852,7 @@ fn compare_control_from_xml(
             "comparison cannot revise content-control properties at {location}"
         )));
     }
+    control_metadata_diagnostics(original, edited, location, diagnostics)?;
     let original_content = modeled_control_content(original);
     let edited_content = modeled_control_content(edited);
     let direct_run_or_raw =
@@ -5151,9 +5429,22 @@ fn tracked_field_result(
     Ok(format!("{deleted}{inserted}"))
 }
 
+/// Rename each `w:t` element to `w:delText`, and no other element whose
+/// name starts the same way, such as `w:tab`.
 fn deleted_text_xml(xml: &str) -> String {
-    xml.replace("<w:t", "<w:delText")
-        .replace("</w:t>", "</w:delText>")
+    let mut output = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(at) = rest.find("w:t") {
+        let (before, after) = rest.split_at(at);
+        let after = &after["w:t".len()..];
+        let is_tag = (before.ends_with('<') || before.ends_with("</"))
+            && after.starts_with(|next: char| matches!(next, '>' | '/') || next.is_whitespace());
+        output.push_str(before);
+        output.push_str(if is_tag { "w:delText" } else { "w:t" });
+        rest = after;
+    }
+    output.push_str(rest);
+    output
 }
 
 fn complex_field_result(xml: &str) -> Result<(String, String, String)> {
@@ -5600,25 +5891,125 @@ fn control_signature(control: &CT_Sdt) -> String {
     )
 }
 
-/// The content-control properties that alignment, refusal and the accept and
-/// reject postconditions compare.
+/// The content-control properties that decide what a control holds, its type
+/// and data binding, which alignment, refusal and the accept and reject
+/// postconditions compare.
 ///
-/// `w:id` is left out. Producers renumber it on save and it carries no
-/// content, so a pair that differs only by it keeps the original's `w:sdtPr`.
-/// A `w:sdtPr` with none of these properties reads like no `w:sdtPr`.
+/// `w:id` is left out because producers renumber it on save, and the
+/// [`CONTROL_METADATA`] because a difference there is reported as a
+/// diagnostic. A pair that differs only by those keeps the original's
+/// `w:sdtPr`. A `w:sdtPr` with neither property reads like no `w:sdtPr`.
 fn control_property_signature(control: &CT_Sdt) -> ControlPropertySignature<'_> {
     control
         .properties
         .as_ref()
-        .map(|properties| {
-            (
-                properties.alias.as_deref(),
-                properties.tag.as_deref(),
-                properties.control_type,
-                properties.data_binding.as_ref(),
-            )
-        })
-        .filter(|signature| !matches!(signature, (None, None, None, None)))
+        .map(|properties| (properties.control_type, properties.data_binding.as_ref()))
+        .filter(|signature| !matches!(signature, (None, None)))
+}
+
+/// Report each [`CONTROL_METADATA`] property that differs between the two
+/// controls. The redline keeps the original `w:sdtPr`.
+fn control_metadata_diagnostics(
+    original: &CT_Sdt,
+    edited: &CT_Sdt,
+    location: &str,
+    diagnostics: &mut Vec<ComparisonDiagnostic>,
+) -> Result<()> {
+    if original.properties == edited.properties {
+        return Ok(());
+    }
+    let edited_values = control_metadata(edited)?;
+    for ((name, original_value), edited_value) in CONTROL_METADATA
+        .iter()
+        .zip(control_metadata(original)?)
+        .zip(edited_values)
+    {
+        if original_value != edited_value {
+            diagnostics.push(ComparisonDiagnostic {
+                location: location.to_owned(),
+                message: format!(
+                    "content-control {name} differs and the original {name} was retained"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The [`CONTROL_METADATA`] values of a control, in that order.
+///
+/// The lock, placeholder and gallery are kept as raw `w:sdtPr` children, so
+/// they are read from the serialized properties by local name.
+fn control_metadata(control: &CT_Sdt) -> Result<[Option<String>; 5]> {
+    let Some(properties) = &control.properties else {
+        return Ok(Default::default());
+    };
+    let mut values = [
+        properties.tag.clone(),
+        properties.alias.clone(),
+        None,
+        None,
+        None,
+    ];
+    let mut shell = control.clone();
+    shell.content.clear();
+    let xml = control_xml(&shell)?;
+    let mut reader = Reader::from_str(&xml);
+    let mut path = Vec::<Vec<u8>>::new();
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("comparison content-control scan failed: {error}"))
+        })?;
+        let (element, empty) = match event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            Event::End(_) => {
+                path.pop();
+                buffer.clear();
+                continue;
+            }
+            Event::Eof => break,
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        let local = element.local_name().as_ref().to_vec();
+        let parents = path.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let slot = match (parents.as_slice(), local.as_slice()) {
+            ([b"sdt", b"sdtPr"], b"lock") => Some(2),
+            ([b"sdt", b"sdtPr", b"placeholder"], b"docPart") => Some(3),
+            ([b"sdt", b"sdtPr", b"docPartObj" | b"docPartList"], b"docPartGallery") => Some(4),
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            let mut value = String::new();
+            for attribute in element.attributes() {
+                let attribute = attribute.map_err(|error| {
+                    Error::Other(format!(
+                        "comparison content-control attribute failed: {error}"
+                    ))
+                })?;
+                if attribute.key.local_name().as_ref() == b"val" {
+                    value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                        .map_err(|error| {
+                            Error::Other(format!(
+                                "comparison content-control value failed: {error}"
+                            ))
+                        })?
+                        .into_owned();
+                }
+            }
+            values[slot] = Some(value);
+        }
+        if !empty {
+            path.push(local);
+        }
+        buffer.clear();
+    }
+    Ok(values)
 }
 
 fn modeled_control_content(control: &CT_Sdt) -> Vec<&SdtContent> {
@@ -6421,8 +6812,8 @@ fn utf8_error(error: impl std::fmt::Display) -> Error {
 mod tests {
     use super::{
         ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING,
-        attributed_run_units, comparison_postcondition_error, complex_field_result, story_document,
-        word_fragments,
+        attributed_run_units, canonical_owned_story, comparison_postcondition_error,
+        complex_field_result, deleted_text_xml, story_document, word_fragments,
     };
     use crate::Document;
     use rdocx_oxml::document::BodyContent;
@@ -6542,6 +6933,37 @@ mod tests {
                 (expected.0, String::new(), expected.2)
             );
         }
+    }
+
+    #[test]
+    fn only_text_elements_become_deleted_text() {
+        assert_eq!(
+            deleted_text_xml(
+                r#"<w:r><w:t>a</w:t><w:tab/><w:t xml:space="preserve"> b </w:t><w:t/><w:br w:type="page"/></w:r><w:ffData><w:textInput><w:maxLength w:val="4"/></w:textInput></w:ffData>"#
+            ),
+            r#"<w:r><w:delText>a</w:delText><w:tab/><w:delText xml:space="preserve"> b </w:delText><w:delText/><w:br w:type="page"/></w:r><w:ffData><w:textInput><w:maxLength w:val="4"/></w:textInput></w:ffData>"#
+        );
+    }
+
+    #[test]
+    fn an_owned_story_shell_reads_the_same_in_every_serialization() {
+        let compatibility = oxml_core::xml::MC_NS;
+        let word = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:mc="{compatibility}" xmlns:w="{W_NS}" mc:Ignorable="w14"><w:comment w:id="0" w:author="Ada"><w:p/></w:comment>
+</w:comments>"#
+        );
+        let other = |author: &str| {
+            format!(
+                r#"<q:comments xmlns:q="{W_NS}"><!-- kept --><q:comment q:author="{author}" q:id="0"><q:p></q:p></q:comment></q:comments>"#
+            )
+        };
+        let canonical = |xml: &str| canonical_owned_story(xml, "comment").unwrap();
+        assert_eq!(canonical(&word), canonical(&other("Ada")));
+        let (skeleton, owners) = canonical(&word);
+        assert_eq!(skeleton.iter().filter(|token| *token == "owner").count(), 1);
+        assert_eq!(owners.len(), 1);
+        assert_ne!(canonical(&word), canonical(&other("Bob")));
     }
 
     #[test]

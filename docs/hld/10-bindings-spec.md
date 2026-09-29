@@ -1421,11 +1421,17 @@ the resulting document when they save it.
 
 Native callers generate tracked changes with `Document::compare`, supplying an
 edited document, author, and RFC 3339 timestamp. The additive
-`ComparisonDiagnostic` value reports stable formatting-only locations and
-messages without turning those differences into revisions. Comparison rejects
-existing modeled revisions and unsupported structural shell differences, and
-it commits only after accepting and rejecting staged copies reproduce their
-respective package-wide modeled baselines. `Document::compare` keeps its
+`ComparisonDiagnostic` value reports stable locations and messages for
+differences that stay out of the revisions, and the redline keeps the
+original for each. A message starts with a stable prefix,
+`formatting differs` for unsupported formatting and
+`content-control <name> differs` for a content control's metadata, where
+`<name>` is `tag`, `alias`, `lock`, `placeholder`, or `docPartGallery`.
+Comparison rejects existing modeled
+revisions and unsupported structural shell differences, a content control's
+type or data binding included, and it commits only after accepting and
+rejecting staged copies reproduce their respective package-wide modeled
+baselines. `Document::compare` keeps its
 source-compatible whole-run default and delegates to the additive
 `compare_with_options` method. The concrete `ComparisonOptions` value selects
 `Run`, `Word`, or `Character` granularity and left-biased ignores for
