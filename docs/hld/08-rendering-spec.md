@@ -297,6 +297,31 @@ with no visible difference and no failing test.
 Two writes of one document cannot detect that, since they reuse the same map
 instances. The regression builds two documents and compares their bytes.
 
+**The text layer follows what each glyph draws.** A `GlyphRun` carries its
+glyphs and its text but not the shaper's clusters, and a ligature draws several
+characters with one glyph, so pairing them by index shifts every later glyph.
+The writer reads the pairing from the font instead. A glyph draws the next
+character when the cmap gives it that character, and the next few when a GSUB
+ligature joins their glyphs into it, so the Carlito `ti` or `ffi` of a Calibri
+document extracts as its characters. Glyphs the font explains neither way share
+the characters up to the next glyph it does explain, looked for within 16
+glyphs and characters. When there is none, an unexplained glyph takes one
+character by position, which keeps the pairing linear in a run the font
+explains nowhere. A plain run has no `ActualText`, so there a glyph that draws
+none of its group's characters by itself adds no ToUnicode text rather than
+repeat a character another glyph carries, and neither does a glyph left after
+the run's last character. A rich run's clusters give their characters to their
+glyphs the same way, so no character of a cluster is lost. In a rich run, a
+glyph that draws none of them by itself, such as the dots an Arabic font draws
+apart from their letter, repeats the text of its cluster, which the run's
+`ActualText` covers, so every glyph of a rich run maps to Unicode. The
+ToUnicode CMap holds one entry per glyph for the whole font, so a glyph that
+draws different text in different places keeps its strongest pairing, a GSUB
+ligature first, then the cmap, then an inferred pairing. The ligature comes
+first because one glyph can be both, as the Carlito `fi` ligature and U+FB01
+are, and one literal U+FB01 must not turn every `fi` of the document into
+U+FB01.
+
 When `LayoutResult::structure` is present, the writer emits deterministic
 `BDC` and `EMC` pairs with page-local MCIDs, `/StructParents`, one parent number
 tree, `/StructTreeRoot`, `/MarkInfo`, an undetermined `/Lang`, and accessible
