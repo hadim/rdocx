@@ -7,7 +7,7 @@ and produces fixed or flow output without an Office host.
 ## Capabilities
 
 - Human-readable or JSON structure and metadata inspection.
-- Plain text or schema-1 rich accepted-view extraction with typed nested paths.
+- Accepted-view plain text or schema-1 rich extraction with typed nested paths.
 - Deterministic point-space body layout fragments for shell automation.
 - PDF, HTML, Markdown, PNG, JPEG, and multi-page TIFF conversion.
 - Page-range rendering, guarded literal replacement, diffing, and validation
@@ -65,6 +65,9 @@ across every supported story and accept at most one selector: `--id`,
 Omitting a selector resolves all modeled revisions. Every mutation, comparison,
 and TOC rebuild requires `-o/--output`, publishes only a complete validated
 DOCX, and supports a schema-1 record through `--json`.
+
+`text` prints the accepted view, like `text --json`: tracked insertions are
+included and tracked deletions are left out.
 
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,

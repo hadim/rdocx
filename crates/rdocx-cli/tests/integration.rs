@@ -77,35 +77,40 @@ fn write_revision_fixture(path: &Path) {
     paragraph.add_run("Charlie");
     document.save(path).unwrap();
 
-    let mut package = OpcPackage::open(path).unwrap();
-    let part = package.main_document_part().unwrap();
-    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
     let revisions = [
         ("Alpha", 10, "Alice", "2026-01-01T00:00:00Z"),
         ("Bravo", 20, "Bob", "2026-01-02T00:00:00Z"),
         ("Charlie", 30, "Alice", "2026-01-03T00:00:00Z"),
     ];
-    let mut xml = xml;
     for (text, id, author, timestamp) in revisions {
-        let marker = format!(">{text}</w:t>");
-        let text_position = xml.find(&marker).expect("fixture text is present");
-        let run_start = xml[..text_position]
-            .rfind("<w:r")
-            .expect("fixture run starts before text");
-        let run_end = text_position
-            + xml[text_position..]
-                .find("</w:r>")
-                .expect("fixture run ends after text")
-            + "</w:r>".len();
-        let run = xml[run_start..run_end].to_owned();
-        let revision = format!(
-            "<w:ins w:id=\"{id}\" w:author=\"{author}\" w:date=\"{timestamp}\">{run}</w:ins>"
-        );
-        xml.replace_range(run_start..run_end, &revision);
+        rewrite_run(path, text, |run| {
+            format!(
+                "<w:ins w:id=\"{id}\" w:author=\"{author}\" w:date=\"{timestamp}\">{run}</w:ins>"
+            )
+        });
     }
+    assert_eq!(Document::open(path).unwrap().revisions().len(), 3);
+}
+
+/// Replace the main-story run whose text is exactly `text` with `rewrite(run)`.
+fn rewrite_run(path: &Path, text: &str, rewrite: impl FnOnce(&str) -> String) {
+    let mut package = OpcPackage::open(path).unwrap();
+    let part = package.main_document_part().unwrap();
+    let mut xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    let marker = format!(">{text}</w:t>");
+    let text_position = xml.find(&marker).expect("fixture text is present");
+    let run_start = xml[..text_position]
+        .rfind("<w:r")
+        .expect("fixture run starts before text");
+    let run_end = text_position
+        + xml[text_position..]
+            .find("</w:r>")
+            .expect("fixture run ends after text")
+        + "</w:r>".len();
+    let replacement = rewrite(&xml[run_start..run_end]);
+    xml.replace_range(run_start..run_end, &replacement);
     package.set_part(&part, xml.into_bytes());
     package.save(path).unwrap();
-    assert_eq!(Document::open(path).unwrap().revisions().len(), 3);
 }
 
 fn path_text(path: &Path) -> &str {
@@ -175,6 +180,55 @@ fn text_prints_body_and_table_content_in_document_order() {
         String::from_utf8(output.stdout).unwrap(),
         "Body first\nLeft cell\tRight cell\t\nBody second\n"
     );
+}
+
+#[test]
+fn plain_text_prints_the_accepted_view_of_tracked_changes() {
+    let temp = TempWorkspace::new("text-tracked");
+    let input = temp.path.join("tracked.docx");
+    let mut document = fixture_document(&[]);
+    {
+        let mut paragraph = document.add_paragraph("");
+        paragraph.add_run("Tracked: ");
+        paragraph.add_run("ins NEEDLE");
+        paragraph.add_run("gone");
+    }
+    {
+        let mut table = document.add_table(1, 1);
+        table.cell(0, 0).unwrap().set_text("cell NEEDLE");
+    }
+    document.save(&input).unwrap();
+    rewrite_run(&input, "ins NEEDLE", |run| {
+        format!(r#"<w:ins w:id="1" w:author="Ada" w:date="2026-09-29T08:00:00Z">{run}</w:ins>"#)
+    });
+    rewrite_run(&input, "gone", |run| {
+        let run = run
+            .replace("<w:t", "<w:delText")
+            .replace("</w:t>", "</w:delText>");
+        format!(r#"<w:del w:id="2" w:author="Ada" w:date="2026-09-29T08:00:00Z">{run}</w:del>"#)
+    });
+    rewrite_run(&input, "cell NEEDLE", |run| {
+        format!(r#"<w:ins w:id="3" w:author="Ada" w:date="2026-09-29T08:00:00Z">{run}</w:ins>"#)
+    });
+    assert_eq!(Document::open(&input).unwrap().revisions().len(), 3);
+
+    let plain = cli(&["text", path_text(&input)]);
+    assert_success(&plain, "plain text");
+    assert_eq!(
+        String::from_utf8(plain.stdout).unwrap(),
+        "Tracked: ins NEEDLE\ncell NEEDLE\t\n"
+    );
+
+    let structured = cli(&["text", path_text(&input), "--json"]);
+    assert_success(&structured, "structured text");
+    let value: serde_json::Value = serde_json::from_slice(&structured.stdout).unwrap();
+    let texts = value["paragraphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|paragraph| paragraph["text"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["Tracked: ins NEEDLE", "cell NEEDLE"]);
 }
 
 #[test]

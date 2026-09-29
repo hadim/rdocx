@@ -14633,12 +14633,16 @@ impl Document {
     }
 
     /// Get the plain text of body paragraphs and table cells in document order.
+    ///
+    /// Each paragraph contributes its accepted-view text, the same text as
+    /// [`ParagraphRef::text`]: tracked insertions are included and tracked
+    /// deletions are left out.
     pub fn text(&self) -> String {
         let mut result = String::new();
         for content in &self.document.body.content {
             match content {
                 BodyContent::Paragraph(paragraph) => {
-                    result.push_str(&paragraph.text());
+                    result.push_str(&ParagraphRef { inner: paragraph }.text());
                     result.push('\n');
                 }
                 BodyContent::Table(table) => {
@@ -14646,7 +14650,7 @@ impl Document {
                         for cell in &row.cells {
                             for content in &cell.content {
                                 if let CellContent::Paragraph(paragraph) = content {
-                                    result.push_str(&paragraph.text());
+                                    result.push_str(&ParagraphRef { inner: paragraph }.text());
                                     result.push('\t');
                                 }
                             }

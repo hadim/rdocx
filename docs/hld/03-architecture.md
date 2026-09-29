@@ -1358,6 +1358,8 @@ both `MathArgument` and `String`. No wrapper, trait, feature flag, or binding
 surface is introduced.
 
 `Document::text` traverses body paragraphs and table cells in document order.
+Each paragraph contributes the same accepted-view text as paragraph text, so
+tracked insertions are included and tracked deletions are left out.
 The WASM binding uses that additive facade accessor for its existing `getText`
 method and otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.

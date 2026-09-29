@@ -14890,6 +14890,18 @@ fn hyperlink_nested_revisions_resolve_inside_out_when_scoped() {
 }
 
 #[test]
+fn document_text_reports_the_accepted_view_of_tracked_changes() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t xml:space="preserve">Tracked: </w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t>ins NEEDLE</w:t></w:r></w:ins><w:del w:id="2" w:author="Ada"><w:r><w:delText>gone</w:delText></w:r></w:del></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t xml:space="preserve">cell </w:t></w:r><w:ins w:id="3" w:author="Ada"><w:r><w:t>added</w:t></w:r></w:ins></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let document = document_with_content_controls(&xml);
+
+    assert_eq!(document.revisions().len(), 3);
+    assert_eq!(document.paragraph(0).unwrap().text(), "Tracked: ins NEEDLE");
+    assert_eq!(document.text(), "Tracked: ins NEEDLE\ncell added\t\n");
+}
+
+#[test]
 fn targetless_revision_only_hyperlinks_keep_sibling_order_when_resolved() {
     let xml = wrap_word_body(
         r#"<w:p><w:hyperlink><w:ins w:id="21" w:author="Ada"><w:r><w:t>H</w:t></w:r></w:ins></w:hyperlink><w:del w:id="22" w:author="Ben"><w:r><w:delText>B</w:delText></w:r></w:del><w:ins w:id="23" w:author="Cy"><w:r><w:t>C</w:t></w:r></w:ins><w:hyperlink><w:del w:id="24" w:author="Dee"><w:r><w:delText>D</w:delText></w:r></w:del></w:hyperlink></w:p>"#,
