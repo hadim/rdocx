@@ -16261,7 +16261,8 @@ mod text_box_replacement_keeps_every_child {
 /// `mc:AlternateContent`, so such a text box was no story, and replacement
 /// edited both copies and counted every match twice.
 mod text_boxes_word_writes_twice {
-    use rdocx::{Document, StoryItemKind, StoryKind};
+    use quick_xml::events::Event;
+    use rdocx::{Document, StoryId, StoryItemKind, StoryKind};
     use rdocx_oxml::namespace::W_NS;
 
     const WPS_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
@@ -16319,15 +16320,20 @@ mod text_boxes_word_writes_twice {
             .collect()
     }
 
-    fn text_box_items(document: &Document) -> Vec<(StoryItemKind, Option<String>, Vec<u8>)> {
+    /// The one text-box story of the document.
+    fn text_box_story(document: &Document) -> StoryId {
         let stories = document.stories().unwrap();
         let text_boxes = stories
             .iter()
             .filter(|story| story.kind() == StoryKind::TextBox)
             .collect::<Vec<_>>();
         assert_eq!(text_boxes.len(), 1, "{stories:?}");
+        text_boxes[0].clone()
+    }
+
+    fn text_box_items(document: &Document) -> Vec<(StoryItemKind, Option<String>, Vec<u8>)> {
         document
-            .story_items(text_boxes[0])
+            .story_items(&text_box_story(document))
             .unwrap()
             .iter()
             .map(|item| {
@@ -16371,6 +16377,34 @@ mod text_boxes_word_writes_twice {
         let start = saved.find("<mc:AlternateContent").unwrap();
         let end = saved.find("</mc:AlternateContent>").unwrap();
         saved[start..end + "</mc:AlternateContent>".len()].to_owned()
+    }
+
+    /// The text of every `w:txbxContent` of the saved main part, in order.
+    fn saved_text_box_texts(document: &mut Document) -> Vec<String> {
+        let saved = super::document_xml(document);
+        let mut reader = quick_xml::Reader::from_str(&saved);
+        let mut texts = Vec::new();
+        let (mut in_text_box, mut in_text) = (false, false);
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(element) => match element.local_name().as_ref() {
+                    b"txbxContent" => {
+                        in_text_box = true;
+                        texts.push(String::new());
+                    }
+                    local_name => in_text = in_text_box && local_name == b"t",
+                },
+                Event::End(element) => {
+                    in_text = false;
+                    in_text_box &= element.local_name().as_ref() != b"txbxContent";
+                }
+                Event::Text(text) if in_text => {
+                    texts.last_mut().unwrap().push_str(&text.decode().unwrap());
+                }
+                Event::Eof => return texts,
+                _ => {}
+            }
+        }
     }
 
     /// A replacement entry point, returning its count.
@@ -16425,12 +16459,13 @@ mod text_boxes_word_writes_twice {
     }
 
     /// Word never writes a Fallback whose text box is not a copy of the
-    /// Choice. Such a Fallback, one that replacement would change more or
-    /// fewer times than the Choice, keeps its bytes, and the count is the
+    /// Choice. Such a Fallback is edited all the same, and the count is the
     /// Choice's.
     #[test]
-    fn a_fallback_that_is_no_copy_of_its_choice_keeps_its_bytes() {
-        for fallback in ["Old NEEDLE NEEDLE", "Old text"] {
+    fn a_fallback_that_is_no_copy_of_its_choice_is_edited_without_being_counted() {
+        for (fallback, expected_fallback) in
+            [("Old NEEDLE NEEDLE", "Old X X"), ("Old text", "Old text")]
+        {
             let mut document = document_with_shape(&alternate_content(
                 &drawing_text_box("Box NEEDLE"),
                 &vml_text_box(fallback),
@@ -16440,9 +16475,126 @@ mod text_boxes_word_writes_twice {
 
             assert_eq!(
                 saved_text_boxes(&mut document),
-                alternate_content(&drawing_text_box("Box X"), &vml_text_box(fallback))
+                alternate_content(&drawing_text_box("Box X"), &vml_text_box(expected_fallback))
             );
         }
+    }
+
+    /// A story edit changes the Choice only, so the Fallback keeps the text
+    /// it had. A later replacement still reaches that Fallback, and counts
+    /// the matches of the Choice alone.
+    #[test]
+    fn a_replacement_after_a_story_edit_reaches_the_fallback() {
+        let mut document = word_text_box_document("Box NEEDLE");
+        let paragraph = super::f254_item(&document, &text_box_story(&document), 0);
+        document.set_story_text(&paragraph, "Edited text").unwrap();
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["Edited text", "Box NEEDLE"]
+        );
+
+        assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 0);
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["Edited text", "Box X"]
+        );
+
+        let mut document = word_text_box_document("Box NEEDLE");
+        let mut paragraph = rdocx_oxml::text::CT_P::new();
+        paragraph.add_run("Second NEEDLE");
+        document
+            .insert_content(
+                &rdocx::ContentLocation::end(text_box_story(&document)),
+                rdocx::ContentFragment::paragraph(paragraph).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["Box NEEDLESecond NEEDLE", "Box NEEDLE"]
+        );
+
+        assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 2);
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["Box XSecond X", "Box X"]
+        );
+    }
+
+    /// A text box that `add_text_box_to_story` authors has the same two
+    /// copies, and a replacement after a story edit reaches its Fallback too.
+    #[test]
+    fn a_replacement_after_a_story_edit_reaches_an_authored_fallback() {
+        let mut document = Document::new();
+        document.add_paragraph("Host");
+        let body = super::f254_story(&document, StoryKind::Body);
+        let zero = rdocx::Length::pt(0.0);
+        let options = rdocx::TextBoxOptions {
+            width: rdocx::Length::pt(144.0),
+            height: rdocx::Length::pt(54.0),
+            anchor: rdocx::PictureAnchor {
+                horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                horizontal_offset: zero,
+                horizontal_alignment: None,
+                vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                vertical_offset: zero,
+                vertical_alignment: None,
+                wrap: rdocx::DrawingWrap::TopAndBottom,
+                distance_top: zero,
+                distance_bottom: zero,
+                distance_left: zero,
+                distance_right: zero,
+                relative_height: 1,
+                behind_text: false,
+            },
+            rotation_degrees: 0.0,
+            text_direction: rdocx::TextBoxDirection::Horizontal,
+            fill_color: None,
+        };
+        document
+            .add_text_box_to_story(&body, "Hello NEEDLE", options)
+            .unwrap();
+        let paragraph = super::f254_item(&document, &text_box_story(&document), 0);
+        document.set_story_text(&paragraph, "Edited").unwrap();
+
+        assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 0);
+        assert_eq!(saved_text_box_texts(&mut document), ["Edited", "Hello X"]);
+    }
+
+    /// With several Choice branches, the text box is read from the first one
+    /// that holds one, as layout draws the first Choice drawing. A later
+    /// Choice is a copy, edited as the Fallback is, and neither listed nor
+    /// counted.
+    #[test]
+    fn the_first_choice_that_holds_a_text_box_is_read_and_counted() {
+        let mut document = document_with_shape(&format!(
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:w16x="urn:unknown:w16x" xmlns:wps="{WPS_NS}" Requires="w16x">{}</mc:Choice><mc:Choice xmlns:wps="{WPS_NS}" Requires="wps">{}</mc:Choice><mc:Fallback>{}</mc:Fallback></mc:AlternateContent>"#,
+            drawing_text_box("First NEEDLE"),
+            drawing_text_box("Second NEEDLE")
+                .replace("Box 10\"", "Box 11\"")
+                .replace("id=\"10\"", "id=\"11\""),
+            vml_text_box("Box NEEDLE"),
+        ));
+
+        assert_eq!(
+            story_items(&document),
+            [
+                (
+                    StoryKind::Body,
+                    StoryItemKind::Paragraph,
+                    Some("Anchor paragraph".to_owned())
+                ),
+                (
+                    StoryKind::TextBox,
+                    StoryItemKind::Paragraph,
+                    Some("First NEEDLE".to_owned())
+                ),
+            ]
+        );
+        assert_eq!(document.try_replace_text("NEEDLE", "X").unwrap(), 1);
+        assert_eq!(
+            saved_text_box_texts(&mut document),
+            ["First X", "Second X", "Box X"]
+        );
     }
 
     /// When the Choice holds no text box, a picture here, the text box of the

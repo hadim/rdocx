@@ -5419,8 +5419,9 @@ fn modeled_story_child(
             parent.local_name == b"textbox" && local_name == b"txbxContent"
         }
         // Word writes a text box twice in a run, as DrawingML in `mc:Choice` and
-        // as VML in `mc:Fallback`. The Choice is read and the Fallback stays
-        // opaque, so the text box is one story.
+        // as VML in `mc:Fallback`. One Choice is read, see
+        // `modeled_story_event`, and the Fallback stays opaque, so the text box
+        // is one story.
         (StoryNamespace::Word, StoryNamespace::MarkupCompatibility) => {
             parent.local_name == b"r" && local_name == b"AlternateContent"
         }
@@ -6946,6 +6947,18 @@ fn modeled_story_event(
     if !modeled_story_child(stack, namespace, local_name) {
         return Ok(false);
     }
+    if namespace == StoryNamespace::MarkupCompatibility && local_name == b"Choice" {
+        // The text box is read from the first Choice that holds one, as layout
+        // draws the first Choice drawing. Any other Choice stays opaque, as the
+        // Fallback does.
+        let Some(alternate) = stack.last() else {
+            return Ok(false);
+        };
+        let Some(text_box) = first_text_box_start(xml, alternate.full_start)? else {
+            return Ok(false);
+        };
+        return Ok(!empty && before < text_box && text_box < story_element_end(xml, before)?);
+    }
     if namespace != StoryNamespace::Word {
         return Ok(true);
     }
@@ -6984,6 +6997,42 @@ fn modeled_story_event(
         return Ok(false);
     }
     Ok(true)
+}
+
+/// Where the first `txbxContent` element inside the element that starts at
+/// `start` begins, whatever its prefix.
+fn first_text_box_start(xml: &[u8], start: usize) -> Result<Option<usize>> {
+    let fragment = xml
+        .get(start..)
+        .ok_or_else(|| Error::Other("story element begins outside its source part".to_owned()))?;
+    let mut reader = quick_xml::Reader::from_reader(fragment);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let before = start + reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story text box scan failed: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element)
+                if depth > 0 && element.local_name().as_ref() == b"txbxContent" =>
+            {
+                return Ok(Some(before));
+            }
+            Event::Start(_) => depth += 1,
+            Event::Empty(_) if depth == 0 => return Ok(None),
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(None);
+                }
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn opaque_story_event(
@@ -21535,23 +21584,27 @@ impl Document {
     /// Apply a regex replacement to the text-box content of the raw XML parts.
     fn replace_regex_in_xml_parts(&mut self, re: &regex::Regex, replacement: &str) -> usize {
         let mut count = 0;
+        let mut changed = false;
 
         for (part_name, _) in self.text_bearing_part_names() {
             let Some(xml) = self.package.get_part(&part_name).map(<[u8]>::to_vec) else {
                 continue;
             };
+            // A part can change without a count, when a replacement reaches
+            // only the uncounted copy of a text box that Word writes twice.
             if let Ok((new_xml, n)) =
                 rdocx_oxml::placeholder::replace_regex_in_xml_part(&xml, re, replacement)
-                && n > 0
+                && (n > 0 || new_xml != xml)
             {
                 self.package.set_part(&part_name, new_xml);
                 count += n;
+                changed = true;
             }
         }
 
         // Re-parse so the in-memory model reflects the edited markup; otherwise
         // the next flush would write the pre-replacement document back out.
-        if count > 0
+        if changed
             && let Some(doc_xml) = self.package.get_part(&self.doc_part_name)
             && let Ok(doc) = CT_Document::from_xml(doc_xml)
         {
@@ -21650,16 +21703,21 @@ impl Document {
         use rdocx_oxml::placeholder::{replace_many_in_chart_xml, replace_many_in_xml_part};
 
         let mut count = 0;
+        let mut changed = false;
 
         // Collect part names for XML parts to process (text boxes/shapes)
         for (part_name, _) in self.raw_text_bearing_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
                 let xml = xml.to_vec();
+                // A part can change without a count, when a replacement
+                // reaches only the uncounted copy of a text box that Word
+                // writes twice.
                 if let Ok((new_xml, n)) = replace_many_in_xml_part(&xml, pairs)
-                    && n > 0
+                    && (n > 0 || new_xml != xml)
                 {
                     self.package.set_part(&part_name, new_xml);
                     count += n;
+                    changed = true;
                 }
             }
         }
@@ -21673,12 +21731,13 @@ impl Document {
                 {
                     self.package.set_part(&part_name, new_xml);
                     count += n;
+                    changed = true;
                 }
             }
         }
 
         // Re-parse document from the (possibly modified) package XML
-        if count > 0
+        if changed
             && let Some(doc_xml) = self.package.get_part(&self.doc_part_name)
             && let Ok(doc) = CT_Document::from_xml(doc_xml)
         {
@@ -24954,35 +25013,48 @@ mod tests {
     }
 
     /// Word writes a text box as DrawingML in `mc:Choice` and as VML in
-    /// `mc:Fallback`. Only the Choice is an owner, and its drawing lists no
-    /// item in the paragraph that holds it.
+    /// `mc:Fallback`. Only the first Choice that holds a text box is an
+    /// owner, and its drawing lists no item in the paragraph that holds it.
+    /// A Choice before it, a picture here, and any Choice after it stay
+    /// opaque, as the Fallback does.
     #[test]
-    fn only_the_choice_of_a_text_box_in_alternate_content_is_an_owner() {
+    fn only_the_first_choice_of_alternate_content_with_a_text_box_is_an_owner() {
         let text_box = |text: &str| {
             format!(r#"<w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent>"#)
         };
-        let xml = format!(
-            r#"<w:document xmlns:w="{WORD_NAMESPACE}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>host</w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx>{}</wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox>{}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p></w:body></w:document>"#,
-            text_box("choice"),
-            text_box("fallback"),
-        );
+        let choice = |text: &str| {
+            format!(
+                r#"<mc:Choice Requires="wps"><w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx>{}</wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>"#,
+                text_box(text)
+            )
+        };
+        let picture = r#"<mc:Choice Requires="wps"><w:drawing><wp:inline><a:graphic><a:graphicData/></a:graphic></wp:inline></w:drawing></mc:Choice>"#;
+        for branches in [
+            choice("choice"),
+            [picture, &choice("choice"), &choice("later choice")].concat(),
+        ] {
+            let xml = format!(
+                r#"<w:document xmlns:w="{WORD_NAMESPACE}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>host</w:t></w:r><w:r><mc:AlternateContent>{branches}<mc:Fallback><w:pict><v:shape><v:textbox>{}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p></w:body></w:document>"#,
+                text_box("fallback"),
+            );
 
-        let owners = scan_story_owners(xml.as_bytes(), StoryKind::Body).unwrap();
+            let owners = scan_story_owners(xml.as_bytes(), StoryKind::Body).unwrap();
 
-        assert_eq!(
-            owners.iter().map(|owner| owner.kind).collect::<Vec<_>>(),
-            [StoryKind::Body, StoryKind::TextBox]
-        );
-        assert_eq!(&xml[owners[1].full.clone()], text_box("choice"));
-        let body_items = scan_story_items(xml.as_bytes(), &owners[0]).unwrap();
-        assert_eq!(
-            body_items.iter().map(|item| item.kind).collect::<Vec<_>>(),
-            [StoryItemKind::Paragraph]
-        );
-        assert_eq!(
-            story_item_text(xml.as_bytes(), &body_items[0]).unwrap(),
-            Some("host".to_owned())
-        );
+            assert_eq!(
+                owners.iter().map(|owner| owner.kind).collect::<Vec<_>>(),
+                [StoryKind::Body, StoryKind::TextBox]
+            );
+            assert_eq!(&xml[owners[1].full.clone()], text_box("choice"));
+            let body_items = scan_story_items(xml.as_bytes(), &owners[0]).unwrap();
+            assert_eq!(
+                body_items.iter().map(|item| item.kind).collect::<Vec<_>>(),
+                [StoryItemKind::Paragraph]
+            );
+            assert_eq!(
+                story_item_text(xml.as_bytes(), &body_items[0]).unwrap(),
+                Some("host".to_owned())
+            );
+        }
     }
 
     #[test]

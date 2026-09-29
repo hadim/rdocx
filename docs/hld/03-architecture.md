@@ -1227,9 +1227,14 @@ content controls, revisions, and fields as typed content. Content rejected by
 that grammar remains one opaque preserved boundary and cannot expose nested
 owners or editable text. Word writes a text box twice in a run's
 `mc:AlternateContent`, as DrawingML in `mc:Choice` and as VML in
-`mc:Fallback`. That text box is one text-box story, read from the Choice. The
-Fallback stays opaque, and the Choice drawing adds no drawing item to the
-story that holds it. A story edit of that text box changes the Choice only.
+`mc:Fallback`. That text box is one text-box story, read from the first
+Choice that holds a text box, the one layout draws. Any other Choice and the
+Fallback stay opaque, and the Choice drawing adds no drawing item to the story
+that holds it. A story edit of that text box changes that Choice only. A
+reader of the VML Fallback, such as Word 2007 or a converter like mammoth.js,
+keeps seeing the text the box had before the edit. A later replacement edits
+every copy, see `10-bindings-spec.md`, which aligns the replaced text of the
+Fallback and not the rest of the edit.
 
 `StoryItemRef::links` returns modeled hyperlinks in item source order. Display
 text comes from the existing story text projection, while relationship targets

@@ -867,12 +867,18 @@ replacement and publishes it only after namespace-safe serialization succeeds.
 The command-line `replace` operation uses this boundary, reports the stable
 serialization error, and creates no partial output. Python and WASM bindings
 gain no corresponding method. Every Word replacement, literal, regular
-expression, or template, edits both copies of a text box that Word writes in
-`mc:AlternateContent` and counts a match once, from the DrawingML
-`mc:Choice`. The VML `mc:Fallback` keeps its edit only when the edit changed
-it as many times as the Choice, and keeps its bytes otherwise, so every change
-left in the document is counted once. A Fallback beside a Choice that holds no
-text box is replaced and counted as any other text box.
+expression, or template, edits every copy of a text box that Word writes in
+`mc:AlternateContent`. The count is that of the first `mc:Choice` that holds a
+text box, the DrawingML copy that layout draws and the story walkers read. The
+VML `mc:Fallback` and any later Choice are edited whatever they hold, a
+Fallback that a story edit left behind its Choice included, and never counted.
+A replacement can therefore change a Fallback and report 0. When no Choice
+holds a text box, a Fallback text box is replaced and counted as any other
+text box. Replacement handles `mc:AlternateContent` at any depth outside
+another text box, while the story walkers read it only as a child of a run.
+A story edit of such a text box changes the Choice only, see
+`03-architecture.md`. `redact_text` removes the literal from every copy and
+still counts each copy.
 
 The native presentation facade provides the same staged boundary through
 `Presentation::try_replace_text`, with exact counts across slides and speaker
