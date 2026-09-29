@@ -157,6 +157,7 @@ def exercise_rdocx_types(path: Path) -> None:
         file_name="report.docx", merge_fields={"Name": "Ada"}
     )
     assert_type(revisions[0].timestamp, str | None)
+    assert_type(revisions[0].story, Story | None)
     document.set_header("Header")
     document.set_footer("Footer")
     document.set_story_text(story_items[0], "edited")

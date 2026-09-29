@@ -266,7 +266,7 @@ struct CommentRangeArgs {
 
 #[derive(Subcommand)]
 enum RevisionCommand {
-    /// List modeled revisions from the main story
+    /// List modeled revisions from every supported story
     List {
         /// Path to the DOCX file
         file: PathBuf,

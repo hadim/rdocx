@@ -171,7 +171,13 @@ class TocRebuildReport:
 @_final
 class Revision:
     def __new__(
-        cls, *, id: int, author: str, timestamp: str | None, kind: str
+        cls,
+        *,
+        id: int,
+        author: str,
+        timestamp: str | None,
+        kind: str,
+        story: Story | None = None,
     ) -> Revision: ...
     @property
     def id(self) -> int: ...
@@ -181,6 +187,8 @@ class Revision:
     def timestamp(self) -> str | None: ...
     @property
     def kind(self) -> str: ...
+    @property
+    def story(self) -> Story | None: ...
 
 
 @_final

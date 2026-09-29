@@ -1042,6 +1042,15 @@ fn cli_collaboration_commands_are_schema_stable_and_atomic() {
         json!({
             "schema": 1,
             "scope": "all-supported-stories",
+            "revisions": 2,
+            "stories": [
+                {
+                    "kind": "body",
+                    "part_name": "/word/document.xml",
+                    "owner_index": 0,
+                    "revisions": 2,
+                },
+            ],
             "main_story_revisions": 2,
             "diagnostics": [],
             "output": path_text(&redline),
@@ -1051,23 +1060,30 @@ fn cli_collaboration_commands_are_schema_stable_and_atomic() {
     let revisions = cli(&["revision", "list", path_text(&redline), "--json"]);
     assert_success(&revisions, "revision list JSON");
     let value: serde_json::Value = serde_json::from_slice(&revisions.stdout).unwrap();
+    let body = json!({
+        "kind": "body",
+        "part_name": "/word/document.xml",
+        "owner_index": 0,
+    });
     assert_eq!(
         value,
         json!({
             "schema": 1,
-            "scope": "main",
+            "scope": "all-supported-stories",
             "revisions": [
                 {
                     "id": 0,
                     "author": "Alice",
                     "timestamp": "2026-09-13T12:00:00Z",
                     "kind": "deletion",
+                    "story": body,
                 },
                 {
                     "id": 1,
                     "author": "Alice",
                     "timestamp": "2026-09-13T12:00:00Z",
                     "kind": "insertion",
+                    "story": body,
                 },
             ],
         })
@@ -1403,6 +1419,138 @@ fn compare_accept_and_reject_reproduce_each_input() {
     assert_eq!(
         Document::open(rejected_path).unwrap().text(),
         Document::open(original).unwrap().text()
+    );
+}
+
+fn write_footer_revision_inputs(temp: &TempWorkspace) -> (PathBuf, PathBuf) {
+    let original = temp.path.join("original.docx");
+    let edited = temp.path.join("edited.docx");
+    for (path, footer) in [
+        (&original, "Footer lorem ipsum"),
+        (&edited, "Footer lorem IPSUM"),
+    ] {
+        let mut document = fixture_document(&["Body."]);
+        document.set_footer(footer);
+        document.save(path).expect("write footer fixture");
+    }
+    (original, edited)
+}
+
+fn compare_footer_inputs(original: &Path, edited: &Path, output: &Path, json: bool) -> Output {
+    let mut args = vec![
+        "compare",
+        path_text(original),
+        path_text(edited),
+        "--author",
+        "R",
+        "--timestamp",
+        "2026-09-27T12:00:00Z",
+        "--output",
+        path_text(output),
+    ];
+    if json {
+        args.push("--json");
+    }
+    cli(&args)
+}
+
+#[test]
+fn revision_list_names_the_story_of_compared_footer_revisions() {
+    let temp = TempWorkspace::new("footer-revision-list");
+    let (original, edited) = write_footer_revision_inputs(&temp);
+    let redline = temp.path.join("redline.docx");
+    let accepted = temp.path.join("accepted.docx");
+
+    let unchanged = cli(&["revision", "list", path_text(&original)]);
+    assert_success(&unchanged, "revision list without revisions");
+    assert_eq!(
+        String::from_utf8_lossy(&unchanged.stdout),
+        "(no revisions)\n"
+    );
+
+    let compared = compare_footer_inputs(&original, &edited, &redline, false);
+    assert_success(&compared, "compare footer");
+
+    let listed = cli(&["revision", "list", path_text(&redline), "--json"]);
+    assert_success(&listed, "revision list footer JSON");
+    let value: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(value["scope"], "all-supported-stories");
+    let records = value["revisions"].as_array().expect("revision records");
+    assert_eq!(records.len(), 2, "{value}");
+    for record in records {
+        assert_eq!(
+            record["story"],
+            json!({
+                "kind": "footer",
+                "part_name": "/word/footer1.xml",
+                "owner_index": 0,
+            })
+        );
+        assert_eq!(record["author"], "R");
+    }
+
+    let listed = cli(&["revision", "list", path_text(&redline)]);
+    assert_success(&listed, "revision list footer text");
+    let lines = String::from_utf8_lossy(&listed.stdout).into_owned();
+    assert_eq!(lines.lines().count(), 2, "{lines}");
+    for line in lines.lines() {
+        let columns = line.split('\t').collect::<Vec<_>>();
+        assert_eq!(columns.len(), 7, "{line}");
+        assert_eq!(columns[1..3], ["R", "2026-09-27T12:00:00Z"], "{line}");
+        assert_eq!(columns[4..], ["footer", "/word/footer1.xml", "0"], "{line}");
+    }
+
+    let resolved = cli(&[
+        "revision",
+        "accept",
+        path_text(&redline),
+        "--output",
+        path_text(&accepted),
+        "--json",
+    ]);
+    assert_success(&resolved, "revision accept footer");
+    let value: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
+    assert_eq!(value["resolved"], records.len());
+}
+
+#[test]
+fn compare_counts_the_revisions_it_creates_in_each_story() {
+    let temp = TempWorkspace::new("footer-compare");
+    let (original, edited) = write_footer_revision_inputs(&temp);
+    let redline = temp.path.join("redline.docx");
+    let text_redline = temp.path.join("text-redline.docx");
+
+    let compared = compare_footer_inputs(&original, &edited, &redline, true);
+    assert_success(&compared, "compare footer JSON");
+    let value: serde_json::Value = serde_json::from_slice(&compared.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "all-supported-stories",
+            "revisions": 2,
+            "stories": [
+                {
+                    "kind": "footer",
+                    "part_name": "/word/footer1.xml",
+                    "owner_index": 0,
+                    "revisions": 2,
+                },
+            ],
+            "main_story_revisions": 0,
+            "diagnostics": [],
+            "output": path_text(&redline),
+        })
+    );
+
+    let compared = compare_footer_inputs(&original, &edited, &text_redline, false);
+    assert_success(&compared, "compare footer text");
+    assert_eq!(
+        String::from_utf8_lossy(&compared.stdout),
+        format!(
+            "Created 2 revision element(s) in 1 story(ies)\n  footer\t/word/footer1.xml\t0\t2\nDiagnostics: 0\nWritten to {}\n",
+            path_text(&text_redline)
+        )
     );
 }
 

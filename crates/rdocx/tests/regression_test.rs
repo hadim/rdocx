@@ -19,10 +19,10 @@ use rdocx::{
     FragmentConflictPolicy, HdrFtrType, HeaderFooterKind, HyperlinkItemRef, HyperlinkRef, Length,
     ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText, MailMergeImage,
     MailMergeRecord, MailMergeValue, ParagraphFrame, ParagraphItemRef, ParagraphRef, RasterFormat,
-    RasterOptions, RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange,
-    RunRef, StoryId, StoryItemKind, StoryKind, StoryRunPosition, StoryRunRange, StyleBuilder,
-    StyleType, TableRef, TcField, TocEntrySelection, TocField, TocRebuildReport, UnderlineStyle,
-    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    RasterOptions, RasterOutput, RenderOptions, RevisionKind, RevisionView, RunItemRef,
+    RunPosition, RunRange, RunRef, StoryId, StoryItemKind, StoryKind, StoryRunPosition,
+    StoryRunRange, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection, TocField,
+    TocRebuildReport, UnderlineStyle, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 use rdocx_oxml::content_control::SdtContent;
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
@@ -22281,6 +22281,290 @@ fn scoped_revision_resolution_visits_every_compared_story_once() {
     let resolved = comparison_part_xml(&mut document, "/word/header1.xml");
     assert!(!resolved.contains(r#"w:id="71""#), "{resolved}");
     assert!(resolved.contains(r#"w:id="72""#), "{resolved}");
+}
+
+fn story_revision_resolution_counts(document: &mut Document) -> (usize, usize) {
+    let bytes = document
+        .to_bytes()
+        .expect("serialize tracked story document");
+    let accepted = Document::from_bytes(&bytes)
+        .expect("open accepted story copy")
+        .accept_all()
+        .expect("accept every story revision");
+    let rejected = Document::from_bytes(&bytes)
+        .expect("open rejected story copy")
+        .reject_all()
+        .expect("reject every story revision");
+    (accepted, rejected)
+}
+
+fn story_revision_rows(document: &Document) -> Vec<(StoryKind, String, usize, i32, RevisionKind)> {
+    let stories = document.stories().expect("inventory stories");
+    document
+        .story_revisions()
+        .expect("list story revisions")
+        .into_iter()
+        .map(|revision| {
+            assert!(
+                stories.contains(revision.story()),
+                "{:?} is not a reported story",
+                revision.story()
+            );
+            (
+                revision.story().kind(),
+                revision.story().part_name().to_owned(),
+                revision.story().owner_index(),
+                revision.id(),
+                revision.kind(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn story_revisions_list_a_compared_footer_that_the_main_listing_omits() {
+    let footer_document = |text: &str| {
+        let mut document = Document::new();
+        document.add_paragraph("Body.");
+        document.set_footer(text);
+        Document::from_bytes(&document.to_bytes().expect("serialize footer fixture"))
+            .expect("open footer fixture")
+    };
+    let mut tracked = footer_document("Footer lorem ipsum");
+    let edited = footer_document("Footer lorem IPSUM");
+    tracked
+        .compare(&edited, "R", "2026-09-27T12:00:00Z")
+        .expect("compare footer-only edit");
+
+    assert!(tracked.revisions().is_empty());
+    let revisions = tracked.story_revisions().expect("list story revisions");
+    assert_eq!(revisions.len(), 2, "{revisions:?}");
+    let footer = tracked
+        .stories()
+        .expect("inventory stories")
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Footer)
+        .expect("footer story");
+    assert!(revisions.iter().all(|revision| revision.story() == &footer));
+    assert!(revisions.iter().all(|revision| revision.author() == "R"));
+    assert!(
+        revisions
+            .iter()
+            .all(|revision| revision.timestamp() == Some("2026-09-27T12:00:00Z"))
+    );
+    let mut kinds = revisions
+        .iter()
+        .map(|revision| revision.kind())
+        .collect::<Vec<_>>();
+    kinds.sort_by_key(|kind| format!("{kind:?}"));
+    assert_eq!(kinds, [RevisionKind::Deletion, RevisionKind::Insertion]);
+    assert_eq!(story_revision_resolution_counts(&mut tracked), (2, 2));
+
+    let reopened = Document::from_bytes(&tracked.to_bytes().expect("serialize redline"))
+        .expect("reopen redline");
+    assert_eq!(
+        reopened.story_revisions().expect("list reopened revisions"),
+        revisions
+    );
+}
+
+#[test]
+fn story_revisions_name_every_compared_story_and_match_resolution_counts() {
+    let mut tracked = document_with_comparison_stories("original");
+    let edited = document_with_comparison_stories("edited");
+    tracked
+        .compare(&edited, "Word", "2026-09-04T09:00:00Z")
+        .expect("full-story comparison");
+
+    let rows = story_revision_rows(&tracked);
+    let mut per_story = Vec::<(StoryKind, String, usize, usize)>::new();
+    for (kind, part_name, owner_index, _, _) in &rows {
+        match per_story
+            .iter_mut()
+            .find(|(k, p, o, _)| k == kind && p == part_name && o == owner_index)
+        {
+            Some(entry) => entry.3 += 1,
+            None => per_story.push((*kind, part_name.clone(), *owner_index, 1)),
+        }
+    }
+    let expected_stories = [
+        (StoryKind::Body, "/word/document.xml"),
+        (StoryKind::Header, "/word/header1.xml"),
+        (StoryKind::Footer, "/word/footer1.xml"),
+        (StoryKind::Comment, "/word/comments.xml"),
+        (StoryKind::Footnote, "/word/footnotes.xml"),
+        (StoryKind::Endnote, "/word/endnotes.xml"),
+    ];
+    assert_eq!(
+        per_story
+            .iter()
+            .map(|(kind, part_name, owner_index, _)| (*kind, part_name.as_str(), *owner_index))
+            .collect::<Vec<_>>(),
+        expected_stories
+            .iter()
+            .map(|(kind, part_name)| (*kind, *part_name, 0))
+            .collect::<Vec<_>>(),
+        "{rows:?}"
+    );
+    assert!(per_story.iter().all(|(.., count)| *count >= 2), "{rows:?}");
+    assert_eq!(
+        rows.iter()
+            .filter(|(kind, ..)| *kind == StoryKind::Body)
+            .count(),
+        tracked.revisions().len()
+    );
+    assert_eq!(
+        story_revision_resolution_counts(&mut tracked),
+        (rows.len(), rows.len())
+    );
+}
+
+#[test]
+fn story_revisions_fold_cells_and_report_text_boxes_as_their_own_story() {
+    let mut header = document_with_comparison_header(concat!(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:ins w:id="81" w:author="Ada"><w:r><w:t>cell</w:t></w:r></w:ins></w:p></w:tc></w:tr></w:tbl>"#,
+        r#"<w:p><w:pPr><w:rPr><w:ins w:id="82" w:author="Ada"/></w:rPr></w:pPr><w:r><w:rPr><w:b/><w:rPrChange w:id="82" w:author="Ada"><w:rPr/></w:rPrChange></w:rPr><w:t>marked</w:t></w:r></w:p>"#,
+        r#"<w:p><w:r><w:pict><v:shape id="box" style="width:100pt;height:50pt"><v:textbox><w:txbxContent><w:p><w:del w:id="83" w:author="Grace"><w:r><w:delText>boxed</w:delText></w:r></w:del></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>"#,
+    ));
+    let header_row = |kind, id, revision| (kind, "/word/header1.xml".to_owned(), 0, id, revision);
+    assert_eq!(
+        story_revision_rows(&header),
+        [
+            header_row(StoryKind::Header, 81, RevisionKind::Insertion),
+            header_row(StoryKind::Header, 82, RevisionKind::Insertion),
+            header_row(StoryKind::Header, 82, RevisionKind::RunPropertyChange),
+            header_row(StoryKind::TextBox, 83, RevisionKind::Deletion),
+        ]
+    );
+    assert_eq!(story_revision_resolution_counts(&mut header), (4, 4));
+
+    let mut body = document_with_content_controls(&wrap_word_body(concat!(
+        r#"<w:p><w:ins w:id="91" w:author="Ada"><w:r><w:t>body</w:t></w:r></w:ins></w:p>"#,
+        r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="vml-box" style="width:100pt;height:50pt"><v:textbox><w:txbxContent><w:p><w:ins w:id="92" w:author="Ada"><w:r><w:t>vml box</w:t></w:r></w:ins></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>"#,
+        r#"<w:p><w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:v="urn:schemas-microsoft-com:vml"><mc:Choice Requires="wps"><w:pict><v:shape id="choice-box"><v:textbox><w:txbxContent><w:p><w:ins w:id="93" w:author="Ada"><w:r><w:t>choice</w:t></w:r></w:ins></w:p></w:txbxContent></v:textbox></v:shape></w:pict></mc:Choice><mc:Fallback><w:pict><v:shape id="fallback-box"><v:textbox><w:txbxContent><w:p><w:ins w:id="93" w:author="Ada"><w:r><w:t>fallback</w:t></w:r></w:ins></w:p></w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>"#,
+    )));
+    assert_eq!(body.revisions().len(), 1);
+    let body_row = |kind, id| {
+        let revision = RevisionKind::Insertion;
+        (kind, "/word/document.xml".to_owned(), 0, id, revision)
+    };
+    assert_eq!(
+        story_revision_rows(&body),
+        [
+            body_row(StoryKind::Body, 91),
+            body_row(StoryKind::TextBox, 92),
+            body_row(StoryKind::Body, 93),
+            body_row(StoryKind::Body, 93),
+        ]
+    );
+    assert_eq!(story_revision_resolution_counts(&mut body), (4, 4));
+}
+
+#[test]
+fn story_revisions_refuse_a_revision_outside_every_story_owner() {
+    let mut document = document_with_comparison_stories("same");
+    let bytes = document.to_bytes().expect("serialize note fixture");
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes))
+        .expect("open note fixture package");
+    let footnotes = String::from_utf8(
+        package
+            .get_part("/word/footnotes.xml")
+            .expect("footnotes part")
+            .to_vec(),
+    )
+    .expect("footnotes are UTF-8")
+    .replacen(
+        "<w:separator/></w:r>",
+        r#"<w:separator/></w:r><w:ins w:id="95" w:author="Ada"><w:r><w:t>edited separator</w:t></w:r></w:ins>"#,
+        1,
+    );
+    assert!(footnotes.contains(r#"w:id="95""#), "{footnotes}");
+    package.set_part("/word/footnotes.xml", footnotes.into_bytes());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).expect("write note fixture");
+    let mut document = Document::from_bytes(output.get_ref()).expect("open note fixture");
+
+    assert!(document.stories().is_ok());
+    let error = document
+        .story_revisions()
+        .expect_err("a separator revision has no story");
+    assert!(error.to_string().contains("has no story owner"), "{error}");
+    // Resolution still reaches the separator, so omitting it would undercount.
+    assert_eq!(story_revision_resolution_counts(&mut document), (1, 1));
+}
+
+#[test]
+fn story_revisions_scan_the_main_part_bytes_that_resolution_scans() {
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let listed_and_resolved = |mut document: Document| {
+        let rows = story_revision_rows(&document);
+        assert_eq!(
+            story_revision_resolution_counts(&mut document),
+            (rows.len(), rows.len()),
+            "{rows:?}"
+        );
+        assert_eq!(document.accept_all().expect("accept in memory"), rows.len());
+        rows
+    };
+    let body_row = |id| {
+        let revision = RevisionKind::Insertion;
+        (
+            StoryKind::Body,
+            "/word/document.xml".to_owned(),
+            0,
+            id,
+            revision,
+        )
+    };
+
+    // The typed serialization writes the default namespace as `w:`, so a
+    // listing of it would miss the unprefixed revision that accept resolves.
+    let default_namespace = document_with_content_controls(&format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><document xmlns="{word}" xmlns:w="{word}"><body><p><ins w:id="30" w:author="Ada"><r><t>added</t></r></ins></p></body></document>"#
+    ));
+    assert_eq!(listed_and_resolved(default_namespace), [body_row(30)]);
+
+    // The typed serialization drops `xmlns:x` from a modeled ancestor, so
+    // `stories()` reports no text box and the revision belongs to the body.
+    // A modified document replays the declaration on a paragraph or run and
+    // cannot be staged with it on the body, and the listing follows accept.
+    for owner in ["body", "p", "r"] {
+        let declaration = |element| {
+            if element == owner {
+                format!(r#" xmlns:x="{word}""#)
+            } else {
+                String::new()
+            }
+        };
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{word}"><w:body{}><w:p{}><w:r{}><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="box"><v:textbox><x:txbxContent><x:p><x:ins x:id="31" x:author="Ada"><x:r><x:t>boxed</x:t></x:r></x:ins></x:p></x:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#,
+            declaration("body"),
+            declaration("p"),
+            declaration("r"),
+        );
+        let document = document_with_content_controls(&xml);
+        assert!(document.revisions().is_empty());
+        assert_eq!(listed_and_resolved(document), [body_row(31)], "{xml}");
+
+        let mut modified = document_with_content_controls(&xml);
+        modified.add_paragraph("after");
+        if owner == "body" {
+            let listed = modified.story_revisions().expect_err("unstaged listing");
+            let accepted = modified.accept_all().expect_err("unstaged accept");
+            assert_eq!(listed.to_string(), accepted.to_string());
+        } else {
+            assert_eq!(listed_and_resolved(modified), [body_row(31)], "{xml}");
+        }
+    }
+
+    // A text box that both serializations report keeps its own story when
+    // one before it loses its binding.
+    let mixed = document_with_content_controls(&format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{word}"><w:body><w:p xmlns:x="{word}"><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="lost"><v:textbox><x:txbxContent><x:p><x:ins x:id="31" x:author="Ada"><x:r><x:t>lost</x:t></x:r></x:ins></x:p></x:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="kept"><v:textbox><w:txbxContent><w:p><w:ins w:id="32" w:author="Ada"><w:r><w:t>kept</w:t></w:r></w:ins></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#
+    ));
+    let mut kept = body_row(32);
+    kept.0 = StoryKind::TextBox;
+    assert_eq!(listed_and_resolved(mixed), [body_row(31), kept]);
 }
 
 #[test]
