@@ -95,7 +95,11 @@ run splitting share the native accepted-view run order. Visible runs inside
 inline content controls, insertions, and move destinations carry recursive
 source paths. Deleted and move-source runs are absent. Paragraph text also
 reads the runs inside smart tags, inline custom XML elements, and simple fields,
-which the run handles do not address. A successful structural
+which the run handles do not address. The run of a simple field has empty text,
+and the runs of a smart tag or a custom XML element have no handle. So an offset
+into paragraph text is an offset into the joined text of the runs only when the
+paragraph holds none of these wrappers. A caller that maps text offsets onto
+runs joins the text of the runs instead. A successful structural
 edit invalidates earlier path-backed run handles through the same document
 revision check as direct handles.
 

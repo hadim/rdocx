@@ -70,10 +70,12 @@ DOCX, and supports a schema-1 record through `--json`.
 has a zero-based `body_index`, a typed zero-based path within that body item,
 its direct style and numbering, and accepted-view runs. Its `text` also holds
 the text inside smart tags, inline custom XML elements, and simple fields,
-which `runs` does not list. Run `formatting` is
-`null` when no direct run properties exist. Otherwise it records nullable
-direct bold, italic, strike, underline, font, point size, colour, highlight,
-language, and character style values.
+which `runs` does not list, so offsets into `text` are not offsets into the
+joined text of `runs` when a paragraph holds one of them. Plain `rdocx text`
+prints the text of the runs, without the text inside these wrappers. Run
+`formatting` is `null` when no direct run properties exist. Otherwise it records
+nullable direct bold, italic, strike, underline, font, point size, colour,
+highlight, language, and character style values.
 
 `layout --json` uses bundled deterministic fonts. It lists every direct body
 item, including preserved items that have no fragments. Each laid-out fragment
