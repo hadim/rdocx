@@ -1634,6 +1634,243 @@ fn checked_table_cell_comment_range_is_atomic_and_reopens() {
     assert_eq!(reopened.comments()[0].text(), "review");
 }
 
+/// GitHub issue #163: the index `find_content_index` returns is a direct body
+/// child index, and every body API that takes an index must address the same
+/// paragraph with it, whatever tables or block content controls precede it.
+mod direct_body_index_coordinates {
+    use rdocx::{
+        Document, RunPosition, RunRange, StoryItemKind, StoryKind, StoryRunPosition, StoryRunRange,
+    };
+
+    const TABLE: &str = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>c00</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>c01</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>c10</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>c11</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    const CONTROL: &str = r#"<w:sdt><w:sdtPr><w:alias w:val="Block"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Control one.</w:t></w:r></w:p><w:p><w:r><w:t>Control two.</w:t></w:r></w:p></w:sdtContent></w:sdt>"#;
+
+    fn paragraph(text: &str) -> String {
+        format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>")
+    }
+
+    fn document_from_body(body: &str) -> Document {
+        super::document_with_content_controls(&super::wrap_word_body(body))
+    }
+
+    fn run_texts(document: &Document) -> Vec<Vec<String>> {
+        document
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.runs().map(|run| run.text()).collect())
+            .collect()
+    }
+
+    fn one_run_range(body_index: usize) -> RunRange {
+        RunRange {
+            start: RunPosition {
+                body_index,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index,
+                run_index: 1,
+            },
+        }
+    }
+
+    /// Visible text between the range markers of comment `id` in the saved
+    /// main part. The tests keep each range inside one paragraph.
+    fn commented_text(document: &mut Document, id: i32) -> String {
+        let xml = super::document_xml(document);
+        let start_marker = format!(r#"<w:commentRangeStart w:id="{id}"/>"#);
+        let end_marker = format!(r#"<w:commentRangeEnd w:id="{id}"/>"#);
+        let start = xml.find(&start_marker).expect("comment start marker") + start_marker.len();
+        let end = start + xml[start..].find(&end_marker).expect("comment end marker");
+        super::f_x093_visible_text(&xml[start..end])
+    }
+
+    #[test]
+    fn split_run_takes_the_direct_body_index_after_a_table() {
+        let mut document = Document::new();
+        document.add_paragraph("Alpha paragraph before the table.");
+        document
+            .add_table(1, 1)
+            .row(0)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .set_text("cell");
+        document.add_paragraph("Beta paragraph after the table.");
+        document.add_paragraph("Gamma paragraph at the end.");
+        let beta = document.find_content_index("Beta").unwrap();
+        assert_eq!(beta, 2);
+
+        assert_eq!(document.split_run(beta, 0, 4).unwrap(), 1);
+        assert_eq!(
+            run_texts(&document),
+            [
+                vec!["Alpha paragraph before the table."],
+                vec!["Beta", " paragraph after the table."],
+                vec!["Gamma paragraph at the end."],
+            ]
+        );
+
+        let id = document
+            .add_comment(one_run_range(beta), "Ada", None, "Which word?")
+            .unwrap();
+        assert_eq!(commented_text(&mut document, id), "Beta");
+
+        document.insert_paragraph(beta, "Inserted.");
+        let texts: Vec<String> = document.paragraphs().iter().map(|p| p.text()).collect();
+        assert_eq!(
+            texts[1..3],
+            ["Inserted.", "Beta paragraph after the table."]
+        );
+    }
+
+    #[test]
+    fn split_run_takes_the_direct_body_index_after_a_block_content_control() {
+        let mut document = document_from_body(&format!(
+            "{}{CONTROL}{}{}",
+            paragraph("Alpha."),
+            paragraph("Beta paragraph."),
+            paragraph("Gamma.")
+        ));
+        let beta = document.find_content_index("Beta").unwrap();
+        assert_eq!(beta, 2);
+        let mut expected = run_texts(&document);
+        expected[3] = vec!["Beta".to_owned(), " paragraph.".to_owned()];
+
+        assert_eq!(document.split_run(beta, 0, 4).unwrap(), 1);
+        assert_eq!(run_texts(&document), expected);
+        let id = document
+            .add_comment(one_run_range(beta), "Ada", None, "Which word?")
+            .unwrap();
+        assert_eq!(commented_text(&mut document, id), "Beta");
+    }
+
+    #[test]
+    fn split_run_names_the_body_child_that_is_not_a_paragraph() {
+        let mut document = document_from_body(&format!(
+            r#"{}{TABLE}{CONTROL}<w:customXml w:element="note">{}</w:customXml>{}"#,
+            paragraph("Alpha."),
+            paragraph("Custom."),
+            paragraph("Beta.")
+        ));
+        let before = document.to_bytes().unwrap();
+        for (body_index, kind) in [(1, "table"), (2, "content control"), (3, "preserved XML")] {
+            let error = document.split_run(body_index, 0, 1).unwrap_err();
+            assert!(
+                error.to_string().contains(kind),
+                "body index {body_index}: {error}"
+            );
+        }
+        let error = document.split_run(5, 0, 1).unwrap_err();
+        assert!(error.to_string().contains("out of range"), "{error}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn bookmark_direct_range_reports_the_index_add_bookmark_took() {
+        let mut document = document_from_body(&format!(
+            "{}{TABLE}{CONTROL}{}",
+            paragraph("Alpha."),
+            paragraph("Beta paragraph.")
+        ));
+        let beta = document.find_content_index("Beta").unwrap();
+        assert_eq!(beta, 3);
+        document.add_bookmark("beta", one_run_range(beta)).unwrap();
+
+        let bookmark = document.bookmarks().remove(0);
+        assert_eq!(bookmark.text(), "Beta paragraph.");
+        assert_eq!(bookmark.direct_range(), Some(one_run_range(beta)));
+        // range() keeps the recursive paragraph ordinal that REF numbering
+        // reads: Alpha, the four cells and the two control paragraphs.
+        assert_eq!(bookmark.range().unwrap().start.body_index, 7);
+    }
+
+    #[test]
+    fn bookmark_direct_range_is_none_when_a_marker_is_nested() {
+        let marked = |id: u32, name: &str, text: &str| {
+            format!(
+                r#"<w:p><w:bookmarkStart w:id="{id}" w:name="{name}"/><w:r><w:t>{text}</w:t></w:r><w:bookmarkEnd w:id="{id}"/></w:p>"#
+            )
+        };
+        let document = document_from_body(&format!(
+            r#"<w:p><w:bookmarkStart w:id="3" w:name="mixed"/><w:r><w:t>Alpha.</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>{}</w:tc></w:tr></w:tbl><w:sdt><w:sdtContent>{}<w:p><w:r><w:t>Control end.</w:t></w:r><w:bookmarkEnd w:id="3"/></w:p></w:sdtContent></w:sdt>{}"#,
+            marked(1, "cell", "In a cell."),
+            marked(2, "control", "In a control."),
+            marked(4, "direct", "Direct.")
+        ));
+        let bookmarks = document.bookmarks();
+        let named = |name: &str| {
+            bookmarks
+                .iter()
+                .find(|bookmark| bookmark.name() == Some(name))
+                .unwrap()
+        };
+        for name in ["cell", "control", "mixed"] {
+            assert!(named(name).range().is_some(), "{name}: {:?}", named(name));
+            assert_eq!(named(name).direct_range(), None, "{name}");
+        }
+        assert_eq!(named("direct").direct_range(), Some(one_run_range(3)));
+    }
+
+    fn comment_on_story_paragraph(document: &mut Document, kind: StoryKind, text: &str) -> i32 {
+        let story = super::f254_story(document, kind);
+        let location = document
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                item.kind() == StoryItemKind::Paragraph
+                    && item.text().unwrap().as_deref() == Some(text)
+            })
+            .unwrap()
+            .location()
+            .clone();
+        document
+            .add_story_comment(
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "Here",
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn story_comment_after_a_block_content_control_anchors_on_its_paragraph() {
+        let mut document = document_from_body(&format!(
+            "{}{CONTROL}{}",
+            paragraph("Alpha."),
+            paragraph("Beta paragraph.")
+        ));
+        let id = comment_on_story_paragraph(&mut document, StoryKind::Body, "Beta paragraph.");
+        assert_eq!(commented_text(&mut document, id), "Beta paragraph.");
+    }
+
+    #[test]
+    fn story_comment_in_a_cell_after_a_block_content_control_anchors_on_its_paragraph() {
+        let mut document = document_from_body(&format!(
+            r#"<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>{CONTROL}{}</w:tc></w:tr></w:tbl>{}"#,
+            paragraph("Target cell paragraph."),
+            paragraph("After.")
+        ));
+        let id = comment_on_story_paragraph(
+            &mut document,
+            StoryKind::TableCell,
+            "Target cell paragraph.",
+        );
+        assert_eq!(commented_text(&mut document, id), "Target cell paragraph.");
+    }
+}
+
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
     let mut document = f255_story_document();
     document.add_picture(b"body image", "body.png", Length::pt(1.0), Length::pt(1.0));

@@ -63,6 +63,7 @@ def exercise_rdocx_types(path: Path) -> None:
     paragraph_format: ParagraphFormat = paragraph.paragraph_format
     paragraph_format.keep_together = None
     split_boundary: int = document.split_run(0, 0, 1)
+    handle_boundary: int = document.split_run(paragraph, 0, 1)
     paragraphs: ParagraphCollection = document.paragraphs
     first: Paragraph = paragraphs[0]
     sliced: list[Paragraph] = paragraphs[:]

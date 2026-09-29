@@ -1496,6 +1496,132 @@ def test_split_run_rejects_bad_coordinates_without_changing_the_document():
         assert document.to_bytes() == before
 
 
+def test_split_run_takes_the_direct_body_index_after_a_table():
+    import rdocx
+
+    # GitHub issue #163: the index find_content_index returns must address
+    # the same paragraph in split_run.
+    document = rdocx.Document()
+    document.add_paragraph("Alpha paragraph before the table.")
+    document.add_table(1, 1).cell(0, 0).text = "cell"
+    document.add_paragraph("Beta paragraph after the table.")
+    document.add_paragraph("Gamma paragraph at the end.")
+    target = next(p for p in document.paragraphs if p.text.startswith("Beta"))
+    body_index = document.find_content_index(target)
+    assert body_index == 2
+
+    assert document.split_run(body_index, 0, 4) == 1
+    assert [[run.text for run in p.runs] for p in document.paragraphs] == [
+        ["Alpha paragraph before the table."],
+        ["Beta", " paragraph after the table."],
+        ["Gamma paragraph at the end."],
+    ]
+
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="is a table, not a paragraph"):
+        document.split_run(1, 0, 1)
+    with pytest.raises(TypeError, match="must be an int or a Paragraph handle"):
+        document.split_run("Beta", 0, 1)
+    with pytest.raises(OverflowError):
+        document.split_run(-1, 0, 1)
+    assert document.to_bytes() == before
+
+
+def test_split_run_accepts_a_paragraph_handle_in_a_control_or_the_body():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        "<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>Control one.</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Control two.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        '<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>'
+        "<w:tr><w:tc>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>In control.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        "<w:p><w:r><w:t>Cell text.</w:t></w:r></w:p>"
+        "</w:tc></w:tr>"
+        "</w:tbl>"
+        "<w:p><w:r><w:t>Beta.</w:t></w:r></w:p>",
+    )
+    control_two = document.paragraphs[2]
+    assert control_two.text == "Control two."
+    run = control_two.runs[0]
+    before_no_op = document.to_bytes()
+    assert document.split_run(control_two, 0, 0) == 0
+    assert document.to_bytes() == before_no_op
+    assert run.text == "Control two."
+
+    assert document.split_run(control_two, 0, 7) == 1
+    with pytest.raises(rdocx.StaleElementError):
+        run.text
+    with pytest.raises(rdocx.StaleElementError):
+        document.split_run(control_two, 0, 1)
+    assert [r.text for r in document.paragraphs[2].runs] == ["Control", " two."]
+
+    # A cell handle is refused, because its index counts the paragraph
+    # inside the cell's content control and the cell writer does not.
+    cell = document.tables[0].rows[0].cells[0]
+    assert [p.text for p in cell.paragraphs] == ["In control.", "Cell text."]
+    before_cell = document.to_bytes()
+    for cell_paragraph in cell.paragraphs:
+        with pytest.raises(ValueError, match="table cell paragraph handle"):
+            document.split_run(cell_paragraph, 0, 2)
+    assert document.to_bytes() == before_cell
+
+    beta = document.paragraphs[3]
+    assert document.find_content_index(beta) == 3
+    beta_run = beta.runs[0]
+    assert document.split_run(beta, 0, 5) == 1
+    assert beta_run.text == "Beta."
+    assert document.split_run(beta, 0, 4) == 1
+    assert [r.text for r in document.paragraphs[3].runs] == ["Beta", "."]
+
+    other = rdocx.Document()
+    other.add_paragraph("elsewhere")
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match="different document"):
+        document.split_run(other.paragraphs[0], 0, 1)
+    assert document.to_bytes() == before
+
+
+def test_story_comment_after_a_block_content_control_anchors_on_its_paragraph():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        "<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>Control one.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        "<w:p><w:r><w:t>Beta paragraph.</w:t></w:r></w:p>",
+    )
+    item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body"
+        and item.kind == "paragraph"
+        and item.text == "Beta paragraph."
+    )
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=item, run_index=0),
+            end=rdocx.StoryRunPosition(item=item, run_index=1),
+        ),
+        author="Ada",
+        text="Here",
+    )
+    xml = _document_xml(document).decode()
+    start = xml.index(f'commentRangeStart w:id="{comment_id}"')
+    end = xml.index(f'commentRangeEnd w:id="{comment_id}"')
+    assert re.findall(r"<w:t[^>]*>([^<]*)</w:t>", xml[start:end]) == [
+        "Beta paragraph."
+    ]
+
+
 def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     import rdocx
 
