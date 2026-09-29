@@ -135,7 +135,9 @@ that the main document relates to is not well formed, or when the main
 document, a header, a footer, the notes, or the comments name a paragraph,
 character, or table style id that no style defines. Word silently falls back
 to the default style for such an id. A style id inside a tracked property
-change is not checked, because it records the formatting before the change.
+change is not checked, because it records the formatting before the change,
+and neither is one inside `mc:Fallback`, which Word does not read, or an empty
+id.
 Empty paragraphs, heading level gaps, and missing metadata are warnings.
 
 `layout --json` uses bundled deterministic fonts. It lists every direct body

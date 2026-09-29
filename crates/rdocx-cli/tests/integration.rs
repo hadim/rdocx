@@ -897,10 +897,12 @@ fn validate_rejects_malformed_related_parts_and_undefined_style_ids() {
 
     // Undefined paragraph, table, and character style ids in the body and a
     // header. The one inside a tracked property change records the formatting
-    // before the change and is not reported.
+    // before the change, Word does not read the one inside mc:Fallback, and an
+    // empty id names no style, so these three are not reported.
     let dangling = temp.path.join("dangling.docx");
     let mut document = fixture_document(&[]);
     document.add_paragraph("Styled").set_style("NoSuchStyle");
+    document.add_paragraph("Unstyled").set_style("");
     document.add_table(1, 1).set_style("NoSuchTableStyle");
     document.set_header("Head");
     document.save(&dangling).unwrap();
@@ -912,7 +914,15 @@ fn validate_rejects_malformed_related_parts_and_undefined_style_ids() {
             r#"<w:pStyle w:val="NoSuchStyle"/><w:pPrChange w:id="9" w:author="Ada"><w:pPr><w:pStyle w:val="RemovedStyle"/></w:pPr></w:pPrChange>"#,
             1,
         );
+    // The new run ends with the closing tag of the run holding "Unstyled".
+    let body = body.replacen(
+        ">Unstyled</w:t>",
+        r#">Unstyled</w:t></w:r><w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" Requires="wps"/><mc:Fallback><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml"><v:textbox><w:txbxContent><w:p><w:pPr><w:pStyle w:val="FallbackOnlyStyle"/></w:pPr></w:p></w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent>"#,
+        1,
+    );
     assert!(body.contains("RemovedStyle"));
+    assert!(body.contains("FallbackOnlyStyle"));
+    assert!(body.contains(r#"<w:pStyle w:val=""/>"#), "{body}");
     package.set_part("/word/document.xml", body.into_bytes());
     let header_xml = String::from_utf8(package.get_part(&header).unwrap().to_vec())
         .unwrap()
