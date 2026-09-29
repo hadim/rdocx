@@ -22673,6 +22673,81 @@ fn story_items_expose_safe_direct_body_owners() {
 }
 
 #[test]
+fn story_item_snapshots_mark_the_direct_children_of_every_owner() {
+    let document = document_with_header_story(
+        r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>left</w:t></w:r><w:sdt><w:sdtContent><w:r><w:t xml:space="preserve"> inline</w:t></w:r></w:sdtContent></w:sdt><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:sdt><w:sdtContent><w:sdt><w:sdtContent><w:p><w:r><w:t>block</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:hdr>"#,
+    );
+    let items = document
+        .story_item_snapshots()
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.location().story().kind() != rdocx::StoryKind::Body)
+        .map(|item| {
+            (
+                item.location().story().kind(),
+                item.location().item_kind(),
+                item.is_direct_child(),
+                item.text().map(str::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    let text = |value: &str| Some(value.to_owned());
+    assert_eq!(
+        items,
+        [
+            (
+                rdocx::StoryKind::Header,
+                rdocx::StoryItemKind::Paragraph,
+                true,
+                text("left inline1")
+            ),
+            (
+                rdocx::StoryKind::Header,
+                rdocx::StoryItemKind::ContentControl,
+                false,
+                text(" inline")
+            ),
+            (
+                rdocx::StoryKind::Header,
+                rdocx::StoryItemKind::Field,
+                false,
+                text("1")
+            ),
+            (
+                rdocx::StoryKind::Header,
+                rdocx::StoryItemKind::ContentControl,
+                true,
+                text("block")
+            ),
+            (
+                rdocx::StoryKind::Header,
+                rdocx::StoryItemKind::ContentControl,
+                false,
+                text("block")
+            ),
+            (
+                rdocx::StoryKind::Header,
+                rdocx::StoryItemKind::Table,
+                true,
+                None
+            ),
+            (
+                rdocx::StoryKind::TableCell,
+                rdocx::StoryItemKind::PreservedNode,
+                true,
+                None
+            ),
+            (
+                rdocx::StoryKind::TableCell,
+                rdocx::StoryItemKind::Paragraph,
+                true,
+                text("cell")
+            ),
+        ]
+    );
+}
+
+#[test]
 fn comparison_drawings_survive_accept_and_reject() {
     for granularity in [
         rdocx::ComparisonGranularity::Run,

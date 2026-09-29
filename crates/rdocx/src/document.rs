@@ -1116,6 +1116,7 @@ pub struct StoryItemRef<'a> {
 pub struct StoryItemSnapshot {
     location: ContentLocation,
     direct_body_index: Option<usize>,
+    direct_child: bool,
     text: Option<String>,
     xml: Vec<u8>,
 }
@@ -1129,6 +1130,16 @@ impl StoryItemSnapshot {
     /// Return the containing direct main-body child when this item has one.
     pub fn direct_body_index(&self) -> Option<usize> {
         self.direct_body_index
+    }
+
+    /// Return whether this item is a direct child of its story owner.
+    ///
+    /// An item nested in another item of the same owner, such as an inline
+    /// content control, a field, or a drawing inside a paragraph, returns
+    /// `false`. The direct items of one owner never overlap, so their text
+    /// reads each part of the owner once.
+    pub fn is_direct_child(&self) -> bool {
+        self.direct_child
     }
 
     /// Return accepted-view text when the item is text bearing.
@@ -13721,6 +13732,7 @@ impl Document {
                             is_end: false,
                         },
                         direct_body_index,
+                        direct_child: item.direct_owner_child,
                         text,
                         xml,
                     });
