@@ -866,7 +866,13 @@ the legacy infallible `replace_text` method. The fallible method stages the
 replacement and publishes it only after namespace-safe serialization succeeds.
 The command-line `replace` operation uses this boundary, reports the stable
 serialization error, and creates no partial output. Python and WASM bindings
-gain no corresponding method.
+gain no corresponding method. Every Word replacement, literal, regular
+expression, or template, edits both copies of a text box that Word writes in
+`mc:AlternateContent` and counts a match once, from the DrawingML
+`mc:Choice`. The VML `mc:Fallback` keeps its edit only when the edit changed
+it as many times as the Choice, and keeps its bytes otherwise, so every change
+left in the document is counted once. A Fallback beside a Choice that holds no
+text box is replaced and counted as any other text box.
 
 The native presentation facade provides the same staged boundary through
 `Presentation::try_replace_text`, with exact counts across slides and speaker
