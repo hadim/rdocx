@@ -892,6 +892,27 @@ impl CT_Sdt {
         }
     }
 
+    /// Remove one content child, keeping the revisions and the source bytes
+    /// of the later runs at their content index.
+    pub(crate) fn remove_content(&mut self, index: usize) {
+        if index >= self.content.len() {
+            return;
+        }
+        self.content.remove(index);
+        for (boundary, _) in &mut self.revisions {
+            if *boundary > index {
+                *boundary -= 1;
+            }
+        }
+        self.inline_run_sources
+            .retain(|source| source.content_index != index);
+        for source in &mut self.inline_run_sources {
+            if source.content_index > index {
+                source.content_index -= 1;
+            }
+        }
+    }
+
     pub(crate) fn word_prefixes(&self) -> &[String] {
         &self.word_prefixes
     }

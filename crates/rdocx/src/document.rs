@@ -21619,8 +21619,10 @@ impl Document {
     /// Replace all occurrences of `placeholder` with `replacement` throughout the document.
     ///
     /// Searches body paragraphs, tables (including nested), headers, footers,
-    /// text boxes and chart labels. Handles placeholders split across multiple
-    /// runs. Returns the total number of replacements made.
+    /// text boxes and chart labels, and the content controls at every level of
+    /// them, inline controls included. Handles placeholders split across
+    /// multiple runs. A match that straddles a content-control boundary is not
+    /// replaced. Returns the total number of replacements made.
     ///
     /// A `replacement` that contains `placeholder` is substituted once, not
     /// repeatedly.
@@ -21725,13 +21727,15 @@ impl Document {
 
         for (rel_id, is_header) in self.header_footer_rel_ids() {
             if let Some(header_footer) = self.load_header_footer(&rel_id, is_header) {
-                sources.extend(crate::template::header_footer_sources(&header_footer));
+                sources.extend(rdocx_oxml::placeholder::header_footer_replaceable_texts(
+                    &header_footer,
+                ));
             }
         }
 
         for (part_name, _) in self.raw_text_bearing_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
-                sources.extend(crate::template::text_box_sources(xml)?);
+                sources.extend(rdocx_oxml::placeholder::xml_part_replaceable_texts(xml)?);
             }
         }
 
@@ -21775,23 +21779,14 @@ impl Document {
         Ok(count)
     }
 
-    /// Run the typed replacement over body paragraphs and tables.
+    /// Run the typed replacement over every body paragraph, those of tables
+    /// and content controls at every level included.
     fn replace_in_body(&mut self, placeholder: &str, replacement: &str) -> usize {
-        use rdocx_oxml::placeholder;
-
         let mut count = 0;
-        for content in &mut self.document.body.content {
-            match content {
-                BodyContent::Paragraph(p) => {
-                    count += placeholder::replace_in_paragraph(p, placeholder, replacement);
-                }
-                BodyContent::Table(t) => {
-                    count += placeholder::replace_in_table(t, placeholder, replacement);
-                }
-                BodyContent::ContentControl(_) => {}
-                BodyContent::RawXml(_) => {}
-            }
-        }
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            count +=
+                rdocx_oxml::placeholder::replace_in_paragraph(paragraph, placeholder, replacement);
+        });
         count
     }
 
@@ -21889,8 +21884,10 @@ impl Document {
     /// Replace all regex matches with `replacement` throughout the document.
     ///
     /// The `replacement` string supports capture groups: `$1`, `$2`, etc.
-    /// Searches body paragraphs, tables (including nested), headers, and footers.
-    /// Returns the total number of replacements made, or an error if the regex is invalid.
+    /// Searches body paragraphs, tables (including nested), headers, footers
+    /// and text boxes, and the content controls at every level of them, as
+    /// [`Self::replace_text`] does. Returns the total number of replacements
+    /// made, or an error if the regex is invalid.
     pub fn replace_regex(&mut self, pattern: &str, replacement: &str) -> Result<usize> {
         let re =
             regex::Regex::new(pattern).map_err(|e| Error::Other(format!("invalid regex: {e}")))?;
@@ -21925,19 +21922,10 @@ impl Document {
 
         let mut count = 0;
 
-        // Replace in body paragraphs and tables
-        for content in &mut self.document.body.content {
-            match content {
-                BodyContent::Paragraph(p) => {
-                    count += placeholder::replace_regex_in_paragraph(p, re, replacement);
-                }
-                BodyContent::Table(t) => {
-                    count += placeholder::replace_regex_in_table(t, re, replacement);
-                }
-                BodyContent::ContentControl(_) => {}
-                BodyContent::RawXml(_) => {}
-            }
-        }
+        // Replace in body paragraphs, tables and content controls
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            count += placeholder::replace_regex_in_paragraph(paragraph, re, replacement);
+        });
 
         // Replace in headers and footers
         for (rel_id, is_header) in self.header_footer_rel_ids() {

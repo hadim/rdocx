@@ -596,6 +596,122 @@ fn cli_replace_reports_namespace_preflight_errors_without_panicking() {
     assert!(!output_path.exists());
 }
 
+/// `rdocx replace --expect 1` found none of the text that Google Docs and
+/// Word keep in content controls: a run wrapped inside its paragraph, a
+/// paragraph wrapped at body level, a control in a table cell, nested
+/// controls, a control in a text box, and the table and controls of a
+/// header or footer.
+#[test]
+fn replace_with_expect_counts_the_text_of_content_controls_everywhere() {
+    let temp = TempWorkspace::new("replace-content-controls");
+    let input = temp.path.join("controls.docx");
+    write_document(&input, &["seed"]);
+
+    let control = |tag: &str, content: &str| {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#
+        )
+    };
+    let run = |text: &str| format!("<w:r><w:t>{text}</w:t></w:r>");
+    let paragraph = |content: &str| format!("<w:p>{content}</w:p>");
+    let table = |cell: &str| {
+        format!(
+            r#"<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>{cell}</w:tc></w:tr></w:tbl>"#
+        )
+    };
+    let text_box = format!(
+        r#"<w:r><w:pict><v:shape style="width:216pt;height:72pt"><v:textbox><w:txbxContent>{}</w:txbxContent></v:textbox></v:shape></w:pict></w:r>"#,
+        control("box", &paragraph(&run("{{box}}")))
+    );
+    let body = [
+        paragraph(&[run("Body "), control("goog_rdk_0", &run("{{inline}}"))].concat()),
+        control("goog_rdk_1", &paragraph(&run("{{block}}"))),
+        table(&control("cell", &paragraph(&run("{{cell}}")))),
+        control("outer", &paragraph(&control("inner", &run("{{nested}}")))),
+        paragraph(&[run("Host"), text_box].concat()),
+    ]
+    .concat();
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let header = format!(
+        r#"<w:hdr xmlns:w="{word}">{}{}</w:hdr>"#,
+        table(&paragraph(&run("{{header_table}}"))),
+        control("header", &paragraph(&run("{{header_control}}")))
+    );
+    let footer = format!(
+        r#"<w:ftr xmlns:w="{word}">{}{}</w:ftr>"#,
+        control("page", &paragraph(&run("{{footer_control}}"))),
+        paragraph(&run("Confidential"))
+    );
+
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(&input).unwrap())).unwrap();
+    let mut references = String::new();
+    for (kind, xml, rel_type) in [
+        ("header", header, rel_types::HEADER),
+        ("footer", footer, rel_types::FOOTER),
+    ] {
+        let part = format!("/word/{kind}1.xml");
+        package.set_part(&part, xml.into_bytes());
+        package.content_types.add_override(
+            &part,
+            &format!("application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}+xml"),
+        );
+        let id = package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_type, &format!("{kind}1.xml"));
+        references.push_str(&format!(
+            r#"<w:{kind}Reference w:type="default" r:id="{id}"/>"#
+        ));
+    }
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{word}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml"><w:body>{body}<w:sectPr>{references}</w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    package
+        .write_to(&mut fs::File::create(&input).unwrap())
+        .unwrap();
+
+    for name in [
+        "inline",
+        "block",
+        "cell",
+        "nested",
+        "box",
+        "header_table",
+        "header_control",
+        "footer_control",
+    ] {
+        let tag = format!("{{{{{name}}}}}");
+        let replaced = temp.path.join(format!("{name}.docx"));
+        let output = cli(&[
+            "replace",
+            path_text(&input),
+            "--placeholder",
+            &tag,
+            "--value",
+            "done",
+            "--expect",
+            "1",
+            "--output",
+            path_text(&replaced),
+        ]);
+        assert_success(&output, name);
+
+        let package = OpcPackage::open(&replaced).unwrap();
+        let saved = ["document", "header1", "footer1"]
+            .map(|part| {
+                let xml = package.get_part(&format!("/word/{part}.xml")).unwrap();
+                String::from_utf8(xml.to_vec()).unwrap()
+            })
+            .concat();
+        assert!(!saved.contains(&tag), "{name}: {saved}");
+        assert_eq!(saved.matches(">done<").count(), 1, "{name}: {saved}");
+    }
+}
+
 #[test]
 fn validate_exit_status_is_a_verdict() {
     let temp = TempWorkspace::new("validate");
