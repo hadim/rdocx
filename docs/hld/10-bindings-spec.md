@@ -199,10 +199,10 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
   limited ABI.
 - The bounded core enum inventory is pure-Python `IntEnum`:
   `WD_ALIGN_PARAGRAPH` and `WD_UNDERLINE` in `rdocx.enum.text`, plus
-  `WD_TABLE_ALIGNMENT` and `WD_CELL_VERTICAL_ALIGNMENT` in
-  `rdocx.enum.table`. All four are also top-level exports. Their checked
+  `WD_TABLE_ALIGNMENT`, `WD_CELL_VERTICAL_ALIGNMENT` and `WD_ROW_HEIGHT_RULE`
+  in `rdocx.enum.table`. All five are also top-level exports. Their checked
   integer literals cover the paragraph, run and table variants exposed by the
-  S33 facade, including `WD_ALIGN_PARAGRAPH.CENTER == 1`. Underline codes use a
+  facade, including `WD_ALIGN_PARAGRAPH.CENTER == 1`. Underline codes use a
   total binding-oriented facade value accessor rather than expanding the
   published exhaustive Rust `UnderlineStyle` enum.
 - The package layer owns `RdocxError(Exception)` as the base, with
@@ -234,6 +234,44 @@ revision once, stales every earlier structural handle, and publishes only the
 native staged result. Python index errors are rejected before mutation, while
 native topology and serialization failures use the existing `RdocxError`
 mapping. Removing the only direct row is rejected.
+
+`Table`, `Row` and `Cell` also bind the checked native formatting setters.
+`Table.set_borders(style, *, size, color)` sets every table edge and
+`set_border(edge, style, *, size, color)` sets one. The style is an
+`ST_Border` name from `none`, `single`, `thick`, `double`, `dotted`, `dashed`,
+`dotDash` and `wave`, the edge is `top`, `bottom`, `left`, `right`, `insideH`
+or `insideV`, the size is in eighths of a point and the color is six
+hexadecimal digits or `auto`. `border(edge)` reads a `(style, size, color)`
+tuple or `None`. `set_cell_margins` takes four keyword EMU lengths and
+`cell_margins` reads a `(top, right, bottom, left)` tuple of optional
+`Length` values. `grid_widths` reads and replaces every grid column, and
+`set_column_width(column, width)` changes one. Both keep the table width and
+every covering cell width in step. `Row.height` and `Row.height_rule` follow
+python-docx with `WD_ROW_HEIGHT_RULE.AT_LEAST` and `EXACTLY`. Assigning a
+height keeps an exact rule, and a rule needs a height to apply to. Unlike
+python-docx, a row whose `w:trHeight` has an `auto` rule or no value reads no
+height, and assigning one writes a minimum.
+`Row.cant_split` and `Row.is_header` are tri-state. `Cell.shading`,
+`Cell.border(edge)`, `Cell.set_border`, `Cell.margins` and `Cell.set_margins`
+are the same forms for one cell. These edits move no content, so they keep
+live handles valid and do not advance the revision. An unknown style, edge or
+rule raises `ValueError`, a value the native setter rejects raises
+`RdocxError`, and either way the document is unchanged.
+
+`Document.insert_table(index, rows, cols)` inserts a table at a direct body
+index, rejects an index past the end with `IndexError` before mutation, and
+returns a handle to the new table. Table handles count every table in
+document order, including those inside block content controls, so the handle
+is resolved from the inserted body position rather than assumed. Cells merge
+through the checked table operations, never through the unchecked cell span
+setter. `Table.set_cell_grid_span(row, col, span)` spans columns and absorbs
+or restores untouched empty cells, and `None` or `1` removes the span.
+`Table.set_cell_vertical_merge(row, col, merge)` writes `restart`, `continue`
+or `None` after validating the whole merge topology. Both take the possibly
+negative indexes `Table.cell` takes. A grid span that absorbs or restores
+cells advances the revision once, because later cell indexes move, while a
+vertical merge keeps live handles valid. `Cell.grid_span` reads the span with
+the python-docx default of 1 and `Cell.vertical_merge` reads the merge state.
 
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
@@ -667,10 +705,13 @@ properties. Both handles read page size, orientation, margins, gutter,
 equal-width columns, page-number start, header and footer distance, title-page
 state, and break type. The mutable handle adds checked setters for every value,
 normalizes page dimensions when setting orientation, and rejects invalid or
-out-of-range inputs before changing any field. `Document` adds `section_count`,
-`sections`, total `section` and `section_mut` lookup, and fallible staged
-`insert_section` and `remove_section` operations. Its older final-section
-geometry convenience setters remain infallible and unchecked.
+out-of-range inputs before changing any field. The margin, gutter, and header
+and footer distance setters fill every other `w:pgMar` value the section lacks
+with the default that layout already assumes for it, so the written element
+carries all seven attributes `CT_PageMar` requires. `Document` adds
+`section_count`, `sections`, total `section` and `section_mut` lookup, and
+fallible staged `insert_section` and `remove_section` operations. Its older
+final-section geometry convenience setters remain infallible and unchecked.
 
 Native Rust also exposes non-exhaustive `HeaderFooterKind`, the existing
 `HdrFtrType`, and owned `SectionStory`. `Document::section_story` resolves one
@@ -683,16 +724,37 @@ also exposes `even_and_odd_headers` and `set_even_and_odd_headers`, while first
 story creation enables section `titlePg`. These are additive pre-1.0 native
 Rust APIs. Python exposes immutable inspection snapshots, and only the default
 header and footer text setters `Document.set_header` and `Document.set_footer`
-as mutation entry points. WASM and CLI gain no corresponding binding surface.
+as story mutation entry points. WASM and CLI gain no corresponding binding
+surface.
 
 `CT_SectPr` adds typed page-number start and raw child-position state, while
 `PageFrame` adds `displayed_page_number` beside its physical `page_number`.
 These model and handle additions are additive APIs on the published pre-1.0
 Rust crates, though exhaustive struct literals can require new fields. The
 published `CT_SectPr.header_refs` and `footer_refs` types remain
-`Vec<HdrFtrRef>` with the complete native vector surface. Python, WASM, and CLI
-gain no section mutation entry point and retain their existing package and
-render behavior.
+`Vec<HdrFtrRef>` with the complete native vector surface. WASM and CLI gain no
+section mutation entry point and retain their existing package and render
+behavior.
+
+Python `Section` values stay frozen snapshots. `Document.update_section(index,
+**values)` edits one section through the checked native setters and returns
+its new snapshot. The keywords are the snapshot's own field names, from
+`orientation` and `page_width` to `break_type`, with EMU lengths and the
+`ST_PageOrientation` and `ST_SectionType` spellings. The native setters write
+page size, the four margins, equal-width columns and the header and footer
+distances as pairs or quartets, so a value given alone keeps its partners as
+the section already has them, and a partner the section never set raises
+`ValueError` rather than being invented. Column partners come from the
+equal-width view the snapshot reports, so `column_count` or `column_spacing`
+alone raises on a section laid out in unequal-width tracks rather than
+rewriting them. Page size applies before orientation, which then normalizes
+the dimensions as the native setter does.
+The whole call is atomic: a name or partner problem raises before any change,
+and a value a native setter rejects restores the section. Section edits move
+no content, so they keep live handles valid and do not advance the revision.
+`Document.insert_section(index)` and `remove_section(index)` call the staged
+native operations, reject an out-of-range index with `IndexError`, and
+advance the revision once, because they add or merge body content.
 
 Python `Document.sections`, `styles`, `stories`, `story_items`,
 `header_footer_variants`, and `hyperlinks` return tuples of frozen typed
@@ -988,10 +1050,10 @@ cell width consistent. A cell with `gridSpan` receives the sum of its covered
 grid columns, and row-level leading and trailing omissions constrain coverage.
 Negative or zero column widths, invalid spans or coverage, and overflowing
 totals are rejected without mutation. The earlier unchecked compatibility
-setters remain available. These are additive pre-1.0 native APIs. Python,
-WASM, and CLI do not gain new table-property methods, but their owned
-`rdocx::Document` remains package-preserving when native code uses the new
-operations.
+setters remain available. These are additive pre-1.0 native APIs. WASM and CLI
+do not gain new table-property methods, and Python binds them as described
+under the Python API shape. Every binding's owned `rdocx::Document` remains
+package-preserving when native code uses the new operations.
 
 Native rows and cells also expose the additive `RowHeight`, `CellBorderEdge`,
 `CellTextDirection`, and `TableConditionalFormatting` values. Row handles have
@@ -1006,8 +1068,9 @@ take checked row and cell indexes. Grid omissions reconcile only untouched
 empty edge cells. Horizontal spans consume or restore only untouched empty
 cells. Vertical continuations require an equal grid range in the immediately
 preceding row. Each operation validates a cloned complete table before
-publication. These are additive pre-1.0 native APIs. Python, WASM, and CLI gain
-no row or cell methods in this story.
+publication. These are additive pre-1.0 native APIs. WASM and CLI gain no row
+or cell methods. Python binds the checked row and cell setters and the span
+and vertical merge operations, as described under the Python API shape.
 
 Row cloning and removal depend on package-wide identities, so the additive
 native operations live on `Document` as `clone_table_row(table, source,

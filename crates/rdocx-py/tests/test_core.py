@@ -1461,6 +1461,206 @@ def test_word_structure_snapshots_preserve_order_ownership_and_types():
     assert reopened.hyperlinks == captured_links
 
 
+def test_update_section_margins_and_orientation_reach_the_layout():
+    import rdocx
+    from rdocx import Inches
+
+    document = rdocx.Document()
+    document.add_paragraph("body text")
+    held = document.paragraphs[0]
+    assert (document.layout_page(0).width, document.layout_page(0).height) == (612.0, 792.0)
+
+    updated = document.update_section(
+        0, orientation="landscape", margin_top=Inches(0.5), margin_left=Inches(2)
+    )
+
+    assert updated == document.sections[0]
+    assert (updated.orientation, updated.page_width, updated.page_height) == (
+        "landscape",
+        Inches(11),
+        Inches(8.5),
+    )
+    assert (
+        updated.margin_top,
+        updated.margin_right,
+        updated.margin_bottom,
+        updated.margin_left,
+    ) == (Inches(0.5), Inches(1), Inches(1), Inches(2))
+    assert held.text == "body text"
+    assert (document.layout_page(0).width, document.layout_page(0).height) == (792.0, 612.0)
+    bounds = document.layout()[0].bounds
+    assert (bounds.x, bounds.y, bounds.width) == (144.0, 36.0, 576.0)
+    xml = _document_xml(document)
+    assert b'<w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>' in xml
+    assert b'<w:pgMar w:top="720" w:right="1440" w:bottom="1440" w:left="2880"' in xml
+    assert rdocx.Document.from_bytes(document.to_bytes()).sections[0] == updated
+
+
+def test_update_section_keeps_unnamed_partners_and_rejects_atomically():
+    import rdocx
+    from rdocx import Inches
+
+    document = rdocx.Document()
+    document.add_paragraph("body")
+    updated = document.update_section(
+        0,
+        page_height=Inches(14),
+        header_distance=Inches(0.25),
+        gutter=Inches(0.1),
+        column_count=2,
+        column_spacing=Inches(0.5),
+        page_number_start=5,
+        different_first_page=True,
+        break_type="oddPage",
+    )
+    assert (updated.page_width, updated.page_height) == (Inches(8.5), Inches(14))
+    assert (updated.header_distance, updated.footer_distance) == (Inches(0.25), Inches(0.5))
+    assert (updated.gutter, updated.column_count, updated.column_spacing) == (
+        Inches(0.1),
+        2,
+        Inches(0.5),
+    )
+    assert (
+        updated.page_number_start,
+        updated.different_first_page,
+        updated.break_type,
+    ) == (5, True, "oddPage")
+    assert document.update_section(0, column_count=3).column_spacing == Inches(0.5)
+
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match="orientation must be portrait or landscape"):
+        document.update_section(0, margin_top=0, orientation="sideways")
+    with pytest.raises(ValueError, match="break type"):
+        document.update_section(0, break_type="page")
+    with pytest.raises(rdocx.RdocxError, match="gutter must be nonnegative"):
+        document.update_section(0, margin_top=Inches(3), orientation="landscape", gutter=-635)
+    with pytest.raises(rdocx.RdocxError, match="page width must be positive"):
+        document.update_section(0, page_width=0)
+    with pytest.raises(rdocx.RdocxError, match="page-number start must be positive"):
+        document.update_section(0, margin_left=0, page_number_start=0)
+    with pytest.raises(IndexError, match="section index out of range"):
+        document.update_section(1, gutter=0)
+    assert document.to_bytes() == before
+
+
+def test_update_section_never_rewrites_unequal_width_columns():
+    import rdocx
+    from rdocx import Inches
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><w:t>body</w:t></w:r></w:p><w:sectPr>'
+        '<w:cols w:num="2" w:space="720" w:equalWidth="0">'
+        '<w:col w:w="3000" w:space="720"/><w:col w:w="5000"/></w:cols>'
+        "</w:sectPr>",
+    )
+    section = document.sections[0]
+    assert (section.column_count, section.column_spacing) == (None, None)
+
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match="no column_spacing to keep"):
+        document.update_section(0, column_count=3)
+    with pytest.raises(ValueError, match="no column_count to keep"):
+        document.update_section(0, column_spacing=Inches(0.25))
+    assert document.to_bytes() == before
+
+    updated = document.update_section(0, column_count=3, column_spacing=Inches(0.25))
+    assert (updated.column_count, updated.column_spacing) == (3, Inches(0.25))
+    assert b"<w:col " not in _document_xml(document)
+
+
+def test_insert_and_remove_section_restructure_the_body():
+    import rdocx
+    from rdocx import Inches
+
+    document = rdocx.Document()
+    document.add_paragraph("first")
+    held = document.paragraphs[0]
+    document.insert_section(1)
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+
+    assert [section.is_final for section in document.sections] == [False, True]
+    assert document.sections[1].margin_top is None
+    with pytest.raises(ValueError, match="no margin_right to keep"):
+        document.update_section(1, margin_top=Inches(1))
+    document.update_section(
+        1,
+        orientation="landscape",
+        page_width=Inches(8.5),
+        page_height=Inches(11),
+        margin_top=Inches(1),
+        margin_right=Inches(1),
+        margin_bottom=Inches(1),
+        margin_left=Inches(1),
+    )
+    document.add_paragraph("second")
+    assert [fragment.physical_page for fragment in document.layout()] == [1, 1, 2]
+    assert document.layout_page(0).width == 612.0
+    assert document.layout_page(1).width == 792.0
+
+    with pytest.raises(IndexError, match="section index out of range"):
+        document.insert_section(3)
+    with pytest.raises(IndexError, match="section index out of range"):
+        document.remove_section(2)
+    document.remove_section(1)
+    assert len(document.sections) == 1
+    assert [paragraph.text for paragraph in document.paragraphs] == ["first", "second"]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="sole document section"):
+        document.remove_section(0)
+    assert document.to_bytes() == before
+
+
+def test_section_edits_write_the_native_body():
+    # section_edits_write_the_body_the_python_binding_pins in
+    # crates/rdocx/tests/integration_test.rs pins the same body for the native
+    # calls, so CI checks that these calls write what the native ones write.
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("first")
+    document.insert_section(1)
+    document.update_section(
+        0,
+        orientation="landscape",
+        margin_top=457200,
+        margin_left=1828800,
+        page_number_start=3,
+        footer_distance=228600,
+        different_first_page=True,
+    )
+    document.update_section(
+        1,
+        page_width=7772400,
+        page_height=10058400,
+        margin_top=914400,
+        margin_right=1143000,
+        margin_bottom=685800,
+        margin_left=1371600,
+        gutter=127000,
+        column_count=2,
+        column_spacing=457200,
+        break_type="continuous",
+    )
+    document.add_paragraph("second")
+
+    xml = _document_xml(document).decode()
+    body = xml[xml.index("<w:body>") : xml.index("</w:body>") + len("</w:body>")]
+    assert "".join(line.strip() for line in body.splitlines()) == (
+        '<w:body><w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:pPr>'
+        '<w:sectPr><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>'
+        '<w:pgMar w:top="720" w:right="1440" w:bottom="1440" w:left="2880"'
+        ' w:gutter="0" w:header="720" w:footer="360"/>'
+        '<w:pgNumType w:start="3"/><w:titlePg/></w:sectPr></w:pPr></w:p>'
+        '<w:p><w:r><w:t>second</w:t></w:r></w:p><w:sectPr>'
+        '<w:type w:val="continuous"/><w:pgSz w:w="12240" w:h="15840"/>'
+        '<w:pgMar w:top="1440" w:right="1800" w:bottom="1080" w:left="2160"'
+        ' w:gutter="200" w:header="720" w:footer="720"/>'
+        '<w:cols w:num="2" w:space="720"/></w:sectPr></w:body>'
+    )
+
+
 def _story_paragraph_texts(document, kind):
     return [
         item.text
