@@ -13888,6 +13888,65 @@ fn table_mutation_rejects_invalid_ranges_without_partial_changes() {
     assert_eq!(presentation.to_bytes().unwrap(), before_overlap);
 }
 
+/// One `a16:colId` or `a16:rowId` extension list, as PowerPoint writes it on
+/// every grid column and row.
+fn powerpoint_table_id(kind: &str, value: u32) -> String {
+    let uri = if kind == "colId" {
+        "{9D8B030D-6E8A-4147-A177-3AD203B41FA5}"
+    } else {
+        "{0D108BD9-81ED-4DB2-BD59-A6C34878D82A}"
+    };
+    format!(
+        r#"<a:extLst><a:ext uri="{uri}"><a16:{kind} xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" val="{value}"/></a:ext></a:extLst>"#
+    )
+}
+
+#[test]
+fn column_widths_change_on_a_powerpoint_grid_whose_columns_share_a_width() {
+    let columns = (1..=3)
+        .map(|id| {
+            format!(
+                r#"<a:gridCol w="1000">{}</a:gridCol>"#,
+                powerpoint_table_id("colId", id)
+            )
+        })
+        .collect::<String>();
+    let cells = r#"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody><a:tcPr/></a:tc>"#;
+    let frame = format!(
+        r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="2" name="Table 1"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="3000" cy="500"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid>{columns}</a:tblGrid><a:tr h="500">{}{}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#,
+        cells.repeat(3),
+        powerpoint_table_id("rowId", 10)
+    );
+    let mut presentation = text_layout_deck(&frame, "");
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        table.set_column_width(0, Emu(1500)).unwrap();
+        table.set_column_width(2, Emu(1500)).unwrap();
+    }
+
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let shape = slide.shapes().next().unwrap();
+    assert_eq!(shape.size(), Some((Emu(4000), Emu(500))));
+    let package = open_opc(&saved, "PowerPoint grid widths");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let grid = (1..=3)
+        .zip([1500, 1000, 1500])
+        .map(|(id, width)| {
+            format!(
+                r#"<a:gridCol w="{width}">{}</a:gridCol>"#,
+                powerpoint_table_id("colId", id)
+            )
+        })
+        .collect::<String>();
+    assert!(xml.contains(&grid), "{xml}");
+    assert!(reopened.validate().is_empty());
+}
+
 fn table_border_line(color: &str) -> CT_LineProperties {
     CT_LineProperties::from_xml(
         format!(r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></a:ln>"#)

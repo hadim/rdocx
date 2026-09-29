@@ -301,6 +301,13 @@ origin in row-major order, and each source keeps one empty paragraph. Splitting
 is valid only at an origin, clears this pattern across its checked rectangle,
 and does not redistribute the migrated content.
 
+The writer matches preserved `a:gridCol` attributes and children, such as
+PowerPoint's `a16:colId` extension, to the public column widths by value, and
+fails with an ambiguity error when an edit leaves repeated widths it cannot
+pair. `CT_Table::set_column_width` first pairs every column with its metadata
+by position, so a width edit keeps the metadata with its column whatever the
+other widths are.
+
 Table properties expose right-to-left order, first and last row and column
 flags, row and column banding, and the optional table style id. Unsupported
 cell properties remain raw XML at their schema boundary. The rendering subset

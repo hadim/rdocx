@@ -398,7 +398,10 @@ TableCellMut::set_border(&mut self, edge: CellBorder, line: Option<CT_LineProper
 Changing a column width uses a checked sum and synchronizes the graphic-frame
 width. Changing a row height does the same for the frame height and requires a
 positive height. The stored height is a minimum, which PowerPoint grows to fit
-the row's text. A border is the `a:lnL`, `a:lnR`, `a:lnT`, or `a:lnB` line of
+the row's text. A width change goes through `CT_Table::set_column_width`, which
+keeps the column's preserved `a:gridCol` content, such as the `a16:colId`
+extension PowerPoint writes, with that column even when other columns share
+its width. A border is the `a:lnL`, `a:lnR`, `a:lnT`, or `a:lnB` line of
 `a:tcPr`, written in that order before the cell fill. Merge accepts opposite rectangle corners in either order. It validates
 the complete rectangle before changing state, rejects overlap with an existing
 merge, migrates typed paragraphs in row-major order, and writes the DrawingML

@@ -547,6 +547,21 @@ impl CT_Table {
         writer.write_event(Event::End(BytesEnd::new("a:tbl")))?;
         Ok(writer.into_inner())
     }
+
+    /// Changes one grid-column width and keeps the column's preserved
+    /// `a:gridCol` content with it, even when other columns share the old or
+    /// the new width.
+    pub fn set_column_width(&mut self, index: usize, width: Emu) -> Result<()> {
+        if index >= self.grid.columns.len() {
+            return Err(OxmlError::InvalidValue(format!(
+                "column index {index} is out of range"
+            )));
+        }
+        self.grid.align_column_metadata()?;
+        self.grid.columns[index] = width;
+        self.grid.column_raw[index].width = width;
+        Ok(())
+    }
 }
 
 fn root_a_namespace_declaration(xml: &[u8]) -> Result<Option<String>> {
@@ -1000,6 +1015,38 @@ impl CT_TableGrid {
             return Err(ambiguous_grid_metadata());
         }
         Ok(matched_original_indices(&self.columns, &original_widths))
+    }
+
+    /// Pairs every current column with the preserved metadata it is matched
+    /// with, and anchors raw grid children to current columns, so the next
+    /// edit is matched by position instead of by width.
+    fn align_column_metadata(&mut self) -> Result<()> {
+        let matches = self.matched_column_indices()?;
+        let original_to_current = invert_matches(&matches, self.column_raw.len());
+        let mut raw_children = OrderedRawChildren::default();
+        for boundary in 0..=self.columns.len() {
+            for child in self.raw_children.at_reconciled(
+                boundary,
+                0,
+                &original_to_current,
+                self.columns.len(),
+            ) {
+                raw_children.push(boundary, child.to_vec());
+            }
+        }
+        self.column_raw = self
+            .columns
+            .iter()
+            .zip(&matches)
+            .map(|(width, matched)| GridColumnRaw {
+                width: *width,
+                ..matched.map_or_else(GridColumnRaw::default, |index| {
+                    self.column_raw[index].clone()
+                })
+            })
+            .collect();
+        self.raw_children = raw_children;
+        Ok(())
     }
 }
 
@@ -2874,6 +2921,24 @@ mod tests {
         insert_and_edit.grid.columns[0] = Emu(150);
         insert_and_edit.grid.columns.insert(1, Emu(300));
         assert_ambiguous_grid_error(insert_and_edit.to_xml().unwrap_err());
+    }
+
+    #[test]
+    fn column_width_edits_keep_metadata_when_columns_share_a_width() {
+        let xml = br#"<a:tbl xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><a:tblGrid><a:gridCol w="100"><x:id val="1"/></a:gridCol><x:before-second/><a:gridCol w="100"><x:id val="2"/></a:gridCol><a:gridCol w="100"><x:id val="3"/></a:gridCol><x:grid-tail/></a:tblGrid><a:tr h="300"><a:tc/><a:tc/><a:tc/></a:tr></a:tbl>"#;
+        let mut table = CT_Table::from_xml(xml).unwrap();
+        table.set_column_width(1, Emu(250)).unwrap();
+        table.set_column_width(2, Emu(100)).unwrap();
+        table.set_column_width(0, Emu(250)).unwrap();
+        assert!(table.set_column_width(3, Emu(1)).is_err());
+
+        let written = table.to_xml().unwrap();
+        assert!(
+            std::str::from_utf8(&written).unwrap().contains(
+                r#"<a:tblGrid><a:gridCol w="250"><x:id val="1"/></a:gridCol><x:before-second/><a:gridCol w="250"><x:id val="2"/></a:gridCol><a:gridCol w="100"><x:id val="3"/></a:gridCol><x:grid-tail/></a:tblGrid>"#
+            )
+        );
+        assert_eq!(table, CT_Table::from_xml(&written).unwrap());
     }
 
     #[test]

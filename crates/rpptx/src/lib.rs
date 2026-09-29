@@ -6590,12 +6590,14 @@ impl<'a> TableMut<'a> {
             ));
         }
         let mut staged = self.table.clone();
-        staged.grid.columns[column] = width;
+        staged
+            .set_column_width(column, width)
+            .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
         let (total_width, total_height) = table_extent(&staged, OPERATION)?;
         staged
             .to_xml()
             .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
-        self.table.grid.columns[column] = width;
+        *self.table = staged;
         let height = self
             .transform
             .extent
