@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
 use rdocx::{Document, WordPackageClass};
-use serde_json::json;
+use serde_json::{Value, json};
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -141,35 +141,76 @@ fn write_revision_fixture(path: &Path) {
     paragraph.add_run("Charlie");
     document.save(path).unwrap();
 
-    let mut package = OpcPackage::open(path).unwrap();
-    let part = package.main_document_part().unwrap();
-    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
     let revisions = [
         ("Alpha", 10, "Alice", "2026-01-01T00:00:00Z"),
         ("Bravo", 20, "Bob", "2026-01-02T00:00:00Z"),
         ("Charlie", 30, "Alice", "2026-01-03T00:00:00Z"),
     ];
-    let mut xml = xml;
     for (text, id, author, timestamp) in revisions {
-        let marker = format!(">{text}</w:t>");
-        let text_position = xml.find(&marker).expect("fixture text is present");
-        let run_start = xml[..text_position]
-            .rfind("<w:r")
-            .expect("fixture run starts before text");
-        let run_end = text_position
-            + xml[text_position..]
-                .find("</w:r>")
-                .expect("fixture run ends after text")
-            + "</w:r>".len();
-        let run = xml[run_start..run_end].to_owned();
-        let revision = format!(
-            "<w:ins w:id=\"{id}\" w:author=\"{author}\" w:date=\"{timestamp}\">{run}</w:ins>"
-        );
-        xml.replace_range(run_start..run_end, &revision);
+        rewrite_run(path, text, |run| {
+            format!(
+                "<w:ins w:id=\"{id}\" w:author=\"{author}\" w:date=\"{timestamp}\">{run}</w:ins>"
+            )
+        });
     }
+    assert_eq!(Document::open(path).unwrap().revisions().len(), 3);
+}
+
+/// Replace the main-story run whose text is exactly `text` with `rewrite(run)`.
+fn rewrite_run(path: &Path, text: &str, rewrite: impl FnOnce(&str) -> String) {
+    let mut package = OpcPackage::open(path).unwrap();
+    let part = package.main_document_part().unwrap();
+    let mut xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    let marker = format!(">{text}</w:t>");
+    let text_position = xml.find(&marker).expect("fixture text is present");
+    let run_start = xml[..text_position]
+        .rfind("<w:r")
+        .expect("fixture run starts before text");
+    let run_end = text_position
+        + xml[text_position..]
+            .find("</w:r>")
+            .expect("fixture run ends after text")
+        + "</w:r>".len();
+    let replacement = rewrite(&xml[run_start..run_end]);
+    xml.replace_range(run_start..run_end, &replacement);
     package.set_part(&part, xml.into_bytes());
     package.save(path).unwrap();
-    assert_eq!(Document::open(path).unwrap().revisions().len(), 3);
+}
+
+fn package_part_text(path: &Path, part: &str) -> String {
+    let package = OpcPackage::open(path).unwrap();
+    String::from_utf8(package.get_part(part).expect("part is present").to_vec()).unwrap()
+}
+
+fn header_part_name(path: &Path) -> String {
+    let package = OpcPackage::open(path).unwrap();
+    let mut headers = package
+        .parts
+        .keys()
+        .filter(|name| name.starts_with("/word/header"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(headers.len(), 1, "fixture has one header part");
+    headers.remove(0)
+}
+
+/// Concatenate the text of every `w:delText` element, like the acceptance
+/// suite's `<w:delText[^>]*>([^<]*)</w:delText>` search.
+fn deleted_text(xml: &str) -> String {
+    let mut deleted = String::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<w:delText") {
+        rest = &rest[start..];
+        let tag_end = rest.find('>').expect("delText start tag ends");
+        if rest[..tag_end].ends_with('/') {
+            rest = &rest[tag_end..];
+            continue;
+        }
+        let content_end = rest.find("</w:delText>").expect("delText element ends");
+        deleted.push_str(&rest[tag_end + 1..content_end]);
+        rest = &rest[content_end..];
+    }
+    deleted
 }
 
 fn path_text(path: &Path) -> &str {
@@ -334,6 +375,55 @@ fn text_prints_paragraphs_wrapped_by_a_body_content_control() {
         String::from_utf8(output.stdout).unwrap(),
         "Wrapped paragraph\nBody text\n"
     );
+}
+
+#[test]
+fn plain_text_prints_the_accepted_view_of_tracked_changes() {
+    let temp = TempWorkspace::new("text-tracked");
+    let input = temp.path.join("tracked.docx");
+    let mut document = fixture_document(&[]);
+    {
+        let mut paragraph = document.add_paragraph("");
+        paragraph.add_run("Tracked: ");
+        paragraph.add_run("ins NEEDLE");
+        paragraph.add_run("gone");
+    }
+    {
+        let mut table = document.add_table(1, 1);
+        table.cell(0, 0).unwrap().set_text("cell NEEDLE");
+    }
+    document.save(&input).unwrap();
+    rewrite_run(&input, "ins NEEDLE", |run| {
+        format!(r#"<w:ins w:id="1" w:author="Ada" w:date="2026-09-29T08:00:00Z">{run}</w:ins>"#)
+    });
+    rewrite_run(&input, "gone", |run| {
+        let run = run
+            .replace("<w:t", "<w:delText")
+            .replace("</w:t>", "</w:delText>");
+        format!(r#"<w:del w:id="2" w:author="Ada" w:date="2026-09-29T08:00:00Z">{run}</w:del>"#)
+    });
+    rewrite_run(&input, "cell NEEDLE", |run| {
+        format!(r#"<w:ins w:id="3" w:author="Ada" w:date="2026-09-29T08:00:00Z">{run}</w:ins>"#)
+    });
+    assert_eq!(Document::open(&input).unwrap().revisions().len(), 3);
+
+    let plain = cli(&["text", path_text(&input)]);
+    assert_success(&plain, "plain text");
+    assert_eq!(
+        String::from_utf8(plain.stdout).unwrap(),
+        "Tracked: ins NEEDLE\ncell NEEDLE\t\n"
+    );
+
+    let structured = cli(&["text", path_text(&input), "--json"]);
+    assert_success(&structured, "structured text");
+    let value: serde_json::Value = serde_json::from_slice(&structured.stdout).unwrap();
+    let texts = value["paragraphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|paragraph| paragraph["text"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["Tracked: ins NEEDLE", "cell NEEDLE"]);
 }
 
 #[test]
@@ -1237,6 +1327,14 @@ fn cli_collaboration_commands_are_schema_stable_and_atomic() {
                     "revisions": 2,
                 },
             ],
+            "options": {
+                "granularity": "run",
+                "ignore_formatting": false,
+                "ignore_whitespace": false,
+                "ignore_fields": false,
+                "ignore_comments": false,
+                "ignored_stories": [],
+            },
             "main_story_revisions": 2,
             "diagnostics": [],
             "output": path_text(&redline),
@@ -1541,6 +1639,103 @@ fn comment_add_counts_the_runs_that_text_json_lists() {
 }
 
 #[test]
+fn comment_add_and_reply_write_the_given_rfc3339_date() {
+    const ADDED: &str = "2026-09-29T08:30:00Z";
+    const REPLIED: &str = "2026-09-29T10:45:00+02:00";
+    let temp = TempWorkspace::new("comment-dates");
+    let input = temp.path.join("input.docx");
+    let added_path = temp.path.join("added.docx");
+    let replied_path = temp.path.join("replied.docx");
+    write_document(&input, &["Comment target"]);
+    let add = |date: &str, output: &Path| {
+        cli(&[
+            "comment",
+            "add",
+            path_text(&input),
+            "--start-paragraph",
+            "0",
+            "--start-run",
+            "0",
+            "--end-paragraph",
+            "0",
+            "--end-run",
+            "1",
+            "--author",
+            "Alice",
+            "--text",
+            "Review this",
+            "--date",
+            date,
+            "--output",
+            path_text(output),
+        ])
+    };
+
+    assert_success(&add(ADDED, &added_path), "dated comment add");
+    let replied = cli(&[
+        "comment",
+        "reply",
+        path_text(&added_path),
+        "--id",
+        "0",
+        "--author",
+        "Bob",
+        "--text",
+        "Agreed",
+        "--date",
+        REPLIED,
+        "--output",
+        path_text(&replied_path),
+    ]);
+    assert_success(&replied, "dated comment reply");
+
+    let document = Document::open(&replied_path).unwrap();
+    let dates = document
+        .comments()
+        .iter()
+        .map(|comment| comment.date().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(dates, [Some(ADDED.to_owned()), Some(REPLIED.to_owned())]);
+    let comments_xml = package_part_text(&replied_path, "/word/comments.xml");
+    assert!(comments_xml.contains(&format!(r#"w:date="{ADDED}""#)));
+    assert!(comments_xml.contains(&format!(r#"w:date="{REPLIED}""#)));
+
+    for invalid in ["2026-02-30T00:00:00Z", "2026-09-29", "yesterday"] {
+        let rejected_path = temp.path.join("rejected.docx");
+        let rejected = add(invalid, &rejected_path);
+        assert_eq!(rejected.status.code(), Some(1), "{invalid}");
+        assert!(rejected.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(rejected.stderr).unwrap(),
+            format!("Error: invalid RFC 3339 comment timestamp: {invalid}\n")
+        );
+        assert!(!rejected_path.exists());
+    }
+    let rejected_reply_path = temp.path.join("rejected-reply.docx");
+    let rejected_reply = cli(&[
+        "comment",
+        "reply",
+        path_text(&added_path),
+        "--id",
+        "0",
+        "--author",
+        "Bob",
+        "--text",
+        "Agreed",
+        "--date",
+        "2026-09-29T25:00:00Z",
+        "--output",
+        path_text(&rejected_reply_path),
+    ]);
+    assert_eq!(rejected_reply.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&rejected_reply.stderr)
+            .contains("invalid RFC 3339 comment timestamp: 2026-09-29T25:00:00Z")
+    );
+    assert!(!rejected_reply_path.exists());
+}
+
+#[test]
 fn revision_filters_change_only_matching_revisions() {
     let temp = TempWorkspace::new("revision-filters");
     let input = temp.path.join("input.docx");
@@ -1808,6 +2003,14 @@ fn compare_counts_the_revisions_it_creates_in_each_story() {
                     "revisions": 2,
                 },
             ],
+            "options": {
+                "granularity": "run",
+                "ignore_formatting": false,
+                "ignore_whitespace": false,
+                "ignore_fields": false,
+                "ignore_comments": false,
+                "ignored_stories": [],
+            },
             "main_story_revisions": 0,
             "diagnostics": [],
             "output": path_text(&redline),
@@ -1823,6 +2026,288 @@ fn compare_counts_the_revisions_it_creates_in_each_story() {
             path_text(&text_redline)
         )
     );
+}
+
+const COMPARE_TIMESTAMP: &str = "2026-09-29T12:00:00Z";
+
+/// Run `rdocx compare --json` and return its record.
+fn compare_record(original: &Path, edited: &Path, redline: &Path, options: &[&str]) -> Value {
+    let mut args = vec![
+        "compare",
+        path_text(original),
+        path_text(edited),
+        "--author",
+        "Reviewer",
+        "--timestamp",
+        COMPARE_TIMESTAMP,
+        "--output",
+        path_text(redline),
+        "--json",
+    ];
+    args.extend_from_slice(options);
+    let output = cli(&args);
+    assert_success(&output, &format!("compare {options:?}"));
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn compare_defaults_to_whole_runs_and_word_marks_only_the_changed_word() {
+    const LOREM: &str =
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor.";
+    let edited_text = LOREM.replace("dolor", "DOLOR");
+    let temp = TempWorkspace::new("compare-granularity");
+    let original = temp.path.join("original.docx");
+    let edited = temp.path.join("edited.docx");
+    write_document(&original, &[LOREM, "Second paragraph"]);
+    write_document(&edited, &[&edited_text, "Second paragraph"]);
+
+    for (granularity, recorded, deleted) in [
+        (None, "run", LOREM),
+        (Some("run"), "run", LOREM),
+        (Some("word"), "word", "dolor"),
+        (Some("character"), "character", "dolor"),
+    ] {
+        let redline = temp
+            .path
+            .join(format!("redline-{recorded}-{}.docx", granularity.is_some()));
+        let options = granularity
+            .map(|granularity| vec!["--granularity", granularity])
+            .unwrap_or_default();
+        let record = compare_record(&original, &edited, &redline, &options);
+        assert_eq!(record["options"]["granularity"], recorded);
+        assert_eq!(record["main_story_revisions"], 2, "{granularity:?}");
+        assert_eq!(
+            deleted_text(&package_part_text(&redline, "/word/document.xml")).trim(),
+            deleted,
+            "{granularity:?}"
+        );
+        let mut accepted = Document::open(&redline).unwrap();
+        accepted.accept_all().unwrap();
+        assert_eq!(
+            accepted.text(),
+            format!("{edited_text}\nSecond paragraph\n")
+        );
+        let mut rejected = Document::open(&redline).unwrap();
+        rejected.reject_all().unwrap();
+        assert_eq!(rejected.text(), format!("{LOREM}\nSecond paragraph\n"));
+    }
+}
+
+#[test]
+fn compare_ignore_flags_keep_the_original_side() {
+    let temp = TempWorkspace::new("compare-ignore");
+    let path = |name: &str| temp.path.join(name);
+
+    write_document(&path("plain.docx"), &["plain"]);
+    let mut bold = fixture_document(&[]);
+    bold.add_paragraph("").add_run("plain").set_bold(true);
+    bold.save(path("bold.docx")).unwrap();
+
+    write_document(&path("spaced.docx"), &["old  tail"]);
+    write_document(&path("single.docx"), &["old tail"]);
+
+    for (name, result) in [("page-one.docx", "1"), ("page-two.docx", "2")] {
+        write_document(&path(name), &["FIELD"]);
+        rewrite_run(&path(name), "FIELD", |_| {
+            format!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>{result}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+            )
+        });
+    }
+
+    for (original, edited, flag, key) in [
+        (
+            "plain.docx",
+            "bold.docx",
+            "--ignore-formatting",
+            "ignore_formatting",
+        ),
+        (
+            "spaced.docx",
+            "single.docx",
+            "--ignore-whitespace",
+            "ignore_whitespace",
+        ),
+        (
+            "page-one.docx",
+            "page-two.docx",
+            "--ignore-fields",
+            "ignore_fields",
+        ),
+    ] {
+        let tracked = compare_record(
+            &path(original),
+            &path(edited),
+            &path(&format!("tracked-{key}.docx")),
+            &[],
+        );
+        assert_ne!(tracked["main_story_revisions"], 0, "{flag}");
+        let ignored_path = path(&format!("ignored-{key}.docx"));
+        let ignored = compare_record(&path(original), &path(edited), &ignored_path, &[flag]);
+        assert_eq!(ignored["options"][key], true, "{flag}");
+        assert_eq!(ignored["main_story_revisions"], 0, "{flag}");
+        assert_eq!(
+            Document::open(&ignored_path).unwrap().text(),
+            Document::open(path(original)).unwrap().text(),
+            "{flag}"
+        );
+    }
+
+    // The edited side carries a comment added by the CLI and one changed word.
+    write_document(&path("reviewed.docx"), &["Review this", "old ending"]);
+    let commented = cli(&[
+        "comment",
+        "add",
+        path_text(&path("reviewed.docx")),
+        "--start-paragraph",
+        "0",
+        "--start-run",
+        "0",
+        "--end-paragraph",
+        "0",
+        "--end-run",
+        "1",
+        "--author",
+        "Bob",
+        "--text",
+        "edited side note",
+        "--output",
+        path_text(&path("commented.docx")),
+    ]);
+    assert_success(&commented, "comment add on the edited copy");
+    let replaced = cli(&[
+        "replace",
+        path_text(&path("commented.docx")),
+        "--placeholder",
+        "old",
+        "--value",
+        "new",
+        "--expect",
+        "1",
+        "--output",
+        path_text(&path("rewritten.docx")),
+    ]);
+    assert_success(&replaced, "replace on the edited copy");
+    let redline = path("comments-ignored.docx");
+    let record = compare_record(
+        &path("reviewed.docx"),
+        &path("rewritten.docx"),
+        &redline,
+        &["--ignore-comments"],
+    );
+    assert_eq!(record["options"]["ignore_comments"], true);
+    assert_eq!(record["main_story_revisions"], 2);
+    let document = Document::open(&redline).unwrap();
+    assert!(document.comments().is_empty());
+    assert_eq!(
+        deleted_text(&package_part_text(&redline, "/word/document.xml")),
+        "old ending"
+    );
+}
+
+#[test]
+fn compare_ignore_story_names_follow_the_python_story_kinds() {
+    let temp = TempWorkspace::new("compare-stories");
+    let original = temp.path.join("original.docx");
+    let edited = temp.path.join("edited.docx");
+    for (path, word) in [(&original, "old"), (&edited, "new")] {
+        let mut document = fixture_document(&[&format!("{word} body")]);
+        document.set_header(&format!("{word} header"));
+        document.save(path).unwrap();
+    }
+    let header = header_part_name(&original);
+    let both_tracked = ("old body".to_owned(), "old header".to_owned());
+    let tracked_stories = |redline: &Path| {
+        (
+            deleted_text(&package_part_text(redline, "/word/document.xml")),
+            deleted_text(&package_part_text(redline, &header)),
+        )
+    };
+
+    let redline = temp.path.join("default.docx");
+    let record = compare_record(&original, &edited, &redline, &[]);
+    assert_eq!(record["options"]["ignored_stories"], json!([]));
+    assert_eq!(tracked_stories(&redline), both_tracked);
+
+    let redline = temp.path.join("header-ignored.docx");
+    let record = compare_record(&original, &edited, &redline, &["--ignore-story", "header"]);
+    assert_eq!(record["options"]["ignored_stories"], json!(["header"]));
+    assert_eq!(
+        tracked_stories(&redline),
+        ("old body".to_owned(), String::new())
+    );
+    assert!(package_part_text(&redline, &header).contains("old header"));
+
+    let redline = temp.path.join("body-ignored.docx");
+    let record = compare_record(&original, &edited, &redline, &["--ignore-story", "body"]);
+    assert_eq!(record["options"]["ignored_stories"], json!(["body"]));
+    assert_eq!(record["main_story_revisions"], 0);
+    assert_eq!(
+        tracked_stories(&redline),
+        (String::new(), "old header".to_owned())
+    );
+
+    let others = ["footer", "comment", "text_box", "footnote", "endnote"];
+    let options = others
+        .iter()
+        .flat_map(|story| ["--ignore-story", story])
+        .collect::<Vec<_>>();
+    let redline = temp.path.join("others-ignored.docx");
+    let record = compare_record(&original, &edited, &redline, &options);
+    assert_eq!(record["options"]["ignored_stories"], json!(others));
+    assert_eq!(tracked_stories(&redline), both_tracked);
+}
+
+#[test]
+fn compare_rejects_unknown_and_duplicate_options_before_writing() {
+    let temp = TempWorkspace::new("compare-invalid-options");
+    let original = temp.path.join("original.docx");
+    let edited = temp.path.join("edited.docx");
+    let redline = temp.path.join("redline.docx");
+    write_document(&original, &["before"]);
+    write_document(&edited, &["after"]);
+
+    for (options, status, message) in [
+        (
+            &["--granularity", "words"][..],
+            2,
+            r#"unknown comparison granularity "words", expected run, word, or character"#,
+        ),
+        (
+            &["--ignore-story", "main"][..],
+            2,
+            r#"unknown comparison story "main", expected body, header, footer, comment, text_box, footnote, or endnote"#,
+        ),
+        (
+            &["--ignore-story", "table_cell"][..],
+            2,
+            r#"unknown comparison story "table_cell""#,
+        ),
+        (
+            &["--ignore-story", "header", "--ignore-story", "header"][..],
+            1,
+            "comparison options contain a duplicate ignored story",
+        ),
+    ] {
+        let mut args = vec![
+            "compare",
+            path_text(&original),
+            path_text(&edited),
+            "--author",
+            "Reviewer",
+            "--timestamp",
+            COMPARE_TIMESTAMP,
+            "--output",
+            path_text(&redline),
+        ];
+        args.extend_from_slice(options);
+        let rejected = cli(&args);
+        assert_eq!(rejected.status.code(), Some(status), "{options:?}");
+        assert!(rejected.stdout.is_empty(), "{options:?}");
+        let stderr = String::from_utf8(rejected.stderr).unwrap();
+        assert!(stderr.contains(message), "{options:?}: {stderr}");
+        assert!(!redline.exists(), "{options:?}");
+    }
 }
 
 #[test]

@@ -1381,7 +1381,9 @@ surface is introduced.
 
 `Document::text` traverses body paragraphs and table cells in document order.
 Nested tables and the content controls at every level contribute their
-paragraphs in place. `Document::images` and `Document::word_count` reach the
+paragraphs in place. Each paragraph contributes the same accepted-view text as
+paragraph text, so tracked insertions are included and tracked deletions are
+left out. `Document::images` and `Document::word_count` reach the
 same content. `Document::headings` and `Document::links` read the body
 paragraphs and those that body-level content controls wrap, and do not search
 table cells. MHTML export sizes its images from the paragraphs the HTML emitter

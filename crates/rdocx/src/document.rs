@@ -9575,7 +9575,7 @@ fn collect_block_control_paragraphs<'a>(control: &'a CT_Sdt, paragraphs: &mut Ve
 
 /// Append a block-level paragraph to [`Document::text`] as one line.
 fn push_paragraph_line(paragraph: &CT_P, text: &mut String) {
-    text.push_str(&paragraph.text());
+    text.push_str(&ParagraphRef { inner: paragraph }.text());
     text.push('\n');
 }
 
@@ -9604,7 +9604,7 @@ fn push_row_text(row: &CT_Row, text: &mut String) {
 }
 
 fn push_cell_paragraph(paragraph: &CT_P, text: &mut String) {
-    text.push_str(&paragraph.text());
+    text.push_str(&ParagraphRef { inner: paragraph }.text());
     text.push('\t');
 }
 
@@ -15044,6 +15044,10 @@ impl Document {
     /// every cell paragraph ends with a tab, paragraphs of nested tables
     /// included. Content controls at every level contribute the paragraphs,
     /// rows and cells they wrap at the position they occupy.
+    ///
+    /// Each paragraph contributes its accepted-view text, the same text as
+    /// [`ParagraphRef::text`]: tracked insertions are included and tracked
+    /// deletions are left out.
     pub fn text(&self) -> String {
         let mut result = String::new();
         for content in &self.document.body.content {

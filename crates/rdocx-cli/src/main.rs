@@ -152,6 +152,34 @@ enum Command {
         /// RFC 3339 revision timestamp
         #[arg(long)]
         timestamp: String,
+        /// Unit of a text change: run, word, or character
+        #[arg(
+            long,
+            value_name = "UNIT",
+            default_value = "run",
+            value_parser = commands::parse_comparison_granularity
+        )]
+        granularity: rdocx::ComparisonGranularity,
+        /// Keep the original formatting and record no formatting change
+        #[arg(long)]
+        ignore_formatting: bool,
+        /// Keep the original whitespace and record no whitespace-only change
+        #[arg(long)]
+        ignore_whitespace: bool,
+        /// Keep the original field results and record no field change
+        #[arg(long)]
+        ignore_fields: bool,
+        /// Keep the original comments and anchors, dropping the edited ones
+        #[arg(long)]
+        ignore_comments: bool,
+        /// Keep one story of the original, repeatable: body, header, footer,
+        /// comment, text_box, footnote, or endnote
+        #[arg(
+            long = "ignore-story",
+            value_name = "KIND",
+            value_parser = commands::parse_comparison_story
+        )]
+        ignore_stories: Vec<rdocx::ComparisonStoryKind>,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -191,6 +219,9 @@ enum CommentCommand {
         /// Comment text
         #[arg(long)]
         text: String,
+        /// RFC 3339 comment timestamp, omitted from the comment when absent
+        #[arg(long)]
+        date: Option<String>,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -211,6 +242,9 @@ enum CommentCommand {
         /// Reply text
         #[arg(long)]
         text: String,
+        /// RFC 3339 reply timestamp, omitted from the reply when absent
+        #[arg(long)]
+        date: Option<String>,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -419,6 +453,7 @@ fn main() {
                 author,
                 initials,
                 text,
+                date,
                 output,
                 json,
             } => commands::comment_add(
@@ -436,6 +471,7 @@ fn main() {
                 &author,
                 initials.as_deref(),
                 &text,
+                date.as_deref(),
                 &output,
                 json,
             ),
@@ -444,9 +480,10 @@ fn main() {
                 id,
                 author,
                 text,
+                date,
                 output,
                 json,
-            } => commands::comment_reply(&file, id, &author, &text, &output, json),
+            } => commands::comment_reply(&file, id, &author, &text, date.as_deref(), &output, json),
             CommentCommand::Resolve {
                 file,
                 id,
@@ -502,9 +539,30 @@ fn main() {
             edited,
             author,
             timestamp,
+            granularity,
+            ignore_formatting,
+            ignore_whitespace,
+            ignore_fields,
+            ignore_comments,
+            ignore_stories,
             output,
             json,
-        } => commands::compare(&original, &edited, &author, &timestamp, &output, json),
+        } => commands::compare(
+            &original,
+            &edited,
+            &author,
+            &timestamp,
+            &rdocx::ComparisonOptions {
+                granularity,
+                ignore_formatting,
+                ignore_whitespace,
+                ignore_fields,
+                ignore_comments,
+                ignored_stories: ignore_stories,
+            },
+            &output,
+            json,
+        ),
         Command::Toc { command } => match command {
             TocCommand::Rebuild { file, output, json } => {
                 commands::toc_rebuild(&file, &output, json)

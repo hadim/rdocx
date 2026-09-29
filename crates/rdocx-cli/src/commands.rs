@@ -8,8 +8,8 @@ use oxml_cli_support::{
     ensure_output_paths_available, json_envelope, parse_range,
 };
 use rdocx::{
-    BodyItemRef, Document, RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
-    StoryId, StoryKind,
+    BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
+    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange, StoryId, StoryKind,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -611,17 +611,19 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
 }
 
 /// Add one Word comment and publish the complete mutated document atomically.
+#[allow(clippy::too_many_arguments)]
 pub fn comment_add(
     file: &Path,
     range: RunRange,
     author: &str,
     initials: Option<&str>,
     text: &str,
+    date: Option<&str>,
     output: &Path,
     json_output: bool,
 ) -> Result<()> {
     let mut doc = Document::open(file)?;
-    let id = doc.add_comment(range, author, initials, text)?;
+    let id = doc.add_comment_with_date(range, author, initials, text, date)?;
     publish_document(&mut doc, output)?;
     mutation_record(
         json_output,
@@ -638,11 +640,12 @@ pub fn comment_reply(
     parent_id: i32,
     author: &str,
     text: &str,
+    date: Option<&str>,
     output: &Path,
     json_output: bool,
 ) -> Result<()> {
     let mut doc = Document::open(file)?;
-    let id = doc.reply_to(parent_id, author, text)?;
+    let id = doc.reply_to_with_date(parent_id, author, text, date)?;
     publish_document(&mut doc, output)?;
     mutation_record(
         json_output,
@@ -780,18 +783,90 @@ pub fn resolve_revisions(
     Ok(())
 }
 
+/// Granularity names, shared by argument parsing and the JSON record.
+const COMPARISON_GRANULARITIES: [(&str, ComparisonGranularity); 3] = [
+    ("run", ComparisonGranularity::Run),
+    ("word", ComparisonGranularity::Word),
+    ("character", ComparisonGranularity::Character),
+];
+
+/// Ignorable story names. They follow the Python `Story.kind` names, so
+/// `body` selects the main story.
+const COMPARISON_STORIES: [(&str, ComparisonStoryKind); 7] = [
+    ("body", ComparisonStoryKind::Main),
+    ("header", ComparisonStoryKind::Header),
+    ("footer", ComparisonStoryKind::Footer),
+    ("comment", ComparisonStoryKind::Comment),
+    ("text_box", ComparisonStoryKind::TextBox),
+    ("footnote", ComparisonStoryKind::Footnote),
+    ("endnote", ComparisonStoryKind::Endnote),
+];
+
+/// Parse a `--granularity` value.
+pub fn parse_comparison_granularity(
+    name: &str,
+) -> std::result::Result<ComparisonGranularity, String> {
+    COMPARISON_GRANULARITIES
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, granularity)| *granularity)
+        .ok_or_else(|| {
+            format!("unknown comparison granularity {name:?}, expected run, word, or character")
+        })
+}
+
+/// Parse one `--ignore-story` value.
+pub fn parse_comparison_story(name: &str) -> std::result::Result<ComparisonStoryKind, String> {
+    COMPARISON_STORIES
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, kind)| *kind)
+        .ok_or_else(|| {
+            format!(
+                "unknown comparison story {name:?}, expected body, header, footer, comment, \
+                 text_box, footnote, or endnote"
+            )
+        })
+}
+
+fn comparison_options_json(options: &ComparisonOptions) -> Value {
+    let granularity = COMPARISON_GRANULARITIES
+        .iter()
+        .find(|(_, known)| *known == options.granularity)
+        .map(|(name, _)| *name);
+    let stories = options
+        .ignored_stories
+        .iter()
+        .map(|kind| {
+            COMPARISON_STORIES
+                .iter()
+                .find(|(_, known)| known == kind)
+                .map(|(name, _)| *name)
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "granularity": granularity,
+        "ignore_formatting": options.ignore_formatting,
+        "ignore_whitespace": options.ignore_whitespace,
+        "ignore_fields": options.ignore_fields,
+        "ignore_comments": options.ignore_comments,
+        "ignored_stories": stories,
+    })
+}
+
 /// Create a tracked-changes document from an original and edited input.
 pub fn compare(
     original: &Path,
     edited: &Path,
     author: &str,
     timestamp: &str,
+    options: &ComparisonOptions,
     output: &Path,
     json_output: bool,
 ) -> Result<()> {
     let mut original_doc = Document::open(original)?;
     let edited_doc = Document::open(edited)?;
-    let diagnostics = original_doc.compare(&edited_doc, author, timestamp)?;
+    let diagnostics = original_doc.compare_with_options(&edited_doc, author, timestamp, options)?;
     let main_story_revisions = original_doc.revisions().len();
     let revisions = original_doc.story_revisions()?;
     let mut stories = Vec::<(&StoryId, usize)>::new();
@@ -825,6 +900,7 @@ pub fn compare(
             .collect::<Vec<_>>();
         print_json(json!({
             "scope": "all-supported-stories",
+            "options": comparison_options_json(options),
             "revisions": revisions.len(),
             "stories": story_records,
             "main_story_revisions": main_story_revisions,
