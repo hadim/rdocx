@@ -9389,6 +9389,91 @@ fn visit_sdt(control: &CT_Sdt, visitor: &mut impl FnMut(&CT_P)) {
     }
 }
 
+/// Collect the body paragraphs in document order, those that body-level
+/// content controls wrap included. Tables are not entered, with or without a
+/// control around them. This is what [`Document::headings`] and
+/// [`Document::links`] read.
+fn block_paragraphs(content: &[BodyContent]) -> Vec<&CT_P> {
+    let mut paragraphs = Vec::new();
+    for item in content {
+        match item {
+            BodyContent::Paragraph(paragraph) => paragraphs.push(paragraph),
+            BodyContent::ContentControl(control) => {
+                collect_block_control_paragraphs(control, &mut paragraphs);
+            }
+            BodyContent::Table(_) | BodyContent::RawXml(_) => {}
+        }
+    }
+    paragraphs
+}
+
+fn collect_block_control_paragraphs<'a>(control: &'a CT_Sdt, paragraphs: &mut Vec<&'a CT_P>) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => paragraphs.push(paragraph),
+            SdtContent::ContentControl(nested) => {
+                collect_block_control_paragraphs(nested, paragraphs);
+            }
+            SdtContent::Table(_)
+            | SdtContent::Row(_)
+            | SdtContent::Cell(_)
+            | SdtContent::Run(_)
+            | SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
+/// Append a block-level paragraph to [`Document::text`] as one line.
+fn push_paragraph_line(paragraph: &CT_P, text: &mut String) {
+    text.push_str(&paragraph.text());
+    text.push('\n');
+}
+
+/// Append a table to [`Document::text`] as one line per row, rows wrapped by
+/// table-level content controls included.
+fn push_table_text(table: &CT_Tbl, text: &mut String) {
+    for index in 0..=table.rows.len() {
+        for (_, _, control) in table
+            .content_controls
+            .iter()
+            .filter(|(at, _, _)| *at == index)
+        {
+            push_control_text(control, text);
+        }
+        if let Some(row) = table.rows.get(index) {
+            push_row_text(row, text);
+        }
+    }
+}
+
+/// Append a row to [`Document::text`] as one line in which every paragraph of
+/// its cells ends with a tab, cell controls and nested tables included.
+fn push_row_text(row: &CT_Row, text: &mut String) {
+    visit_row(row, &mut |paragraph| push_cell_paragraph(paragraph, text));
+    text.push('\n');
+}
+
+fn push_cell_paragraph(paragraph: &CT_P, text: &mut String) {
+    text.push_str(&paragraph.text());
+    text.push('\t');
+}
+
+/// Append what a block, table or row content control wraps to [`Document::text`].
+fn push_control_text(control: &CT_Sdt, text: &mut String) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => push_paragraph_line(paragraph, text),
+            SdtContent::Table(table) => push_table_text(table, text),
+            SdtContent::Row(row) => push_row_text(row, text),
+            SdtContent::Cell(cell) => {
+                visit_cell(cell, &mut |paragraph| push_cell_paragraph(paragraph, text));
+            }
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+            SdtContent::ContentControl(nested) => push_control_text(nested, text),
+        }
+    }
+}
+
 fn visit_body_paragraphs_mut(content: &mut [BodyContent], visitor: &mut impl FnMut(&mut CT_P)) {
     for item in content {
         match item {
@@ -14633,28 +14718,18 @@ impl Document {
     }
 
     /// Get the plain text of body paragraphs and table cells in document order.
+    ///
+    /// A body paragraph ends with a newline. A table row is one line in which
+    /// every cell paragraph ends with a tab, paragraphs of nested tables
+    /// included. Content controls at every level contribute the paragraphs,
+    /// rows and cells they wrap at the position they occupy.
     pub fn text(&self) -> String {
         let mut result = String::new();
         for content in &self.document.body.content {
             match content {
-                BodyContent::Paragraph(paragraph) => {
-                    result.push_str(&paragraph.text());
-                    result.push('\n');
-                }
-                BodyContent::Table(table) => {
-                    for row in &table.rows {
-                        for cell in &row.cells {
-                            for content in &cell.content {
-                                if let CellContent::Paragraph(paragraph) = content {
-                                    result.push_str(&paragraph.text());
-                                    result.push('\t');
-                                }
-                            }
-                        }
-                        result.push('\n');
-                    }
-                }
-                BodyContent::ContentControl(_) => {}
+                BodyContent::Paragraph(paragraph) => push_paragraph_line(paragraph, &mut result),
+                BodyContent::Table(table) => push_table_text(table, &mut result),
+                BodyContent::ContentControl(control) => push_control_text(control, &mut result),
                 BodyContent::RawXml(_) => {}
             }
         }
@@ -22700,13 +22775,13 @@ impl Document {
 
     /// Get all headings in the document as (level, text) pairs.
     ///
-    /// Detects heading paragraphs by their style ID (e.g. "Heading1", "Heading2").
+    /// Detects heading paragraphs by their style ID (e.g. "Heading1", "Heading2")
+    /// among the body paragraphs, including those that body-level content
+    /// controls wrap. Table cells are not searched.
     pub fn headings(&self) -> Vec<(u32, String)> {
         let mut result = Vec::new();
-        for content in &self.document.body.content {
-            if let BodyContent::Paragraph(p) = content
-                && let Some(level) = Self::detect_heading_level_for_toc(p)
-            {
+        for p in block_paragraphs(&self.document.body.content) {
+            if let Some(level) = Self::detect_heading_level_for_toc(p) {
                 result.push((level, p.text()));
             }
         }
@@ -22724,75 +22799,39 @@ impl Document {
 
     /// Get information about all images in the document.
     ///
-    /// Returns metadata for each inline and anchored image found in body paragraphs.
+    /// Returns metadata for each inline and anchored image found in body
+    /// paragraphs, table cells and content controls, in document order.
     pub fn images(&self) -> Vec<ImageInfo> {
         let mut result = Vec::new();
-
-        for content in &self.document.body.content {
-            Self::collect_images_from_content(content, &mut result);
-        }
+        visit_all_drawings(&self.document.body.content, &mut |drawing| {
+            if let Some(inline) = &drawing.inline {
+                result.push(ImageInfo {
+                    embed_id: inline.embed_id.clone(),
+                    name: inline.name.clone(),
+                    description: inline.description.clone(),
+                    width_emu: inline.extent_cx.0,
+                    height_emu: inline.extent_cy.0,
+                    is_anchor: false,
+                });
+            }
+            if let Some(anchor) = &drawing.anchor {
+                result.push(ImageInfo {
+                    embed_id: anchor.embed_id.clone(),
+                    name: anchor.name.clone(),
+                    description: anchor.description.clone(),
+                    width_emu: anchor.extent_cx.0,
+                    height_emu: anchor.extent_cy.0,
+                    is_anchor: true,
+                });
+            }
+        });
         result
-    }
-
-    fn collect_images_from_content(content: &BodyContent, result: &mut Vec<ImageInfo>) {
-        match content {
-            BodyContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
-            BodyContent::Table(tbl) => Self::collect_images_from_table(tbl, result),
-            BodyContent::ContentControl(_) => {}
-            BodyContent::RawXml(_) => {}
-        }
-    }
-
-    fn collect_images_from_paragraph(p: &CT_P, result: &mut Vec<ImageInfo>) {
-        for run in &p.runs {
-            for rc in &run.content {
-                let RunContent::Drawing(drawing) = rc else {
-                    continue;
-                };
-                if let Some(inline) = &drawing.inline {
-                    result.push(ImageInfo {
-                        embed_id: inline.embed_id.clone(),
-                        name: inline.name.clone(),
-                        description: inline.description.clone(),
-                        width_emu: inline.extent_cx.0,
-                        height_emu: inline.extent_cy.0,
-                        is_anchor: false,
-                    });
-                }
-                if let Some(anchor) = &drawing.anchor {
-                    result.push(ImageInfo {
-                        embed_id: anchor.embed_id.clone(),
-                        name: anchor.name.clone(),
-                        description: anchor.description.clone(),
-                        width_emu: anchor.extent_cx.0,
-                        height_emu: anchor.extent_cy.0,
-                        is_anchor: true,
-                    });
-                }
-            }
-        }
-    }
-
-    fn collect_images_from_table(tbl: &CT_Tbl, result: &mut Vec<ImageInfo>) {
-        use rdocx_oxml::table::CellContent;
-
-        for row in &tbl.rows {
-            for cell in &row.cells {
-                for cc in &cell.content {
-                    match cc {
-                        CellContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
-                        CellContent::Table(nested) => {
-                            Self::collect_images_from_table(nested, result)
-                        }
-                        CellContent::ContentControl(_) => {}
-                    }
-                }
-            }
-        }
     }
 
     /// Get information about all hyperlinks in the document.
     ///
+    /// Reads the body paragraphs, including those that body-level content
+    /// controls wrap. Table cells are not searched.
     /// Resolves hyperlink relationship IDs to their target URLs where possible.
     pub fn links(&self) -> Vec<LinkInfo> {
         use oxml_opc::relationship::rel_types;
@@ -22810,35 +22849,33 @@ impl Document {
         }
 
         let mut result = Vec::new();
-        for content in &self.document.body.content {
-            if let BodyContent::Paragraph(p) = content {
-                for hl in &p.hyperlinks {
-                    // `HyperlinkSpan`'s bounds are public and can be set by
-                    // hand, so clamp rather than slice-panic on a bad range.
-                    let start = hl.run_start.min(p.runs.len());
-                    let end = hl.run_end.clamp(start, p.runs.len());
-                    let text: String = p.runs[start..end].iter().map(|r| r.text()).collect();
+        for p in block_paragraphs(&self.document.body.content) {
+            for hl in &p.hyperlinks {
+                // `HyperlinkSpan`'s bounds are public and can be set by
+                // hand, so clamp rather than slice-panic on a bad range.
+                let start = hl.run_start.min(p.runs.len());
+                let end = hl.run_end.clamp(start, p.runs.len());
+                let text: String = p.runs[start..end].iter().map(|r| r.text()).collect();
 
-                    let url = hl.rel_id.as_ref().and_then(|id| url_map.get(id)).cloned();
+                let url = hl.rel_id.as_ref().and_then(|id| url_map.get(id)).cloned();
 
-                    result.push(LinkInfo {
-                        text,
-                        url,
-                        anchor: hl.anchor.clone(),
-                        rel_id: hl.rel_id.clone(),
-                    });
-                }
-                for field in p.complex_field_hyperlinks() {
-                    let start = field.run_start.min(p.runs.len());
-                    let end = field.run_end.clamp(start, p.runs.len());
-                    let text: String = p.runs[start..end].iter().map(|run| run.text()).collect();
-                    result.push(LinkInfo {
-                        text,
-                        url: Some(field.target),
-                        anchor: None,
-                        rel_id: None,
-                    });
-                }
+                result.push(LinkInfo {
+                    text,
+                    url,
+                    anchor: hl.anchor.clone(),
+                    rel_id: hl.rel_id.clone(),
+                });
+            }
+            for field in p.complex_field_hyperlinks() {
+                let start = field.run_start.min(p.runs.len());
+                let end = field.run_end.clamp(start, p.runs.len());
+                let text: String = p.runs[start..end].iter().map(|run| run.text()).collect();
+                result.push(LinkInfo {
+                    text,
+                    url: Some(field.target),
+                    anchor: None,
+                    rel_id: None,
+                });
             }
         }
         result
@@ -22847,43 +22884,12 @@ impl Document {
     /// Count the number of words in the document.
     ///
     /// Counts whitespace-separated tokens across all paragraphs (including
-    /// paragraphs inside table cells).
+    /// paragraphs inside table cells and content controls).
     pub fn word_count(&self) -> usize {
         let mut count = 0;
-        for content in &self.document.body.content {
-            count += Self::word_count_in_content(content);
-        }
-        count
-    }
-
-    fn word_count_in_content(content: &BodyContent) -> usize {
-        match content {
-            BodyContent::Paragraph(p) => p.text().split_whitespace().count(),
-            BodyContent::Table(tbl) => Self::word_count_in_table(tbl),
-            BodyContent::ContentControl(_) => 0,
-            BodyContent::RawXml(_) => 0,
-        }
-    }
-
-    fn word_count_in_table(tbl: &CT_Tbl) -> usize {
-        use rdocx_oxml::table::CellContent;
-
-        let mut count = 0;
-        for row in &tbl.rows {
-            for cell in &row.cells {
-                for cc in &cell.content {
-                    match cc {
-                        CellContent::Paragraph(p) => {
-                            count += p.text().split_whitespace().count();
-                        }
-                        CellContent::Table(nested) => {
-                            count += Self::word_count_in_table(nested);
-                        }
-                        CellContent::ContentControl(_) => {}
-                    }
-                }
-            }
-        }
+        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+            count += paragraph.text().split_whitespace().count();
+        });
         count
     }
 
