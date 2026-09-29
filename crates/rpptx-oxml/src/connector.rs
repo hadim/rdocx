@@ -14,9 +14,13 @@ use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, all_attributes,
     root_attributes, self_contained_attributes,
 };
+use crate::shape_tree::CT_ShapeStyle;
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
+
+/// The theme references python-pptx writes for a new connector.
+const DEFAULT_STYLE: &str = r#"<p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="1"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style>"#;
 
 /// One optional connector endpoint in `p:cNvCxnSpPr`.
 #[allow(non_camel_case_types)]
@@ -43,6 +47,9 @@ struct ConnectionShapeRaw {
     raw_attributes: RawAttributes,
     non_visual: NonVisualConnectionShape,
     style: Option<Vec<u8>>,
+    /// The references of `style` when it carries all four in schema order.
+    /// Writing always uses the preserved `style` bytes.
+    typed_style: Option<Box<CT_ShapeStyle>>,
     extension_list: Option<Vec<u8>>,
     raw_children: OrderedRawChildren,
 }
@@ -115,10 +122,39 @@ impl CT_ConnectionShape {
                     raw_children: OrderedRawChildren::default(),
                 },
                 style: None,
+                typed_style: None,
                 extension_list: None,
                 raw_children: OrderedRawChildren::default(),
             }),
         })
+    }
+
+    /// Sets `p:style` to the theme references python-pptx writes for a new
+    /// connector: the second theme line and the first theme effect in
+    /// `accent1`, no theme fill, and the minor font in `tx1`.
+    ///
+    /// A connector with neither a style nor a direct `a:ln` has no line, so
+    /// PowerPoint draws nothing for it.
+    pub fn set_default_style(&mut self) -> Result<()> {
+        let namespaces = NamespaceBindings::from_entries(&[
+            ("p".to_owned(), P_NS.to_owned()),
+            ("a".to_owned(), A_NS.to_owned()),
+        ]);
+        self.raw.typed_style = Some(CT_ShapeStyle::from_fragment(
+            DEFAULT_STYLE.as_bytes(),
+            &namespaces,
+        )?);
+        self.raw.style = Some(DEFAULT_STYLE.as_bytes().to_vec());
+        Ok(())
+    }
+
+    /// Returns the typed format-scheme references of `p:style`.
+    ///
+    /// A style that does not carry `a:lnRef`, `a:fillRef`, `a:effectRef`,
+    /// and `a:fontRef` in schema order is still preserved, but has no typed
+    /// view.
+    pub fn style(&self) -> Option<&CT_ShapeStyle> {
+        self.raw.typed_style.as_deref()
     }
 
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
@@ -198,6 +234,7 @@ impl CT_ConnectionShape {
         let mut non_visual = None;
         let mut shape_properties = None;
         let mut style = None;
+        let mut typed_style = None;
         let mut extension_list = None;
         let mut raw_children = OrderedRawChildren::default();
         let mut boundary = 0usize;
@@ -217,6 +254,7 @@ impl CT_ConnectionShape {
                         &mut non_visual,
                         &mut shape_properties,
                         &mut style,
+                        &mut typed_style,
                         &mut extension_list,
                         &mut raw_children,
                         &mut boundary,
@@ -235,6 +273,7 @@ impl CT_ConnectionShape {
                         &mut non_visual,
                         &mut shape_properties,
                         &mut style,
+                        &mut typed_style,
                         &mut extension_list,
                         &mut raw_children,
                         &mut boundary,
@@ -263,6 +302,7 @@ impl CT_ConnectionShape {
                 )?,
                 non_visual: connector_properties,
                 style,
+                typed_style,
                 extension_list,
                 raw_children,
             }),
@@ -323,6 +363,7 @@ fn capture_root_child(
     non_visual: &mut Option<ParsedNonVisualConnectionShape>,
     shape_properties: &mut Option<CT_ShapeProperties>,
     style: &mut Option<Vec<u8>>,
+    typed_style: &mut Option<Box<CT_ShapeStyle>>,
     extension_list: &mut Option<Vec<u8>>,
     raw_children: &mut OrderedRawChildren,
     boundary: &mut usize,
@@ -340,6 +381,7 @@ fn capture_root_child(
             *boundary = 2;
         }
         (Some(P_NS), b"style") if *boundary == 2 && style.is_none() => {
+            *typed_style = CT_ShapeStyle::from_fragment(&raw, namespaces).ok();
             *style = Some(raw);
             *boundary = 3;
         }
@@ -948,6 +990,31 @@ mod constructor_tests {
         let text = String::from_utf8(xml.clone()).unwrap();
         assert!(text.contains("<p:cNvPr id=\"2\" name=\"Connector &amp; 2\"/>"));
         assert!(text.find("<p:nvCxnSpPr").unwrap() < text.find("<p:spPr").unwrap());
+        assert!(!text.contains("<p:style"));
+        assert!(connector.style().is_none());
+        assert_eq!(CT_ConnectionShape::from_xml(&xml).unwrap(), connector);
+    }
+
+    #[test]
+    fn default_style_follows_shape_properties_and_has_a_typed_view() {
+        let mut connector = CT_ConnectionShape::new_free_standing(
+            2,
+            "Connector 2",
+            "line",
+            CT_Transform2D::default(),
+        )
+        .unwrap();
+        connector.set_default_style().unwrap();
+
+        let style = connector.style().expect("typed default style");
+        assert_eq!(style.line_reference.index, 2);
+        assert_eq!(style.fill_reference.index, 0);
+        assert_eq!(style.effect_reference.index, 1);
+        let xml = connector.to_xml().unwrap();
+        let text = String::from_utf8(xml.clone()).unwrap();
+        assert!(text.contains(
+            r#"</p:spPr><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="1"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style></p:cxnSp>"#
+        ));
         assert_eq!(CT_ConnectionShape::from_xml(&xml).unwrap(), connector);
     }
 }

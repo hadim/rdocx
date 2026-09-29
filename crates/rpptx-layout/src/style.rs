@@ -7,6 +7,7 @@ use oxml_drawing::effect::CT_EffectList;
 use oxml_drawing::fill::Fill;
 use oxml_drawing::line::CT_LineProperties;
 use oxml_drawing::style_ref::FontCollectionIndex;
+use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::shape_tree::CT_Shape;
 
 use crate::ResolveCtx;
@@ -158,6 +159,35 @@ impl ResolveCtx<'_> {
             }
         }
         Ok(effective)
+    }
+
+    /// Resolves one connector's line from its style's theme line reference and
+    /// its direct `a:ln`, the same way an ordinary shape's line resolves.
+    pub(crate) fn effective_connector_line(
+        &self,
+        connector: &CT_ConnectionShape,
+    ) -> Result<Option<CT_LineProperties>, ResolveError> {
+        let style = connector.style();
+        let mut line = match style {
+            Some(style) => matrix_entry(
+                "line",
+                style.line_reference.index,
+                &self.theme.theme_elements.format_scheme.line_styles,
+            )?,
+            None => None,
+        };
+        if let Some(explicit) = &connector.shape_properties.line {
+            if let Some(line) = line.as_mut() {
+                overlay_line(line, explicit);
+            } else {
+                line = Some(explicit.clone());
+            }
+        }
+        if let Some(fill) = line.as_mut().and_then(|line| line.fill.as_mut()) {
+            let reference = style.and_then(|style| style.line_reference.color.as_ref());
+            substitute_fill(fill, reference, "line")?;
+        }
+        Ok(line)
     }
 }
 

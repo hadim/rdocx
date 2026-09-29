@@ -635,7 +635,7 @@ struct ShapeRaw {
 }
 
 impl CT_ShapeStyle {
-    fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Box<Self>> {
+    pub(crate) fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Box<Self>> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {

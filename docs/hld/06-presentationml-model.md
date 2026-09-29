@@ -582,7 +582,11 @@ or `curvedConnector3` for `Straight`, `Elbow`, or `Curve`. Its transform offset
 is the componentwise minimum endpoint, its extents are the absolute endpoint
 spans, and its horizontal and vertical flips retain endpoint direction. A
 horizontal or vertical connector may have one zero extent. A span that cannot
-fit in the signed EMU representation returns a contextual error.
+fit in the signed EMU representation returns a contextual error. The connector
+carries the `p:style` python-pptx writes after its `p:spPr`: `a:lnRef idx="2"`,
+`a:fillRef idx="0"`, and `a:effectRef idx="1"` in `accent1`, and
+`a:fontRef idx="minor"` in `tx1`. PowerPoint draws no line for a connector with
+neither a style nor a direct `a:ln`, so the style gives it the theme's line.
 
 A constructed table uses a canonical `p:graphicFrame` with deterministic name
 `Table {id}`, a typed transform, the DrawingML table URI, and a rectangular
@@ -870,9 +874,12 @@ content-aware image deduplication prevent cross-scope aliasing.
 start and end connections. Each present `a:stCxn` or `a:endCxn` carries the
 required unqualified shape `id` and connection-site `idx` as `u32` values.
 Free-standing, start-only, end-only, and fully connected shapes therefore use
-the same model. Unsupported connector locks, style, extensions, attributes,
-and children remain in their ordered schema slots and round-trip without being
-interpreted.
+the same model. Unsupported connector locks, extensions, attributes, and
+children remain in their ordered schema slots and round-trip without being
+interpreted. The optional `p:style` also round-trips as preserved bytes. When
+it carries `a:lnRef`, `a:fillRef`, `a:effectRef`, and `a:fontRef` in schema
+order, `CT_ConnectionShape::style` also exposes them as a typed
+`CT_ShapeStyle`, the model ordinary shapes use.
 
 **`p:cNvPr/@id` must be unique within one `spTree`**, including inside nested
 groups, preserved raw members, and every branch of `mc:AlternateContent`. A
