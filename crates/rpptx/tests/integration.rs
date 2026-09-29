@@ -2962,16 +2962,22 @@ fn smartart_data_paragraph_properties_override_the_layout_defaults() {
         );
         return;
     }
-    for (data_properties, expected) in [
-        ("", ParagraphAlignment::Center),
-        (r#"<a:pPr algn="r"/>"#, ParagraphAlignment::Right),
+    for (data_properties, later_properties, expected) in [
+        ("", "", ParagraphAlignment::Center),
+        (r#"<a:pPr algn="r"/>"#, "", ParagraphAlignment::Right),
+        (
+            r#"<a:pPr algn="r"/>"#,
+            r#"<a:pPr algn="l"/>"#,
+            ParagraphAlignment::Right,
+        ),
     ] {
         let mut package =
             OpcPackage::from_reader(Cursor::new(authentic_smartart_oracle_source_bytes("cycle")))
                 .unwrap();
         let data = String::from_utf8(authentic_smartart_data_model("cycle"))
             .unwrap()
-            .replace("<a:p><a:r>", &format!("<a:p>{data_properties}<a:r>"));
+            .replace("<a:p><a:r>", &format!("<a:p>{data_properties}<a:r>"))
+            .replace("</a:r></a:p>", &format!("</a:r>{later_properties}</a:p>"));
         package.set_part("/ppt/diagrams/data1.xml", data.into_bytes());
         let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
         let (input, _) = presentation.render_deterministic().unwrap();
@@ -14624,6 +14630,80 @@ fn text_mutation_preserves_unmodelled_xml_and_schema_order() {
     }
     assert!(xml.find("<a:bodyPr").unwrap() < xml.find("<a:p>").unwrap());
     assert!(xml.find("<a:r>").unwrap() < xml.find("<a:t>ordered</a:t>").unwrap());
+}
+
+#[test]
+fn a_second_paragraph_properties_element_keeps_every_run_readable_editable_and_rendered() {
+    use rpptx::TextAlignment;
+
+    let second = r#"<a:pPr algn="r"/>"#;
+    let paragraph = format!(
+        r#"<a:p><a:pPr algn="l"/><a:r><a:rPr lang="en-US" sz="1800"/><a:t>One. </a:t></a:r>{second}<a:r><a:rPr lang="en-US" sz="1800"/><a:t>Two.</a:t></a:r></a:p>"#
+    );
+    let mut presentation = text_layout_deck(
+        &text_layout_shape(
+            2,
+            "Two properties",
+            (914_400, 914_400, 3_657_600, 914_400),
+            "<a:bodyPr/>",
+            &paragraph,
+        ),
+        "",
+    );
+    let shape = presentation.slide(0).unwrap().shape(0).unwrap();
+    assert_eq!(shape.text().as_deref(), Some("One. Two."));
+    let frame = shape.text_frame().unwrap();
+    let properties = frame.paragraph(0).unwrap().properties().unwrap();
+    assert_eq!(properties.alignment, Some(TextAlignment::Left));
+
+    let (input, _) = presentation.render_deterministic().unwrap();
+    assert_eq!(
+        resolved_content_text(&input.slides[0].shapes[0].content),
+        "One. Two."
+    );
+    let frames = presentation.text_layout_deterministic(1.0).unwrap();
+    assert_eq!(
+        frames[0]
+            .layout
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<String>(),
+        "One. Two."
+    );
+
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .text_frame()
+        .unwrap()
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .set_text("Uno. ");
+    let output = open_opc(&presentation.to_bytes().unwrap(), "second pPr edit output");
+    let xml =
+        String::from_utf8(output.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    assert!(
+        xml.contains(&format!(
+            r#"<a:t xml:space="preserve">Uno. </a:t></a:r>{second}<a:r>"#
+        )),
+        "{xml}"
+    );
+    let reopened = Presentation::from_bytes(&package_bytes(output)).unwrap();
+    assert_eq!(
+        reopened
+            .slide(0)
+            .unwrap()
+            .shape(0)
+            .unwrap()
+            .text()
+            .as_deref(),
+        Some("Uno. Two.")
+    );
 }
 
 #[test]
