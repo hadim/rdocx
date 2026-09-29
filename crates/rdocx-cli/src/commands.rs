@@ -1236,6 +1236,32 @@ pub fn validate(file: &Path) -> Result<bool> {
         }
     }
 
+    // Markup Compatibility requires every prefix that `mc:Ignorable` or
+    // `mc:MustUnderstand` lists to be declared, and a consumer may reject a
+    // part that breaks the rule. A part that does not parse as XML is
+    // outside this check.
+    let mut xml_parts = package
+        .parts
+        .iter()
+        .filter(|(part_name, _)| {
+            package
+                .content_types
+                .content_type_for(part_name)
+                .is_some_and(|content_type| content_type.ends_with("xml"))
+        })
+        .collect::<Vec<_>>();
+    xml_parts.sort();
+    for (part_name, xml) in xml_parts {
+        let Ok(findings) = rdocx_oxml::namespace::undeclared_compatibility_prefixes(xml) else {
+            continue;
+        };
+        for (attribute, prefix) in findings {
+            errors.push(format!(
+                "part {part_name} lists undeclared prefix `{prefix}` in mc:{attribute}"
+            ));
+        }
+    }
+
     // --- Advisory findings ---
 
     if doc.content_count() == 0 {

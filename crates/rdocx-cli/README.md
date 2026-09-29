@@ -90,4 +90,9 @@ directory, a symbolic link, a FIFO, or a device like `/dev/null`. A run checks
 every file it would write before it writes the first one, and publishes each
 file only once it is complete, so a failed run leaves no truncated output.
 
+`validate` exits unsuccessfully on a structural error: a relationship to a
+missing part, a part without a content type, or a prefix that `mc:Ignorable`
+or `mc:MustUnderstand` lists without a namespace declaration. Empty
+paragraphs, heading level gaps, and missing metadata are warnings only.
+
 Run `rdocx --help` or `rdocx <command> --help` for the complete option set.

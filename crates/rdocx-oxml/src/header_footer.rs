@@ -194,6 +194,9 @@ pub struct CT_HdrFtr {
     watermarks: Vec<VmlWatermark>,
     /// Extra namespace declarations captured from the root element.
     pub extra_namespaces: Vec<(String, String)>,
+    /// Non-namespace attributes of the root element, such as `mc:Ignorable`,
+    /// in source order.
+    root_attributes: Vec<(String, String)>,
     /// Unknown child elements captured as raw XML.
     pub extra_xml: Vec<Vec<u8>>,
 }
@@ -205,6 +208,7 @@ impl CT_HdrFtr {
             paragraphs: Vec::new(),
             watermarks: Vec::new(),
             extra_namespaces: Vec::new(),
+            root_attributes: Vec::new(),
             extra_xml: Vec::new(),
         }
     }
@@ -231,6 +235,7 @@ impl CT_HdrFtr {
 
         let mut paragraphs = Vec::new();
         let mut extra_namespaces = Vec::new();
+        let mut root_attributes = Vec::new();
         let mut extra_xml = Vec::new();
         let mut buf = Vec::new();
         let mut word_prefixes = Vec::new();
@@ -251,16 +256,25 @@ impl CT_HdrFtr {
                     } else if is_word_element(name.as_ref(), b"hdr", &prefixes)
                         || is_word_element(name.as_ref(), b"ftr", &prefixes)
                     {
-                        // Capture extra namespace declarations from root element
+                        // Capture extra namespace declarations and the other
+                        // attributes from root element
                         for attr in e.attributes().flatten() {
                             let key = attr.key.as_ref();
-                            if (key.starts_with(b"xmlns:") || key == b"xmlns")
-                                && !known_ns.contains(&key)
-                            {
+                            let is_namespace = key.starts_with(b"xmlns:") || key == b"xmlns";
+                            if is_namespace && !known_ns.contains(&key) {
                                 let key_str = std::str::from_utf8(key).unwrap_or("").to_string();
                                 let val_str =
                                     std::str::from_utf8(&attr.value).unwrap_or("").to_string();
                                 extra_namespaces.push((key_str, val_str));
+                            } else if !is_namespace {
+                                root_attributes.push((
+                                    std::str::from_utf8(key)?.to_owned(),
+                                    attr.decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        e.decoder(),
+                                    )?
+                                    .into_owned(),
+                                ));
                             }
                         }
                         word_prefixes = prefixes;
@@ -291,6 +305,7 @@ impl CT_HdrFtr {
             paragraphs,
             watermarks,
             extra_namespaces,
+            root_attributes,
             extra_xml,
         })
     }
@@ -334,8 +349,9 @@ impl CT_HdrFtr {
             start.push_attribute(("xmlns:wp", wp_ns));
         }
 
-        // Replay captured extra namespaces
-        for (key, val) in &self.extra_namespaces {
+        // Replay captured extra namespaces, then the root attributes that
+        // may name their prefixes, such as `mc:Ignorable`.
+        for (key, val) in self.extra_namespaces.iter().chain(&self.root_attributes) {
             start.push_attribute((key.as_str(), val.as_str()));
         }
 
@@ -1508,6 +1524,25 @@ mod tests {
             CT_HdrFtr::from_xml(&updated).unwrap().watermarks(),
             &[image]
         );
+    }
+
+    /// #160: a typed rewrite dropped `mc:Ignorable` from the part root.
+    #[test]
+    fn root_attributes_survive_a_rewrite_after_the_namespace_declarations() {
+        let xml = format!(
+            r#"<w:ftr xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w="{W_NS}" mc:Ignorable="w14" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:p><w:r><w:t>Page</w:t></w:r></w:p></w:ftr>"#
+        );
+        let parsed = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        let written = String::from_utf8(parsed.to_xml_footer().unwrap()).unwrap();
+        assert!(
+            written.contains(
+                r#" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" mc:Ignorable="w14">"#
+            ),
+            "{written}"
+        );
+        let reparsed = CT_HdrFtr::from_xml(written.as_bytes()).unwrap();
+        assert_eq!(reparsed.root_attributes, parsed.root_attributes);
+        assert_eq!(reparsed.to_xml_footer().unwrap(), written.as_bytes());
     }
 
     #[test]

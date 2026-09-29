@@ -427,6 +427,10 @@ rewriting the raw subtree bytes. Prefix aliases, nested shadows, and ordinary
 namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
+The main document, header, and footer roots also retain their other
+attributes, such as `mc:Ignorable`, in source order. A typed rewrite writes
+them after every namespace declaration it keeps, so a compatibility attribute
+survives the rewrite and every prefix it lists stays declared.
 
 Modeled paragraph, run, and section-property owners retain every ordered root
 attribute, including producer identity, revision-session, foreign, and
@@ -545,12 +549,15 @@ remain zero-width and keep their relative schema positions around literal text.
 
 The Word facade resolves an existing comments part through the main document's
 `COMMENTS` relationship and retains the normalized target. Saving serializes
-the typed comments model back to that target with its content-type override.
-The model preserves unmodelled attributes and children at their insertion
-boundaries, while comment range and reference anchors remain ordered among
-neighbouring paragraph and run XML. A document without a comments relationship
-does not gain a comments part, relationship, or override during an ordinary
-save.
+the typed comments model back to that target with its content-type override
+once the model no longer matches the part. Every public output shares that
+test, so a save without a comment edit keeps the part byte for byte and leaves
+a package signature over it valid. The model preserves unmodelled attributes
+and children at their insertion boundaries, and a rewritten root keeps its
+producer declarations and compatibility attributes in source order. Comment
+range and reference anchors remain ordered among neighbouring paragraph and
+run XML. A document without a comments relationship does not gain a comments
+part, relationship, or override during an ordinary save.
 
 The Word facade resolves an existing settings part through the main document's
 `SETTINGS` relationship and retains the normalized target instead of assuming

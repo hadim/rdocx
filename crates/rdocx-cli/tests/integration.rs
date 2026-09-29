@@ -629,6 +629,43 @@ fn validate_exit_status_is_a_verdict() {
     );
 }
 
+/// #160: rdocx 0.14 rewrote an empty comments root without its `w14`
+/// declaration while `mc:Ignorable` still listed `w14`, and validate passed
+/// the part.
+#[test]
+fn validate_reports_an_undeclared_ignorable_prefix() {
+    let temp = TempWorkspace::new("validate-compatibility");
+    let valid = temp.path.join("valid.docx");
+    let broken = temp.path.join("broken.docx");
+    write_document(&valid, &["Valid content"]);
+
+    let mut package = OpcPackage::open(&valid).unwrap();
+    package.set_part(
+        "/word/comments.xml",
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" mc:Ignorable="w14 w15"></w:comments>"#.to_vec(),
+    );
+    package.content_types.add_override(
+        "/word/comments.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    let document_part = package.main_document_part().unwrap();
+    package
+        .get_or_create_part_rels(&document_part)
+        .add(rel_types::COMMENTS, "comments.xml");
+    package.save(&broken).unwrap();
+
+    let output = cli(&["validate", path_text(&broken)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!(
+            "1 error(s) in {}:\n  1. part /word/comments.xml lists undeclared prefix `w14` in mc:Ignorable\n",
+            broken.display()
+        )
+    );
+}
+
 #[test]
 fn render_uses_the_bundled_font_deterministic_path() {
     let temp = TempWorkspace::new("render");

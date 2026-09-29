@@ -12171,8 +12171,20 @@ impl Document {
         self.flush_to_package()
     }
 
+    /// Stage every public output. A comments model that no longer matches its
+    /// part is written back even when no mutation marked it dirty. An
+    /// unchanged comments part keeps its producer bytes, as styles and the
+    /// other modelled parts do, so a save without a comment edit neither
+    /// rewrites it nor invalidates a package signature over it.
     pub(crate) fn prepare_staged_output(&mut self) -> Result<()> {
-        self.comments_dirty |= self.comments.is_some() && self.comments_part_name.is_some();
+        if let (Some(comments), Some(part_name)) = (&self.comments, &self.comments_part_name) {
+            self.comments_dirty |= self
+                .package
+                .get_part(part_name)
+                .and_then(|xml| rdocx_oxml::comments::CT_Comments::from_xml(xml).ok())
+                .as_ref()
+                != Some(comments);
+        }
         self.prepare_staged_package()
     }
 
