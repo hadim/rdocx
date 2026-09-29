@@ -6,7 +6,8 @@ use oxml_cli_support::{
     StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
 };
 use rdocx::{
-    BodyItemRef, Document, RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
+    BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
+    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -757,18 +758,90 @@ pub fn resolve_revisions(
     Ok(())
 }
 
+/// Granularity names, shared by argument parsing and the JSON record.
+const COMPARISON_GRANULARITIES: [(&str, ComparisonGranularity); 3] = [
+    ("run", ComparisonGranularity::Run),
+    ("word", ComparisonGranularity::Word),
+    ("character", ComparisonGranularity::Character),
+];
+
+/// Ignorable story names. They follow the Python `Story.kind` names, so
+/// `body` selects the main story.
+const COMPARISON_STORIES: [(&str, ComparisonStoryKind); 7] = [
+    ("body", ComparisonStoryKind::Main),
+    ("header", ComparisonStoryKind::Header),
+    ("footer", ComparisonStoryKind::Footer),
+    ("comment", ComparisonStoryKind::Comment),
+    ("text_box", ComparisonStoryKind::TextBox),
+    ("footnote", ComparisonStoryKind::Footnote),
+    ("endnote", ComparisonStoryKind::Endnote),
+];
+
+/// Parse a `--granularity` value.
+pub fn parse_comparison_granularity(
+    name: &str,
+) -> std::result::Result<ComparisonGranularity, String> {
+    COMPARISON_GRANULARITIES
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, granularity)| *granularity)
+        .ok_or_else(|| {
+            format!("unknown comparison granularity {name:?}, expected run, word, or character")
+        })
+}
+
+/// Parse one `--ignore-story` value.
+pub fn parse_comparison_story(name: &str) -> std::result::Result<ComparisonStoryKind, String> {
+    COMPARISON_STORIES
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, kind)| *kind)
+        .ok_or_else(|| {
+            format!(
+                "unknown comparison story {name:?}, expected body, header, footer, comment, \
+                 text_box, footnote, or endnote"
+            )
+        })
+}
+
+fn comparison_options_json(options: &ComparisonOptions) -> Value {
+    let granularity = COMPARISON_GRANULARITIES
+        .iter()
+        .find(|(_, known)| *known == options.granularity)
+        .map(|(name, _)| *name);
+    let stories = options
+        .ignored_stories
+        .iter()
+        .map(|kind| {
+            COMPARISON_STORIES
+                .iter()
+                .find(|(_, known)| known == kind)
+                .map(|(name, _)| *name)
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "granularity": granularity,
+        "ignore_formatting": options.ignore_formatting,
+        "ignore_whitespace": options.ignore_whitespace,
+        "ignore_fields": options.ignore_fields,
+        "ignore_comments": options.ignore_comments,
+        "ignored_stories": stories,
+    })
+}
+
 /// Create a tracked-changes document from an original and edited input.
 pub fn compare(
     original: &Path,
     edited: &Path,
     author: &str,
     timestamp: &str,
+    options: &ComparisonOptions,
     output: &Path,
     json_output: bool,
 ) -> Result<()> {
     let mut original_doc = Document::open(original)?;
     let edited_doc = Document::open(edited)?;
-    let diagnostics = original_doc.compare(&edited_doc, author, timestamp)?;
+    let diagnostics = original_doc.compare_with_options(&edited_doc, author, timestamp, options)?;
     let revision_count = original_doc.revisions().len();
     let records = diagnostics
         .iter()
@@ -783,6 +856,7 @@ pub fn compare(
     if json_output {
         print_json(json!({
             "scope": "all-supported-stories",
+            "options": comparison_options_json(options),
             "main_story_revisions": revision_count,
             "diagnostics": records,
             "output": output.display().to_string(),

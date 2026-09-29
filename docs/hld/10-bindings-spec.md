@@ -1295,9 +1295,15 @@ Complex fields map every physical source run to one modeled comparison owner,
 and sibling fields from one physical run share that owner.
 It emits same-story moves and supported run, paragraph, table, and section
 property revisions. Diagnostic locations retain the actual story identity and
-stable owner path. `rdocx-cli compare` exposes the source-compatible whole-run
-comparison with explicit author, RFC 3339 timestamp, and output. Python and
-WASM preserve comparison output when they save their owned document.
+stable owner path. `rdocx-cli compare` takes an explicit author, RFC 3339
+timestamp, and output, and exposes every `ComparisonOptions` field as a flag.
+Its `--granularity` defaults to the source-compatible whole-run `run`, like
+the native default, and `word` or `character` marks only the changed words or
+characters. `--ignore-story` is
+repeatable and takes the Python `Story.kind` names, where `body` selects the
+main story. An unknown granularity or story name is a usage error, and a
+duplicated story keeps the native rejection. Python and WASM preserve
+comparison output when they save their owned document.
 
 Native Word rendering exposes `rdocx::RevisionView` and the concrete
 `rdocx::RenderOptions`, whose default selects the accepted view. Additive
@@ -2066,10 +2072,11 @@ output and leaves an existing destination untouched. Both the selected page
 and all-page `render` paths use bundled deterministic fonts. The compiled
 surface also includes nested comment thread commands with optional RFC 3339
 comment dates, main-story revision inspection, all-story filtered revision
-resolution, whole-run comparison, and TOC rebuild. Every new mutation requires
-an explicit output and publishes through the shared staged output set. Their
-schema-1 records state `main` or `all-supported-stories` scope. Revision
-selectors are mutually exclusive, and
+resolution, comparison with explicit granularity and ignore options, and TOC
+rebuild. Every new mutation requires an explicit output and publishes through
+the shared staged output set. Their schema-1 records state `main` or
+`all-supported-stories` scope, and the comparison record also states the
+options that ran. Revision selectors are mutually exclusive, and
 RFC 3339 start and end bounds must be paired. The complete compiled surface is
 covered by one integration binary, with fixtures constructed in code and no
 command-only test dependency.

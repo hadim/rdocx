@@ -14,8 +14,9 @@ and produces fixed or flow output without an Office host.
   verdicts.
 - Comment thread inspection and mutation with explicit body run ranges and
   optional RFC 3339 dates.
-- Tracked revision inspection, filtered resolution, document comparison, and
-  table-of-contents rebuilds.
+- Tracked revision inspection, filtered resolution, table-of-contents rebuilds,
+  and document comparison at run, word, or character granularity with ignore
+  options.
 - Package-preserving edits cover the final S74 paragraph, run, typography,
   table, section, settings, field, form, equation, and drawing surface.
 
@@ -56,6 +57,9 @@ rdocx comment add report.docx --start-paragraph 0 --start-run 0 \
 rdocx revision accept reviewed.docx --author Reviewer -o accepted.docx
 rdocx compare original.docx edited.docx --author Reviewer \
   --timestamp 2026-09-13T12:00:00Z -o redline.docx
+rdocx compare original.docx edited.docx --author Reviewer \
+  --timestamp 2026-09-13T12:00:00Z --granularity word --ignore-comments \
+  --ignore-story header -o redline.docx
 rdocx toc rebuild report.docx -o refreshed.docx
 ```
 
@@ -65,6 +69,20 @@ removal select a decimal comment id. Comment `add` and `reply` write an
 optional `--date` RFC 3339 timestamp as the comment date. An invalid timestamp
 exits unsuccessfully without creating the output, and without `--date` the
 comment stays undated.
+
+`compare` replaces each changed run whole by default (`--granularity run`),
+like the Rust and Python APIs. `--granularity word` marks only the changed
+words, and `--granularity character` marks only the changed characters.
+`--ignore-formatting`, `--ignore-whitespace`, `--ignore-fields`,
+and `--ignore-comments` keep the original side of those differences.
+`--ignore-comments` keeps the original's comments and anchors and drops the
+comments of the edited file. The repeatable `--ignore-story KIND` keeps one
+story of the original, where `KIND` is a Python `Story.kind` name: `body`,
+`header`, `footer`, `comment`, `text_box`, `footnote`, or `endnote`. Ignoring
+the `comment` story excludes only the comments part, so a pair whose comments
+differ needs `--ignore-comments`. An unknown granularity or story name is a
+usage error, a repeated story fails, and neither creates the output. The
+`--json` record states the options that ran.
 
 Revision `list` reports the main story. Revision `accept` and `reject` operate
 across every supported story and accept at most one selector: `--id`,
