@@ -47,6 +47,8 @@ with open("report.pdf", "wb") as output:
   bookmarks.
 - Paragraph style assignment by style ID or name, checked against the styles
   the document defines.
+- Core document properties such as title, author, and revision, read and
+  written through `Document.core_properties` under python-docx's names.
 - Rich headers, footers, related stories, and resolved hyperlinks.
 - Complete paragraph and run formatting, multilingual and vertical typography,
   conditional and floating tables, section semantics, settings, fields, forms,

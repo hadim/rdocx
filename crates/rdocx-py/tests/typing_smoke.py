@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, assert_type
 
@@ -9,6 +10,7 @@ from rdocx import (
     Comment,
     ComparisonDiagnostic,
     ContentFragment,
+    CoreProperties,
     Document,
     Font,
     HeaderFooterVariant,
@@ -125,6 +127,16 @@ def exercise_rdocx_types(path: Path) -> None:
     fragments: tuple[LayoutFragment, ...] = document.layout()
     maybe_layout_page: LayoutPage | None = document.layout_page(0)
     report: TocRebuildReport = document.rebuild_toc()
+    core: CoreProperties = document.core_properties
+    core.title = "Typed title"
+    core.author = None
+    core.created = datetime(2026, 9, 29, tzinfo=timezone.utc)
+    core.last_printed = None
+    core.revision = 2
+    assert_type(core.title, str)
+    assert_type(core.comments, str)
+    assert_type(core.modified, datetime | None)
+    assert_type(core.revision, int)
     update_fields_on_open: bool | None = document.update_fields_on_open
     document.update_fields_on_open = True
     document.update_fields_on_open = None
@@ -205,6 +217,7 @@ if TYPE_CHECKING:
     Cell()  # type: ignore[call-arg]
     CellCollection()  # type: ignore[call-arg]
     CellParagraphCollection()  # type: ignore[call-arg]
+    CoreProperties()  # type: ignore[call-arg]
     Font()  # type: ignore[call-arg]
     Paragraph()  # type: ignore[call-arg]
     ParagraphCollection()  # type: ignore[call-arg]

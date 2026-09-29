@@ -557,6 +557,23 @@ malformed form reports the existing XML error without changing package bytes.
 This is additive pre-1.0 native and Python API. WASM and CLI do not gain new
 entry points and otherwise receive preserved package behavior.
 
+Python exposes the core properties as `Document.core_properties`, a
+`CoreProperties` handle with the python-docx attribute names `author`,
+`category`, `comments`, `content_status`, `created`, `identifier`, `keywords`,
+`language`, `last_modified_by`, `last_printed`, `modified`, `revision`,
+`subject`, `title` and `version`. `author` maps to `dc:creator` and `comments`
+to `dc:description`. Text properties read as an empty string when absent and
+accept at most 255 characters, as in python-docx. `revision` reads as an
+integer, zero when absent or unreadable, and accepts only a positive integer.
+The three dates read as timezone-aware UTC `datetime` values, parsed from
+W3CDTF as python-docx parses them, and accept a `datetime`, a naive one being
+taken as UTC. Assigning `None` or empty text removes a property. Each
+assignment replaces the native model through `Document::set_core_properties`,
+which creates `docProps/core.xml` with its package relationship and content
+type when the document has none. It changes no content, so the revision and
+every handle stay valid. A value of the wrong type raises `TypeError` and an
+out-of-range one `ValueError`, both before any change.
+
 Native Word mutations share one private document identifier owner. Existing
 method signatures stay unchanged, but fallible operations can report imported,
 preserved, overflow, and pending-collision errors before publication. Save and
