@@ -367,7 +367,8 @@ MEASUREMENT_COLUMNS = (
 )
 MEASUREMENT_DATE = "2026-09-19"
 ARCHIVE_REMEASUREMENT_DATES = {
-    "oxml-drawing": "2026-09-27",
+    "oxml-core": "2026-09-29",
+    "oxml-drawing": "2026-09-29",
     "oxml-opc": "2026-09-29",
     "oxml-pdf": "2026-09-29",
     "rdocx": "2026-09-29",
@@ -375,32 +376,34 @@ ARCHIVE_REMEASUREMENT_DATES = {
     "rdocx-layout": "2026-09-29",
     "rdocx-oxml": "2026-09-29",
     "rpptx": "2026-09-29",
+    "rpptx-cli": "2026-09-29",
     "rpptx-layout": "2026-09-29",
+    "rpptx-oxml": "2026-09-29",
 }
 MEASUREMENT_PLATFORM = "macOS 26.6.2, Apple M5 Max, arm64"
 ARCHIVE_COMPRESSION_TOLERANCE_BYTES = 64
 ARCHIVE_MEASUREMENTS = {
     "oxml-chart": (102_042, 659_367, 6),
     "oxml-cli-support": (8_603, 30_840, 6),
-    "oxml-core": (20_677, 100_124, 15),
-    "oxml-drawing": (161_853, 1_131_956, 24),
+    "oxml-core": (21_497, 103_654, 15),
+    "oxml-drawing": (168_367, 1_166_131, 24),
     "oxml-layout": (4_623_324, 9_227_483, 51),
     "oxml-media": (12_252, 50_992, 6),
     "oxml-opc": (96_722, 373_059, 12),
     "oxml-pdf": (73_852, 339_017, 14),
     "oxml-sml": (12_511, 49_803, 6),
-    "rdocx": (1_151_681, 6_765_067, 36),
-    "rdocx-cli": (40_831, 175_868, 8),
+    "rdocx": (1_184_219, 6_926_252, 36),
+    "rdocx-cli": (56_686, 250_367, 8),
     "rdocx-html": (15_486, 63_894, 11),
-    "rdocx-layout": (256_076, 1_387_027, 15),
+    "rdocx-layout": (258_530, 1_395_810, 15),
     "rdocx-opc": (3_655, 9_668, 6),
-    "rdocx-oxml": (390_761, 2_480_540, 32),
+    "rdocx-oxml": (401_208, 2_530_692, 32),
     "rdocx-pdf": (8_111, 26_758, 6),
-    "rpptx": (421_769, 2_192_962, 16),
+    "rpptx": (435_483, 2_259_663, 16),
     "rpptx-chart": (6_648, 21_136, 6),
-    "rpptx-cli": (39_442, 171_727, 8),
-    "rpptx-layout": (79_592, 460_415, 11),
-    "rpptx-oxml": (154_086, 1_046_474, 20),
+    "rpptx-cli": (40_734, 178_874, 8),
+    "rpptx-layout": (80_013, 463_237, 11),
+    "rpptx-oxml": (155_559, 1_052_534, 20),
     "rpptx-render": (59_928, 329_994, 8),
 }
 PACKAGE_VERSIONS = {
