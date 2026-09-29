@@ -635,16 +635,24 @@ retargeted in place. A shared one stays with its other references and the link
 gets a new relationship. An anchor link becomes external and loses its anchor.
 Removal keeps the link's runs in place and clears the built-in Hyperlink and
 FollowedHyperlink character styles, as Word's Remove Hyperlink does. Both remove
-a hyperlink relationship that nothing references any more. A HYPERLINK field is
-not listed by `story_links` and stays out of scope. Python exposes
+a hyperlink relationship that nothing references any more. Only links that
+`story_links` lists are in reach. An empty `w:hyperlink`, a link inside
+`w:fldSimple`, a link in a text box inside `mc:AlternateContent`, and a
+HYPERLINK field are not. Python exposes
 `Document.set_hyperlink_url` and `Document.remove_hyperlink` for a `Hyperlink`
-snapshot, which must still match the document. Neither moves content, so live
-handles stay valid.
+record. A snapshot from `Document.hyperlinks` resolves at its recorded position
+only while its story keeps the same link paths and texts and the link keeps
+its fields, and a record built from the public fields resolves only when
+exactly one link matches. Neither call moves content, so live handles stay
+valid.
 `Document::set_picture_size` resizes every main-document `pic:pic` drawing
 whose blip names one image relationship. It writes `wp:extent` and the `a:ext`
 of `pic:spPr/a:xfrm`, scales `wp:effectExtent` with the extent on each axis,
-and leaves anchor positions alone. Python exposes `Document.set_picture_size`
-with EMU sizes, and it keeps live handles valid too.
+and leaves anchor positions alone. It rejects a zero size. A VML `w:pict`
+picture on the relationship is not resized, the relationship of an SVG blip
+extension is not matched, and a picture inside a group is not resized. Python
+exposes `Document.set_picture_size` with EMU sizes, and it keeps live handles
+valid too.
 
 Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
 Each handle reports its zero-based document ordinal, schema-final ownership,

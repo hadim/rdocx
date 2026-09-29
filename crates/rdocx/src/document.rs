@@ -5761,6 +5761,17 @@ fn story_link_spans(
 ) -> Result<Vec<(ContentLocation, StoryLinkSpan)>> {
     let items = scan_story_items(xml, owner)?;
     let item_scopes = story_namespace_scopes_at(xml, items.iter().map(|item| item.scan.start))?;
+    ordered_story_link_spans(xml, story, items, &item_scopes)
+}
+
+/// Pair the hyperlinks of one story's scanned items with the smallest item
+/// that owns each, in physical source order.
+fn ordered_story_link_spans(
+    xml: &[u8],
+    story: &StoryId,
+    items: Vec<StoryItemSpan>,
+    item_scopes: &HashMap<usize, BTreeMap<String, String>>,
+) -> Result<Vec<(ContentLocation, StoryLinkSpan)>> {
     let mut links = Vec::new();
     for (index, item) in items.into_iter().enumerate() {
         let scope = item_scopes.get(&item.scan.start).ok_or_else(|| {
@@ -13860,64 +13871,26 @@ impl Document {
             )?;
             let mut link_inventories = Vec::new();
             for (story, items) in inventories {
-                let mut links = Vec::new();
-                for (index, item) in items.into_iter().enumerate() {
-                    let scope = item_scopes.get(&item.scan.start).ok_or_else(|| {
-                        Error::Other("story item namespace scope was not inventoried".to_owned())
-                    })?;
-                    for link in scan_story_item_links_with_scope(source.xml.as_ref(), &item, scope)?
-                    {
-                        let source_position = link.full.start;
-                        let source_end = link.full.end;
-                        let owner_width = item.full.end - item.full.start;
-                        links.push((
-                            source_position,
-                            source_end,
-                            owner_width,
-                            ContentLocation {
-                                story: story.clone(),
-                                item_kind: item.kind,
-                                index_path: vec![index],
-                                is_end: false,
-                            },
-                            link,
-                        ));
-                    }
-                }
+                let links =
+                    ordered_story_link_spans(source.xml.as_ref(), &story, items, &item_scopes)?;
                 link_inventories.push((story, links));
             }
             let link_scopes = story_namespace_scopes_at(
                 source.xml.as_ref(),
                 link_inventories
                     .iter()
-                    .flat_map(|(_, links)| links.iter().map(|(_, _, _, _, link)| link.full.start)),
+                    .flat_map(|(_, links)| links.iter().map(|(_, link)| link.full.start)),
             )?;
             for (story, links) in link_inventories {
-                let mut links = links
-                    .into_iter()
-                    .map(
-                        |(source_position, source_end, owner_width, location, link)| {
-                            let scope = link_scopes.get(&link.full.start).ok_or_else(|| {
-                                Error::Other(
-                                    "story hyperlink namespace scope was not inventoried"
-                                        .to_owned(),
-                                )
-                            })?;
-                            let info =
-                                self.story_link_info(&story, source.xml.as_ref(), link, scope)?;
-                            Ok((source_position, source_end, owner_width, location, info))
-                        },
-                    )
-                    .collect::<Result<Vec<_>>>()?;
-                links.sort_by_key(|(source_position, _, owner_width, _, _)| {
-                    (*source_position, *owner_width)
-                });
-                links.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
-                snapshots.extend(
-                    links
-                        .into_iter()
-                        .map(|(_, _, _, location, info)| (location, info)),
-                );
+                for (location, link) in links {
+                    let scope = link_scopes.get(&link.full.start).ok_or_else(|| {
+                        Error::Other(
+                            "story hyperlink namespace scope was not inventoried".to_owned(),
+                        )
+                    })?;
+                    let info = self.story_link_info(&story, source.xml.as_ref(), link, scope)?;
+                    snapshots.push((location, info));
+                }
             }
         }
         Ok(snapshots)
@@ -14594,6 +14567,10 @@ impl Document {
     /// relationship is retargeted in place when nothing else references it.
     /// Otherwise the link gets a new relationship, so another link that shared
     /// the old one keeps its target. A relationship left unreferenced is removed.
+    ///
+    /// Only links that [`Self::story_links`] lists can be addressed. An empty
+    /// `w:hyperlink`, a link inside `w:fldSimple`, a link in a text box inside
+    /// `mc:AlternateContent`, and a HYPERLINK field are out of reach.
     pub fn set_hyperlink_url(
         &mut self,
         story: &StoryId,
@@ -14608,7 +14585,8 @@ impl Document {
     /// `link_index` indexes [`Self::story_links`] for `story`. The runs keep
     /// their formatting, except that the built-in Hyperlink and
     /// FollowedHyperlink character styles are cleared, as Word's Remove
-    /// Hyperlink does. A relationship left unreferenced is removed.
+    /// Hyperlink does. A relationship left unreferenced is removed. The links
+    /// out of reach are those [`Self::set_hyperlink_url`] names.
     pub fn remove_hyperlink(&mut self, story: &StoryId, link_index: usize) -> Result<()> {
         self.edit_story_hyperlink(story, link_index, None)
     }
@@ -16090,6 +16068,11 @@ impl Document {
     /// the relationship are all resized. Its `wp:effectExtent` scales with the
     /// extent on each axis, and anchor positions stay as they are. Returns the
     /// number of drawings resized.
+    ///
+    /// A VML `w:pict` picture that uses the relationship is not resized. The
+    /// relationship of an SVG blip extension is not matched, so pass the
+    /// relationship of its `a:blip` instead. A picture inside a group is not
+    /// resized, so a relationship that only grouped pictures use is an error.
     pub fn set_picture_size(
         &mut self,
         rel_id: &str,
@@ -16098,11 +16081,11 @@ impl Document {
     ) -> Result<usize> {
         const MAX_POSITIVE_COORDINATE: i64 = 27_273_042_316_900;
         let (cx, cy) = (width.to_emu(), height.to_emu());
-        if !(0..=MAX_POSITIVE_COORDINATE).contains(&cx)
-            || !(0..=MAX_POSITIVE_COORDINATE).contains(&cy)
+        if !(1..=MAX_POSITIVE_COORDINATE).contains(&cx)
+            || !(1..=MAX_POSITIVE_COORDINATE).contains(&cy)
         {
             return Err(Error::Other(format!(
-                "picture size {cx} x {cy} EMU is outside the DrawingML coordinate range"
+                "picture size {cx} x {cy} EMU must be positive and within the DrawingML coordinate range"
             )));
         }
         let owner = self.doc_part_name.clone();

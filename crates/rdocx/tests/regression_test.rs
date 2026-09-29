@@ -1645,6 +1645,16 @@ fn hyperlinks_can_be_retargeted_and_removed_in_every_story() {
         ))
     );
     let links = document.story_links(&body).unwrap();
+    // The package-wide snapshot numbers links exactly as story_links does.
+    assert_eq!(
+        document
+            .story_link_snapshots()
+            .unwrap()
+            .into_iter()
+            .filter(|(location, _)| location.story() == &body)
+            .collect::<Vec<_>>(),
+        links
+    );
     assert_eq!(links[3].1.rel_id.as_deref(), Some("rIdOwn"));
     assert_ne!(links[0].1.rel_id.as_deref(), Some("rIdShared"));
 
@@ -1764,7 +1774,12 @@ fn set_picture_size_resizes_every_drawing_of_a_relationship() {
     let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
 
     let before = document.to_bytes().unwrap();
-    for (id, width) in [("rIdMissing", 50), ("rIdLink", 50), (shared.as_str(), -1)] {
+    for (id, width) in [
+        ("rIdMissing", 50),
+        ("rIdLink", 50),
+        (shared.as_str(), -1),
+        (shared.as_str(), 0),
+    ] {
         assert!(
             document
                 .set_picture_size(id, Length::emu(width), Length::emu(400))

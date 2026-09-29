@@ -516,6 +516,67 @@ def test_hyperlinks_are_retargeted_or_removed_in_every_story():
         assert b"example.com/cell" not in archive.read("word/_rels/document.xml.rels")
 
 
+def test_a_stale_hyperlink_snapshot_never_edits_another_link():
+    import rdocx
+
+    word = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    rel = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    body = (
+        '<w:p><w:hyperlink r:id="rIdU"><w:r><w:t>x</w:t></w:r></w:hyperlink>'
+        '<w:r><w:t xml:space="preserve"> </w:t></w:r>'
+        '<w:hyperlink r:id="rIdU"><w:r><w:rPr><w:b/></w:rPr><w:t>here</w:t></w:r></w:hyperlink>'
+        '<w:r><w:t xml:space="preserve"> and </w:t></w:r>'
+        '<w:hyperlink r:id="rIdU"><w:r><w:t>here</w:t></w:r></w:hyperlink></w:p><w:sectPr/>'
+    )
+    source = io.BytesIO(rdocx.Document().to_bytes())
+    result = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(result, "w") as result_zip:
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == "word/document.xml":
+                data = f"<w:document {word} {rel}><w:body>{body}</w:body></w:document>".encode()
+            elif info.filename == "word/_rels/document.xml.rels":
+                data = data.replace(
+                    b"</Relationships>",
+                    b'<Relationship Id="rIdU" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://u/" TargetMode="External"/></Relationships>',
+                )
+            result_zip.writestr(info, data)
+    document = rdocx.Document.from_bytes(result.getvalue())
+
+    links = document.hyperlinks
+    document.remove_hyperlink(links[0])
+    before = document.to_bytes()
+    # The bold link moved to position 0, and the plain one now sits at the
+    # snapshot's position with the same fields. Neither is edited.
+    with pytest.raises(rdocx.RdocxError, match="re-fetch"):
+        document.remove_hyperlink(links[1])
+    assert document.to_bytes() == before
+
+    # A record rebuilt from the public fields equals the snapshot and resolves
+    # only when exactly one link matches it.
+    fresh = document.hyperlinks
+    rebuilt = [
+        rdocx.Hyperlink(
+            story=link.story,
+            index_path=link.index_path,
+            text=link.text,
+            url=link.url,
+            anchor=link.anchor,
+            relationship_id=link.relationship_id,
+        )
+        for link in fresh
+    ]
+    assert rebuilt == list(fresh)
+    with pytest.raises(rdocx.RdocxError, match="re-fetch"):
+        document.set_hyperlink_url(rebuilt[0], "https://z/")
+    document.set_hyperlink_url(fresh[1], "https://plain/")
+    document.set_hyperlink_url(fresh[0], "https://bold/")
+    assert [(link.text, link.url) for link in document.hyperlinks] == [
+        ("here", "https://bold/"),
+        ("here", "https://plain/"),
+    ]
+
+
 def test_set_picture_size_resizes_every_drawing_of_a_relationship():
     docx = pytest.importorskip("docx")
     import rdocx
