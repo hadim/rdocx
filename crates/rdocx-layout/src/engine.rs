@@ -2273,6 +2273,10 @@ impl Engine {
                 })
                 .count()
         });
+        // The restart begins strictly before the first changed block. A page
+        // boundary right before it may have been chosen by that block, which
+        // moved there whole or broke the page before itself, and an edit can
+        // undo that choice. The document start is always a safe restart.
         let restart_checkpoint = first_changed.and_then(|first_changed| {
             self.restart_cache
                 .as_ref()
@@ -2280,7 +2284,9 @@ impl Engine {
                 .checkpoints
                 .iter()
                 .rev()
-                .find(|checkpoint| checkpoint.next_block_index <= first_changed)
+                .find(|checkpoint| {
+                    checkpoint.next_block_index < first_changed || checkpoint.page_count == 0
+                })
                 .copied()
         });
         let tail_reusable = sources.is_none()
@@ -14694,6 +14700,8 @@ mod tests {
             assert_eq!(displayed, page.page_number.to_string());
         }
 
+        // Paragraph 80 opens page 8 here, so the edit restarts at the clean
+        // boundary before it, paragraph 57 on page 6, and rebuilds four pages.
         change_page_spanning_paragraph(&mut input, 80, 1);
         let warm = engine.layout(&input).expect("warm note and footer edit");
         let fresh = Engine::new_deterministic()
@@ -14701,7 +14709,7 @@ mod tests {
             .layout(&input)
             .expect("fresh note and footer edit");
         assert_layout_results_equal(&warm, &fresh);
-        assert!(engine.page_layout_invocation_count() <= 2);
+        assert!(engine.page_layout_invocation_count() <= 4);
     }
 
     #[test]
@@ -14727,6 +14735,50 @@ mod tests {
                 .is_some_and(|cache| !cache.checkpoints.is_empty()),
             "complete ordinary-prose block boundaries must publish restart checkpoints"
         );
+    }
+
+    /// A block that did not fit moved whole to the top of the next page, and
+    /// that page boundary is a checkpoint. Once the block is edited shorter it
+    /// may fit where it was, so a warm relayout restarts before it and lays
+    /// out as a fresh engine does.
+    #[test]
+    fn a_block_moved_to_a_new_page_and_edited_shorter_lays_out_as_fresh() {
+        let text = |lines: usize| "block moved whole to the next page ".repeat(3 * lines);
+        let input = |fillers: usize, lines: usize, keep_lines: bool| {
+            let mut input = make_input_with_text("");
+            input.document.body.content.clear();
+            for index in 0..fillers {
+                let mut paragraph = CT_P::new();
+                paragraph.add_run(&format!("ordinary prose paragraph {index:03} line"));
+                input.document.body.add_paragraph(paragraph);
+            }
+            let mut moved = CT_P::new();
+            moved.properties.get_or_insert_default().keep_lines = Some(keep_lines);
+            moved.add_run(&text(lines));
+            input.document.body.add_paragraph(moved);
+            for index in 0..30 {
+                let mut paragraph = CT_P::new();
+                paragraph.add_run(&format!("ordinary prose tail {index:03} line"));
+                input.document.body.add_paragraph(paragraph);
+            }
+            input
+        };
+        // Kept together, or widow-controlled with room for one line only.
+        for (lines, keep_lines) in [(12, true), (4, false)] {
+            for fillers in 20..40 {
+                let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+                engine
+                    .layout(&input(fillers, lines, keep_lines))
+                    .expect("prime moved block");
+                let shorter = input(fillers, 1, keep_lines);
+                let warm = engine.layout(&shorter).expect("warm shorter block");
+                let fresh = Engine::new_deterministic()
+                    .expect("bundled fonts load")
+                    .layout(&shorter)
+                    .expect("fresh shorter block");
+                assert_layout_results_equal(&warm, &fresh);
+            }
+        }
     }
 
     #[test]
