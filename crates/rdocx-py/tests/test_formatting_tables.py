@@ -385,6 +385,50 @@ def test_python_paragraph_and_run_formatting_matches_native_facades():
     assert reopened.font.shading is None
 
 
+def test_paragraph_style_accepts_a_defined_id_or_name_and_rejects_the_rest():
+    from rdocx import Document
+
+    source = BytesIO(Document().to_bytes())
+    output = BytesIO()
+    with ZipFile(source) as archive, ZipFile(
+        output, "w", compression=ZIP_DEFLATED
+    ) as rewritten:
+        for member in archive.infolist():
+            contents = archive.read(member.filename)
+            if member.filename == "word/styles.xml":
+                assert b"</w:styles>" in contents
+                contents = contents.replace(
+                    b"</w:styles>",
+                    b'<w:style w:type="character" w:styleId="Strong">'
+                    b'<w:name w:val="Strong"/></w:style></w:styles>',
+                )
+            rewritten.writestr(member, contents)
+    document = Document.from_bytes(output.getvalue())
+    document.add_paragraph("Title")
+    paragraph = document.paragraphs[0]
+
+    for value, expected in (
+        ("Heading 1", "Heading1"),
+        ("Normal", "Normal"),
+        ("heading 1", "Heading1"),
+        ("Heading1", "Heading1"),
+    ):
+        paragraph.style = value
+        assert paragraph.style == expected
+
+    before = document.to_bytes()
+    for value, message in (
+        ("NoSuchStyle", "no style has the ID or name 'NoSuchStyle'"),
+        ("Heading 7", "no style"),
+        ("Strong", "character style"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            paragraph.style = value
+    assert document.to_bytes() == before
+    assert paragraph.style == "Heading1"
+    assert Document.from_bytes(before).paragraphs[0].style == "Heading1"
+
+
 def test_word_highlight_keywords_round_trip_and_clear():
     from rdocx import Document, RGBColor
 

@@ -45,6 +45,8 @@ with open("report.pdf", "wb") as output:
 - Paragraphs, runs, fonts, tables, rows, cells, sections, and styles.
 - Paragraph text replacement that keeps paragraph formatting, comments, and
   bookmarks.
+- Paragraph style assignment by style ID or name, checked against the styles
+  the document defines.
 - Rich headers, footers, related stories, and resolved hyperlinks.
 - Complete paragraph and run formatting, multilingual and vertical typography,
   conditional and floating tables, section semantics, settings, fields, forms,

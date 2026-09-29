@@ -53,6 +53,36 @@ pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocati
     }
 }
 
+/// Resolve a paragraph style given by ID, or by name as python-docx accepts,
+/// to the ID the package defines.
+///
+/// The ID is tried first, so a value read from `Paragraph.style` always
+/// assigns the same style. A name then matches exactly before it matches
+/// regardless of case, which is how "Heading 1" finds Word's "heading 1".
+fn paragraph_style_id(document: &rdocx::Document, value: &str) -> PyResult<String> {
+    let styles = document.styles();
+    let lowered = value.to_lowercase();
+    let style = styles
+        .iter()
+        .find(|style| style.style_id() == value)
+        .or_else(|| styles.iter().find(|style| style.name() == Some(value)))
+        .or_else(|| {
+            styles.iter().find(|style| {
+                style
+                    .name()
+                    .is_some_and(|name| name.to_lowercase() == lowered)
+            })
+        })
+        .ok_or_else(|| PyValueError::new_err(format!("no style has the ID or name '{value}'")))?;
+    if style.style_type() != rdocx::StyleType::Paragraph {
+        return Err(PyValueError::new_err(format!(
+            "style '{value}' is a {} style, not a paragraph style",
+            style.style_type().to_str()
+        )));
+    }
+    Ok(style.style_id().to_owned())
+}
+
 #[pyclass(name = "Paragraph")]
 pub struct PyParagraph {
     document: Py<PyDocument>,
@@ -337,6 +367,9 @@ impl PyParagraph {
     #[setter]
     fn set_style(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
         let location = self.validate(py)?;
+        let value = value
+            .map(|value| paragraph_style_id(&self.document.borrow(py).inner, &value))
+            .transpose()?;
         crate::formatting::apply_paragraph_update(
             py,
             &self.document,

@@ -252,6 +252,15 @@ assignment advances the revision once and stales every earlier handle, the
 assigned paragraph included, as `Cell.text` does. A rejected one changes
 nothing. `Document::set_story_text` keeps its own behavior.
 
+`Paragraph.style` accepts a style ID the package defines or, as python-docx
+does, a style name, and writes the resolved ID. The ID is tried first, so a
+value read back always assigns the same style, then the exact name, then the
+name regardless of case, so `Heading 1` finds Word's `heading 1`. A value that
+names no style, or names a character, table or numbering style, raises
+`ValueError` before any change. Assigning a style is a value-only mutation and
+keeps handles valid. The run style, table style and numbering setters still
+write their value unchecked.
+
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
 field cache update operations. `RunPosition` and
