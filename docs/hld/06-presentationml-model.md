@@ -391,6 +391,10 @@ pub enum CellBorder { Left, Right, Top, Bottom }
 
 TableRef::row_height(&self, row: usize) -> Option<Emu>;
 TableMut::set_row_height(&mut self, row: usize, height: Emu) -> Result<()>;
+TableMut::insert_row(&mut self, index: usize) -> Result<()>;
+TableMut::remove_row(&mut self, index: usize) -> Result<()>;
+TableMut::insert_column(&mut self, index: usize) -> Result<()>;
+TableMut::remove_column(&mut self, index: usize) -> Result<()>;
 TableCellRef::border(&self, edge: CellBorder) -> Option<&CT_LineProperties>;
 TableCellMut::set_border(&mut self, edge: CellBorder, line: Option<CT_LineProperties>);
 ```
@@ -401,14 +405,20 @@ positive height. The stored height is a minimum, which PowerPoint grows to fit
 the row's text. A width change goes through `CT_Table::set_column_width`, which
 keeps the column's preserved `a:gridCol` content, such as the `a16:colId`
 extension PowerPoint writes, with that column even when other columns share
-its width. A border is the `a:lnL`, `a:lnR`, `a:lnT`, or `a:lnB` line of
+its width. `insert_row` and `insert_column` take the index the new row or
+column gets, where the count appends, and run the `CT_Table` operations
+described in `05-drawingml-model.md`. A row edit moves the frame height by the
+height of the inserted or removed row, and a column edit moves the frame width
+by the column's width. PowerPoint keeps the stored row heights when it grows
+rows to fit their text and records the measured height in the frame, so that
+excess is kept. Removing the only row or column is rejected. A border is the `a:lnL`, `a:lnR`, `a:lnT`, or `a:lnB` line of
 `a:tcPr`, written in that order before the cell fill. Merge accepts opposite rectangle corners in either order. It validates
 the complete rectangle before changing state, rejects overlap with an existing
 merge, migrates typed paragraphs in row-major order, and writes the DrawingML
 origin and continuation pattern described in `05-drawingml-model.md`. Split is
 valid only on a checked merge origin. It restores span one and clears
 continuation flags without redistributing content. Fallible width, height,
-merge, and split operations stage and serialize a table clone before committing it, so an
+row, column, merge, and split operations stage and serialize a table clone before committing it, so an
 error leaves the table unchanged.
 
 `SlideMut` also exposes the direct shape construction surface:
