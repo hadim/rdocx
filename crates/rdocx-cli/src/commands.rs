@@ -949,7 +949,7 @@ fn story_json(story: &StoryId) -> Value {
 }
 
 fn publish_document(doc: &mut Document, output: &Path) -> Result<()> {
-    let bytes = doc.to_bytes()?;
+    let bytes = doc.to_bytes_for_path(output)?;
     stage_and_publish(&[(output.to_path_buf(), bytes)], false)
 }
 

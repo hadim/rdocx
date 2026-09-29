@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use rpptx::{Angle, CT_TextCharacterProperties, Comment, CommentAuthor, Emu, Presentation};
+use rpptx::{
+    Angle, CT_TextCharacterProperties, Comment, CommentAuthor, Emu, Presentation,
+    PresentationPackageClass,
+};
 use serde_json::json;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -1145,6 +1148,86 @@ fn replacement_preserves_formatting_and_opaque_parts() {
         package.get_part("/custom/opaque.bin"),
         Some(b"opaque bytes".as_slice())
     );
+}
+
+#[test]
+fn replace_output_extension_selects_the_package_class() {
+    let temp = TempWorkspace::new("replace-class");
+    let source = temp.path.join("template.potx");
+    write_deck(&source, &["Hello {{name}}"]);
+    assert_eq!(
+        Presentation::open(&source)
+            .unwrap()
+            .package_class()
+            .unwrap(),
+        PresentationPackageClass::Template
+    );
+
+    let output = temp.path.join("deck.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        Presentation::open(&output)
+            .unwrap()
+            .package_class()
+            .unwrap(),
+        PresentationPackageClass::Presentation
+    );
+}
+
+#[test]
+fn replace_refuses_a_macro_free_output_for_a_vba_input() {
+    let temp = TempWorkspace::new("replace-vba");
+    let fixture = temp.path.join("fixture.pptx");
+    let source = temp.path.join("macros.pptm");
+    write_deck(&fixture, &["Hello {{name}}"]);
+    let mut package = OpcPackage::open(&fixture).unwrap();
+    fs::remove_file(&fixture).unwrap();
+    package
+        .get_or_create_part_rels("/ppt/presentation.xml")
+        .add(rel_types::VBA_PROJECT, "vbaProject.bin");
+    package.set_part("/ppt/vbaProject.bin", b"vba-project".to_vec());
+    package.content_types.add_override(
+        "/ppt/vbaProject.bin",
+        "application/vnd.ms-office.vbaProject",
+    );
+    package.content_types.add_override(
+        "/ppt/presentation.xml",
+        content_types::PRESENTATION_MACRO_ENABLED,
+    );
+    package.save(&source).unwrap();
+
+    let output = temp.path.join("deck.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("VBA project"));
+    let entries: Vec<_> = fs::read_dir(&temp.path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [source.file_name().unwrap()]);
 }
 
 #[test]

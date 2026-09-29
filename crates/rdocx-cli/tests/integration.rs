@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
-use rdocx::Document;
+use rdocx::{Document, WordPackageClass};
 use serde_json::json;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -559,6 +559,76 @@ fn replace_writes_a_reopenable_document_and_reports_the_exact_count() {
         Document::open(input).unwrap().paragraph(0).unwrap().text(),
         "Hello {{name}}, {{name}} again"
     );
+}
+
+#[test]
+fn replace_output_extension_selects_the_package_class() {
+    let temp = TempWorkspace::new("replace-class");
+    let input = temp.path.join("template.dotx");
+    let replaced = temp.path.join("report.docx");
+    write_document(&input, &["Hello {{name}}"]);
+    assert_eq!(
+        Document::open(&input).unwrap().package_class().unwrap(),
+        WordPackageClass::Template
+    );
+
+    let output = cli(&[
+        "replace",
+        path_text(&input),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        path_text(&replaced),
+    ]);
+    assert_success(&output, "replace");
+    assert_eq!(
+        Document::open(&replaced).unwrap().package_class().unwrap(),
+        WordPackageClass::Document
+    );
+}
+
+#[test]
+fn replace_refuses_a_macro_free_output_for_a_vba_input() {
+    let temp = TempWorkspace::new("replace-vba");
+    let input = temp.path.join("macros.docm");
+    let replaced = temp.path.join("report.docx");
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(
+        fixture_document(&["Hello {{name}}"]).to_bytes().unwrap(),
+    ))
+    .unwrap();
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::VBA_PROJECT, "vbaProject.bin");
+    package.set_part("/word/vbaProject.bin", b"vba-project".to_vec());
+    package.content_types.add_override(
+        "/word/vbaProject.bin",
+        "application/vnd.ms-office.vbaProject",
+    );
+    package.content_types.add_override(
+        "/word/document.xml",
+        "application/vnd.ms-word.document.macroEnabled.main+xml",
+    );
+    package.save(&input).unwrap();
+
+    let output = cli(&[
+        "replace",
+        path_text(&input),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        path_text(&replaced),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("VBA project"));
+    let entries: Vec<_> = fs::read_dir(&temp.path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [input.file_name().unwrap()]);
 }
 
 #[test]

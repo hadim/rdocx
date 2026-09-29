@@ -3699,6 +3699,118 @@ mod flat_opc_package_class_tests {
     }
 
     #[test]
+    fn save_writes_the_package_class_that_the_path_extension_names() {
+        let directory = std::env::temp_dir().join(format!(
+            "rdocx-extension-class-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let main_content_type = |path: &std::path::Path| {
+            OpcPackage::open(path)
+                .unwrap()
+                .content_types
+                .override_for("/word/document.xml")
+                .unwrap()
+                .to_owned()
+        };
+
+        let template_path = directory.join("t.dotx");
+        Document::new().save(&template_path).unwrap();
+        assert_eq!(
+            main_content_type(&template_path),
+            content_types::WORD_TEMPLATE
+        );
+        let document_path = directory.join("b.docx");
+        Document::open(&template_path)
+            .unwrap()
+            .save(&document_path)
+            .unwrap();
+        assert_eq!(
+            main_content_type(&document_path),
+            content_types::WORD_DOCUMENT
+        );
+        let compact_path = directory.join("compact.dotm");
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document))
+            .save(&compact_path)
+            .unwrap();
+        assert_eq!(
+            main_content_type(&compact_path),
+            content_types::WORD_TEMPLATE_MACRO_ENABLED
+        );
+
+        let mut vba_free = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::MacroEnabledDocument,
+        ));
+        for (extension, class) in [
+            ("DOCX", WordPackageClass::Document),
+            ("docm", WordPackageClass::MacroEnabledDocument),
+            ("dotx", WordPackageClass::Template),
+            ("dotm", WordPackageClass::MacroEnabledTemplate),
+        ] {
+            let path = directory.join(format!("converted.{extension}"));
+            vba_free.save(&path).unwrap();
+            assert_eq!(main_content_type(&path), content_type(class), "{extension}");
+            let bytes = vba_free.to_bytes_for_path(&path).unwrap();
+            assert_eq!(
+                Document::from_bytes(&bytes)
+                    .unwrap()
+                    .package_class()
+                    .unwrap(),
+                class
+            );
+        }
+        let other_path = directory.join("converted.bin");
+        vba_free.save(&other_path).unwrap();
+        assert_eq!(
+            main_content_type(&other_path),
+            content_types::WORD_DOCUMENT_MACRO_ENABLED
+        );
+        assert_eq!(
+            vba_free.package_class().unwrap(),
+            WordPackageClass::MacroEnabledDocument
+        );
+
+        for (class, same_class, refused) in [
+            (WordPackageClass::Template, "dotx", &["docx"][..]),
+            (
+                WordPackageClass::MacroEnabledDocument,
+                "docm",
+                &["docx", "dotx"][..],
+            ),
+        ] {
+            let mut document =
+                Document::from_bytes(&package_bytes(&source_package(class))).unwrap();
+            let same_class_path = directory.join(format!("vba-same.{same_class}"));
+            document.save(&same_class_path).unwrap();
+            assert_eq!(main_content_type(&same_class_path), content_type(class));
+            let converted_path = directory.join("vba-converted.dotm");
+            document.save(&converted_path).unwrap();
+            assert_eq!(
+                main_content_type(&converted_path),
+                content_types::WORD_TEMPLATE_MACRO_ENABLED
+            );
+            assert_eq!(
+                OpcPackage::open(&converted_path)
+                    .unwrap()
+                    .get_part("/word/vbaProject.bin"),
+                Some(VBA_BYTES)
+            );
+            for extension in refused {
+                let path = directory.join(format!("vba-refused.{extension}"));
+                let error = document.save(&path).unwrap_err();
+                assert!(
+                    error.to_string().contains("VBA project"),
+                    "{class:?} {extension}: {error}"
+                );
+                assert!(!path.exists(), "{class:?} {extension}");
+                assert!(document.to_bytes_for_path(&path).is_err());
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     #[ignore = "requires installed Microsoft Word 16.104 GUI automation"]
     fn flat_opc_and_modern_word_package_classes_open_in_pinned_word_without_repair() {
         let plist = "/Applications/Microsoft Word.app/Contents/Info.plist";

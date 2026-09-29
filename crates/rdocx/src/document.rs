@@ -232,6 +232,24 @@ impl WordPackageClass {
             _ => None,
         }
     }
+
+    /// The class that a `.docx`, `.docm`, `.dotx`, or `.dotm` path names.
+    fn from_path(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "docx" => Some(Self::Document),
+            "docm" => Some(Self::MacroEnabledDocument),
+            "dotx" => Some(Self::Template),
+            "dotm" => Some(Self::MacroEnabledTemplate),
+            _ => None,
+        }
+    }
+
+    fn is_macro_enabled(self) -> bool {
+        matches!(
+            self,
+            Self::MacroEnabledDocument | Self::MacroEnabledTemplate
+        )
+    }
 }
 
 /// One direct child of a document body, in source order.
@@ -12210,11 +12228,24 @@ impl Document {
 
     /// Save the document to a file path.
     ///
+    /// A `.docx`, `.docm`, `.dotx`, or `.dotm` extension selects the main
+    /// part content type, so a template saved as `.docx` declares a document.
+    /// Any other extension keeps the opened class, and `save_encrypted` and
+    /// the Flat OPC saves ignore the extension. When the class changes, a
+    /// main part that carries a VBA project cannot be saved under a
+    /// macro-free extension, because the project would remain in a file that
+    /// claims to carry none. [`Document::save_as_package_class`] performs
+    /// that conversion explicitly and keeps the VBA part.
+    ///
     /// The package is staged in a synced sibling file and renamed over `path`
     /// through [`oxml_opc::write_atomic_file`], so a failed save leaves an
     /// existing file as it was. A symbolic link at `path` is kept and the file
     /// it names is replaced, and on Unix that file keeps its permission bits.
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        let path = path.as_ref();
+        if let Some(class) = self.package_class_for_path(path)? {
+            return self.save_as_package_class(path, class);
+        }
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
@@ -12236,6 +12267,44 @@ impl Document {
         let mut buf = std::io::Cursor::new(Vec::new());
         candidate.package.write_to(&mut buf)?;
         Ok(buf.into_inner())
+    }
+
+    /// Serialize the bytes that [`Document::save`] writes to `path`.
+    pub fn to_bytes_for_path<P: AsRef<Path>>(&mut self, path: P) -> Result<Vec<u8>> {
+        match self.package_class_for_path(path.as_ref())? {
+            Some(class) => self.to_bytes_as(class),
+            None => self.to_bytes(),
+        }
+    }
+
+    /// The class a save to `path` converts to, or `None` to keep the opened class.
+    fn package_class_for_path(&self, path: &Path) -> Result<Option<WordPackageClass>> {
+        let Some(target) = WordPackageClass::from_path(path) else {
+            return Ok(None);
+        };
+        // Read the override itself: a new compact document has no main part
+        // bytes until staging, so `package_class` cannot validate it yet.
+        let current = self
+            .package
+            .content_types
+            .override_for(&self.doc_part_name)
+            .and_then(WordPackageClass::from_content_type);
+        if current == Some(target) {
+            return Ok(None);
+        }
+        let carries_vba =
+            self.package
+                .get_part_rels(&self.doc_part_name)
+                .is_some_and(|relationships| {
+                    relationships.get_by_type(rel_types::VBA_PROJECT).is_some()
+                });
+        if carries_vba && !target.is_macro_enabled() {
+            return Err(Error::Other(format!(
+                "cannot save {}: the document carries a VBA project and the extension names a macro-free class, save it as .docm or .dotm",
+                path.display()
+            )));
+        }
+        Ok(Some(target))
     }
 
     /// Save a password-protected document using the fixed Agile write profile.

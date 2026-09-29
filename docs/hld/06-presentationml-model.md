@@ -82,6 +82,7 @@ Presentation::core_properties_mut(&mut self) -> &mut CoreProperties;
 Presentation::replace_text(&mut self, placeholder: &str, value: &str) -> usize;
 Presentation::package_class(&self) -> Result<PresentationPackageClass>;
 Presentation::to_bytes_as(&self, class: PresentationPackageClass) -> Result<Vec<u8>>;
+Presentation::to_bytes_for_path(&self, path: impl AsRef<Path>) -> Result<Vec<u8>>;
 Presentation::save_as_package_class(&self, path: impl AsRef<Path>, class: PresentationPackageClass) -> Result<()>;
 Presentation::save_as_show(&self, path: impl AsRef<Path>) -> Result<()>;
 Presentation::slide_layout_index(&self, slide_index: usize) -> Option<usize>;
@@ -654,12 +655,21 @@ mutation instead of publishing invalid XML.
 
 The PPTX, PPTM, POTX, POTM, PPSX, and PPSM distinction lives entirely in this
 part's exact main content type. `PresentationPackageClass` maps those six
-values without inspecting a path extension. Ordinary `save` and `to_bytes`
-retain the opened class. `to_bytes_as` and `save_as_package_class` change only
-the staged output override and leave the live facade unchanged.
+values. `save` and `to_bytes_for_path` write the class that a `.pptx`, `.pptm`,
+`.potx`, `.potm`, `.ppsx`, or `.ppsm` extension names, compared without regard
+to case, so a template saved as `.pptx` declares a presentation. `to_bytes`,
+`save_encrypted`, and a save to any other extension retain the opened class.
+When the class changes, a macro-free extension fails before anything is written
+if the presentation part carries a `vbaProject` relationship, whatever the
+source class, because the project would remain in a file that claims to carry
+none. A macro-enabled package without one converts. `to_bytes_as` and
+`save_as_package_class` stay the explicit conversion. They change only the
+staged output override and leave the live facade unchanged.
 `Presentation::save_as_show()` remains a compatibility wrapper for ordinary
 PPSX output. A class conversion preserves executable payloads and relationships
-and records retained package signature evidence as invalidated.
+and records retained package signature evidence as invalidated. The CLI
+`replace` and comment mutations publish through `to_bytes_for_path`, so their
+output extension selects the class the same way.
 
 ## Notes parts
 
