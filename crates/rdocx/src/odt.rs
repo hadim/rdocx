@@ -138,9 +138,10 @@ impl Document {
     /// Serialize and save ODT to a path, returning lossy-conversion diagnostics.
     pub fn save_odt<P: AsRef<Path>>(&self, path: P) -> Result<Vec<OdtDiagnostic>> {
         let result = self.to_odt_bytes()?;
-        crate::document::write_atomic_file(
+        oxml_opc::write_atomic_file(
             path.as_ref(),
             &result.bytes,
+            "rdocx",
             "invalid file name",
             "could not allocate ODT-save staging file",
         )?;

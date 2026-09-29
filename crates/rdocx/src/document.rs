@@ -14,7 +14,7 @@ use oxml_chart::{CT_ChartSpace, ChartData, ChartKind};
 use oxml_core::app_properties::AppProperties;
 use oxml_opc::content_types;
 use oxml_opc::relationship::rel_types;
-use oxml_opc::{OpcPackage, PackageReadLimits};
+use oxml_opc::{OpcPackage, PackageReadLimits, write_atomic_file};
 use oxml_sml::Workbook;
 use quick_xml::Writer;
 use quick_xml::XmlVersion;
@@ -11710,6 +11710,7 @@ impl Document {
         write_atomic_file(
             path.as_ref(),
             &bytes,
+            "rdocx",
             "invalid Word package file name",
             "could not allocate Word package save staging file",
         )?;
@@ -12073,6 +12074,11 @@ impl Document {
     }
 
     /// Save the document to a file path.
+    ///
+    /// The package is staged in a synced sibling file and renamed over `path`
+    /// through [`oxml_opc::write_atomic_file`], so a failed save leaves an
+    /// existing file as it was. A symbolic link at `path` is kept and the file
+    /// it names is replaced, and on Unix that file keeps its permission bits.
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_output()?;
@@ -12104,6 +12110,7 @@ impl Document {
         write_atomic_file(
             path.as_ref(),
             &bytes,
+            "rdocx",
             "invalid file name",
             "could not allocate encrypted-save staging file",
         )?;
@@ -22977,86 +22984,6 @@ impl Document {
         }
 
         issues
-    }
-}
-
-pub(crate) fn write_atomic_file(
-    path: &Path,
-    bytes: &[u8],
-    invalid_name_message: &'static str,
-    exhausted_message: &'static str,
-) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, invalid_name_message)
-    })?;
-    for attempt in 0..128_u8 {
-        let mut temporary_name = std::ffi::OsString::from(".");
-        temporary_name.push(file_name);
-        temporary_name.push(format!(".rdocx-{}-{attempt}.tmp", std::process::id()));
-        let temporary = parent.join(temporary_name);
-        let mut file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        };
-        let result = std::io::Write::write_all(&mut file, bytes).and_then(|()| file.sync_all());
-        drop(file);
-        let result = result.and_then(|()| replace_file(&temporary, path));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        return result;
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        exhausted_message,
-    ))
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
-    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn MoveFileExW(
-            existing_file_name: *const u16,
-            new_file_name: *const u16,
-            flags: u32,
-        ) -> i32;
-    }
-
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    // SAFETY: both path buffers are NUL-terminated and remain alive for the call.
-    let replaced = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if replaced == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
     }
 }
 

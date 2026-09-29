@@ -552,9 +552,10 @@ impl Document {
 
     pub fn save_mhtml<P: AsRef<Path>>(&self, path: P) -> Result<Vec<MhtmlDiagnostic>> {
         let result = self.to_mhtml_bytes()?;
-        crate::document::write_atomic_file(
+        oxml_opc::write_atomic_file(
             path.as_ref(),
             &result.bytes,
+            "rdocx",
             "MHTML output path has no file name",
             "could not allocate an MHTML temporary file",
         )?;

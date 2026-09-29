@@ -63,9 +63,10 @@ impl Document {
     /// Serialize and atomically save EPUB, returning lossy-conversion diagnostics.
     pub fn save_epub<P: AsRef<Path>>(&self, path: P) -> Result<Vec<EpubDiagnostic>> {
         let result = self.to_epub_bytes()?;
-        crate::document::write_atomic_file(
+        oxml_opc::write_atomic_file(
             path.as_ref(),
             &result.bytes,
+            "rdocx",
             "invalid EPUB file name",
             "could not allocate EPUB-save staging file",
         )?;

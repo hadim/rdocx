@@ -13008,6 +13008,81 @@ fn assert_f223_relationships_equal(
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn path_saves_replace_the_file_by_rename_and_keep_links_and_permissions() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let directory = f222_temp_directory("atomic-save");
+    let links = directory.join("links");
+    fs::create_dir_all(&links).unwrap();
+    let staging_files = |directory: &Path| {
+        fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "tmp"))
+            .collect::<Vec<_>>()
+    };
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+    let presentation = f222_source_presentation();
+
+    // The plain save replaces an existing file by rename and keeps its mode.
+    let destination = directory.join("existing.pptx");
+    fs::write(&destination, b"previous bytes").unwrap();
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o600)).unwrap();
+    let previous_inode = fs::metadata(&destination).unwrap().ino();
+    presentation.save(&destination).unwrap();
+    assert_ne!(fs::metadata(&destination).unwrap().ino(), previous_inode);
+    assert_eq!(mode(&destination), 0o600);
+    assert_eq!(
+        fs::read(&destination).unwrap(),
+        presentation.to_bytes().unwrap()
+    );
+
+    // A save through a symbolic link replaces the file it names and keeps the link.
+    let target = directory.join("linked.ppsx");
+    fs::write(&target, b"previous bytes").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+    let link = links.join("link.ppsx");
+    std::os::unix::fs::symlink("../linked.ppsx", &link).unwrap();
+    presentation.save_as_show(&link).unwrap();
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("../linked.ppsx"));
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        presentation
+            .to_bytes_as(PresentationPackageClass::Slideshow)
+            .unwrap()
+    );
+    assert_eq!(mode(&target), 0o640);
+
+    // The saver that already staged its output now keeps the mode too.
+    let odp = directory.join("existing.odp");
+    fs::write(&odp, b"previous bytes").unwrap();
+    fs::set_permissions(&odp, fs::Permissions::from_mode(0o600)).unwrap();
+    presentation.save_odp(&odp).unwrap();
+    assert_eq!(
+        fs::read(&odp).unwrap(),
+        presentation.to_odp_bytes().unwrap().bytes
+    );
+    assert_eq!(mode(&odp), 0o600);
+
+    // A save that cannot replace its destination leaves it and no staged file.
+    let occupied = directory.join("directory.pptx");
+    fs::create_dir(&occupied).unwrap();
+    assert!(presentation.save(&occupied).is_err());
+    assert!(occupied.is_dir());
+
+    assert!(staging_files(&directory).is_empty());
+    assert!(staging_files(&links).is_empty());
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn save_as_show_changes_only_the_main_content_type() {
     let presentation = Presentation::from_bytes(&package_bytes(fixture_package())).unwrap();
