@@ -270,6 +270,36 @@ impl CT_TextBody {
         self.raw_children = raw_children;
     }
 
+    /// Returns an empty body that keeps this body's properties and list style
+    /// and the formatting of its first paragraph, as PowerPoint fills the
+    /// cells of a new table row or column.
+    ///
+    /// The one paragraph keeps the first paragraph's properties. The
+    /// character properties of that paragraph's first regular run, or its end
+    /// properties when the run is missing or has none, become the new end
+    /// properties without their hyperlinks. Unmodelled body and paragraph
+    /// children are not copied.
+    pub fn empty_like(&self) -> Self {
+        let mut paragraph = CT_TextParagraph::default();
+        if let Some(first) = self.paragraphs.first() {
+            let first_run = first.runs.iter().find_map(|run| match run {
+                TextRun::Run(run) => Some(run),
+                TextRun::Break(_) | TextRun::Field(_) => None,
+            });
+            paragraph.properties = first.properties.clone();
+            paragraph.end_properties = first_run
+                .and_then(|run| run.properties.clone())
+                .or_else(|| first.end_properties.clone())
+                .map(CT_TextCharacterProperties::without_hyperlinks);
+        }
+        Self {
+            body_properties: self.body_properties.clone(),
+            list_style: self.list_style.clone(),
+            paragraphs: vec![paragraph],
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+
     /// Returns one paragraph for in-place mutation.
     pub fn paragraph_mut(&mut self, index: usize) -> Option<&mut CT_TextParagraph> {
         self.paragraphs.get_mut(index)

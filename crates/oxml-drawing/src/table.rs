@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::io::Write;
+use std::ops::Range;
 
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
@@ -547,6 +548,274 @@ impl CT_Table {
         writer.write_event(Event::End(BytesEnd::new("a:tbl")))?;
         Ok(writer.into_inner())
     }
+
+    /// Changes one grid-column width and keeps the column's preserved
+    /// `a:gridCol` content with it, even when other columns share the old or
+    /// the new width.
+    pub fn set_column_width(&mut self, index: usize, width: Emu) -> Result<()> {
+        if index >= self.grid.columns.len() {
+            return Err(index_out_of_range("column", index));
+        }
+        self.grid.align_column_metadata()?;
+        self.grid.columns[index] = width;
+        self.grid.column_raw[index].width = width;
+        Ok(())
+    }
+
+    /// Inserts a row before the row at `index`, or appends one when `index`
+    /// equals the row count.
+    ///
+    /// The new row copies the height of the row above it, or of the first
+    /// row when it becomes the first. Each new cell copies the cell
+    /// properties of that row's cell in the same column and the formatting of
+    /// its first paragraph without the text. A row inserted inside a merged
+    /// cell extends the merge, and every other new cell is unmerged.
+    pub fn insert_row(&mut self, index: usize) -> Result<()> {
+        let regions = self.merge_regions()?;
+        if index > self.rows.len() {
+            return Err(index_out_of_range("row", index));
+        }
+        let template = self
+            .rows
+            .get(index.saturating_sub(1))
+            .ok_or_else(|| missing("at least one a:tr"))?;
+        let grown = regions
+            .into_iter()
+            .filter(|region| region.top < index && index < region.rows().end)
+            .collect::<Vec<_>>();
+        let mut cells = template
+            .cells
+            .iter()
+            .map(CT_TableCell::empty_like)
+            .collect::<Vec<_>>();
+        for region in &grown {
+            for column in region.columns() {
+                cells[column].copy_merge_state(&self.rows[index].cells[column]);
+            }
+        }
+        let row = CT_TableRow {
+            height: template.height,
+            cells,
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+            original_cells: Vec::new(),
+            origin_index: usize::MAX,
+        };
+        self.rows.insert(index, row);
+        for region in grown {
+            self.replace_spans(
+                region.top..region.rows().end + 1,
+                region.columns(),
+                |cell| &mut cell.row_span,
+                region.row_span,
+                region.row_span + 1,
+            );
+        }
+        Ok(())
+    }
+
+    /// Removes the row at `index`, which must not be the only row.
+    ///
+    /// A merged cell across the row loses one row of its span. When the row
+    /// holds the top of such a merge, the row below takes over the origin,
+    /// with the origin's text and cell properties.
+    pub fn remove_row(&mut self, index: usize) -> Result<()> {
+        let regions = self.merge_regions()?;
+        if index >= self.rows.len() {
+            return Err(index_out_of_range("row", index));
+        }
+        if self.rows.len() == 1 {
+            return Err(OxmlError::InvalidValue(
+                "a table keeps at least one row".to_owned(),
+            ));
+        }
+        for region in regions
+            .iter()
+            .filter(|region| region.row_span > 1 && region.rows().contains(&index))
+        {
+            if index == region.top {
+                let (above, below) = self.rows.split_at_mut(index + 1);
+                for column in region.columns() {
+                    below[0].cells[column]
+                        .take_merge_origin(&mut above[index].cells[column], column == region.left);
+                }
+            }
+            self.replace_spans(
+                region.rows(),
+                region.columns(),
+                |cell| &mut cell.row_span,
+                region.row_span,
+                region.row_span - 1,
+            );
+        }
+        self.rows.remove(index);
+        Ok(())
+    }
+
+    /// Inserts a grid column before the column at `index`, or appends one
+    /// when `index` equals the column count.
+    ///
+    /// The new column copies the width of the column left of it, or of the
+    /// first column when it becomes the first, and each new cell copies that
+    /// column's cell in the same row as `insert_row` does. A column inserted
+    /// inside a merged cell extends the merge, and every other new cell is
+    /// unmerged.
+    pub fn insert_column(&mut self, index: usize) -> Result<()> {
+        let regions = self.merge_regions()?;
+        if index > self.grid.columns.len() {
+            return Err(index_out_of_range("column", index));
+        }
+        let template = index.saturating_sub(1);
+        let width = self
+            .grid
+            .columns
+            .get(template)
+            .copied()
+            .ok_or_else(|| missing("at least one a:gridCol"))?;
+        let grown = regions
+            .into_iter()
+            .filter(|region| region.left < index && index < region.columns().end)
+            .collect::<Vec<_>>();
+        self.grid.insert_column(index, width)?;
+        for (row_index, row) in self.rows.iter_mut().enumerate() {
+            let mut cell = row.cells[template].empty_like();
+            if grown
+                .iter()
+                .any(|region| region.rows().contains(&row_index))
+            {
+                cell.copy_merge_state(&row.cells[index]);
+            }
+            row.cells.insert(index, cell);
+        }
+        for region in grown {
+            self.replace_spans(
+                region.rows(),
+                region.left..region.columns().end + 1,
+                |cell| &mut cell.grid_span,
+                region.grid_span,
+                region.grid_span + 1,
+            );
+        }
+        Ok(())
+    }
+
+    /// Removes the grid column at `index`, which must not be the only one.
+    ///
+    /// A merged cell across the column loses one column of its span. When
+    /// the column holds the left edge of such a merge, the column to its right
+    /// takes over the origin, with the origin's text and cell properties.
+    pub fn remove_column(&mut self, index: usize) -> Result<()> {
+        let regions = self.merge_regions()?;
+        if index >= self.grid.columns.len() {
+            return Err(index_out_of_range("column", index));
+        }
+        if self.grid.columns.len() == 1 {
+            return Err(OxmlError::InvalidValue(
+                "a table keeps at least one column".to_owned(),
+            ));
+        }
+        self.grid.remove_column(index)?;
+        for region in regions
+            .iter()
+            .filter(|region| region.grid_span > 1 && region.columns().contains(&index))
+        {
+            if index == region.left {
+                for row in region.rows() {
+                    let (left, right) = self.rows[row].cells.split_at_mut(index + 1);
+                    right[0].take_merge_origin(&mut left[index], row == region.top);
+                }
+            }
+            self.replace_spans(
+                region.rows(),
+                region.columns(),
+                |cell| &mut cell.grid_span,
+                region.grid_span,
+                region.grid_span - 1,
+            );
+        }
+        for row in &mut self.rows {
+            row.cells.remove(index);
+        }
+        Ok(())
+    }
+
+    /// Returns every merged rectangle by its origin, after checking that each
+    /// row has one explicit cell per grid column and that every merge fits
+    /// the grid.
+    fn merge_regions(&self) -> Result<Vec<MergeRegion>> {
+        let columns = self.grid.columns.len();
+        if self.rows.iter().any(|row| row.cells.len() != columns) {
+            return Err(OxmlError::InvalidValue(
+                "table does not have a rectangular explicit cell grid".to_owned(),
+            ));
+        }
+        let mut regions = Vec::new();
+        for (top, row) in self.rows.iter().enumerate() {
+            for (left, cell) in row.cells.iter().enumerate() {
+                if cell.horizontal_merge
+                    || cell.vertical_merge
+                    || (cell.row_span == 1 && cell.grid_span == 1)
+                {
+                    continue;
+                }
+                let region = MergeRegion {
+                    top,
+                    left,
+                    row_span: cell.row_span,
+                    grid_span: cell.grid_span,
+                };
+                if region.rows().end > self.rows.len() || region.columns().end > columns {
+                    return Err(OxmlError::InvalidValue(
+                        "merge origin span exceeds the table grid".to_owned(),
+                    ));
+                }
+                regions.push(region);
+            }
+        }
+        Ok(regions)
+    }
+
+    /// Replaces the span `old` with `new` on every cell of a rectangle, which
+    /// keeps the span on whichever cells the producer stored it.
+    fn replace_spans(
+        &mut self,
+        rows: Range<usize>,
+        columns: Range<usize>,
+        span: fn(&mut CT_TableCell) -> &mut u32,
+        old: u32,
+        new: u32,
+    ) {
+        for row in &mut self.rows[rows] {
+            for cell in &mut row.cells[columns.clone()] {
+                let value = span(cell);
+                if *value == old {
+                    *value = new;
+                }
+            }
+        }
+    }
+}
+
+/// One merged rectangle of explicit cells, by its origin and its spans.
+struct MergeRegion {
+    top: usize,
+    left: usize,
+    row_span: u32,
+    grid_span: u32,
+}
+
+impl MergeRegion {
+    fn rows(&self) -> Range<usize> {
+        self.top..self.top.saturating_add(self.row_span as usize)
+    }
+
+    fn columns(&self) -> Range<usize> {
+        self.left..self.left.saturating_add(self.grid_span as usize)
+    }
+}
+
+fn index_out_of_range(kind: &str, index: usize) -> OxmlError {
+    OxmlError::InvalidValue(format!("{kind} index {index} is out of range"))
 }
 
 fn root_a_namespace_declaration(xml: &[u8]) -> Result<Option<String>> {
@@ -1001,6 +1270,75 @@ impl CT_TableGrid {
         }
         Ok(matched_original_indices(&self.columns, &original_widths))
     }
+
+    /// Pairs every current column with the preserved metadata it is matched
+    /// with, and anchors raw grid children to current columns, so the next
+    /// edit is matched by position instead of by width.
+    fn align_column_metadata(&mut self) -> Result<()> {
+        let matches = self.matched_column_indices()?;
+        let original_to_current = invert_matches(&matches, self.column_raw.len());
+        let mut raw_children = OrderedRawChildren::default();
+        for boundary in 0..=self.columns.len() {
+            for child in self.raw_children.at_reconciled(
+                boundary,
+                0,
+                &original_to_current,
+                self.columns.len(),
+            ) {
+                raw_children.push(boundary, child.to_vec());
+            }
+        }
+        self.column_raw = self
+            .columns
+            .iter()
+            .zip(&matches)
+            .map(|(width, matched)| GridColumnRaw {
+                width: *width,
+                ..matched.map_or_else(GridColumnRaw::default, |index| {
+                    self.column_raw[index].clone()
+                })
+            })
+            .collect();
+        self.raw_children = raw_children;
+        Ok(())
+    }
+
+    /// Inserts a column without preserved metadata before the column at
+    /// `index`, keeping raw grid children before the column they preceded.
+    fn insert_column(&mut self, index: usize, width: Emu) -> Result<()> {
+        self.align_column_metadata()?;
+        self.raw_children.shift_boundaries_from(index);
+        self.columns.insert(index, width);
+        self.column_raw.insert(
+            index,
+            GridColumnRaw {
+                width,
+                ..GridColumnRaw::default()
+            },
+        );
+        Ok(())
+    }
+
+    /// Removes one column and its preserved metadata, moving raw grid
+    /// children that preceded it before the next column.
+    fn remove_column(&mut self, index: usize) -> Result<()> {
+        self.align_column_metadata()?;
+        let mut raw_children = OrderedRawChildren::default();
+        for boundary in 0..=self.columns.len() {
+            let target = if boundary > index {
+                boundary - 1
+            } else {
+                boundary
+            };
+            for child in self.raw_children.at(boundary) {
+                raw_children.push(target, child.to_vec());
+            }
+        }
+        self.raw_children = raw_children;
+        self.columns.remove(index);
+        self.column_raw.remove(index);
+        Ok(())
+    }
 }
 
 fn has_duplicate_values<T: PartialEq>(values: &[T]) -> bool {
@@ -1301,6 +1639,43 @@ impl CT_TableCell {
         emit_raw(writer, self.raw_children.at(2))?;
         writer.write_event(Event::End(BytesEnd::new("a:tc")))?;
         Ok(())
+    }
+
+    /// Returns an unmerged cell with this cell's properties and an empty text
+    /// body that keeps its formatting, for a new row or column.
+    fn empty_like(&self) -> Self {
+        Self {
+            text_body: Some(
+                self.text_body
+                    .as_ref()
+                    .map_or_else(CT_TextBody::new, CT_TextBody::empty_like),
+            ),
+            row_span: 1,
+            grid_span: 1,
+            horizontal_merge: false,
+            vertical_merge: false,
+            properties: self.properties.clone(),
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+            origin_index: usize::MAX,
+        }
+    }
+
+    fn copy_merge_state(&mut self, other: &Self) {
+        self.row_span = other.row_span;
+        self.grid_span = other.grid_span;
+        self.horizontal_merge = other.horizontal_merge;
+        self.vertical_merge = other.vertical_merge;
+    }
+
+    /// Takes over the merge state of `edge`, a cell of a removed first row or
+    /// column of a merge, and with `content` its text and cell properties.
+    fn take_merge_origin(&mut self, edge: &mut Self, content: bool) {
+        self.copy_merge_state(edge);
+        if content {
+            std::mem::swap(&mut self.text_body, &mut edge.text_body);
+            std::mem::swap(&mut self.properties, &mut edge.properties);
+        }
     }
 }
 
@@ -2874,6 +3249,295 @@ mod tests {
         insert_and_edit.grid.columns[0] = Emu(150);
         insert_and_edit.grid.columns.insert(1, Emu(300));
         assert_ambiguous_grid_error(insert_and_edit.to_xml().unwrap_err());
+    }
+
+    #[test]
+    fn column_width_edits_keep_metadata_when_columns_share_a_width() {
+        let xml = br#"<a:tbl xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><a:tblGrid><a:gridCol w="100"><x:id val="1"/></a:gridCol><x:before-second/><a:gridCol w="100"><x:id val="2"/></a:gridCol><a:gridCol w="100"><x:id val="3"/></a:gridCol><x:grid-tail/></a:tblGrid><a:tr h="300"><a:tc/><a:tc/><a:tc/></a:tr></a:tbl>"#;
+        let mut table = CT_Table::from_xml(xml).unwrap();
+        table.set_column_width(1, Emu(250)).unwrap();
+        table.set_column_width(2, Emu(100)).unwrap();
+        table.set_column_width(0, Emu(250)).unwrap();
+        assert!(table.set_column_width(3, Emu(1)).is_err());
+
+        let written = table.to_xml().unwrap();
+        assert!(
+            std::str::from_utf8(&written).unwrap().contains(
+                r#"<a:tblGrid><a:gridCol w="250"><x:id val="1"/></a:gridCol><x:before-second/><a:gridCol w="250"><x:id val="2"/></a:gridCol><a:gridCol w="100"><x:id val="3"/></a:gridCol><x:grid-tail/></a:tblGrid>"#
+            )
+        );
+        assert_eq!(table, CT_Table::from_xml(&written).unwrap());
+    }
+
+    const PYTHON_PPTX_TABLE: &[u8] = br#"<a:tbl xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:tblPr firstRow="1" bandRow="1"><a:tableStyleId>{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}</a:tableStyleId></a:tblPr><a:tblGrid><a:gridCol w="2057400"/><a:gridCol w="1828800"/></a:tblGrid><a:tr h="548640"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody><a:tcPr><a:solidFill><a:srgbClr val="3E4A59"/></a:solidFill></a:tcPr></a:tc><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1500"/><a:t>A. Repair</a:t></a:r></a:p></a:txBody><a:tcPr><a:solidFill><a:srgbClr val="3E4A59"/></a:solidFill></a:tcPr></a:tc></a:tr><a:tr h="457200"><a:tc><a:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="r"/><a:r><a:rPr sz="1500" b="1"><a:hlinkClick r:id="rId9"/></a:rPr><a:t>Cost</a:t></a:r><a:r><a:rPr sz="900"/><a:t> (EUR)</a:t></a:r></a:p><a:p><a:r><a:t>second</a:t></a:r></a:p></a:txBody><a:tcPr marL="0"/></a:tc><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr sz="1100"/></a:p></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl>"#;
+
+    #[test]
+    fn inserted_rows_and_columns_copy_neighbour_formatting_without_text() {
+        let mut table = CT_Table::from_xml(PYTHON_PPTX_TABLE).unwrap();
+        table.insert_row(2).unwrap();
+        table.insert_row(0).unwrap();
+        table.insert_column(2).unwrap();
+        assert_eq!(
+            table.rows.iter().map(|row| row.height).collect::<Vec<_>>(),
+            [Emu(548_640), Emu(548_640), Emu(457_200), Emu(457_200)]
+        );
+        assert_eq!(
+            table.grid.columns,
+            [Emu(2_057_400), Emu(1_828_800), Emu(1_828_800)]
+        );
+        assert!(table.rows.iter().all(|row| row.cells.len() == 3));
+
+        let written = String::from_utf8(table.to_xml().unwrap()).unwrap();
+        let rows = written.split("<a:tr ").skip(1).collect::<Vec<_>>();
+        let header = r#"<a:tcPr><a:solidFill><a:srgbClr val="3E4A59"/></a:solidFill></a:tcPr>"#;
+        assert_eq!(
+            rows[0],
+            format!(
+                r#"h="548640"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody>{header}</a:tc><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr sz="1500"/></a:p></a:txBody>{header}</a:tc><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr sz="1500"/></a:p></a:txBody>{header}</a:tc></a:tr>"#
+            )
+        );
+        assert!(rows[1].contains("A. Repair"));
+        assert!(rows[2].contains("Cost") && rows[2].contains("second"));
+        assert_eq!(
+            rows[3],
+            r#"h="457200"><a:tc><a:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="r"/><a:endParaRPr sz="1500" b="1"/></a:p></a:txBody><a:tcPr marL="0"/></a:tc><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr sz="1100"/></a:p></a:txBody><a:tcPr/></a:tc><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr sz="1100"/></a:p></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl>"#
+        );
+        assert!(written.contains(
+            r#"<a:tableStyleId>{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}</a:tableStyleId>"#
+        ));
+        assert_eq!(written.matches("r:id=").count(), 1);
+        assert_eq!(table, CT_Table::from_xml(written.as_bytes()).unwrap());
+
+        table.remove_row(3).unwrap();
+        table.remove_row(0).unwrap();
+        table.remove_column(2).unwrap();
+        assert_eq!(
+            table.to_xml().unwrap(),
+            CT_Table::from_xml(PYTHON_PPTX_TABLE)
+                .unwrap()
+                .to_xml()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn row_and_column_edits_refuse_what_would_break_the_grid() {
+        let mut table = CT_Table::new(1, 1, Emu(100), Emu(100)).unwrap();
+        let before = table.clone();
+        for result in [
+            table.remove_row(0),
+            table.remove_column(0),
+            table.insert_row(2),
+            table.insert_column(2),
+            table.remove_row(1),
+            table.remove_column(1),
+        ] {
+            assert!(matches!(result, Err(OxmlError::InvalidValue(_))));
+        }
+        assert_eq!(table, before);
+
+        let mut emptied = CT_Table::new(1, 1, Emu(100), Emu(100)).unwrap();
+        emptied.rows.clear();
+        assert!(matches!(
+            emptied.insert_row(0),
+            Err(OxmlError::MissingElement(_))
+        ));
+        let mut emptied = CT_Table::new(1, 1, Emu(100), Emu(100)).unwrap();
+        emptied.grid.columns.clear();
+        emptied.rows[0].cells.clear();
+        assert!(matches!(
+            emptied.insert_column(0),
+            Err(OxmlError::MissingElement(_))
+        ));
+
+        let ragged = br#"<a:tbl xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:tblGrid><a:gridCol w="100"/><a:gridCol w="100"/></a:tblGrid><a:tr h="100"><a:tc/></a:tr></a:tbl>"#;
+        let overflowing = br#"<a:tbl xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:tblGrid><a:gridCol w="100"/></a:tblGrid><a:tr h="100"><a:tc rowSpan="2"/></a:tr><a:tr h="100"><a:tc vMerge="1"/></a:tr><a:tr h="100"><a:tc gridSpan="2"/></a:tr></a:tbl>"#;
+        for xml in [&ragged[..], &overflowing[..]] {
+            let mut table = CT_Table::from_xml(xml).unwrap();
+            assert!(table.insert_row(1).is_err());
+            assert!(table.remove_column(0).is_err());
+            assert_eq!(table, CT_Table::from_xml(xml).unwrap());
+        }
+    }
+
+    /// Draws each cell as its origin spans, `h` and `v` continuation flags,
+    /// or `.` for an unmerged cell, row by row.
+    fn merge_pattern(table: &CT_Table) -> Vec<String> {
+        table
+            .rows
+            .iter()
+            .map(|row| {
+                row.cells
+                    .iter()
+                    .map(|cell| {
+                        let flags = match (cell.horizontal_merge, cell.vertical_merge) {
+                            (true, true) => "hv",
+                            (true, false) => "h",
+                            (false, true) => "v",
+                            (false, false) if cell.row_span == 1 && cell.grid_span == 1 => ".",
+                            (false, false) => "o",
+                        };
+                        format!("{flags}{}x{}", cell.row_span, cell.grid_span)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    fn merged_three_by_three() -> CT_Table {
+        let mut table = CT_Table::new(3, 3, Emu(300), Emu(300)).unwrap();
+        for (row, column, row_span, grid_span, horizontal, vertical) in [
+            (0, 0, 2, 2, false, false),
+            (0, 1, 2, 1, true, false),
+            (1, 0, 1, 2, false, true),
+            (1, 1, 1, 1, true, true),
+        ] {
+            let cell = &mut table.rows[row].cells[column];
+            cell.row_span = row_span;
+            cell.grid_span = grid_span;
+            cell.horizontal_merge = horizontal;
+            cell.vertical_merge = vertical;
+            cell.text_body
+                .as_mut()
+                .unwrap()
+                .set_text(&format!("{row}{column}"));
+        }
+        table.rows[0].cells[0]
+            .properties
+            .as_mut()
+            .unwrap()
+            .margin_left = Some(Emu(7));
+        table
+    }
+
+    #[test]
+    fn row_and_column_edits_grow_shrink_and_move_merged_cells() {
+        assert_eq!(
+            merge_pattern(&merged_three_by_three()),
+            ["o2x2 h2x1 .1x1", "v1x2 hv1x1 .1x1", ".1x1 .1x1 .1x1"]
+        );
+
+        let mut inside = merged_three_by_three();
+        inside.insert_row(1).unwrap();
+        assert_eq!(
+            merge_pattern(&inside),
+            [
+                "o3x2 h3x1 .1x1",
+                "v1x2 hv1x1 .1x1",
+                "v1x2 hv1x1 .1x1",
+                ".1x1 .1x1 .1x1"
+            ]
+        );
+        inside.insert_column(1).unwrap();
+        assert_eq!(
+            merge_pattern(&inside),
+            [
+                "o3x3 h3x1 h3x1 .1x1",
+                "v1x3 hv1x1 hv1x1 .1x1",
+                "v1x3 hv1x1 hv1x1 .1x1",
+                ".1x1 .1x1 .1x1 .1x1"
+            ]
+        );
+        assert_eq!(
+            inside,
+            CT_Table::from_xml(&inside.to_xml().unwrap()).unwrap()
+        );
+
+        for index in [0, 2] {
+            let mut outside = merged_three_by_three();
+            outside.insert_row(index).unwrap();
+            outside.insert_column(index).unwrap();
+            let pattern = merge_pattern(&outside);
+            assert_eq!(pattern.len(), 4);
+            let without_new = pattern
+                .iter()
+                .enumerate()
+                .filter(|(row, _)| *row != index)
+                .map(|(_, row)| {
+                    row.split(' ')
+                        .enumerate()
+                        .filter(|(column, _)| *column != index)
+                        .map(|(_, cell)| cell)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(without_new, merge_pattern(&merged_three_by_three()));
+            assert!(pattern[index].split(' ').all(|cell| cell == ".1x1"));
+            assert!(
+                pattern
+                    .iter()
+                    .all(|row| row.split(' ').nth(index) == Some(".1x1"))
+            );
+        }
+
+        let mut top_removed = merged_three_by_three();
+        top_removed.remove_row(0).unwrap();
+        assert_eq!(
+            merge_pattern(&top_removed),
+            ["o1x2 h1x1 .1x1", ".1x1 .1x1 .1x1"]
+        );
+        let origin = &top_removed.rows[0].cells[0];
+        assert_eq!(origin.text_body.as_ref().unwrap().plain_text(), "00");
+        assert_eq!(
+            origin.properties.as_ref().unwrap().margin_left,
+            Some(Emu(7))
+        );
+
+        let mut covered_removed = merged_three_by_three();
+        covered_removed.remove_row(1).unwrap();
+        assert_eq!(
+            merge_pattern(&covered_removed),
+            ["o1x2 h1x1 .1x1", ".1x1 .1x1 .1x1"]
+        );
+
+        let mut left_removed = merged_three_by_three();
+        left_removed.remove_column(0).unwrap();
+        assert_eq!(
+            merge_pattern(&left_removed),
+            ["o2x1 .1x1", "v1x1 .1x1", ".1x1 .1x1"]
+        );
+        let origin = &left_removed.rows[0].cells[0];
+        assert_eq!(origin.text_body.as_ref().unwrap().plain_text(), "00");
+        assert_eq!(
+            origin.properties.as_ref().unwrap().margin_left,
+            Some(Emu(7))
+        );
+        assert_eq!(left_removed.grid.columns, [Emu(100), Emu(100)]);
+
+        let mut collapsed = merged_three_by_three();
+        collapsed.remove_row(1).unwrap();
+        collapsed.remove_column(1).unwrap();
+        assert_eq!(merge_pattern(&collapsed), [".1x1 .1x1", ".1x1 .1x1"]);
+    }
+
+    #[test]
+    fn row_and_column_edits_keep_unmodelled_row_and_grid_content_in_place() {
+        let xml = br#"<a:tbl xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><a:tblGrid><a:gridCol w="100"><x:id val="1"/></a:gridCol><x:before-second/><a:gridCol w="100"><x:id val="2"/></a:gridCol><x:grid-tail/></a:tblGrid><a:tr h="300"><a:tc/><a:tc x:cell="kept"/><x:row-id val="1"/></a:tr><x:between-rows/><a:tr h="400"><a:tc/><a:tc/><x:row-id val="2"/></a:tr><x:table-tail/></a:tbl>"#;
+        let mut table = CT_Table::from_xml(xml).unwrap();
+        table.insert_row(1).unwrap();
+        table.insert_column(1).unwrap();
+        table.set_column_width(1, Emu(150)).unwrap();
+        let written = String::from_utf8(table.to_xml().unwrap()).unwrap();
+        assert!(written.contains(
+            r#"<a:tblGrid><a:gridCol w="100"><x:id val="1"/></a:gridCol><a:gridCol w="150"/><x:before-second/><a:gridCol w="100"><x:id val="2"/></a:gridCol><x:grid-tail/></a:tblGrid>"#
+        ), "{written}");
+        assert!(written.contains(
+            r#"<a:tr h="300"><a:tc/><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody></a:tc><a:tc x:cell="kept"/><x:row-id val="1"/></a:tr><a:tr h="300"><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody></a:tc><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody></a:tc><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody></a:tc></a:tr><x:between-rows/><a:tr h="400">"#
+        ), "{written}");
+        assert!(written.ends_with(r#"<x:row-id val="2"/></a:tr><x:table-tail/></a:tbl>"#));
+        assert_eq!(table, CT_Table::from_xml(written.as_bytes()).unwrap());
+
+        table.remove_column(0).unwrap();
+        table.remove_row(0).unwrap();
+        let written = String::from_utf8(table.to_xml().unwrap()).unwrap();
+        assert!(written.contains(
+            r#"<a:tblGrid><a:gridCol w="150"/><x:before-second/><a:gridCol w="100"><x:id val="2"/></a:gridCol><x:grid-tail/></a:tblGrid>"#
+        ), "{written}");
+        assert!(!written.contains(r#"<x:row-id val="1"/>"#));
+        assert!(written.ends_with(r#"<x:row-id val="2"/></a:tr><x:table-tail/></a:tbl>"#));
+        assert_eq!(table, CT_Table::from_xml(written.as_bytes()).unwrap());
     }
 
     #[test]

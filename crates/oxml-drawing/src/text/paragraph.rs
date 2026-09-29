@@ -805,6 +805,14 @@ impl CT_TextCharacterProperties {
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
     }
+
+    /// Returns these properties as formatting for new text, without the click
+    /// and mouse-over hyperlinks, which name relationships rather than format.
+    pub(crate) fn without_hyperlinks(mut self) -> Self {
+        self.hyperlink_click = None;
+        self.hyperlink_mouse_over = None;
+        self
+    }
 }
 
 fn character_property_slot(name: &[u8]) -> Option<usize> {
@@ -1516,7 +1524,10 @@ impl CT_TextParagraph {
     /// Replaces ordered text choices with one regular run.
     ///
     /// The first existing regular run supplies direct formatting and
-    /// unmodelled run content for the replacement.
+    /// unmodelled run content for the replacement. A paragraph without one
+    /// formats the new run with its end-of-paragraph properties, without
+    /// their hyperlinks, as PowerPoint formats text typed into an empty
+    /// paragraph.
     pub fn set_text(&mut self, text: &str) {
         let old_run_count = self.runs.len();
         let retained_run = self.runs.iter().find_map(|run| match run {
@@ -1537,7 +1548,13 @@ impl CT_TextParagraph {
             }
         }
         self.raw_children = raw_children;
-        let mut run = retained_run.unwrap_or_else(|| CT_RegularTextRun::new(text));
+        let mut run = retained_run.unwrap_or_else(|| CT_RegularTextRun {
+            properties: self
+                .end_properties
+                .clone()
+                .map(CT_TextCharacterProperties::without_hyperlinks),
+            ..CT_RegularTextRun::new(text)
+        });
         run.set_text(text);
         self.runs = vec![TextRun::Run(run)];
     }
@@ -2093,6 +2110,36 @@ mod tests {
         );
         let written = paragraph.to_xml().unwrap();
         assert_eq!(CT_TextParagraph::from_xml(&written).unwrap(), paragraph);
+    }
+
+    #[test]
+    fn text_written_into_an_empty_paragraph_takes_its_end_formatting() {
+        let mut paragraph = CT_TextParagraph::from_xml(
+            br#"<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:pPr algn="r"/><a:endParaRPr sz="1500" b="1"><a:hlinkClick r:id="rId9"/></a:endParaRPr></a:p>"#,
+        )
+        .unwrap();
+        paragraph.set_text("Risk");
+        assert_eq!(
+            String::from_utf8(paragraph.to_xml().unwrap()).unwrap(),
+            r#"<a:p><a:pPr algn="r"/><a:r><a:rPr sz="1500" b="1"/><a:t>Risk</a:t></a:r><a:endParaRPr sz="1500" b="1"><a:hlinkClick r:id="rId9"/></a:endParaRPr></a:p>"#
+        );
+
+        let mut formatted = CT_TextParagraph::from_xml(
+            br#"<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:rPr i="1"/><a:t>old</a:t></a:r><a:endParaRPr sz="1500"/></a:p>"#,
+        )
+        .unwrap();
+        formatted.set_text("new");
+        assert_eq!(
+            String::from_utf8(formatted.to_xml().unwrap()).unwrap(),
+            r#"<a:p><a:r><a:rPr i="1"/><a:t>new</a:t></a:r><a:endParaRPr sz="1500"/></a:p>"#
+        );
+
+        let mut bare = CT_TextParagraph::default();
+        bare.set_text("plain");
+        assert_eq!(
+            bare.to_xml().unwrap(),
+            br#"<a:p><a:r><a:t>plain</a:t></a:r></a:p>"#
+        );
     }
 
     #[test]
