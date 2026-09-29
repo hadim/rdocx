@@ -2424,7 +2424,7 @@ def test_group_shapes_add_members_and_the_group_fits_them(tmp_path):
     prs.slides[0].shapes[0].shapes.add_table(1, 2, emu, 2 * emu, emu, emu)
     prs.slides[0].shapes[0].shapes.add_picture(io.BytesIO(_tiny_png()), emu, emu, emu, emu)
     inner = prs.slides[0].shapes[0].shapes.add_group_shape()
-    assert (inner.left, len(inner.shapes)) == (None, 0)
+    assert (inner.left, inner.width, len(inner.shapes)) == (0, 0, 0)
     nested = inner.shapes.add_textbox(3 * emu, 3 * emu, emu, emu)
     assert nested.left == 3 * emu
     group = prs.slides[0].shapes[0]
@@ -2488,6 +2488,8 @@ def test_only_groups_accept_members_and_nested_collections_do_not_remove():
     before = prs.to_bytes()
     with pytest.raises(ValueError, match="shape is not a group"):
         textbox.shapes.add_textbox(0, 0, 10, 10)
+    with pytest.raises(ValueError, match="shape is not a group"):
+        textbox.shapes.add_picture("missing.png", 0, 0)
     with pytest.raises(rpptx.RpptxError):
         prs.slides[0].shapes[0].shapes.add_shape("notAPreset", 0, 0, 10, 10)
     group = prs.slides[0].shapes[0]
@@ -2495,6 +2497,60 @@ def test_only_groups_accept_members_and_nested_collections_do_not_remove():
         group.shapes.remove(group.shapes[0])
     assert prs.to_bytes() == before
     assert len(prs.slides[0].shapes[0].shapes) == 1
+
+
+def test_a_group_in_an_alternate_content_fallback_does_not_take_new_shapes(tmp_path):
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_group_shape()
+    prs.slides[0].shapes[0].shapes.add_textbox(0, 0, 100, 100)
+    parts = _package_parts(prs.to_bytes())
+    slide = parts["ppt/slides/slide1.xml"].decode()
+    start = slide.index("<p:grpSp>")
+    end = slide.index("</p:grpSp>") + len("</p:grpSp>")
+    group = slide[start:end]
+    parts["ppt/slides/slide1.xml"] = (
+        slide[:start]
+        + '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        + ' xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">'
+        + f'<mc:Choice Requires="p14">{group}</mc:Choice><mc:Fallback>{group}</mc:Fallback>'
+        + "</mc:AlternateContent>"
+        + slide[end:]
+    ).encode()
+    source = tmp_path / "fallback-group.pptx"
+    source.write_bytes(_package_bytes(parts))
+    prs = rpptx.Presentation(source)
+    fallback_group = prs.slides[0].shapes[0].shapes[0]
+    assert int(fallback_group.shape_type) == 6
+    with pytest.raises(ValueError, match="mc:AlternateContent fallback cannot take new shapes"):
+        fallback_group.shapes.add_textbox(0, 0, 10, 10)
+
+
+def test_an_empty_nested_group_lets_python_pptx_refit_its_parent(tmp_path):
+    import rpptx
+
+    emu = 914_400
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_group_shape()
+    prs.slides[0].shapes[0].shapes.add_textbox(emu, emu, emu, emu)
+    inner = prs.slides[0].shapes[0].shapes.add_group_shape()
+    assert (inner.left, inner.top, inner.width, inner.height) == (0, 0, 0, 0)
+    outer = prs.slides[0].shapes[0]
+    assert (outer.left, outer.top, outer.width, outer.height) == (emu, emu, emu, emu)
+    output = tmp_path / "empty-nested.pptx"
+    prs.save(output)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output)
+    group = oracle.slides[0].shapes[0]
+    group.shapes.add_textbox(2 * emu, 2 * emu, emu, emu)
+    # python-pptx counts the empty group's zero box, which rpptx leaves out.
+    assert (group.left, group.top, group.width, group.height) == (0, 0, 3 * emu, 3 * emu)
+    oracle.save(output)
+    assert len(rpptx.Presentation(output).slides[0].shapes[0].shapes) == 3
 
 
 def test_shapes_and_slides_are_removed_and_reordered_with_stale_handles(tmp_path):

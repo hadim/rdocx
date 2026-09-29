@@ -628,6 +628,24 @@ impl PyShapeCollection {
         Ok(())
     }
 
+    /// Returns the slide index and group path that additions to this
+    /// collection target, or the error an addition raises.
+    fn target(&self, py: Python<'_>) -> PyResult<(usize, Vec<usize>)> {
+        let slide_index = self.validate(py)?;
+        let group = shape_indices(&self.path).collect::<Vec<_>>();
+        let mut presentation = self.presentation.borrow_mut(py);
+        if presentation.inner.shapes_mut(slide_index, &group).is_some() {
+            return Ok((slide_index, group));
+        }
+        let fallback_group = shape_ref_at(&presentation.inner, &self.path)
+            .is_some_and(|shape| shape.kind() == rpptx::ShapeKind::Group);
+        Err(PyValueError::new_err(if fallback_group {
+            "a group inside an mc:AlternateContent fallback cannot take new shapes"
+        } else {
+            "shape is not a group"
+        }))
+    }
+
     /// Adds one shape to the slide or group this collection holds, advances
     /// the revision once, and returns the new shape captured at it.
     fn add(
@@ -635,14 +653,13 @@ impl PyShapeCollection {
         py: Python<'_>,
         add: impl FnOnce(&mut rpptx::ShapesMut<'_>) -> rpptx::Result<()>,
     ) -> PyResult<Py<PyShape>> {
-        let slide_index = self.validate(py)?;
+        let (slide_index, group) = self.target(py)?;
         let index = self.len(py)?;
-        let group = shape_indices(&self.path).collect::<Vec<_>>();
         let mut presentation = self.presentation.borrow_mut(py);
         let mut shapes = presentation
             .inner
             .shapes_mut(slide_index, &group)
-            .ok_or_else(|| PyValueError::new_err("shape is not a group"))?;
+            .expect("the target is a slide or a group");
         add(&mut shapes).map_err(|error| rpptx_to_pyerr(py, error))?;
         drop(presentation);
         self.capture_added(py, index)
@@ -895,7 +912,7 @@ impl PyShapeCollection {
         width: Option<i64>,
         height: Option<i64>,
     ) -> PyResult<Py<PyShape>> {
-        self.validate(py)?;
+        self.target(py)?;
         let (bytes, filename) = image_bytes(image_file)?;
         self.add(py, |shapes| {
             shapes

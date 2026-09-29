@@ -345,10 +345,14 @@ their slide coordinates. An addition to a group advances the revision once,
 like any addition, so the group handle and its collection go stale and the
 returned member is captured at the new revision. The next addition re-fetches
 the group, for example through `prs.slides[0].shapes[0].shapes`.
-`add_group_shape` has no python-pptx `shapes` argument for moving existing
-shapes into the new group. Adding to the collection of a shape that is not a
-group raises `ValueError`, and so do `remove` and `move` on a nested
-collection.
+A group added inside a group has the zero `a:xfrm` python-pptx writes, so its
+`left`, `top`, `width`, and `height` read zero until its first member arrives,
+while a group added to a slide's own shapes reads `None`. `add_group_shape` has
+no python-pptx `shapes` argument for moving existing shapes into the new group.
+Adding to the collection of a shape that is not a group raises `ValueError`
+before any image is read, and so does adding to a group inside an
+`mc:AlternateContent` fallback, which stays read-only. `remove` and `move` on a
+nested collection raise `ValueError` too.
 
 A table `Cell` follows python-pptx for `merge(other_cell)`, `split()`,
 `is_merge_origin`, `is_spanned`, `span_height`, and `span_width`. Merge and

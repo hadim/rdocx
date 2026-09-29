@@ -5931,7 +5931,7 @@ impl<'a> SlideMut<'a> {
 
     /// Appends an empty group at the top of the slide's z-order.
     pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>> {
-        append_new_member(self.shape_tree(), &[], |id| Ok(group_member(id)))
+        append_new_member(self.shape_tree(), &[], |id| Ok(group_member(id, false)))
     }
 
     fn shape_tree(&mut self) -> &mut CT_ShapeTree {
@@ -6023,8 +6023,14 @@ impl ShapesMut<'_> {
     }
 
     /// Appends an empty group, which the first addition to it fits.
+    ///
+    /// A group added inside a group gets the zero `a:xfrm` python-pptx
+    /// writes, because python-pptx cannot refit a group whose member group
+    /// has none. One added to the slide's own shapes has no transform, as
+    /// [`SlideMut::add_group_shape`] writes it.
     pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>> {
-        self.append(|id| Ok(group_member(id)))
+        let nested = !self.group.is_empty();
+        self.append(|id| Ok(group_member(id, nested)))
     }
 
     /// Appends a rectangular table.
@@ -6124,11 +6130,17 @@ fn connector_member(
     .map_err(|error| invalid_shape_construction("add connector", error))
 }
 
-fn group_member(id: u32) -> ShapeTreeChild {
-    ShapeTreeChild::GroupShape(Box::new(CT_GroupShape::new_empty(
-        id,
-        &format!("Group {id}"),
-    )))
+/// Builds an empty group, with a zero `a:xfrm` when `nested` in a group.
+fn group_member(id: u32, nested: bool) -> ShapeTreeChild {
+    let mut group = CT_GroupShape::new_empty(id, &format!("Group {id}"));
+    if nested {
+        let transform = group.group_transform_mut();
+        transform.offset = Some(CT_Point2D::default());
+        transform.extent = Some(CT_PositiveSize2D::default());
+        transform.child_offset = Some(CT_Point2D::default());
+        transform.child_extent = Some(CT_PositiveSize2D::default());
+    }
+    ShapeTreeChild::GroupShape(Box::new(group))
 }
 
 fn table_member(
@@ -6177,11 +6189,25 @@ fn append_member<'t>(
     if group.is_empty() {
         return tree.append_child(member);
     }
+    // Only a group that already has a counted member has members whose drawn
+    // place its refit must keep.
+    let occupied = (1..=group.len())
+        .map(|depth| {
+            group_at_mut(&mut tree.children, &group[..depth])
+                .expect(CHECKED)
+                .children
+                .iter()
+                .any(|child| member_box(child).is_some())
+        })
+        .collect::<Vec<_>>();
     group_at_mut(&mut tree.children, group)
         .expect(CHECKED)
         .append_child(member);
     for depth in (1..=group.len()).rev() {
-        fit_group_to_members(group_at_mut(&mut tree.children, &group[..depth]).expect(CHECKED));
+        fit_group_to_members(
+            group_at_mut(&mut tree.children, &group[..depth]).expect(CHECKED),
+            occupied[depth - 1],
+        );
     }
     group_at_mut(&mut tree.children, group)
         .expect(CHECKED)
@@ -6207,23 +6233,35 @@ fn group_at_mut<'t>(
     }
 }
 
+/// Returns the offset and extent a member adds to its group's union, or
+/// `None` for a member without both and for a group without members.
+fn member_box(child: &ShapeTreeChild) -> Option<(CT_Point2D, CT_PositiveSize2D)> {
+    if let ShapeTreeChild::GroupShape(group) = child
+        && group.children.is_empty()
+    {
+        return None;
+    }
+    let transform = shape_transform(child)?;
+    Some((transform.offset?, transform.extent?))
+}
+
 /// Refits a group to the union of its members' own boxes, as python-pptx
 /// does after each addition.
 ///
 /// `a:chOff` and `a:chExt` become the union in member space, and `a:off` and
 /// `a:ext` follow through the group's current mapping from member space to
-/// its parent, the one the renderer applies, so no member moves on the
-/// slide. A group without all four values draws its members unscaled in
-/// place, so its four values end equal, as python-pptx writes them. As in
-/// python-pptx, member rotation does not widen the union. Members without
-/// an offset and an extent, such as an empty group, do not count, and a
-/// group without a counted member keeps its transform.
-fn fit_group_to_members(group: &mut CT_GroupShape) {
+/// its parent, the one the renderer applies. The group's flips and rotation
+/// apply about the centre of `a:off` and `a:ext`, so when the group is
+/// `occupied`, meaning it had a counted member before the addition, `a:off`
+/// also moves by [`pivot_shift`]. No member drawn before the addition moves
+/// on the slide. A group without all four values draws its members unscaled
+/// in place, so its four values end equal, as python-pptx writes them. As
+/// in python-pptx, member rotation does not widen the union. A member
+/// without an offset and an extent does not count, nor does a group without
+/// members, and a group without a counted member keeps its transform.
+fn fit_group_to_members(group: &mut CT_GroupShape, occupied: bool) {
     let mut union: Option<(i64, i64, i64, i64)> = None;
-    for transform in group.children.iter().filter_map(shape_transform) {
-        let (Some(offset), Some(extent)) = (transform.offset, transform.extent) else {
-            continue;
-        };
+    for (offset, extent) in group.children.iter().filter_map(member_box) {
         let (left, top) = (offset.x.0, offset.y.0);
         let right = left.saturating_add(extent.cx.0);
         let bottom = top.saturating_add(extent.cy.0);
@@ -6241,20 +6279,30 @@ fn fit_group_to_members(group: &mut CT_GroupShape) {
         .offset
         .zip(transform.extent)
         .zip(transform.child_offset.zip(transform.child_extent));
-    let (x, cx) = member_span_to_parent(
+    let (mut x, cx) = member_span_to_parent(
         left,
         width,
         mapping.map(|((offset, extent), (child_offset, child_extent))| {
             (offset.x.0, extent.cx.0, child_offset.x.0, child_extent.cx.0)
         }),
     );
-    let (y, cy) = member_span_to_parent(
+    let (mut y, cy) = member_span_to_parent(
         top,
         height,
         mapping.map(|((offset, extent), (child_offset, child_extent))| {
             (offset.y.0, extent.cy.0, child_offset.y.0, child_extent.cy.0)
         }),
     );
+    if occupied && let Some(((offset, extent), _)) = mapping {
+        let centre = |start: i64, length: i64| start as f64 + length as f64 / 2.0;
+        let (shift_x, shift_y) = pivot_shift(
+            transform,
+            centre(x, cx) - centre(offset.x.0, extent.cx.0),
+            centre(y, cy) - centre(offset.y.0, extent.cy.0),
+        );
+        x = x.saturating_add(shift_x);
+        y = y.saturating_add(shift_y);
+    }
     transform.offset = Some(CT_Point2D {
         x: Emu(x),
         y: Emu(y),
@@ -6271,6 +6319,26 @@ fn fit_group_to_members(group: &mut CT_GroupShape) {
         cx: Emu(width),
         cy: Emu(height),
     });
+}
+
+/// Returns how far a group's `a:off` must move so that its flips and
+/// rotation, which apply about the centre of `a:off` and `a:ext`, place its
+/// members as before after that centre moved by `(dx, dy)`.
+///
+/// PowerPoint flips, then rotates, so for that linear part `L` the shift is
+/// `(L - I)(dx, dy)`, which is zero without rotation and flips. The rpptx
+/// renderer rotates a group before it flips it, which agrees with
+/// PowerPoint unless a group is both rotated and flipped.
+fn pivot_shift(transform: &CT_Transform2D, dx: f64, dy: f64) -> (i64, i64) {
+    let (sin, cos) = (f64::from(transform.rotation.0) / 60_000.0)
+        .to_radians()
+        .sin_cos();
+    let flip_x = if transform.flip_horizontal { -1.0 } else { 1.0 };
+    let flip_y = if transform.flip_vertical { -1.0 } else { 1.0 };
+    (
+        ((cos * flip_x - 1.0) * dx - sin * flip_y * dy).round() as i64,
+        (sin * flip_x * dx + (cos * flip_y - 1.0) * dy).round() as i64,
+    )
 }
 
 /// Maps one axis of a member-space span onto a group's parent, given the

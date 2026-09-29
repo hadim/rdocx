@@ -23588,6 +23588,206 @@ fn adding_to_a_moved_and_scaled_group_keeps_its_members_in_place() {
     assert!(presentation.validate().is_empty());
 }
 
+/// Returns a slide with one group holding a red square at one inch, with
+/// `attributes` written onto the group's fitted `a:xfrm`, since the facade
+/// has no flip setter.
+fn transformed_group_fixture(attributes: &str) -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_group_shape()
+        .unwrap();
+    presentation
+        .shapes_mut(0, &[0])
+        .unwrap()
+        .add_shape(
+            "rect",
+            Emu(914_400),
+            Emu(914_400),
+            Emu(914_400),
+            Emu(914_400),
+        )
+        .unwrap()
+        .set_fill(
+            Fill::from_xml(br#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#).unwrap(),
+        )
+        .unwrap();
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "transformed group");
+    let xml = String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<p:grpSpPr><a:xfrm>",
+            &format!("<p:grpSpPr><a:xfrm{attributes}>"),
+            1,
+        );
+    package.set_part("/ppt/slides/slide1.xml", xml.into_bytes());
+    Presentation::from_bytes(&package_bytes(package)).unwrap()
+}
+
+/// Returns where PowerPoint draws two corners of the red square: member
+/// space scales into `a:off` and `a:ext`, then flips, then rotates about
+/// their centre.
+fn powerpoint_red_corners(presentation: &Presentation) -> [(f64, f64); 2] {
+    let slide = saved_first_slide(presentation);
+    let ShapeTreeChild::GroupShape(group) = &slide.common_slide_data.shape_tree.children[0] else {
+        panic!("expected a group");
+    };
+    let transform = group.group_transform().unwrap();
+    let [x, y, cx, cy, child_x, child_y, child_cx, child_cy] =
+        group_frame(&slide.common_slide_data.shape_tree.children[0]).map(|value| value as f64);
+    let (sin, cos) = (f64::from(transform.rotation.0) / 60_000.0)
+        .to_radians()
+        .sin_cos();
+    let (centre_x, centre_y) = (x + cx / 2.0, y + cy / 2.0);
+    [914_400.0, 1_828_800.0].map(|corner| {
+        let mut dx = x + (corner - child_x) * cx / child_cx - centre_x;
+        let mut dy = y + (corner - child_y) * cy / child_cy - centre_y;
+        if transform.flip_horizontal {
+            dx = -dx;
+        }
+        if transform.flip_vertical {
+            dy = -dy;
+        }
+        (
+            centre_x + cos * dx - sin * dy,
+            centre_y + sin * dx + cos * dy,
+        )
+    })
+}
+
+#[test]
+fn adding_to_a_rotated_or_flipped_group_keeps_its_members_in_place() {
+    for attributes in [
+        r#" rot="5400000""#,
+        r#" rot="1800000""#,
+        r#" flipH="1""#,
+        r#" flipV="1""#,
+        r#" rot="1800000" flipH="1""#,
+        r#" rot="2700000" flipV="1""#,
+    ] {
+        let mut presentation = transformed_group_fixture(attributes);
+        let corners = powerpoint_red_corners(&presentation);
+        let png = presentation
+            .slide_png_deterministic(0, 72.0)
+            .unwrap()
+            .unwrap();
+        presentation
+            .shapes_mut(0, &[0])
+            .unwrap()
+            .add_textbox(Emu(5_000_000), Emu(4_000_000), Emu(100_000), Emu(100_000))
+            .unwrap();
+        let moved = powerpoint_red_corners(&presentation);
+        for (before, after) in corners.iter().zip(moved) {
+            assert!(
+                (before.0 - after.0).abs() <= 1.0 && (before.1 - after.1).abs() <= 1.0,
+                "{attributes}: {corners:?} became {moved:?}"
+            );
+        }
+        // The renderer rotates a group before it flips it, which agrees with
+        // PowerPoint unless the group is both rotated and flipped.
+        if !(attributes.contains("rot") && attributes.contains("flip")) {
+            assert_eq!(
+                presentation
+                    .slide_png_deterministic(0, 72.0)
+                    .unwrap()
+                    .unwrap(),
+                png,
+                "{attributes}"
+            );
+        }
+    }
+}
+
+#[test]
+fn adding_to_a_rotated_inner_group_keeps_every_member_in_place() {
+    let mut presentation = transformed_group_fixture(r#" rot="2700000""#);
+    presentation
+        .shapes_mut(0, &[0])
+        .unwrap()
+        .add_group_shape()
+        .unwrap();
+    presentation
+        .shapes_mut(0, &[0, 1])
+        .unwrap()
+        .add_shape(
+            "rect",
+            Emu(2_743_200),
+            Emu(1_828_800),
+            Emu(457_200),
+            Emu(457_200),
+        )
+        .unwrap()
+        .set_fill(
+            Fill::from_xml(br#"<a:solidFill><a:srgbClr val="0000FF"/></a:solidFill>"#).unwrap(),
+        )
+        .unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut outer = slide.shape_mut(0).unwrap();
+    outer
+        .child_mut(1)
+        .unwrap()
+        .set_rotation(Angle(1_800_000))
+        .unwrap();
+    let png = presentation
+        .slide_png_deterministic(0, 72.0)
+        .unwrap()
+        .unwrap();
+
+    presentation
+        .shapes_mut(0, &[0, 1])
+        .unwrap()
+        .add_textbox(Emu(5_000_000), Emu(4_000_000), Emu(100_000), Emu(100_000))
+        .unwrap();
+    assert_eq!(
+        presentation
+            .slide_png_deterministic(0, 72.0)
+            .unwrap()
+            .unwrap(),
+        png
+    );
+    assert!(presentation.validate().is_empty());
+}
+
+#[test]
+fn an_empty_group_inside_a_group_has_the_zero_transform_python_pptx_writes() {
+    const INCH: i64 = 914_400;
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_group_shape()
+        .unwrap();
+    let mut shapes = presentation.shapes_mut(0, &[0]).unwrap();
+    shapes
+        .add_textbox(Emu(INCH), Emu(INCH), Emu(INCH), Emu(INCH))
+        .unwrap();
+    shapes.add_group_shape().unwrap();
+
+    let slide = saved_first_slide(&presentation);
+    let ShapeTreeChild::GroupShape(outer) = &slide.common_slide_data.shape_tree.children[0] else {
+        panic!("expected the outer group");
+    };
+    assert_eq!(group_frame(&outer.children[1]), [0; 8]);
+    assert_eq!(
+        group_frame(&slide.common_slide_data.shape_tree.children[0]),
+        [INCH; 8]
+    );
+
+    presentation
+        .shapes_mut(0, &[])
+        .unwrap()
+        .add_group_shape()
+        .unwrap();
+    let slide = saved_first_slide(&presentation);
+    let ShapeTreeChild::GroupShape(top) = &slide.common_slide_data.shape_tree.children[1] else {
+        panic!("expected the slide's own group");
+    };
+    assert!(top.group_transform().is_none());
+}
+
 #[test]
 fn group_shape_collections_reject_paths_that_are_not_groups_without_change() {
     let mut presentation = Presentation::new().unwrap();
