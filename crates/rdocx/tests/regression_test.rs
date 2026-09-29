@@ -17086,6 +17086,69 @@ mod replacement_reaches_notes_and_tracked_insertions {
             }
         }
     }
+
+    /// A replacement inside an insertion stays part of that tracked change.
+    /// The revisions keep their ids, authors and dates. Accepting them keeps
+    /// the replaced text, and rejecting them gives what rejecting the source
+    /// gives, since the insertion goes away with the text replaced in it.
+    #[test]
+    fn a_replaced_insertion_is_accepted_and_rejected_as_one_revision() {
+        let revisions = |document: &Document| {
+            document
+                .revisions()
+                .iter()
+                .map(|revision| {
+                    (
+                        revision.id(),
+                        revision.author().to_owned(),
+                        revision.timestamp().map(str::to_owned),
+                        format!("{:?}", revision.kind()),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let replaced = || {
+            let mut document = document("NEEDLE", true);
+            assert_eq!(document.try_replace_text("ins NEEDLE", "ins X").unwrap(), 1);
+            document
+        };
+        assert_eq!(revisions(&replaced()), revisions(&document("NEEDLE", true)));
+
+        for accept in [true, false] {
+            let mut source = document("NEEDLE", true);
+            let mut edited = replaced();
+            let resolve = |document: &mut Document| {
+                if accept {
+                    document.accept_all().unwrap()
+                } else {
+                    document.reject_all().unwrap()
+                }
+            };
+            assert_eq!(
+                resolve(&mut edited),
+                resolve(&mut source),
+                "accept: {accept}"
+            );
+
+            let expected = paragraph_texts(&source)
+                .into_iter()
+                .map(|text| text.replace("ins NEEDLE", "ins X"))
+                .collect::<Vec<_>>();
+            assert_eq!(paragraph_texts(&edited), expected, "accept: {accept}");
+            let tracked = if accept {
+                "Tracked: ins X"
+            } else {
+                "Tracked: del NEEDLE"
+            };
+            assert!(expected.contains(&tracked.to_owned()), "{expected:?}");
+            let xml = saved_parts(&mut edited)[DOCUMENT].clone();
+            assert!(
+                !xml.contains("<w:ins ") && !xml.contains("<w:del "),
+                "{xml}"
+            );
+            assert_eq!(xml.contains(">ins X<"), accept, "{xml}");
+        }
+    }
 }
 
 /// `9360 / cols` panicked when a caller asked for a zero-column table.

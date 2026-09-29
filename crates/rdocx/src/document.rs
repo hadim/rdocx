@@ -21212,12 +21212,15 @@ impl Document {
     /// Replace all occurrences of `placeholder` with `replacement` throughout the document.
     ///
     /// Searches body paragraphs, tables (including nested), headers, footers,
-    /// footnotes, endnotes, text boxes and chart labels, and the content
-    /// controls at every level of them, inline controls included. It reads
-    /// the text [`crate::Paragraph::text`] reads: the text of a tracked
-    /// insertion or move destination, replaced inside that revision, and not
-    /// deleted or moved-away text. The separator and continuation entries of
-    /// the notes parts are never searched. Handles placeholders split across
+    /// footnotes, endnotes, the text boxes of the body, headers and footers,
+    /// and the chart labels of the body, and the content controls at every
+    /// level of them, inline controls included. It reads the text
+    /// [`crate::Paragraph::text`] reads: the text of a tracked insertion or
+    /// move destination, replaced inside that revision, and not deleted or
+    /// moved-away text. A text box inside a deleted run is the exception, as
+    /// the text box pass rewrites it like any other text box. A text box
+    /// inside a note, and the separator and continuation entries of the notes
+    /// parts, are never searched. Handles placeholders split across
     /// multiple runs. A match that straddles a content-control or a
     /// tracked-insertion boundary is not replaced. Returns the total number
     /// of replacements made.
@@ -21454,10 +21457,10 @@ impl Document {
     /// Replace all regex matches with `replacement` throughout the document.
     ///
     /// The `replacement` string supports capture groups: `$1`, `$2`, etc.
-    /// Searches body paragraphs, tables (including nested), headers, footers,
+    /// Searches the stories [`Self::replace_text`] searches, except chart
+    /// labels: body paragraphs, tables (including nested), headers, footers,
     /// footnotes, endnotes and text boxes, the content controls at every level
-    /// of them and the text of tracked insertions, as [`Self::replace_text`]
-    /// does. Returns the total number of replacements made, or an error if the
+    /// of them and the text of tracked insertions. Returns the total number of replacements made, or an error if the
     /// regex is invalid.
     pub fn replace_regex(&mut self, pattern: &str, replacement: &str) -> Result<usize> {
         let re =
@@ -21519,7 +21522,8 @@ impl Document {
         Ok(count)
     }
 
-    /// Apply a regex replacement to the text-box content of the raw XML parts.
+    /// Apply a regex replacement to the text-box content of the raw XML parts,
+    /// then to the notes of the footnotes and endnotes parts.
     fn replace_regex_in_xml_parts(&mut self, re: &regex::Regex, replacement: &str) -> usize {
         let mut count = 0;
 
@@ -21682,7 +21686,9 @@ impl Document {
         })
     }
 
-    /// Run raw XML replacement on all XML parts (for text boxes, shapes, charts, etc.).
+    /// Run raw XML replacement on the text boxes of the body, header and footer
+    /// parts, on the chart parts, and on the notes of the footnotes and
+    /// endnotes parts.
     ///
     /// This is called after the typed-model replacement and flush_to_package.
     fn replace_in_xml_parts(&mut self, pairs: &[(&str, &str)]) -> usize {
