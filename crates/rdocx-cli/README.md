@@ -68,7 +68,9 @@ DOCX, and supports a schema-1 record through `--json`.
 
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,
-its direct style and numbering, and accepted-view runs. Run `formatting` is
+its direct style and numbering, and accepted-view runs. Its `text` also holds
+the text inside smart tags, inline custom XML elements, and simple fields,
+which `runs` does not list. Run `formatting` is
 `null` when no direct run properties exist. Otherwise it records nullable
 direct bold, italic, strike, underline, font, point size, colour, highlight,
 language, and character style values.
@@ -83,9 +85,10 @@ fragment on each occupied page.
 exactly `N`. A mismatch exits unsuccessfully without creating or replacing the
 requested output. The count covers the text a reader sees in the body, tables,
 content controls, headers, footers, footnotes, endnotes, and tracked insertions,
-in the text boxes of the body, headers, and footers, and in the labels of the
-charts in the body. Deleted text is not counted, except in a text box inside a
-deleted run, which is replaced like any other text box. A text box inside a
-note and the separators of the notes parts are not counted.
+in the text boxes of the body, headers, and footers, in the labels of the
+charts in the body, and inside smart tags, inline custom XML elements, and the
+cached results of simple fields. Deleted text is not counted, except in a text
+box inside a deleted run, which is replaced like any other text box. A text box
+inside a note and the separators of the notes parts are not counted.
 
 Run `rdocx --help` or `rdocx <command> --help` for the complete option set.

@@ -93,7 +93,9 @@ borrowed nested handle can mutate without a rebind:
 Python paragraph text, run iteration, run indexing, formatting mutation, and
 run splitting share the native accepted-view run order. Visible runs inside
 inline content controls, insertions, and move destinations carry recursive
-source paths. Deleted and move-source runs are absent. A successful structural
+source paths. Deleted and move-source runs are absent. Paragraph text also
+reads the runs inside smart tags, inline custom XML elements, and simple fields,
+which the run handles do not address. A successful structural
 edit invalidates earlier path-backed run handles through the same document
 revision check as direct handles.
 
@@ -880,9 +882,11 @@ below, as the typed notes reader and the story walkers read them. A text box
 inside a note is not searched. A notes part is rewritten only when a note
 changed, and then only the changed children of that note are serialized again.
 A match inside a tracked insertion or move destination is replaced inside it.
-Deleted text is not matched, except in a text box inside a deleted run, which
-the text box pass rewrites like any other text box. The Rust facade, Python
-`try_replace_text` and `replace_all_regex`, the WASM replacement method, and
+So is a match inside a smart tag, an inline custom XML element, or the cached
+result of a simple field, whose instruction is never matched. Deleted text is
+not matched, except in a text box inside a deleted run, which the text box pass
+rewrites like any other text box. The Rust facade, Python `try_replace_text`
+and `replace_all_regex`, the WASM replacement method, and
 `rdocx replace --expect` share these counts.
 
 The native presentation facade provides the same staged boundary through

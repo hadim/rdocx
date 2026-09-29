@@ -4080,7 +4080,8 @@ fn actual_flattened_locations_resolve_only_their_direct_destination_child() {
             .into_iter()
             .map(|paragraph| paragraph.text())
             .collect::<Vec<_>>(),
-        ["first", "inserted", "later"]
+        // The first paragraph reads the cached result of its simple field.
+        ["first1", "inserted", "later"]
     );
 
     let body = f254_story(&document, StoryKind::Body);
@@ -17147,6 +17148,79 @@ mod replacement_reaches_notes_and_tracked_insertions {
                 "{xml}"
             );
             assert_eq!(xml.contains(">ins X<"), accept, "{xml}");
+        }
+    }
+}
+
+/// `Paragraph::text` and replacement did not read the runs inside a simple
+/// field, a smart tag or an inline custom XML element. The fixture is the
+/// one the skills suite builds: "before ", then "MID" inside the wrapper,
+/// then " after".
+mod text_and_replacement_reach_simple_fields_smart_tags_and_custom_xml {
+    use rdocx::Document;
+    use rdocx_oxml::namespace::W_NS;
+
+    use super::{document_with_content_controls, document_xml};
+
+    const WRAPPERS: [(&str, &str); 3] = [
+        (
+            r#"<w:fldSimple w:instr=" DOCPROPERTY Title ">"#,
+            "</w:fldSimple>",
+        ),
+        (r#"<w:smartTag w:element="place">"#, "</w:smartTag>"),
+        (r#"<w:customXml w:element="item">"#, "</w:customXml>"),
+    ];
+
+    fn document((start, end): (&str, &str)) -> (Document, String) {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t xml:space="preserve">before </w:t></w:r>{start}<w:r><w:t>MID</w:t></w:r>{end}<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#
+        );
+        (document_with_content_controls(&xml), xml)
+    }
+
+    /// The paragraph reads the text inside the wrapper, which a no-op save
+    /// keeps byte for byte, and the run index space does not change.
+    #[test]
+    fn the_paragraph_text_reads_the_wrapper() {
+        for wrapper in WRAPPERS {
+            let (mut document, xml) = document(wrapper);
+            let run_count = document.paragraph(0).unwrap().run_count();
+
+            assert_eq!(
+                document.paragraph(0).unwrap().text(),
+                "before MID after",
+                "{}",
+                wrapper.0
+            );
+            assert_eq!(document.paragraph(0).unwrap().run_count(), run_count);
+            assert_eq!(document_xml(&mut document), xml);
+        }
+    }
+
+    /// Literal and regex replacement change the text inside the wrapper,
+    /// whose start tag, the instruction of a field included, keeps its
+    /// bytes. A match across the wrapper is not replaced.
+    #[test]
+    fn replacement_reaches_the_wrapper() {
+        for regex in [false, true] {
+            for wrapper in WRAPPERS {
+                let (mut document, _) = document(wrapper);
+                let replace = |document: &mut Document, from: &str, to: &str| {
+                    if regex {
+                        document.replace_regex(from, to).unwrap()
+                    } else {
+                        document.try_replace_text(from, to).unwrap()
+                    }
+                };
+
+                assert_eq!(replace(&mut document, "before MID", "-"), 0);
+                assert_eq!(replace(&mut document, "MID", "X"), 1, "{}", wrapper.0);
+
+                assert_eq!(document.paragraph(0).unwrap().text(), "before X after");
+                let body = document_xml(&mut document);
+                let expected = format!("{}<w:r><w:t>X</w:t></w:r>{}", wrapper.0, wrapper.1);
+                assert!(body.contains(&expected), "{body}");
+            }
         }
     }
 }

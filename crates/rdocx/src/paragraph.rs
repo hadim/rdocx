@@ -835,13 +835,10 @@ pub struct Paragraph<'a> {
 }
 
 impl<'a> Paragraph<'a> {
-    /// Get the combined text of all runs.
+    /// Get the combined text of all runs, with the text of the runs inside
+    /// smart tags, inline custom XML elements and simple fields.
     pub fn text(&self) -> String {
-        self.inner
-            .accepted_bookmark_runs()
-            .iter()
-            .map(|run| run.text())
-            .collect()
+        self.inner.accepted_text()
     }
 
     /// Iterate over typed equations in paragraph source order.
@@ -2233,13 +2230,10 @@ pub struct ParagraphRef<'a> {
 }
 
 impl<'a> ParagraphRef<'a> {
-    /// Get the combined text of all runs.
+    /// Get the combined text of all runs, with the text of the runs inside
+    /// smart tags, inline custom XML elements and simple fields.
     pub fn text(&self) -> String {
-        self.inner
-            .accepted_bookmark_runs()
-            .iter()
-            .map(|run| run.text())
-            .collect()
+        self.inner.accepted_text()
     }
 
     /// Iterate over typed equations in paragraph source order.

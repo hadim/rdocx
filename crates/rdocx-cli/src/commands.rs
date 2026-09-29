@@ -260,7 +260,7 @@ fn paragraph_json(body_index: usize, path: &[Value], paragraph: &CT_P) -> Value 
         "path": path,
         "style": style,
         "numbering": numbering,
-        "text": runs.iter().filter_map(|run| run["text"].as_str()).collect::<String>(),
+        "text": paragraph.accepted_text(),
         "runs": runs,
     })
 }

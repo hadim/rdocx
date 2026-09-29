@@ -6,12 +6,14 @@
 //!
 //! A replacement reads the runs of a paragraph that `Paragraph::text` reads,
 //! in document order: the direct runs, the runs of its inline content
-//! controls, and those of its tracked insertions and move destinations, but
-//! not those of a deletion or a move source. It searches their text left to
-//! right as one. A match must lie within one stretch of those runs, see
-//! [`replaceable_texts`]. A match that straddles a content-control or a
-//! tracked-insertion boundary is not replaced, and the search goes on after
-//! it, so no part of the text it covers is replaced either.
+//! controls, those of its tracked insertions and move destinations, but not
+//! those of a deletion or a move source, and those inside its smart tags,
+//! inline custom XML elements and simple fields. It searches their text left
+//! to right as one. A match must lie within one stretch of those runs, see
+//! [`replaceable_texts`]. A match that straddles the boundary of a content
+//! control, a tracked insertion or one of those wrappers is not replaced,
+//! and the search goes on after it, so no part of the text it covers is
+//! replaced either.
 
 use crate::content_control::{CT_Sdt, SdtContent};
 use crate::footnotes::NoteType;
@@ -23,14 +25,16 @@ use crate::revision::{CT_Revision, RevisionKind};
 use crate::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use crate::text::{
     AcceptedRunPath, AcceptedRunPathSegment, BoundaryOwner, CT_P, CT_R, RunContent,
-    boundary_owners, optional_word_attribute, raw_with_external_bindings,
+    boundary_owners, optional_word_attribute, raw_with_external_bindings, run_wrapper_paragraph,
+    set_simple_field_source, simple_field_source, with_run_wrapper_content,
 };
 
 /// Replace all occurrences of `placeholder` with `replacement` in a paragraph.
 ///
 /// Handles placeholders split across multiple runs and reaches the runs of
-/// inline content controls and tracked insertions. A match that straddles a
-/// content-control or a tracked-insertion boundary is not replaced.
+/// inline content controls, tracked insertions, smart tags, inline custom
+/// XML elements and simple fields. A match that straddles one of their
+/// boundaries is not replaced.
 /// Preserves the formatting of the first matched run. Returns the number of
 /// replacements made.
 pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &str) -> usize {
@@ -44,20 +48,22 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
 }
 
 /// The texts a replacement in `para` matches against, one per stretch of
-/// runs. The direct runs between two inline content controls or tracked
-/// insertions form one stretch, and so do the runs of one control, or of
-/// one insertion or move destination, between the controls and insertions
-/// nested in it. A match never spans two stretches.
+/// runs. The direct runs between two inline content controls, tracked
+/// insertions or wrappers form one stretch, and so do the runs of one
+/// control, insertion, move destination, smart tag, inline custom XML
+/// element or simple field, between those nested in it. A match never spans
+/// two stretches.
 #[doc(hidden)]
 pub fn replaceable_texts(para: &CT_P) -> Vec<String> {
     let mut texts: Vec<String> = Vec::new();
     let mut previous = None;
-    for (stretch, path) in text_runs(para) {
-        if previous != Some(stretch) {
+    let walk = text_runs(para);
+    for run in &walk.runs {
+        if previous != Some(run.stretch) {
             texts.push(String::new());
-            previous = Some(stretch);
+            previous = Some(run.stretch);
         }
-        if let (Some(text), Some(run)) = (texts.last_mut(), para.accepted_run(&path)) {
+        if let (Some(text), Some(run)) = (texts.last_mut(), text_run(para, &walk.wrappers, run)) {
             text.extend(run.content.iter().filter_map(|content| match content {
                 RunContent::Text(t) => Some(t.text.as_str()),
                 _ => None,
@@ -74,7 +80,9 @@ type MatchFinder<'a> = dyn FnMut(&str, usize) -> Option<(usize, usize, String)> 
 /// Find each match that `next_match` reports in the text of `para` and
 /// replace it.
 fn replace_matches(para: &mut CT_P, next_match: &mut MatchFinder<'_>) -> usize {
-    let runs = text_runs(para);
+    let TextWalk {
+        runs, mut wrappers, ..
+    } = text_runs(para);
     let mut emptied = Vec::new();
     let mut total = 0;
 
@@ -87,7 +95,7 @@ fn replace_matches(para: &mut CT_P, next_match: &mut MatchFinder<'_>) -> usize {
 
     loop {
         // 1. Concatenate all run text and build a char map.
-        let (full_text, char_map) = build_char_map(para, &runs);
+        let (full_text, char_map) = build_char_map(para, &wrappers, &runs);
         if search_from > full_text.len() {
             break;
         }
@@ -116,7 +124,7 @@ fn replace_matches(para: &mut CT_P, next_match: &mut MatchFinder<'_>) -> usize {
         let first_run = char_map[match_start].run_index;
         let last_run = char_map[match_end - 1].run_index;
 
-        if runs[first_run].0 != runs[last_run].0 {
+        if runs[first_run].stretch != runs[last_run].stretch {
             // The match straddles a content-control boundary, so it is no
             // match. Look again after it, as after a replaced match, so that
             // no shorter match inside it, such as `\d+` finds in the digits
@@ -127,12 +135,20 @@ fn replace_matches(para: &mut CT_P, next_match: &mut MatchFinder<'_>) -> usize {
 
         if first_run == last_run {
             // Single-run match: simple in-place replacement on that run's text content.
-            edit_run(para, &runs[first_run].1, |run| {
+            edit_run(para, &mut wrappers, &runs[first_run], |run| {
                 replace_in_single_run(run, &char_map, match_start, match_end, &replacement);
             });
         } else {
             // Cross-run match: put replacement in first run, clear matched parts from others.
-            replace_across_runs(para, &runs, &char_map, match_start, match_end, &replacement);
+            replace_across_runs(
+                para,
+                &mut wrappers,
+                &runs,
+                &char_map,
+                match_start,
+                match_end,
+                &replacement,
+            );
             emptied.extend(first_run + 1..=last_run);
         }
 
@@ -144,63 +160,149 @@ fn replace_matches(para: &mut CT_P, next_match: &mut MatchFinder<'_>) -> usize {
         total += 1;
     }
 
-    remove_emptied_runs(para, &runs, emptied);
+    remove_emptied_runs(para, wrappers, &runs, emptied);
     total
+}
+
+/// A run of the text a replacement reads.
+struct TextRun {
+    /// The stretch of runs it belongs to. A match never spans two.
+    stretch: usize,
+    /// The wrapper whose content holds it, an index into
+    /// [`TextWalk::wrappers`], or None for the paragraph being replaced.
+    wrapper: Option<usize>,
+    /// Its address in the paragraph that holds it.
+    path: AcceptedRunPath,
+}
+
+/// A smart tag, an inline custom XML element or a simple field that a
+/// replacement reads, in the paragraph being replaced or nested in another
+/// such wrapper. Its content is parsed from its preserved source, see
+/// [`run_wrapper_paragraph`], and written back into that source only when a
+/// replacement changed it, so any other wrapper keeps its bytes.
+struct Wrapper {
+    content: CT_P,
+    /// The wrapper whose content holds this one, or None for the paragraph.
+    parent: Option<usize>,
+    source: WrapperSource,
+    changed: bool,
+}
+
+/// Where the source of a [`Wrapper`] is in the paragraph that holds it.
+enum WrapperSource {
+    /// An index into `extra_xml`.
+    Raw(usize),
+    /// The index of the run that holds a simple field.
+    Field(usize),
+}
+
+/// The runs of a paragraph that a replacement reads, see [`text_runs`].
+#[derive(Default)]
+struct TextWalk {
+    runs: Vec<TextRun>,
+    wrappers: Vec<Wrapper>,
+    /// The stretch of the next run.
+    stretch: usize,
+    /// The wrapper whose content is being walked.
+    wrapper: Option<usize>,
+}
+
+impl TextWalk {
+    fn push(&mut self, prefix: &[AcceptedRunPathSegment]) {
+        self.runs.push(TextRun {
+            stretch: self.stretch,
+            wrapper: self.wrapper,
+            path: AcceptedRunPath {
+                segments: prefix.to_vec(),
+            },
+        });
+    }
 }
 
 /// The runs of `para` that a replacement reads, in the order of the accepted
 /// view that `Paragraph::text` reads, each with the stretch it belongs to
-/// and its address.
-fn text_runs(para: &CT_P) -> Vec<(usize, AcceptedRunPath)> {
-    let mut runs = Vec::new();
-    paragraph_text_runs(para, &mut Vec::new(), &mut 0, &mut runs);
-    runs
+/// and its address, and the wrappers that hold some of them.
+fn text_runs(para: &CT_P) -> TextWalk {
+    let mut walk = TextWalk::default();
+    paragraph_text_runs(para, &mut Vec::new(), &mut walk);
+    walk
 }
 
-fn paragraph_text_runs(
-    para: &CT_P,
-    prefix: &mut Vec<AcceptedRunPathSegment>,
-    stretch: &mut usize,
-    runs: &mut Vec<(usize, AcceptedRunPath)>,
-) {
+/// The run that `run` addresses.
+fn text_run<'a>(para: &'a CT_P, wrappers: &'a [Wrapper], run: &TextRun) -> Option<&'a CT_R> {
+    run.wrapper
+        .map_or(para, |index| &wrappers[index].content)
+        .accepted_run(&run.path)
+}
+
+fn paragraph_text_runs(para: &CT_P, prefix: &mut Vec<AcceptedRunPathSegment>, walk: &mut TextWalk) {
+    let word = ["w".to_owned()];
     for index in 0..=para.runs.len() {
         for owner in boundary_owners(para, index) {
             match owner {
                 BoundaryOwner::ContentControl(control) => {
                     prefix.push(AcceptedRunPathSegment::ContentControl(control));
-                    *stretch += 1;
-                    control_text_runs(&para.content_controls[control].3, prefix, stretch, runs);
-                    *stretch += 1;
+                    walk.stretch += 1;
+                    control_text_runs(&para.content_controls[control].3, prefix, walk);
+                    walk.stretch += 1;
                     prefix.pop();
                 }
                 BoundaryOwner::Revision(revision) => revision_text_runs(
                     &para.revisions[revision].2,
                     AcceptedRunPathSegment::Revision(revision),
                     prefix,
-                    stretch,
-                    runs,
+                    walk,
                 ),
+                // `Paragraph::text` reads the wrappers of the paragraph and
+                // those nested in them, not those inside a control or a
+                // revision.
+                BoundaryOwner::Wrapper(raw) if prefix.is_empty() => {
+                    wrapper_text_runs(&para.extra_xml[raw].1, &word, WrapperSource::Raw(raw), walk)
+                }
+                BoundaryOwner::Wrapper(_) => {}
             }
         }
-        if index < para.runs.len() {
-            prefix.push(AcceptedRunPathSegment::Run(index));
-            runs.push((
-                *stretch,
-                AcceptedRunPath {
-                    segments: prefix.clone(),
-                },
-            ));
-            prefix.pop();
+        let Some(run) = para.runs.get(index) else {
+            continue;
+        };
+        match simple_field_source(run) {
+            Some((raw, prefixes)) if prefix.is_empty() => {
+                wrapper_text_runs(raw, prefixes, WrapperSource::Field(index), walk);
+            }
+            _ => {
+                prefix.push(AcceptedRunPathSegment::Run(index));
+                walk.push(prefix);
+                prefix.pop();
+            }
         }
     }
 }
 
-fn control_text_runs(
-    sdt: &CT_Sdt,
-    prefix: &mut Vec<AcceptedRunPathSegment>,
-    stretch: &mut usize,
-    runs: &mut Vec<(usize, AcceptedRunPath)>,
-) {
+/// The runs of a smart tag, an inline custom XML element or a simple field
+/// form a stretch of their own, so a replacement inside them stays inside
+/// the wrapper. A wrapper whose content cannot be read still ends the
+/// stretch before it. For a simple field, the runs are its cached result,
+/// which Word computes again when it updates the field, and its instruction
+/// is never read.
+fn wrapper_text_runs(raw: &[u8], prefixes: &[String], source: WrapperSource, walk: &mut TextWalk) {
+    walk.stretch += 1;
+    if let Some(content) = run_wrapper_paragraph(raw, prefixes) {
+        let index = walk.wrappers.len();
+        walk.wrappers.push(Wrapper {
+            content: CT_P::new(),
+            parent: walk.wrapper,
+            source,
+            changed: false,
+        });
+        let parent = walk.wrapper.replace(index);
+        paragraph_text_runs(&content, &mut Vec::new(), walk);
+        walk.wrapper = parent;
+        walk.wrappers[index].content = content;
+    }
+    walk.stretch += 1;
+}
+
+fn control_text_runs(sdt: &CT_Sdt, prefix: &mut Vec<AcceptedRunPathSegment>, walk: &mut TextWalk) {
     for index in 0..=sdt.content.len() {
         for (revision, (_, wrapper)) in sdt
             .revisions()
@@ -212,26 +314,20 @@ fn control_text_runs(
                 wrapper,
                 AcceptedRunPathSegment::Revision(revision),
                 prefix,
-                stretch,
-                runs,
+                walk,
             );
         }
         match sdt.content.get(index) {
             Some(SdtContent::Run(_)) => {
                 prefix.push(AcceptedRunPathSegment::Run(index));
-                runs.push((
-                    *stretch,
-                    AcceptedRunPath {
-                        segments: prefix.clone(),
-                    },
-                ));
+                walk.push(prefix);
                 prefix.pop();
             }
             Some(SdtContent::ContentControl(nested)) => {
                 prefix.push(AcceptedRunPathSegment::ContentControl(index));
-                *stretch += 1;
-                control_text_runs(nested, prefix, stretch, runs);
-                *stretch += 1;
+                walk.stretch += 1;
+                control_text_runs(nested, prefix, walk);
+                walk.stretch += 1;
                 prefix.pop();
             }
             _ => {}
@@ -248,8 +344,7 @@ fn revision_text_runs(
     revision: &CT_Revision,
     segment: AcceptedRunPathSegment,
     prefix: &mut Vec<AcceptedRunPathSegment>,
-    stretch: &mut usize,
-    runs: &mut Vec<(usize, AcceptedRunPath)>,
+    walk: &mut TextWalk,
 ) {
     if !matches!(
         revision.kind(),
@@ -259,19 +354,31 @@ fn revision_text_runs(
         return;
     }
     prefix.push(segment);
-    *stretch += 1;
+    walk.stretch += 1;
     if let Some(inserted) = revision.editable_accepted_paragraph() {
-        paragraph_text_runs(inserted, prefix, stretch, runs);
+        paragraph_text_runs(inserted, prefix, walk);
     }
-    *stretch += 1;
+    walk.stretch += 1;
     prefix.pop();
 }
 
-/// Apply `edit` to the run at `path`.
-fn edit_run(para: &mut CT_P, path: &AcceptedRunPath, edit: impl FnOnce(&mut CT_R)) {
-    if let Some(mut run) = para.accepted_run(path).cloned() {
-        edit(&mut run);
-        let replaced = para.replace_accepted_run(path, run);
+/// Apply `edit` to the run that `run` addresses.
+fn edit_run(
+    para: &mut CT_P,
+    wrappers: &mut [Wrapper],
+    run: &TextRun,
+    edit: impl FnOnce(&mut CT_R),
+) {
+    let paragraph = match run.wrapper {
+        Some(index) => {
+            wrappers[index].changed = true;
+            &mut wrappers[index].content
+        }
+        None => para,
+    };
+    if let Some(mut edited) = paragraph.accepted_run(&run.path).cloned() {
+        edit(&mut edited);
+        let replaced = paragraph.replace_accepted_run(&run.path, edited);
         debug_assert!(matches!(replaced, Ok(true)), "text run path is stale");
     }
 }
@@ -287,12 +394,16 @@ struct CharMapping {
     byte_offset: usize,
 }
 
-fn build_char_map(para: &CT_P, runs: &[(usize, AcceptedRunPath)]) -> (String, Vec<CharMapping>) {
+fn build_char_map(
+    para: &CT_P,
+    wrappers: &[Wrapper],
+    runs: &[TextRun],
+) -> (String, Vec<CharMapping>) {
     let mut full_text = String::new();
     let mut char_map = Vec::new();
 
-    for (run_idx, (_, path)) in runs.iter().enumerate() {
-        let Some(run) = para.accepted_run(path) else {
+    for (run_idx, text) in runs.iter().enumerate() {
+        let Some(run) = text_run(para, wrappers, text) else {
             continue;
         };
         for (content_idx, content) in run.content.iter().enumerate() {
@@ -349,7 +460,8 @@ fn replace_in_single_run(
 
 fn replace_across_runs(
     para: &mut CT_P,
-    runs: &[(usize, AcceptedRunPath)],
+    wrappers: &mut [Wrapper],
+    runs: &[TextRun],
     char_map: &[CharMapping],
     match_start: usize,
     match_end: usize,
@@ -357,7 +469,7 @@ fn replace_across_runs(
 ) {
     // Handle the first run: replace from match start to end of text in that content item.
     let first_mapping = &char_map[match_start];
-    edit_run(para, &runs[first_mapping.run_index].1, |run| {
+    edit_run(para, wrappers, &runs[first_mapping.run_index], |run| {
         if let RunContent::Text(t) = &mut run.content[first_mapping.content_index] {
             let mut new_text = String::new();
             new_text.push_str(&t.text[..first_mapping.byte_offset]);
@@ -369,7 +481,7 @@ fn replace_across_runs(
 
     // Handle the last run: replace from start to match end within that content item.
     let last_mapping = &char_map[match_end - 1];
-    edit_run(para, &runs[last_mapping.run_index].1, |run| {
+    edit_run(para, wrappers, &runs[last_mapping.run_index], |run| {
         if let RunContent::Text(t) = &mut run.content[last_mapping.content_index] {
             let remaining = &t.text[last_mapping.byte_offset..];
             let ch_len = remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
@@ -389,8 +501,8 @@ fn replace_across_runs(
     });
 
     // Clear text content from runs strictly between first and last.
-    for (_, path) in &runs[first_mapping.run_index + 1..last_mapping.run_index] {
-        edit_run(para, path, |run| {
+    for text in &runs[first_mapping.run_index + 1..last_mapping.run_index] {
+        edit_run(para, wrappers, text, |run| {
             run.content.retain(|c| !matches!(c, RunContent::Text(_)));
         });
     }
@@ -398,19 +510,89 @@ fn replace_across_runs(
 
 /// Remove the runs at `candidates` (indices into `runs`) that the replacement
 /// left without any content, keeping every anchor of the paragraph and of
-/// its content controls on the boundary that remains.
+/// its content controls on the boundary that remains, and write each changed
+/// wrapper back into the paragraph that holds it.
 fn remove_emptied_runs(
     para: &mut CT_P,
-    runs: &[(usize, AcceptedRunPath)],
+    mut wrappers: Vec<Wrapper>,
+    runs: &[TextRun],
     mut candidates: Vec<usize>,
 ) {
     candidates.sort_unstable();
     candidates.dedup();
+    // A wrapper holds only wrappers read after it, so writing them back in
+    // reverse order writes each one into its parent before the parent loses
+    // its emptied runs, which would move the run of a simple field.
+    while let Some(wrapper) = wrappers.pop() {
+        let index = wrappers.len();
+        let mut content = wrapper.content;
+        remove_paragraph_emptied_runs(
+            &mut content,
+            candidates
+                .iter()
+                .filter(|candidate| runs[**candidate].wrapper == Some(index))
+                .map(|candidate| &runs[*candidate].path),
+        );
+        if !wrapper.changed {
+            continue;
+        }
+        let parent = match wrapper.parent {
+            Some(parent) => {
+                wrappers[parent].changed = true;
+                &mut wrappers[parent].content
+            }
+            None => &mut *para,
+        };
+        let written = write_wrapper_back(parent, &wrapper.source, &content);
+        debug_assert!(written, "wrapper source is stale");
+    }
+    remove_paragraph_emptied_runs(
+        para,
+        candidates
+            .iter()
+            .filter(|candidate| runs[**candidate].wrapper.is_none())
+            .map(|candidate| &runs[*candidate].path),
+    );
+}
+
+/// Write `content` back as the content of the wrapper at `source` in
+/// `paragraph`. Returns false when the source cannot take it.
+fn write_wrapper_back(paragraph: &mut CT_P, source: &WrapperSource, content: &CT_P) -> bool {
+    match *source {
+        WrapperSource::Raw(index) => {
+            let Some((_, raw)) = paragraph.extra_xml.get_mut(index) else {
+                return false;
+            };
+            let Ok(updated) = with_run_wrapper_content(raw, content) else {
+                return false;
+            };
+            *raw = updated;
+            true
+        }
+        WrapperSource::Field(index) => {
+            let Some(run) = paragraph.runs.get_mut(index) else {
+                return false;
+            };
+            let Some(Ok(updated)) =
+                simple_field_source(run).map(|(raw, _)| with_run_wrapper_content(raw, content))
+            else {
+                return false;
+            };
+            set_simple_field_source(run, &updated).unwrap_or(false)
+        }
+    }
+}
+
+/// Remove the runs of `para` at `paths` that the replacement left without
+/// any content.
+fn remove_paragraph_emptied_runs<'a>(
+    para: &mut CT_P,
+    paths: impl DoubleEndedIterator<Item = &'a AcceptedRunPath>,
+) {
     let mut direct = vec![false; para.runs.len()];
     // Later runs first, so that removing one inside a control leaves the
     // addresses of the others valid.
-    for index in candidates.into_iter().rev() {
-        let path = &runs[index].1;
+    for path in paths.rev() {
         // A run keeps the attributes of its start tag, such as `w:rsidR`, as
         // a raw record, which does not make it worth keeping once empty.
         let emptied = para.accepted_run(path).is_some_and(|run| {
@@ -1145,8 +1327,9 @@ pub fn replace_many_in_chart_xml(
 ///
 /// The `replacement` string supports capture group references: `$1`, `$2`, etc.
 /// Uses the same cross-run char map algorithm as literal replacement, so it
-/// reaches the runs of inline content controls and tracked insertions and
-/// leaves a match that straddles one of their boundaries as it is.
+/// reaches the runs of inline content controls, tracked insertions, smart
+/// tags, inline custom XML elements and simple fields, and leaves a match
+/// that straddles one of their boundaries as it is.
 /// Returns the number of replacements made.
 pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacement: &str) -> usize {
     // `captures_at` (rather than slicing) keeps anchors and look-around
@@ -1510,6 +1693,111 @@ mod tests {
         assert!(xml.contains(">from NEEDLE<"), "{xml}");
         let insertion = format!("{INSERTION}<w:r><w:t>X</w:t></w:r></w:ins></w:sdtContent>");
         assert!(xml.contains(&insertion), "{xml}");
+    }
+
+    /// The start tags of a simple field, a smart tag and an inline custom XML
+    /// element, as the skills suite builds them.
+    const WRAPPERS: [(&str, &str); 3] = [
+        (
+            r#"<w:fldSimple w:instr=" DOCPROPERTY Title ">"#,
+            "</w:fldSimple>",
+        ),
+        (r#"<w:smartTag w:element="place">"#, "</w:smartTag>"),
+        (r#"<w:customXml w:element="item">"#, "</w:customXml>"),
+    ];
+
+    /// "before ", then `content` inside `wrapper`, then " after".
+    fn wrapped(wrapper: (&str, &str), content: &str) -> CT_P {
+        let (start, end) = wrapper;
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:r><w:t xml:space="preserve">before </w:t></w:r>{start}{content}{end}<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>"#
+        );
+        CT_P::from_xml_fragment(source.as_bytes()).unwrap()
+    }
+
+    /// The runs of a simple field, a smart tag and an inline custom XML
+    /// element are read in document order, as a stretch of their own, and
+    /// replaced inside the wrapper, whose start tag keeps its bytes. A
+    /// match across the wrapper, or one that only an edge of the wrapper
+    /// would anchor, is no match.
+    #[test]
+    fn a_wrapper_is_a_stretch_of_its_own() {
+        let starts_with_mid = regex::Regex::new("^MID").unwrap();
+        let ends_with_x = regex::Regex::new("X$").unwrap();
+        let word_x = regex::Regex::new(r"\bX\b").unwrap();
+        for wrapper in WRAPPERS {
+            let mut p = wrapped(wrapper, "<w:r><w:t>MID</w:t></w:r>");
+            assert_eq!(p.accepted_text(), "before MID after", "{}", wrapper.0);
+            assert_eq!(replaceable_texts(&p), ["before ", "MID", " after"]);
+
+            for straddling in ["before M", "D after", "e MID a"] {
+                assert_eq!(replace_in_paragraph(&mut p, straddling, "-"), 0);
+            }
+            assert_eq!(replace_regex_in_paragraph(&mut p, &starts_with_mid, "-"), 0);
+            assert_eq!(replace_in_paragraph(&mut p, "MID", "X"), 1);
+            assert_eq!(replace_regex_in_paragraph(&mut p, &ends_with_x, "Y"), 0);
+            assert_eq!(replace_regex_in_paragraph(&mut p, &word_x, "Y"), 1);
+
+            assert_eq!(p.accepted_text(), "before Y after", "{}", wrapper.0);
+            let xml = paragraph_xml(&p);
+            let expected = format!("{}<w:r><w:t>Y</w:t></w:r>{}", wrapper.0, wrapper.1);
+            assert!(xml.contains(&expected), "{xml}");
+        }
+    }
+
+    /// A wrapper nested in another is read and replaced inside it. The
+    /// properties of each wrapper, and a wrapper without a match, keep their
+    /// bytes, and a run the replacement empties inside a wrapper is removed.
+    #[test]
+    fn nested_wrappers_are_read_and_untouched_ones_keep_their_bytes() {
+        let untouched = r#"<w:smartTag w:uri="urn:schemas-microsoft-com:office:smarttags" w:element="City"><w:smartTagPr><w:attr w:name="kept" w:val="1"/></w:smartTagPr><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Paris</w:t></w:r></w:smartTag>"#;
+        let content = format!(
+            r#"<w:customXmlPr><w:placeholder w:val="kept"/></w:customXmlPr><w:r><w:t xml:space="preserve">in </w:t></w:r><w:smartTag w:element="place"><w:r><w:t>NEE</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>DLE</w:t></w:r></w:smartTag><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:smartTag w:element="date"><w:fldSimple w:instr=" DATE "><w:r><w:t>NEEDLE</w:t></w:r></w:fldSimple></w:smartTag>{untouched}"#
+        );
+        let mut p = wrapped(WRAPPERS[2], &content);
+        assert_eq!(p.accepted_text(), "before in NEEDLE and NEEDLEParis after");
+        assert_eq!(
+            replaceable_texts(&p),
+            [
+                "before ", "in ", "NEEDLE", " and ", "NEEDLE", "Paris", " after"
+            ]
+        );
+
+        assert_eq!(replace_in_paragraph(&mut p, "NEEDLE", "X"), 2);
+
+        assert_eq!(p.accepted_text(), "before in X and XParis after");
+        let xml = paragraph_xml(&p);
+        for expected in [
+            r#"<w:customXml w:element="item"><w:customXmlPr><w:placeholder w:val="kept"/></w:customXmlPr>"#,
+            r#"<w:smartTag w:element="place"><w:r><w:t>X</w:t></w:r></w:smartTag>"#,
+            r#"<w:smartTag w:element="date"><w:fldSimple w:instr=" DATE "><w:r><w:t>X</w:t></w:r></w:fldSimple></w:smartTag>"#,
+            untouched,
+        ] {
+            assert!(xml.contains(expected), "{expected}\n{xml}");
+        }
+    }
+
+    /// A paragraph whose wrappers hold no match keeps their bytes, and so
+    /// does a wrapper that `w` does not name WordprocessingML inside, which
+    /// is not read.
+    #[test]
+    fn wrappers_without_a_match_keep_their_bytes() {
+        let foreign = r#"<w:smartTag xmlns:w="urn:producer" w:element="x"><w:r><w:t>MID</w:t></w:r></w:smartTag>"#;
+        let mut p = wrapped(WRAPPERS[1], foreign);
+        assert_eq!(p.accepted_text(), "before  after");
+        assert_eq!(replace_in_paragraph(&mut p, "MID", "X"), 0);
+        assert!(paragraph_xml(&p).contains(foreign));
+
+        let mut p = wrapped(
+            WRAPPERS[0],
+            r#"<w:r><w:rPr><w:b/></w:rPr><w:t>MID</w:t></w:r>"#,
+        );
+        assert_eq!(replace_in_paragraph(&mut p, "before", "BEFORE"), 1);
+        assert!(
+            paragraph_xml(&p).contains(
+                r#"<w:fldSimple w:instr=" DOCPROPERTY Title "><w:r><w:rPr><w:b/></w:rPr><w:t>MID</w:t></w:r></w:fldSimple>"#
+            )
+        );
     }
 
     /// A notes part with the separators Word writes, a continuation notice,

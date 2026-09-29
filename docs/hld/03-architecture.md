@@ -1261,6 +1261,18 @@ insertion is written back inside the same wrapper, which keeps its id, author,
 and date, so the edited text stays attributed to that tracked change. A
 deletion or a move source is never matched and does not split a stretch.
 
+The paragraph model keeps a smart tag and an inline custom XML element as raw
+XML, and a simple field as a field run whose source is its raw XML. Paragraph
+text and replacement parse the runs of these wrappers on demand from that
+source, in document order, nested wrappers included, and the paragraph run
+handles do not address them. The runs of each wrapper form a stretch of their
+own under the same rule. A replacement inside one writes the wrapper again from
+its start tag, its changed content, and its end tag, so its attributes and a
+field instruction keep their bytes, and a wrapper without a match keeps all of
+them. For a simple field, the replaced text is its cached result, which is what
+a reader sees until Word updates the field. A wrapper inside a content control,
+a revision, or a hyperlink is not read.
+
 `ContentFragment` owns one paragraph, table, block content control, or removed
 preserved node. Insert, remove, clone, and move resolve canonical
 `StoryItemRef::location` values only when they name actual direct owner
