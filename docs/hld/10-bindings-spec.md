@@ -259,13 +259,19 @@ and stales every earlier handle, the assigned paragraph included, as
 `Document::set_story_text` keeps its own behavior.
 
 `Paragraph.style` accepts a style ID the package defines or, as python-docx
-does, a style name, and writes the resolved ID. The ID is tried first, so a
-value read back always assigns the same style, then the exact name, then the
-name regardless of case, so `Heading 1` finds Word's `heading 1`. A value that
-names no style, or names a character, table or numbering style, raises
-`ValueError` before any change. Assigning a style is a value-only mutation and
-keeps handles valid. The run style, table style and numbering setters still
-write their value unchecked.
+does, a style name, and writes the resolved ID. Among paragraph styles only,
+the ID is tried first, so a value read back always assigns the same style,
+then the exact name, then the name regardless of case, so `Heading 1` finds
+Word's `heading 1`. A character style therefore cannot hide a paragraph style
+of the same name. As in python-docx, a value that names no style raises
+`KeyError`, and one that names only a character, table or numbering style
+raises `ValueError`, both before any change. Assigning a style is a value-only
+mutation and keeps handles valid. The run style, table style and numbering
+setters still write their value unchecked. This changes behavior on documents
+that lack the style. `rdocx.Document()` defines only `Normal` and `Heading1`,
+so `p.style = "Heading2"` on a new document used to store an undefined style,
+which `rebuild_toc` even read as a level-two heading, and now raises
+`KeyError`.
 
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and

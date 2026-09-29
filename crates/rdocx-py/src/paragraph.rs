@@ -1,5 +1,5 @@
 use oxml_py_support::{ContentPath, PathSeg};
-use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PySlice};
 use smallvec::smallvec;
@@ -59,28 +59,42 @@ pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocati
 /// The ID is tried first, so a value read from `Paragraph.style` always
 /// assigns the same style. A name then matches exactly before it matches
 /// regardless of case, which is how "Heading 1" finds Word's "heading 1".
+/// Each step looks at paragraph styles only, so a character style cannot hide
+/// a paragraph style of that name. As in python-docx, a value naming no style
+/// raises `KeyError` and one naming only a style of another type raises
+/// `ValueError`.
 fn paragraph_style_id(document: &rdocx::Document, value: &str) -> PyResult<String> {
     let styles = document.styles();
     let lowered = value.to_lowercase();
-    let style = styles
-        .iter()
-        .find(|style| style.style_id() == value)
-        .or_else(|| styles.iter().find(|style| style.name() == Some(value)))
-        .or_else(|| {
-            styles.iter().find(|style| {
-                style
-                    .name()
-                    .is_some_and(|name| name.to_lowercase() == lowered)
+    let resolve = |paragraph_only: bool| {
+        let candidates = || {
+            styles.iter().filter(move |style| {
+                !paragraph_only || style.style_type() == rdocx::StyleType::Paragraph
             })
-        })
-        .ok_or_else(|| PyValueError::new_err(format!("no style has the ID or name '{value}'")))?;
-    if style.style_type() != rdocx::StyleType::Paragraph {
-        return Err(PyValueError::new_err(format!(
+        };
+        candidates()
+            .find(|style| style.style_id() == value)
+            .or_else(|| candidates().find(|style| style.name() == Some(value)))
+            .or_else(|| {
+                candidates().find(|style| {
+                    style
+                        .name()
+                        .is_some_and(|name| name.to_lowercase() == lowered)
+                })
+            })
+    };
+    if let Some(style) = resolve(true) {
+        return Ok(style.style_id().to_owned());
+    }
+    match resolve(false) {
+        Some(style) => Err(PyValueError::new_err(format!(
             "style '{value}' is a {} style, not a paragraph style",
             style.style_type().to_str()
-        )));
+        ))),
+        None => Err(PyKeyError::new_err(format!(
+            "no style with ID or name '{value}'"
+        ))),
     }
-    Ok(style.style_id().to_owned())
 }
 
 #[pyclass(name = "Paragraph")]

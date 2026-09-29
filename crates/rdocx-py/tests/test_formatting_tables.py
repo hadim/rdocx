@@ -400,7 +400,11 @@ def test_paragraph_style_accepts_a_defined_id_or_name_and_rejects_the_rest():
                 contents = contents.replace(
                     b"</w:styles>",
                     b'<w:style w:type="character" w:styleId="Strong">'
-                    b'<w:name w:val="Strong"/></w:style></w:styles>',
+                    b'<w:name w:val="Strong"/></w:style>'
+                    b'<w:style w:type="character" w:styleId="Emphasis">'
+                    b'<w:name w:val="Emphasis Char"/></w:style>'
+                    b'<w:style w:type="paragraph" w:styleId="EmphPara">'
+                    b'<w:name w:val="Emphasis"/></w:style></w:styles>',
                 )
             rewritten.writestr(member, contents)
     document = Document.from_bytes(output.getvalue())
@@ -411,18 +415,20 @@ def test_paragraph_style_accepts_a_defined_id_or_name_and_rejects_the_rest():
         ("Heading 1", "Heading1"),
         ("Normal", "Normal"),
         ("heading 1", "Heading1"),
+        ("Emphasis", "EmphPara"),
         ("Heading1", "Heading1"),
     ):
         paragraph.style = value
         assert paragraph.style == expected
 
     before = document.to_bytes()
-    for value, message in (
-        ("NoSuchStyle", "no style has the ID or name 'NoSuchStyle'"),
-        ("Heading 7", "no style"),
-        ("Strong", "character style"),
+    for value, error, message in (
+        ("NoSuchStyle", KeyError, "no style with ID or name 'NoSuchStyle'"),
+        ("Heading 7", KeyError, "no style"),
+        ("Strong", ValueError, "character style"),
+        ("emphasis char", ValueError, "character style"),
     ):
-        with pytest.raises(ValueError, match=message):
+        with pytest.raises(error, match=message):
             paragraph.style = value
     assert document.to_bytes() == before
     assert paragraph.style == "Heading1"

@@ -624,7 +624,14 @@ class Paragraph:
     @property
     def style(self) -> str | None: ...
     @style.setter
-    def style(self, value: str | None) -> None: ...
+    def style(self, value: str | None) -> None:
+        """Assign a paragraph style by ID, or by name as python-docx does.
+
+        The ID is tried first, then the exact name, then the name regardless of
+        case. Raises `KeyError` when no style has that ID or name, and
+        `ValueError` when only a character, table or numbering style does.
+        `None` removes the paragraph style.
+        """
     @property
     def numbering(self) -> tuple[int, int] | None: ...
     @numbering.setter
