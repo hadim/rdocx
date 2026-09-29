@@ -5194,6 +5194,7 @@ enum StoryNamespace {
     WordDrawing,
     WordShape,
     WordGroup,
+    MarkupCompatibility,
     Other,
 }
 
@@ -5242,6 +5243,9 @@ fn story_namespace(namespace: &ResolveResult<'_>) -> StoryNamespace {
             }
             b"http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" => {
                 StoryNamespace::WordGroup
+            }
+            b"http://schemas.openxmlformats.org/markup-compatibility/2006" => {
+                StoryNamespace::MarkupCompatibility
             }
             _ => StoryNamespace::Other,
         },
@@ -5413,6 +5417,18 @@ fn modeled_story_child(
         },
         (StoryNamespace::Vml, StoryNamespace::Word) => {
             parent.local_name == b"textbox" && local_name == b"txbxContent"
+        }
+        // Word writes a text box twice in a run, as DrawingML in `mc:Choice` and
+        // as VML in `mc:Fallback`. The Choice is read and the Fallback stays
+        // opaque, so the text box is one story.
+        (StoryNamespace::Word, StoryNamespace::MarkupCompatibility) => {
+            parent.local_name == b"r" && local_name == b"AlternateContent"
+        }
+        (StoryNamespace::MarkupCompatibility, StoryNamespace::MarkupCompatibility) => {
+            parent.local_name == b"AlternateContent" && local_name == b"Choice"
+        }
+        (StoryNamespace::MarkupCompatibility, StoryNamespace::Word) => {
+            parent.local_name == b"Choice" && local_name == b"drawing"
         }
         (StoryNamespace::Word, StoryNamespace::WordDrawing) => {
             parent.local_name == b"drawing" && matches!(local_name, b"inline" | b"anchor")
@@ -7526,6 +7542,15 @@ fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemS
                     match local_name.as_slice() {
                         b"sdt" => Some(StoryItemKind::ContentControl),
                         b"fldSimple" => Some(StoryItemKind::Field),
+                        // A drawing in `mc:Choice` is read only for the text
+                        // boxes it holds, and lists no item of its own.
+                        b"drawing"
+                            if stack.last().is_some_and(|parent| {
+                                parent.namespace == StoryNamespace::MarkupCompatibility
+                            }) =>
+                        {
+                            None
+                        }
                         b"drawing" | b"pict" => Some(StoryItemKind::Drawing),
                         _ => None,
                     }
@@ -24926,6 +24951,38 @@ mod tests {
         assert_eq!(links.first().unwrap().1.text, "link 0");
         assert_eq!(links.last().unwrap().1.text, "link 63");
         assert_eq!(STORY_TEXT_PREFIX_BYTES.get(), 0);
+    }
+
+    /// Word writes a text box as DrawingML in `mc:Choice` and as VML in
+    /// `mc:Fallback`. Only the Choice is an owner, and its drawing lists no
+    /// item in the paragraph that holds it.
+    #[test]
+    fn only_the_choice_of_a_text_box_in_alternate_content_is_an_owner() {
+        let text_box = |text: &str| {
+            format!(r#"<w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent>"#)
+        };
+        let xml = format!(
+            r#"<w:document xmlns:w="{WORD_NAMESPACE}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>host</w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx>{}</wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox>{}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p></w:body></w:document>"#,
+            text_box("choice"),
+            text_box("fallback"),
+        );
+
+        let owners = scan_story_owners(xml.as_bytes(), StoryKind::Body).unwrap();
+
+        assert_eq!(
+            owners.iter().map(|owner| owner.kind).collect::<Vec<_>>(),
+            [StoryKind::Body, StoryKind::TextBox]
+        );
+        assert_eq!(&xml[owners[1].full.clone()], text_box("choice"));
+        let body_items = scan_story_items(xml.as_bytes(), &owners[0]).unwrap();
+        assert_eq!(
+            body_items.iter().map(|item| item.kind).collect::<Vec<_>>(),
+            [StoryItemKind::Paragraph]
+        );
+        assert_eq!(
+            story_item_text(xml.as_bytes(), &body_items[0]).unwrap(),
+            Some("host".to_owned())
+        );
     }
 
     #[test]

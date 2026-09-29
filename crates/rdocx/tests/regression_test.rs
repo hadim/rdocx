@@ -16255,6 +16255,135 @@ mod text_box_replacement_keeps_every_child {
     }
 }
 
+/// Word writes a text box twice, the DrawingML shape in `mc:Choice` and a VML
+/// copy in `mc:Fallback`. The story walkers skipped the whole
+/// `mc:AlternateContent`, so such a text box was no story.
+mod text_boxes_word_writes_twice {
+    use rdocx::{Document, StoryItemKind, StoryKind};
+    use rdocx_oxml::namespace::W_NS;
+
+    const WPS_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+
+    /// The DrawingML text box of Word, holding `text`.
+    fn drawing_text_box(text: &str) -> String {
+        format!(
+            r#"<w:drawing><wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="1270000" cy="635000"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="10" name="Text Box 10"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="{WPS_NS}"><wps:wsp xmlns:wps="{WPS_NS}"><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>"#
+        )
+    }
+
+    /// The VML copy of the text box, holding `text`.
+    fn vml_text_box(text: &str) -> String {
+        format!(
+            r#"<w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" style="width:100pt;height:50pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict>"#
+        )
+    }
+
+    /// The two copies of a text box in `mc:AlternateContent`, as Word writes
+    /// them.
+    fn alternate_content(choice: &str, fallback: &str) -> String {
+        format!(
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:wps="{WPS_NS}" Requires="wps">{choice}</mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+        )
+    }
+
+    /// A body paragraph with a run of its own and a run holding `shape`.
+    fn document_with_shape(shape: &str) -> Document {
+        super::document_with_content_controls(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>Anchor paragraph</w:t></w:r><w:r>{shape}</w:r></w:p></w:body></w:document>"#
+        ))
+    }
+
+    /// A text box as Word writes it, the same text in both copies.
+    fn word_text_box_document(text: &str) -> Document {
+        document_with_shape(&alternate_content(
+            &drawing_text_box(text),
+            &vml_text_box(text),
+        ))
+    }
+
+    /// Every story item as the story kind, the item kind and the text.
+    fn story_items(document: &Document) -> Vec<(StoryKind, StoryItemKind, Option<String>)> {
+        document
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .map(|item| {
+                (
+                    item.location().story().kind(),
+                    item.location().item_kind(),
+                    item.text().map(str::to_owned),
+                )
+            })
+            .collect()
+    }
+
+    fn text_box_items(document: &Document) -> Vec<(StoryItemKind, Option<String>, Vec<u8>)> {
+        let stories = document.stories().unwrap();
+        let text_boxes = stories
+            .iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+            .collect::<Vec<_>>();
+        assert_eq!(text_boxes.len(), 1, "{stories:?}");
+        document
+            .story_items(text_boxes[0])
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item.kind(),
+                    item.text().unwrap(),
+                    item.xml().unwrap().to_vec(),
+                )
+            })
+            .collect()
+    }
+
+    /// The text box is one story, read from the Choice, with the paragraph
+    /// items of a text box written without `mc:AlternateContent`. The body
+    /// lists its own paragraph only, as it did.
+    #[test]
+    fn a_word_text_box_is_one_story_read_from_its_choice() {
+        let document = word_text_box_document("Box NEEDLE");
+
+        assert_eq!(
+            story_items(&document),
+            [
+                (
+                    StoryKind::Body,
+                    StoryItemKind::Paragraph,
+                    Some("Anchor paragraph".to_owned())
+                ),
+                (
+                    StoryKind::TextBox,
+                    StoryItemKind::Paragraph,
+                    Some("Box NEEDLE".to_owned())
+                ),
+            ]
+        );
+        let bare = document_with_shape(&drawing_text_box("Box NEEDLE"));
+        assert_eq!(text_box_items(&document), text_box_items(&bare));
+    }
+
+    /// When the Choice holds no text box, a picture here, the text box of the
+    /// Fallback is the only one. The story walkers list neither it nor the
+    /// picture, as before.
+    #[test]
+    fn a_fallback_text_box_beside_a_picture_is_unchanged() {
+        let picture = r#"<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="10" cy="10"/><wp:docPr id="11" name="Picture 11"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="11" name="Picture 11"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill/><pic:spPr/></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#;
+        let document =
+            document_with_shape(&alternate_content(picture, &vml_text_box("Box NEEDLE")));
+
+        assert_eq!(
+            story_items(&document),
+            [(
+                StoryKind::Body,
+                StoryItemKind::Paragraph,
+                Some("Anchor paragraph".to_owned())
+            )]
+        );
+    }
+}
+
 /// Replacement skipped the text of content controls. It never entered a
 /// body-level control, read the runs of an inline control at no level, and
 /// reached neither the tables and controls of a header or footer nor those

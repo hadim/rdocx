@@ -1225,7 +1225,11 @@ second document tree. The facade resolves package owners and stable source
 order. The existing `rdocx-oxml` grammar remains the authority for admitting
 content controls, revisions, and fields as typed content. Content rejected by
 that grammar remains one opaque preserved boundary and cannot expose nested
-owners or editable text.
+owners or editable text. Word writes a text box twice in a run's
+`mc:AlternateContent`, as DrawingML in `mc:Choice` and as VML in
+`mc:Fallback`. That text box is one text-box story, read from the Choice. The
+Fallback stays opaque, and the Choice drawing adds no drawing item to the
+story that holds it. A story edit of that text box changes the Choice only.
 
 `StoryItemRef::links` returns modeled hyperlinks in item source order. Display
 text comes from the existing story text projection, while relationship targets
