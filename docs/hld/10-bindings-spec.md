@@ -2542,7 +2542,13 @@ a `stories` array with the Python `Story.kind` name, part name, owner index,
 and items of each story. Each item carries its story `index_path`, its kind,
 and its accepted-view text.
 `convert` to Markdown or HTML appends the same parts after the body under a
-bold label, and leaves comments out as review annotations. `layout --json` uses
+bold label, and leaves comments out as review annotations. `validate` checks
+that every XML part the main document relates to is well formed, and that the
+paragraph, character, and table style ids named in the main document, headers,
+footers, notes, and comments are defined. Both are errors. A style id inside a
+tracked property change is not checked. Parts are scanned before the document
+opens, so a malformed styles, numbering, or settings part is named in the
+report beside the open failure it causes. `layout --json` uses
 bundled deterministic fonts and reports every direct body item. Its point-space
 fragments carry one-based physical and displayed page numbers, and preserved
 unlaid items retain an empty fragment list. `replace --expect N` checks the

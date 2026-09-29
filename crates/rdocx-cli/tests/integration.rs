@@ -1447,6 +1447,106 @@ fn validate_reports_an_undeclared_ignorable_prefix() {
 }
 
 #[test]
+fn validate_rejects_malformed_related_parts_and_undefined_style_ids() {
+    let temp = TempWorkspace::new("validate-parts");
+    let every_story = temp.path.join("every-story.docx");
+    write_every_story_fixture(&every_story);
+    let output = cli(&["validate", path_text(&every_story)]);
+    assert_success(&output, "validate every story");
+
+    let valid = temp.path.join("valid.docx");
+    let mut document = fixture_document(&[]);
+    document.add_paragraph("Styled").set_style("Heading1");
+    document.set_header("Head");
+    document.save(&valid).unwrap();
+    let output = cli(&["validate", path_text(&valid)]);
+    assert_success(&output, "validate defined styles");
+
+    // Half of a header part, as the skills suite cuts it, and the whole
+    // settings part but its closing root tag. Where the half cut lands
+    // decides which syntax error the reader reports.
+    let header = header_part_name(&valid);
+    for (part, cut, detail) in [
+        (header.as_str(), "half", ""),
+        (
+            "/word/settings.xml",
+            "end tag",
+            "the part ends inside 1 unclosed element(s)",
+        ),
+    ] {
+        let broken = temp.path.join("broken.docx");
+        let mut package = OpcPackage::open(&valid).unwrap();
+        let xml = package.get_part(part).unwrap().to_vec();
+        let kept = if cut == "half" {
+            xml.len() / 2
+        } else {
+            String::from_utf8_lossy(&xml)
+                .rfind("</w:settings>")
+                .unwrap()
+        };
+        package.set_part(part, xml[..kept].to_vec());
+        package.save(&broken).unwrap();
+
+        let output = cli(&["validate", path_text(&broken)]);
+        assert_eq!(output.status.code(), Some(1), "{part}");
+        assert!(output.stderr.is_empty(), "{part}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.contains(&format!(
+                "  1. part {part} is not well-formed XML: {detail}"
+            )),
+            "{stdout}"
+        );
+        fs::remove_file(broken).unwrap();
+    }
+
+    // Undefined paragraph, table, and character style ids in the body and a
+    // header. The one inside a tracked property change records the formatting
+    // before the change and is not reported.
+    let dangling = temp.path.join("dangling.docx");
+    let mut document = fixture_document(&[]);
+    document.add_paragraph("Styled").set_style("NoSuchStyle");
+    document.add_table(1, 1).set_style("NoSuchTableStyle");
+    document.set_header("Head");
+    document.save(&dangling).unwrap();
+    let mut package = OpcPackage::open(&dangling).unwrap();
+    let body = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            r#"<w:pStyle w:val="NoSuchStyle"/>"#,
+            r#"<w:pStyle w:val="NoSuchStyle"/><w:pPrChange w:id="9" w:author="Ada"><w:pPr><w:pStyle w:val="RemovedStyle"/></w:pPr></w:pPrChange>"#,
+            1,
+        );
+    assert!(body.contains("RemovedStyle"));
+    package.set_part("/word/document.xml", body.into_bytes());
+    let header_xml = String::from_utf8(package.get_part(&header).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<w:r>",
+            r#"<w:r><w:rPr><w:rStyle w:val="NoSuchRunStyle"/></w:rPr>"#,
+            1,
+        );
+    assert!(header_xml.contains("NoSuchRunStyle"));
+    package.set_part(&header, header_xml.into_bytes());
+    package.save(&dangling).unwrap();
+
+    let output = cli(&["validate", path_text(&dangling)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with(&format!(
+            "3 error(s) in {}:\n\
+             \x20 1. paragraph style \"NoSuchStyle\" used in /word/document.xml is not defined\n\
+             \x20 2. table style \"NoSuchTableStyle\" used in /word/document.xml is not defined\n\
+             \x20 3. character style \"NoSuchRunStyle\" used in {header} is not defined\n",
+            dangling.display()
+        )),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn render_uses_the_bundled_font_deterministic_path() {
     let temp = TempWorkspace::new("render");
     let input = temp.path.join("visible.docx");
