@@ -579,7 +579,8 @@ accept at most 255 characters, as in python-docx. `revision` reads as an
 integer, zero when absent or unreadable, and accepts only a positive integer.
 The three dates read as timezone-aware UTC `datetime` values, parsed from
 W3CDTF as python-docx parses them, and accept a `datetime`, a naive one being
-taken as UTC. Assigning `None` or empty text removes a property. Each
+taken as UTC. A date that cannot be read, has an offset of a day or more, or
+leaves the `datetime` range in UTC reads as `None` rather than raising. Assigning `None` or empty text removes a property. Each
 assignment replaces the native model through `Document::set_core_properties`,
 which creates `docProps/core.xml` with its package relationship and content
 type when the document has none. It changes no content, so the revision and

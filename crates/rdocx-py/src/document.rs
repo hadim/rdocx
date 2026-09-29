@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError};
-use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
@@ -858,7 +858,8 @@ fn w3cdtf_fields(value: &str) -> Option<([u32; 6], i32)> {
 }
 
 /// Convert a stored W3CDTF date to an aware UTC `datetime`, or `None` when it
-/// cannot be read.
+/// cannot be read, has an offset of a day or more, or falls outside the
+/// `datetime` range once converted to UTC.
 fn w3cdtf_to_datetime(py: Python<'_>, value: &str) -> PyResult<Option<Py<PyAny>>> {
     let Some(([year, month, day, hour, minute, second], offset)) = w3cdtf_fields(value) else {
         return Ok(None);
@@ -869,13 +870,19 @@ fn w3cdtf_to_datetime(py: Python<'_>, value: &str) -> PyResult<Option<Py<PyAny>>
     let delta = datetime
         .getattr("timedelta")?
         .call((0, i64::from(offset) * 60), None)?;
-    let zone = timezone.call1((delta,))?;
-    let stamp = datetime
-        .getattr("datetime")?
-        .call1((year, month, day, hour, minute, second, 0, zone));
+    let constructor = datetime.getattr("datetime")?;
+    let stamp = timezone
+        .call1((delta,))
+        .and_then(|zone| constructor.call1((year, month, day, hour, minute, second, 0, zone)))
+        .and_then(|stamp| stamp.call_method1("astimezone", (utc,)));
     match stamp {
-        Ok(stamp) => Ok(Some(stamp.call_method1("astimezone", (utc,))?.unbind())),
-        Err(error) if error.is_instance_of::<PyValueError>(py) => Ok(None),
+        Ok(stamp) => Ok(Some(stamp.unbind())),
+        Err(error)
+            if error.is_instance_of::<PyValueError>(py)
+                || error.is_instance_of::<PyOverflowError>(py) =>
+        {
+            Ok(None)
+        }
         Err(error) => Err(error),
     }
 }

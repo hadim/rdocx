@@ -1534,27 +1534,34 @@ def test_core_properties_read_w3cdtf_dates_like_python_docx():
 
     import rdocx
 
-    def core_xml(name, data):
-        if name != "docProps/core.xml":
-            return data
-        return (
-            '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/'
-            'metadata/core-properties" xmlns:dcterms="http://purl.org/dc/terms/" '
-            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-            '<dcterms:created xsi:type="dcterms:W3CDTF">2024-01-15T10:30:00-05:30'
-            "</dcterms:created>"
-            '<dcterms:modified xsi:type="dcterms:W3CDTF">2024-02</dcterms:modified>'
-            "<cp:lastPrinted>not a date</cp:lastPrinted>"
-            "<cp:revision>seven</cp:revision>"
-            "</cp:coreProperties>"
-        ).encode()
+    def with_core(created, modified, last_printed):
+        def core_xml(name, data):
+            if name != "docProps/core.xml":
+                return data
+            return (
+                '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/'
+                '2006/metadata/core-properties" xmlns:dcterms="http://purl.org/dc/terms/" '
+                'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+                f'<dcterms:created xsi:type="dcterms:W3CDTF">{created}</dcterms:created>'
+                f'<dcterms:modified xsi:type="dcterms:W3CDTF">{modified}</dcterms:modified>'
+                f"<cp:lastPrinted>{last_printed}</cp:lastPrinted>"
+                "<cp:revision>seven</cp:revision>"
+                "</cp:coreProperties>"
+            ).encode()
 
-    core = _rewrite_package(rdocx.Document(), core_xml).core_properties
+        return _rewrite_package(rdocx.Document(), core_xml).core_properties
+
     utc = datetime.timezone.utc
+    core = with_core("2024-01-15T10:30:00-05:30", "2024-02", "not a date")
     assert core.created == datetime.datetime(2024, 1, 15, 16, 0, 0, tzinfo=utc)
     assert core.modified == datetime.datetime(2024, 2, 1, tzinfo=utc)
     assert core.last_printed is None
     assert core.revision == 0
+
+    core = with_core(
+        "2024-01-15T10:30:00+99:99", "0001-01-01T00:30:00+01:00", "2024-13-01"
+    )
+    assert (core.created, core.modified, core.last_printed) == (None, None, None)
 
 
 def test_core_properties_create_a_missing_part_with_its_relationship():
