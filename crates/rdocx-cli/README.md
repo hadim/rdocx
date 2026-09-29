@@ -12,7 +12,8 @@ and produces fixed or flow output without an Office host.
 - PDF, HTML, Markdown, PNG, JPEG, and multi-page TIFF conversion.
 - Page-range rendering, guarded literal replacement, diffing, and validation
   verdicts.
-- Comment thread inspection and mutation with explicit body run ranges.
+- Comment thread inspection and mutation with explicit body run ranges and
+  optional RFC 3339 dates.
 - Tracked revision inspection, filtered resolution, document comparison, and
   table-of-contents rebuilds.
 - Package-preserving edits cover the final S74 paragraph, run, typography,
@@ -49,6 +50,9 @@ rdocx convert report.docx --to pdf -o report.pdf
 rdocx validate report.docx
 rdocx render report.docx --page 0 -o rendered
 rdocx comment list report.docx --json
+rdocx comment add report.docx --start-paragraph 0 --start-run 0 \
+  --end-paragraph 0 --end-run 1 --author Reviewer --text 'Check this' \
+  --date 2026-09-13T12:00:00Z -o commented.docx
 rdocx revision accept reviewed.docx --author Reviewer -o accepted.docx
 rdocx compare original.docx edited.docx --author Reviewer \
   --timestamp 2026-09-13T12:00:00Z -o redline.docx
@@ -57,7 +61,10 @@ rdocx toc rebuild report.docx -o refreshed.docx
 
 Comment `add` ranges use zero-based body paragraph and run boundaries. The
 start is inclusive and the end is exclusive. Comment replies, resolution, and
-removal select a decimal comment id.
+removal select a decimal comment id. Comment `add` and `reply` write an
+optional `--date` RFC 3339 timestamp as the comment date. An invalid timestamp
+exits unsuccessfully without creating the output, and without `--date` the
+comment stays undated.
 
 Revision `list` reports the main story. Revision `accept` and `reject` operate
 across every supported story and accept at most one selector: `--id`,

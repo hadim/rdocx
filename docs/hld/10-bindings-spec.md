@@ -1000,7 +1000,8 @@ author threads through `add_comment`, `reply_to`, `resolve_comment`, and
 `remove_comment`. The additive native `add_comment_with_date` and
 `reply_to_with_date` methods accept an optional validated RFC 3339 timestamp.
 The Python `add_comment` and `reply_to` methods expose the same value as the
-optional `date` keyword. Omission writes no date and remains deterministic.
+optional `date` keyword, and `rdocx comment add` and `rdocx comment reply` as
+the optional `--date` flag. Omission writes no date and remains deterministic.
 Returned ids keep naming the same comment or reply after rdocx save and reopen,
 although third-party editors may renumber them. `RunPosition` and `RunRange`
 define top-level paragraph run
@@ -2063,11 +2064,12 @@ unlaid items retain an empty fragment list. `replace --expect N` checks the
 run-aware replacement count before staged publication. A mismatch creates no
 output and leaves an existing destination untouched. Both the selected page
 and all-page `render` paths use bundled deterministic fonts. The compiled
-surface also includes nested comment thread commands, main-story revision
-inspection, all-story filtered revision resolution, whole-run comparison, and
-TOC rebuild. Every new mutation requires an explicit output and publishes
-through the shared staged output set. Their schema-1 records state `main` or
-`all-supported-stories` scope. Revision selectors are mutually exclusive, and
+surface also includes nested comment thread commands with optional RFC 3339
+comment dates, main-story revision inspection, all-story filtered revision
+resolution, whole-run comparison, and TOC rebuild. Every new mutation requires
+an explicit output and publishes through the shared staged output set. Their
+schema-1 records state `main` or `all-supported-stories` scope. Revision
+selectors are mutually exclusive, and
 RFC 3339 start and end bounds must be paired. The complete compiled surface is
 covered by one integration binary, with fixtures constructed in code and no
 command-only test dependency.

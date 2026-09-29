@@ -592,17 +592,19 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
 }
 
 /// Add one Word comment and publish the complete mutated document atomically.
+#[allow(clippy::too_many_arguments)]
 pub fn comment_add(
     file: &Path,
     range: RunRange,
     author: &str,
     initials: Option<&str>,
     text: &str,
+    date: Option<&str>,
     output: &Path,
     json_output: bool,
 ) -> Result<()> {
     let mut doc = Document::open(file)?;
-    let id = doc.add_comment(range, author, initials, text)?;
+    let id = doc.add_comment_with_date(range, author, initials, text, date)?;
     publish_document(&mut doc, output)?;
     mutation_record(
         json_output,
@@ -619,11 +621,12 @@ pub fn comment_reply(
     parent_id: i32,
     author: &str,
     text: &str,
+    date: Option<&str>,
     output: &Path,
     json_output: bool,
 ) -> Result<()> {
     let mut doc = Document::open(file)?;
-    let id = doc.reply_to(parent_id, author, text)?;
+    let id = doc.reply_to_with_date(parent_id, author, text, date)?;
     publish_document(&mut doc, output)?;
     mutation_record(
         json_output,

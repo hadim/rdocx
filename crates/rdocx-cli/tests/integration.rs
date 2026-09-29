@@ -113,6 +113,11 @@ fn rewrite_run(path: &Path, text: &str, rewrite: impl FnOnce(&str) -> String) {
     package.save(path).unwrap();
 }
 
+fn package_part_text(path: &Path, part: &str) -> String {
+    let package = OpcPackage::open(path).unwrap();
+    String::from_utf8(package.get_part(part).expect("part is present").to_vec()).unwrap()
+}
+
 fn path_text(path: &Path) -> &str {
     path.to_str().expect("temporary path is UTF-8")
 }
@@ -1015,6 +1020,103 @@ fn comment_commands_round_trip_one_resolved_thread() {
     );
     assert!(Document::open(&removed_path).unwrap().comments().is_empty());
     assert_eq!(Document::open(&input).unwrap().comments().len(), 0);
+}
+
+#[test]
+fn comment_add_and_reply_write_the_given_rfc3339_date() {
+    const ADDED: &str = "2026-09-29T08:30:00Z";
+    const REPLIED: &str = "2026-09-29T10:45:00+02:00";
+    let temp = TempWorkspace::new("comment-dates");
+    let input = temp.path.join("input.docx");
+    let added_path = temp.path.join("added.docx");
+    let replied_path = temp.path.join("replied.docx");
+    write_document(&input, &["Comment target"]);
+    let add = |date: &str, output: &Path| {
+        cli(&[
+            "comment",
+            "add",
+            path_text(&input),
+            "--start-paragraph",
+            "0",
+            "--start-run",
+            "0",
+            "--end-paragraph",
+            "0",
+            "--end-run",
+            "1",
+            "--author",
+            "Alice",
+            "--text",
+            "Review this",
+            "--date",
+            date,
+            "--output",
+            path_text(output),
+        ])
+    };
+
+    assert_success(&add(ADDED, &added_path), "dated comment add");
+    let replied = cli(&[
+        "comment",
+        "reply",
+        path_text(&added_path),
+        "--id",
+        "0",
+        "--author",
+        "Bob",
+        "--text",
+        "Agreed",
+        "--date",
+        REPLIED,
+        "--output",
+        path_text(&replied_path),
+    ]);
+    assert_success(&replied, "dated comment reply");
+
+    let document = Document::open(&replied_path).unwrap();
+    let dates = document
+        .comments()
+        .iter()
+        .map(|comment| comment.date().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(dates, [Some(ADDED.to_owned()), Some(REPLIED.to_owned())]);
+    let comments_xml = package_part_text(&replied_path, "/word/comments.xml");
+    assert!(comments_xml.contains(&format!(r#"w:date="{ADDED}""#)));
+    assert!(comments_xml.contains(&format!(r#"w:date="{REPLIED}""#)));
+
+    for invalid in ["2026-02-30T00:00:00Z", "2026-09-29", "yesterday"] {
+        let rejected_path = temp.path.join("rejected.docx");
+        let rejected = add(invalid, &rejected_path);
+        assert_eq!(rejected.status.code(), Some(1), "{invalid}");
+        assert!(rejected.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(rejected.stderr).unwrap(),
+            format!("Error: invalid RFC 3339 comment timestamp: {invalid}\n")
+        );
+        assert!(!rejected_path.exists());
+    }
+    let rejected_reply_path = temp.path.join("rejected-reply.docx");
+    let rejected_reply = cli(&[
+        "comment",
+        "reply",
+        path_text(&added_path),
+        "--id",
+        "0",
+        "--author",
+        "Bob",
+        "--text",
+        "Agreed",
+        "--date",
+        "2026-09-29T25:00:00Z",
+        "--output",
+        path_text(&rejected_reply_path),
+    ]);
+    assert_eq!(rejected_reply.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&rejected_reply.stderr)
+            .contains("invalid RFC 3339 comment timestamp: 2026-09-29T25:00:00Z")
+    );
+    assert!(!rejected_reply_path.exists());
 }
 
 #[test]

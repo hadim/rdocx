@@ -184,6 +184,9 @@ enum CommentCommand {
         /// Comment text
         #[arg(long)]
         text: String,
+        /// RFC 3339 comment timestamp, omitted from the comment when absent
+        #[arg(long)]
+        date: Option<String>,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -204,6 +207,9 @@ enum CommentCommand {
         /// Reply text
         #[arg(long)]
         text: String,
+        /// RFC 3339 reply timestamp, omitted from the reply when absent
+        #[arg(long)]
+        date: Option<String>,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -406,6 +412,7 @@ fn main() {
                 author,
                 initials,
                 text,
+                date,
                 output,
                 json,
             } => commands::comment_add(
@@ -423,6 +430,7 @@ fn main() {
                 &author,
                 initials.as_deref(),
                 &text,
+                date.as_deref(),
                 &output,
                 json,
             ),
@@ -431,9 +439,10 @@ fn main() {
                 id,
                 author,
                 text,
+                date,
                 output,
                 json,
-            } => commands::comment_reply(&file, id, &author, &text, &output, json),
+            } => commands::comment_reply(&file, id, &author, &text, date.as_deref(), &output, json),
             CommentCommand::Resolve {
                 file,
                 id,
