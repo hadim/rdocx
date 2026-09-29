@@ -2708,7 +2708,7 @@ def _rewrite_package(document, rewrite):
     return type(document).from_bytes(result.getvalue())
 
 
-def _package_part(document, name):
+def _package_part_text(document, name):
     with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
         return archive.read(name).decode()
 
@@ -2756,7 +2756,7 @@ def test_core_properties_use_python_docx_names_and_round_trip(tmp_path):
     assert reopened.created == datetime.datetime(2026, 9, 1, 8, 0, 0, tzinfo=utc)
     assert reopened.modified == datetime.datetime(2026, 9, 2, 8, 30, 0, tzinfo=utc)
     assert reopened.last_printed == datetime.datetime(2026, 9, 3, 7, 0, 0, tzinfo=utc)
-    xml = _package_part(document, "docProps/core.xml")
+    xml = _package_part_text(document, "docProps/core.xml")
     assert '<dcterms:created xsi:type="dcterms:W3CDTF">2026-09-01T08:00:00Z<' in xml
     assert "<cp:lastPrinted>2026-09-03T07:00:00Z</cp:lastPrinted>" in xml
 
@@ -2772,7 +2772,7 @@ def test_core_properties_use_python_docx_names_and_round_trip(tmp_path):
     core.revision = None
     core.created = None
     assert (core.title, core.comments, core.revision, core.created) == ("", "", 0, None)
-    xml = _package_part(document, "docProps/core.xml")
+    xml = _package_part_text(document, "docProps/core.xml")
     for element in ("dc:title", "dc:description", "cp:revision", "dcterms:created"):
         assert element not in xml, element
 
@@ -2848,16 +2848,16 @@ def test_core_properties_create_a_missing_part_with_its_relationship():
         return data
 
     document = _rewrite_package(rdocx.Document(), drop_core)
-    assert _CORE_RELATIONSHIP not in _package_part(document, "_rels/.rels")
+    assert _CORE_RELATIONSHIP not in _package_part_text(document, "_rels/.rels")
     assert document.core_properties.title == ""
 
     document.core_properties.title = "Created"
 
     reopened = rdocx.Document.from_bytes(document.to_bytes())
     assert reopened.core_properties.title == "Created"
-    relationships = _package_part(document, "_rels/.rels")
+    relationships = _package_part_text(document, "_rels/.rels")
     assert f'Type="{_CORE_RELATIONSHIP}" Target="docProps/core.xml"' in relationships
     assert (
         '<Override PartName="/docProps/core.xml" '
         'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
-    ) in _package_part(document, "[Content_Types].xml")
+    ) in _package_part_text(document, "[Content_Types].xml")
