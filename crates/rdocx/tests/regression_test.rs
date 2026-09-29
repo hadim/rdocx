@@ -17223,6 +17223,33 @@ mod text_and_replacement_reach_simple_fields_smart_tags_and_custom_xml {
             }
         }
     }
+
+    /// A paragraph that declares its own prefix for WordprocessingML, with
+    /// a wrapper named with that prefix, as the review fixture holds it. The
+    /// wrapper is not read, since its content would be written back with
+    /// `w` and the paragraph could no longer be identified on save, so the
+    /// replacement saves and leaves it as it is.
+    #[test]
+    fn a_wrapper_named_with_the_prefix_of_its_paragraph_is_not_read() {
+        for wrapper in [
+            r#"<x:fldSimple x:instr=" TITLE "><x:r><x:t>MID</x:t></x:r></x:fldSimple>"#,
+            r#"<x:smartTag x:element="x"><x:r><x:t>MID</x:t></x:r></x:smartTag>"#,
+            r#"<x:customXml x:element="item"><x:r><x:t>MID</x:t></x:r></x:customXml>"#,
+        ] {
+            let xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}"><w:body><x:p xmlns:x="{W_NS}"><x:r><x:t xml:space="preserve">before </x:t></x:r>{wrapper}<x:r><x:t xml:space="preserve"> after</x:t></x:r></x:p><w:sectPr/></w:body></w:document>"#
+            );
+            let mut document = document_with_content_controls(&xml);
+            assert_eq!(document.paragraph(0).unwrap().text(), "before  after");
+
+            assert_eq!(document.try_replace_text("MID", "X").unwrap(), 0);
+            assert_eq!(document.try_replace_text("before", "B").unwrap(), 1);
+
+            let body = document_xml(&mut document);
+            assert!(body.contains(wrapper), "{body}");
+            assert!(body.contains(">B </"), "{body}");
+        }
+    }
 }
 
 /// `9360 / cols` panicked when a caller asked for a zero-column table.
