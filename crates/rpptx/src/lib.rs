@@ -5692,6 +5692,9 @@ impl<'a> SlideMut<'a> {
     }
 
     /// Appends a free-standing connector at the top of the slide's z-order.
+    ///
+    /// The connector carries the theme style python-pptx writes, so it shows
+    /// the theme's line until a direct line replaces it.
     pub fn add_connector(
         &mut self,
         connector: ConnectorType,
@@ -5703,13 +5706,16 @@ impl<'a> SlideMut<'a> {
         let transform = connector_transform(begin_x, begin_y, end_x, end_y)?;
         let tree = &mut self.record.slide.common_slide_data.shape_tree;
         let id = ShapeIdAllocator::scan(tree).allocate();
-        let connector = CT_ConnectionShape::new_free_standing(
+        let mut connector = CT_ConnectionShape::new_free_standing(
             id,
             &format!("Connector {id}"),
             connector.preset_name(),
             transform,
         )
         .map_err(|error| invalid_shape_construction("add connector", error))?;
+        connector
+            .set_default_style()
+            .map_err(|error| invalid_shape_construction("add connector", error))?;
         Ok(shape_mut(
             tree.append_child(ShapeTreeChild::Connector(connector)),
         ))

@@ -496,7 +496,11 @@ or `curvedConnector3` for `Straight`, `Elbow`, or `Curve`. Its transform offset
 is the componentwise minimum endpoint, its extents are the absolute endpoint
 spans, and its horizontal and vertical flips retain endpoint direction. A
 horizontal or vertical connector may have one zero extent. A span that cannot
-fit in the signed EMU representation returns a contextual error.
+fit in the signed EMU representation returns a contextual error. The connector
+carries the `p:style` python-pptx writes after its `p:spPr`: `a:lnRef idx="2"`,
+`a:fillRef idx="0"`, and `a:effectRef idx="1"` in `accent1`, and
+`a:fontRef idx="minor"` in `tx1`. PowerPoint draws no line for a connector with
+neither a style nor a direct `a:ln`, so the style gives it the theme's line.
 
 A constructed table uses a canonical `p:graphicFrame` with deterministic name
 `Table {id}`, a typed transform, the DrawingML table URI, and a rectangular

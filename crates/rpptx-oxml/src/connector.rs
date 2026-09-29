@@ -19,6 +19,9 @@ use crate::shape_tree::CT_ShapeStyle;
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
 
+/// The theme references python-pptx writes for a new connector.
+const DEFAULT_STYLE: &str = r#"<p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="1"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style>"#;
+
 /// One optional connector endpoint in `p:cNvCxnSpPr`.
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,6 +127,25 @@ impl CT_ConnectionShape {
                 raw_children: OrderedRawChildren::default(),
             }),
         })
+    }
+
+    /// Sets `p:style` to the theme references python-pptx writes for a new
+    /// connector: the second theme line and the first theme effect in
+    /// `accent1`, no theme fill, and the minor font in `tx1`.
+    ///
+    /// A connector with neither a style nor a direct `a:ln` has no line, so
+    /// PowerPoint draws nothing for it.
+    pub fn set_default_style(&mut self) -> Result<()> {
+        let namespaces = NamespaceBindings::from_entries(&[
+            ("p".to_owned(), P_NS.to_owned()),
+            ("a".to_owned(), A_NS.to_owned()),
+        ]);
+        self.raw.typed_style = Some(CT_ShapeStyle::from_fragment(
+            DEFAULT_STYLE.as_bytes(),
+            &namespaces,
+        )?);
+        self.raw.style = Some(DEFAULT_STYLE.as_bytes().to_vec());
+        Ok(())
     }
 
     /// Returns the typed format-scheme references of `p:style`.
@@ -970,6 +992,29 @@ mod constructor_tests {
         assert!(text.find("<p:nvCxnSpPr").unwrap() < text.find("<p:spPr").unwrap());
         assert!(!text.contains("<p:style"));
         assert!(connector.style().is_none());
+        assert_eq!(CT_ConnectionShape::from_xml(&xml).unwrap(), connector);
+    }
+
+    #[test]
+    fn default_style_follows_shape_properties_and_has_a_typed_view() {
+        let mut connector = CT_ConnectionShape::new_free_standing(
+            2,
+            "Connector 2",
+            "line",
+            CT_Transform2D::default(),
+        )
+        .unwrap();
+        connector.set_default_style().unwrap();
+
+        let style = connector.style().expect("typed default style");
+        assert_eq!(style.line_reference.index, 2);
+        assert_eq!(style.fill_reference.index, 0);
+        assert_eq!(style.effect_reference.index, 1);
+        let xml = connector.to_xml().unwrap();
+        let text = String::from_utf8(xml.clone()).unwrap();
+        assert!(text.contains(
+            r#"</p:spPr><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="1"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style></p:cxnSp>"#
+        ));
         assert_eq!(CT_ConnectionShape::from_xml(&xml).unwrap(), connector);
     }
 }
