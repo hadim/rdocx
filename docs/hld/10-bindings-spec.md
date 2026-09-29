@@ -640,6 +640,11 @@ not listed by `story_links` and stays out of scope. Python exposes
 `Document.set_hyperlink_url` and `Document.remove_hyperlink` for a `Hyperlink`
 snapshot, which must still match the document. Neither moves content, so live
 handles stay valid.
+`Document::set_picture_size` resizes every main-document `pic:pic` drawing
+whose blip names one image relationship. It writes `wp:extent` and the `a:ext`
+of `pic:spPr/a:xfrm`, scales `wp:effectExtent` with the extent on each axis,
+and leaves anchor positions alone. Python exposes `Document.set_picture_size`
+with EMU sizes, and it keeps live handles valid too.
 
 Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
 Each handle reports its zero-based document ordinal, schema-final ownership,

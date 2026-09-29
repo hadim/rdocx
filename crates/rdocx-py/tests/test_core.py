@@ -516,6 +516,31 @@ def test_hyperlinks_are_retargeted_or_removed_in_every_story():
         assert b"example.com/cell" not in archive.read("word/_rels/document.xml.rels")
 
 
+def test_set_picture_size_resizes_every_drawing_of_a_relationship():
+    docx = pytest.importorskip("docx")
+    import rdocx
+
+    document = rdocx.Document.from_bytes(_linked_report_docx())
+    relationship_id = re.search(
+        rb'r:embed="([^"]+)"', _document_xml(document)
+    ).group(1).decode()
+    # Both pictures share one image relationship, so both are resized.
+    assert (
+        document.set_picture_size(
+            relationship_id, width=rdocx.Inches(1), height=rdocx.Inches(1)
+        )
+        == 2
+    )
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        document.set_picture_size("rIdMissing", width=1, height=1)
+    assert document.to_bytes() == before
+    saved = docx.Document(io.BytesIO(document.to_bytes()))
+    assert [(shape.width, shape.height) for shape in saved.inline_shapes] == [
+        (rdocx.Inches(1), rdocx.Inches(1))
+    ] * 2
+
+
 def _document_with_structure_snapshots(document):
     word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"

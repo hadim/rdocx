@@ -1229,6 +1229,24 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    fn set_picture_size(
+        &mut self,
+        py: Python<'_>,
+        relationship_id: &str,
+        width: i64,
+        height: i64,
+    ) -> PyResult<usize> {
+        // No content moves, so live handles stay valid.
+        py.detach(|| {
+            self.inner.set_picture_size(
+                relationship_id,
+                rdocx::Length::emu(width),
+                rdocx::Length::emu(height),
+            )
+        })
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
     fn split_run(
         &mut self,
         py: Python<'_>,

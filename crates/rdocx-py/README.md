@@ -45,6 +45,7 @@ with open("report.pdf", "wb") as output:
 - Paragraphs, runs, fonts, tables, rows, cells, sections, and styles.
 - Rich headers, footers, related stories, and hyperlinks resolved, retargeted,
   or removed in any story.
+- Picture replacement and resizing by image relationship.
 - Complete paragraph and run formatting, multilingual and vertical typography,
   conditional and floating tables, section semantics, settings, fields, forms,
   equations, drawings, comments, and metadata.

@@ -1703,6 +1703,108 @@ fn hyperlinks_can_be_retargeted_and_removed_in_every_story() {
 }
 
 #[test]
+fn set_picture_size_resizes_every_drawing_of_a_relationship() {
+    const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    const PIC_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+    const WP_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+    const WPG_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup";
+    let png: &[u8] = b"\x89PNG\r\n\x1a\noriginal";
+    let mut seed = Document::new();
+    seed.add_picture(png, "one.png", Length::emu(1), Length::emu(1));
+    seed.add_picture(
+        b"\x89PNG\r\n\x1a\nother",
+        "two.png",
+        Length::emu(1),
+        Length::emu(1),
+    );
+    let ids = seed
+        .images()
+        .into_iter()
+        .map(|image| image.embed_id)
+        .collect::<Vec<_>>();
+    let (shared, other) = (&ids[0], &ids[1]);
+    let picture = |id: &str, cx: u32, cy: u32| {
+        format!(
+            r#"<a:graphic><a:graphicData uri="{PIC_NS}"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="p"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="{id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>"#
+        )
+    };
+    let body = format!(
+        concat!(
+            r#"<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="100" cy="200"/><wp:effectExtent l="10" t="20" r="10" b="20"/><wp:docPr id="1" name="inline"/>{inline}</wp:inline></w:drawing></w:r></w:p>"#,
+            r#"<w:p><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>12345</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>678</wp:posOffset></wp:positionV><wp:extent cx="300" cy="300"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="2" name="anchor"/>{anchor}</wp:anchor></w:drawing></w:r></w:p>"#,
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="700" cy="700"/><wp:docPr id="3" name="group"/><a:graphic><a:graphicData uri="{WPG_NS}"><wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr/><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="g"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="{shared}"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="700" cy="700"/></a:xfrm></pic:spPr></pic:pic></wpg:wgp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="900" cy="900"/><wp:docPr id="4" name="other"/>{other}</wp:inline></w:drawing></w:r></w:p>"#,
+        ),
+        inline = picture(shared, 100, 200),
+        anchor = picture(shared, 300, 300),
+        other = picture(other, 900, 900),
+        WPG_NS = WPG_NS,
+        shared = shared,
+    );
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="{RELATIONSHIPS_NS}" xmlns:wp="{WP_NS}" xmlns:a="{A_NS}" xmlns:pic="{PIC_NS}" xmlns:wpg="{WPG_NS}"><w:body>{body}<w:sectPr/></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .items
+        .push(oxml_opc::Relationship {
+            id: "rIdLink".to_owned(),
+            rel_type: oxml_opc::relationship::rel_types::HYPERLINK.to_owned(),
+            target: "https://example.test/".to_owned(),
+            target_mode: Some("External".to_owned()),
+        });
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+
+    let before = document.to_bytes().unwrap();
+    for (id, width) in [("rIdMissing", 50), ("rIdLink", 50), (shared.as_str(), -1)] {
+        assert!(
+            document
+                .set_picture_size(id, Length::emu(width), Length::emu(400))
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    assert_eq!(
+        document
+            .set_picture_size(shared, Length::emu(50), Length::emu(400))
+            .unwrap(),
+        2
+    );
+
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(
+        reopened
+            .images()
+            .into_iter()
+            .map(|image| (image.width_emu, image.height_emu, image.is_anchor))
+            .collect::<Vec<_>>(),
+        [
+            (50, 400, false),
+            (50, 400, true),
+            (700, 700, false),
+            (900, 900, false)
+        ]
+    );
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(xml.matches(r#"<a:ext cx="50" cy="400"/>"#).count(), 2);
+    assert!(xml.contains(r#"<wp:effectExtent l="5" t="40" r="5" b="40"/>"#));
+    assert!(xml.contains(r#"<wp:effectExtent l="0" t="0" r="0" b="0"/>"#));
+    assert!(xml.contains("<wp:posOffset>12345</wp:posOffset>"));
+    assert!(xml.contains(r#"<a:ext cx="700" cy="700"/>"#));
+    assert!(xml.contains(r#"<a:ext cx="900" cy="900"/>"#));
+}
+
+#[test]
 fn split_run_enables_exact_comment_ranges_without_losing_content() {
     let mut document = Document::new();
     document

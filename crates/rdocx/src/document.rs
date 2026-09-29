@@ -8197,6 +8197,186 @@ fn unwrap_story_hyperlink(
     Ok(updated)
 }
 
+/// Resize every `pic:pic` drawing in `xml` whose blip names `relationship_id`,
+/// returning the edited XML and the number of drawings resized.
+///
+/// `wp:extent` and the `a:ext` of `pic:spPr/a:xfrm` take the new size, and
+/// `wp:effectExtent` scales with the extent on each axis.
+fn resize_story_pictures(
+    xml: &[u8],
+    relationship_id: &str,
+    cx: i64,
+    cy: i64,
+) -> Result<(Vec<u8>, usize)> {
+    struct Drawing {
+        depth: usize,
+        extent: Option<Range<usize>>,
+        effect_extent: Option<Range<usize>>,
+        shape_extent: Option<Range<usize>>,
+        shows_image: bool,
+    }
+    const A: &str = drawing_ns::A;
+    const PIC: &str = drawing_ns::PIC;
+    let on_path = |path: &[(String, Vec<u8>)], expected: &[(&str, &[u8])]| {
+        path.len() == expected.len()
+            && path.iter().zip(expected).all(
+                |((namespace, local), (want_namespace, want_local))| {
+                    namespace == want_namespace && local.as_slice() == *want_local
+                },
+            )
+    };
+    let attribute_value = |tag: Range<usize>, name: &[u8]| -> Result<(Range<usize>, i64)> {
+        let (start, end) =
+            story_attribute_value_span(&xml[tag.clone()], name).ok_or_else(|| {
+                Error::Other(format!(
+                    "picture drawing has no {} attribute",
+                    String::from_utf8_lossy(name)
+                ))
+            })?;
+        let range = tag.start + start..tag.start + end;
+        let value = std::str::from_utf8(&xml[range.clone()])
+            .ok()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "picture drawing {} is not an integer",
+                    String::from_utf8_lossy(name)
+                ))
+            })?;
+        Ok((range, value))
+    };
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut stack: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut drawings: Vec<Drawing> = Vec::new();
+    let mut edits = Vec::new();
+    let mut resized = 0usize;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("picture drawing scan failed: {error}")))?;
+        let namespace = match namespace {
+            ResolveResult::Bound(Namespace(uri)) => String::from_utf8_lossy(uri).into_owned(),
+            _ => String::new(),
+        };
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let local = element.local_name().as_ref().to_vec();
+                if let Some(drawing) = drawings.last_mut() {
+                    let path = &stack[drawing.depth + 1..];
+                    if path.is_empty() && namespace == drawing_ns::WP {
+                        match local.as_slice() {
+                            b"extent" => drawing.extent = Some(before..after),
+                            b"effectExtent" => drawing.effect_extent = Some(before..after),
+                            _ => {}
+                        }
+                    } else if namespace == A
+                        && local == b"blip"
+                        && on_path(
+                            path,
+                            &[
+                                (A, b"graphic"),
+                                (A, b"graphicData"),
+                                (PIC, b"pic"),
+                                (PIC, b"blipFill"),
+                            ],
+                        )
+                    {
+                        drawing.shows_image |= element.attributes().flatten().any(|attribute| {
+                            let (attribute_namespace, name) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            matches!(attribute_namespace, ResolveResult::Bound(Namespace(uri)) if uri == drawing_ns::R.as_bytes())
+                                && matches!(name.as_ref(), b"embed" | b"link")
+                                && attribute.value.as_ref() == relationship_id.as_bytes()
+                        });
+                    } else if namespace == A
+                        && local == b"ext"
+                        && on_path(
+                            path,
+                            &[
+                                (A, b"graphic"),
+                                (A, b"graphicData"),
+                                (PIC, b"pic"),
+                                (PIC, b"spPr"),
+                                (A, b"xfrm"),
+                            ],
+                        )
+                    {
+                        drawing.shape_extent = Some(before..after);
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    if namespace == drawing_ns::WP
+                        && matches!(local.as_slice(), b"inline" | b"anchor")
+                    {
+                        drawings.push(Drawing {
+                            depth: stack.len(),
+                            extent: None,
+                            effect_extent: None,
+                            shape_extent: None,
+                            shows_image: false,
+                        });
+                    }
+                    stack.push((namespace, local));
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+                if drawings
+                    .last()
+                    .is_some_and(|drawing| drawing.depth == stack.len())
+                    && let Some(drawing) = drawings.pop()
+                    && drawing.shows_image
+                    && let Some(extent) = drawing.extent
+                {
+                    let (cx_range, old_cx) = attribute_value(extent.clone(), b"cx")?;
+                    let (cy_range, old_cy) = attribute_value(extent, b"cy")?;
+                    edits.push((cx_range, cx));
+                    edits.push((cy_range, cy));
+                    if let Some(shape_extent) = drawing.shape_extent {
+                        edits.push((attribute_value(shape_extent.clone(), b"cx")?.0, cx));
+                        edits.push((attribute_value(shape_extent, b"cy")?.0, cy));
+                    }
+                    if let Some(effect_extent) = drawing.effect_extent {
+                        for (name, new, old) in [
+                            (&b"l"[..], cx, old_cx),
+                            (b"t", cy, old_cy),
+                            (b"r", cx, old_cx),
+                            (b"b", cy, old_cy),
+                        ] {
+                            let (range, value) = attribute_value(effect_extent.clone(), name)?;
+                            let scaled = if old == 0 {
+                                0
+                            } else {
+                                i64::try_from(i128::from(value) * i128::from(new) / i128::from(old))
+                                    .map_err(|_| {
+                                        Error::Other(
+                                            "scaled picture effect extent overflows".to_owned(),
+                                        )
+                                    })?
+                            };
+                            edits.push((range, scaled));
+                        }
+                    }
+                    resized += 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    edits.sort_by_key(|(range, _)| range.start);
+    let mut updated = xml.to_vec();
+    for (range, value) in edits.into_iter().rev() {
+        updated.splice(range, value.to_string().into_bytes());
+    }
+    Ok((updated, resized))
+}
+
 fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
@@ -15901,6 +16081,54 @@ impl Document {
     pub fn replace_image(&mut self, rel_id: &str, image_data: &[u8]) -> Result<()> {
         let owner = self.doc_part_name.clone();
         self.replace_image_relationship(&owner, rel_id, image_data)
+    }
+
+    /// Resize every main-document picture that shows one image relationship.
+    ///
+    /// Each inline or anchored `pic:pic` drawing whose blip names `rel_id`
+    /// gets the new `wp:extent` and `pic:spPr` `a:ext`, so pictures that share
+    /// the relationship are all resized. Its `wp:effectExtent` scales with the
+    /// extent on each axis, and anchor positions stay as they are. Returns the
+    /// number of drawings resized.
+    pub fn set_picture_size(
+        &mut self,
+        rel_id: &str,
+        width: Length,
+        height: Length,
+    ) -> Result<usize> {
+        const MAX_POSITIVE_COORDINATE: i64 = 27_273_042_316_900;
+        let (cx, cy) = (width.to_emu(), height.to_emu());
+        if !(0..=MAX_POSITIVE_COORDINATE).contains(&cx)
+            || !(0..=MAX_POSITIVE_COORDINATE).contains(&cy)
+        {
+            return Err(Error::Other(format!(
+                "picture size {cx} x {cy} EMU is outside the DrawingML coordinate range"
+            )));
+        }
+        let owner = self.doc_part_name.clone();
+        let is_image = self
+            .package
+            .get_part_rels(&owner)
+            .and_then(|relationships| relationships.get_by_id(rel_id))
+            .is_some_and(|relationship| relationship.rel_type == rel_types::IMAGE);
+        if !is_image {
+            return Err(Error::Other(format!(
+                "relationship owner {owner} has no image relationship {rel_id}"
+            )));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (updated, resized) =
+            resize_story_pictures(&candidate.document.to_xml()?, rel_id, cx, cy)?;
+        if resized == 0 {
+            return Err(Error::Other(format!(
+                "no picture drawing shows image relationship {rel_id}"
+            )));
+        }
+        set_story_source_xml(&mut candidate, &owner, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(resized)
     }
 
     /// Resolve a hyperlink relationship ID to its external URL.
