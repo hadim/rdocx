@@ -9592,6 +9592,85 @@ fn custom_style_round_trip() {
 }
 
 #[test]
+fn common_styles_are_added_once_and_leave_unstyled_layout_unchanged() {
+    let ids = |document: &Document| {
+        document
+            .styles()
+            .iter()
+            .map(|style| style.style_id().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let mut document = Document::new();
+    assert_eq!(ids(&document), ["Normal", "Heading1"]);
+    document.add_paragraph("Heading").style("Heading1");
+    document.add_paragraph("Body text");
+    document
+        .add_table(2, 2)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("cell");
+    let before = document.to_pdf_deterministic().unwrap();
+
+    assert_eq!(document.add_common_styles().unwrap(), 15);
+    assert_eq!(
+        ids(&document),
+        [
+            "Normal",
+            "Heading1",
+            "Heading2",
+            "Heading3",
+            "Heading4",
+            "Heading5",
+            "Heading6",
+            "Heading7",
+            "Heading8",
+            "Heading9",
+            "Title",
+            "Subtitle",
+            "NoSpacing",
+            "Quote",
+            "ListParagraph",
+            "Caption",
+            "TableGrid",
+        ]
+    );
+    document.validate_style_graph().unwrap();
+    assert_eq!(document.to_pdf_deterministic().unwrap(), before);
+    let heading = document.style("Heading2").unwrap();
+    assert_eq!(heading.name(), Some("heading 2"));
+    assert_eq!(heading.based_on(), Some("Normal"));
+    assert_eq!(heading.next_style(), Some("Normal"));
+    assert_eq!(heading.paragraph_properties().unwrap().outline_lvl, Some(1));
+    assert_eq!(document.style("Caption").unwrap().name(), Some("caption"));
+    let grid = document.style("TableGrid").unwrap();
+    assert_eq!(grid.style_type(), rdocx::StyleType::Table);
+    let borders = grid.table_properties().unwrap().borders.as_ref().unwrap();
+    assert_eq!(borders.inside_v.as_ref().unwrap().val, ST_Border::Single);
+
+    let saved = document.to_bytes().unwrap();
+    assert_eq!(document.add_common_styles().unwrap(), 0);
+    assert_eq!(document.to_bytes().unwrap(), saved);
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(ids(&reopened), ids(&document));
+    reopened.validate_style_graph().unwrap();
+
+    let mut localized = Document::new();
+    localized
+        .add_style(StyleBuilder::paragraph("berschrift2", "Heading 2").based_on("Normal"))
+        .unwrap();
+    assert_eq!(localized.add_common_styles().unwrap(), 14);
+    assert!(localized.style("Heading2").is_none());
+
+    let mut baseless = Document::new();
+    assert!(baseless.remove_style("Heading1").unwrap());
+    assert!(baseless.remove_style("Normal").unwrap());
+    let saved = baseless.to_bytes().unwrap();
+    let error = baseless.add_common_styles().unwrap_err().to_string();
+    assert!(error.contains("missing style 'Normal'"), "{error}");
+    assert_eq!(baseless.to_bytes().unwrap(), saved);
+}
+
+#[test]
 fn source_built_style_graph_matches_pinned_word_effective_formatting() {
     const WORD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
     const LIBREOFFICE_ORACLE: &str =

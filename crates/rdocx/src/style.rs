@@ -2,9 +2,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use rdocx_oxml::borders::CT_BorderEdge;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::shared::{ST_Border, ST_Jc};
 use rdocx_oxml::styles::{CT_Style, CT_Styles, CT_TblStylePr, StyleType, TableStyleRegion};
-use rdocx_oxml::table::{CT_TblPr, CT_TcPr, CT_TrPr};
+use rdocx_oxml::table::{CT_TblBorders, CT_TblPr, CT_TcPr, CT_TrPr};
+use rdocx_oxml::units::{HalfPoint, Twips};
 
 use crate::{Error, Result};
 
@@ -526,6 +529,147 @@ impl StyleBuilder {
     pub(crate) fn build(self) -> (CT_Style, u16, Vec<TableStyleRegion>) {
         (self.style, self.cleared, self.removed_regions)
     }
+}
+
+/// The Word built-in styles `Document::add_common_styles` adds, in order.
+///
+/// Each carries the IDs, names, UI metadata and formatting Word's Office theme
+/// writes, with the theme colours and fonts resolved to literal values the way
+/// the default `Heading1` already is. `Table Grid` carries its borders but not
+/// its `Normal Table` base, which a new document does not define.
+pub(crate) fn common_styles() -> Vec<CT_Style> {
+    let spacing = |before: Option<i32>, after: i32, line: Option<i32>| CT_PPr {
+        space_before: before.map(Twips),
+        space_after: Some(Twips(after)),
+        line_spacing: line.map(Twips),
+        line_rule: line.map(|_| "auto".to_owned()),
+        ..CT_PPr::default()
+    };
+    let text = |size: Option<u32>, color: &str, italic: bool| CT_RPr {
+        sz: size.map(HalfPoint),
+        sz_cs: size.map(HalfPoint),
+        italic: italic.then_some(true),
+        italic_cs: italic.then_some(true),
+        color: Some(color.to_owned()),
+        ..CT_RPr::default()
+    };
+    // Levels 2 to 9: half-point size (inherited when absent), colour, italic.
+    let headings = [
+        (Some(26), "2F5496", false),
+        (Some(24), "1F3763", false),
+        (None, "2F5496", true),
+        (None, "2F5496", false),
+        (None, "1F3763", false),
+        (None, "1F3763", true),
+        (Some(21), "272727", false),
+        (Some(21), "272727", true),
+    ];
+    let mut styles = Vec::new();
+    for (level, (size, color, italic)) in (2u32..).zip(headings) {
+        styles.push(
+            StyleBuilder::paragraph(&format!("Heading{level}"), &format!("heading {level}"))
+                .based_on("Normal")
+                .next_style("Normal")
+                .priority(9)
+                .unhide_when_used(true)
+                .quick_format(true)
+                .paragraph_properties(CT_PPr {
+                    keep_next: Some(true),
+                    keep_lines: Some(true),
+                    outline_lvl: Some(level - 1),
+                    ..spacing(Some(40), 0, None)
+                })
+                .run_properties(text(size, color, italic)),
+        );
+    }
+    let border = || {
+        Some(CT_BorderEdge {
+            sz: Some(4),
+            space: Some(0),
+            color: Some("auto".to_owned()),
+            ..CT_BorderEdge::new(ST_Border::Single)
+        })
+    };
+    styles.extend([
+        StyleBuilder::paragraph("Title", "Title")
+            .based_on("Normal")
+            .next_style("Normal")
+            .priority(10)
+            .quick_format(true)
+            .paragraph_properties(CT_PPr {
+                contextual_spacing: Some(true),
+                ..spacing(None, 0, Some(240))
+            })
+            .run_properties(CT_RPr {
+                sz: Some(HalfPoint(56)),
+                sz_cs: Some(HalfPoint(56)),
+                spacing: Some(Twips(-10)),
+                kern: Some(HalfPoint(28)),
+                ..CT_RPr::default()
+            }),
+        StyleBuilder::paragraph("Subtitle", "Subtitle")
+            .based_on("Normal")
+            .next_style("Normal")
+            .priority(11)
+            .quick_format(true)
+            .paragraph_properties(spacing(None, 160, None))
+            .run_properties(CT_RPr {
+                spacing: Some(Twips(15)),
+                ..text(Some(22), "5A5A5A", false)
+            }),
+        StyleBuilder::paragraph("NoSpacing", "No Spacing")
+            .priority(1)
+            .quick_format(true)
+            .paragraph_properties(spacing(None, 0, Some(240))),
+        StyleBuilder::paragraph("Quote", "Quote")
+            .based_on("Normal")
+            .next_style("Normal")
+            .priority(29)
+            .quick_format(true)
+            .paragraph_properties(CT_PPr {
+                jc: Some(ST_Jc::Center),
+                ind_left: Some(Twips(864)),
+                ind_right: Some(Twips(864)),
+                ..spacing(Some(200), 160, None)
+            })
+            .run_properties(text(None, "404040", true)),
+        StyleBuilder::paragraph("ListParagraph", "List Paragraph")
+            .based_on("Normal")
+            .priority(34)
+            .quick_format(true)
+            .paragraph_properties(CT_PPr {
+                ind_left: Some(Twips(720)),
+                contextual_spacing: Some(true),
+                ..CT_PPr::default()
+            }),
+        StyleBuilder::paragraph("Caption", "caption")
+            .based_on("Normal")
+            .next_style("Normal")
+            .priority(35)
+            .unhide_when_used(true)
+            .quick_format(true)
+            .paragraph_properties(spacing(None, 200, Some(240)))
+            .run_properties(text(Some(18), "44546A", true)),
+        StyleBuilder::table("TableGrid", "Table Grid")
+            .priority(39)
+            .paragraph_properties(spacing(None, 0, Some(240)))
+            .table_properties(CT_TblPr {
+                borders: Some(CT_TblBorders {
+                    top: border(),
+                    left: border(),
+                    bottom: border(),
+                    right: border(),
+                    inside_h: border(),
+                    inside_v: border(),
+                    ..CT_TblBorders::default()
+                }),
+                ..CT_TblPr::default()
+            }),
+    ]);
+    styles
+        .into_iter()
+        .map(|builder| builder.build().0)
+        .collect()
 }
 
 pub(crate) fn validate_style_graph(styles: &CT_Styles) -> Result<()> {

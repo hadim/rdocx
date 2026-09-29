@@ -424,7 +424,7 @@ def test_paragraph_style_accepts_a_defined_id_or_name_and_rejects_the_rest():
     before = document.to_bytes()
     for value, error, message in (
         ("NoSuchStyle", KeyError, "no style with ID or name 'NoSuchStyle'"),
-        ("Heading 7", KeyError, "no style"),
+        ("Heading 10", KeyError, "no style"),
         ("Strong", ValueError, "character style"),
         ("emphasis char", ValueError, "character style"),
     ):
@@ -433,6 +433,51 @@ def test_paragraph_style_accepts_a_defined_id_or_name_and_rejects_the_rest():
     assert document.to_bytes() == before
     assert paragraph.style == "Heading1"
     assert Document.from_bytes(before).paragraphs[0].style == "Heading1"
+
+
+def test_new_document_defines_the_common_word_styles_and_opened_ones_keep_theirs():
+    from rdocx import Document
+
+    document = Document()
+    styles = {style.style_id: style for style in document.styles}
+    expected = {f"Heading{level}" for level in range(1, 10)} | {
+        "Normal",
+        "Title",
+        "Subtitle",
+        "NoSpacing",
+        "Quote",
+        "ListParagraph",
+        "Caption",
+        "TableGrid",
+    }
+    assert set(styles) == expected
+    assert styles["Heading2"].name == "heading 2"
+    assert styles["Heading2"].based_on == "Normal"
+    assert styles["TableGrid"].style_type == "table"
+    assert [style.is_default for style in document.styles].count(True) == 1
+
+    document.add_paragraph("Chapter")
+    document.paragraphs[0].style = "Heading 2"
+    assert document.paragraphs[0].style == "Heading2"
+    document.paragraphs[0].style = "Caption"
+    assert document.paragraphs[0].style == "Caption"
+
+    trimmed = BytesIO()
+    with ZipFile(BytesIO(document.to_bytes())) as source, ZipFile(
+        trimmed, "w", compression=ZIP_DEFLATED
+    ) as output:
+        for member in source.infolist():
+            contents = source.read(member.filename)
+            if member.filename == "word/styles.xml":
+                contents = (
+                    b'<w:styles xmlns:w="http://schemas.openxmlformats.org/'
+                    b'wordprocessingml/2006/main"><w:style w:type="paragraph" '
+                    b'w:default="1" w:styleId="Normal"><w:name w:val="Normal"/>'
+                    b"</w:style></w:styles>"
+                )
+            output.writestr(member, contents)
+    opened = Document.from_bytes(trimmed.getvalue())
+    assert [style.style_id for style in opened.styles] == ["Normal"]
 
 
 def test_word_highlight_keywords_round_trip_and_clear():

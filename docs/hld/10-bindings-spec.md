@@ -268,10 +268,10 @@ of the same name. As in python-docx, a value that names no style raises
 raises `ValueError`, both before any change. Assigning a style is a value-only
 mutation and keeps handles valid. The run style, table style and numbering
 setters still write their value unchecked. This changes behavior on documents
-that lack the style. `rdocx.Document()` defines only `Normal` and `Heading1`,
-so `p.style = "Heading2"` on a new document used to store an undefined style,
-which `rebuild_toc` even read as a level-two heading, and now raises
-`KeyError`.
+that lack the style. On such a document `p.style = "Heading2"` used to store an
+undefined style, which `rebuild_toc` even read as a level-two heading, and now
+raises `KeyError`. A new `rdocx.Document()` defines `Heading2` and the other
+common Word styles that `Document::add_common_styles` adds.
 
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
@@ -519,6 +519,23 @@ support parts, and `Document::new()` selects its DOCX form. Macro-capable
 profiles select package identity without manufacturing executable content.
 Python, WASM, and CLI construction continues through `Document::new()` and
 therefore receives the compatible DOCX default without a new selector surface.
+
+Both profiles define the same two styles, `Normal` and `Heading1`.
+`Document::add_common_styles` adds the Word built-in styles most documents use
+and python-docx's default template defines: `heading 2` to `heading 9`,
+`Title`, `Subtitle`, `No Spacing`, `Quote`, `List Paragraph`, `caption` and
+`Table Grid`. Each has Word's IDs, names, UI metadata and Office theme
+formatting, with theme colours resolved to literal values as in the default
+`Heading1`. `Table Grid` has no `Normal Table` base, since a new document
+defines none. A style whose ID, or whose name regardless of case, the document
+already defines is skipped, and the call returns how many it added. None is a
+default style, so content that names none of them lays out as before. A
+document without a `Normal` paragraph style is rejected unchanged.
+`Document::new()` itself keeps its two styles, so the hash harness baseline and
+every output pinned on it stay as they are. A new Python `Document()` calls
+`add_common_styles`, so python-docx code that names these styles finds them. A
+Python document opened from a file or bytes keeps exactly the styles it has.
+WASM and CLI construction is unchanged.
 
 Native Rust re-exports `StyleType`, `TableStyleRegion` and
 `ConditionalTableStyle`. `StyleBuilder` authors paragraph, character, and table

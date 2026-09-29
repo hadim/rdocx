@@ -1450,7 +1450,13 @@ impl PyDocument {
             Some(path) => rdocx::Document::open(path)
                 .map(Self::from_document)
                 .map_err(|error| rdocx_to_pyerr(py, error)),
-            None => Ok(Self::from_document(rdocx::Document::new())),
+            None => {
+                let mut document = rdocx::Document::new();
+                document
+                    .add_common_styles()
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                Ok(Self::from_document(document))
+            }
         }
     }
 
