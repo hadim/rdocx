@@ -19,6 +19,7 @@ from rdocx import (
     LayoutFragment,
     LayoutBackedFieldUpdateReport,
     LayoutPage,
+    ListLevel,
     RGBColor,
     Paragraph,
     ParagraphCollection,
@@ -103,6 +104,31 @@ def exercise_rdocx_types(path: Path) -> None:
     comments: tuple[Comment, ...] = document.comments
     sections: tuple[Section, ...] = document.sections
     styles: tuple[Style, ...] = document.styles
+    note: Style = document.add_style("Note", "paragraph", based_on="Normal")
+    document.add_style(
+        "Boxed Note",
+        style_id="BoxedNote",
+        next_style="Normal",
+        font_name="Arial",
+        font_size=Inches(0.25),
+        bold=True,
+        italic=None,
+        color=RGBColor(0x11, 0x22, 0x33),
+        space_before=Inches(0.1),
+        space_after=None,
+        left_indent=Inches(0.5),
+        right_indent=None,
+        first_line_indent=-Inches(0.25),
+    )
+    list_level = ListLevel(format="decimal", text="%1.", start=1, left_indent=Inches(0.5))
+    assert_type(list_level.format, str)
+    assert_type(list_level.text, str | None)
+    assert_type(list_level.hanging_indent, int | None)
+    definition_id: int = document.add_numbering_definition([list_level, ListLevel()])
+    num_id: int = document.add_numbering_instance(definition_id)
+    document.link_style_to_numbering(note.style_id, num_id, 0)
+    document.set_default_style("Normal")
+    style_removed: bool = document.remove_style("BoxedNote")
     stories: tuple[Story, ...] = document.stories
     image_data: bytes | None = document.image_data("rId1")
     document.replace_image("rId1", b"image")
@@ -209,6 +235,7 @@ def exercise_rdocx_types(path: Path) -> None:
         fragment_kind,
         inserted_picture,
         story_comment_id,
+        style_removed,
     )
     accepted, dated, replaced, matched, updated
 

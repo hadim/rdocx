@@ -11,9 +11,9 @@ use rdocx::table::{
     TableConditionalFormatting, TableLayout, TableLook, TableWidth, VerticalAlignment,
 };
 use rdocx::{
-    BodyItemRef, BorderStyle, Length, ListLevel, MhtmlDiagnostic, ParagraphRef, RunPosition,
-    RunRange, SectionBreak, StoryItemKind, StoryKind, StyleBuilder, TabAlignment, TabLeader,
-    TableStyleRegion, UnderlineStyle,
+    BodyItemRef, BorderStyle, Length, ListLevel, ListNumberFormat, MhtmlDiagnostic, ParagraphRef,
+    RunPosition, RunRange, SectionBreak, StoryItemKind, StoryKind, StyleBuilder, TabAlignment,
+    TabLeader, TableStyleRegion, UnderlineStyle,
 };
 use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, WordPackageClass};
 use rdocx_oxml::CT_BorderEdge;
@@ -9668,6 +9668,59 @@ fn common_styles_are_added_once_and_leave_unstyled_layout_unchanged() {
     let error = baseless.add_common_styles().unwrap_err().to_string();
     assert!(error.contains("missing style 'Normal'"), "{error}");
     assert_eq!(baseless.to_bytes().unwrap(), saved);
+}
+
+#[test]
+fn a_style_linked_to_numbering_numbers_its_paragraphs_in_layout() {
+    assert_eq!(
+        ListNumberFormat::from_name("lowerLetter"),
+        ListNumberFormat::LowerLetter
+    );
+    assert_eq!(
+        ListNumberFormat::from_name("Decimal"),
+        ListNumberFormat::Other("Decimal".to_owned())
+    );
+    let mut document = Document::new();
+    let definition = document
+        .add_numbering_definition(&[
+            ListLevel::new(ListNumberFormat::from_name("decimal")).level_text("%1.")
+        ])
+        .unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .add_style(
+            StyleBuilder::paragraph("Step", "Step")
+                .based_on("Normal")
+                .paragraph_properties(rdocx::CT_PPr {
+                    space_before: Some(rdocx::Twips(240)),
+                    space_after: Some(rdocx::Twips(120)),
+                    ..Default::default()
+                })
+                .run_properties(rdocx::CT_RPr {
+                    font_ascii: Some("Arial".to_owned()),
+                    font_hansi: Some("Arial".to_owned()),
+                    sz: Some(rdocx::HalfPoint(28)),
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+        )
+        .unwrap();
+    document
+        .link_style_to_numbering("Step", instance, 0)
+        .unwrap();
+    document.add_paragraph("Mix").style("Step");
+    document.add_paragraph("Bake").style("Step");
+    document.add_paragraph("Serve");
+
+    let layout = document.layout_deterministic().unwrap();
+    let marker = |index| {
+        layout
+            .document_body_paragraph_numbering(index)
+            .map(|numbering| numbering.marker_text.clone())
+    };
+    assert_eq!(marker(0).as_deref(), Some("1."));
+    assert_eq!(marker(1).as_deref(), Some("2."));
+    assert_eq!(marker(2), None);
 }
 
 #[test]

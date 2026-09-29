@@ -90,7 +90,7 @@ pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 pub use oxml_core::app_properties::AppProperties;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::custom_properties::{CustomProperty, CustomPropertyValue};
-pub use oxml_core::{Length, Twips};
+pub use oxml_core::{HalfPoint, Length, Twips};
 pub use oxml_drawing::theme::CT_OfficeStyleSheet;
 pub use oxml_opc::PackageReadLimits;
 #[cfg(feature = "digital-signatures")]
@@ -114,7 +114,9 @@ pub use rdocx_oxml::math::{
     MathRadical, MathRun, MathRunProperties, MathScript, MathScriptStyle, MathStyle,
     MathSubSuperscript, MatrixBaseJustification, OfficeMath,
 };
-pub use rdocx_oxml::properties::{CT_EastAsianLayout, CT_FitText, ST_Em, ST_TextEffect};
+pub use rdocx_oxml::properties::{
+    CT_EastAsianLayout, CT_FitText, CT_PPr, CT_RPr, ST_Em, ST_TextEffect,
+};
 pub use rdocx_oxml::ruby::{CT_Ruby, CT_RubyPr, ST_RubyAlign};
 pub use rdocx_oxml::settings::{
     CharacterSpacingControl, CompatibilityOption, CompatibilitySetting, CryptAlgorithmClass,

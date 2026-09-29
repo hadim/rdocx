@@ -23407,6 +23407,12 @@ pub enum ListNumberFormat {
 }
 
 impl ListNumberFormat {
+    /// The format an OOXML `w:numFmt` name selects, such as `decimal` or
+    /// `lowerLetter`. A name outside the standard set is `Other`.
+    pub fn from_name(name: &str) -> Self {
+        list_number_format_from_st(ST_NumberFormat::from_str(name))
+    }
+
     fn to_st(&self) -> ST_NumberFormat {
         match self {
             Self::Decimal => ST_NumberFormat::Decimal,

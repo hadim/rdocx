@@ -1,6 +1,6 @@
 import datetime as _datetime
 import os as _os
-from collections.abc import Iterator as _Iterator
+from collections.abc import Iterator as _Iterator, Sequence as _Sequence
 from typing import Literal as _Literal, NoReturn as _Never, final as _final, overload as _overload
 
 from . import shared as _shared
@@ -11,7 +11,7 @@ _Path = str | _os.PathLike[str]
 __all__ = [
     "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
     "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font",
-    "HeaderFooterVariant", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "Paragraph", "ParagraphCollection",
+    "HeaderFooterVariant", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
     "RunRange", "Section", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style", "Table", "TableCollection",
     "TocRebuildReport",
@@ -414,6 +414,29 @@ class Style:
 
 
 @_final
+class ListLevel:
+    def __new__(
+        cls,
+        *,
+        format: str = "decimal",
+        text: str | None = None,
+        start: int | None = None,
+        left_indent: int | None = None,
+        hanging_indent: int | None = None,
+    ) -> ListLevel: ...
+    @property
+    def format(self) -> str: ...
+    @property
+    def text(self) -> str | None: ...
+    @property
+    def start(self) -> int | None: ...
+    @property
+    def left_indent(self) -> int | None: ...
+    @property
+    def hanging_indent(self) -> int | None: ...
+
+
+@_final
 class CoreProperties:
     def __new__(cls, *, _private: _Never) -> CoreProperties: ...
     @property
@@ -516,6 +539,38 @@ class Document:
     def sections(self) -> tuple[Section, ...]: ...
     @property
     def styles(self) -> tuple[Style, ...]: ...
+    def add_style(
+        self,
+        name: str,
+        style_type: _Literal["paragraph", "character", "table"] = "paragraph",
+        *,
+        style_id: str | None = None,
+        based_on: str | None = None,
+        next_style: str | None = None,
+        font_name: str | None = None,
+        font_size: int | None = None,
+        bold: bool | None = None,
+        italic: bool | None = None,
+        color: _shared.RGBColor | None = None,
+        space_before: int | None = None,
+        space_after: int | None = None,
+        left_indent: int | None = None,
+        right_indent: int | None = None,
+        first_line_indent: int | None = None,
+    ) -> Style:
+        """Create a style as python-docx's `styles.add_style` does.
+
+        The ID is the name without its spaces unless `style_id` is given.
+        `based_on` and `next_style` take an ID or a name. Lengths and the font
+        size are EMU. Raises `KeyError` when a base or next style names no
+        style, and `ValueError` for a duplicate ID or name or any other
+        invalid argument.
+        """
+    def remove_style(self, style: str) -> bool: ...
+    def set_default_style(self, style: str) -> None: ...
+    def add_numbering_definition(self, levels: _Sequence[ListLevel]) -> int: ...
+    def add_numbering_instance(self, definition_id: int) -> int: ...
+    def link_style_to_numbering(self, style: str, num_id: int, level: int) -> None: ...
     @property
     def stories(self) -> tuple[Story, ...]: ...
     @property

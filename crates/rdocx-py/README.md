@@ -49,6 +49,10 @@ with open("report.pdf", "wb") as output:
   the document defines.
 - New documents with Word's usual styles, such as `Heading 2`, `Title`,
   `List Paragraph`, `Caption`, and `Table Grid`.
+- Style creation with a font, spacing, and indentation through
+  `Document.add_style`, plus style removal and default selection.
+- Numbering definitions and instances built from `ListLevel` values, and
+  paragraph styles linked to a numbering level.
 - Core document properties such as title, author, and revision, read and
   written through `Document.core_properties` under python-docx's names.
 - Rich headers, footers, related stories, and resolved hyperlinks.

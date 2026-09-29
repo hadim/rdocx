@@ -53,48 +53,76 @@ pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocati
     }
 }
 
-/// Resolve a paragraph style given by ID, or by name as python-docx accepts,
-/// to the ID the package defines.
+/// Find the style a value names among `styles` of `style_type`, or among
+/// every style when it is `None`: a style ID or, as python-docx accepts, a
+/// style name.
 ///
 /// The ID is tried first, so a value read from `Paragraph.style` always
-/// assigns the same style. A name then matches exactly before it matches
+/// finds the same style. A name then matches exactly before it matches
 /// regardless of case, which is how "Heading 1" finds Word's "heading 1".
-/// Each step looks at paragraph styles only, so a character style cannot hide
-/// a paragraph style of that name. As in python-docx, a value naming no style
-/// raises `KeyError` and one naming only a style of another type raises
-/// `ValueError`.
-fn paragraph_style_id(document: &rdocx::Document, value: &str) -> PyResult<String> {
-    let styles = document.styles();
+fn find_style<'s, 'a>(
+    styles: &'s [rdocx::Style<'a>],
+    value: &str,
+    style_type: Option<rdocx::StyleType>,
+) -> Option<&'s rdocx::Style<'a>> {
     let lowered = value.to_lowercase();
-    let resolve = |paragraph_only: bool| {
-        let candidates = || {
-            styles.iter().filter(move |style| {
-                !paragraph_only || style.style_type() == rdocx::StyleType::Paragraph
-            })
-        };
-        candidates()
-            .find(|style| style.style_id() == value)
-            .or_else(|| candidates().find(|style| style.name() == Some(value)))
-            .or_else(|| {
-                candidates().find(|style| {
-                    style
-                        .name()
-                        .is_some_and(|name| name.to_lowercase() == lowered)
-                })
-            })
+    let candidates = || {
+        styles
+            .iter()
+            .filter(move |style| style_type.is_none_or(|wanted| style.style_type() == wanted))
     };
-    if let Some(style) = resolve(true) {
+    candidates()
+        .find(|style| style.style_id() == value)
+        .or_else(|| candidates().find(|style| style.name() == Some(value)))
+        .or_else(|| {
+            candidates().find(|style| {
+                style
+                    .name()
+                    .is_some_and(|name| name.to_lowercase() == lowered)
+            })
+        })
+}
+
+fn no_style_error(value: &str) -> PyErr {
+    PyKeyError::new_err(format!("no style with ID or name '{value}'"))
+}
+
+/// Resolve a style of `style_type`, given by ID or name, to the ID the
+/// package defines.
+///
+/// Each step of [`find_style`] looks at styles of that type only, so a
+/// character style cannot hide a paragraph style of that name. As in
+/// python-docx, a value naming no style raises `KeyError` and one naming only
+/// a style of another type raises `ValueError`.
+pub(crate) fn style_id_of_type(
+    document: &rdocx::Document,
+    value: &str,
+    style_type: rdocx::StyleType,
+) -> PyResult<String> {
+    let styles = document.styles();
+    if let Some(style) = find_style(&styles, value, Some(style_type)) {
         return Ok(style.style_id().to_owned());
     }
-    match resolve(false) {
+    match find_style(&styles, value, None) {
         Some(style) => Err(PyValueError::new_err(format!(
-            "style '{value}' is a {} style, not a paragraph style",
-            style.style_type().to_str()
+            "style '{value}' is a {} style, not a {} style",
+            style.style_type().to_str(),
+            style_type.to_str()
         ))),
-        None => Err(PyKeyError::new_err(format!(
-            "no style with ID or name '{value}'"
-        ))),
+        None => Err(no_style_error(value)),
     }
+}
+
+/// The type and ID of the style of any type a value names, as [`find_style`]
+/// finds it, or `KeyError`.
+pub(crate) fn defined_style(
+    document: &rdocx::Document,
+    value: &str,
+) -> PyResult<(rdocx::StyleType, String)> {
+    let styles = document.styles();
+    find_style(&styles, value, None)
+        .map(|style| (style.style_type(), style.style_id().to_owned()))
+        .ok_or_else(|| no_style_error(value))
 }
 
 #[pyclass(name = "Paragraph")]
@@ -382,7 +410,13 @@ impl PyParagraph {
     fn set_style(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
         let location = self.validate(py)?;
         let value = value
-            .map(|value| paragraph_style_id(&self.document.borrow(py).inner, &value))
+            .map(|value| {
+                style_id_of_type(
+                    &self.document.borrow(py).inner,
+                    &value,
+                    rdocx::StyleType::Paragraph,
+                )
+            })
             .transpose()?;
         crate::formatting::apply_paragraph_update(
             py,
