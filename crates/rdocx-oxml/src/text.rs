@@ -5733,6 +5733,8 @@ impl CT_P {
                         if let Some(field) = field {
                             runs.push(field_run(field, None));
                             run_sources.push(None);
+                            projected_run_count += 1;
+                            tracked_run_count += 1;
                         } else {
                             extra_xml.push((runs.len(), raw));
                         }
@@ -12087,6 +12089,29 @@ mod tests {
         assert!(reopened.equations[0].2.has_unsupported_content());
         let second = serialized_paragraph(&reopened);
         assert!(second.contains(&equation), "{second}");
+    }
+
+    #[test]
+    fn self_closing_simple_fields_count_in_bookmark_run_projections() {
+        for field in [
+            r#"<w:fldSimple w:instr=" PAGE "/>"#,
+            r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple>"#,
+        ] {
+            let paragraph = parse_paragraph(&format!(
+                r#"{field}<w:bookmarkStart w:id="1" w:name="after"/><w:r><w:t>text</w:t></w:r><w:bookmarkEnd w:id="1"/>"#
+            ));
+
+            assert_eq!(paragraph.runs.len(), 2, "{field}");
+            let marker = &paragraph.bookmark_markers[0];
+            assert_eq!(marker.run_index(), 1, "{field}");
+            assert_eq!(marker.projected_run_index(), 1, "{field}");
+            assert_eq!(marker.tracked_run_index(), 1, "{field}");
+            assert_eq!(
+                paragraph.bookmark_markers[1].projected_run_index(),
+                2,
+                "{field}"
+            );
+        }
     }
 
     #[test]
