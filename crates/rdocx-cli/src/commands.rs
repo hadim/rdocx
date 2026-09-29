@@ -20,7 +20,7 @@ use rdocx::{
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
-use rdocx_oxml::namespace::W_NS;
+use rdocx_oxml::namespace::{MC_NS, W_NS};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R};
 use serde_json::{Value, json};
@@ -1779,10 +1779,12 @@ fn print_validation_report(file: &Path, errors: &[String], warnings: &[String]) 
 
 /// Read `xml` as one well-formed element tree and return the paragraph,
 /// character, and table style ids it names. The ids inside a tracked property
-/// change are left out, because they record the formatting before the change.
+/// change are left out, because they record the formatting before the change,
+/// and so are those inside `mc:Fallback`, which Word does not read. An empty
+/// id names no style.
 fn xml_style_references(xml: &[u8]) -> std::result::Result<Vec<(&'static str, String)>, String> {
     let mut reader = NsReader::from_reader(xml);
-    // One entry per open element: whether it is a tracked property change.
+    // One entry per open element: whether its style ids are left out.
     let mut open = Vec::new();
     let mut roots = 0usize;
     let mut references = Vec::new();
@@ -1794,6 +1796,8 @@ fn xml_style_references(xml: &[u8]) -> std::result::Result<Vec<(&'static str, St
         };
         let is_word =
             matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes());
+        let is_compatibility =
+            matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == MC_NS.as_bytes());
         match event {
             Event::Start(ref element) | Event::Empty(ref element) => {
                 if open.is_empty() {
@@ -1811,11 +1815,15 @@ fn xml_style_references(xml: &[u8]) -> std::result::Result<Vec<(&'static str, St
                 };
                 if let Some(kind) = kind.filter(|_| is_word && !open.contains(&true))
                     && let Some(style_id) = word_value(&reader, element)?
+                    && !style_id.is_empty()
                 {
                     references.push((kind, style_id));
                 }
                 if matches!(event, Event::Start(_)) {
-                    open.push(is_word && local_name.as_ref().ends_with(b"PrChange"));
+                    open.push(
+                        (is_word && local_name.as_ref().ends_with(b"PrChange"))
+                            || (is_compatibility && local_name.as_ref() == b"Fallback"),
+                    );
                 }
             }
             Event::End(_) => {

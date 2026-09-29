@@ -2549,7 +2549,8 @@ status, and `text --json` states `main` scope. `validate` checks
 that every XML part the main document relates to is well formed, and that the
 paragraph, character, and table style ids named in the main document, headers,
 footers, notes, and comments are defined. Both are errors. A style id inside a
-tracked property change is not checked. Parts are scanned before the document
+tracked property change or inside `mc:Fallback`, and an empty id, are not
+checked. Parts are scanned before the document
 opens, so a malformed styles, numbering, or settings part is named in the
 report beside the open failure it causes. `layout --json` uses
 bundled deterministic fonts and reports every direct body item. Its point-space
