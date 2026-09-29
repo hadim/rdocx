@@ -1375,9 +1375,10 @@ Repeated numbered paragraphs keep their existing numbering part reference and
 level. No numbering relationship, instance, or abstract definition is added.
 Markers are removed only from the candidate. Scalar syntax and JSON values are
 resolved against lexical loop scopes before replacement reaches typed body
-content, relationship-resolved headers and footers, raw text boxes, or chart
-parts. Replacement values pass through collision-free sentinels, so a value
-that contains template syntax is not evaluated recursively. The live typed
+content, relationship-resolved headers and footers, the notes of the footnotes
+and endnotes parts, raw text boxes, or chart parts. Replacement values pass
+through collision-free sentinels, so a value that contains template syntax is
+not evaluated recursively. The live typed
 document and package are replaced only after every discovered tag is accounted
 for, every repeated numbering reference resolves, and the candidate document
 serializes successfully. Any control, lookup, numbering, scalar-type, parse, or

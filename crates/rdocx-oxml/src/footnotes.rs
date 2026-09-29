@@ -30,7 +30,7 @@ pub enum NoteType {
 }
 
 impl NoteType {
-    fn from_str(s: &str) -> Self {
+    pub(crate) fn from_str(s: &str) -> Self {
         match s {
             "separator" => NoteType::Separator,
             "continuationSeparator" => NoteType::ContinuationSeparator,

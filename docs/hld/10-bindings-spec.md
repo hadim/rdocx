@@ -1169,7 +1169,8 @@ The native Word facade provides additive `Document::try_replace_text` beside
 the legacy infallible `replace_text` method. The fallible method stages the
 replacement and publishes it only after namespace-safe serialization succeeds.
 The command-line `replace` operation uses this boundary, reports the stable
-serialization error, and creates no partial output.
+serialization error, and creates no partial output. The WASM binding keeps its
+infallible `replacePlaceholder`, which calls `replace_text`.
 `Document::try_replace_all_expected` takes ordered `(placeholder, replacement,
 expected)` pairs and returns the count of each pair. Each pair runs over the
 whole staged document after the pairs before it, so a later pair sees what an
@@ -1190,6 +1191,22 @@ live handles unchanged. `index` names the failing pair of a batch and is
 --expect` prints. The error pickles. Zero matches without an expected count
 return zero rather than raising. A replacement advances the revision once when
 it replaced something. WASM gains no corresponding method.
+
+Literal replacement reaches the body, tables, content controls at every level,
+headers, footers, footnotes, endnotes, the text boxes of the body, headers, and
+footers, and the labels of the charts in the body. Regex replacement reaches
+the same stories except chart labels. Every normal note of the
+relationship-resolved footnotes and endnotes parts is searched, its tables and
+block controls included. The separator, continuation separator, and
+continuation notice entries are not, and neither is an untyped entry at id 0 or
+below, as the typed notes reader and the story walkers read them. A text box
+inside a note is not searched. A notes part is rewritten only when a note
+changed, and then only the changed children of that note are serialized again.
+A match inside a tracked insertion or move destination is replaced inside it.
+Deleted text is not matched, except in a text box inside a deleted run, which
+the text box pass rewrites like any other text box. The Rust facade, Python
+`try_replace_text`, `replace_all` and `replace_all_regex`, the WASM replacement
+method, and `rdocx replace --expect` share these counts.
 
 The native presentation facade provides the same staged boundary through
 `Presentation::try_replace_text`, with exact counts across slides and speaker

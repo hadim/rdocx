@@ -121,7 +121,12 @@ fragment on each occupied page.
 
 `replace --expect N` publishes only when the run-aware replacement count is
 exactly `N`. A mismatch exits unsuccessfully without creating or replacing the
-requested output.
+requested output. The count covers the text a reader sees in the body, tables,
+content controls, headers, footers, footnotes, endnotes, and tracked insertions,
+in the text boxes of the body, headers, and footers, and in the labels of the
+charts in the body. Deleted text is not counted, except in a text box inside a
+deleted run, which is replaced like any other text box. A text box inside a
+note and the separators of the notes parts are not counted.
 
 `convert` and `render` refuse an output file that already exists unless
 `--force` is given. Even with `--force` they refuse their own input file under

@@ -1,31 +1,38 @@
-//! Placeholder replacement across paragraphs, tables, and headers/footers.
+//! Placeholder replacement across paragraphs, tables, headers and footers,
+//! text boxes, and footnotes and endnotes.
 //!
 //! Handles the cross-run splitting problem: a placeholder like `{{name}}`
 //! may be split across multiple `<w:r>` elements in the OOXML source.
 //!
-//! A replacement reads the direct runs of a paragraph and the runs of its
-//! inline content controls, in document order, and searches their text left
-//! to right as one. A match must lie within one stretch of those runs, see
-//! [`replaceable_texts`]. A match that straddles a content-control boundary
-//! is not replaced, and the search goes on after it, so no part of the text
-//! it covers is replaced either.
+//! A replacement reads the runs of a paragraph that `Paragraph::text` reads,
+//! in document order: the direct runs, the runs of its inline content
+//! controls, and those of its tracked insertions and move destinations, but
+//! not those of a deletion or a move source. It searches their text left to
+//! right as one. A match must lie within one stretch of those runs, see
+//! [`replaceable_texts`]. A match that straddles a content-control or a
+//! tracked-insertion boundary is not replaced, and the search goes on after
+//! it, so no part of the text it covers is replaced either.
 
 use crate::content_control::{CT_Sdt, SdtContent};
+use crate::footnotes::NoteType;
 use crate::header_footer::CT_HdrFtr;
 use crate::namespace::W_NS;
 use crate::numbering::{local_namespace_overrides, namespace_bindings, word_prefixes_at};
 use crate::properties::is_word_element;
+use crate::revision::{CT_Revision, RevisionKind};
 use crate::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use crate::text::{
-    AcceptedRunPath, AcceptedRunPathSegment, CT_P, CT_R, RunContent, raw_with_external_bindings,
+    AcceptedRunPath, AcceptedRunPathSegment, BoundaryOwner, CT_P, CT_R, RunContent,
+    boundary_owners, optional_word_attribute, raw_with_external_bindings,
 };
 
 /// Replace all occurrences of `placeholder` with `replacement` in a paragraph.
 ///
 /// Handles placeholders split across multiple runs and reaches the runs of
-/// inline content controls. A match that straddles a content-control
-/// boundary is not replaced. Preserves the formatting of the first matched
-/// run. Returns the number of replacements made.
+/// inline content controls and tracked insertions. A match that straddles a
+/// content-control or a tracked-insertion boundary is not replaced.
+/// Preserves the formatting of the first matched run. Returns the number of
+/// replacements made.
 pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &str) -> usize {
     if placeholder.is_empty() {
         return 0;
@@ -37,9 +44,10 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
 }
 
 /// The texts a replacement in `para` matches against, one per stretch of
-/// runs. The direct runs between two inline content controls form one
-/// stretch, and so do the runs of one control between its nested controls.
-/// A match never spans two stretches.
+/// runs. The direct runs between two inline content controls or tracked
+/// insertions form one stretch, and so do the runs of one control, or of
+/// one insertion or move destination, between the controls and insertions
+/// nested in it. A match never spans two stretches.
 #[doc(hidden)]
 pub fn replaceable_texts(para: &CT_P) -> Vec<String> {
     let mut texts: Vec<String> = Vec::new();
@@ -140,33 +148,51 @@ fn replace_matches(para: &mut CT_P, next_match: &mut MatchFinder<'_>) -> usize {
     total
 }
 
-/// The runs of `para` that a replacement reads, in the order `CT_P::runs`
-/// reads them, each with the stretch it belongs to and its address.
+/// The runs of `para` that a replacement reads, in the order of the accepted
+/// view that `Paragraph::text` reads, each with the stretch it belongs to
+/// and its address.
 fn text_runs(para: &CT_P) -> Vec<(usize, AcceptedRunPath)> {
     let mut runs = Vec::new();
-    let mut stretch = 0;
+    paragraph_text_runs(para, &mut Vec::new(), &mut 0, &mut runs);
+    runs
+}
+
+fn paragraph_text_runs(
+    para: &CT_P,
+    prefix: &mut Vec<AcceptedRunPathSegment>,
+    stretch: &mut usize,
+    runs: &mut Vec<(usize, AcceptedRunPath)>,
+) {
     for index in 0..=para.runs.len() {
-        for (control, (_, _, _, sdt)) in para
-            .content_controls
-            .iter()
-            .enumerate()
-            .filter(|(_, (at, _, _, _))| *at == index)
-        {
-            let mut prefix = vec![AcceptedRunPathSegment::ContentControl(control)];
-            stretch += 1;
-            control_text_runs(sdt, &mut prefix, &mut stretch, &mut runs);
-            stretch += 1;
+        for owner in boundary_owners(para, index) {
+            match owner {
+                BoundaryOwner::ContentControl(control) => {
+                    prefix.push(AcceptedRunPathSegment::ContentControl(control));
+                    *stretch += 1;
+                    control_text_runs(&para.content_controls[control].3, prefix, stretch, runs);
+                    *stretch += 1;
+                    prefix.pop();
+                }
+                BoundaryOwner::Revision(revision) => revision_text_runs(
+                    &para.revisions[revision].2,
+                    AcceptedRunPathSegment::Revision(revision),
+                    prefix,
+                    stretch,
+                    runs,
+                ),
+            }
         }
         if index < para.runs.len() {
+            prefix.push(AcceptedRunPathSegment::Run(index));
             runs.push((
-                stretch,
+                *stretch,
                 AcceptedRunPath {
-                    segments: vec![AcceptedRunPathSegment::Run(index)],
+                    segments: prefix.clone(),
                 },
             ));
+            prefix.pop();
         }
     }
-    runs
 }
 
 fn control_text_runs(
@@ -175,9 +201,23 @@ fn control_text_runs(
     stretch: &mut usize,
     runs: &mut Vec<(usize, AcceptedRunPath)>,
 ) {
-    for (index, content) in sdt.content.iter().enumerate() {
-        match content {
-            SdtContent::Run(_) => {
+    for index in 0..=sdt.content.len() {
+        for (revision, (_, wrapper)) in sdt
+            .revisions()
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _))| *at == index)
+        {
+            revision_text_runs(
+                wrapper,
+                AcceptedRunPathSegment::Revision(revision),
+                prefix,
+                stretch,
+                runs,
+            );
+        }
+        match sdt.content.get(index) {
+            Some(SdtContent::Run(_)) => {
                 prefix.push(AcceptedRunPathSegment::Run(index));
                 runs.push((
                     *stretch,
@@ -187,7 +227,7 @@ fn control_text_runs(
                 ));
                 prefix.pop();
             }
-            SdtContent::ContentControl(nested) => {
+            Some(SdtContent::ContentControl(nested)) => {
                 prefix.push(AcceptedRunPathSegment::ContentControl(index));
                 *stretch += 1;
                 control_text_runs(nested, prefix, stretch, runs);
@@ -197,6 +237,34 @@ fn control_text_runs(
             _ => {}
         }
     }
+}
+
+/// The runs of a tracked insertion or move destination form a stretch of
+/// their own, so a replacement inside them stays inside the wrapper, with
+/// its id, author and date. A wrapper whose runs cannot be written back
+/// still ends the stretch before it. A deletion or a move source is not
+/// read, as the reader does not see it, and does not split a stretch.
+fn revision_text_runs(
+    revision: &CT_Revision,
+    segment: AcceptedRunPathSegment,
+    prefix: &mut Vec<AcceptedRunPathSegment>,
+    stretch: &mut usize,
+    runs: &mut Vec<(usize, AcceptedRunPath)>,
+) {
+    if !matches!(
+        revision.kind(),
+        RevisionKind::Insertion | RevisionKind::MoveTo
+    ) || revision.content_paragraph().is_none()
+    {
+        return;
+    }
+    prefix.push(segment);
+    *stretch += 1;
+    if let Some(inserted) = revision.editable_accepted_paragraph() {
+        paragraph_text_runs(inserted, prefix, stretch, runs);
+    }
+    *stretch += 1;
+    prefix.pop();
 }
 
 /// Apply `edit` to the run at `path`.
@@ -359,16 +427,32 @@ fn remove_emptied_runs(
         }
         match path.segments() {
             [AcceptedRunPathSegment::Run(run)] => direct[*run] = true,
-            [AcceptedRunPathSegment::ContentControl(control), rest @ ..] => {
-                if let Some((_, _, _, sdt)) = para.content_controls.get_mut(*control) {
-                    remove_control_run(sdt, rest);
-                }
-            }
-            _ => {}
+            nested => remove_paragraph_run(para, nested),
         }
     }
     if direct.contains(&true) {
         para.remove_runs(&direct);
+    }
+}
+
+fn remove_paragraph_run(para: &mut CT_P, path: &[AcceptedRunPathSegment]) {
+    match path {
+        [AcceptedRunPathSegment::Run(index)] if *index < para.runs.len() => {
+            let mut removed = vec![false; para.runs.len()];
+            removed[*index] = true;
+            para.remove_runs(&removed);
+        }
+        [AcceptedRunPathSegment::ContentControl(control), rest @ ..] => {
+            if let Some((_, _, _, sdt)) = para.content_controls.get_mut(*control) {
+                remove_control_run(sdt, rest);
+            }
+        }
+        [AcceptedRunPathSegment::Revision(revision), rest @ ..] => {
+            if let Some((_, _, revision)) = para.revisions.get_mut(*revision) {
+                remove_revision_run(revision, rest);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -380,8 +464,23 @@ fn remove_control_run(sdt: &mut CT_Sdt, path: &[AcceptedRunPathSegment]) {
                 remove_control_run(nested, rest);
             }
         }
+        [AcceptedRunPathSegment::Revision(index), rest @ ..] => {
+            if let Some((_, revision)) = sdt.revisions.get_mut(*index) {
+                remove_revision_run(revision, rest);
+            }
+        }
         _ => {}
     }
+}
+
+/// Remove a run of a tracked insertion or move destination, which keeps
+/// the wrapper and the other runs in it.
+fn remove_revision_run(revision: &mut CT_Revision, path: &[AcceptedRunPathSegment]) {
+    let removed = revision.edit_accepted_paragraph(|inserted| {
+        remove_paragraph_run(inserted, path);
+        Ok(true)
+    });
+    debug_assert!(matches!(removed, Ok(true)), "revision run path is stale");
 }
 
 /// Replace all occurrences of `placeholder` in all paragraphs of a slice.
@@ -450,11 +549,11 @@ fn edit_cell(cell: &mut CT_Tc, edit: &mut dyn FnMut(&mut CT_P) -> usize) -> usiz
     count
 }
 
-/// Hand the paragraphs of a table or a block content control kept as raw
-/// XML to `edit`, and re-serialise the element in place when the edit
-/// counts a change. Any other element, one the typed parsers refuse, or one
-/// whose namespaces the rewrite cannot keep, see [`with_source_namespaces`],
-/// keeps its bytes and counts nothing.
+/// Hand a paragraph kept as raw XML, or the paragraphs of a table or a block
+/// content control kept so, to `edit`, and re-serialise the element in place
+/// when the edit counts a change. Any other element, one the typed parsers
+/// refuse, or one whose namespaces the rewrite cannot keep, see
+/// [`with_source_namespaces`], keeps its bytes and counts nothing.
 fn edit_raw_block(
     raw: &mut Vec<u8>,
     word_prefixes: &[String],
@@ -477,7 +576,18 @@ fn edit_raw_block(
         return 0;
     };
     let mut writer = Writer::new(Vec::new());
-    let count = if is_word_element(start.name().as_ref(), b"tbl", &prefixes) {
+    let count = if is_word_element(start.name().as_ref(), b"p", &prefixes) {
+        let Ok(mut paragraph) =
+            CT_P::from_xml_with_prefixes_and_root(&mut reader, &prefixes, Some(&start))
+        else {
+            return 0;
+        };
+        let count = edit(&mut paragraph);
+        if count == 0 || paragraph.to_xml(&mut writer).is_err() {
+            return 0;
+        }
+        count
+    } else if is_word_element(start.name().as_ref(), b"tbl", &prefixes) {
         let Ok(mut table) =
             CT_Tbl::from_xml_with_prefixes_and_owner_bindings(&mut reader, &prefixes, &bindings)
         else {
@@ -857,6 +967,145 @@ fn write_text_box_paragraph<W: std::io::Write>(
     Ok(())
 }
 
+/// Apply several placeholder replacements to the notes of a footnotes or
+/// endnotes part in one pass.
+///
+/// Reaches the paragraphs of every footnote and endnote a reader writes,
+/// those of their tables and block content controls included. A separator,
+/// a continuation separator, a continuation notice and an untyped entry at
+/// id 0 or below are never edited, as [`crate::footnotes::CT_Footnotes`]
+/// reads them. A child the replacement changed is re-serialised in place and
+/// every other byte of the part is kept. A part that does not bind the `w`
+/// prefix to WordprocessingML keeps its bytes, since the rewritten children
+/// use it. Returns the modified XML and the replacement count.
+pub fn replace_many_in_notes_part(
+    xml: &[u8],
+    replacements: &[(&str, &str)],
+) -> crate::error::Result<(Vec<u8>, usize)> {
+    rewrite_notes(xml, &mut |paragraph| {
+        replacements
+            .iter()
+            .map(|(placeholder, replacement)| {
+                replace_in_paragraph(paragraph, placeholder, replacement)
+            })
+            .sum()
+    })
+}
+
+/// Apply a regex replacement to the notes of a footnotes or endnotes part,
+/// see [`replace_many_in_notes_part`].
+pub fn replace_regex_in_notes_part(
+    xml: &[u8],
+    re: &regex::Regex,
+    replacement: &str,
+) -> crate::error::Result<(Vec<u8>, usize)> {
+    rewrite_notes(xml, &mut |paragraph| {
+        replace_regex_in_paragraph(paragraph, re, replacement)
+    })
+}
+
+/// The texts a replacement in the notes of a footnotes or endnotes part
+/// matches against, see [`replaceable_texts`].
+#[doc(hidden)]
+pub fn notes_part_replaceable_texts(xml: &[u8]) -> crate::error::Result<Vec<String>> {
+    let mut texts = Vec::new();
+    rewrite_notes(xml, &mut |paragraph| {
+        texts.extend(replaceable_texts(paragraph));
+        0
+    })?;
+    Ok(texts)
+}
+
+/// Walk a footnotes or endnotes part, handing each paragraph of a note to
+/// `edit`, those of its tables and block content controls included, see
+/// [`edit_raw_block`]. A child is parsed with the namespaces the part
+/// declares around it. Every other child of a note, the start tag of the
+/// note with its id, and every entry that is not a note a reader writes are
+/// copied through verbatim. Returns the rewritten XML and the summed count.
+fn rewrite_notes(
+    xml: &[u8],
+    edit: &mut dyn FnMut(&mut CT_P) -> usize,
+) -> crate::error::Result<(Vec<u8>, usize)> {
+    use crate::error::OxmlError;
+    use crate::raw_xml::capture_element;
+    use quick_xml::events::Event;
+    use quick_xml::{Reader, Writer};
+
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::new());
+    let mut buffer = Vec::new();
+    let mut total_count = 0;
+    // The bindings the elements open around the current position declare.
+    let mut scopes: Vec<Vec<String>> = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Eof => break,
+            Event::Start(start) => {
+                let prefixes = word_prefixes_at(&start, scopes.last().map_or(&[], Vec::as_slice))?;
+                // A note is a child of the root. Its children are rewritten
+                // with the `w` prefix, so the part must bind it.
+                if scopes.len() == 1
+                    && prefixes.iter().any(|prefix| prefix == "w")
+                    && is_note_a_reader_writes(&start, &prefixes)
+                {
+                    writer.write_event(Event::Start(start))?;
+                    let mut inner_buffer = Vec::new();
+                    loop {
+                        match reader.read_event_into(&mut inner_buffer)? {
+                            Event::Start(child) => {
+                                let mut raw = capture_element(&mut reader, &child)?;
+                                total_count += edit_raw_block(&mut raw, &prefixes, edit);
+                                writer.get_mut().extend_from_slice(&raw);
+                            }
+                            // Every child element is consumed whole, so the
+                            // first end tag at this level closes the note.
+                            Event::End(end) => {
+                                writer.write_event(Event::End(end))?;
+                                break;
+                            }
+                            Event::Eof => {
+                                return Err(OxmlError::MissingElement("note end".to_owned()));
+                            }
+                            // Empty elements, whitespace, comments and
+                            // processing instructions.
+                            event => writer.write_event(event)?,
+                        }
+                        inner_buffer.clear();
+                    }
+                } else {
+                    scopes.push(prefixes);
+                    writer.write_event(Event::Start(start))?;
+                }
+            }
+            Event::End(end) => {
+                scopes.pop();
+                writer.write_event(Event::End(end))?;
+            }
+            event => writer.write_event(event)?,
+        }
+        buffer.clear();
+    }
+
+    Ok((writer.into_inner(), total_count))
+}
+
+/// Whether `start` opens a footnote or an endnote that a reader writes. A
+/// separator, a continuation separator and a continuation notice are drawn
+/// by the application, and so is an untyped entry at id 0 or below, as
+/// `CT_Footnotes::from_xml` and the story walkers read them.
+fn is_note_a_reader_writes(start: &quick_xml::events::BytesStart<'_>, prefixes: &[String]) -> bool {
+    let name = start.name();
+    (is_word_element(name.as_ref(), b"footnote", prefixes)
+        || is_word_element(name.as_ref(), b"endnote", prefixes))
+        && optional_word_attribute(start, b"type", prefixes)
+            .is_none_or(|kind| NoteType::from_str(&kind) == NoteType::Normal)
+        && optional_word_attribute(start, b"id", prefixes)
+            .and_then(|id| id.parse::<i32>().ok())
+            .is_some_and(|id| id > 0)
+}
+
 /// Replace placeholders in chart XML parts.
 ///
 /// Chart text uses DrawingML runs: `a:r` → `a:t` (not `w:r`/`w:t`).
@@ -929,8 +1178,8 @@ pub fn replace_many_in_chart_xml(
 ///
 /// The `replacement` string supports capture group references: `$1`, `$2`, etc.
 /// Uses the same cross-run char map algorithm as literal replacement, so it
-/// reaches the runs of inline content controls and leaves a match that
-/// straddles a content-control boundary as it is.
+/// reaches the runs of inline content controls and tracked insertions and
+/// leaves a match that straddles one of their boundaries as it is.
 /// Returns the number of replacements made.
 pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacement: &str) -> usize {
     // `captures_at` (rather than slicing) keeps anchors and look-around
@@ -1190,6 +1439,215 @@ mod tests {
             assert_eq!(replace_regex_in_paragraph(&mut p, &re, "N"), 1, "{pattern}");
 
             assert_eq!(p.text(), "1234 end N", "{pattern}");
+        }
+    }
+
+    const INSERTION: &str = r#"<w:ins w:id="901" w:author="Editor" w:date="2026-01-01T00:00:00Z">"#;
+
+    /// The text `Paragraph::text` reads: tracked insertions in, deletions out.
+    fn accepted_text(paragraph: &CT_P) -> String {
+        paragraph
+            .accepted_bookmark_runs()
+            .iter()
+            .map(|run| run.text())
+            .collect()
+    }
+
+    /// The runs of a tracked insertion are read, as a stretch of their own,
+    /// and replaced inside the wrapper, which keeps its id, author and date.
+    /// A match across the wrapper is no match, and deleted text is not read.
+    #[test]
+    fn a_tracked_insertion_is_a_stretch_of_its_own() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:r><w:t xml:space="preserve">Tracked: </w:t></w:r>{INSERTION}<w:r><w:t>ins NEEDLE</w:t></w:r></w:ins><w:del w:id="902" w:author="Editor" w:date="2026-01-01T00:00:00Z"><w:r><w:delText xml:space="preserve">del NEEDLE</w:delText></w:r></w:del></w:p>"#
+        );
+        let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+        assert_eq!(replaceable_texts(&p), ["Tracked: ", "ins NEEDLE"]);
+
+        for straddling in ["Tracked: ins", " ins", "del"] {
+            assert_eq!(replace_in_paragraph(&mut p, straddling, "-"), 0);
+        }
+        assert_eq!(replace_in_paragraph(&mut p, "NEEDLE", "X"), 1);
+        let re = regex::Regex::new(r"X$").unwrap();
+        assert_eq!(replace_regex_in_paragraph(&mut p, &re, "Y"), 1);
+
+        assert_eq!(accepted_text(&p), "Tracked: ins Y");
+        let xml = paragraph_xml(&p);
+        let insertion = format!("{INSERTION}<w:r><w:t>ins Y</w:t></w:r></w:ins>");
+        assert!(xml.contains(&insertion), "{xml}");
+        assert!(xml.contains(">del NEEDLE</w:delText>"), "{xml}");
+    }
+
+    /// A deletion is not read, so it does not split the text around it: the
+    /// reader sees "alpha" and the match over it is replaced, with the
+    /// deletion kept after the replacement.
+    #[test]
+    fn a_deletion_does_not_split_a_stretch() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:r><w:t>al</w:t></w:r><w:del w:id="3" w:author="Editor"><w:r><w:delText>X</w:delText></w:r></w:del><w:r><w:t>pha</w:t></w:r></w:p>"#
+        );
+        let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+
+        assert_eq!(replace_in_paragraph(&mut p, "alpha", "ALPHA"), 1);
+
+        assert_eq!(accepted_text(&p), "ALPHA");
+        let xml = paragraph_xml(&p);
+        assert!(
+            xml.contains(r#"<w:t>ALPHA</w:t></w:r><w:del w:id="3" w:author="Editor">"#),
+            "{xml}"
+        );
+    }
+
+    /// A match across the runs of one insertion removes the runs it empties
+    /// inside the wrapper, and the wrapper keeps the run that holds the
+    /// replacement.
+    #[test]
+    fn a_match_across_runs_of_an_insertion_removes_the_emptied_ones() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}">{INSERTION}<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">ins NEE</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>DL</w:t></w:r><w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t>E</w:t></w:r></w:ins></w:p>"#
+        );
+        let re = regex::Regex::new("NEEDLE").unwrap();
+        for regex in [false, true] {
+            let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+            let count = if regex {
+                replace_regex_in_paragraph(&mut p, &re, "X")
+            } else {
+                replace_in_paragraph(&mut p, "NEEDLE", "X")
+            };
+
+            assert_eq!(count, 1, "regex: {regex}");
+            let xml = paragraph_xml(&p);
+            let insertion = format!(
+                r#"<w:p>{INSERTION}<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">ins X</w:t></w:r></w:ins></w:p>"#
+            );
+            assert_eq!(xml, insertion, "regex: {regex}");
+        }
+    }
+
+    /// The destination of a move is read like an insertion, and its source
+    /// is not read, like a deletion. An insertion inside an inline control
+    /// is a stretch of its own within the control.
+    #[test]
+    fn a_move_destination_and_an_insertion_in_a_control_are_read() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:moveFrom w:id="4" w:author="Editor"><w:r><w:t>from NEEDLE</w:t></w:r></w:moveFrom><w:moveTo w:id="5" w:author="Editor"><w:r><w:t>to NEEDLE</w:t></w:r></w:moveTo><w:sdt><w:sdtContent><w:r><w:t xml:space="preserve">control </w:t></w:r>{INSERTION}<w:r><w:t>NEEDLE</w:t></w:r></w:ins></w:sdtContent></w:sdt></w:p>"#
+        );
+        let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+        assert_eq!(replaceable_texts(&p), ["to NEEDLE", "control ", "NEEDLE"]);
+        assert_eq!(replace_in_paragraph(&mut p, "control NEEDLE", "-"), 0);
+
+        assert_eq!(replace_in_paragraph(&mut p, "NEEDLE", "X"), 2);
+
+        assert_eq!(accepted_text(&p), "to Xcontrol X");
+        let xml = paragraph_xml(&p);
+        assert!(xml.contains(">from NEEDLE<"), "{xml}");
+        let insertion = format!("{INSERTION}<w:r><w:t>X</w:t></w:r></w:ins></w:sdtContent>");
+        assert!(xml.contains(&insertion), "{xml}");
+    }
+
+    /// A notes part with the separators Word writes, a continuation notice,
+    /// a note that holds the token in a paragraph, a table and a block
+    /// control, and a note without it.
+    fn notes_part(kind: &str) -> (String, [String; 4]) {
+        let note = |attributes: &str, content: &str| {
+            format!(r#"<w:{kind} {attributes}>{content}</w:{kind}>"#)
+        };
+        let kept = [
+            note(
+                r#"w:type="separator" w:id="-1""#,
+                "<w:p><w:r><w:separator/></w:r></w:p>",
+            ),
+            note(
+                r#"w:type="continuationSeparator" w:id="0""#,
+                "<w:p><w:r><w:continuationSeparator/></w:r><w:r><w:t>NEEDLE</w:t></w:r></w:p>",
+            ),
+            note(
+                r#"w:type="continuationNotice" w:id="7""#,
+                "<w:p><w:r><w:t>NEEDLE</w:t></w:r></w:p>",
+            ),
+            note(
+                r#"w:id="2""#,
+                &format!(
+                    r#"<w:p w14:paraId="0000ABCD" w:rsidR="00AA"><w:r><w:{kind}Ref/></w:r><w:r><w:t xml:space="preserve"> Plain.</w:t></w:r></w:p>"#
+                ),
+            ),
+        ];
+        let changed = note(
+            r#"w:id="1""#,
+            &format!(
+                r#"<w:p w14:paraId="0000ABCE" w:rsidR="00AA"><w:r w:rsidR="00BB"><w:rPr><w:rStyle w:val="Ref"/></w:rPr><w:{kind}Ref/></w:r><w:r w:rsidR="00BB"><w:t xml:space="preserve"> Note NEEDLE.</w:t></w:r></w:p><w:tbl><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>Cell NEEDLE</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtContent><w:p><w:r><w:t>Control NEEDLE</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+            ),
+        );
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:{kind}s xmlns:w="{W_NS}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">{}{changed}{}</w:{kind}s>"#,
+            kept[..3].concat(),
+            kept[3]
+        );
+        (xml, kept)
+    }
+
+    /// Every note a reader writes is reached, its tables and controls
+    /// included, and nothing else changes: the separators and the
+    /// continuation notice keep their bytes, and so does the note without
+    /// a match. The changed paragraph keeps its identity attributes and its
+    /// reference mark.
+    #[test]
+    fn replace_in_notes_part_reaches_every_note_a_reader_writes() {
+        let re = regex::Regex::new("NEEDLE").unwrap();
+        for kind in ["footnote", "endnote"] {
+            let (xml, kept) = notes_part(kind);
+            assert_eq!(
+                notes_part_replaceable_texts(xml.as_bytes()).unwrap(),
+                [" Note NEEDLE.", "Cell NEEDLE", "Control NEEDLE", " Plain."],
+                "{kind}"
+            );
+            for (rewritten, count) in [
+                replace_many_in_notes_part(xml.as_bytes(), &[("NEEDLE", "X")]).unwrap(),
+                replace_regex_in_notes_part(xml.as_bytes(), &re, "X").unwrap(),
+            ] {
+                assert_eq!(count, 3, "{kind}");
+                let rewritten = String::from_utf8(rewritten).unwrap();
+                for kept in &kept {
+                    assert!(rewritten.contains(kept.as_str()), "{kept}\n{rewritten}");
+                }
+                let (head, _) = xml.split_once(r#"<w:p w14:paraId="0000ABCE""#).unwrap();
+                assert!(rewritten.starts_with(head), "{rewritten}");
+                // The typed writer declares the prefix of a start-tag
+                // attribute again on its element, as it does in the body.
+                assert_eq!(rewritten.matches(r#"<w:r w:rsidR="00BB""#).count(), 2);
+                for expected in [
+                    r#"<w:p w14:paraId="0000ABCE" w:rsidR="00AA""#.to_owned(),
+                    format!(r#"<w:rPr><w:rStyle w:val="Ref"/></w:rPr><w:{kind}Ref/></w:r>"#),
+                    "> Note X.</w:t>".to_owned(),
+                    ">Cell X</w:t>".to_owned(),
+                    ">Control X</w:t>".to_owned(),
+                ] {
+                    assert!(rewritten.contains(&expected), "{expected}\n{rewritten}");
+                }
+                assert_eq!(rewritten.matches("NEEDLE").count(), 2, "{rewritten}");
+            }
+        }
+    }
+
+    /// The rewritten children of a note use the `w` prefix, so a part that
+    /// does not bind it to WordprocessingML keeps its bytes and counts
+    /// nothing.
+    #[test]
+    fn replace_in_notes_part_needs_the_w_prefix() {
+        for root in [
+            format!(r#"<q:footnotes xmlns:q="{W_NS}">"#),
+            format!(r#"<q:footnotes xmlns:q="{W_NS}" xmlns:w="urn:producer">"#),
+        ] {
+            let xml = format!(
+                r#"{root}<q:footnote q:id="1"><q:p><q:r><q:t>NEEDLE</q:t></q:r></q:p></q:footnote></q:footnotes>"#
+            );
+
+            let (rewritten, count) =
+                replace_many_in_notes_part(xml.as_bytes(), &[("NEEDLE", "X")]).unwrap();
+
+            assert_eq!(count, 0);
+            assert_eq!(rewritten, xml.as_bytes());
         }
     }
 

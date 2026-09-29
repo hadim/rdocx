@@ -793,12 +793,12 @@ order. Focused tests cover dotted and lexical lookup, loop shadowing and scope
 restoration, every JSON truthiness case, malformed and crossed controls, and
 atomic rejection. The round-trip test clones section-ending paragraphs and
 table rows, then proves their section properties and unmodelled XML remain in
-schema order after saving and reopening. Headers, footers, text boxes, and
-chart labels retain the scalar-only coverage shared with literal placeholder
-replacement. The repeating-table regression gate expands three adjacent
-template rows over ten records and compares all thirty rows in order. It also
-checks banding, grid spans, vertical merge restarts and continuations, and
-atomic rejection of an invalid repeated numbering reference. The continuous
+schema order after saving and reopening. Headers, footers, footnotes, endnotes,
+text boxes, and chart labels retain the scalar-only coverage shared with literal
+placeholder replacement. The repeating-table regression gate expands three
+adjacent template rows over ten records and compares all thirty rows in order.
+It also checks banding, grid spans, vertical merge restarts and continuations,
+and atomic rejection of an invalid repeated numbering reference. The continuous
 numbering regression proves that mixed list and ordinary paragraphs retain one
 `numId` and level without changing the numbering part. The paired round-trip
 test compares row, cell, table, numbering, and raw XML state after reopen and

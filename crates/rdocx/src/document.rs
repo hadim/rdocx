@@ -21730,10 +21730,18 @@ impl Document {
     /// Replace all occurrences of `placeholder` with `replacement` throughout the document.
     ///
     /// Searches body paragraphs, tables (including nested), headers, footers,
-    /// text boxes and chart labels, and the content controls at every level of
-    /// them, inline controls included. Handles placeholders split across
-    /// multiple runs. A match that straddles a content-control boundary is not
-    /// replaced. Returns the total number of replacements made.
+    /// footnotes, endnotes, the text boxes of the body, headers and footers,
+    /// and the chart labels of the body, and the content controls at every
+    /// level of them, inline controls included. It reads the text
+    /// [`crate::Paragraph::text`] reads: the text of a tracked insertion or
+    /// move destination, replaced inside that revision, and not deleted or
+    /// moved-away text. A text box inside a deleted run is the exception, as
+    /// the text box pass rewrites it like any other text box. A text box
+    /// inside a note, and the separator and continuation entries of the notes
+    /// parts, are never searched. Handles placeholders split across
+    /// multiple runs. A match that straddles a content-control or a
+    /// tracked-insertion boundary is not replaced. Returns the total number
+    /// of replacements made.
     ///
     /// A `replacement` that contains `placeholder` is substituted once, not
     /// repeatedly.
@@ -21847,6 +21855,12 @@ impl Document {
         for (part_name, _) in self.raw_text_bearing_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
                 sources.extend(rdocx_oxml::placeholder::xml_part_replaceable_texts(xml)?);
+            }
+        }
+
+        for part_name in self.note_part_names() {
+            if let Some(xml) = self.package.get_part(&part_name) {
+                sources.extend(rdocx_oxml::placeholder::notes_part_replaceable_texts(xml)?);
             }
         }
 
@@ -21995,10 +22009,11 @@ impl Document {
     /// Replace all regex matches with `replacement` throughout the document.
     ///
     /// The `replacement` string supports capture groups: `$1`, `$2`, etc.
-    /// Searches body paragraphs, tables (including nested), headers, footers
-    /// and text boxes, and the content controls at every level of them, as
-    /// [`Self::replace_text`] does. Returns the total number of replacements
-    /// made, or an error if the regex is invalid.
+    /// Searches the stories [`Self::replace_text`] searches, except chart
+    /// labels: body paragraphs, tables (including nested), headers, footers,
+    /// footnotes, endnotes and text boxes, the content controls at every level
+    /// of them and the text of tracked insertions. Returns the total number of replacements made, or an error if the
+    /// regex is invalid.
     pub fn replace_regex(&mut self, pattern: &str, replacement: &str) -> Result<usize> {
         let re =
             regex::Regex::new(pattern).map_err(|e| Error::Other(format!("invalid regex: {e}")))?;
@@ -22059,7 +22074,8 @@ impl Document {
         Ok(count)
     }
 
-    /// Apply a regex replacement to the text-box content of the raw XML parts.
+    /// Apply a regex replacement to the text-box content of the raw XML parts,
+    /// then to the notes of the footnotes and endnotes parts.
     fn replace_regex_in_xml_parts(&mut self, re: &regex::Regex, replacement: &str) -> usize {
         let mut count = 0;
 
@@ -22086,6 +22102,9 @@ impl Document {
         }
 
         count
+            + self.rewrite_note_parts(|xml| {
+                rdocx_oxml::placeholder::replace_regex_in_notes_part(xml, re, replacement)
+            })
     }
 
     /// The main document part plus every header and footer part: everywhere
@@ -22108,6 +22127,55 @@ impl Document {
             }
         }
         names
+    }
+
+    /// The footnotes and endnotes parts of the main document, each once.
+    fn note_part_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for relationship in self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .map(|relationships| relationships.items.as_slice())
+            .unwrap_or_default()
+        {
+            if matches!(
+                relationship.rel_type.as_str(),
+                rel_types::FOOTNOTES | rel_types::ENDNOTES
+            ) && relationship_is_internal(relationship)
+            {
+                let name =
+                    OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
+    }
+
+    /// Apply `rewrite` to every footnotes and endnotes part and keep each
+    /// part it changes. The typed footnotes are read again from the new
+    /// part, since the next flush writes only what they add.
+    fn rewrite_note_parts(
+        &mut self,
+        mut rewrite: impl FnMut(&[u8]) -> rdocx_oxml::error::Result<(Vec<u8>, usize)>,
+    ) -> usize {
+        let mut count = 0;
+        for part_name in self.note_part_names() {
+            let Some(Ok((xml, n))) = self.package.get_part(&part_name).map(&mut rewrite) else {
+                continue;
+            };
+            if n == 0 {
+                continue;
+            }
+            if self.footnotes_part_name.as_deref() == Some(part_name.as_str()) {
+                self.footnotes =
+                    rdocx_oxml::footnotes::CT_Footnotes::from_xml(&xml).unwrap_or_default();
+            }
+            self.package.set_part(&part_name, xml);
+            count += n;
+        }
+        count
     }
 
     fn chart_part_names(&self) -> Vec<String> {
@@ -22170,7 +22238,9 @@ impl Document {
         })
     }
 
-    /// Run raw XML replacement on all XML parts (for text boxes, shapes, charts, etc.).
+    /// Run raw XML replacement on the text boxes of the body, header and footer
+    /// parts, on the chart parts, and on the notes of the footnotes and
+    /// endnotes parts.
     ///
     /// This is called after the typed-model replacement and flush_to_package.
     fn replace_in_xml_parts(&mut self, pairs: &[(&str, &str)]) -> usize {
@@ -22213,6 +22283,9 @@ impl Document {
         }
 
         count
+            + self.rewrite_note_parts(|xml| {
+                rdocx_oxml::placeholder::replace_many_in_notes_part(xml, pairs)
+            })
     }
 
     // ---- Layout and PDF conversion ----

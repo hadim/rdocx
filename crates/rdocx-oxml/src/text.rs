@@ -3719,6 +3719,64 @@ impl AcceptedRunPath {
     }
 }
 
+/// A content control or a revision wrapper at a run boundary of a paragraph.
+#[derive(Clone, Copy)]
+pub(crate) enum BoundaryOwner {
+    /// An index into [`CT_P::content_controls`].
+    ContentControl(usize),
+    /// An index into [`CT_P::revisions`].
+    Revision(usize),
+}
+
+/// The content controls and revision wrappers at run `boundary` of
+/// `paragraph`, in document order.
+pub(crate) fn boundary_owners(paragraph: &CT_P, boundary: usize) -> Vec<BoundaryOwner> {
+    let mut owners = paragraph
+        .content_controls
+        .iter()
+        .enumerate()
+        .filter(|(_, (at, _, _, _))| *at == boundary)
+        .map(|(index, (_, raw_before, _, _))| {
+            (
+                AcceptedOwnerOrder::Raw(*raw_before),
+                BoundaryOwner::ContentControl(index),
+            )
+        })
+        .chain(
+            paragraph
+                .revisions
+                .iter()
+                .enumerate()
+                .filter(|(_, (at, _, _))| *at == boundary)
+                .map(|(index, (_, slot, _))| {
+                    let order = if let Some(hyperlink_index) = hyperlink_revision_index(*slot) {
+                        if let Some(raw_before) = paragraph
+                            .hyperlinks
+                            .get(hyperlink_index)
+                            .and_then(|hyperlink| hyperlink.preserved_raw_before)
+                        {
+                            AcceptedOwnerOrder::Raw(raw_before)
+                        } else if paragraph
+                            .hyperlinks
+                            .get(hyperlink_index)
+                            .is_some_and(|hyperlink| boundary == hyperlink.run_end)
+                        {
+                            AcceptedOwnerOrder::BeforeRaw
+                        } else {
+                            AcceptedOwnerOrder::AfterRaw
+                        }
+                    } else {
+                        AcceptedOwnerOrder::Raw(*slot)
+                    };
+                    (order, BoundaryOwner::Revision(index))
+                }),
+        )
+        .collect::<Vec<_>>();
+    // A control goes before a revision wrapper of the same raw slot.
+    owners.sort_by_key(|(order, owner)| (*order, matches!(owner, BoundaryOwner::Revision(_))));
+    owners.into_iter().map(|(_, owner)| owner).collect()
+}
+
 fn accepted_paragraph_run_paths(paragraph: &CT_P) -> Vec<AcceptedRunPath> {
     let mut output = Vec::new();
     let mut prefix = Vec::new();
@@ -3732,56 +3790,20 @@ pub(crate) fn append_accepted_paragraph_run_paths(
     output: &mut Vec<AcceptedRunPath>,
 ) {
     for boundary in 0..=paragraph.runs.len() {
-        let mut owners = paragraph
-            .content_controls
-            .iter()
-            .enumerate()
-            .filter(|(_, (at, _, _, _))| *at == boundary)
-            .map(|(index, (_, raw_before, _, _))| {
-                (AcceptedOwnerOrder::Raw(*raw_before), 0u8, index)
-            })
-            .chain(
-                paragraph
-                    .revisions
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (at, _, _))| *at == boundary)
-                    .map(|(index, (_, slot, _))| {
-                        let order = if let Some(hyperlink_index) = hyperlink_revision_index(*slot) {
-                            if let Some(raw_before) = paragraph
-                                .hyperlinks
-                                .get(hyperlink_index)
-                                .and_then(|hyperlink| hyperlink.preserved_raw_before)
-                            {
-                                AcceptedOwnerOrder::Raw(raw_before)
-                            } else if paragraph
-                                .hyperlinks
-                                .get(hyperlink_index)
-                                .is_some_and(|hyperlink| boundary == hyperlink.run_end)
-                            {
-                                AcceptedOwnerOrder::BeforeRaw
-                            } else {
-                                AcceptedOwnerOrder::AfterRaw
-                            }
-                        } else {
-                            AcceptedOwnerOrder::Raw(*slot)
-                        };
-                        (order, 1u8, index)
-                    }),
-            )
-            .collect::<Vec<_>>();
-        owners.sort_by_key(|(order, kind, _)| (*order, *kind));
-        for (_, kind, index) in owners {
-            if kind == 0 {
-                prefix.push(AcceptedRunPathSegment::ContentControl(index));
-                paragraph.content_controls[index]
-                    .3
-                    .append_accepted_run_paths(prefix, output);
-            } else {
-                prefix.push(AcceptedRunPathSegment::Revision(index));
-                paragraph.revisions[index]
-                    .2
-                    .append_accepted_run_paths(prefix, output);
+        for owner in boundary_owners(paragraph, boundary) {
+            match owner {
+                BoundaryOwner::ContentControl(index) => {
+                    prefix.push(AcceptedRunPathSegment::ContentControl(index));
+                    paragraph.content_controls[index]
+                        .3
+                        .append_accepted_run_paths(prefix, output);
+                }
+                BoundaryOwner::Revision(index) => {
+                    prefix.push(AcceptedRunPathSegment::Revision(index));
+                    paragraph.revisions[index]
+                        .2
+                        .append_accepted_run_paths(prefix, output);
+                }
             }
             prefix.pop();
         }
@@ -3798,53 +3820,14 @@ pub(crate) fn append_accepted_paragraph_run_paths(
 fn accepted_paragraph_runs(paragraph: &CT_P) -> Vec<&CT_R> {
     let mut output = Vec::new();
     for boundary in 0..=paragraph.runs.len() {
-        let mut owners = paragraph
-            .content_controls
-            .iter()
-            .filter(|(at, _, _, _)| *at == boundary)
-            .map(|(_, raw_before, _, control)| {
-                (
-                    AcceptedOwnerOrder::Raw(*raw_before),
-                    0u8,
-                    Some(control),
-                    None,
-                )
-            })
-            .chain(
-                paragraph
-                    .revisions
-                    .iter()
-                    .filter(|(at, _, _)| *at == boundary)
-                    .map(|(_, slot, revision)| {
-                        let order = if let Some(index) = hyperlink_revision_index(*slot) {
-                            if let Some(raw_before) = paragraph
-                                .hyperlinks
-                                .get(index)
-                                .and_then(|hyperlink| hyperlink.preserved_raw_before)
-                            {
-                                AcceptedOwnerOrder::Raw(raw_before)
-                            } else if paragraph
-                                .hyperlinks
-                                .get(index)
-                                .is_some_and(|hyperlink| boundary == hyperlink.run_end)
-                            {
-                                AcceptedOwnerOrder::BeforeRaw
-                            } else {
-                                AcceptedOwnerOrder::AfterRaw
-                            }
-                        } else {
-                            AcceptedOwnerOrder::Raw(*slot)
-                        };
-                        (order, 1u8, None, Some(revision))
-                    }),
-            )
-            .collect::<Vec<_>>();
-        owners.sort_by_key(|(order, kind, _, _)| (*order, *kind));
-        for (_, _, control, revision) in owners {
-            if let Some(control) = control {
-                append_accepted_control_runs(control, &mut output);
-            } else if let Some(revision) = revision {
-                append_accepted_revision_runs(revision, &mut output);
+        for owner in boundary_owners(paragraph, boundary) {
+            match owner {
+                BoundaryOwner::ContentControl(index) => {
+                    append_accepted_control_runs(&paragraph.content_controls[index].3, &mut output);
+                }
+                BoundaryOwner::Revision(index) => {
+                    append_accepted_revision_runs(&paragraph.revisions[index].2, &mut output);
+                }
             }
         }
         if let Some(run) = paragraph.runs.get(boundary) {
@@ -3917,53 +3900,14 @@ fn append_accepted_cell_runs<'a>(cell: &'a CT_Tc, output: &mut Vec<&'a CT_R>) {
 fn tracked_paragraph_runs(paragraph: &CT_P) -> Vec<&CT_R> {
     let mut output = Vec::new();
     for boundary in 0..=paragraph.runs.len() {
-        let mut owners = paragraph
-            .content_controls
-            .iter()
-            .filter(|(at, _, _, _)| *at == boundary)
-            .map(|(_, raw_before, _, control)| {
-                (
-                    AcceptedOwnerOrder::Raw(*raw_before),
-                    0u8,
-                    Some(control),
-                    None,
-                )
-            })
-            .chain(
-                paragraph
-                    .revisions
-                    .iter()
-                    .filter(|(at, _, _)| *at == boundary)
-                    .map(|(_, slot, revision)| {
-                        let order = if let Some(index) = hyperlink_revision_index(*slot) {
-                            if let Some(raw_before) = paragraph
-                                .hyperlinks
-                                .get(index)
-                                .and_then(|hyperlink| hyperlink.preserved_raw_before)
-                            {
-                                AcceptedOwnerOrder::Raw(raw_before)
-                            } else if paragraph
-                                .hyperlinks
-                                .get(index)
-                                .is_some_and(|hyperlink| boundary == hyperlink.run_end)
-                            {
-                                AcceptedOwnerOrder::BeforeRaw
-                            } else {
-                                AcceptedOwnerOrder::AfterRaw
-                            }
-                        } else {
-                            AcceptedOwnerOrder::Raw(*slot)
-                        };
-                        (order, 1u8, None, Some(revision))
-                    }),
-            )
-            .collect::<Vec<_>>();
-        owners.sort_by_key(|(order, kind, _, _)| (*order, *kind));
-        for (_, _, control, revision) in owners {
-            if let Some(control) = control {
-                append_tracked_control_runs(control, &mut output);
-            } else if let Some(revision) = revision {
-                append_tracked_revision_runs(revision, &mut output);
+        for owner in boundary_owners(paragraph, boundary) {
+            match owner {
+                BoundaryOwner::ContentControl(index) => {
+                    append_tracked_control_runs(&paragraph.content_controls[index].3, &mut output);
+                }
+                BoundaryOwner::Revision(index) => {
+                    append_tracked_revision_runs(&paragraph.revisions[index].2, &mut output);
+                }
             }
         }
         if let Some(run) = paragraph.runs.get(boundary) {
@@ -9301,7 +9245,7 @@ fn required_word_i32_attribute(
     )))
 }
 
-fn optional_word_attribute(
+pub(crate) fn optional_word_attribute(
     element: &BytesStart<'_>,
     local: &[u8],
     word_prefixes: &[String],
