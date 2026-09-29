@@ -12900,6 +12900,89 @@ fn ordinary_save_preserves_opened_template_and_macro_classes() {
 }
 
 #[test]
+fn save_writes_the_package_class_that_the_path_extension_names() {
+    let directory =
+        std::env::temp_dir().join(format!("rpptx-extension-class-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let main_content_type = |path: &Path| {
+        OpcPackage::open(path)
+            .unwrap()
+            .content_types
+            .content_type_for(PRESENTATION_PART)
+            .unwrap()
+            .to_owned()
+    };
+
+    let template = Presentation::from_bytes(&package_bytes(f223_fixture_package(
+        PresentationPackageClass::Template,
+    )))
+    .unwrap();
+    let template_path = directory.join("t.potx");
+    template.save(&template_path).unwrap();
+    assert_eq!(
+        main_content_type(&template_path),
+        content_types::PRESENTATION_TEMPLATE
+    );
+    let presentation_path = directory.join("b.pptx");
+    Presentation::open(&template_path)
+        .unwrap()
+        .save(&presentation_path)
+        .unwrap();
+    assert_eq!(
+        main_content_type(&presentation_path),
+        content_types::PRESENTATION
+    );
+
+    for (extension, class) in [
+        ("PPTX", PresentationPackageClass::Presentation),
+        ("pptm", PresentationPackageClass::MacroEnabledPresentation),
+        ("potm", PresentationPackageClass::MacroEnabledTemplate),
+        ("ppsx", PresentationPackageClass::Slideshow),
+        ("ppsm", PresentationPackageClass::MacroEnabledSlideshow),
+    ] {
+        let path = directory.join(format!("converted.{extension}"));
+        template.save(&path).unwrap();
+        assert_eq!(
+            main_content_type(&path),
+            f223_content_type(class),
+            "{extension}"
+        );
+        let bytes = template.to_bytes_for_path(&path).unwrap();
+        assert_eq!(
+            Presentation::from_bytes(&bytes)
+                .unwrap()
+                .package_class()
+                .unwrap(),
+            class
+        );
+    }
+    assert_eq!(
+        template.package_class().unwrap(),
+        PresentationPackageClass::Template
+    );
+
+    let macro_enabled = Presentation::from_bytes(&package_bytes(f223_fixture_package(
+        PresentationPackageClass::MacroEnabledPresentation,
+    )))
+    .unwrap();
+    for extension in ["pptx", "potx", "ppsx"] {
+        let path = directory.join(format!("macro.{extension}"));
+        assert!(
+            matches!(
+                macro_enabled.save(&path),
+                Err(Error::InvalidPresentationMutation {
+                    operation: "save",
+                    ..
+                })
+            ),
+            "{extension}"
+        );
+        assert!(!path.exists(), "{extension}");
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn package_class_conversion_preserves_and_invalidates_signature_evidence() {
     let presentation =
         Presentation::from_bytes(&package_bytes(embedded_fixture_package(true))).unwrap();

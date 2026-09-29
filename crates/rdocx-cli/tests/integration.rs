@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
-use rdocx::Document;
+use rdocx::{Document, WordPackageClass};
 use serde_json::json;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -305,6 +305,34 @@ fn replace_writes_a_reopenable_document_and_reports_the_exact_count() {
     assert_eq!(
         Document::open(input).unwrap().paragraph(0).unwrap().text(),
         "Hello {{name}}, {{name}} again"
+    );
+}
+
+#[test]
+fn replace_output_extension_selects_the_package_class() {
+    let temp = TempWorkspace::new("replace-class");
+    let input = temp.path.join("template.dotx");
+    let replaced = temp.path.join("report.docx");
+    write_document(&input, &["Hello {{name}}"]);
+    assert_eq!(
+        Document::open(&input).unwrap().package_class().unwrap(),
+        WordPackageClass::Template
+    );
+
+    let output = cli(&[
+        "replace",
+        path_text(&input),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        path_text(&replaced),
+    ]);
+    assert_success(&output, "replace");
+    assert_eq!(
+        Document::open(&replaced).unwrap().package_class().unwrap(),
+        WordPackageClass::Document
     );
 }
 

@@ -232,6 +232,24 @@ impl WordPackageClass {
             _ => None,
         }
     }
+
+    /// The class that a `.docx`, `.docm`, `.dotx`, or `.dotm` path names.
+    fn from_path(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "docx" => Some(Self::Document),
+            "docm" => Some(Self::MacroEnabledDocument),
+            "dotx" => Some(Self::Template),
+            "dotm" => Some(Self::MacroEnabledTemplate),
+            _ => None,
+        }
+    }
+
+    fn is_macro_enabled(self) -> bool {
+        matches!(
+            self,
+            Self::MacroEnabledDocument | Self::MacroEnabledTemplate
+        )
+    }
 }
 
 /// One direct child of a document body, in source order.
@@ -11988,7 +12006,18 @@ impl Document {
     }
 
     /// Save the document to a file path.
+    ///
+    /// A `.docx`, `.docm`, `.dotx`, or `.dotm` extension selects the main
+    /// part content type, so a template saved as `.docx` declares a document.
+    /// Any other extension keeps the opened class. A macro-enabled package
+    /// cannot be saved under a macro-free extension, because its executable
+    /// parts would remain in a file that claims to carry none. Use
+    /// [`Document::save_as_package_class`] for that conversion.
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        let path = path.as_ref();
+        if let Some(class) = self.package_class_for_path(path)? {
+            return self.save_as_package_class(path, class);
+        }
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
@@ -12010,6 +12039,38 @@ impl Document {
         let mut buf = std::io::Cursor::new(Vec::new());
         candidate.package.write_to(&mut buf)?;
         Ok(buf.into_inner())
+    }
+
+    /// Serialize the bytes that [`Document::save`] writes to `path`.
+    pub fn to_bytes_for_path<P: AsRef<Path>>(&mut self, path: P) -> Result<Vec<u8>> {
+        match self.package_class_for_path(path.as_ref())? {
+            Some(class) => self.to_bytes_as(class),
+            None => self.to_bytes(),
+        }
+    }
+
+    /// The class a save to `path` converts to, or `None` to keep the opened class.
+    fn package_class_for_path(&self, path: &Path) -> Result<Option<WordPackageClass>> {
+        let Some(target) = WordPackageClass::from_path(path) else {
+            return Ok(None);
+        };
+        // Read the override itself: a new compact document has no main part
+        // bytes until staging, so `package_class` cannot validate it yet.
+        let current = self
+            .package
+            .content_types
+            .override_for(&self.doc_part_name)
+            .and_then(WordPackageClass::from_content_type);
+        if current == Some(target) {
+            return Ok(None);
+        }
+        if current.is_some_and(WordPackageClass::is_macro_enabled) && !target.is_macro_enabled() {
+            return Err(Error::Other(format!(
+                "cannot save a macro-enabled Word package as {}: the extension names a macro-free class, save it as .docm or .dotm",
+                path.display()
+            )));
+        }
+        Ok(Some(target))
     }
 
     /// Save a password-protected document using the fixed Agile write profile.

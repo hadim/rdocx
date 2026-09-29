@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use rpptx::{Angle, CT_TextCharacterProperties, Comment, CommentAuthor, Emu, Presentation};
+use rpptx::{
+    Angle, CT_TextCharacterProperties, Comment, CommentAuthor, Emu, Presentation,
+    PresentationPackageClass,
+};
 use serde_json::json;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -870,6 +873,44 @@ fn replacement_preserves_formatting_and_opaque_parts() {
     assert_eq!(
         package.get_part("/custom/opaque.bin"),
         Some(b"opaque bytes".as_slice())
+    );
+}
+
+#[test]
+fn replace_output_extension_selects_the_package_class() {
+    let temp = TempWorkspace::new("replace-class");
+    let source = temp.path.join("template.potx");
+    write_deck(&source, &["Hello {{name}}"]);
+    assert_eq!(
+        Presentation::open(&source)
+            .unwrap()
+            .package_class()
+            .unwrap(),
+        PresentationPackageClass::Template
+    );
+
+    let output = temp.path.join("deck.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        Presentation::open(&output)
+            .unwrap()
+            .package_class()
+            .unwrap(),
+        PresentationPackageClass::Presentation
     );
 }
 

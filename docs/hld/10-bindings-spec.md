@@ -467,12 +467,20 @@ content resolves to an empty slice, while an invalid body index resolves to
 Native Rust also exposes `WordPackageClass` for DOCX, DOCM, DOTX, and DOTM.
 `Document::package_class` reads the exact main-part override.
 `to_bytes_as` and `save_as_package_class` select an output class on a staged
-copy without removing executable or opaque parts. `from_flat_opc_bytes`, its
+copy without removing executable or opaque parts. `Document::save` and
+`to_bytes_for_path` write the class that a `.docx`, `.docm`, `.dotx`, or
+`.dotm` extension names, compared without regard to case, so a template saved
+as `.docx` declares a document. `to_bytes`, and a save to any other extension,
+retain the opened class. A macro-free extension for a macro-enabled package
+fails before anything is written, because the executable parts would remain in
+a file that claims to carry none. `from_flat_opc_bytes`, its
 limits overload, `open_flat_opc`, `to_flat_opc_bytes`, and `save_flat_opc`
 provide bounded strict Flat OPC interchange through the same `Document` and
-`OpcPackage` owners. These are additive pre-1.0 native APIs. Python, WASM, and
-CLI bindings preserve opened class identity through their existing saves but
-gain no selector or Flat OPC entry point.
+`OpcPackage` owners. These are additive pre-1.0 native APIs. The Python
+`Document.save` and `Presentation.save` methods and the package outputs of
+both CLIs follow the same extension rule, because they go through `save` or
+`to_bytes_for_path`. WASM saves take no path and retain the opened class. No
+binding gains a class selector or a Flat OPC entry point.
 
 Native Rust also exposes the additive pre-1.0 `WordCreationProfile` enum and
 `Document::new_with_profile`. `Minimal(WordPackageClass)` preserves the compact

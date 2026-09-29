@@ -519,6 +519,28 @@ impl PresentationPackageClass {
             Self::MacroEnabledSlideshow => content_types::SLIDESHOW_MACRO_ENABLED,
         }
     }
+
+    /// The class that a `.pptx`, `.pptm`, `.potx`, `.potm`, `.ppsx`, or `.ppsm` path names.
+    fn from_path(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "pptx" => Some(Self::Presentation),
+            "pptm" => Some(Self::MacroEnabledPresentation),
+            "potx" => Some(Self::Template),
+            "potm" => Some(Self::MacroEnabledTemplate),
+            "ppsx" => Some(Self::Slideshow),
+            "ppsm" => Some(Self::MacroEnabledSlideshow),
+            _ => None,
+        }
+    }
+
+    fn is_macro_enabled(self) -> bool {
+        matches!(
+            self,
+            Self::MacroEnabledPresentation
+                | Self::MacroEnabledTemplate
+                | Self::MacroEnabledSlideshow
+        )
+    }
 }
 
 /// A package or presentation invariant that would make a saved deck unsafe.
@@ -1081,6 +1103,27 @@ impl Presentation {
         Ok(output.into_inner())
     }
 
+    /// Serialises the bytes that [`Presentation::save`] writes to `path`.
+    pub fn to_bytes_for_path<P: AsRef<Path>>(&self, path: P) -> Result<Vec<u8>> {
+        let Some(target) = PresentationPackageClass::from_path(path.as_ref()) else {
+            return self.to_bytes();
+        };
+        let current = self.package_class()?;
+        if target == current {
+            return self.to_bytes();
+        }
+        if current.is_macro_enabled() && !target.is_macro_enabled() {
+            return Err(invalid_presentation_mutation(
+                "save",
+                format!(
+                    "a macro-enabled presentation cannot be written as {}: the extension names a macro-free class, save it as .pptm, .potm, or .ppsm",
+                    path.as_ref().display()
+                ),
+            ));
+        }
+        self.to_bytes_as(target)
+    }
+
     /// Serialises the current presentation through the fixed Agile write profile.
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
@@ -1512,14 +1555,23 @@ impl Presentation {
         Ok(package)
     }
 
-    /// Saves the deterministic package bytes to a `.pptx` path.
+    /// Saves the deterministic package bytes to a path.
+    ///
+    /// A `.pptx`, `.pptm`, `.potx`, `.potm`, `.ppsx`, or `.ppsm` extension
+    /// selects the main part content type, so a template saved as `.pptx`
+    /// declares a presentation. Any other extension keeps the opened class. A
+    /// macro-enabled package cannot be saved under a macro-free extension,
+    /// because its executable parts would remain in a file that claims to
+    /// carry none. Use [`Presentation::save_as_package_class`] for that
+    /// conversion.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         debug_assert!(
             self.validate().is_empty(),
             "invalid presentation at path save boundary: {:?}",
             self.validate()
         );
-        std::fs::write(path, self.to_bytes()?).map_err(OpcError::from)?;
+        let path = path.as_ref();
+        std::fs::write(path, self.to_bytes_for_path(path)?).map_err(OpcError::from)?;
         Ok(())
     }
 

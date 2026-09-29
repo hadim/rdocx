@@ -7,7 +7,9 @@ presentation, notes, handout, PDF, and animation outputs.
 
 ## Capabilities
 
-- Open, create, validate, and save PPTX or PPSX packages.
+- Open, create, validate, and save PPTX, PPTM, POTX, POTM, PPSX, and PPSM
+  packages. The save path extension selects the declared package class, so a
+  template saved as `.pptx` becomes a presentation.
 - Encrypt and sign packages through the opt-in `agile-encryption` and
   `digital-signatures` features.
 - Add, remove, move, duplicate, and transfer slides.

@@ -494,7 +494,7 @@ pub fn replace(
     if count == 0 && expect != Some(0) {
         return Err(format!("no replacements found for \"{placeholder}\"").into());
     }
-    let bytes = presentation.to_bytes()?;
+    let bytes = presentation.to_bytes_for_path(output)?;
     stage_and_publish(&[(output.to_path_buf(), bytes)])?;
     println!("Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\"");
     println!("Written to {}", output.display());
@@ -944,7 +944,10 @@ fn next_comment_guid(presentation: &Presentation) -> String {
 }
 
 fn publish_presentation(presentation: &Presentation, output: &Path) -> Result<()> {
-    stage_and_publish(&[(output.to_path_buf(), presentation.to_bytes()?)])
+    stage_and_publish(&[(
+        output.to_path_buf(),
+        presentation.to_bytes_for_path(output)?,
+    )])
 }
 
 /// Prints a schema-1 operation record, or the action and the output path.

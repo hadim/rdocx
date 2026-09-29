@@ -64,7 +64,10 @@ across every supported story and accept at most one selector: `--id`,
 `--author`, or the paired `--start-date` and `--end-date` RFC 3339 bounds.
 Omitting a selector resolves all modeled revisions. Every mutation, comparison,
 and TOC rebuild requires `-o/--output`, publishes only a complete validated
-DOCX, and supports a schema-1 record through `--json`.
+DOCX, and supports a schema-1 record through `--json`. A `.docx`, `.docm`,
+`.dotx`, or `.dotm` output extension selects the package class the output
+declares, so a template edited into `report.docx` is written as a document. A
+macro-enabled input cannot be written to a macro-free extension.
 
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,

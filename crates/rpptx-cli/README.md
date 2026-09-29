@@ -78,4 +78,9 @@ takes a thread id, which also removes its replies, or a reply id. Every
 mutation requires `-o/--output`, refuses an existing output, publishes only a
 complete presentation, and supports a schema-1 record through `--json`.
 
+The output extension of `replace` and of every comment mutation selects the
+package class the output declares. A `.potx` template written to `deck.pptx`
+becomes a presentation, and a macro-enabled deck cannot be written to a
+macro-free extension.
+
 Run `rpptx --help` or `rpptx <command> --help` for the complete command surface.
