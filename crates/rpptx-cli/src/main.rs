@@ -1,5 +1,6 @@
 //! Command-line access to the public `rpptx` facade.
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
@@ -39,6 +40,9 @@ enum Command {
         to: String,
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
+        /// Replace existing output files, but never the input file
+        #[arg(long)]
+        force: bool,
         #[arg(long, default_value = "150")]
         dpi: f64,
         /// One-based slide range for image output, such as 1,3-5
@@ -73,6 +77,9 @@ enum Command {
         file: PathBuf,
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
+        /// Replace existing slide images, but never the input file
+        #[arg(long)]
+        force: bool,
         #[arg(long, default_value = "150")]
         dpi: f64,
         #[arg(long)]
@@ -92,6 +99,9 @@ enum Command {
         file: PathBuf,
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
+        /// Replace an existing output file, but never the input file
+        #[arg(long)]
+        force: bool,
     },
     /// Print each slide title and recursive paragraph outline
     Outline {
@@ -207,6 +217,7 @@ fn main() {
             file,
             to,
             output,
+            force,
             dpi,
             slides,
             quality,
@@ -215,10 +226,13 @@ fn main() {
             &file,
             &to,
             output.as_deref(),
+            force,
             dpi,
-            slides.as_deref(),
-            quality,
-            transparent,
+            commands::ImageOptions {
+                slides: slides.as_deref(),
+                quality,
+                transparent,
+            },
         ),
         Command::Diff { file_a, file_b } => commands::diff(&file_a, &file_b),
         Command::Replace {
@@ -232,6 +246,7 @@ fn main() {
         Command::Render {
             file,
             output,
+            force,
             dpi,
             slide,
             format,
@@ -240,13 +255,20 @@ fn main() {
         } => commands::render(
             &file,
             output.as_deref(),
+            force,
             dpi,
-            slide.as_deref(),
             &format,
-            quality,
-            transparent,
+            commands::ImageOptions {
+                slides: slide.as_deref(),
+                quality,
+                transparent,
+            },
         ),
-        Command::Thumbnail { file, output } => commands::thumbnail(&file, output.as_deref()),
+        Command::Thumbnail {
+            file,
+            output,
+            force,
+        } => commands::thumbnail(&file, output.as_deref(), force),
         Command::Outline { file, json, notes } => commands::outline(&file, json, notes),
         Command::Comment { command } => match command {
             CommentCommand::List { file, json } => commands::comment_list(&file, json),
@@ -305,8 +327,18 @@ fn main() {
             } => commands::comment_remove(&file, &id, &output, json),
         },
     };
+    // Standard output is line buffered, so a last line without a newline is
+    // only written, and can only fail, when it is flushed.
+    let result = result.and_then(|()| io::stdout().flush().map_err(Into::into));
     if let Err(error) = result {
-        eprintln!("Error: {error}");
-        process::exit(1);
+        // A reader that closes standard output early, as `| head` does, ends
+        // the output. That is not a failure of the command.
+        let closed_stdout = error
+            .downcast_ref::<io::Error>()
+            .is_some_and(|error| error.kind() == io::ErrorKind::BrokenPipe);
+        if !closed_stdout {
+            eprintln!("Error: {error}");
+            process::exit(1);
+        }
     }
 }

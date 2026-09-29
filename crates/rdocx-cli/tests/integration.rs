@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::OpcPackage;
@@ -37,6 +38,23 @@ fn cli(args: &[&str]) -> Output {
         .expect("run rdocx CLI")
 }
 
+/// Runs the CLI while its reader takes a short prefix of standard output and
+/// then closes it, as `| head -1` does.
+fn cli_with_closed_stdout(args: &[&str]) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rdocx"))
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rdocx CLI");
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    stdout
+        .read_exact(&mut [0; 64])
+        .expect("read an output prefix");
+    drop(stdout);
+    child.wait_with_output().expect("wait for rdocx CLI")
+}
+
 fn assert_success(output: &Output, command: &str) {
     assert!(
         output.status.success(),
@@ -49,6 +67,52 @@ fn assert_success(output: &Output, command: &str) {
         "{command} wrote stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// Asserts that `args` refuses to replace an existing `output` and leaves it
+/// byte-identical, and that the same command with `--force` replaces it.
+fn assert_existing_output_needs_force(args: &[&str], output: &Path) {
+    fs::write(output, b"keep me").unwrap();
+    let refused = cli(args);
+    assert_eq!(refused.status.code(), Some(1), "{args:?} was not refused");
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr),
+        format!(
+            "Error: output already exists: {} (pass --force to replace it)\n",
+            output.display()
+        )
+    );
+    assert_eq!(fs::read(output).unwrap(), b"keep me");
+
+    let forced = [args, &["--force"]].concat();
+    assert_success(&cli(&forced), &forced.join(" "));
+    assert_ne!(fs::read(output).unwrap(), b"keep me");
+    assert!(
+        fs::read_dir(output.parent().unwrap())
+            .unwrap()
+            .all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            })
+    );
+}
+
+/// Asserts that `args`, whose output is `input` under some spelling, leaves
+/// the input byte-identical with and without `--force`.
+fn assert_input_is_never_replaced(args: &[&str], input: &Path, output: &str) {
+    let before = fs::read(input).unwrap();
+    for force in [&[][..], &["--force"]] {
+        let refused = cli(&[args, force].concat());
+        assert_eq!(refused.status.code(), Some(1), "{args:?} {force:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&refused.stderr),
+            format!("Error: output is the input file: {output}\n")
+        );
+        assert_eq!(fs::read(input).unwrap(), before, "{args:?} {force:?}");
+    }
 }
 
 fn fixture_document(paragraphs: &[&str]) -> Document {
@@ -178,6 +242,74 @@ fn text_prints_body_and_table_content_in_document_order() {
 }
 
 #[test]
+fn printing_commands_end_cleanly_when_the_reader_closes_stdout() {
+    let temp = TempWorkspace::new("closed-stdout");
+    let input = temp.path.join("long.docx");
+    // Several hundred kilobytes outgrow a default pipe buffer, so the CLI
+    // is still writing when its reader goes away.
+    let lines = (0..20_000)
+        .map(|index| format!("Line {index}, lorem ipsum dolor sit amet."))
+        .collect::<Vec<_>>();
+    write_document(
+        &input,
+        &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+
+    for args in [
+        vec!["text", path_text(&input)],
+        vec!["text", path_text(&input), "--json"],
+    ] {
+        let output = cli_with_closed_stdout(&args);
+        assert_success(&output, &args.join(" "));
+    }
+}
+
+#[test]
+fn validate_keeps_its_verdict_when_the_reader_closes_stdout() {
+    let temp = TempWorkspace::new("validate-closed-stdout");
+    let valid = temp.path.join("valid.docx");
+    let corrupt = temp.path.join("corrupt.docx");
+    write_document(&valid, &["Valid content"]);
+    // Thousands of undeclared parts make a report that outgrows a default pipe
+    // buffer, so the CLI is still writing when its reader goes away.
+    let mut package = OpcPackage::open(&valid).unwrap();
+    for index in 0..3_000 {
+        package.set_part(&format!("/word/undeclared{index}.dat"), Vec::new());
+    }
+    package.save(&corrupt).unwrap();
+
+    let output = cli_with_closed_stdout(&["validate", path_text(&corrupt)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_stdout_other_than_a_closed_pipe_is_an_error() {
+    let temp = TempWorkspace::new("full-stdout");
+    let input = temp.path.join("short.docx");
+    write_document(&input, &["No space left"]);
+    let full = fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("open /dev/full");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rdocx"))
+        .args(["text", path_text(&input)])
+        .stdout(full)
+        .output()
+        .expect("run rdocx CLI");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with("Error: "), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[test]
 fn convert_writes_valid_formats_and_uses_the_shared_default_output() {
     let temp = TempWorkspace::new("convert");
     let input = temp.path.join("source.docx");
@@ -249,6 +381,100 @@ fn convert_writes_valid_formats_and_uses_the_shared_default_output() {
     );
     let dimensions = png_dimensions(&fs::read(png).unwrap());
     assert!(dimensions.0 > 0 && dimensions.1 > 0);
+}
+
+#[test]
+fn convert_replaces_an_existing_output_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("convert-output-policy");
+    let input = temp.path.join("source.docx");
+    write_document(&input, &["Output policy"]);
+    let source = path_text(&input);
+    let spelled = temp.path.join("pages/../source.docx");
+    fs::create_dir(temp.path.join("pages")).unwrap();
+
+    let default_pdf = temp.path.join("source.pdf");
+    assert_existing_output_needs_force(&["convert", source, "--to", "pdf"], &default_pdf);
+    for to in ["pdf", "md", "html", "png", "tiff"] {
+        let output = temp.path.join(format!("converted.{to}"));
+        assert_existing_output_needs_force(
+            &[
+                "convert",
+                source,
+                "--to",
+                to,
+                "--dpi",
+                "24",
+                "-o",
+                path_text(&output),
+            ],
+            &output,
+        );
+        for spelling in [source, path_text(&spelled)] {
+            assert_input_is_never_replaced(
+                &["convert", source, "--to", to, "--dpi", "24", "-o", spelling],
+                &input,
+                spelling,
+            );
+        }
+    }
+    #[cfg(unix)]
+    {
+        let refused = cli(&[
+            "convert",
+            source,
+            "--to",
+            "md",
+            "-o",
+            "/dev/null",
+            "--force",
+        ]);
+        assert_eq!(refused.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8_lossy(&refused.stderr),
+            "Error: output is not a regular file: /dev/null\n"
+        );
+    }
+}
+
+#[test]
+fn render_replaces_existing_pages_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("render-output-policy");
+    let input = temp.path.join("source.docx");
+    let pages = temp.path.join("pages");
+    write_document(&input, &["Output policy"]);
+    fs::create_dir(&pages).unwrap();
+    let render = [
+        "render",
+        path_text(&input),
+        "-o",
+        path_text(&pages),
+        "--dpi",
+        "24",
+    ];
+
+    assert_existing_output_needs_force(&render, &pages.join("source_page1.png"));
+    assert_existing_output_needs_force(
+        &[render.as_slice(), &["--format", "tiff"]].concat(),
+        &pages.join("source.tiff"),
+    );
+
+    // A document named like its own TIFF output, rendered into its folder.
+    let named = temp.path.join("named.tiff");
+    fs::copy(&input, &named).unwrap();
+    assert_input_is_never_replaced(
+        &[
+            "render",
+            path_text(&named),
+            "-o",
+            path_text(&temp.path),
+            "--format",
+            "tiff",
+            "--dpi",
+            "24",
+        ],
+        &named,
+        path_text(&named),
+    );
 }
 
 #[test]

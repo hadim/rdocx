@@ -1,9 +1,11 @@
 //! CLI command implementations.
 
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use oxml_cli_support::{
-    StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
+    StagedOutputSet, default_output_path, ensure_output_paths_allowed,
+    ensure_output_paths_available, json_envelope, parse_range,
 };
 use rdocx::{
     BodyItemRef, Document, RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
@@ -67,38 +69,39 @@ pub fn inspect(file: &Path, json: bool) -> Result<()> {
         }
     }
 
+    let mut stdout = io::stdout().lock();
     if json {
         let obj = inspect_json(file, &doc, style_ids)?;
-        println!("{}", serde_json::to_string_pretty(&obj)?);
+        writeln!(stdout, "{}", serde_json::to_string_pretty(&obj)?)?;
     } else {
-        println!("File: {}", file.display());
-        println!("Paragraphs: {paragraph_count}");
-        println!("Tables: {table_count}");
-        println!("Content elements: {content_count}");
-        println!();
-        println!("Metadata:");
+        writeln!(stdout, "File: {}", file.display())?;
+        writeln!(stdout, "Paragraphs: {paragraph_count}")?;
+        writeln!(stdout, "Tables: {table_count}")?;
+        writeln!(stdout, "Content elements: {content_count}")?;
+        writeln!(stdout)?;
+        writeln!(stdout, "Metadata:")?;
         if let Some(t) = &title {
-            println!("  Title: {t}");
+            writeln!(stdout, "  Title: {t}")?;
         }
         if let Some(a) = &author {
-            println!("  Author: {a}");
+            writeln!(stdout, "  Author: {a}")?;
         }
         if let Some(s) = &subject {
-            println!("  Subject: {s}");
+            writeln!(stdout, "  Subject: {s}")?;
         }
         if let Some(k) = &keywords {
-            println!("  Keywords: {k}");
+            writeln!(stdout, "  Keywords: {k}")?;
         }
         if title.is_none() && author.is_none() && subject.is_none() && keywords.is_none() {
-            println!("  (none)");
+            writeln!(stdout, "  (none)")?;
         }
-        println!();
-        println!("Styles used:");
+        writeln!(stdout)?;
+        writeln!(stdout, "Styles used:")?;
         if style_ids.is_empty() {
-            println!("  (none)");
+            writeln!(stdout, "  (none)")?;
         } else {
             for sid in &style_ids {
-                println!("  - {sid}");
+                writeln!(stdout, "  - {sid}")?;
             }
         }
     }
@@ -151,7 +154,7 @@ pub fn text(file: &Path, json_output: bool) -> Result<()> {
             "paragraphs": paragraphs,
         }))?;
     } else {
-        print!("{}", doc.text());
+        write!(io::stdout(), "{}", doc.text())?;
     }
     Ok(())
 }
@@ -202,14 +205,16 @@ pub fn layout(file: &Path, json_output: bool) -> Result<()> {
             "body_items": body_items,
         }))?;
     } else {
-        println!("Pages: {}", layout.layout.pages.len());
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "Pages: {}", layout.layout.pages.len())?;
         for item in body_items {
-            println!(
+            writeln!(
+                stdout,
                 "Body item {} ({}): {} fragment(s)",
                 item["body_index"],
                 item["kind"].as_str().unwrap_or("unknown"),
                 item["fragments"].as_array().map_or(0, Vec::len)
-            );
+            )?;
         }
     }
     Ok(())
@@ -373,6 +378,7 @@ pub fn convert(
     file: &Path,
     to: &str,
     output: Option<&Path>,
+    force: bool,
     dpi: u32,
     font_dir: Option<&Path>,
     image: ImageOptions<'_>,
@@ -398,7 +404,13 @@ pub fn convert(
         Some(p) => p.to_path_buf(),
         None => default_output_path(file, default_ext),
     };
+    // Several PNG or JPEG pages are written under numbered names, so those
+    // outputs are checked once the pages are selected.
+    if !matches!(to, "png" | "jpg" | "jpeg") {
+        ensure_output_paths_allowed(std::slice::from_ref(&output_path), file, force)?;
+    }
 
+    let mut stdout = io::stdout().lock();
     match to {
         "pdf" => {
             let bytes = if let Some(dir) = font_dir {
@@ -411,15 +423,15 @@ pub fn convert(
             } else {
                 doc.to_pdf()?
             };
-            std::fs::write(&output_path, bytes)?;
+            stage_and_publish(&[(output_path.clone(), bytes)], force)?;
         }
         "html" => {
             let html = doc.to_html();
-            std::fs::write(&output_path, html)?;
+            stage_and_publish(&[(output_path.clone(), html.into_bytes())], force)?;
         }
         "md" | "markdown" => {
             let md = doc.to_markdown();
-            std::fs::write(&output_path, md)?;
+            stage_and_publish(&[(output_path.clone(), md.into_bytes())], force)?;
         }
         "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
             let (format, extension) = parse_image_format(to, image.quality, image.transparent)?;
@@ -438,14 +450,14 @@ pub fn convert(
                     let RasterOutput::MultiPageTiff(tiff) = output else {
                         return Err("TIFF render did not produce one stream".into());
                     };
-                    stage_and_publish(&[(output_path.clone(), tiff)])?;
-                    println!("Written to {}", output_path.display());
+                    stage_and_publish(&[(output_path.clone(), tiff)], force)?;
+                    writeln!(stdout, "Written to {}", output_path.display())?;
                 }
                 RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
                     let output_paths =
                         convert_separate_output_paths(&output_path, extension, selected.len());
-                    ensure_output_paths_available(&output_paths)?;
-                    let mut staged = StagedOutputSet::new();
+                    ensure_output_paths_allowed(&output_paths, file, force)?;
+                    let mut staged = StagedOutputSet::with_replace_existing(force);
                     for (page_index, path) in selected.iter().zip(output_paths.iter()) {
                         let image = render_one_raster_page(
                             &layout.layout,
@@ -459,18 +471,19 @@ pub fn convert(
                     }
                     staged.publish()?;
                     if output_paths.len() == 1 {
-                        println!("Written to {}", output_path.display());
+                        writeln!(stdout, "Written to {}", output_path.display())?;
                     } else {
                         let stem = output_path
                             .file_stem()
                             .unwrap_or_default()
                             .to_string_lossy();
                         let parent = output_path.parent().unwrap_or(Path::new("."));
-                        println!(
+                        writeln!(
+                            stdout,
                             "Written {} pages to {}/{stem}_NNN.{extension}",
                             output_paths.len(),
                             parent.display()
-                        );
+                        )?;
                     }
                 }
             }
@@ -479,7 +492,7 @@ pub fn convert(
         _ => unreachable!(),
     }
 
-    println!("Written to {}", output_path.display());
+    writeln!(stdout, "Written to {}", output_path.display())?;
     Ok(())
 }
 
@@ -491,19 +504,22 @@ pub fn diff(file_a: &Path, file_b: &Path) -> Result<()> {
     let paras_a: Vec<String> = doc_a.paragraphs().iter().map(|p| p.text()).collect();
     let paras_b: Vec<String> = doc_b.paragraphs().iter().map(|p| p.text()).collect();
 
-    println!(
+    let mut stdout = io::stdout().lock();
+    writeln!(
+        stdout,
         "--- {} ({} paragraphs, {} tables)",
         file_a.display(),
         doc_a.paragraph_count(),
         doc_a.table_count()
-    );
-    println!(
+    )?;
+    writeln!(
+        stdout,
         "+++ {} ({} paragraphs, {} tables)",
         file_b.display(),
         doc_b.paragraph_count(),
         doc_b.table_count()
-    );
-    println!();
+    )?;
+    writeln!(stdout)?;
 
     // Simple LCS-based diff on paragraph texts
     let lcs = compute_lcs(&paras_a, &paras_b);
@@ -514,12 +530,12 @@ pub fn diff(file_a: &Path, file_b: &Path) -> Result<()> {
     while k < lcs.len() {
         // Output removed lines before the match
         while i < paras_a.len() && paras_a[i] != lcs[k] {
-            println!("- [{}] {}", i + 1, paras_a[i]);
+            writeln!(stdout, "- [{}] {}", i + 1, paras_a[i])?;
             i += 1;
         }
         // Output added lines before the match
         while j < paras_b.len() && paras_b[j] != lcs[k] {
-            println!("+ [{}] {}", j + 1, paras_b[j]);
+            writeln!(stdout, "+ [{}] {}", j + 1, paras_b[j])?;
             j += 1;
         }
         // Skip the common line
@@ -530,19 +546,19 @@ pub fn diff(file_a: &Path, file_b: &Path) -> Result<()> {
 
     // Remaining lines
     while i < paras_a.len() {
-        println!("- [{}] {}", i + 1, paras_a[i]);
+        writeln!(stdout, "- [{}] {}", i + 1, paras_a[i])?;
         i += 1;
     }
     while j < paras_b.len() {
-        println!("+ [{}] {}", j + 1, paras_b[j]);
+        writeln!(stdout, "+ [{}] {}", j + 1, paras_b[j])?;
         j += 1;
     }
 
     let changes = paras_a.len() + paras_b.len() - 2 * lcs.len();
     if changes == 0 {
-        println!("(no differences in paragraph text)");
+        writeln!(stdout, "(no differences in paragraph text)")?;
     } else {
-        println!("\n{changes} paragraph(s) differ.");
+        writeln!(stdout, "\n{changes} paragraph(s) differ.")?;
     }
 
     Ok(())
@@ -566,16 +582,18 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
             })
         })
         .collect::<Vec<_>>();
+    let mut stdout = io::stdout().lock();
     if json_output {
         print_json(json!({
             "scope": "main",
             "comments": records,
         }))?;
     } else if comments.is_empty() {
-        println!("(no comments)");
+        writeln!(stdout, "(no comments)")?;
     } else {
         for comment in comments {
-            println!(
+            writeln!(
+                stdout,
                 "{}\t{}\t{}\t{}",
                 comment.id(),
                 comment.author().unwrap_or(""),
@@ -585,7 +603,7 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
                     "open"
                 },
                 comment.text().replace('\n', " ")
-            );
+            )?;
         }
     }
     Ok(())
@@ -681,22 +699,24 @@ pub fn revision_list(file: &Path, json_output: bool) -> Result<()> {
             })
         })
         .collect::<Vec<_>>();
+    let mut stdout = io::stdout().lock();
     if json_output {
         print_json(json!({
             "scope": "main",
             "revisions": records,
         }))?;
     } else if revisions.is_empty() {
-        println!("(no revisions in main story)");
+        writeln!(stdout, "(no revisions in main story)")?;
     } else {
         for revision in revisions {
-            println!(
+            writeln!(
+                stdout,
                 "{}\t{}\t{}\t{}",
                 revision.id(),
                 revision.author(),
                 revision.timestamp().unwrap_or(""),
                 revision_kind_label(revision.kind())
-            );
+            )?;
         }
     }
     Ok(())
@@ -748,8 +768,9 @@ pub fn resolve_revisions(
             "output": output.display().to_string(),
         }))?;
     } else {
-        println!("{action_label}: {count} revision element(s)");
-        println!("Written to {}", output.display());
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "{action_label}: {count} revision element(s)")?;
+        writeln!(stdout, "Written to {}", output.display())?;
     }
     Ok(())
 }
@@ -785,9 +806,13 @@ pub fn compare(
             "output": output.display().to_string(),
         }))?;
     } else {
-        println!("Created {revision_count} main-story revision element(s)");
-        println!("Diagnostics: {}", diagnostics.len());
-        println!("Written to {}", output.display());
+        let mut stdout = io::stdout().lock();
+        writeln!(
+            stdout,
+            "Created {revision_count} main-story revision element(s)"
+        )?;
+        writeln!(stdout, "Diagnostics: {}", diagnostics.len())?;
+        writeln!(stdout, "Written to {}", output.display())?;
     }
     Ok(())
 }
@@ -806,10 +831,11 @@ pub fn toc_rebuild(file: &Path, output: &Path, json_output: bool) -> Result<()> 
             "output": output.display().to_string(),
         }))?;
     } else {
-        println!("Entries: {}", report.entry_count);
-        println!("Bookmarks: {}", report.bookmark_count);
-        println!("Diagnostics: {}", report.diagnostic_count());
-        println!("Written to {}", output.display());
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "Entries: {}", report.entry_count)?;
+        writeln!(stdout, "Bookmarks: {}", report.bookmark_count)?;
+        writeln!(stdout, "Diagnostics: {}", report.diagnostic_count())?;
+        writeln!(stdout, "Written to {}", output.display())?;
     }
     Ok(())
 }
@@ -865,7 +891,7 @@ fn revision_kind_label(kind: RevisionKind) -> &'static str {
 
 fn publish_document(doc: &mut Document, output: &Path) -> Result<()> {
     let bytes = doc.to_bytes()?;
-    stage_and_publish(&[(output.to_path_buf(), bytes)])
+    stage_and_publish(&[(output.to_path_buf(), bytes)], false)
 }
 
 fn mutation_record(
@@ -888,17 +914,19 @@ fn mutation_record(
         object.extend(detail);
         print_json(payload)?;
     } else {
-        println!("{action}");
-        println!("Written to {}", output.display());
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "{action}")?;
+        writeln!(stdout, "Written to {}", output.display())?;
     }
     Ok(())
 }
 
 fn print_json(payload: Value) -> Result<()> {
-    println!(
+    writeln!(
+        io::stdout(),
         "{}",
         serde_json::to_string_pretty(&json_envelope(payload)?)?
-    );
+    )?;
     Ok(())
 }
 
@@ -957,8 +985,12 @@ pub fn replace(
         .into());
     }
     publish_document(&mut doc, output)?;
-    println!("Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\"");
-    println!("Written to {}", output.display());
+    let mut stdout = io::stdout().lock();
+    writeln!(
+        stdout,
+        "Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\""
+    )?;
+    writeln!(stdout, "Written to {}", output.display())?;
     Ok(())
 }
 
@@ -966,6 +998,7 @@ pub fn replace(
 pub fn render(
     file: &Path,
     output_dir: Option<&Path>,
+    force: bool,
     dpi: f64,
     options: RenderOptions<'_>,
 ) -> Result<()> {
@@ -979,21 +1012,24 @@ pub fn render(
     let stem = file.file_stem().unwrap_or_default().to_string_lossy();
     let legacy_single_page = options.page.is_some();
 
+    let mut stdout = io::stdout().lock();
     // Writing into a directory the user named but has not created should not
     // fail with a bare "No such file or directory". Do it after validation and
     // encoding so invalid options leave no partial output.
     match format {
         RasterFormat::Tiff => {
+            let out_path = out_dir.join(format!("{stem}.tiff"));
+            ensure_output_paths_allowed(std::slice::from_ref(&out_path), file, force)?;
             let output =
                 oxml_pdf::render_pages(&layout.layout, &selected, RasterOptions { dpi, format })?;
             let RasterOutput::MultiPageTiff(tiff) = output else {
                 return Err("TIFF render did not produce one stream".into());
             };
-            let out_path = out_dir.join(format!("{stem}.tiff"));
             std::fs::create_dir_all(out_dir)?;
             let tiff_len = tiff.len();
-            stage_and_publish(&[(out_path.clone(), tiff)])?;
-            println!(
+            stage_and_publish(&[(out_path.clone(), tiff)], force)?;
+            writeln!(
+                stdout,
                 "Pages {} -> {} ({} bytes)",
                 selected
                     .iter()
@@ -1002,7 +1038,7 @@ pub fn render(
                     .join(","),
                 out_path.display(),
                 tiff_len
-            );
+            )?;
         }
         RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
             let output_paths = selected
@@ -1013,8 +1049,8 @@ pub fn render(
                 })
                 .collect::<Vec<_>>();
             std::fs::create_dir_all(out_dir)?;
-            ensure_output_paths_available(&output_paths)?;
-            let mut staged = StagedOutputSet::new();
+            ensure_output_paths_allowed(&output_paths, file, force)?;
+            let mut staged = StagedOutputSet::with_replace_existing(force);
             let mut rendered = Vec::with_capacity(selected.len());
             for (page_index, out_path) in selected.iter().zip(output_paths.iter()) {
                 let one_based = page_index + 1;
@@ -1028,10 +1064,14 @@ pub fn render(
             }
             staged.publish()?;
             for (one_based, out_path, len) in rendered {
-                println!("Page {one_based} -> {} ({len} bytes)", out_path.display());
+                writeln!(
+                    stdout,
+                    "Page {one_based} -> {} ({len} bytes)",
+                    out_path.display()
+                )?;
             }
             if !legacy_single_page {
-                println!("Rendered {} page(s) at {dpi} DPI", selected.len());
+                writeln!(stdout, "Rendered {} page(s) at {dpi} DPI", selected.len())?;
             }
         }
     }
@@ -1126,13 +1166,16 @@ fn render_one_raster_page(
     Ok(pages.remove(0))
 }
 
-fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)]) -> Result<()> {
-    let paths = outputs
-        .iter()
-        .map(|(path, _)| path.clone())
-        .collect::<Vec<_>>();
-    ensure_output_paths_available(&paths)?;
-    let mut staged = StagedOutputSet::new();
+/// Publishes complete outputs, replacing existing files only with `force`.
+fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)], force: bool) -> Result<()> {
+    if !force {
+        let paths = outputs
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        ensure_output_paths_available(&paths)?;
+    }
+    let mut staged = StagedOutputSet::with_replace_existing(force);
     for (path, bytes) in outputs {
         staged.stage_bytes(path, bytes)?;
     }
@@ -1229,25 +1272,38 @@ pub fn validate(file: &Path) -> Result<bool> {
 
     // --- Report ---
 
+    // A reader that closes standard output early, as `| head` does, cuts the
+    // report short but does not change the verdict.
+    match print_validation_report(file, &errors, &warnings) {
+        Err(error) if error.kind() != io::ErrorKind::BrokenPipe => Err(error.into()),
+        _ => Ok(errors.is_empty()),
+    }
+}
+
+fn print_validation_report(file: &Path, errors: &[String], warnings: &[String]) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
     if errors.is_empty() && warnings.is_empty() {
-        println!("OK — no issues found in {}", file.display());
-        return Ok(true);
+        return writeln!(stdout, "OK — no issues found in {}", file.display());
     }
 
     if !errors.is_empty() {
-        println!("{} error(s) in {}:", errors.len(), file.display());
+        writeln!(stdout, "{} error(s) in {}:", errors.len(), file.display())?;
         for (i, issue) in errors.iter().enumerate() {
-            println!("  {}. {issue}", i + 1);
+            writeln!(stdout, "  {}. {issue}", i + 1)?;
         }
     }
     if !warnings.is_empty() {
-        println!("{} warning(s) in {}:", warnings.len(), file.display());
+        writeln!(
+            stdout,
+            "{} warning(s) in {}:",
+            warnings.len(),
+            file.display()
+        )?;
         for (i, issue) in warnings.iter().enumerate() {
-            println!("  {}. {issue}", i + 1);
+            writeln!(stdout, "  {}. {issue}", i + 1)?;
         }
     }
-
-    Ok(errors.is_empty())
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1298,6 +1354,7 @@ mod tests {
             &input,
             "md",
             None,
+            false,
             96,
             None,
             ImageOptions {

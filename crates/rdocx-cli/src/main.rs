@@ -2,6 +2,7 @@
 //!
 //! Inspect, convert, diff, and manipulate DOCX files from the command line.
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
@@ -52,6 +53,9 @@ enum Command {
         /// Output file path (defaults to input with new extension)
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
+        /// Replace existing output files, but never the input file
+        #[arg(long)]
+        force: bool,
         /// DPI for image rendering (default: 150)
         #[arg(long, default_value = "150")]
         dpi: u32,
@@ -104,6 +108,9 @@ enum Command {
         /// Output directory (defaults to current directory)
         #[arg(long, short = 'o')]
         output_dir: Option<PathBuf>,
+        /// Replace existing page images, but never the input file
+        #[arg(long)]
+        force: bool,
         /// DPI resolution (default: 150)
         #[arg(long, default_value = "150")]
         dpi: f64,
@@ -350,6 +357,7 @@ fn main() {
             file,
             to,
             output,
+            force,
             dpi,
             font_dir,
             pages,
@@ -359,6 +367,7 @@ fn main() {
             &file,
             &to,
             output.as_deref(),
+            force,
             dpi,
             font_dir.as_deref(),
             commands::ImageOptions {
@@ -380,6 +389,7 @@ fn main() {
         Command::Render {
             file,
             output_dir,
+            force,
             dpi,
             page,
             pages,
@@ -389,6 +399,7 @@ fn main() {
         } => commands::render(
             &file,
             output_dir.as_deref(),
+            force,
             dpi,
             commands::RenderOptions {
                 page,
@@ -499,8 +510,18 @@ fn main() {
         },
     };
 
+    // Standard output is line buffered, so a last line without a newline is
+    // only written, and can only fail, when it is flushed.
+    let result = result.and_then(|()| io::stdout().flush().map_err(Into::into));
     if let Err(e) = result {
-        eprintln!("Error: {e}");
-        process::exit(1);
+        // A reader that closes standard output early, as `| head` does, ends
+        // the output. That is not a failure of the command.
+        let closed_stdout = e
+            .downcast_ref::<io::Error>()
+            .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe);
+        if !closed_stdout {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
     }
 }

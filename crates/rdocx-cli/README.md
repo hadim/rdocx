@@ -22,7 +22,7 @@ and produces fixed or flow output without an Office host.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rdocx-cli | 33,805 compressed bytes, 145,256 member bytes, 8 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
+| Crates.io archive: rdocx-cli | 36,540 compressed bytes, 156,754 member bytes, 8 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
 
 ## Use it when
 
@@ -82,5 +82,12 @@ fragment on each occupied page.
 `replace --expect N` publishes only when the run-aware replacement count is
 exactly `N`. A mismatch exits unsuccessfully without creating or replacing the
 requested output.
+
+`convert` and `render` refuse an output file that already exists unless
+`--force` is given. Even with `--force` they refuse their own input file under
+any spelling of its path, and an output that is not a regular file, such as a
+directory, a symbolic link, a FIFO, or a device like `/dev/null`. A run checks
+every file it would write before it writes the first one, and publishes each
+file only once it is complete, so a failed run leaves no truncated output.
 
 Run `rdocx --help` or `rdocx <command> --help` for the complete option set.
