@@ -6594,8 +6594,34 @@ fn restart_merges_continued_below(table: &mut CT_Tbl, row_index: usize) -> Resul
 
 fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) -> Result<()> {
     if part_name == document.doc_part_name {
+        // The main-part story source is canonical XML. It drops a root
+        // default namespace and every body declaration, and binds the root
+        // `w`, `r` and `mc` prefixes to their canonical URIs. The save path's
+        // check on those declarations keeps retained content of the replaced
+        // part in its namespace.
+        let rewritten_root_declarations: Vec<_> = document
+            .root_namespace_declarations
+            .iter()
+            .filter(|(name, _)| {
+                matches!(name.as_str(), "xmlns" | "xmlns:w" | "xmlns:r" | "xmlns:mc")
+            })
+            .cloned()
+            .collect();
+        if let Some(prefix) = unsafe_serializer_namespace_prefix(
+            &rewritten_root_declarations,
+            &document.body_namespace_declarations,
+            document.package.get_part(part_name),
+        ) {
+            return Err(Error::Other(format!(
+                "cannot serialize a modified document with a shadowed `{prefix}` namespace"
+            )));
+        }
+        let namespace_scopes = document_namespace_scopes(&xml)?;
         document.document = CT_Document::from_xml(&xml)?;
         document.package.set_part(part_name, xml);
+        document.root_namespace_declarations = namespace_scopes.root_declarations;
+        document.body_namespace_declarations = namespace_scopes.body_declarations;
+        document.body_namespace_bindings = namespace_scopes.body_bindings;
     } else if document.comments_part_name.as_deref() == Some(part_name) {
         document.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(&xml)?);
         document.package.set_part(part_name, xml);

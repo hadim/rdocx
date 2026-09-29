@@ -14075,6 +14075,242 @@ fn used_root_default_namespace_still_fails_atomically() {
     assert_eq!(document.to_bytes().unwrap(), before);
 }
 
+const ISSUE_157_UNUSED_ROOT_DEFAULT: &str =
+    r#" xmlns="http://schemas.microsoft.com/office/tasks/2019/documenttasks""#;
+
+/// A Google Docs shaped main part: extra root namespace declarations, an
+/// optional `goog_rdk_0` block content control and a one-cell table.
+fn issue_157_document(root_declarations: &str, content_control: bool, producer: &str) -> Document {
+    let inside = "<w:p><w:r><w:t>Inside the control.</w:t></w:r></w:p>";
+    let inside = if content_control {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_0"/></w:sdtPr><w:sdtContent>{inside}</w:sdtContent></w:sdt>"#
+        )
+    } else {
+        inside.to_owned()
+    };
+    document_with_content_controls(&format!(
+        r#"<w:document xmlns:w="{W_NS}"{root_declarations}><w:body>{producer}<w:p><w:r><w:t>Before the control.</w:t></w:r></w:p>{inside}<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr/></w:body></w:document>"#
+    ))
+}
+
+fn issue_157_paragraph_summary(paragraph: &ParagraphRef<'_>) -> String {
+    let has_picture = paragraph.runs().any(|run| {
+        run.items()
+            .any(|item| matches!(item, RunItemRef::Drawing(drawing) if drawing.is_inline()))
+    });
+    if has_picture {
+        "picture".to_owned()
+    } else {
+        format!("p:{}", paragraph.text())
+    }
+}
+
+fn issue_157_body_summary(document: &Document) -> Vec<String> {
+    document
+        .body_items()
+        .map(|item| match item {
+            BodyItemRef::Paragraph(paragraph) => issue_157_paragraph_summary(&paragraph),
+            BodyItemRef::ContentControl(control) => format!(
+                "sdt:{}:{}",
+                control.tag().unwrap_or_default(),
+                control.text()
+            ),
+            BodyItemRef::Table(table) => format!(
+                "table:{}",
+                table
+                    .cell(0, 0)
+                    .unwrap()
+                    .paragraphs()
+                    .map(|paragraph| issue_157_paragraph_summary(&paragraph))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ),
+            BodyItemRef::UnsupportedXml(raw) => format!("raw:{}", String::from_utf8_lossy(raw)),
+        })
+        .collect()
+}
+
+fn issue_157_insert_picture(
+    document: &mut Document,
+    story: &StoryId,
+    after: Option<&ContentLocation>,
+) -> rdocx::Result<ContentLocation> {
+    document.insert_picture_to_story(
+        story,
+        after,
+        b"issue 157 image payload",
+        "issue_157.png",
+        Some(Length::pt(12.0)),
+        Some(Length::pt(8.0)),
+    )
+}
+
+#[test]
+fn story_picture_splice_beside_content_control_ignores_unused_root_default() {
+    // A story splice publishes canonical main-part XML without the unused
+    // root default. The flush that follows must classify those bytes, not
+    // the declarations of the part they replaced.
+    for (root_default, content_control) in [(true, true), (false, true), (true, false)] {
+        let case = format!("root default {root_default}, content control {content_control}");
+        let root_declarations = if root_default {
+            ISSUE_157_UNUSED_ROOT_DEFAULT
+        } else {
+            ""
+        };
+        let mut document = issue_157_document(root_declarations, content_control, "");
+        let body = f254_story(&document, StoryKind::Body);
+        let anchor = document
+            .story_items(&body)
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                if content_control {
+                    item.kind() == StoryItemKind::ContentControl
+                } else {
+                    item.text().unwrap().as_deref() == Some("Inside the control.")
+                }
+            })
+            .unwrap()
+            .location()
+            .clone();
+        let after = issue_157_insert_picture(&mut document, &body, Some(&anchor))
+            .unwrap_or_else(|error| panic!("{case}: picture after the anchor: {error}"));
+        assert_eq!(after.item_kind(), StoryItemKind::Paragraph, "{case}");
+
+        let cell = f254_story(&document, StoryKind::TableCell);
+        issue_157_insert_picture(&mut document, &cell, None)
+            .unwrap_or_else(|error| panic!("{case}: picture in the table cell: {error}"));
+        let cell = f254_story(&document, StoryKind::TableCell);
+        document
+            .add_hyperlink_to_story(&cell, "link", "https://example.invalid/issue-157")
+            .unwrap_or_else(|error| panic!("{case}: hyperlink in the table cell: {error}"));
+        let body = f254_story(&document, StoryKind::Body);
+        issue_157_insert_picture(&mut document, &body, None)
+            .unwrap_or_else(|error| panic!("{case}: appended picture: {error}"));
+
+        let anchor = if content_control {
+            "sdt:goog_rdk_0:Inside the control."
+        } else {
+            "p:Inside the control."
+        };
+        let expected = [
+            "p:Before the control.",
+            anchor,
+            "picture",
+            "table:p:cell|picture|p:link",
+            "picture",
+        ];
+        assert_eq!(issue_157_body_summary(&document), expected, "{case}");
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(issue_157_body_summary(&reopened), expected, "{case}");
+    }
+}
+
+#[test]
+fn rewritten_root_namespaces_block_story_splices_atomically() {
+    // The canonical main-part source of a story splice drops the root
+    // default and rebinds the root `w`, `r` and `mc` prefixes, so retained
+    // content that uses one of those root bindings would silently change
+    // namespace.
+    let roots = [
+        (r#" xmlns="urn:used-default""#, "<producer/>", "default"),
+        (r#" xmlns:r="urn:not-relationships""#, "<r:producer/>", "r"),
+        (
+            r#" xmlns:mc="urn:not-compatibility""#,
+            "<mc:producer/>",
+            "mc",
+        ),
+    ];
+    for (root_declarations, producer, prefix) in roots {
+        for content_control in [false, true] {
+            let case = format!("{prefix}, content control {content_control}");
+            let mut document = issue_157_document(root_declarations, content_control, producer);
+            let before = document.to_bytes().unwrap();
+            let body = f254_story(&document, StoryKind::Body);
+            let cell = f254_story(&document, StoryKind::TableCell);
+            let errors = [
+                issue_157_insert_picture(&mut document, &body, None).unwrap_err(),
+                issue_157_insert_picture(&mut document, &cell, None).unwrap_err(),
+                document
+                    .insert_content(&ContentLocation::end(body), f254_paragraph("spliced"))
+                    .unwrap_err(),
+            ];
+            for error in errors {
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("shadowed `{prefix}` namespace")),
+                    "{case}: {error}"
+                );
+            }
+            assert_eq!(document.to_bytes().unwrap(), before, "{case}");
+        }
+    }
+}
+
+#[test]
+fn body_declarations_and_a_rebound_root_w_block_story_splices_atomically() {
+    // The canonical main-part source drops every declaration on `w:body`, so
+    // a raw element nested in a paragraph or run would keep an unbound
+    // prefix. It also binds the root `w` prefix to WordprocessingML, so a
+    // producer element under another root `w` binding would change namespace.
+    for content_control in [false, true] {
+        let control = |q: &str| {
+            if content_control {
+                format!(
+                    r#"<{q}:sdt><{q}:sdtPr><{q}:tag {q}:val="goog_rdk_0"/></{q}:sdtPr><{q}:sdtContent><{q}:p><{q}:r><{q}:t>Inside the control.</{q}:t></{q}:r></{q}:p></{q}:sdtContent></{q}:sdt>"#
+                )
+            } else {
+                String::new()
+            }
+        };
+        let (w_control, q_control) = (control("w"), control("q"));
+        let documents = [
+            (
+                format!(
+                    r#"<w:document xmlns:w="{W_NS}"><w:body xmlns:x="urn:x"><w:p><w:r><x:producer/><w:t>run</w:t></w:r></w:p>{w_control}<w:sectPr/></w:body></w:document>"#
+                ),
+                "x",
+            ),
+            (
+                format!(
+                    r#"<w:document xmlns:w="{W_NS}"><w:body xmlns:x="urn:x"><w:p><x:producer/><w:r><w:t>run</w:t></w:r></w:p>{w_control}<w:sectPr/></w:body></w:document>"#
+                ),
+                "x",
+            ),
+            (
+                format!(
+                    r#"<q:document xmlns:q="{W_NS}" xmlns:w="urn:producer"><q:body><w:producer/><q:p><q:r><q:t>run</q:t></q:r></q:p>{q_control}<q:sectPr/></q:body></q:document>"#
+                ),
+                "w",
+            ),
+        ];
+        for (xml, prefix) in documents {
+            let case = format!("content control {content_control}: {xml}");
+            let mut document = document_with_content_controls(&xml);
+            let before = document.to_bytes().unwrap();
+            let body = f254_story(&document, StoryKind::Body);
+            let errors = [
+                issue_157_insert_picture(&mut document, &body, None).unwrap_err(),
+                document
+                    .insert_content(&ContentLocation::end(body), f254_paragraph("spliced"))
+                    .unwrap_err(),
+            ];
+            for error in errors {
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("shadowed `{prefix}` namespace")),
+                    "{case}: {error}"
+                );
+            }
+            assert_eq!(document.to_bytes().unwrap(), before, "{case}");
+        }
+    }
+}
+
 #[test]
 fn try_replace_text_publishes_only_a_preflighted_candidate() {
     let mut document = Document::new();
