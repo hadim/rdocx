@@ -338,7 +338,10 @@ TextParagraphMut::add_run(&mut self, text: &str) -> TextRunMut<'_>;
 ```
 
 `TextFrame` also reads and replaces whole-frame text. Paragraph handles replace
-text, paragraph properties, and bullets. Run handles replace text, character
+text, paragraph properties, and bullets. Replaced text keeps the formatting of
+the paragraph's first regular run. A paragraph without one formats the new run
+with its `a:endParaRPr`, without hyperlinks, as PowerPoint formats text typed
+into an empty paragraph. Run handles replace text, character
 properties, and the direct Latin font. The typed formatting values are
 re-exported by `rpptx`. Structural append returns the newly inserted borrowed
 item, and Rust's borrow rules prevent a live nested handle from being

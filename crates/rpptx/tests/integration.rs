@@ -14151,6 +14151,7 @@ fn table_rows_and_columns_are_inserted_and_removed_with_the_frame_in_step() {
         table.insert_row(0).unwrap();
         table.insert_column(4).unwrap();
         table.set_column_width(4, Emu(1_000_000)).unwrap();
+        table.cell_mut(5, 0).unwrap().set_text("Risk");
     }
     let saved = presentation.to_bytes().unwrap();
     let reopened = Presentation::from_bytes(&saved).unwrap();
@@ -14179,7 +14180,7 @@ fn table_rows_and_columns_are_inserted_and_removed_with_the_frame_in_step() {
             "Cost (EUR)|46,000|212,000|690,000|",
             "Closure|2 weeks|7 weeks|5 months|",
             "Next major work|2031|2040|2055|",
-            "||||",
+            "Risk||||",
         ]
     );
     let header =
@@ -14191,12 +14192,16 @@ fn table_rows_and_columns_are_inserted_and_removed_with_the_frame_in_step() {
     let xml =
         String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
     let appended = &xml[xml.rfind(r#"<a:tr h="548640">"#).unwrap()..xml.find("</a:tbl>").unwrap()];
+    let empty = r#"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr sz="1500"/></a:p></a:txBody><a:tcPr/></a:tc>"#;
     assert_eq!(
         appended,
         format!(
-            r#"<a:tr h="548640">{}</a:tr>"#,
-            r#"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr sz="1500"/></a:p></a:txBody><a:tcPr/></a:tc>"#
-                .repeat(5)
+            r#"<a:tr h="548640">{}{}</a:tr>"#,
+            empty.replace(
+                "<a:endParaRPr",
+                r#"<a:r><a:rPr sz="1500"/><a:t>Risk</a:t></a:r><a:endParaRPr"#
+            ),
+            empty.repeat(4)
         )
     );
     assert!(xml.contains(

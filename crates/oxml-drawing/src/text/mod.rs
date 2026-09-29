@@ -289,11 +289,8 @@ impl CT_TextBody {
             paragraph.properties = first.properties.clone();
             paragraph.end_properties = first_run
                 .and_then(|run| run.properties.clone())
-                .or_else(|| first.end_properties.clone());
-            if let Some(properties) = &mut paragraph.end_properties {
-                properties.hyperlink_click = None;
-                properties.hyperlink_mouse_over = None;
-            }
+                .or_else(|| first.end_properties.clone())
+                .map(CT_TextCharacterProperties::without_hyperlinks);
         }
         Self {
             body_properties: self.body_properties.clone(),
