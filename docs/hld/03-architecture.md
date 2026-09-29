@@ -1253,6 +1253,13 @@ before enclosing content controls and exposes every matching body coordinate.
 Paragraph text and run handles use one accepted-view walk. Direct runs, inline
 content-control runs, insertion runs, and move-destination runs retain recursive
 source paths in exact order. Deletion and move-source text stays excluded.
+Literal and regex replacement read the same runs in the same order. The runs of
+one inline content control, insertion, or move destination form a stretch of
+their own, and a match must lie within one stretch, so a match that crosses an
+insertion boundary is not replaced and is not counted. A replacement inside an
+insertion is written back inside the same wrapper, which keeps its id, author,
+and date, so the edited text stays attributed to that tracked change. A
+deletion or a move source is never matched and does not split a stretch.
 
 `ContentFragment` owns one paragraph, table, block content control, or removed
 preserved node. Insert, remove, clone, and move resolve canonical

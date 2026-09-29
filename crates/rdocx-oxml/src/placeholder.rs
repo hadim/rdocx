@@ -3,29 +3,34 @@
 //! Handles the cross-run splitting problem: a placeholder like `{{name}}`
 //! may be split across multiple `<w:r>` elements in the OOXML source.
 //!
-//! A replacement reads the direct runs of a paragraph and the runs of its
-//! inline content controls, in document order, and searches their text left
-//! to right as one. A match must lie within one stretch of those runs, see
-//! [`replaceable_texts`]. A match that straddles a content-control boundary
-//! is not replaced, and the search goes on after it, so no part of the text
-//! it covers is replaced either.
+//! A replacement reads the runs of a paragraph that `Paragraph::text` reads,
+//! in document order: the direct runs, the runs of its inline content
+//! controls, and those of its tracked insertions and move destinations, but
+//! not those of a deletion or a move source. It searches their text left to
+//! right as one. A match must lie within one stretch of those runs, see
+//! [`replaceable_texts`]. A match that straddles a content-control or a
+//! tracked-insertion boundary is not replaced, and the search goes on after
+//! it, so no part of the text it covers is replaced either.
 
 use crate::content_control::{CT_Sdt, SdtContent};
 use crate::header_footer::CT_HdrFtr;
 use crate::namespace::W_NS;
 use crate::numbering::{local_namespace_overrides, namespace_bindings, word_prefixes_at};
 use crate::properties::is_word_element;
+use crate::revision::{CT_Revision, RevisionKind};
 use crate::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use crate::text::{
-    AcceptedRunPath, AcceptedRunPathSegment, CT_P, CT_R, RunContent, raw_with_external_bindings,
+    AcceptedRunPath, AcceptedRunPathSegment, BoundaryOwner, CT_P, CT_R, RunContent,
+    boundary_owners, raw_with_external_bindings,
 };
 
 /// Replace all occurrences of `placeholder` with `replacement` in a paragraph.
 ///
 /// Handles placeholders split across multiple runs and reaches the runs of
-/// inline content controls. A match that straddles a content-control
-/// boundary is not replaced. Preserves the formatting of the first matched
-/// run. Returns the number of replacements made.
+/// inline content controls and tracked insertions. A match that straddles a
+/// content-control or a tracked-insertion boundary is not replaced.
+/// Preserves the formatting of the first matched run. Returns the number of
+/// replacements made.
 pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &str) -> usize {
     if placeholder.is_empty() {
         return 0;
@@ -37,9 +42,10 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
 }
 
 /// The texts a replacement in `para` matches against, one per stretch of
-/// runs. The direct runs between two inline content controls form one
-/// stretch, and so do the runs of one control between its nested controls.
-/// A match never spans two stretches.
+/// runs. The direct runs between two inline content controls or tracked
+/// insertions form one stretch, and so do the runs of one control, or of
+/// one insertion or move destination, between the controls and insertions
+/// nested in it. A match never spans two stretches.
 #[doc(hidden)]
 pub fn replaceable_texts(para: &CT_P) -> Vec<String> {
     let mut texts: Vec<String> = Vec::new();
@@ -140,33 +146,51 @@ fn replace_matches(para: &mut CT_P, next_match: &mut MatchFinder<'_>) -> usize {
     total
 }
 
-/// The runs of `para` that a replacement reads, in the order `CT_P::runs`
-/// reads them, each with the stretch it belongs to and its address.
+/// The runs of `para` that a replacement reads, in the order of the accepted
+/// view that `Paragraph::text` reads, each with the stretch it belongs to
+/// and its address.
 fn text_runs(para: &CT_P) -> Vec<(usize, AcceptedRunPath)> {
     let mut runs = Vec::new();
-    let mut stretch = 0;
+    paragraph_text_runs(para, &mut Vec::new(), &mut 0, &mut runs);
+    runs
+}
+
+fn paragraph_text_runs(
+    para: &CT_P,
+    prefix: &mut Vec<AcceptedRunPathSegment>,
+    stretch: &mut usize,
+    runs: &mut Vec<(usize, AcceptedRunPath)>,
+) {
     for index in 0..=para.runs.len() {
-        for (control, (_, _, _, sdt)) in para
-            .content_controls
-            .iter()
-            .enumerate()
-            .filter(|(_, (at, _, _, _))| *at == index)
-        {
-            let mut prefix = vec![AcceptedRunPathSegment::ContentControl(control)];
-            stretch += 1;
-            control_text_runs(sdt, &mut prefix, &mut stretch, &mut runs);
-            stretch += 1;
+        for owner in boundary_owners(para, index) {
+            match owner {
+                BoundaryOwner::ContentControl(control) => {
+                    prefix.push(AcceptedRunPathSegment::ContentControl(control));
+                    *stretch += 1;
+                    control_text_runs(&para.content_controls[control].3, prefix, stretch, runs);
+                    *stretch += 1;
+                    prefix.pop();
+                }
+                BoundaryOwner::Revision(revision) => revision_text_runs(
+                    &para.revisions[revision].2,
+                    AcceptedRunPathSegment::Revision(revision),
+                    prefix,
+                    stretch,
+                    runs,
+                ),
+            }
         }
         if index < para.runs.len() {
+            prefix.push(AcceptedRunPathSegment::Run(index));
             runs.push((
-                stretch,
+                *stretch,
                 AcceptedRunPath {
-                    segments: vec![AcceptedRunPathSegment::Run(index)],
+                    segments: prefix.clone(),
                 },
             ));
+            prefix.pop();
         }
     }
-    runs
 }
 
 fn control_text_runs(
@@ -175,9 +199,23 @@ fn control_text_runs(
     stretch: &mut usize,
     runs: &mut Vec<(usize, AcceptedRunPath)>,
 ) {
-    for (index, content) in sdt.content.iter().enumerate() {
-        match content {
-            SdtContent::Run(_) => {
+    for index in 0..=sdt.content.len() {
+        for (revision, (_, wrapper)) in sdt
+            .revisions()
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _))| *at == index)
+        {
+            revision_text_runs(
+                wrapper,
+                AcceptedRunPathSegment::Revision(revision),
+                prefix,
+                stretch,
+                runs,
+            );
+        }
+        match sdt.content.get(index) {
+            Some(SdtContent::Run(_)) => {
                 prefix.push(AcceptedRunPathSegment::Run(index));
                 runs.push((
                     *stretch,
@@ -187,7 +225,7 @@ fn control_text_runs(
                 ));
                 prefix.pop();
             }
-            SdtContent::ContentControl(nested) => {
+            Some(SdtContent::ContentControl(nested)) => {
                 prefix.push(AcceptedRunPathSegment::ContentControl(index));
                 *stretch += 1;
                 control_text_runs(nested, prefix, stretch, runs);
@@ -197,6 +235,34 @@ fn control_text_runs(
             _ => {}
         }
     }
+}
+
+/// The runs of a tracked insertion or move destination form a stretch of
+/// their own, so a replacement inside them stays inside the wrapper, with
+/// its id, author and date. A wrapper whose runs cannot be written back
+/// still ends the stretch before it. A deletion or a move source is not
+/// read, as the reader does not see it, and does not split a stretch.
+fn revision_text_runs(
+    revision: &CT_Revision,
+    segment: AcceptedRunPathSegment,
+    prefix: &mut Vec<AcceptedRunPathSegment>,
+    stretch: &mut usize,
+    runs: &mut Vec<(usize, AcceptedRunPath)>,
+) {
+    if !matches!(
+        revision.kind(),
+        RevisionKind::Insertion | RevisionKind::MoveTo
+    ) || revision.content_paragraph().is_none()
+    {
+        return;
+    }
+    prefix.push(segment);
+    *stretch += 1;
+    if let Some(inserted) = revision.editable_accepted_paragraph() {
+        paragraph_text_runs(inserted, prefix, stretch, runs);
+    }
+    *stretch += 1;
+    prefix.pop();
 }
 
 /// Apply `edit` to the run at `path`.
@@ -359,16 +425,32 @@ fn remove_emptied_runs(
         }
         match path.segments() {
             [AcceptedRunPathSegment::Run(run)] => direct[*run] = true,
-            [AcceptedRunPathSegment::ContentControl(control), rest @ ..] => {
-                if let Some((_, _, _, sdt)) = para.content_controls.get_mut(*control) {
-                    remove_control_run(sdt, rest);
-                }
-            }
-            _ => {}
+            nested => remove_paragraph_run(para, nested),
         }
     }
     if direct.contains(&true) {
         para.remove_runs(&direct);
+    }
+}
+
+fn remove_paragraph_run(para: &mut CT_P, path: &[AcceptedRunPathSegment]) {
+    match path {
+        [AcceptedRunPathSegment::Run(index)] if *index < para.runs.len() => {
+            let mut removed = vec![false; para.runs.len()];
+            removed[*index] = true;
+            para.remove_runs(&removed);
+        }
+        [AcceptedRunPathSegment::ContentControl(control), rest @ ..] => {
+            if let Some((_, _, _, sdt)) = para.content_controls.get_mut(*control) {
+                remove_control_run(sdt, rest);
+            }
+        }
+        [AcceptedRunPathSegment::Revision(revision), rest @ ..] => {
+            if let Some((_, _, revision)) = para.revisions.get_mut(*revision) {
+                remove_revision_run(revision, rest);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -380,8 +462,23 @@ fn remove_control_run(sdt: &mut CT_Sdt, path: &[AcceptedRunPathSegment]) {
                 remove_control_run(nested, rest);
             }
         }
+        [AcceptedRunPathSegment::Revision(index), rest @ ..] => {
+            if let Some((_, revision)) = sdt.revisions.get_mut(*index) {
+                remove_revision_run(revision, rest);
+            }
+        }
         _ => {}
     }
+}
+
+/// Remove a run of a tracked insertion or move destination, which keeps
+/// the wrapper and the other runs in it.
+fn remove_revision_run(revision: &mut CT_Revision, path: &[AcceptedRunPathSegment]) {
+    let removed = revision.edit_accepted_paragraph(|inserted| {
+        remove_paragraph_run(inserted, path);
+        Ok(true)
+    });
+    debug_assert!(matches!(removed, Ok(true)), "revision run path is stale");
 }
 
 /// Replace all occurrences of `placeholder` in all paragraphs of a slice.
@@ -896,8 +993,8 @@ pub fn replace_many_in_chart_xml(
 ///
 /// The `replacement` string supports capture group references: `$1`, `$2`, etc.
 /// Uses the same cross-run char map algorithm as literal replacement, so it
-/// reaches the runs of inline content controls and leaves a match that
-/// straddles a content-control boundary as it is.
+/// reaches the runs of inline content controls and tracked insertions and
+/// leaves a match that straddles one of their boundaries as it is.
 /// Returns the number of replacements made.
 pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacement: &str) -> usize {
     // `captures_at` (rather than slicing) keeps anchors and look-around
@@ -1158,6 +1255,109 @@ mod tests {
 
             assert_eq!(p.text(), "1234 end N", "{pattern}");
         }
+    }
+
+    const INSERTION: &str = r#"<w:ins w:id="901" w:author="Editor" w:date="2026-01-01T00:00:00Z">"#;
+
+    /// The text `Paragraph::text` reads: tracked insertions in, deletions out.
+    fn accepted_text(paragraph: &CT_P) -> String {
+        paragraph
+            .accepted_bookmark_runs()
+            .iter()
+            .map(|run| run.text())
+            .collect()
+    }
+
+    /// The runs of a tracked insertion are read, as a stretch of their own,
+    /// and replaced inside the wrapper, which keeps its id, author and date.
+    /// A match across the wrapper is no match, and deleted text is not read.
+    #[test]
+    fn a_tracked_insertion_is_a_stretch_of_its_own() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:r><w:t xml:space="preserve">Tracked: </w:t></w:r>{INSERTION}<w:r><w:t>ins NEEDLE</w:t></w:r></w:ins><w:del w:id="902" w:author="Editor" w:date="2026-01-01T00:00:00Z"><w:r><w:delText xml:space="preserve">del NEEDLE</w:delText></w:r></w:del></w:p>"#
+        );
+        let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+        assert_eq!(replaceable_texts(&p), ["Tracked: ", "ins NEEDLE"]);
+
+        for straddling in ["Tracked: ins", " ins", "del"] {
+            assert_eq!(replace_in_paragraph(&mut p, straddling, "-"), 0);
+        }
+        assert_eq!(replace_in_paragraph(&mut p, "NEEDLE", "X"), 1);
+        let re = regex::Regex::new(r"X$").unwrap();
+        assert_eq!(replace_regex_in_paragraph(&mut p, &re, "Y"), 1);
+
+        assert_eq!(accepted_text(&p), "Tracked: ins Y");
+        let xml = paragraph_xml(&p);
+        let insertion = format!("{INSERTION}<w:r><w:t>ins Y</w:t></w:r></w:ins>");
+        assert!(xml.contains(&insertion), "{xml}");
+        assert!(xml.contains(">del NEEDLE</w:delText>"), "{xml}");
+    }
+
+    /// A deletion is not read, so it does not split the text around it: the
+    /// reader sees "alpha" and the match over it is replaced, with the
+    /// deletion kept after the replacement.
+    #[test]
+    fn a_deletion_does_not_split_a_stretch() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:r><w:t>al</w:t></w:r><w:del w:id="3" w:author="Editor"><w:r><w:delText>X</w:delText></w:r></w:del><w:r><w:t>pha</w:t></w:r></w:p>"#
+        );
+        let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+
+        assert_eq!(replace_in_paragraph(&mut p, "alpha", "ALPHA"), 1);
+
+        assert_eq!(accepted_text(&p), "ALPHA");
+        let xml = paragraph_xml(&p);
+        assert!(
+            xml.contains(r#"<w:t>ALPHA</w:t></w:r><w:del w:id="3" w:author="Editor">"#),
+            "{xml}"
+        );
+    }
+
+    /// A match across the runs of one insertion removes the runs it empties
+    /// inside the wrapper, and the wrapper keeps the run that holds the
+    /// replacement.
+    #[test]
+    fn a_match_across_runs_of_an_insertion_removes_the_emptied_ones() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}">{INSERTION}<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">ins NEE</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>DL</w:t></w:r><w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t>E</w:t></w:r></w:ins></w:p>"#
+        );
+        let re = regex::Regex::new("NEEDLE").unwrap();
+        for regex in [false, true] {
+            let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+            let count = if regex {
+                replace_regex_in_paragraph(&mut p, &re, "X")
+            } else {
+                replace_in_paragraph(&mut p, "NEEDLE", "X")
+            };
+
+            assert_eq!(count, 1, "regex: {regex}");
+            let xml = paragraph_xml(&p);
+            let insertion = format!(
+                r#"<w:p>{INSERTION}<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">ins X</w:t></w:r></w:ins></w:p>"#
+            );
+            assert_eq!(xml, insertion, "regex: {regex}");
+        }
+    }
+
+    /// The destination of a move is read like an insertion, and its source
+    /// is not read, like a deletion. An insertion inside an inline control
+    /// is a stretch of its own within the control.
+    #[test]
+    fn a_move_destination_and_an_insertion_in_a_control_are_read() {
+        let source = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:moveFrom w:id="4" w:author="Editor"><w:r><w:t>from NEEDLE</w:t></w:r></w:moveFrom><w:moveTo w:id="5" w:author="Editor"><w:r><w:t>to NEEDLE</w:t></w:r></w:moveTo><w:sdt><w:sdtContent><w:r><w:t xml:space="preserve">control </w:t></w:r>{INSERTION}<w:r><w:t>NEEDLE</w:t></w:r></w:ins></w:sdtContent></w:sdt></w:p>"#
+        );
+        let mut p = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+        assert_eq!(replaceable_texts(&p), ["to NEEDLE", "control ", "NEEDLE"]);
+        assert_eq!(replace_in_paragraph(&mut p, "control NEEDLE", "-"), 0);
+
+        assert_eq!(replace_in_paragraph(&mut p, "NEEDLE", "X"), 2);
+
+        assert_eq!(accepted_text(&p), "to Xcontrol X");
+        let xml = paragraph_xml(&p);
+        assert!(xml.contains(">from NEEDLE<"), "{xml}");
+        let insertion = format!("{INSERTION}<w:r><w:t>X</w:t></w:r></w:ins></w:sdtContent>");
+        assert!(xml.contains(&insertion), "{xml}");
     }
 
     #[test]
