@@ -2057,8 +2057,10 @@ mutually exclusive with the one-based `render --pages` range. Both flags select
 against the same deterministic layout snapshot that is passed to the shared
 raster backend. The legacy `--page 0` default PNG path and single-line stdout
 remain unchanged. The `text` command emits paragraphs and table cells in
-document order through the facade plain-text representation, which is the
-same accepted view as `text --json`. `text --json`
+document order through the facade plain-text representation. It gives each
+paragraph the same accepted-view text as `text --json`, but it leaves out
+paragraphs inside block-level and cell-level content controls and inside
+nested tables, which `text --json` reports. `text --json`
 emits schema-1 accepted-view paragraphs with a zero-based direct body index,
 typed zero-based nested path, direct style and numbering, text, and ordered
 runs. Run formatting is null when no direct run properties exist. Otherwise it

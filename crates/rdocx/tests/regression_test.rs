@@ -14891,14 +14891,20 @@ fn hyperlink_nested_revisions_resolve_inside_out_when_scoped() {
 
 #[test]
 fn document_text_reports_the_accepted_view_of_tracked_changes() {
-    let xml = wrap_word_body(
-        r#"<w:p><w:r><w:t xml:space="preserve">Tracked: </w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t>ins NEEDLE</w:t></w:r></w:ins><w:del w:id="2" w:author="Ada"><w:r><w:delText>gone</w:delText></w:r></w:del></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t xml:space="preserve">cell </w:t></w:r><w:ins w:id="3" w:author="Ada"><w:r><w:t>added</w:t></w:r></w:ins></w:p></w:tc></w:tr></w:tbl>"#,
-    );
+    let xml = wrap_word_body(concat!(
+        r#"<w:p><w:r><w:t xml:space="preserve">Tracked: </w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t>ins NEEDLE</w:t></w:r></w:ins><w:del w:id="2" w:author="Ada"><w:r><w:delText>gone</w:delText></w:r></w:del></w:p>"#,
+        r#"<w:p><w:r><w:t xml:space="preserve">Moved: </w:t></w:r><w:moveFrom w:id="4" w:author="Ada"><w:r><w:t>old place</w:t></w:r></w:moveFrom><w:moveTo w:id="5" w:author="Ada"><w:r><w:t>new place</w:t></w:r></w:moveTo></w:p>"#,
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t xml:space="preserve">cell </w:t></w:r><w:ins w:id="3" w:author="Ada"><w:r><w:t>added</w:t></w:r></w:ins></w:p></w:tc></w:tr></w:tbl>"#,
+    ));
     let document = document_with_content_controls(&xml);
 
-    assert_eq!(document.revisions().len(), 3);
+    assert_eq!(document.revisions().len(), 5);
     assert_eq!(document.paragraph(0).unwrap().text(), "Tracked: ins NEEDLE");
-    assert_eq!(document.text(), "Tracked: ins NEEDLE\ncell added\t\n");
+    assert_eq!(document.paragraph(1).unwrap().text(), "Moved: new place");
+    assert_eq!(
+        document.text(),
+        "Tracked: ins NEEDLE\nMoved: new place\ncell added\t\n"
+    );
 }
 
 #[test]

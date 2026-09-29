@@ -91,8 +91,12 @@ Omitting a selector resolves all modeled revisions. Every mutation, comparison,
 and TOC rebuild requires `-o/--output`, publishes only a complete validated
 DOCX, and supports a schema-1 record through `--json`.
 
-`text` prints the accepted view, like `text --json`: tracked insertions are
-included and tracked deletions are left out.
+`text` prints each paragraph with the same accepted-view text as `text --json`:
+tracked insertions and move destinations are included, and tracked deletions
+and move sources are left out. Plain `text` covers body paragraphs and the
+paragraphs directly inside table cells. It leaves out paragraphs inside
+block-level and cell-level content controls and inside nested tables, which
+`text --json` reports.
 
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,
