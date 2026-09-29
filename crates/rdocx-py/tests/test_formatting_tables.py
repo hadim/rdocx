@@ -729,7 +729,7 @@ def test_paragraph_style_accepts_a_defined_id_or_name_and_rejects_the_rest():
     before = document.to_bytes()
     for value, error, message in (
         ("NoSuchStyle", KeyError, "no style with ID or name 'NoSuchStyle'"),
-        ("Heading 7", KeyError, "no style"),
+        ("Heading 10", KeyError, "no style"),
         ("Strong", ValueError, "character style"),
         ("emphasis char", ValueError, "character style"),
     ):
@@ -738,6 +738,306 @@ def test_paragraph_style_accepts_a_defined_id_or_name_and_rejects_the_rest():
     assert document.to_bytes() == before
     assert paragraph.style == "Heading1"
     assert Document.from_bytes(before).paragraphs[0].style == "Heading1"
+
+
+def _part(document, name):
+    with ZipFile(BytesIO(document.to_bytes())) as archive:
+        return archive.read(name).decode()
+
+
+def test_new_document_defines_the_common_word_styles_and_opened_ones_keep_theirs():
+    from rdocx import Document
+
+    document = Document()
+    styles = {style.style_id: style for style in document.styles}
+    expected = {f"Heading{level}" for level in range(1, 10)} | {
+        "Normal",
+        "Title",
+        "Subtitle",
+        "NoSpacing",
+        "Quote",
+        "ListParagraph",
+        "Caption",
+        "TableGrid",
+    }
+    assert set(styles) == expected
+    assert styles["Heading2"].name == "heading 2"
+    assert styles["Heading2"].based_on == "Normal"
+    assert styles["TableGrid"].style_type == "table"
+    assert [style.is_default for style in document.styles].count(True) == 1
+
+    document.add_paragraph("Chapter")
+    document.paragraphs[0].style = "Heading 2"
+    assert document.paragraphs[0].style == "Heading2"
+    document.paragraphs[0].style = "Caption"
+    assert document.paragraphs[0].style == "Caption"
+
+    trimmed = BytesIO()
+    with ZipFile(BytesIO(document.to_bytes())) as source, ZipFile(
+        trimmed, "w", compression=ZIP_DEFLATED
+    ) as output:
+        for member in source.infolist():
+            contents = source.read(member.filename)
+            if member.filename == "word/styles.xml":
+                contents = (
+                    b'<w:styles xmlns:w="http://schemas.openxmlformats.org/'
+                    b'wordprocessingml/2006/main"><w:style w:type="paragraph" '
+                    b'w:default="1" w:styleId="Normal"><w:name w:val="Normal"/>'
+                    b"</w:style></w:styles>"
+                )
+            output.writestr(member, contents)
+    opened = Document.from_bytes(trimmed.getvalue())
+    assert [style.style_id for style in opened.styles] == ["Normal"]
+
+
+def test_add_style_derives_the_word_id_and_writes_its_formatting(tmp_path):
+    from rdocx import Document, Inches, Pt, RGBColor, Style
+
+    document = Document()
+    document.add_paragraph("body")
+    held = document.paragraphs[0]
+
+    note = document.add_style("Note", style_type="paragraph", based_on="Normal")
+    assert note == Style(
+        style_id="Note",
+        name="Note",
+        based_on="Normal",
+        style_type="paragraph",
+        linked_style=None,
+        next_style=None,
+        priority=None,
+        auto_redefine=None,
+        hidden=None,
+        semi_hidden=None,
+        unhide_when_used=None,
+        quick_format=None,
+        locked=None,
+        is_default=False,
+    )
+    boxed = document.add_style(
+        "Boxed Note",
+        based_on="note",
+        next_style="Normal",
+        font_name="Arial",
+        font_size=Pt(12),
+        bold=True,
+        italic=False,
+        color=RGBColor(0x11, 0x22, 0x33),
+        space_before=Pt(6),
+        space_after=Pt(3),
+        left_indent=Inches(0.5),
+        right_indent=Inches(0.25),
+        first_line_indent=-Inches(0.25),
+    )
+    assert (boxed.style_id, boxed.based_on, boxed.next_style) == (
+        "BoxedNote",
+        "Note",
+        "Normal",
+    )
+    assert document.add_style("heading x", style_id="Custom").style_id == "Custom"
+    assert document.add_style("Callout", "character", bold=True).style_type == "character"
+    assert document.add_style("Plain Grid", "table", based_on="Table Grid").based_on == (
+        "TableGrid"
+    )
+    assert held.text == "body"
+    held.style = "Boxed Note"
+    assert held.style == "BoxedNote"
+
+    path = tmp_path / "styles.docx"
+    document.save(path)
+    reopened = {style.style_id: style for style in Document(path).styles}
+    assert reopened["BoxedNote"] == boxed
+    xml = _part(document, "word/styles.xml")
+    start = xml.index('w:styleId="BoxedNote"')
+    boxed_xml = xml[start : xml.index("</w:style>", start)]
+    for fragment in (
+        '<w:spacing w:before="120" w:after="60"/>',
+        '<w:ind w:left="720" w:right="360" w:hanging="360"/>',
+        '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/>',
+        '<w:i w:val="false"/>',
+        '<w:color w:val="112233"/>',
+        '<w:sz w:val="24"/>',
+    ):
+        assert fragment in boxed_xml, fragment
+
+    docx = pytest.importorskip("docx")
+    oracle = docx.Document(str(path)).styles["Boxed Note"]
+    assert oracle.style_id == "BoxedNote"
+    assert oracle.base_style.name == "Note"
+    assert (oracle.font.name, oracle.font.size, oracle.font.bold) == ("Arial", Pt(12), True)
+    assert oracle.font.italic is False
+    assert str(oracle.font.color.rgb) == "112233"
+    assert oracle.paragraph_format.space_before == Pt(6)
+    assert oracle.paragraph_format.left_indent == Inches(0.5)
+    assert oracle.paragraph_format.first_line_indent == -Inches(0.25)
+
+
+def test_add_style_derives_word_ids_that_survive_save_and_reopen(tmp_path):
+    from rdocx import Document
+
+    expected = {
+        "Q&A": "QA",
+        "Note (draft)": "Notedraft",
+        "My-Style.v2": "My-Stylev2",
+        "\u00dcberschrift Eigen": "berschriftEigen",
+        'A "q" <x>': "Aqx",
+        "\u898b\u51fa\u3057 \u30ab\u30b9\u30bf\u30e0": "a",
+        "\u5225\u306e\u30b9\u30bf\u30a4\u30eb": "a0",
+    }
+    document = Document()
+    for name, style_id in expected.items():
+        assert document.add_style(name, based_on="Normal").style_id == style_id
+        document.add_paragraph(name).style = style_id
+
+    path = tmp_path / "ids.docx"
+    document.save(path)
+    reopened = Document(path)
+    assert set(expected.values()) <= {style.style_id for style in reopened.styles}
+    assert [paragraph.style for paragraph in reopened.paragraphs] == list(
+        expected.values()
+    )
+    docx = pytest.importorskip("docx")
+    oracle = {style.style_id for style in docx.Document(str(path)).styles}
+    assert set(expected.values()) <= oracle
+
+
+def test_add_style_rejects_bad_input_without_changing_the_document():
+    from rdocx import Document
+
+    document = Document()
+    document.add_style("Callout", "character")
+    before = document.to_bytes()
+    for arguments, keywords, error, message in (
+        (("Heading 2",), {}, ValueError, "ID 'Heading2' already exists"),
+        (("normal",), {"style_id": "Other"}, ValueError, "named 'normal' already exists"),
+        (("Note",), {"style_id": " "}, ValueError, "cannot be blank"),
+        (("Note", "numbering"), {}, ValueError, "style_type must be"),
+        (("Note",), {"based_on": "Missing"}, KeyError, "no style with ID or name 'Missing'"),
+        (("Note",), {"based_on": "Callout"}, ValueError, "is a character style, not a paragraph"),
+        (("Note",), {"next_style": "Table Grid"}, ValueError, "is a table style, not a paragraph"),
+        (("Note", "character"), {"next_style": "Normal"}, ValueError, "only a paragraph style"),
+        (("Note", "character"), {"space_after": 12700}, ValueError, "no paragraph formatting"),
+    ):
+        with pytest.raises(error, match=message):
+            document.add_style(*arguments, **keywords)
+    assert document.to_bytes() == before
+
+
+def test_a_style_with_a_numbering_level_renders_its_paragraphs_numbered():
+    from rdocx import Document, ListLevel, Pt
+
+    def recipe(style_numbering, direct_numbering):
+        document = Document()
+        definition = document.add_numbering_definition(
+            [ListLevel(format="decimal", text="%1."), ListLevel(format="lowerLetter")]
+        )
+        instance = document.add_numbering_instance(definition)
+        document.add_style(
+            "Step",
+            based_on="Normal",
+            font_name="Arial",
+            font_size=Pt(14),
+            bold=True,
+            space_before=Pt(12),
+            space_after=Pt(6),
+        )
+        if style_numbering:
+            document.link_style_to_numbering("Step", instance, 0)
+        for text in ("Mix", "Bake"):
+            paragraph = document.add_paragraph(text)
+            paragraph.style = "Step"
+            if direct_numbering:
+                paragraph.numbering = (instance, 0)
+        return document
+
+    document = recipe(style_numbering=True, direct_numbering=False)
+    assert document.paragraphs[0].numbering is None
+    styles_xml = _part(document, "word/styles.xml")
+    step = styles_xml[styles_xml.index('w:styleId="Step"') :]
+    assert '<w:numId w:val="1"/>' in step[: step.index("</w:style>")]
+    numbering_xml = _part(document, "word/numbering.xml")
+    assert '<w:pStyle w:val="Step"/>' in numbering_xml
+    assert '<w:numFmt w:val="lowerLetter"/>' in numbering_xml
+    assert '<w:lvlText w:val="%2."/>' in numbering_xml
+
+    rendered = document.render_page_to_png(0, 72)
+    assert rendered == recipe(False, True).render_page_to_png(0, 72)
+    assert rendered != recipe(False, False).render_page_to_png(0, 72)
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.render_page_to_png(0, 72) == rendered
+
+
+def test_list_levels_and_numbering_calls_check_their_input():
+    import rdocx
+    from rdocx import Document, Inches, ListLevel, RdocxError
+
+    level = ListLevel(format="bullet", text="-", start=3, left_indent=Inches(1))
+    assert (level.format, level.text, level.start) == ("bullet", "-", 3)
+    assert (level.left_indent, level.hanging_indent) == (Inches(1), None)
+    assert level == ListLevel(format="bullet", text="-", start=3, left_indent=Inches(1))
+    assert ListLevel().format == "decimal"
+    with pytest.raises(ValueError, match="'Decimal' is not a Word numbering format"):
+        ListLevel(format="Decimal")
+    with pytest.raises(ValueError, match="hanging_indent"):
+        ListLevel(hanging_indent=-1)
+    with pytest.raises(AttributeError):
+        level.start = 1  # type: ignore[misc]
+
+    document = Document()
+    definition = document.add_numbering_definition(
+        [level, ListLevel(format="upperRoman", hanging_indent=Inches(0.5))]
+    )
+    numbering_xml = _part(document, "word/numbering.xml")
+    for fragment in (
+        '<w:start w:val="3"/>',
+        '<w:lvlText w:val="-"/>',
+        '<w:ind w:left="1440" w:hanging="360"/>',
+        '<w:ind w:left="1440" w:hanging="720"/>',
+    ):
+        assert fragment in numbering_xml, fragment
+    instance = document.add_numbering_instance(definition)
+    assert instance != document.add_numbering_instance(definition)
+
+    before = document.to_bytes()
+    for call in (
+        lambda: document.add_numbering_definition([]),
+        lambda: document.add_numbering_definition([ListLevel(text="%2.")]),
+        lambda: document.add_numbering_instance(definition + 100),
+        lambda: document.link_style_to_numbering("Normal", instance + 100, 0),
+        lambda: document.link_style_to_numbering("Normal", instance, 5),
+    ):
+        with pytest.raises(RdocxError):
+            call()
+    with pytest.raises(ValueError, match="is a table style, not a paragraph"):
+        document.link_style_to_numbering("TableGrid", instance, 0)
+    assert document.to_bytes() == before
+    assert rdocx.ListLevel is ListLevel
+
+
+def test_styles_can_be_removed_and_made_the_default():
+    from rdocx import Document, RdocxError
+
+    document = Document()
+    document.add_style("Note", based_on="Normal")
+    document.add_style("Aside", based_on="Note")
+    document.add_paragraph("aside").style = "Aside"
+
+    assert document.remove_style("No Such Style") is False
+    before = document.to_bytes()
+    with pytest.raises(RdocxError, match="referenced by style 'Aside'"):
+        document.remove_style("Note")
+    with pytest.raises(RdocxError, match="referenced by document content"):
+        document.remove_style("Aside")
+    assert document.to_bytes() == before
+
+    document.set_default_style("note")
+    defaults = [style.style_id for style in document.styles if style.is_default]
+    assert defaults == ["Note"]
+    with pytest.raises(KeyError, match="no style with ID or name 'Missing'"):
+        document.set_default_style("Missing")
+
+    assert document.remove_style("Subtitle") is True
+    assert "Subtitle" not in {style.style_id for style in document.styles}
 
 
 def test_word_highlight_keywords_round_trip_and_clear():

@@ -11,9 +11,9 @@ use rdocx::table::{
     TableConditionalFormatting, TableLayout, TableLook, TableWidth, VerticalAlignment,
 };
 use rdocx::{
-    BodyItemRef, BorderStyle, Length, ListLevel, MhtmlDiagnostic, ParagraphRef, RunPosition,
-    RunRange, SectionBreak, StoryItemKind, StoryKind, StyleBuilder, TabAlignment, TabLeader,
-    TableStyleRegion, UnderlineStyle,
+    BodyItemRef, BorderStyle, Length, ListLevel, ListNumberFormat, MhtmlDiagnostic, ParagraphRef,
+    RunPosition, RunRange, SectionBreak, StoryItemKind, StoryKind, StyleBuilder, TabAlignment,
+    TabLeader, TableStyleRegion, UnderlineStyle,
 };
 use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, WordPackageClass};
 use rdocx_oxml::CT_BorderEdge;
@@ -9938,6 +9938,167 @@ fn custom_style_round_trip() {
 
     let paras = doc2.paragraphs();
     assert_eq!(paras[0].style_id(), Some("CustomHeading"));
+}
+
+#[test]
+fn common_styles_are_added_once_and_leave_unstyled_layout_unchanged() {
+    let ids = |document: &Document| {
+        document
+            .styles()
+            .iter()
+            .map(|style| style.style_id().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let mut document = Document::new();
+    assert_eq!(ids(&document), ["Normal", "Heading1"]);
+    document.add_paragraph("Heading").style("Heading1");
+    document.add_paragraph("Body text");
+    document
+        .add_table(2, 2)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("cell");
+    let before = document.to_pdf_deterministic().unwrap();
+
+    assert_eq!(document.add_common_styles().unwrap(), 15);
+    assert_eq!(
+        ids(&document),
+        [
+            "Normal",
+            "Heading1",
+            "Heading2",
+            "Heading3",
+            "Heading4",
+            "Heading5",
+            "Heading6",
+            "Heading7",
+            "Heading8",
+            "Heading9",
+            "Title",
+            "Subtitle",
+            "NoSpacing",
+            "Quote",
+            "ListParagraph",
+            "Caption",
+            "TableGrid",
+        ]
+    );
+    document.validate_style_graph().unwrap();
+    assert_eq!(document.to_pdf_deterministic().unwrap(), before);
+    let heading = document.style("Heading2").unwrap();
+    assert_eq!(heading.name(), Some("heading 2"));
+    assert_eq!(heading.based_on(), Some("Normal"));
+    assert_eq!(heading.next_style(), Some("Normal"));
+    assert_eq!(heading.paragraph_properties().unwrap().outline_lvl, Some(1));
+    assert_eq!(heading.semi_hidden(), None);
+    assert_eq!(
+        document.style("Heading4").unwrap().semi_hidden(),
+        Some(true)
+    );
+    let caption = document.style("Caption").unwrap();
+    assert_eq!(caption.name(), Some("caption"));
+    assert_eq!(caption.semi_hidden(), Some(true));
+    let grid = document.style("TableGrid").unwrap();
+    assert_eq!(grid.style_type(), rdocx::StyleType::Table);
+    let grid_properties = grid.table_properties().unwrap();
+    let borders = grid_properties.borders.as_ref().unwrap();
+    assert_eq!(borders.inside_v.as_ref().unwrap().val, ST_Border::Single);
+    // Without a `Normal Table` base, Word would give the cells no side padding.
+    assert_eq!(
+        grid_properties.cell_margin,
+        Some(CT_TblCellMar {
+            top: Some(rdocx::Twips(0)),
+            left: Some(rdocx::Twips(108)),
+            bottom: Some(rdocx::Twips(0)),
+            right: Some(rdocx::Twips(108)),
+        })
+    );
+
+    let saved = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(saved.clone())).unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    let grid_xml = &styles[styles.find(r#"w:styleId="TableGrid""#).unwrap()..];
+    for margin in [
+        r#"<w:top w:w="0" w:type="dxa"/>"#,
+        r#"<w:left w:w="108" w:type="dxa"/>"#,
+        r#"<w:bottom w:w="0" w:type="dxa"/>"#,
+        r#"<w:right w:w="108" w:type="dxa"/>"#,
+    ] {
+        assert!(grid_xml.contains(margin), "{margin}");
+    }
+    assert_eq!(document.add_common_styles().unwrap(), 0);
+    assert_eq!(document.to_bytes().unwrap(), saved);
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(ids(&reopened), ids(&document));
+    reopened.validate_style_graph().unwrap();
+
+    let mut localized = Document::new();
+    localized
+        .add_style(StyleBuilder::paragraph("berschrift2", "Heading 2").based_on("Normal"))
+        .unwrap();
+    assert_eq!(localized.add_common_styles().unwrap(), 14);
+    assert!(localized.style("Heading2").is_none());
+
+    let mut baseless = Document::new();
+    assert!(baseless.remove_style("Heading1").unwrap());
+    assert!(baseless.remove_style("Normal").unwrap());
+    let saved = baseless.to_bytes().unwrap();
+    let error = baseless.add_common_styles().unwrap_err().to_string();
+    assert!(error.contains("missing style 'Normal'"), "{error}");
+    assert_eq!(baseless.to_bytes().unwrap(), saved);
+}
+
+#[test]
+fn a_style_linked_to_numbering_numbers_its_paragraphs_in_layout() {
+    assert_eq!(
+        ListNumberFormat::from_name("lowerLetter"),
+        ListNumberFormat::LowerLetter
+    );
+    assert_eq!(
+        ListNumberFormat::from_name("Decimal"),
+        ListNumberFormat::Other("Decimal".to_owned())
+    );
+    let mut document = Document::new();
+    let definition = document
+        .add_numbering_definition(&[
+            ListLevel::new(ListNumberFormat::from_name("decimal")).level_text("%1.")
+        ])
+        .unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .add_style(
+            StyleBuilder::paragraph("Step", "Step")
+                .based_on("Normal")
+                .paragraph_properties(rdocx::CT_PPr {
+                    space_before: Some(rdocx::Twips(240)),
+                    space_after: Some(rdocx::Twips(120)),
+                    ..Default::default()
+                })
+                .run_properties(rdocx::CT_RPr {
+                    font_ascii: Some("Arial".to_owned()),
+                    font_hansi: Some("Arial".to_owned()),
+                    sz: Some(rdocx::HalfPoint(28)),
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+        )
+        .unwrap();
+    document
+        .link_style_to_numbering("Step", instance, 0)
+        .unwrap();
+    document.add_paragraph("Mix").style("Step");
+    document.add_paragraph("Bake").style("Step");
+    document.add_paragraph("Serve");
+
+    let layout = document.layout_deterministic().unwrap();
+    let marker = |index| {
+        layout
+            .document_body_paragraph_numbering(index)
+            .map(|numbering| numbering.marker_text.clone())
+    };
+    assert_eq!(marker(0).as_deref(), Some("1."));
+    assert_eq!(marker(1).as_deref(), Some("2."));
+    assert_eq!(marker(2), None);
 }
 
 #[test]

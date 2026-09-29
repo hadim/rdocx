@@ -306,10 +306,51 @@ of the same name. As in python-docx, a value that names no style raises
 raises `ValueError`, both before any change. Assigning a style is a value-only
 mutation and keeps handles valid. The run style, table style and numbering
 setters still write their value unchecked. This changes behavior on documents
-that lack the style. `rdocx.Document()` defines only `Normal` and `Heading1`,
-so `p.style = "Heading2"` on a new document used to store an undefined style,
-which `rebuild_toc` even read as a level-two heading, and now raises
-`KeyError`.
+that lack the style. On such a document `p.style = "Heading2"` used to store an
+undefined style, which `rebuild_toc` even read as a level-two heading, and now
+raises `KeyError`. A new `rdocx.Document()` defines `Heading2` and the other
+common Word styles that `Document::add_common_styles` adds.
+
+`Document.add_style(name, style_type="paragraph")` creates a paragraph,
+character or table style through the native `add_style`, as python-docx's
+`styles.add_style` does, and returns its `Style` snapshot. The ID keeps the
+ASCII letters, digits and hyphens of the name, as Word derives one, so `Q&A`
+gives `QA` and `Note (draft)` gives `Notedraft`. A name with none of them, such
+as a Japanese one, gets the first unused of `a`, `a0`, `a1` and so on. The
+exceptions python-docx makes for Word's lowercase built-in names `caption` and
+`heading 1` to `heading 9` still give `Caption` and `Heading1` to `Heading9`.
+The `style_id` keyword overrides the derived ID. `based_on` and `next_style`
+accept an ID or a name, resolved as `Paragraph.style` resolves one among the
+styles of the new style's type, or among paragraph styles for `next_style`. The
+formatting keywords are the font name, size, bold, italic and colour, and the
+spacing before and after, left, right and first-line indentation in EMU. They
+are written as the `Font` and `ParagraphFormat` setters write them on content,
+and a negative first-line indentation becomes a hanging one. A base or next
+style that no style names raises `KeyError`. A duplicate ID, a name another
+style has regardless of case, an unknown type, a base or next style of another
+type, and paragraph formatting on a character style raise `ValueError`. Both
+are raised before any change. `remove_style` and `set_default_style` resolve a
+style of any type the same way. `remove_style` returns `False` when no style
+has the ID or name, and `set_default_style` raises `KeyError` then and
+otherwise makes the style the default of its type. The native refusals, such as
+removing a style that content or another style names, raise `RdocxError`.
+Python does not bind the native `set_style`, whose property merge cannot remove
+the theme font or theme colour that a Word style carries, so existing styles
+keep their formatting.
+
+`ListLevel` is a constructible frozen value with a `format` checked against
+the standard `w:numFmt` names through `ListNumberFormat::from_name`, the level
+`text`, `start`, and `left_indent` and `hanging_indent` in EMU. Omitted values
+take the native defaults, `%1.` or a bullet glyph and half an inch of
+indentation per level with a quarter-inch hanging indent.
+`Document.add_numbering_definition(levels)` creates an abstract definition from
+one to nine levels and returns its ID. `add_numbering_instance(definition_id)`
+creates a `w:num` for it and returns the `numId` that `Paragraph.numbering`
+takes. `link_style_to_numbering(style, num_id, level)` links a paragraph style,
+given by ID or name, to one level through the native method of that name, so
+every paragraph of that style is numbered. Native checks raise `RdocxError`
+and publish nothing. Style and numbering authoring changes no content, so the
+revision and every handle stay valid.
 
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
@@ -599,8 +640,11 @@ style links but do not mutate them independently.
 `Document::link_style_to_numbering` and
 `Document::unlink_style_from_numbering` are additive pre-1.0 native Rust APIs.
 They atomically mutate the paragraph style and effective numbering level for
-one exact style, `numId`, and level tuple. Python, WASM, and CLI bindings gain
-no numbering graph authoring surface.
+one exact style, `numId`, and level tuple. Python binds definition and instance
+creation and the style link, as described for the Python `Document`. WASM and
+CLI bindings gain no numbering graph authoring surface.
+`ListNumberFormat::from_name` reads a `w:numFmt` name, and a name outside the
+standard set is `Other`.
 
 F-248 also adds public fields to the pre-1.0 native Rust projections.
 `ResolvedNumbering` exposes `number_current`, `number_level`,
@@ -653,8 +697,30 @@ profiles select package identity without manufacturing executable content.
 Python, WASM, and CLI construction continues through `Document::new()` and
 therefore receives the compatible DOCX default without a new selector surface.
 
+Both profiles define the same two styles, `Normal` and `Heading1`.
+`Document::add_common_styles` adds the Word built-in styles most documents use
+and python-docx's default template defines: `heading 2` to `heading 9`,
+`Title`, `Subtitle`, `No Spacing`, `Quote`, `List Paragraph`, `caption` and
+`Table Grid`. Each has the ID, name, UI priority, visibility flags and
+paragraph and run formatting Word writes for it under the Office theme, with
+theme colours written as literal values as in the default `Heading1`. None
+names a font. `Table Grid` has no `Normal Table` base, since a new document
+defines none, so it carries that base's cell margins itself, 108 twips left and
+right. Without them Word gives its cells no side padding and the text touches
+the grid. A style whose ID, or whose name regardless of case, the document
+already defines is skipped, and the call returns how many it added. None is a
+default style, so content that names none of them lays out as before. A
+document without a `Normal` paragraph style is rejected unchanged.
+`Document::new()` itself keeps its two styles, so the hash harness baseline and
+every output pinned on it stay as they are. A new Python `Document()` calls
+`add_common_styles`, so python-docx code that names these styles finds them. A
+Python document opened from a file or bytes keeps exactly the styles it has.
+WASM and CLI construction is unchanged.
+
 Native Rust re-exports `StyleType`, `TableStyleRegion` and
-`ConditionalTableStyle`. `StyleBuilder` authors paragraph, character, and table
+`ConditionalTableStyle`, and `CT_PPr`, `CT_RPr` and `HalfPoint`, the property
+and unit types `StyleBuilder` takes, so a caller of the facade alone can give a
+style its formatting. `StyleBuilder` authors paragraph, character, and table
 styles with inheritance, reciprocal links, next styles, UI flags, base
 properties including a table style's own row and cell properties, and
 conditional table regions carrying all five property layers. `add_style` is
@@ -677,8 +743,9 @@ bitmask together, `Table::clear_look` removes the selection, and the checked
 columns. `Paragraph::set_conditional_formatting` and
 `Paragraph::conditional_formatting` select conditional regions through the same
 `TableConditionalFormatting` shape a row and a cell already use.
-Python, WASM, and CLI retain style package and render behavior without new
-style mutation entry points.
+WASM and CLI retain style package and render behavior without new style
+mutation entry points. Python gains style creation, removal and default
+selection, as described for the Python `Document`.
 
 Native Rust re-exports `CT_OfficeStyleSheet` and adds the concrete
 `FontDefinition`, `EmbeddedFont`, `EmbeddedFontKind`, and

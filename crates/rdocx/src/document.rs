@@ -18303,6 +18303,42 @@ impl Document {
         Ok(true)
     }
 
+    /// Add the Word built-in styles most documents use and python-docx's
+    /// default template defines, returning how many were added.
+    ///
+    /// They are `heading 2` to `heading 9`, `Title`, `Subtitle`,
+    /// `No Spacing`, `Quote`, `List Paragraph`, `caption` and `Table Grid`,
+    /// none of them a default style, so content that names none of them lays
+    /// out as before. A style whose ID, or whose name regardless of case, the
+    /// document already defines is skipped. Most are based on `Normal`, so a
+    /// document without a `Normal` paragraph style is rejected unchanged.
+    pub fn add_common_styles(&mut self) -> Result<usize> {
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        let mut added = 0;
+        for common in style::common_styles() {
+            let defined = candidate.styles.styles.iter().any(|style| {
+                style.style_id == common.style_id
+                    || style
+                        .name
+                        .as_deref()
+                        .zip(common.name.as_deref())
+                        .is_some_and(|(name, common)| name.eq_ignore_ascii_case(common))
+            });
+            if !defined {
+                candidate.styles.styles.push(common);
+                added += 1;
+            }
+        }
+        if added == 0 {
+            return Ok(0);
+        }
+        style::validate_style_graph(&candidate.styles)?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(added)
+    }
+
     /// Validate all style IDs, defaults, links, next styles, and inheritance chains.
     pub fn validate_style_graph(&self) -> Result<()> {
         style::validate_style_graph(&self.styles)
@@ -23724,6 +23760,12 @@ pub enum ListNumberFormat {
 }
 
 impl ListNumberFormat {
+    /// The format an OOXML `w:numFmt` name selects, such as `decimal` or
+    /// `lowerLetter`. A name outside the standard set is `Other`.
+    pub fn from_name(name: &str) -> Self {
+        list_number_format_from_st(ST_NumberFormat::from_str(name))
+    }
+
     fn to_st(&self) -> ST_NumberFormat {
         match self {
             Self::Decimal => ST_NumberFormat::Decimal,
