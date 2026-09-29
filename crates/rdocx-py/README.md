@@ -55,8 +55,9 @@ with open("report.pdf", "wb") as output:
   paragraph styles linked to a numbering level.
 - Core document properties such as title, author, and revision, read and
   written through `Document.core_properties` under python-docx's names.
-- Rich per-section headers and footers, related stories, and resolved
-  hyperlinks.
+- Rich per-section headers and footers, related stories, and hyperlinks
+  resolved, retargeted, or removed in any story.
+- Picture replacement and resizing by image relationship.
 - Complete paragraph and run formatting, multilingual and vertical typography,
   conditional and floating tables, section semantics, settings, fields, forms,
   equations, drawings, comments, and metadata.

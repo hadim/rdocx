@@ -201,6 +201,7 @@ def exercise_rdocx_types(path: Path) -> None:
     image_data: bytes | None = document.image_data("rId1")
     document.replace_image("rId1", b"image")
     document.replace_image_for_story(stories[0], "rId1", b"image")
+    resized: int = document.set_picture_size("rId1", width=Inches(1), height=Inches(1))
     story_items: tuple[StoryItem, ...] = document.story_items
     inserted_picture: StoryItem = document.add_picture(
         b"png", "image.png", Inches(1), Inches(1), after=story_items[0]
@@ -214,6 +215,8 @@ def exercise_rdocx_types(path: Path) -> None:
     direct_body_index: int | None = story_items[0].direct_body_index if story_items else None
     variants: tuple[HeaderFooterVariant, ...] = document.header_footer_variants
     hyperlinks: tuple[Hyperlink, ...] = document.hyperlinks
+    document.set_hyperlink_url(hyperlinks[0], "https://example.org/new")
+    document.remove_hyperlink(hyperlinks[0])
     resolved: bool = document.resolve_comment(comment_id)
     removed: bool = document.remove_comment(reply_id)
     diagnostics: tuple[ComparisonDiagnostic, ...] = document.compare(
