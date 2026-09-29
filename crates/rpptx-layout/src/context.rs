@@ -820,17 +820,15 @@ impl<'a> ResolveCtx<'a> {
                     .map(|fill| self.concrete_fill(fill, (bounds.width, bounds.height)))
                     .transpose()?
                     .unwrap_or((None, None));
-                let has_direct_line = connector.shape_properties.line.is_some();
-                let mut line = connector
-                    .shape_properties
-                    .line
+                let has_line_source =
+                    connector.shape_properties.line.is_some() || connector.style().is_some();
+                let effective_line = self.effective_connector_line(connector)?;
+                let mut line = effective_line
                     .as_ref()
                     .map(|line| self.concrete_line(line, (bounds.width, bounds.height)))
                     .transpose()?
                     .flatten();
-                let (head_end, tail_end) = connector
-                    .shape_properties
-                    .line
+                let (head_end, tail_end) = effective_line
                     .as_ref()
                     .map(resolved_line_ends)
                     .unwrap_or((None, None));
@@ -886,7 +884,7 @@ impl<'a> ResolveCtx<'a> {
                 if let Some(message) = geometry_diagnostic {
                     diagnostics.push(Diagnostic { message });
                 }
-                let line_unsupported = (!has_direct_line).then_some("connector line style");
+                let line_unsupported = (!has_line_source).then_some("connector line style");
                 if line_unsupported.is_some() {
                     line = Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0));
                     diagnostics.push(Diagnostic {
@@ -5832,6 +5830,48 @@ mod tests {
             [Diagnostic {
                 message: "unsupported connector line style retained as visible default".to_owned(),
             }]
+        );
+    }
+
+    #[test]
+    fn connector_style_resolves_the_theme_line_under_its_direct_line() {
+        let styled = |line_index: u32, line: &str| {
+            connector("line", 127_000, 254_000, "", line).replace(
+                "</p:cxnSp>",
+                &format!(
+                    r#"<p:style><a:lnRef idx="{line_index}"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="1"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style></p:cxnSp>"#
+                ),
+            )
+        };
+        let fixture = Fixture::new(
+            &[
+                styled(2, ""),
+                styled(2, r#"<a:ln w="38100"/>"#),
+                styled(0, ""),
+            ]
+            .join(""),
+            "",
+            "",
+        );
+
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "{:?}",
+            resolved.diagnostics
+        );
+        let accent1 = Paint::Solid(Color::from_hex("156082"));
+        let themed = resolved.shapes[0].line.as_ref().expect("theme line");
+        assert_eq!((&themed.paint, themed.width), (&accent1, 1.5));
+        let widened = resolved.shapes[1].line.as_ref().expect("overlaid line");
+        assert_eq!((&widened.paint, widened.width), (&accent1, 3.0));
+        assert_eq!(resolved.shapes[2].line, None);
+        assert!(
+            resolved
+                .shapes
+                .iter()
+                .all(|shape| shape.unsupported.is_none())
         );
     }
 

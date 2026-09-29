@@ -14,6 +14,7 @@ use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, all_attributes,
     root_attributes, self_contained_attributes,
 };
+use crate::shape_tree::CT_ShapeStyle;
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
@@ -43,6 +44,9 @@ struct ConnectionShapeRaw {
     raw_attributes: RawAttributes,
     non_visual: NonVisualConnectionShape,
     style: Option<Vec<u8>>,
+    /// The references of `style` when it carries all four in schema order.
+    /// Writing always uses the preserved `style` bytes.
+    typed_style: Option<Box<CT_ShapeStyle>>,
     extension_list: Option<Vec<u8>>,
     raw_children: OrderedRawChildren,
 }
@@ -115,10 +119,20 @@ impl CT_ConnectionShape {
                     raw_children: OrderedRawChildren::default(),
                 },
                 style: None,
+                typed_style: None,
                 extension_list: None,
                 raw_children: OrderedRawChildren::default(),
             }),
         })
+    }
+
+    /// Returns the typed format-scheme references of `p:style`.
+    ///
+    /// A style that does not carry `a:lnRef`, `a:fillRef`, `a:effectRef`,
+    /// and `a:fontRef` in schema order is still preserved, but has no typed
+    /// view.
+    pub fn style(&self) -> Option<&CT_ShapeStyle> {
+        self.raw.typed_style.as_deref()
     }
 
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
@@ -198,6 +212,7 @@ impl CT_ConnectionShape {
         let mut non_visual = None;
         let mut shape_properties = None;
         let mut style = None;
+        let mut typed_style = None;
         let mut extension_list = None;
         let mut raw_children = OrderedRawChildren::default();
         let mut boundary = 0usize;
@@ -217,6 +232,7 @@ impl CT_ConnectionShape {
                         &mut non_visual,
                         &mut shape_properties,
                         &mut style,
+                        &mut typed_style,
                         &mut extension_list,
                         &mut raw_children,
                         &mut boundary,
@@ -235,6 +251,7 @@ impl CT_ConnectionShape {
                         &mut non_visual,
                         &mut shape_properties,
                         &mut style,
+                        &mut typed_style,
                         &mut extension_list,
                         &mut raw_children,
                         &mut boundary,
@@ -263,6 +280,7 @@ impl CT_ConnectionShape {
                 )?,
                 non_visual: connector_properties,
                 style,
+                typed_style,
                 extension_list,
                 raw_children,
             }),
@@ -323,6 +341,7 @@ fn capture_root_child(
     non_visual: &mut Option<ParsedNonVisualConnectionShape>,
     shape_properties: &mut Option<CT_ShapeProperties>,
     style: &mut Option<Vec<u8>>,
+    typed_style: &mut Option<Box<CT_ShapeStyle>>,
     extension_list: &mut Option<Vec<u8>>,
     raw_children: &mut OrderedRawChildren,
     boundary: &mut usize,
@@ -340,6 +359,7 @@ fn capture_root_child(
             *boundary = 2;
         }
         (Some(P_NS), b"style") if *boundary == 2 && style.is_none() => {
+            *typed_style = CT_ShapeStyle::from_fragment(&raw, namespaces).ok();
             *style = Some(raw);
             *boundary = 3;
         }
@@ -948,6 +968,8 @@ mod constructor_tests {
         let text = String::from_utf8(xml.clone()).unwrap();
         assert!(text.contains("<p:cNvPr id=\"2\" name=\"Connector &amp; 2\"/>"));
         assert!(text.find("<p:nvCxnSpPr").unwrap() < text.find("<p:spPr").unwrap());
+        assert!(!text.contains("<p:style"));
+        assert!(connector.style().is_none());
         assert_eq!(CT_ConnectionShape::from_xml(&xml).unwrap(), connector);
     }
 }

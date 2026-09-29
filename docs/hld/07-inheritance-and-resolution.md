@@ -226,9 +226,10 @@ as an ordinary shape and retains its transform, direct line, fill, and
 arrowheads. Connector custom geometry reuses the same checked DrawingML path
 evaluator as ordinary shape custom geometry. A horizontal or vertical
 connector may have a zero extent on its
-collapsed axis and remains a finite stroked path. A connector without a direct
-line keeps a visible default line and a diagnostic until its preserved
-`p:style` reference has a typed resolution path. Explicit
+collapsed axis and remains a finite stroked path. A connector's line resolves
+from the `a:lnRef` of its typed `p:style` and its direct `a:ln`, as an ordinary
+shape's line does. A connector with neither keeps a visible default line and a
+diagnostic. Explicit
 `p:bgPr` fills and `p:bgRef` theme styles resolve to concrete background paint
 before crossing the renderer boundary. If slide, layout, and master all omit
 `p:bg`, the resolved background remains absent and the raster backend keeps its
@@ -399,7 +400,9 @@ shape's explicit `a:spPr` fill, line and effects on top. Reference colour
 transforms precede the placeholder colour's transforms. Fill and modelled
 effects are atomic replacements. Line width, cap, fill, dash, join, head, and
 tail values overlay independently, so omitted direct properties retain their
-theme values. An explicit `a:noFill` replaces a referenced fill.
+theme values. An explicit `a:noFill` replaces a referenced fill. A connector
+resolves its line reference the same way. Its fill and effect references are
+not rendered yet.
 
 Opaque effect children remain preserved rather than being claimed as resolved.
 An opaque effect that still contains `phClr` returns
