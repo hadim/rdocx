@@ -165,6 +165,66 @@ def test_counted_replacement_spans_runs_and_a_bad_regex_changes_nothing():
     assert document.paragraphs[0].text == "Dear Ada, bye"
 
 
+def test_counted_replacement_checks_expected_counts_before_publishing():
+    import pickle
+
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("{{a}} {{b}} {{b}} {{c}}")
+    document.set_header("{{c}} header")
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        document.replace_all([("{{a}}", "A", 1), ("{{b}}", "B", 1), ("{{c}}", "C", 2)])
+    error = raised.value
+    assert isinstance(error, rdocx.RdocxError)
+    assert (error.index, error.expected, error.found) == (1, 1, 2)
+    assert str(error) == 'pair 1: expected 1 replacement(s) of "{{b}}", found 2'
+    # Worker pools pickle exceptions to return them, so the error must survive.
+    copy = pickle.loads(pickle.dumps(error))
+    assert (type(copy), str(copy), copy.index, copy.expected, copy.found) == (
+        rdocx.ReplacementCountError,
+        str(error),
+        1,
+        1,
+        2,
+    )
+    assert document.to_bytes() == before
+    assert held.text == "{{a}} {{b}} {{b}} {{c}}"
+
+    with pytest.raises(
+        rdocx.ReplacementCountError,
+        match=r'^expected 3 replacement\(s\) of "\{\{b\}\}", found 2$',
+    ) as raised:
+        document.try_replace_text("{{b}}", "B", expect=3)
+    assert (raised.value.index, raised.value.expected, raised.value.found) == (None, 3, 2)
+    assert document.to_bytes() == before
+    assert document.try_replace_text("{{missing}}", "x", expect=0) == 0
+    assert document.replace_all([("{{missing}}", "x")]) == (0,)
+    assert document.replace_all([]) == ()
+    assert held.text == "{{a}} {{b}} {{b}} {{c}}"
+
+    # Pairs run in order, so the second one also replaces what the first wrote.
+    assert document.replace_all(
+        [("{{a}}", "{{b}}", 1), ("{{b}}", "B", 3), ("{{c}}", "C", None)]
+    ) == (1, 3, 2)
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert document.paragraphs[0].text == "B B B C"
+    assert _story_paragraph_texts(document, "header") == ["C header"]
+    assert document.try_replace_text("B", "b", expect=3) == 3
+
+    for pairs, message in (
+        ([("x",)], "pair 0 must be"),
+        ([("x", "y"), ("x", "y", -1)], "pair 1 must be"),
+        ("xy", "pair 0 must be"),
+    ):
+        with pytest.raises(TypeError, match=message):
+            document.replace_all(pairs)
+
+
 def test_update_fields_takes_a_keyword_context_and_counts_updates():
     import datetime
 
@@ -1306,6 +1366,143 @@ def test_update_layout_backed_fields_returns_owned_report():
     assert b"stale target" not in xml
 
 
+def test_pageref_to_a_bookmarked_run_range_is_filled_from_the_layout():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("See page ")
+    document.add_table(2, 2)
+    target = document.add_paragraph("The target phrase ends here.")
+    target.paragraph_format.page_break_before = True
+    index = document.find_content_index("The target phrase")
+    assert index == 2
+    assert document.split_run(index, 0, len("The target phrase")) == 1
+    range_ = rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=index, run_index=0),
+        end=rdocx.RunPosition(body_index=index, run_index=1),
+    )
+    held = document.paragraphs[0].runs[0]
+
+    bookmark_id = document.add_bookmark("target", range_)
+    assert document.bookmarks == (
+        rdocx.Bookmark(
+            id=bookmark_id,
+            name="target",
+            # The recursive range counts the four cell paragraphs of the table.
+            range=rdocx.RunRange(
+                start=rdocx.RunPosition(body_index=5, run_index=0),
+                end=rdocx.RunPosition(body_index=5, run_index=1),
+            ),
+            direct_range=range_,
+            text="The target phrase",
+            issue=None,
+        ),
+    )
+    later = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body" and item.text == "The target phrase ends here."
+    )
+    held.add_field("PAGEREF target \\h", "?")
+    # The field is a story item of its own, so later items move and go stale.
+    for stale in (lambda: held.text, lambda: document.set_story_text(later, "x")):
+        with pytest.raises(rdocx.StaleElementError):
+            stale()
+    assert document.paragraphs[0].runs[0].text == "See page "
+
+    report = document.update_layout_backed_fields()
+    assert report.page_reference_fields == 1
+    field = re.search(
+        rb'w:instr="PAGEREF target \\h"[^>]*>\s*<w:r>\s*<w:t>([^<]*)</w:t>',
+        _document_xml(document),
+    )
+    assert field is not None and field.group(1) == b"2"
+
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="already exists"):
+        document.add_bookmark("target", range_)
+    table_range = rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=1, run_index=0),
+        end=rdocx.RunPosition(body_index=1, run_index=0),
+    )
+    with pytest.raises(rdocx.RdocxError, match="is not a paragraph"):
+        document.add_bookmark("in_table", table_range)
+    run = document.paragraphs[0].runs[0]
+    with pytest.raises(rdocx.RdocxError, match="field name"):
+        run.add_field("  ")
+    assert run.text == "See page "
+    assert document.to_bytes() == before
+
+
+def test_bookmarks_report_nested_ranges_without_a_direct_range():
+    import rdocx
+
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    document = _replace_document_body(
+        source,
+        """
+        <w:sdt><w:sdtContent><w:p><w:bookmarkStart w:id="1" w:name="inside"/><w:r><w:t>Inside</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p></w:sdtContent></w:sdt>
+        <w:p><w:bookmarkStart w:id="2" w:name="open"/><w:r><w:t>Open</w:t></w:r></w:p>
+        """,
+    )
+    inside, unmatched = document.bookmarks
+    assert inside.name == "inside"
+    assert inside.range == rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=0, run_index=0),
+        end=rdocx.RunPosition(body_index=0, run_index=1),
+    )
+    assert inside.direct_range is None
+    assert inside.text == "Inside"
+    assert unmatched.range is None and unmatched.direct_range is None
+    assert unmatched.issue == "bookmark id 2 has 1 start markers and 0 end markers"
+
+
+def test_insert_toc_links_headings_and_tab_and_fields_extend_a_run():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Intro")
+    document.add_paragraph("Chapter one").style = "Heading1"
+    document.add_paragraph("Section one point one").style = "Heading2"
+    document.add_paragraph("Deep detail").style = "Heading3"
+    held = document.paragraphs[0]
+
+    before = document.to_bytes()
+    with pytest.raises(IndexError):
+        document.insert_toc(5)
+    with pytest.raises(ValueError, match="max_level"):
+        document.insert_toc(0, max_level=0)
+    assert document.to_bytes() == before
+    assert held.text == "Intro"
+
+    assert document.insert_toc(0, max_level=2) is None
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert [paragraph.text for paragraph in document.paragraphs[:3]] == [
+        "Table of Contents",
+        "Chapter one\t",
+        "Section one point one\t",
+    ]
+    assert [(link.text, link.anchor) for link in document.hyperlinks] == [
+        ("Chapter one", "_Toc1"),
+        ("Section one point one", "_Toc2"),
+    ]
+    assert [(bookmark.name, bookmark.text) for bookmark in document.bookmarks] == [
+        ("_Toc1", "Chapter one"),
+        ("_Toc2", "Section one point one"),
+    ]
+
+    run = document.paragraphs[3].runs[0]
+    run.add_tab()
+    assert run.text == "Intro\t"
+    run.add_field("PAGE", "1")
+    with pytest.raises(rdocx.StaleElementError):
+        run.text
+    xml = _document_xml(document)
+    assert b'<w:fldSimple w:instr="PAGE"' in xml
+
+
 def test_word_structure_snapshots_preserve_order_ownership_and_types():
     import rdocx
 
@@ -1711,6 +1908,122 @@ def test_set_story_text_rejects_a_story_that_is_not_in_the_document():
         document.set_story_text(missing, "edited")
     assert document.to_bytes() == before
     assert held.text == "body"
+
+
+def _two_section_document():
+    import rdocx
+
+    section = (
+        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" '
+        'w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" '
+        'w:gutter="0"/></w:sectPr>'
+    )
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    return _replace_document_body(
+        source,
+        f"<w:p><w:pPr>{section}</w:pPr><w:r><w:t>First section.</w:t></w:r></w:p>"
+        f"<w:p><w:r><w:t>Second section.</w:t></w:r></w:p>{section}",
+    )
+
+
+def _default_footer(document, section_index):
+    return next(
+        variant.story
+        for variant in document.header_footer_variants
+        if variant.section_index == section_index
+        and variant.kind == "footer"
+        and variant.variant == "default"
+    )
+
+
+def _story_part(document, story):
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        return archive.read(story.part_name.lstrip("/"))
+
+
+def test_footer_with_text_tab_and_page_fields_is_built_for_one_section():
+    import rdocx
+
+    document = _two_section_document()
+    held = document.paragraphs[0]
+    footer = document.create_section_story(1, "footer", "default")
+    assert footer.kind == "footer"
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert _default_footer(document, 0) is None
+    assert _default_footer(document, 1) == footer
+
+    # Author the paragraph in the body with the typed API, then move it.
+    paragraph = document.add_paragraph("Confidential")
+    paragraph.runs[0].add_tab()
+    document.paragraphs[2].add_run("Page ").add_field("PAGE", "1")
+    document.paragraphs[2].add_run(" of ").add_field("NUMPAGES", "1")
+    fragment = document.pop_content(document.find_content_index("Confidential"))
+    document.insert_content(footer, fragment)
+    assert [paragraph.text for paragraph in document.paragraphs] == [
+        "First section.",
+        "Second section.",
+    ]
+    assert _story_paragraph_texts(document, "footer") == ["ConfidentialPage 1 of 1"]
+
+    report = document.update_layout_backed_fields()
+    assert (report.page_fields, report.num_pages_fields) == (1, 1)
+    xml = _story_part(document, footer)
+    assert re.search(rb"<w:t>Confidential</w:t>\s*<w:tab/>", xml)
+    for instruction in (b"PAGE", b"NUMPAGES"):
+        field = re.search(
+            rb'w:instr="' + instruction + rb'"[^>]*>\s*<w:r>\s*<w:t>([^<]*)</w:t>', xml
+        )
+        assert field is not None and field.group(1) == b"2"
+    body = _document_xml(document)
+    first_section = body[: body.index(b"First section.")]
+    assert b"footerReference" not in first_section
+    assert body.count(b"footerReference") == 1
+    assert document.to_pdf().startswith(b"%PDF")
+
+
+def test_section_stories_link_unlink_and_reject_bad_names_atomically():
+    import rdocx
+
+    document = _two_section_document()
+    footer = document.create_section_story(1, "footer", "default")
+    document.add_paragraph("Footer text")
+    fragment = document.pop_content(document.find_content_index("Footer text"))
+    document.insert_content(footer, fragment)
+    before = document.to_bytes()
+    for arguments, error in (
+        ((1, "side", "default"), ValueError),
+        ((1, "footer", "odd"), ValueError),
+        ((2, "footer", "default"), IndexError),
+    ):
+        with pytest.raises(error):
+            document.create_section_story(*arguments)
+        with pytest.raises(error):
+            document.unlink_section_story(*arguments)
+        with pytest.raises(error):
+            document.link_section_story(*arguments, footer)
+    with pytest.raises(rdocx.RdocxError):
+        document.link_section_story(0, "header", "default", footer)
+    with pytest.raises(TypeError, match="destination must be an int, a StoryItem or a Story"):
+        document.insert_content("footer", fragment)
+    with pytest.raises(TypeError, match="index must be an int or a StoryItem"):
+        document.pop_content(footer)
+    assert document.to_bytes() == before
+
+    assert document.link_section_story(0, "footer", "default", footer) == footer
+    assert _default_footer(document, 0) == footer
+    copy = document.unlink_section_story(0, "footer", "default")
+    assert copy.part_name != footer.part_name
+    assert _default_footer(document, 0) == copy
+    assert _story_paragraph_texts(document, "footer") == ["Footer text", "Footer text"]
+
+    [item] = [item for item in document.story_items if item.story == copy]
+    popped = document.pop_content(item)
+    assert popped.kind == "paragraph"
+    assert [item for item in document.story_items if item.story == copy] == []
+    assert _default_footer(document, 1) == footer
+    assert _story_paragraph_texts(document, "footer") == ["Footer text"]
 
 
 def test_hyperlinks_are_added_to_paragraphs_and_stories():

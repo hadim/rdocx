@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, assert_type
 
 from rdocx import (
+    Bookmark,
     BoundingBox,
     Cell,
     CellCollection,
@@ -19,6 +20,7 @@ from rdocx import (
     LayoutBackedFieldUpdateReport,
     LayoutPage,
     RGBColor,
+    ReplacementCountError,
     Paragraph,
     ParagraphCollection,
     ParagraphFormat,
@@ -35,6 +37,8 @@ from rdocx import (
     StoryRunPosition,
     StoryRunRange,
     Style,
+    SvgDiagnostic,
+    SvgRenderResult,
     Table,
     TableCollection,
     TocRebuildReport,
@@ -116,6 +120,12 @@ def exercise_rdocx_types(path: Path) -> None:
     pdf_bytes: bytes = opened.to_pdf()
     pages: list[bytes] = opened.render_all_pages()
     maybe_page: bytes | None = opened.render_page_to_png(0)
+    font_pdf: bytes = opened.to_pdf(fonts=[("Carlito", b"font")], font_dir=path)
+    archival_pdf: bytes = opened.to_pdfa_deterministic("pdfa-3b")
+    svg_page: SvgRenderResult | None = opened.render_page_to_svg(0)
+    if svg_page is not None:
+        assert_type(svg_page.svg, str)
+        svg_diagnostics: tuple[SvgDiagnostic, ...] = svg_page.diagnostics
     document.save(path)
     document.remove_content(0)
     position = RunPosition(body_index=0, run_index=0)
@@ -136,6 +146,12 @@ def exercise_rdocx_types(path: Path) -> None:
         text="done",
         date="2026-09-16T11:00:00+01:00",
     )
+    bookmark_id: int = document.add_bookmark("target", range_)
+    bookmarks: tuple[Bookmark, ...] = document.bookmarks
+    assert_type(bookmarks[0].direct_range, RunRange | None)
+    run.add_tab()
+    run.add_field("PAGEREF target \\h", "1")
+    document.insert_toc(0, max_level=2)
     comments: tuple[Comment, ...] = document.comments
     sections: tuple[Section, ...] = document.sections
     updated_section: Section = document.update_section(
@@ -198,6 +214,11 @@ def exercise_rdocx_types(path: Path) -> None:
     document.move_content(table, content_index)
     replacement_count: int = document.try_replace_text("old", "new")
     regex_count: int = document.replace_all_regex([("old", "new")])
+    expected_count: int = document.try_replace_text("old", "new", expect=1)
+    batch_counts: tuple[int, ...] = document.replace_all([("a", "b", 1), ("c", "d")])
+    count_error = ReplacementCountError("message", 1, 2, index=0)
+    assert_type(count_error.index, int | None)
+    assert_type(count_error.found, int)
     revisions: tuple[Revision, ...] = document.revisions
     accepted: int = document.accept_all()
     dated: int = document.reject_revisions_in_date_range(
@@ -214,6 +235,11 @@ def exercise_rdocx_types(path: Path) -> None:
     document.set_footer("Footer")
     document.set_story_text(story_items[0], "edited")
     document.add_hyperlink_to_story(stories[0], "home", "https://example.com/")
+    section_footer: Story = document.create_section_story(0, "footer", "default")
+    linked_footer: Story = document.link_section_story(0, "footer", "first", section_footer)
+    unlinked_footer: Story = document.unlink_section_story(0, "footer", "first")
+    document.insert_content(section_footer, document.pop_content(story_items[0]))
+    document.insert_content(story_items[0], fragment)
     link_run: Run = first.add_hyperlink("docs", "https://example.com/docs")
     assert_type(story_items[0].xml, bytes)
     compatible_story_item = StoryItem(
