@@ -23723,6 +23723,330 @@ fn ignored_formatting_keeps_original_numbering_left_biased() {
     );
 }
 
+/// Each body paragraph as its visible text with markers and container edges
+/// written inline, read from the XML without the rdocx model.
+fn marked_paragraphs(xml: &str) -> Vec<String> {
+    const MARKERS: [&str; 7] = [
+        "bookmarkStart",
+        "bookmarkEnd",
+        "commentRangeStart",
+        "commentRangeEnd",
+        "proofErr",
+        "permStart",
+        "permEnd",
+    ];
+    const CONTAINERS: [&str; 8] = [
+        "smartTag",
+        "customXml",
+        "hyperlink",
+        "sdt",
+        "fldSimple",
+        "oMath",
+        "ins",
+        "del",
+    ];
+    let describe = |element: &quick_xml::events::BytesStart<'_>| {
+        let name = String::from_utf8_lossy(element.local_name().as_ref()).into_owned();
+        let mut attributes = element
+            .attributes()
+            .flatten()
+            .map(|attribute| {
+                format!(
+                    "{}={}",
+                    String::from_utf8_lossy(attribute.key.local_name().as_ref()),
+                    String::from_utf8_lossy(attribute.value.as_ref())
+                )
+            })
+            .filter(|attribute| !attribute.starts_with("rsid"))
+            .collect::<Vec<_>>();
+        attributes.sort();
+        (name.clone(), format!("{name}[{}]", attributes.join(",")))
+    };
+    let mut reader = XmlReader::from_str(xml);
+    let mut paragraphs = Vec::<String>::new();
+    let mut in_text = false;
+    let mut hidden = 0usize;
+    loop {
+        match reader.read_event().unwrap() {
+            XmlEvent::Eof => return paragraphs,
+            XmlEvent::Start(element) => {
+                let (name, description) = describe(&element);
+                match name.as_str() {
+                    "p" => paragraphs.push(String::new()),
+                    "t" => in_text = true,
+                    "delText" | "instrText" | "sdtPr" | "rPr" | "pPr" => hidden += 1,
+                    _ => {}
+                }
+                if let Some(paragraph) = paragraphs.last_mut()
+                    && (MARKERS.contains(&name.as_str()) || CONTAINERS.contains(&name.as_str()))
+                {
+                    paragraph.push_str(&format!("<{description}>"));
+                }
+            }
+            XmlEvent::Empty(element) => {
+                let (name, description) = describe(&element);
+                if let Some(paragraph) = paragraphs.last_mut()
+                    && (MARKERS.contains(&name.as_str()) || CONTAINERS.contains(&name.as_str()))
+                {
+                    paragraph.push_str(&format!("<{description}/>"));
+                }
+            }
+            XmlEvent::End(element) => {
+                let name = String::from_utf8_lossy(element.local_name().as_ref()).into_owned();
+                match name.as_str() {
+                    "t" => in_text = false,
+                    "delText" | "instrText" | "sdtPr" | "rPr" | "pPr" => hidden -= 1,
+                    _ => {}
+                }
+                if let Some(paragraph) = paragraphs.last_mut()
+                    && CONTAINERS.contains(&name.as_str())
+                {
+                    paragraph.push_str(&format!("</{name}>"));
+                }
+            }
+            XmlEvent::Text(text) if in_text && hidden == 0 => {
+                if let Some(paragraph) = paragraphs.last_mut() {
+                    paragraph.push_str(&text.decode().unwrap());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn marker_comparison_options() -> Vec<rdocx::ComparisonOptions> {
+    let word = rdocx::ComparisonOptions {
+        granularity: rdocx::ComparisonGranularity::Word,
+        ..Default::default()
+    };
+    vec![
+        word.clone(),
+        rdocx::ComparisonOptions {
+            granularity: rdocx::ComparisonGranularity::Character,
+            ..Default::default()
+        },
+        rdocx::ComparisonOptions {
+            ignore_whitespace: true,
+            ..Default::default()
+        },
+        rdocx::ComparisonOptions {
+            ignore_formatting: true,
+            ..Default::default()
+        },
+        rdocx::ComparisonOptions {
+            ignore_fields: true,
+            ..word.clone()
+        },
+        rdocx::ComparisonOptions {
+            ignore_comments: true,
+            ..word
+        },
+    ]
+}
+
+#[test]
+fn granular_comparison_keeps_markers_and_controls_in_document_order() {
+    let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    let heading = |text: &str| {
+        format!(
+            r#"<w:bookmarkStart w:id="1" w:name="_Toc1"/>{}<w:bookmarkEnd w:id="1"/>"#,
+            run(text)
+        )
+    };
+    let go_back = r#"<w:bookmarkStart w:id="0" w:name="_GoBack"/><w:bookmarkEnd w:id="0"/>"#;
+    let grammar_end = r#"<w:proofErr w:type="gramEnd"/>"#;
+    let commented = |text: &str| {
+        format!(
+            r#"<w:commentRangeStart w:id="7"/>{}<w:commentRangeEnd w:id="7"/>"#,
+            run(text)
+        )
+    };
+    let control = |inner: &str| {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:alias w:val="c"/></w:sdtPr><w:sdtContent>{inner}</w:sdtContent></w:sdt>"#
+        )
+    };
+    let link = |inner: &str| format!(r#"<w:hyperlink w:anchor="target">{inner}</w:hyperlink>"#);
+    let cases = [
+        (
+            "heading bookmark",
+            heading("Heading one"),
+            heading("Heading ONE"),
+        ),
+        (
+            "proofErr and bookmark after the edit",
+            format!("{}{grammar_end}{go_back}", run("one two three")),
+            format!("{}{grammar_end}{go_back}", run("one TWO three")),
+        ),
+        (
+            "bookmark between runs",
+            format!("{}{go_back}{}", run("one two "), run("three four")),
+            format!("{}{go_back}{}", run("one TWO "), run("three four")),
+        ),
+        (
+            "comment range around the edit",
+            commented("Heading one"),
+            commented("Heading ONE"),
+        ),
+        (
+            "bookmark after an edited control",
+            format!("{}{go_back}{}", control(&run("Heading one")), run(" tail")),
+            format!("{}{go_back}{}", control(&run("Heading ONE")), run(" tail")),
+        ),
+        (
+            "bookmark inside an edited control",
+            format!(
+                "{}{}",
+                control(&format!("{}{go_back}", run("Heading one"))),
+                run(" tail")
+            ),
+            format!(
+                "{}{}",
+                control(&format!("{}{go_back}", run("Heading ONE"))),
+                run(" tail")
+            ),
+        ),
+        (
+            "bookmark inside an edited hyperlink",
+            link(&format!("{}{go_back}{}", run("Heading one"), run(" tail"))),
+            link(&format!("{}{go_back}{}", run("Heading ONE"), run(" tail"))),
+        ),
+    ];
+    for (name, original_body, edited_body) in &cases {
+        let original_xml = wrap_word_body(&format!("<w:p>{original_body}</w:p>"));
+        let edited_xml = wrap_word_body(&format!("<w:p>{edited_body}</w:p>"));
+        let mut original = document_with_content_controls(&original_xml);
+        let mut edited = document_with_content_controls(&edited_xml);
+        let original_marks = marked_paragraphs(&document_xml(&mut original));
+        let edited_marks = marked_paragraphs(&document_xml(&mut edited));
+        for options in marker_comparison_options() {
+            let mut tracked = document_with_content_controls(&original_xml);
+            tracked
+                .compare_with_options(&edited, "Ada", "2026-09-04T09:00:00Z", &options)
+                .unwrap_or_else(|error| panic!("{name} {options:?}: {error}"));
+            let bytes = tracked.to_bytes().unwrap();
+            let mut accepted = Document::from_bytes(&bytes).unwrap();
+            accepted.accept_all().unwrap();
+            assert_eq!(
+                marked_paragraphs(&document_xml(&mut accepted)),
+                edited_marks,
+                "{name} {options:?}"
+            );
+            let mut rejected = Document::from_bytes(&bytes).unwrap();
+            rejected.reject_all().unwrap();
+            assert_eq!(
+                marked_paragraphs(&document_xml(&mut rejected)),
+                original_marks,
+                "{name} {options:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn granular_comparison_refuses_marker_moves_it_cannot_express() {
+    let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    let go_back = r#"<w:bookmarkStart w:id="0" w:name="_GoBack"/><w:bookmarkEnd w:id="0"/>"#;
+    let smart_tag = format!(
+        r#"<w:smartTag w:uri="urn:x" w:element="place">{}</w:smartTag>"#,
+        run("XYZ")
+    );
+    let control = format!(
+        r#"<w:sdt><w:sdtPr><w:alias w:val="c"/></w:sdtPr><w:sdtContent>{}</w:sdtContent></w:sdt>"#,
+        run("abc")
+    );
+    let page = r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>7</w:t></w:r></w:fldSimple>"#;
+    let caption = |bookmarked_field: bool| {
+        let field = r#"<w:fldSimple w:instr=" SEQ Figure "><w:r><w:t>1</w:t></w:r></w:fldSimple>"#;
+        let start = r#"<w:bookmarkStart w:id="2" w:name="_Ref1"/>"#;
+        let end = r#"<w:bookmarkEnd w:id="2"/>"#;
+        if bookmarked_field {
+            format!("{start}{}{field}{end}{}", run("Figure "), run(" caption"))
+        } else {
+            format!("{start}{}{end}{field}{}", run("Figure "), run(" caption"))
+        }
+    };
+    let word = rdocx::ComparisonOptions {
+        granularity: rdocx::ComparisonGranularity::Word,
+        ..Default::default()
+    };
+    let ignored_whitespace = rdocx::ComparisonOptions {
+        ignore_whitespace: true,
+        ..word.clone()
+    };
+    let ignored_fields = rdocx::ComparisonOptions {
+        ignore_fields: true,
+        ..word.clone()
+    };
+    let cases = [
+        (
+            "insertion at a run end before a bookmark",
+            format!("{}{go_back}{}", run("one"), run(" three")),
+            format!("{}{go_back}{}", run("one two"), run(" three")),
+            word.clone(),
+        ),
+        (
+            "insertion at a run end before a comment range",
+            format!(
+                r#"{}<w:commentRangeStart w:id="7"/><w:commentRangeEnd w:id="7"/>{}"#,
+                run("one"),
+                run(" three")
+            ),
+            format!(
+                r#"{}<w:commentRangeStart w:id="7"/><w:commentRangeEnd w:id="7"/>{}"#,
+                run("one two"),
+                run(" three")
+            ),
+            word.clone(),
+        ),
+        (
+            "smart tag and control swapped across an empty run",
+            format!("{}{smart_tag}<w:r></w:r>{control}", run("one")),
+            format!("{}<w:r></w:r>{control}{smart_tag}", run("one")),
+            word.clone(),
+        ),
+        (
+            "smart tag and control swapped across ignored whitespace",
+            format!("{}{smart_tag}{}{control}", run("one"), run(" ")),
+            format!("{}{}{control}{smart_tag}", run("one"), run(" ")),
+            ignored_whitespace.clone(),
+        ),
+        (
+            "smart tag and control swapped across an ignored field",
+            format!("{}{smart_tag}{page}{control}", run("one")),
+            format!("{}{page}{control}{smart_tag}", run("one")),
+            ignored_fields.clone(),
+        ),
+        (
+            "bookmark moved across ignored whitespace",
+            format!("{}{go_back}{}{}", run("one"), run(" "), run("two")),
+            format!("{}{}{go_back}{}", run("one"), run(" "), run("two")),
+            ignored_whitespace,
+        ),
+        (
+            "caption bookmark end moved across its ignored field",
+            caption(true),
+            caption(false),
+            ignored_fields,
+        ),
+    ];
+    for (name, original_body, edited_body, options) in &cases {
+        let original_xml = wrap_word_body(&format!("<w:p>{original_body}</w:p>"));
+        let edited =
+            document_with_content_controls(&wrap_word_body(&format!("<w:p>{edited_body}</w:p>")));
+        let mut tracked = document_with_content_controls(&original_xml);
+        let before = tracked.to_bytes().unwrap();
+        let error = tracked
+            .compare_with_options(&edited, "Ada", "2026-09-04T09:00:00Z", options)
+            .expect_err(name);
+        assert!(
+            error.to_string().starts_with("comparison "),
+            "{name}: {error}"
+        );
+        assert_eq!(tracked.to_bytes().unwrap(), before, "{name}");
+    }
+}
+
 #[test]
 fn granular_hyperlink_edits_preserve_the_owner_shell() {
     let hyperlink = |text| {

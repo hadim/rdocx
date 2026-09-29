@@ -1275,7 +1275,15 @@ edited document, author, and RFC 3339 timestamp. The additive
 messages without turning those differences into revisions. Comparison rejects
 existing modeled revisions and unsupported structural shell differences, and
 it commits only after accepting and rejecting staged copies reproduce their
-respective package-wide modeled baselines. `Document::compare` keeps its
+respective package-wide modeled baselines. Those baselines read each
+paragraph as one sequence in document order: compared units, preserved raw
+children such as bookmarks, comment range markers, inline content controls,
+and hyperlink edges. A granular revision that splits a run therefore still
+reproduces a bookmark or comment range beside the edit, while a result that
+moves any of them relative to the text or to each other is refused. Ignored
+whitespace, fields, and comment references stay in the sequence where they
+touch one of those markers, so moving a marker across them is refused too, and
+`ignore_comments` leaves comment range markers out. `Document::compare` keeps its
 source-compatible whole-run default and delegates to the additive
 `compare_with_options` method. The concrete `ComparisonOptions` value selects
 `Run`, `Word`, or `Character` granularity and left-biased ignores for

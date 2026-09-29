@@ -12,7 +12,7 @@ use rdocx_oxml::document::{BodyContent, CT_Document};
 use rdocx_oxml::namespace::W_NS;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblPr, CT_Tc, CT_TrPr, CellContent};
-use rdocx_oxml::text::{CT_P, CT_R, CT_Text, RunContent};
+use rdocx_oxml::text::{CT_P, CT_R, CT_Text, CommentRangeMarker, RunContent};
 use sha2::{Digest, Sha256};
 
 use crate::revision::validate_revision_timestamp;
@@ -5553,21 +5553,6 @@ fn paragraph_signature_with_options(paragraph: &CT_P, options: &ComparisonOption
     let numbering = (!options.ignore_formatting)
         .then(|| paragraph_numbering(paragraph))
         .flatten();
-    let runs = if !uses_attributed_run_path(options) {
-        paragraph
-            .runs
-            .iter()
-            .map(|run| run_signature_with_options(run, options))
-            .filter(|signature| !signature.is_empty())
-            .collect::<Vec<_>>()
-    } else {
-        attributed_run_units(&paragraph.runs, options)
-            .iter()
-            .filter(|unit| !unit_is_ignorable(unit) && !unit_is_empty(unit))
-            .map(attributed_unit_signature)
-            .collect::<Vec<_>>()
-    };
-    let comment_ranges = (!options.ignore_comments).then_some(&paragraph.comment_ranges);
     let hyperlinks = paragraph
         .hyperlinks
         .iter()
@@ -5585,27 +5570,184 @@ fn paragraph_signature_with_options(paragraph: &CT_P, options: &ComparisonOption
             )
         })
         .collect::<Vec<_>>();
-    let extra_xml = paragraph
+    format!(
+        "{numbering:?}:{:?}:{hyperlinks:?}",
+        paragraph_tokens(paragraph, options)
+    )
+}
+
+/// One token of a paragraph signature.
+#[derive(PartialEq, Eq)]
+enum ParagraphToken {
+    /// A compared unit, or a whole run on the whole-run path.
+    Unit(String),
+    /// A unit the options ignore, such as whitespace, a field or a comment
+    /// reference.
+    Ignored(String),
+    /// A preserved raw child, comment marker, inline control or hyperlink edge.
+    Boundary(String),
+}
+
+/// Paragraph content as tokens in document order.
+///
+/// Raw children, comment markers and inline controls come out at each run
+/// boundary in the order the serializer writes them, and each run follows
+/// as its compared units. Splitting or merging runs therefore cannot move
+/// a marker, and a run without content cannot reorder its neighbours.
+/// Ignored units are kept only where they touch a boundary token, so a
+/// marker on either side of ignored content still differs.
+fn paragraph_tokens(paragraph: &CT_P, options: &ComparisonOptions) -> Vec<String> {
+    let attributed = uses_attributed_run_path(options);
+    let units = if attributed {
+        attributed_run_units(&paragraph.runs, options)
+    } else {
+        Vec::new()
+    };
+    let mut next_unit = 0;
+    let mut tokens = Vec::new();
+    let mut open_hyperlink = None;
+    for boundary in 0..=paragraph.runs.len() {
+        let inside = paragraph
+            .hyperlinks
+            .iter()
+            .rposition(|link| link.run_start <= boundary && boundary < link.run_end);
+        if let Some(index) = open_hyperlink
+            && open_hyperlink != inside
+        {
+            tokens.push(ParagraphToken::Boundary(format!("hyperlink-end:{index}")));
+            open_hyperlink = None;
+        }
+        push_boundary_tokens(paragraph, boundary, options, &mut tokens);
+        for (index, _) in paragraph.hyperlinks.iter().enumerate().filter(|(_, link)| {
+            link.run_start == boundary
+                && link.run_end == boundary
+                && link.preserved_raw_before.is_none()
+        }) {
+            tokens.push(ParagraphToken::Boundary(format!("hyperlink-empty:{index}")));
+        }
+        let Some(run) = paragraph.runs.get(boundary) else {
+            break;
+        };
+        if let Some(index) = inside
+            && open_hyperlink != inside
+        {
+            tokens.push(ParagraphToken::Boundary(format!("hyperlink-start:{index}")));
+            open_hyperlink = inside;
+        }
+        if !attributed {
+            let signature = run_signature_with_options(run, options);
+            if !signature.is_empty() {
+                tokens.push(ParagraphToken::Unit(signature));
+            }
+            continue;
+        }
+        while let Some(unit) = units.get(next_unit).filter(|unit| unit.owner == boundary) {
+            next_unit += 1;
+            if unit_is_empty(unit) {
+                continue;
+            }
+            let signature = attributed_unit_signature(unit);
+            tokens.push(if unit_is_ignorable(unit) {
+                ParagraphToken::Ignored(signature)
+            } else {
+                ParagraphToken::Unit(signature)
+            });
+        }
+    }
+    tokens
+        .dedup_by(|next, previous| matches!(next, ParagraphToken::Ignored(_)) && next == previous);
+    let ignored = |index: usize| matches!(tokens.get(index), Some(ParagraphToken::Ignored(_)));
+    let boundary = |index: usize| matches!(tokens.get(index), Some(ParagraphToken::Boundary(_)));
+    let mut keep = vec![true; tokens.len()];
+    let mut start = 0;
+    while start < tokens.len() {
+        if !ignored(start) {
+            start += 1;
+            continue;
+        }
+        let end = (start..tokens.len())
+            .find(|index| !ignored(*index))
+            .unwrap_or(tokens.len());
+        let touches_boundary = (start > 0 && boundary(start - 1)) || boundary(end);
+        keep[start..end].fill(touches_boundary);
+        start = end;
+    }
+    tokens
+        .into_iter()
+        .zip(keep)
+        .filter(|(_, keep)| *keep)
+        .map(|(token, _)| match token {
+            ParagraphToken::Unit(signature) => format!("unit:{signature}"),
+            ParagraphToken::Ignored(signature) | ParagraphToken::Boundary(signature) => signature,
+        })
+        .collect()
+}
+
+/// Push the raw children, comment markers and inline controls at one run
+/// boundary in the order `CT_P` serialization writes them.
+fn push_boundary_tokens(
+    paragraph: &CT_P,
+    boundary: usize,
+    options: &ComparisonOptions,
+    tokens: &mut Vec<ParagraphToken>,
+) {
+    let extras = paragraph
         .extra_xml
         .iter()
-        .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
+        .filter(|(position, raw)| {
+            *position == boundary && !CT_P::raw_is_root_attributes(*position, raw)
+        })
+        .map(|(_, raw)| raw)
         .collect::<Vec<_>>();
-    format!(
-        "{numbering:?}:{runs:?}:{:?}:{comment_ranges:?}:{:?}:{:?}:{:?}",
-        hyperlinks,
-        paragraph.bookmark_markers,
-        extra_xml,
-        paragraph
-            .content_controls
+    for raw_index in 0..=extras.len() {
+        let markers = paragraph
+            .comment_ranges
             .iter()
-            .map(|(at, raw_before, markers_before, control)| (
-                policy_run_boundary(paragraph, *at, options),
-                raw_before,
-                markers_before,
-                control_signature_with_options(control, options),
-            ))
-            .collect::<Vec<_>>(),
-    )
+            .filter_map(|marker| {
+                let (start, id, run_index, raw_before, has_child_content) = match *marker {
+                    CommentRangeMarker::Start {
+                        id,
+                        run_index,
+                        raw_before,
+                        has_child_content,
+                    } => (true, id, run_index, raw_before, has_child_content),
+                    CommentRangeMarker::End {
+                        id,
+                        run_index,
+                        raw_before,
+                        has_child_content,
+                    } => (false, id, run_index, raw_before, has_child_content),
+                };
+                (run_index == boundary && raw_before.min(extras.len()) == raw_index)
+                    .then(|| format!("comment-range:{start}:{id}:{has_child_content}"))
+            })
+            .collect::<Vec<_>>();
+        for marker_index in 0..=markers.len() {
+            for (_, _, _, control) in
+                paragraph
+                    .content_controls
+                    .iter()
+                    .filter(|(at, raw_before, markers_before, _)| {
+                        *at == boundary
+                            && (*raw_before).min(extras.len()) == raw_index
+                            && (*markers_before).min(markers.len()) == marker_index
+                    })
+            {
+                tokens.push(ParagraphToken::Boundary(format!(
+                    "control:{}",
+                    control_signature_with_options(control, options)
+                )));
+            }
+            if let Some(marker) = markers.get(marker_index)
+                && !options.ignore_comments
+            {
+                tokens.push(ParagraphToken::Boundary(marker.clone()));
+            }
+        }
+        if let Some(raw) = extras.get(raw_index) {
+            tokens.push(ParagraphToken::Boundary(format!("raw:{raw:?}")));
+        }
+    }
 }
 
 fn run_signature_with_options(run: &CT_R, options: &ComparisonOptions) -> String {
