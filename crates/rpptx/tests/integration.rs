@@ -2952,6 +2952,49 @@ fn smartart_rendering_uses_producing_scope_and_updates_after_node_edit() {
     );
 }
 
+#[test]
+fn smartart_data_paragraph_properties_override_the_layout_defaults() {
+    use rpptx_layout::ParagraphAlignment;
+
+    if !pinned_smartart_resources_available() {
+        eprintln!(
+            "authentic SmartArt paragraph properties skipped because pinned PowerPoint resources are absent or hash-mismatched"
+        );
+        return;
+    }
+    for (data_properties, expected) in [
+        ("", ParagraphAlignment::Center),
+        (r#"<a:pPr algn="r"/>"#, ParagraphAlignment::Right),
+    ] {
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(authentic_smartart_oracle_source_bytes("cycle")))
+                .unwrap();
+        let data = String::from_utf8(authentic_smartart_data_model("cycle"))
+            .unwrap()
+            .replace("<a:p><a:r>", &format!("<a:p>{data_properties}<a:r>"));
+        package.set_part("/ppt/diagrams/data1.xml", data.into_bytes());
+        let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let (input, _) = presentation.render_deterministic().unwrap();
+        let slide = &input.slides[0];
+        assert!(slide.diagnostics.is_empty(), "{:?}", slide.diagnostics);
+        let paragraphs = slide
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.content {
+                ResolvedContent::Text(body) if resolved_text(body).starts_with("F220 cycle") => {
+                    Some(&body.paragraphs[0])
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(paragraphs.len(), 3, "{data_properties}");
+        for paragraph in paragraphs {
+            assert_eq!(paragraph.alignment, expected, "{data_properties}");
+            assert!(paragraph.line_spacing.is_some(), "{data_properties}");
+        }
+    }
+}
+
 fn assert_smartart_frame_clip(
     page: &PageFrame,
     slide: &ResolvedSlide,

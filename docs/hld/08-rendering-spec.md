@@ -85,8 +85,12 @@ programs into transient ordinary PresentationML groups before the shared
 resolver runs. Authoritative data-node text, layout-owned decorative shapes,
 quick styles, colours, connector paths, and the graphic-frame transform flow
 through the same text, paint, effect, geometry, group, and clipping machinery
-as ordinary shapes. Static, timeline, media, and animation entry points reuse
-that resolved group. Unsupported or invalid programs retain a visible bounds
+as ordinary shapes. The centred layouts set node alignment and line spacing as
+typed defaults that fill only what a data paragraph's own `a:pPr` leaves
+unset, so a node whose data says `algn="r"` renders right-aligned rather than
+as a labelled placeholder. An empty data paragraph takes no defaults. Static,
+timeline, media, and animation entry points reuse that resolved group.
+Unsupported or invalid programs retain a visible bounds
 fallback and a stable diagnostic. The renderer never reads diagram XML or
 treats a cached diagram drawing as authoritative.
 
