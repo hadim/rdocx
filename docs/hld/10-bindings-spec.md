@@ -628,6 +628,18 @@ existing `LinkInfo` values after checked owner-scoped resolution.
 source position. Python exposes `Document.add_hyperlink_to_story` for a `Story`
 snapshot, resolved the same way as a story item, and `Paragraph.add_hyperlink`,
 which adds a main-document link relationship and returns the new hyperlink run.
+`Document::set_hyperlink_url` and `remove_hyperlink` edit the link at one
+position of a story's `story_links` list in any story, through the relationship
+set of that story's part. A relationship that only this link references is
+retargeted in place. A shared one stays with its other references and the link
+gets a new relationship. An anchor link becomes external and loses its anchor.
+Removal keeps the link's runs in place and clears the built-in Hyperlink and
+FollowedHyperlink character styles, as Word's Remove Hyperlink does. Both remove
+a hyperlink relationship that nothing references any more. A HYPERLINK field is
+not listed by `story_links` and stays out of scope. Python exposes
+`Document.set_hyperlink_url` and `Document.remove_hyperlink` for a `Hyperlink`
+snapshot, which must still match the document. Neither moves content, so live
+handles stay valid.
 
 Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
 Each handle reports its zero-based document ordinal, schema-final ownership,

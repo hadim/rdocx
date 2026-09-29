@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError};
@@ -461,6 +461,9 @@ pub struct PyHyperlink {
     url: Option<String>,
     anchor: Option<String>,
     relationship_id: Option<String>,
+    /// The position among the native `story_links` of `story`, which
+    /// selects one of several identical links in the same item.
+    link_index: usize,
 }
 
 #[pymethods]
@@ -482,6 +485,7 @@ impl PyHyperlink {
             url,
             anchor,
             relationship_id,
+            link_index: 0,
         }
     }
 
@@ -822,6 +826,39 @@ impl PyDocument {
                     )),
                 )
             })
+    }
+
+    /// The live story of a `Hyperlink` snapshot, checked to still hold that
+    /// hyperlink at the snapshot's position.
+    fn native_hyperlink_story(
+        &self,
+        py: Python<'_>,
+        hyperlink: &PyHyperlink,
+    ) -> PyResult<rdocx::StoryId> {
+        let story = self.native_story(py, &hyperlink.story)?;
+        let links = self
+            .inner
+            .story_links(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let unchanged = links
+            .get(hyperlink.link_index)
+            .is_some_and(|(location, link)| {
+                location.index_path() == hyperlink.index_path.as_slice()
+                    && link.text == hyperlink.text
+                    && link.url == hyperlink.url
+                    && link.anchor == hyperlink.anchor
+                    && link.rel_id == hyperlink.relationship_id
+            });
+        if !unchanged {
+            return Err(rdocx_to_pyerr(
+                py,
+                rdocx::Error::Other(
+                    "the hyperlink no longer matches the document, re-fetch it with document.hyperlinks"
+                        .to_owned(),
+                ),
+            ));
+        }
+        Ok(story)
     }
 
     fn body_story(&self, py: Python<'_>) -> PyResult<rdocx::StoryId> {
@@ -1400,18 +1437,52 @@ impl PyDocument {
             .inner
             .story_link_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let mut story_link_counts = HashMap::new();
         let snapshots = links
             .into_iter()
-            .map(|(location, link)| PyHyperlink {
-                story: story_snapshot(location.story()),
-                index_path: location.index_path().to_vec(),
-                text: link.text,
-                url: link.url,
-                anchor: link.anchor,
-                relationship_id: link.rel_id,
+            .map(|(location, link)| {
+                let count = story_link_counts
+                    .entry(location.story().clone())
+                    .or_insert(0);
+                let link_index = *count;
+                *count += 1;
+                PyHyperlink {
+                    story: story_snapshot(location.story()),
+                    index_path: location.index_path().to_vec(),
+                    text: link.text,
+                    url: link.url,
+                    anchor: link.anchor,
+                    relationship_id: link.rel_id,
+                    link_index,
+                }
             })
             .collect::<Vec<_>>();
         PyTuple::new(py, snapshots)
+    }
+
+    fn set_hyperlink_url(
+        &mut self,
+        py: Python<'_>,
+        hyperlink: PyRef<'_, PyHyperlink>,
+        url: &str,
+    ) -> PyResult<()> {
+        let story = self.native_hyperlink_story(py, &hyperlink)?;
+        let link_index = hyperlink.link_index;
+        // No content moves, so live handles stay valid.
+        py.detach(|| self.inner.set_hyperlink_url(&story, link_index, url))
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn remove_hyperlink(
+        &mut self,
+        py: Python<'_>,
+        hyperlink: PyRef<'_, PyHyperlink>,
+    ) -> PyResult<()> {
+        let story = self.native_hyperlink_story(py, &hyperlink)?;
+        let link_index = hyperlink.link_index;
+        // The runs stay in their paragraph, so live handles stay valid.
+        py.detach(|| self.inner.remove_hyperlink(&story, link_index))
+            .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     fn set_header(&mut self, text: &str) {

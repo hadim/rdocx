@@ -1515,6 +1515,193 @@ fn replace_image_preserves_drawings_and_story_relationship_ownership() {
     );
 }
 
+const RELATIONSHIPS_NS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+/// Replace the body of a fresh document and add the given main-document
+/// relationships and header, then reopen it.
+fn hyperlink_story_document(body: &str, header: Option<&str>) -> Document {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header_reference = if header.is_some() {
+        r#"<w:sectPr><w:headerReference w:type="default" r:id="rIdHeader"/></w:sectPr>"#
+    } else {
+        "<w:sectPr/>"
+    };
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="{RELATIONSHIPS_NS}"><w:body>{body}{header_reference}</w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    for (id, target) in [
+        ("rIdShared", "https://shared.example/"),
+        ("rIdOwn", "https://own.example/"),
+    ] {
+        relationships.items.push(oxml_opc::Relationship {
+            id: id.to_owned(),
+            rel_type: oxml_opc::relationship::rel_types::HYPERLINK.to_owned(),
+            target: target.to_owned(),
+            target_mode: Some("External".to_owned()),
+        });
+    }
+    if let Some(header) = header {
+        relationships.add_with_id(
+            "rIdHeader",
+            oxml_opc::relationship::rel_types::HEADER,
+            "header1.xml",
+        );
+        package.set_part(
+            "/word/header1.xml",
+            format!(r#"<w:hdr xmlns:w="{W_NS}" xmlns:r="{RELATIONSHIPS_NS}">{header}</w:hdr>"#)
+                .into_bytes(),
+        );
+        package.content_types.add_override(
+            "/word/header1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        package
+            .get_or_create_part_rels("/word/header1.xml")
+            .items
+            .push(oxml_opc::Relationship {
+                id: "rIdHeaderLink".to_owned(),
+                rel_type: oxml_opc::relationship::rel_types::HYPERLINK.to_owned(),
+                target: "https://header.example/".to_owned(),
+                target_mode: Some("External".to_owned()),
+            });
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(&bytes.into_inner()).unwrap()
+}
+
+fn hyperlink_targets(
+    document: &Document,
+    kind: StoryKind,
+) -> Vec<(String, Option<String>, Option<String>)> {
+    let story = f254_story(document, kind);
+    document
+        .story_links(&story)
+        .unwrap()
+        .into_iter()
+        .map(|(_, link)| (link.text, link.url, link.anchor))
+        .collect()
+}
+
+#[test]
+fn hyperlinks_can_be_retargeted_and_removed_in_every_story() {
+    let mut document = hyperlink_story_document(
+        concat!(
+            r#"<w:p><w:hyperlink r:id="rIdShared"><w:r><w:t>one</w:t></w:r></w:hyperlink>"#,
+            r#"<w:hyperlink r:id="rIdShared"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:b/></w:rPr><w:t>two</w:t></w:r></w:hyperlink></w:p>"#,
+            r#"<w:p><w:hyperlink w:anchor="target" w:history="1"><w:r><w:t>anchor</w:t></w:r></w:hyperlink></w:p>"#,
+            r#"<w:p><w:hyperlink r:id="rIdOwn" w:tooltip="tip"><w:r><w:t>own</w:t></w:r></w:hyperlink></w:p>"#,
+        ),
+        Some(
+            r#"<w:p><w:hyperlink r:id="rIdHeaderLink"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>head</w:t></w:r></w:hyperlink></w:p>"#,
+        ),
+    );
+    let body = f254_story(&document, StoryKind::Body);
+    let before = document.to_bytes().unwrap();
+    assert!(document.set_hyperlink_url(&body, 4, "https://x/").is_err());
+    assert!(document.remove_hyperlink(&body, 4).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    // A shared relationship is not retargeted for the other link.
+    document
+        .set_hyperlink_url(&body, 0, "https://one.example/")
+        .unwrap();
+    assert!(
+        document
+            .set_hyperlink_url(&body, 1, "https://stale/")
+            .is_err()
+    );
+    let body = f254_story(&document, StoryKind::Body);
+    // An anchor link becomes external and keeps its other attributes.
+    document
+        .set_hyperlink_url(&body, 2, "https://anchor.example/")
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    // An unshared relationship is retargeted in place.
+    document
+        .set_hyperlink_url(&body, 3, "https://own.example/new")
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    assert_eq!(
+        hyperlink_targets(&document, StoryKind::Body),
+        [
+            ("one", Some("https://one.example/"), None),
+            ("two", Some("https://shared.example/"), None),
+            ("anchor", Some("https://anchor.example/"), None),
+            ("own", Some("https://own.example/new"), None),
+        ]
+        .map(|(text, url, anchor): (&str, Option<&str>, Option<&str>)| (
+            text.to_owned(),
+            url.map(str::to_owned),
+            anchor.map(str::to_owned)
+        ))
+    );
+    let links = document.story_links(&body).unwrap();
+    assert_eq!(links[3].1.rel_id.as_deref(), Some("rIdOwn"));
+    assert_ne!(links[0].1.rel_id.as_deref(), Some("rIdShared"));
+
+    // Removing the last link to a relationship unwraps its runs and prunes it.
+    document.remove_hyperlink(&body, 1).unwrap();
+    let header = f254_story(&document, StoryKind::Header);
+    document
+        .set_hyperlink_url(&header, 0, "https://header.example/new")
+        .unwrap();
+    assert_eq!(
+        hyperlink_targets(&document, StoryKind::Header),
+        [(
+            "head".to_owned(),
+            Some("https://header.example/new".to_owned()),
+            None
+        )]
+    );
+    let header = f254_story(&document, StoryKind::Header);
+    document.remove_hyperlink(&header, 0).unwrap();
+
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(
+        reopened
+            .story_link_snapshots()
+            .unwrap()
+            .into_iter()
+            .map(|(_, link)| link.text)
+            .collect::<Vec<_>>(),
+        ["one", "anchor", "own"]
+    );
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "onetwo");
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let document_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    assert!(document_xml.contains("<w:b/>"));
+    assert!(!document_xml.contains("Hyperlink"));
+    assert!(!document_xml.contains("w:anchor"));
+    assert!(document_xml.contains(r#"w:history="1""#));
+    assert!(document_xml.contains(r#"w:tooltip="tip""#));
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    assert!(relationships.get_by_id("rIdShared").is_none());
+    assert_eq!(
+        relationships.get_by_id("rIdOwn").unwrap().target,
+        "https://own.example/new"
+    );
+    let header_xml =
+        String::from_utf8(package.get_part("/word/header1.xml").unwrap().to_vec()).unwrap();
+    assert!(header_xml.contains("<w:t>head</w:t>"));
+    assert!(!header_xml.contains("hyperlink") && !header_xml.contains("rStyle"));
+    assert!(
+        package
+            .get_part_rels("/word/header1.xml")
+            .is_none_or(|relationships| relationships.items.is_empty())
+    );
+}
+
 #[test]
 fn split_run_enables_exact_comment_ranges_without_losing_content() {
     let mut document = Document::new();

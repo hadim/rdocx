@@ -5752,6 +5752,39 @@ fn scan_story_item_links_with_scope(
         .collect())
 }
 
+/// Scan one story's hyperlinks in physical source order, each paired with the
+/// smallest item that owns it. [`Document::story_links`] numbers this list.
+fn story_link_spans(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    story: &StoryId,
+) -> Result<Vec<(ContentLocation, StoryLinkSpan)>> {
+    let items = scan_story_items(xml, owner)?;
+    let item_scopes = story_namespace_scopes_at(xml, items.iter().map(|item| item.scan.start))?;
+    let mut links = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        let scope = item_scopes.get(&item.scan.start).ok_or_else(|| {
+            Error::Other("story item namespace scope was not inventoried".to_owned())
+        })?;
+        let owner_width = item.full.end - item.full.start;
+        for link in scan_story_item_links_with_scope(xml, &item, scope)? {
+            let location = ContentLocation {
+                story: story.clone(),
+                item_kind: item.kind,
+                index_path: vec![index],
+                is_end: false,
+            };
+            links.push((owner_width, location, link));
+        }
+    }
+    links.sort_by_key(|(owner_width, _, link)| (link.full.start, *owner_width));
+    links.dedup_by(|left, right| left.2.full == right.2.full);
+    Ok(links
+        .into_iter()
+        .map(|(_, location, link)| (location, link))
+        .collect())
+}
+
 fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan) -> Result<bool> {
     let mut scope = story_namespace_scope_at(xml, item.full.start)?;
     let mut reader = quick_xml::Reader::from_reader(&xml[item.full.clone()]);
@@ -7905,6 +7938,263 @@ fn story_hyperlink_attributes(
         );
     }
     Ok((rel_id, anchor))
+}
+
+/// Return the start tag range of one hyperlink element and, unless it is
+/// empty, its end tag range.
+fn story_hyperlink_tags(
+    xml: &[u8],
+    link: &Range<usize>,
+) -> Result<(Range<usize>, Option<Range<usize>>)> {
+    let mut reader = quick_xml::Reader::from_reader(&xml[link.clone()]);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut start = None;
+    loop {
+        let before = link.start + reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story hyperlink scan failed: {error}")))?;
+        let after = link.start + reader.buffer_position() as usize;
+        match event {
+            Event::Empty(_) if depth == 0 => return Ok((before..after, None)),
+            Event::Start(_) => {
+                if depth == 0 {
+                    start = Some(before..after);
+                }
+                depth += 1;
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let start = start.ok_or_else(|| {
+                        Error::Other("story hyperlink has no start tag".to_owned())
+                    })?;
+                    return Ok((start, Some(before..after)));
+                }
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "story hyperlink has no closing tag".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+/// Rebuild a hyperlink start tag so that it names `relationship_id` and has no
+/// anchor, keeping every other attribute.
+fn external_story_hyperlink_start(
+    tag: &[u8],
+    scope: &BTreeMap<String, String>,
+    relationship_id: &str,
+) -> Result<Vec<u8>> {
+    let mut reader = quick_xml::Reader::from_reader(tag);
+    let mut buffer = Vec::new();
+    let (element, empty) = match reader
+        .read_event_into(&mut buffer)
+        .map_err(|error| Error::Other(format!("story hyperlink scan failed: {error}")))?
+    {
+        Event::Start(element) => (element, false),
+        Event::Empty(element) => (element, true),
+        _ => {
+            return Err(Error::Other(
+                "story hyperlink start tag is invalid".to_owned(),
+            ));
+        }
+    };
+    let mut rewritten = Vec::with_capacity(tag.len() + relationship_id.len() + 16);
+    rewritten.push(b'<');
+    rewritten.extend_from_slice(element.name().as_ref());
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("story hyperlink attribute scan failed: {error}"))
+        })?;
+        let key = attribute.key.as_ref();
+        let resolved = key.iter().position(|byte| *byte == b':').and_then(|colon| {
+            let prefix = std::str::from_utf8(&key[..colon]).ok()?;
+            Some((scope.get(prefix)?.as_str(), &key[colon + 1..]))
+        });
+        if matches!(resolved, Some((namespace, b"id")) if namespace == drawing_ns::R)
+            || matches!(resolved, Some((namespace, b"anchor")) if namespace == WORD_NAMESPACE)
+        {
+            continue;
+        }
+        let quote = if attribute.value.contains(&b'"') {
+            b'\''
+        } else {
+            b'"'
+        };
+        rewritten.push(b' ');
+        rewritten.extend_from_slice(key);
+        rewritten.push(b'=');
+        rewritten.push(quote);
+        rewritten.extend_from_slice(&attribute.value);
+        rewritten.push(quote);
+    }
+    let bound = scope
+        .iter()
+        .find(|(prefix, namespace)| !prefix.is_empty() && namespace.as_str() == drawing_ns::R)
+        .map(|(prefix, _)| prefix.clone());
+    let prefix = match bound {
+        Some(prefix) => prefix,
+        None => {
+            let mut suffix = 0usize;
+            let prefix = loop {
+                let candidate = if suffix == 0 {
+                    "r".to_owned()
+                } else {
+                    format!("r{suffix}")
+                };
+                if !scope.contains_key(&candidate) {
+                    break candidate;
+                }
+                suffix += 1;
+            };
+            rewritten
+                .extend_from_slice(format!(" xmlns:{prefix}=\"{}\"", drawing_ns::R).as_bytes());
+            prefix
+        }
+    };
+    rewritten.extend_from_slice(
+        format!(
+            " {prefix}:id=\"{}\"",
+            quick_xml::escape::escape(relationship_id)
+        )
+        .as_bytes(),
+    );
+    rewritten.extend_from_slice(if empty { b"/>" } else { b">" });
+    Ok(rewritten)
+}
+
+/// Remove one hyperlink element and keep its content in place.
+///
+/// Namespace declarations on the hyperlink move to each child element, and
+/// `cleared_styles` are removed from the `w:rStyle` of the runs it held.
+fn unwrap_story_hyperlink(
+    xml: &[u8],
+    link: &Range<usize>,
+    scope: &BTreeMap<String, String>,
+    cleared_styles: &HashSet<String>,
+) -> Result<Vec<u8>> {
+    let (start, end) = story_hyperlink_tags(xml, link)?;
+    let mut edits = vec![(start.clone(), Vec::new())];
+    if let Some(end) = end {
+        let mut declarations = Vec::new();
+        let mut reader = quick_xml::Reader::from_reader(&xml[start.clone()]);
+        let mut buffer = Vec::new();
+        if let Event::Start(element) = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story hyperlink scan failed: {error}")))?
+        {
+            for attribute in element.attributes() {
+                let attribute = attribute.map_err(|error| {
+                    Error::Other(format!("story hyperlink attribute scan failed: {error}"))
+                })?;
+                let key = attribute.key.as_ref();
+                if key == b"xmlns" || key.starts_with(b"xmlns:") {
+                    declarations.push((key.to_vec(), attribute.value.into_owned()));
+                }
+            }
+        }
+        let (closed, added) = scoped_story_fragment(xml, link.clone(), scope)?;
+        let map = |position: usize| link.start + position - added;
+        let mut reader = NsReader::from_reader(closed.as_slice());
+        reader.config_mut().trim_text(false);
+        let mut buffer = Vec::new();
+        let mut stack: Vec<(bool, Vec<u8>, Option<usize>)> = Vec::new();
+        loop {
+            let before = reader.buffer_position() as usize;
+            let (namespace, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|error| Error::Other(format!("story hyperlink scan failed: {error}")))?;
+            let is_word = word_element(&namespace);
+            drop(namespace);
+            let after = reader.buffer_position() as usize;
+            match event {
+                Event::Start(ref element) | Event::Empty(ref element) => {
+                    if stack.len() == 1 {
+                        let insert_at = map(before + 1 + element.name().as_ref().len());
+                        let mut inserted = Vec::new();
+                        for (key, value) in &declarations {
+                            let redeclared = element
+                                .attributes()
+                                .flatten()
+                                .any(|attribute| attribute.key.as_ref() == key.as_slice());
+                            if !redeclared {
+                                inserted.push(b' ');
+                                inserted.extend_from_slice(key);
+                                inserted.extend_from_slice(b"=\"");
+                                inserted.extend_from_slice(value);
+                                inserted.push(b'"');
+                            }
+                        }
+                        if !inserted.is_empty() {
+                            edits.push((insert_at..insert_at, inserted));
+                        }
+                    }
+                    let local = element.local_name().as_ref().to_vec();
+                    let in_run_properties = is_word
+                        && local == b"rStyle"
+                        && stack.len() >= 2
+                        && matches!(&stack[stack.len() - 2..], [(true, run, _), (true, properties, _)]
+                            if run == b"r" && properties == b"rPr")
+                        && !stack
+                            .iter()
+                            .any(|(word, name, _)| *word && name == b"txbxContent");
+                    let cleared = in_run_properties
+                        && element.attributes().flatten().any(|attribute| {
+                            let (namespace, name) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            word_element(&namespace)
+                                && name.as_ref() == b"val"
+                                && attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .is_ok_and(|value| cleared_styles.contains(value.as_ref()))
+                        });
+                    if matches!(event, Event::Start(_)) {
+                        stack.push((is_word, local, cleared.then(|| map(before))));
+                    } else if cleared {
+                        edits.push((map(before)..map(after), Vec::new()));
+                    }
+                }
+                Event::End(_) => {
+                    if let Some((_, _, Some(removed_from))) = stack.pop() {
+                        edits.push((removed_from..map(after), Vec::new()));
+                    }
+                    if stack.is_empty() {
+                        break;
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+        edits.push((end, Vec::new()));
+    }
+    edits.sort_by_key(|(range, _)| range.start);
+    let mut updated = xml.to_vec();
+    for (mut range, replacement) in edits.into_iter().rev() {
+        // A removed tag takes its indentation with it: whitespace between
+        // WordprocessingML elements outside `w:t` carries no content.
+        if replacement.is_empty() && !range.is_empty() {
+            let indented = xml[..range.start]
+                .iter()
+                .rposition(|byte| !byte.is_ascii_whitespace());
+            if let Some(previous) = indented.filter(|previous| xml[*previous] == b'>') {
+                range.start = previous + 1;
+            }
+        }
+        updated.splice(range, replacement);
+    }
+    Ok(updated)
 }
 
 fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
@@ -13337,60 +13627,21 @@ impl Document {
     /// with the checked location of the item that owns each hyperlink.
     pub fn story_links(&self, story: &StoryId) -> Result<Vec<(ContentLocation, LinkInfo)>> {
         let (source, owner) = self.story_source_and_owner(story)?;
-        let items = scan_story_items(source.xml.as_ref(), &owner)?;
-        let item_scopes = story_namespace_scopes_at(
-            source.xml.as_ref(),
-            items.iter().map(|item| item.scan.start),
-        )?;
-        let mut links = Vec::new();
-        for (index, item) in items.into_iter().enumerate() {
-            let scope = item_scopes.get(&item.scan.start).ok_or_else(|| {
-                Error::Other("story item namespace scope was not inventoried".to_owned())
-            })?;
-            for link in scan_story_item_links_with_scope(source.xml.as_ref(), &item, scope)? {
-                let source_position = link.full.start;
-                let source_end = link.full.end;
-                let owner_width = item.full.end - item.full.start;
-                links.push((
-                    source_position,
-                    source_end,
-                    owner_width,
-                    ContentLocation {
-                        story: story.clone(),
-                        item_kind: item.kind,
-                        index_path: vec![index],
-                        is_end: false,
-                    },
-                    link,
-                ));
-            }
-        }
+        let links = story_link_spans(source.xml.as_ref(), &owner, story)?;
         let link_scopes = story_namespace_scopes_at(
             source.xml.as_ref(),
-            links.iter().map(|(_, _, _, _, link)| link.full.start),
+            links.iter().map(|(_, link)| link.full.start),
         )?;
-        let mut links = links
+        links
             .into_iter()
-            .map(
-                |(source_position, source_end, owner_width, location, link)| {
-                    let scope = link_scopes.get(&link.full.start).ok_or_else(|| {
-                        Error::Other(
-                            "story hyperlink namespace scope was not inventoried".to_owned(),
-                        )
-                    })?;
-                    let info = self.story_link_info(story, source.xml.as_ref(), link, scope)?;
-                    Ok((source_position, source_end, owner_width, location, info))
-                },
-            )
-            .collect::<Result<Vec<_>>>()?;
-        links.sort_by_key(|(source_position, _, owner_width, _, _)| {
-            (*source_position, *owner_width)
-        });
-        links.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
-        Ok(links
-            .into_iter()
-            .map(|(_, _, _, location, info)| (location, info))
-            .collect())
+            .map(|(location, link)| {
+                let scope = link_scopes.get(&link.full.start).ok_or_else(|| {
+                    Error::Other("story hyperlink namespace scope was not inventoried".to_owned())
+                })?;
+                let info = self.story_link_info(story, source.xml.as_ref(), link, scope)?;
+                Ok((location, info))
+            })
+            .collect()
     }
 
     /// Materialize every modeled story hyperlink from one package inventory.
@@ -14154,6 +14405,160 @@ impl Document {
         let reopened = candidate.reopen_prepared_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
+    }
+
+    /// Point one story hyperlink at an external URL.
+    ///
+    /// `link_index` indexes [`Self::story_links`] for `story`. An anchor
+    /// hyperlink becomes external and loses its anchor. The link's
+    /// relationship is retargeted in place when nothing else references it.
+    /// Otherwise the link gets a new relationship, so another link that shared
+    /// the old one keeps its target. A relationship left unreferenced is removed.
+    pub fn set_hyperlink_url(
+        &mut self,
+        story: &StoryId,
+        link_index: usize,
+        url: &str,
+    ) -> Result<()> {
+        self.edit_story_hyperlink(story, link_index, Some(url))
+    }
+
+    /// Remove one story hyperlink and keep its content in place.
+    ///
+    /// `link_index` indexes [`Self::story_links`] for `story`. The runs keep
+    /// their formatting, except that the built-in Hyperlink and
+    /// FollowedHyperlink character styles are cleared, as Word's Remove
+    /// Hyperlink does. A relationship left unreferenced is removed.
+    pub fn remove_hyperlink(&mut self, story: &StoryId, link_index: usize) -> Result<()> {
+        self.edit_story_hyperlink(story, link_index, None)
+    }
+
+    fn edit_story_hyperlink(
+        &mut self,
+        story: &StoryId,
+        link_index: usize,
+        url: Option<&str>,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(story)?;
+        let part_name = source.part_name.clone();
+        let xml = source.xml.into_owned();
+        let mut links = story_link_spans(&xml, &owner, story)?;
+        let len = links.len();
+        if link_index >= len {
+            return Err(StoryError::OutOfBounds {
+                index: link_index,
+                len,
+            }
+            .into());
+        }
+        let (_, link) = links.swap_remove(link_index);
+        let scope = story_namespace_scope_at(&xml, link.full.start)?;
+        let updated = match url {
+            Some(url) => {
+                let (start, _) = story_hyperlink_tags(&xml, &link.full)?;
+                let with_relationship = |relationship_id: &str| -> Result<Vec<u8>> {
+                    let tag = external_story_hyperlink_start(
+                        &xml[start.clone()],
+                        &scope,
+                        relationship_id,
+                    )?;
+                    let mut updated = xml.clone();
+                    updated.splice(start.clone(), tag);
+                    Ok(updated)
+                };
+                let shared = match link.rel_id.as_deref() {
+                    Some(old) => xml_relationship_ids_in_order(&with_relationship("")?)?
+                        .iter()
+                        .any(|id| id == old),
+                    None => false,
+                };
+                let in_place = link.rel_id.as_deref().filter(|_| !shared).and_then(|old| {
+                    candidate
+                        .package
+                        .get_part_rels_mut(&part_name)?
+                        .items
+                        .iter_mut()
+                        .find(|relationship| {
+                            relationship.id == old
+                                && relationship.rel_type == rel_types::HYPERLINK
+                                && relationship.target_mode.as_deref() == Some("External")
+                        })
+                });
+                match in_place {
+                    Some(relationship) => {
+                        relationship.target = url.to_owned();
+                        let relationship_id = relationship.id.clone();
+                        if link.anchor.is_some() {
+                            with_relationship(&relationship_id)?
+                        } else {
+                            xml.clone()
+                        }
+                    }
+                    None => {
+                        let relationship_id = candidate.add_external_relationship_checked(
+                            &part_name,
+                            rel_types::HYPERLINK,
+                            url,
+                        )?;
+                        if part_name == candidate.doc_part_name {
+                            candidate
+                                .identifiers
+                                .register_nested_story_relationship(story, relationship_id.clone());
+                        }
+                        with_relationship(&relationship_id)?
+                    }
+                }
+            }
+            None => {
+                let styles = candidate.hyperlink_character_style_ids();
+                unwrap_story_hyperlink(&xml, &link.full, &scope, &styles)?
+            }
+        };
+        if let Some(old) = link.rel_id.as_deref()
+            && !xml_relationship_ids_in_order(&updated)?
+                .iter()
+                .any(|id| id == old)
+            && let Some(relationships) = candidate.package.get_part_rels_mut(&part_name)
+        {
+            let before = relationships.items.len();
+            relationships.items.retain(|relationship| {
+                relationship.id != old || relationship.rel_type != rel_types::HYPERLINK
+            });
+            if relationships.items.len() != before {
+                if relationships.items.is_empty() {
+                    candidate.package.remove_part_rels(&part_name);
+                }
+                candidate
+                    .identifiers
+                    .retire_authored_story_relationships(&part_name, [old.to_owned()]);
+            }
+        }
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// The character style IDs that mark hyperlink text: the built-in
+    /// Hyperlink and FollowedHyperlink styles, by ID and by name.
+    fn hyperlink_character_style_ids(&self) -> HashSet<String> {
+        const NAMES: [&str; 2] = ["Hyperlink", "FollowedHyperlink"];
+        let mut ids = NAMES.map(str::to_owned).into_iter().collect::<HashSet<_>>();
+        ids.extend(
+            self.styles
+                .styles
+                .iter()
+                .filter(|style| {
+                    style.style_type == StyleType::Character
+                        && style.name.as_deref().is_some_and(|name| {
+                            NAMES.iter().any(|known| known.eq_ignore_ascii_case(name))
+                        })
+                })
+                .map(|style| style.style_id.clone()),
+        );
+        ids
     }
 
     /// Insert one owned fragment at a checked direct-child boundary.
