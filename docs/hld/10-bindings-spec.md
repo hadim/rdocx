@@ -279,8 +279,15 @@ field cache update operations. `RunPosition` and
 `RunRange` are constructible frozen values for zero-based half-open run ranges.
 `StoryRunPosition` and `StoryRunRange` are parallel frozen values whose
 `StoryItem` snapshots can identify direct body or table-cell paragraphs.
-`Document.add_comment` accepts either range form. The original direct-body
-constructors and call shape remain unchanged.
+`StoryRunPosition` also accepts a body `Paragraph` handle. A handle to a
+paragraph inside a block content control yields an item with the two-segment
+path of `Document::paragraph_story_location`, the control's story item index
+then the paragraph's position among the control's paragraphs, which only
+comment positions accept.
+`Document.add_comment` accepts either range form.
+`Document.add_comment_on_text` comments on the zero-based occurrence of an
+exact text in the main story without run index bookkeeping. The original
+direct-body constructors and call shape remain unchanged.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
 `LayoutPage`, `TocRebuildReport`, and `Revision` are frozen typed snapshots.
 `Document.revisions` lists the revisions of every story that the accept and
@@ -813,7 +820,10 @@ bundled-font page targets and returns `TocRebuildReport` with entry and newly
 allocated bookmark counts plus exact retained-field diagnostics in physical
 source order. `diagnostic_count()` is derived from the owned diagnostic
 collection. A document without a TOC is unchanged and returns empty counts and
-diagnostics. `rdocx-cli toc rebuild` publishes the validated result to an
+diagnostics. The cached entry paragraphs are replaced, so comment and bookmark
+markers on them, including those in a table of contents content control, are
+dropped with them, and a comment anchored only there stays unanchored in the
+comments part. `rdocx-cli toc rebuild` publishes the validated result to an
 explicit output and reports the counts through a schema-1 main-story record.
 Python exposes the same operation and returns diagnostics as an immutable tuple
 with a derived `diagnostic_count` property. WASM does not expose this operation.
@@ -1128,12 +1138,26 @@ Native Word callers can inspect comments through `Document::comments` and
 author threads through `add_comment`, `reply_to`, `resolve_comment`, and
 `remove_comment`. The additive native `add_comment_with_date` and
 `reply_to_with_date` methods accept an optional validated RFC 3339 timestamp.
+The additive native `add_comment_on_text` anchors a comment on the zero-based,
+non-overlapping, case-sensitive occurrence of a literal text in main-story
+paragraphs, through tables and block content controls. It splits the runs at
+both ends of the match, anchors the runs between the splits like
+`add_comment`, and refuses a missing occurrence or a match that cannot be
+anchored exactly without changing the document. Tabs and breaks have no width
+in the literal text, and a match whose range would also show text that the
+literal text leaves out, such as a field result, is not exact. Python exposes
+it with keyword `author`, `text`, `occurrence`, `initials` and `date`
+arguments.
 The Python `add_comment` and `reply_to` methods expose the same value as the
 optional `date` keyword. Omission writes no date and remains deterministic.
 Returned ids keep naming the same comment or reply after rdocx save and reopen,
 although third-party editors may renumber them. `RunPosition` and `RunRange`
 define top-level paragraph run
-boundaries with an inclusive start and exclusive end. `Document::split_run`
+boundaries with an inclusive start and exclusive end. Run boundaries count the
+accepted-view runs that `Paragraph.runs` and `rdocx-cli text --json` list,
+including the runs inside inline content controls and tracked insertions, and
+a range that cannot be anchored exactly is an error rather than a shifted
+range. `Document::split_run`
 splits one direct-body run at a Unicode scalar offset of its literal text, so
 such a boundary can fall inside what was one run. Its first argument is the
 same direct body child index as `RunPosition` and `find_content_index`. An
@@ -1149,7 +1173,8 @@ binding revision advances only when a continuation is created. `CommentRef` expo
 comment metadata, text, parent identity, and resolved state without permitting
 part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
 removes comments. Add ranges use explicit zero-based, half-open body paragraph
-and run coordinates. Every mutation publishes a complete validated document
+and run coordinates, and the run coordinates count the runs that `text --json`
+lists. Every mutation publishes a complete validated document
 to an explicit output. Python and WASM keep their package-preserving owners.
 
 Native Word callers remove one exact non-empty literal with
@@ -1167,9 +1192,8 @@ direct range, current text, and marker issue. The range counts paragraphs
 recursively through tables and block content controls. The direct range uses
 the `RunPosition` body index that `add_bookmark` takes and is present only when
 both markers sit in direct body paragraphs. Its run indexes stay the
-accepted-view boundaries of the range, which equal the run indexes
-`add_bookmark` takes only in a paragraph without inline content controls or
-tracked insertions. Insertion validates the Word name and both
+accepted-view boundaries of the range, which are the run indexes
+`add_bookmark` takes. Insertion validates the Word name and both
 boundaries, rejects duplicate or producer-reserved names, and returns the
 allocated nonnegative id. The shared recursive `Field` model retains the
 complete `REF` and `PAGEREF` instruction, target argument, cached display,

@@ -56,8 +56,11 @@ rdocx toc rebuild report.docx -o refreshed.docx
 ```
 
 Comment `add` ranges use zero-based body paragraph and run boundaries. The
-start is inclusive and the end is exclusive. Comment replies, resolution, and
-removal select a decimal comment id.
+start is inclusive and the end is exclusive. Run boundaries count the runs that
+`text --json` lists, including the runs inside inline content controls and
+tracked insertions. A range that cannot be anchored exactly, such as one that
+crosses the edge of an inline content control, is refused. Comment replies,
+resolution, and removal select a decimal comment id.
 
 Revision `list` reports every supported story and names the story of each
 revision. Revision `accept` and `reject` operate across every supported story

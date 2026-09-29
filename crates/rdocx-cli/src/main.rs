@@ -253,13 +253,15 @@ struct CommentRangeArgs {
     /// Zero-based body paragraph index at the inclusive start
     #[arg(long)]
     start_paragraph: usize,
-    /// Zero-based run boundary at the inclusive start
+    /// Zero-based run boundary at the inclusive start, counting the runs that
+    /// `text --json` lists
     #[arg(long)]
     start_run: usize,
     /// Zero-based body paragraph index at the exclusive end
     #[arg(long)]
     end_paragraph: usize,
-    /// Zero-based run boundary at the exclusive end
+    /// Zero-based run boundary at the exclusive end, counting the runs that
+    /// `text --json` lists
     #[arg(long)]
     end_run: usize,
 }

@@ -1269,6 +1269,91 @@ fn comment_commands_round_trip_one_resolved_thread() {
     assert_eq!(Document::open(&input).unwrap().comments().len(), 0);
 }
 
+/// GitHub issue #172: `comment add` counts runs the way `text --json` lists
+/// them, including the runs of an inline content control.
+#[test]
+fn comment_add_counts_the_runs_that_text_json_lists() {
+    let temp = TempWorkspace::new("comment-inline-control");
+    let input = temp.path.join("input.docx");
+    let mut document = fixture_document(&[]);
+    let mut paragraph = document.add_paragraph("");
+    for text in ["before ", "TAR", "GET", " after"] {
+        paragraph.add_run(text);
+    }
+    document.save(&input).unwrap();
+    let mut package = OpcPackage::open(&input).unwrap();
+    let part = package.main_document_part().unwrap();
+    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    let start = xml[..xml.find(">TAR<").unwrap()].rfind("<w:r>").unwrap();
+    let end =
+        xml.find(">GET<").unwrap() + xml[xml.find(">GET<").unwrap()..].find("</w:r>").unwrap();
+    let xml = format!(
+        "{}<w:sdt><w:sdtPr/><w:sdtContent>{}</w:r></w:sdtContent></w:sdt>{}",
+        &xml[..start],
+        &xml[start..end],
+        &xml[end + "</w:r>".len()..]
+    );
+    package.set_part(&part, xml.into_bytes());
+    package.save(&input).unwrap();
+
+    let text = cli(&["text", path_text(&input), "--json"]);
+    assert_success(&text, "text --json");
+    let value: serde_json::Value = serde_json::from_slice(&text.stdout).unwrap();
+    let runs = value["paragraphs"][0]["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|run| run["text"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(runs, ["before ", "TAR", "GET", " after"]);
+
+    let add = |start_run: &str, end_run: &str, output: &Path| {
+        cli(&[
+            "comment",
+            "add",
+            path_text(&input),
+            "--start-paragraph",
+            "0",
+            "--start-run",
+            start_run,
+            "--end-paragraph",
+            "0",
+            "--end-run",
+            end_run,
+            "--author",
+            "Alice",
+            "--text",
+            "Here",
+            "--output",
+            path_text(output),
+        ])
+    };
+    let added = temp.path.join("added.docx");
+    assert_success(&add("1", "3", &added), "comment add");
+    let package = OpcPackage::open(&added).unwrap();
+    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    let anchored =
+        &xml[xml.find("<w:commentRangeStart").unwrap()..xml.find("<w:commentRangeEnd").unwrap()];
+    let anchored_text = anchored
+        .split("<w:t>")
+        .skip(1)
+        .map(|text| &text[..text.find("</w:t>").unwrap()])
+        .collect::<String>();
+    assert_eq!(anchored_text, "TARGET");
+
+    // From inside the control to after it cannot be anchored exactly.
+    let refused = temp.path.join("refused.docx");
+    let output = add("2", "4", &refused);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("crosses the edge of an inline content control"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!refused.exists());
+}
+
 #[test]
 fn revision_filters_change_only_matching_revisions() {
     let temp = TempWorkspace::new("revision-filters");

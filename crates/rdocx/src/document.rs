@@ -9591,7 +9591,10 @@ fn push_control_text(control: &CT_Sdt, text: &mut String) {
     }
 }
 
-fn visit_body_paragraphs_mut(content: &mut [BodyContent], visitor: &mut impl FnMut(&mut CT_P)) {
+pub(crate) fn visit_body_paragraphs_mut(
+    content: &mut [BodyContent],
+    visitor: &mut impl FnMut(&mut CT_P),
+) {
     for item in content {
         match item {
             BodyContent::Paragraph(paragraph) => visit_paragraph_mut(paragraph, visitor),
@@ -13309,18 +13312,26 @@ impl Document {
     }
 
     pub(crate) fn story_paragraph_mut(&mut self, location: &ContentLocation) -> Result<&mut CT_P> {
-        let (part_name, paragraph_slot, cell_route) = {
+        let (part_name, paragraph_slot, ordinal, cell_route) = {
             let (source, owner) = self.story_source_and_owner(&location.story)?;
             let part_name = source.part_name.clone();
             let source_xml = source.xml.into_owned();
-            if location.index_path.len() != 1 {
-                return Err(StoryError::InvalidPath {
-                    path: location.index_path.clone(),
+            // A paragraph inside a block content control of the body is the
+            // control item followed by the paragraph's position among the
+            // paragraphs of that control.
+            let (item_index, ordinal) = match location.index_path.as_slice() {
+                [item_index] => (*item_index, None),
+                [item_index, ordinal] if location.story.kind == StoryKind::Body => {
+                    (*item_index, Some(*ordinal))
                 }
-                .into());
-            }
+                _ => {
+                    return Err(StoryError::InvalidPath {
+                        path: location.index_path.clone(),
+                    }
+                    .into());
+                }
+            };
             let items = scan_story_items(&source_xml, &owner)?;
-            let item_index = location.index_path[0];
             let item = items.get(item_index).ok_or(StoryError::OutOfBounds {
                 index: item_index,
                 len: items.len(),
@@ -13330,7 +13341,15 @@ impl Document {
                     "comment positions must identify paragraphs".to_owned(),
                 ));
             }
-            if item.kind != location.item_kind {
+            if ordinal.is_some()
+                && (item.kind != StoryItemKind::ContentControl || !item.direct_owner_child)
+            {
+                return Err(Error::Other(
+                    "a two-segment comment position must start with a block content control"
+                        .to_owned(),
+                ));
+            }
+            if ordinal.is_none() && item.kind != location.item_kind {
                 return Err(StoryError::KindMismatch {
                     expected: location.item_kind,
                     actual: item.kind,
@@ -13355,7 +13374,7 @@ impl Document {
                 && part_name == self.doc_part_name)
                 .then(|| modeled_main_cell_route(&source_xml, &owner))
                 .transpose()?;
-            (part_name, paragraph_slot, cell_route)
+            (part_name, paragraph_slot, ordinal, cell_route)
         };
         if part_name != self.doc_part_name {
             return Err(Error::Other(
@@ -13363,10 +13382,20 @@ impl Document {
             ));
         }
         match location.story.kind {
-            StoryKind::Body => match self.document.body.content.get_mut(paragraph_slot) {
-                Some(BodyContent::Paragraph(paragraph)) => Ok(paragraph),
-                _ => Err(Error::Other("comment body paragraph is missing".to_owned())),
-            },
+            StoryKind::Body => {
+                match (self.document.body.content.get_mut(paragraph_slot), ordinal) {
+                    (Some(BodyContent::Paragraph(paragraph)), None) => Ok(paragraph),
+                    (Some(BodyContent::ContentControl(control)), Some(mut remaining)) => {
+                        nth_paragraph_in_control(control, &mut remaining).ok_or_else(|| {
+                            Error::Other(format!(
+                                "comment content control has no paragraph {}",
+                                ordinal.unwrap_or_default()
+                            ))
+                        })
+                    }
+                    _ => Err(Error::Other("comment body paragraph is missing".to_owned())),
+                }
+            }
             StoryKind::TableCell => {
                 let (content_index, mut cell_index) = cell_route.ok_or_else(|| {
                     Error::Other("comment position has no modeled table-cell route".to_owned())
@@ -15338,6 +15367,59 @@ impl Document {
             .content
             .iter()
             .position(|content| matches!(content, BodyContent::Paragraph(paragraph) if std::ptr::eq(paragraph, target)))
+    }
+
+    /// Return the checked body story location of the paragraph addressed by
+    /// `paragraph_index`, the index of [`Self::paragraph_mut`].
+    ///
+    /// A direct body paragraph has its one-segment story item path. A
+    /// paragraph inside a block content control, which has no story item of
+    /// its own, has a two-segment path: the control's story item index, then
+    /// the paragraph's position among the control's paragraphs. Only
+    /// [`Self::add_story_comment`] accepts the two-segment form. Returns
+    /// `None` when the index is out of range.
+    pub fn paragraph_story_location(
+        &self,
+        paragraph_index: usize,
+    ) -> Result<Option<ContentLocation>> {
+        let mut remaining = paragraph_index;
+        let mut target = None;
+        for (slot, child) in self.document.body.content.iter().enumerate() {
+            let count = match child {
+                BodyContent::Paragraph(_) => 1,
+                BodyContent::ContentControl(control) => paragraph_count_in_control(control),
+                BodyContent::Table(_) | BodyContent::RawXml(_) => 0,
+            };
+            if remaining < count {
+                let ordinal = matches!(child, BodyContent::ContentControl(_)).then_some(remaining);
+                target = Some((slot, ordinal));
+                break;
+            }
+            remaining -= count;
+        }
+        let Some((slot, ordinal)) = target else {
+            return Ok(None);
+        };
+        let story = self
+            .stories()?
+            .into_iter()
+            .find(|story| story.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("document body story is missing".to_owned()))?;
+        let (source, owner) = self.story_source_and_owner(&story)?;
+        // The body section properties come last, so the n-th direct item is
+        // the direct body child at slot n.
+        let item_index = scan_story_items(source.xml.as_ref(), &owner)?
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.direct_owner_child)
+            .nth(slot)
+            .map(|(index, _)| index)
+            .ok_or_else(|| Error::Other("body paragraph has no story item".to_owned()))?;
+        Ok(Some(ContentLocation::new(
+            story,
+            StoryItemKind::Paragraph,
+            std::iter::once(item_index).chain(ordinal).collect(),
+        )))
     }
 
     /// Return the direct body index of the table addressed by `table_index`.

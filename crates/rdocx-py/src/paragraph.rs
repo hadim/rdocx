@@ -55,7 +55,7 @@ pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocati
 
 #[pyclass(name = "Paragraph")]
 pub struct PyParagraph {
-    document: Py<PyDocument>,
+    pub(crate) document: Py<PyDocument>,
     path: ContentPath,
 }
 
