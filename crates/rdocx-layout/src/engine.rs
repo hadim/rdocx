@@ -17258,6 +17258,7 @@ mod tests {
                     height: 12.0,
                     is_header: true,
                     cant_split: false,
+                    min_height: 0.0,
                     offset_left: 0.0,
                 },
                 table::TableRow {
@@ -17266,6 +17267,7 @@ mod tests {
                     height: 12.0,
                     is_header: false,
                     cant_split: false,
+                    min_height: 0.0,
                     offset_left: 0.0,
                 },
             ],

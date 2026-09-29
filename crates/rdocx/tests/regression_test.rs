@@ -33805,3 +33805,72 @@ mod keep_with_next_regressions {
         assert_eq!(pages_from(&document, 43), vec![2, 2]);
     }
 }
+
+mod row_minimum_height_split_regressions {
+    use rdocx::{Document, Length};
+
+    /// 43 fillers of 14 points leave 46 of the 648 point page, then a
+    /// borderless one-cell table whose row holds four 14 point lines, with a
+    /// minimum height of `minimum` points when there is one. Three lines, 42
+    /// points, fit on page 1.
+    fn probe(minimum: Option<f64>) -> Document {
+        let mut document = Document::new();
+        for index in 0..43 {
+            let mut paragraph = document.add_paragraph(&format!("Filler {index:02}"));
+            paragraph.set_line_spacing(14.0);
+            paragraph.set_space_before(Length::pt(0.0));
+            paragraph.set_space_after(Length::pt(0.0));
+        }
+        {
+            let mut table = document.add_table(1, 1);
+            table.set_cell_margins(
+                Length::pt(0.0),
+                Length::pt(5.0),
+                Length::pt(0.0),
+                Length::pt(5.0),
+            );
+            let mut cell = table.cell(0, 0).expect("cell exists");
+            cell.set_text("Row line 0");
+            for line in 1..4 {
+                cell.add_paragraph(&format!("Row line {line}"));
+            }
+            for line in 0..4 {
+                let mut paragraph = cell.paragraph_mut(line).expect("cell paragraph");
+                paragraph.set_line_spacing(14.0);
+                paragraph.set_space_before(Length::pt(0.0));
+                paragraph.set_space_after(Length::pt(0.0));
+            }
+            if let Some(minimum) = minimum {
+                table
+                    .row(0)
+                    .expect("row exists")
+                    .set_height(Length::pt(minimum));
+            }
+        }
+        document
+    }
+
+    /// The pages the table's row lands on.
+    fn row_pages(document: &Document) -> Vec<usize> {
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        result
+            .body_layout_fragments(43)
+            .expect("the table is body item 43")
+            .iter()
+            .map(|fragment| fragment.physical_page)
+            .collect()
+    }
+
+    /// Word 16 splits a row with a minimum height only when the part that
+    /// stays on the first page reaches that minimum, and otherwise moves the
+    /// row whole. Layout split it whatever its minimum.
+    #[test]
+    fn a_row_splits_only_when_its_first_part_reaches_its_minimum_height() {
+        assert_eq!(row_pages(&probe(None)), vec![1, 2]);
+        assert_eq!(row_pages(&probe(Some(40.0))), vec![1, 2]);
+        assert_eq!(row_pages(&probe(Some(44.0))), vec![2]);
+        assert_eq!(row_pages(&probe(Some(100.0))), vec![2]);
+    }
+}

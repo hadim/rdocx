@@ -811,7 +811,13 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                 let mut first_fragment = true;
                 loop {
                     let space = pager.available_height() - pager.cursor_y;
-                    let split = split_simple_table_row(&pending, pending_semantics.as_ref(), space);
+                    // Word splits a row with a minimum height only when the
+                    // part that stays on this page reaches that minimum, and
+                    // otherwise moves the row whole.
+                    let split = split_simple_table_row(&pending, pending_semantics.as_ref(), space)
+                        .filter(|(fragment, ..)| {
+                            fragment.height >= pending.min_height || !pager.has_content()
+                        });
                     if let Some((fragment, rest, fragment_semantics, rest_semantics)) = split {
                         paint_flowed_table_row(
                             &mut pager,
@@ -995,6 +1001,7 @@ fn split_simple_table_row(
     }
     first.height = first_height;
     rest.height = rest_height.max(row.height - first_height);
+    rest.min_height = 0.0;
     for cell in &mut first.cells {
         cell.height = first.height;
         cell.merged_height = first.height;
@@ -7152,6 +7159,7 @@ mod tests {
             height: 10.0,
             is_header: false,
             cant_split: false,
+            min_height: 0.0,
             offset_left: 0.0,
         };
         let mut elements = Vec::new();
@@ -7418,6 +7426,7 @@ mod tests {
                 height: 12.0,
                 is_header: false,
                 cant_split: false,
+                min_height: 0.0,
                 offset_left: 0.0,
             }],
             header_row_indices: Vec::new(),
