@@ -190,27 +190,9 @@ impl<'a> ResolveCtx<'a> {
         &'ctx self,
         placeholder: Option<&CT_Placeholder>,
     ) -> (Option<&'ctx CT_Shape>, Option<&'ctx CT_Shape>) {
-        let Some(slide_key) = placeholder.map(CT_Placeholder::key) else {
-            return (None, None);
-        };
-        let Some(layout_shape) = find_placeholder(
-            &self.layout.common_slide_data.shape_tree.children,
-            &slide_key,
-        ) else {
-            return (None, None);
-        };
-        let Some(layout_key) = layout_shape
-            .placeholder
-            .as_ref()
-            .map(|placeholder| placeholder.key())
-        else {
-            return (None, None);
-        };
-        let master_shape = find_placeholder(
-            &self.master.common_slide_data.shape_tree.children,
-            &layout_key,
-        );
-        (Some(layout_shape), master_shape)
+        placeholder.map_or((None, None), |placeholder| {
+            placeholder_chain(placeholder, self.layout, self.master)
+        })
     }
 
     fn is_slide_number_placeholder(&self, shape: &CT_Shape) -> bool {
@@ -232,13 +214,9 @@ impl<'a> ResolveCtx<'a> {
 
     /// Resolves an owned transform from the slide, layout, then master shape.
     pub fn effective_xfrm(&self, shape: &CT_Shape) -> Option<CT_Transform2D> {
-        let (layout, master) = self.placeholder_chain(shape);
-        shape
-            .shape_properties
-            .transform
-            .clone()
-            .or_else(|| layout.and_then(|shape| shape.shape_properties.transform.as_ref().cloned()))
-            .or_else(|| master.and_then(|shape| shape.shape_properties.transform.as_ref().cloned()))
+        shape.shape_properties.transform.clone().or_else(|| {
+            inherited_xfrm(shape.placeholder.as_ref()?, self.layout, self.master).cloned()
+        })
     }
 
     /// Resolves picture bounds from the slide picture, layout placeholder, then master placeholder.
@@ -246,13 +224,9 @@ impl<'a> ResolveCtx<'a> {
         &self,
         picture: &rpptx_oxml::picture::CT_Picture,
     ) -> Option<CT_Transform2D> {
-        let (layout, master) = self.placeholder_chain_for(picture.placeholder.as_ref());
-        picture
-            .shape_properties
-            .transform
-            .clone()
-            .or_else(|| layout.and_then(|shape| shape.shape_properties.transform.as_ref().cloned()))
-            .or_else(|| master.and_then(|shape| shape.shape_properties.transform.as_ref().cloned()))
+        picture.shape_properties.transform.clone().or_else(|| {
+            inherited_xfrm(picture.placeholder.as_ref()?, self.layout, self.master).cloned()
+        })
     }
 
     /// Resolves body properties per field over defaults, master, layout, and slide.
@@ -3826,6 +3800,46 @@ fn merge_body_properties(target: &mut CT_TextBodyProperties, source: &CT_TextBod
     }
 }
 
+/// Returns the transform a slide placeholder inherits, ignoring its own.
+///
+/// The placeholder matches a layout placeholder, whose own key then matches
+/// a master placeholder. The first of the two that carries a transform
+/// supplies it whole, which is the fallback [`ResolveCtx::effective_xfrm`]
+/// takes when the slide shape has no transform of its own.
+pub fn inherited_xfrm<'a>(
+    placeholder: &CT_Placeholder,
+    layout: &'a CT_SlideLayout,
+    master: &'a CT_SlideMaster,
+) -> Option<&'a CT_Transform2D> {
+    let (layout, master) = placeholder_chain(placeholder, layout, master);
+    [layout, master]
+        .into_iter()
+        .flatten()
+        .find_map(|shape| shape.shape_properties.transform.as_ref())
+}
+
+fn placeholder_chain<'a>(
+    placeholder: &CT_Placeholder,
+    layout: &'a CT_SlideLayout,
+    master: &'a CT_SlideMaster,
+) -> (Option<&'a CT_Shape>, Option<&'a CT_Shape>) {
+    let Some(layout_shape) = find_placeholder(
+        &layout.common_slide_data.shape_tree.children,
+        &placeholder.key(),
+    ) else {
+        return (None, None);
+    };
+    let Some(layout_key) = layout_shape
+        .placeholder
+        .as_ref()
+        .map(|placeholder| placeholder.key())
+    else {
+        return (None, None);
+    };
+    let master_shape = find_placeholder(&master.common_slide_data.shape_tree.children, &layout_key);
+    (Some(layout_shape), master_shape)
+}
+
 fn find_placeholder<'a>(
     children: &'a [ShapeTreeChild],
     key: &PlaceholderKey,
@@ -3870,8 +3884,8 @@ mod tests {
     use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
 
     use super::{
-        BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx, resolved_shape_page_bounds,
-        resolved_shape_page_transform, transform_values,
+        BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx, inherited_xfrm,
+        resolved_shape_page_bounds, resolved_shape_page_transform, transform_values,
     };
     use crate::{
         ChartResource, Diagnostic, ParagraphAlignment, ResolvedAutofit, ResolvedBackground,
@@ -4340,6 +4354,50 @@ mod tests {
 
         assert_eq!(offsets, [11, 22, 33]);
         assert!(context.effective_xfrm(fixture.slide_shape(3)).is_none());
+    }
+
+    #[test]
+    fn inherited_transform_skips_the_slide_shape_and_follows_the_layout_key() {
+        let slide_children = [
+            shape_with_details(Some("body"), Some(1), &transform(11), None),
+            shape(Some("body"), Some(3)),
+            shape(Some("ftr"), Some(9)),
+            shape(Some("body"), Some(5)),
+        ]
+        .join("");
+        let layout_children = [
+            shape_with_details(Some("body"), Some(1), &transform(21), None),
+            shape(Some("body"), Some(3)),
+            shape(Some("ftr"), Some(10)),
+        ]
+        .join("");
+        let master_children = [
+            shape_with_details(Some("body"), Some(1), &transform(31), None),
+            shape_with_details(Some("body"), Some(3), &transform(33), None),
+            shape_with_details(Some("ftr"), Some(11), &transform(34), None),
+            shape_with_details(Some("body"), Some(5), &transform(35), None),
+        ]
+        .join("");
+        let fixture = Fixture::new(&slide_children, &layout_children, &master_children);
+        let context = fixture.context();
+        let inherited = |index: usize| {
+            let placeholder = fixture.slide_shape(index).placeholder.as_ref().unwrap();
+            inherited_xfrm(placeholder, &fixture.layout, &fixture.master)
+                .map(|transform| transform.offset.unwrap().x.0)
+        };
+
+        assert_eq!(inherited(0), Some(21));
+        assert_eq!(inherited(1), Some(33));
+        assert_eq!(inherited(2), Some(34));
+        assert_eq!(inherited(3), None, "a master match alone is not inherited");
+        for index in 1..4 {
+            assert_eq!(
+                context
+                    .effective_xfrm(fixture.slide_shape(index))
+                    .map(|transform| transform.offset.unwrap().x.0),
+                inherited(index)
+            );
+        }
     }
 
     #[test]

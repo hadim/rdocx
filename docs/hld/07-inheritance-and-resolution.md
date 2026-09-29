@@ -344,7 +344,11 @@ Six independent chains. Getting them separately right is the difference between
 Shape's own `a:xfrm`, then the matching layout placeholder, then the matching
 master placeholder, then none. `ResolveCtx::effective_xfrm` returns an owned
 clone from the first source that supplies a transform. A shape that resolves to
-no extent is skipped rather than treated as an error.
+no extent is skipped rather than treated as an error. The public
+`inherited_xfrm(placeholder, layout, master)` resolves the layout and master
+part of that chain without a `ResolveCtx`. `effective_xfrm` and
+`effective_picture_xfrm` fall back to it, and the facade's effective geometry
+and layout change call it, so all of them share one matching rule.
 
 ### 2. Body properties
 

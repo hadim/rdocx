@@ -85,6 +85,9 @@ Presentation::to_bytes_as(&self, class: PresentationPackageClass) -> Result<Vec<
 Presentation::save_as_package_class(&self, path: impl AsRef<Path>, class: PresentationPackageClass) -> Result<()>;
 Presentation::save_as_show(&self, path: impl AsRef<Path>) -> Result<()>;
 Presentation::slide_layout_index(&self, slide_index: usize) -> Option<usize>;
+Presentation::set_slide_layout(&mut self, slide_index: usize, layout_index: usize) -> Result<()>;
+Presentation::effective_geometry(&self, slide_index: usize, shape_path: &[usize]) -> Result<Option<(Emu, Emu, Emu, Emu)>>;
+Presentation::materialize_geometry(&mut self, slide_index: usize, shape_path: &[usize]) -> Result<()>;
 Presentation::set_notes_text(&mut self, slide_index: usize, text: &str) -> Result<()>;
 SlideRef::hidden(&self) -> bool;
 SlideRef::has_explicit_background(&self) -> bool;
@@ -100,6 +103,26 @@ layout list the masters reach. `background_fill` reports only a direct
 `p:bgPr` fill, so a theme reference reads as `None`. `clear_background` keeps
 a theme reference, while `remove_background` drops any `p:bg` so the slide
 follows its layout and master.
+
+The two geometry operations need `render`, which carries the placeholder
+matching rule. `shape_path` names a shape by its index in the slide tree, then
+its index in each enclosing group. `effective_geometry` returns the shape's own
+offset and extent, or for a placeholder without a transform, the one
+`rpptx_layout::inherited_xfrm` resolves, which is the transform rendering uses.
+A missing offset reads as zero and a transform without an extent reads as
+`None`. `ShapeRef::position` and `size` keep reporting only direct values.
+`materialize_geometry` copies the missing offset or extent of that inherited
+transform onto a placeholder, or the whole transform with its rotation and
+flips when the placeholder has none, so a later `set_position` or `set_size`
+leaves the other pair in place.
+
+`set_slide_layout` needs `render` as well. It retargets the slide's layout
+relationship to any layout the masters reach, including one of another master.
+A placeholder without its own transform that the new layout chain does not
+place first receives the transform it inherited, and every other placeholder
+follows the new layout. Placeholders of the new layout that the slide lacks
+are not added. The change is staged and publishes only after the staged
+package reopens.
 
 `SlideMut::set_notes_text` edits an existing notes slide and fails without one.
 `Presentation::set_notes_text` also creates the notes slide when it is absent,

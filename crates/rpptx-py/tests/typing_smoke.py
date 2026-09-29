@@ -197,6 +197,8 @@ def exercise_rpptx_types(path: Path) -> None:
     slide_layout: SlideLayout = current_slide.slide_layout
     layout_index: int = presentation.slide_layouts.index(slide_layout)
     same_layout: bool = slide_layout == presentation.slide_layouts[0]
+    current_slide.slide_layout = presentation.slide_layouts[1]
+    current_slide = presentation.slides[0]
     hidden: bool = current_slide.hidden
     current_slide.hidden = True
     background: Background = current_slide.background
@@ -210,6 +212,7 @@ def exercise_rpptx_types(path: Path) -> None:
     shape.top = Inches(2)
     shape.width = Inches(3)
     shape.height = Inches(1)
+    geometry: tuple[Length, Length, Length, Length] | None = shape.effective_geometry()
     shape.name = "Typed"
     shape.rotation = 15.0
     rotation: float = shape.rotation

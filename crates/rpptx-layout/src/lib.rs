@@ -15,7 +15,7 @@ pub mod timeline;
 
 pub use context::{
     BackgroundContent, BackgroundSource, EffectiveBackground, FlattenedItem, FlattenedSource,
-    ResolveCtx,
+    ResolveCtx, inherited_xfrm,
 };
 pub use style::{EffectiveShapeStyle, ResolveError};
 pub use text::{EffectiveListStyle, EffectiveTextProperties};
