@@ -811,7 +811,13 @@ fn paginate_pass_from<B: LayoutBlockLike>(
                 let mut first_fragment = true;
                 loop {
                     let space = pager.available_height() - pager.cursor_y;
-                    let split = split_simple_table_row(&pending, pending_semantics.as_ref(), space);
+                    // Word splits a row with a minimum height only when the
+                    // part that stays on this page reaches that minimum, and
+                    // otherwise moves the row whole.
+                    let split = split_simple_table_row(&pending, pending_semantics.as_ref(), space)
+                        .filter(|(fragment, ..)| {
+                            fragment.height >= pending.min_height || !pager.has_content()
+                        });
                     if let Some((fragment, rest, fragment_semantics, rest_semantics)) = split {
                         paint_flowed_table_row(
                             &mut pager,
@@ -995,6 +1001,7 @@ fn split_simple_table_row(
     }
     first.height = first_height;
     rest.height = rest_height.max(row.height - first_height);
+    rest.min_height = 0.0;
     for cell in &mut first.cells {
         cell.height = first.height;
         cell.merged_height = first.height;
@@ -2255,6 +2262,15 @@ impl<'a> Pager<'a> {
         self.finish_page_before(next_block_index);
     }
 
+    /// Move the flow on for a keep-with-next chain, without a restart
+    /// checkpoint. The blocks after the boundary chose it, so a restart there
+    /// would keep it after an edit to those blocks no longer calls for it.
+    fn advance_flow_for_chain(&mut self) {
+        if !self.advance_column_track() {
+            self.finish_page_outright();
+        }
+    }
+
     /// End the page before `next_block_index`, whatever column the body is in.
     fn finish_page_before(&mut self, next_block_index: usize) {
         self.finish_page_outright();
@@ -3212,25 +3228,18 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         }
     }
 
-    // Check keep-with-next
-    if para.keep_next && block_idx + 1 < blocks.len() {
-        let next = &blocks[block_idx + 1];
-        let next_first = next.paragraph().map_or_else(
-            || {
-                next.table().map_or(0.0, |table| {
-                    table.rows.first().map_or(0.0, |row| row.height)
-                })
-            },
-            |paragraph| paragraph.lines.first().map_or(0.0, |line| line.height),
-        );
-        if pager.cursor_y + space_before + para.content_height() + next_first
-            > pager.available_height_for(&para.lines)
-            && pager.has_content()
-        {
-            pager.advance_flow_before(block_idx);
-            if pager.stopped_at.is_some() {
-                return;
-            }
+    // Keep with next: the first paragraph of a keep-with-next chain moves to
+    // the next page unless the whole chain fits below it, as in Word. The
+    // paragraphs after it follow it, so a chain no page could hold breaks
+    // where the page ends.
+    let first_of_chain = !block_idx
+        .checked_sub(1)
+        .and_then(|previous| blocks[previous].paragraph())
+        .is_some_and(|previous| previous.keep_next);
+    if para.keep_next && first_of_chain && pager.has_content() {
+        let chain = keep_next_chain_height(para.block, block_idx, blocks, pager);
+        if pager.cursor_y + space_before + chain > pager.available_height_for(&para.lines) {
+            pager.advance_flow_for_chain();
         }
     }
 
@@ -3302,6 +3311,62 @@ fn paginate_paragraph<B: LayoutBlockLike>(
     pager.cursor_y += para.space_after;
     pager.previous_space_after = para.space_after;
     pager.mark_content();
+}
+
+/// Height a keep-with-next chain needs below the space before its first
+/// paragraph, as Word keeps it on one page: that paragraph, every following
+/// paragraph that also keeps with its next, the spacing between them, and then
+/// the opening of the block that ends the chain. That opening is a table's
+/// first row, or the lines a paragraph's own pagination cannot leave alone at
+/// the foot of a page: all of them under keep-lines or when there are two or
+/// fewer, two under widow control, else one, and never past a page break
+/// inside it. A page break before a block ends the chain without it, and the
+/// walk stops once the chain is taller than a page.
+fn keep_next_chain_height<B: LayoutBlockLike>(
+    para: &ParagraphBlock,
+    block_idx: usize,
+    blocks: &[B],
+    pager: &Pager,
+) -> f64 {
+    let mut height = para.content_height();
+    let mut space_after = para.space_after;
+    for next in &blocks[block_idx + 1..] {
+        if next.page_break_before() || height > pager.content_height {
+            break;
+        }
+        let Some(paragraph) = next.paragraph() else {
+            if let Some(table) = next.table() {
+                height += space_after + table.rows.first().map_or(0.0, |row| row.height);
+            }
+            break;
+        };
+        height += if pager.geometry.do_not_use_html_paragraph_auto_spacing {
+            space_after + paragraph.space_before
+        } else {
+            space_after.max(paragraph.space_before)
+        };
+        let page_break = forced_page_split(&paragraph.lines);
+        if paragraph.keep_next && page_break.is_none() {
+            height += paragraph.content_height();
+            space_after = paragraph.space_after;
+            continue;
+        }
+        let opening = if paragraph.keep_lines || paragraph.lines.len() <= 2 {
+            paragraph.lines.len()
+        } else if paragraph.widow_control {
+            2
+        } else {
+            1
+        };
+        let opening = page_break.map_or(opening, |split_at| opening.min(split_at));
+        height += paragraph.content_offset_top
+            + paragraph.lines[..opening]
+                .iter()
+                .map(|line| line.height)
+                .sum::<f64>();
+        break;
+    }
+    height
 }
 
 /// Return the line boundary immediately after the first page break that has a
@@ -7094,6 +7159,7 @@ mod tests {
             height: 10.0,
             is_header: false,
             cant_split: false,
+            min_height: 0.0,
             offset_left: 0.0,
         };
         let mut elements = Vec::new();
@@ -7360,6 +7426,7 @@ mod tests {
                 height: 12.0,
                 is_header: false,
                 cant_split: false,
+                min_height: 0.0,
                 offset_left: 0.0,
             }],
             header_row_indices: Vec::new(),
