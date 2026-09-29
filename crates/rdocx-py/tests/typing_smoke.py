@@ -119,6 +119,17 @@ def exercise_rdocx_types(path: Path) -> None:
     diagnostics: tuple[ComparisonDiagnostic, ...] = document.compare(
         opened, author="Ada", timestamp="2026-09-14T09:00:00Z"
     )
+    optioned: tuple[ComparisonDiagnostic, ...] = document.compare(
+        opened,
+        "Ada",
+        "2026-09-14T09:00:00Z",
+        granularity="word",
+        ignore_formatting=True,
+        ignore_whitespace=True,
+        ignore_fields=True,
+        ignore_comments=True,
+        ignored_stories=("header", "text_box"),
+    )
     fragments: tuple[LayoutFragment, ...] = document.layout()
     maybe_layout_page: LayoutPage | None = document.layout_page(0)
     report: TocRebuildReport = document.rebuild_toc()
@@ -212,3 +223,5 @@ if TYPE_CHECKING:
     RunCollection()  # type: ignore[call-arg]
     Table()  # type: ignore[call-arg]
     TableCollection()  # type: ignore[call-arg]
+    Document().compare(Document(), "Ada", "2026-09-14T09:00:00Z", granularity="words")  # type: ignore[arg-type]
+    Document().compare(Document(), "Ada", "2026-09-14T09:00:00Z", ignored_stories="header")  # type: ignore[arg-type]

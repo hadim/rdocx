@@ -1295,8 +1295,17 @@ and sibling fields from one physical run share that owner.
 It emits same-story moves and supported run, paragraph, table, and section
 property revisions. Diagnostic locations retain the actual story identity and
 stable owner path. `rdocx-cli compare` exposes the source-compatible whole-run
-comparison with explicit author, RFC 3339 timestamp, and output. Python and
-WASM preserve comparison output when they save their owned document.
+comparison with explicit author, RFC 3339 timestamp, and output. Python
+`Document.compare` takes the `ComparisonOptions` fields as keyword-only
+arguments. `granularity` is `"run"`, `"word"`, or `"character"` and defaults to
+the native `"run"`. `ignore_formatting`, `ignore_whitespace`, `ignore_fields`,
+and `ignore_comments` default to false. `ignored_stories` takes `Story.kind`
+names, where `body` selects the main story and `table_cell` is not a comparison
+category. An unknown granularity or story name raises `RdocxError` before the
+document changes, and a duplicated story keeps the native rejection.
+`ignore_comments` also leaves comment anchors to the original, while ignoring
+the `comment` story excludes only the comments part. WASM preserves comparison
+output when it saves its owned document.
 
 Native Word rendering exposes `rdocx::RevisionView` and the concrete
 `rdocx::RenderOptions`, whose default selects the accepted view. Additive

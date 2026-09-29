@@ -914,6 +914,211 @@ def test_priority_word_operations_return_typed_snapshots_and_remain_atomic():
     assert live_after_noop.text == "no table of contents"
 
 
+_COMPARE_TIMESTAMP = "2026-09-27T12:00:00Z"
+_LOREM = (
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod "
+    "tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim "
+    "veniam, quis nostrud exercitation ullamco."
+)
+
+
+def _tracked_texts(xml):
+    xml = xml.decode()
+    deleted = [
+        "".join(re.findall(r"<w:delText(?: [^>]*)?>([^<]*)</w:delText>", wrapper))
+        for wrapper in re.findall(r"<w:del\b[^>]*(?<!/)>.*?</w:del>", xml)
+    ]
+    inserted = [
+        "".join(re.findall(r"<w:t(?: [^>]*)?>([^<]*)</w:t>", wrapper))
+        for wrapper in re.findall(r"<w:ins\b[^>]*(?<!/)>.*?</w:ins>", xml)
+    ]
+    return deleted, inserted
+
+
+def _package_part(document, name):
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        return archive.read(name)
+
+
+def test_compare_granularity_marks_only_the_changed_word():
+    import rdocx
+
+    edited_text = _LOREM.replace("magna", "MAGNA")
+
+    def redline(**options):
+        original = rdocx.Document()
+        original.add_paragraph(_LOREM)
+        edited = rdocx.Document()
+        edited.add_paragraph(edited_text)
+        assert original.compare(edited, "Ada", _COMPARE_TIMESTAMP, **options) == ()
+        return original
+
+    whole_run = ([_LOREM], [edited_text])
+    for options, expected in [
+        ({}, whole_run),
+        ({"granularity": "run"}, whole_run),
+        ({"granularity": "word"}, (["magna"], ["MAGNA"])),
+        ({"granularity": "character"}, (["magna"], ["MAGNA"])),
+    ]:
+        compared = redline(**options)
+        assert _tracked_texts(_document_xml(compared)) == expected, options
+        accepted = rdocx.Document.from_bytes(compared.to_bytes())
+        accepted.accept_all()
+        assert accepted.paragraphs[0].text == edited_text
+        rejected = rdocx.Document.from_bytes(compared.to_bytes())
+        rejected.reject_all()
+        assert rejected.paragraphs[0].text == _LOREM
+
+    explicit_defaults = redline(
+        granularity="run",
+        ignore_formatting=False,
+        ignore_whitespace=False,
+        ignore_fields=False,
+        ignore_comments=False,
+        ignored_stories=(),
+    )
+    assert explicit_defaults.to_bytes() == redline().to_bytes()
+
+
+def test_compare_ignore_options_keep_the_original_side():
+    import rdocx
+
+    def compared(original, edited, **options):
+        work = rdocx.Document.from_bytes(original.to_bytes())
+        assert work.compare(edited, "Ada", _COMPARE_TIMESTAMP, **options) == ()
+        return work
+
+    plain = rdocx.Document()
+    plain.add_paragraph("plain")
+    bold = rdocx.Document.from_bytes(plain.to_bytes())
+    bold.paragraphs[0].runs[0].font.bold = True
+    assert [item.kind for item in compared(plain, bold).revisions] == [
+        "run_property_change"
+    ]
+    unformatted = compared(plain, bold, ignore_formatting=True)
+    assert unformatted.revisions == ()
+    assert unformatted.paragraphs[0].runs[0].font.bold is None
+
+    spaced = rdocx.Document()
+    spaced.add_paragraph("old  tail")
+    single = rdocx.Document()
+    single.add_paragraph("old tail")
+    assert [item.kind for item in compared(spaced, single).revisions] == [
+        "deletion",
+        "insertion",
+    ]
+    unspaced = compared(spaced, single, ignore_whitespace=True)
+    assert unspaced.revisions == ()
+    assert unspaced.paragraphs[0].text == "old  tail"
+
+    def page_field(result):
+        document = rdocx.Document()
+        document.add_paragraph("placeholder")
+        return _replace_document_body(
+            document,
+            '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+            '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+            '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            f"<w:r><w:t>{result}</w:t></w:r>"
+            '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>',
+        )
+
+    first_page, second_page = page_field("1"), page_field("2")
+    assert [item.kind for item in compared(first_page, second_page).revisions] == [
+        "deletion",
+        "insertion",
+    ]
+    unfielded = compared(first_page, second_page, ignore_fields=True)
+    assert unfielded.revisions == ()
+    assert b"<w:t>1</w:t>" in _document_xml(unfielded)
+
+    reviewed = rdocx.Document()
+    reviewed.add_paragraph("review this")
+    reviewed.add_paragraph("old ending")
+    commented = rdocx.Document.from_bytes(reviewed.to_bytes())
+    commented.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=0, run_index=1),
+        ),
+        author="Bo",
+        text="edited side note",
+    )
+    commented.paragraphs[1].runs[0].text = "new ending"
+    redline = compared(reviewed, commented, ignore_comments=True)
+    assert redline.comments == ()
+    assert b"<w:comment" not in _document_xml(redline)
+    assert _tracked_texts(_document_xml(redline)) == (["old ending"], ["new ending"])
+
+    headed = rdocx.Document()
+    headed.add_paragraph("old body")
+    headed.set_header("old header")
+    rewritten = rdocx.Document.from_bytes(headed.to_bytes())
+    for story in ("body", "header"):
+        item = next(
+            item
+            for item in rewritten.story_items
+            if item.story.kind == story and item.text
+        )
+        rewritten.set_story_text(item, item.text.replace("old", "new"))
+    header_part = next(
+        story.part_name for story in headed.stories if story.kind == "header"
+    ).lstrip("/")
+    tracked = compared(headed, rewritten)
+    assert _tracked_texts(_package_part(tracked, header_part)) == (
+        ["old header"],
+        ["new header"],
+    )
+    ignored = compared(headed, rewritten, ignored_stories=("header",))
+    assert _package_part(ignored, header_part) == _package_part(headed, header_part)
+    assert _tracked_texts(_document_xml(ignored)) == (["old body"], ["new body"])
+    unbodied = compared(headed, rewritten, ignored_stories=("body",))
+    assert _document_xml(unbodied) == _document_xml(headed)
+    assert _tracked_texts(_package_part(unbodied, header_part)) == (
+        ["old header"],
+        ["new header"],
+    )
+    for story in ("footer", "comment", "text_box", "footnote", "endnote"):
+        untouched = compared(headed, rewritten, ignored_stories=(story,))
+        assert _tracked_texts(_document_xml(untouched)) == (
+            ["old body"],
+            ["new body"],
+        ), story
+        assert _tracked_texts(_package_part(untouched, header_part)) == (
+            ["old header"],
+            ["new header"],
+        ), story
+
+
+def test_compare_rejects_unknown_options_before_mutation():
+    import rdocx
+
+    original = rdocx.Document()
+    original.add_paragraph("before")
+    edited = rdocx.Document()
+    edited.add_paragraph("after")
+    live = original.paragraphs[0]
+    before = original.to_bytes()
+    for options, error, message in [
+        ({"granularity": "words"}, rdocx.RdocxError, 'granularity "words"'),
+        ({"ignored_stories": ["main"]}, rdocx.RdocxError, 'story "main"'),
+        ({"ignored_stories": ["table_cell"]}, rdocx.RdocxError, 'story "table_cell"'),
+        (
+            {"ignored_stories": ["header", "header"]},
+            rdocx.RdocxError,
+            "duplicate ignored story",
+        ),
+        ({"ignored_stories": "header"}, TypeError, None),
+    ]:
+        with pytest.raises(error, match=message):
+            original.compare(edited, "Ada", _COMPARE_TIMESTAMP, **options)
+        assert original.to_bytes() == before
+        assert live.text == "before"
+    with pytest.raises(TypeError):
+        original.compare(edited, "Ada", _COMPARE_TIMESTAMP, "word")
+    assert live.text == "before"
+
+
 def test_word_default_toc_switch_rebuilds_and_reports_ordered_diagnostics():
     import rdocx
 
