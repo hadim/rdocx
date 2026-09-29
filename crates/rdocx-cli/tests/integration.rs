@@ -113,6 +113,63 @@ fn rewrite_run(path: &Path, text: &str, rewrite: impl FnOnce(&str) -> String) {
     package.save(path).unwrap();
 }
 
+/// Write the skills acceptance suite's every-story document: NEEDLE once in
+/// the body, a body table cell, a VML text box, the default header, the
+/// default footer and a table cell in it, the first-page footer, a footnote,
+/// and an endnote.
+fn write_every_story_fixture(path: &Path) {
+    let mut document = fixture_document(&["Body NEEDLE one."]);
+    {
+        let mut table = document.add_table(1, 2);
+        table.cell(0, 1).unwrap().set_text("Cell NEEDLE");
+    }
+    let footnote = document.add_footnote("Footnote NEEDLE.");
+    document
+        .add_paragraph("Footnote here")
+        .add_footnote_ref(footnote);
+    document.set_header("Header NEEDLE");
+    document.set_footer("Footer NEEDLE");
+    document.set_first_page_footer("First footer NEEDLE");
+    document.save(path).unwrap();
+
+    rewrite_run(path, "Footnote here", |run| {
+        format!(
+            r#"{run}<w:r><w:endnoteReference w:id="1"/></w:r><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" style="width:100pt;height:50pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>Text box NEEDLE</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>"#
+        )
+    });
+    let mut package = OpcPackage::open(path).unwrap();
+    let footer = package
+        .parts
+        .iter()
+        .find(|(name, xml)| {
+            name.starts_with("/word/footer")
+                && String::from_utf8_lossy(xml).contains(">Footer NEEDLE<")
+        })
+        .map(|(name, _)| name.clone())
+        .expect("fixture has a default footer");
+    let footer_xml = String::from_utf8(package.get_part(&footer).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "</w:ftr>",
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4320"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>Footer cell NEEDLE</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:ftr>"#,
+            1,
+        );
+    package.set_part(&footer, footer_xml.into_bytes());
+    package.set_part(
+        "/word/endnotes.xml",
+        br#"<w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:endnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:endnote><w:endnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote><w:endnote w:id="1"><w:p><w:r><w:endnoteRef/></w:r><w:r><w:t xml:space="preserve"> Endnote NEEDLE.</w:t></w:r></w:p></w:endnote></w:endnotes>"#
+            .to_vec(),
+    );
+    package.content_types.add_override(
+        "/word/endnotes.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::ENDNOTES, "endnotes.xml");
+    package.save(path).unwrap();
+}
+
 fn package_part_text(path: &Path, part: &str) -> String {
     let package = OpcPackage::open(path).unwrap();
     String::from_utf8(package.get_part(part).expect("part is present").to_vec()).unwrap()
@@ -265,6 +322,261 @@ fn plain_text_prints_the_accepted_view_of_tracked_changes() {
         .map(|paragraph| paragraph["text"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(texts, ["Tracked: ins NEEDLE", "cell NEEDLE"]);
+}
+
+#[test]
+fn text_views_read_every_story_after_the_body() {
+    let temp = TempWorkspace::new("text-every-story");
+    let input = temp.path.join("every-story.docx");
+    write_every_story_fixture(&input);
+
+    // The body keeps its exact form, and each other story follows under one
+    // line naming its kind and part. A footer lists its own paragraphs, the
+    // last one empty, before the cell of its table.
+    let plain = cli(&["text", path_text(&input)]);
+    assert_success(&plain, "plain text");
+    assert_eq!(
+        String::from_utf8(plain.stdout).unwrap(),
+        "Body NEEDLE one.\n\tCell NEEDLE\t\nFootnote here\n\
+         --- text_box (/word/document.xml) ---\nText box NEEDLE\n\
+         --- header (/word/header1.xml) ---\nHeader NEEDLE\n\
+         --- footer (/word/footer1.xml) ---\nFooter NEEDLE\n\nFooter cell NEEDLE\n\
+         --- footer (/word/footerFirst1.xml) ---\nFirst footer NEEDLE\n\
+         --- footnote (/word/footnotes.xml) ---\nFootnote NEEDLE.\n\
+         --- endnote (/word/endnotes.xml) ---\n Endnote NEEDLE.\n"
+    );
+
+    let structured = cli(&["text", path_text(&input), "--json"]);
+    assert_success(&structured, "structured text");
+    let value: Value = serde_json::from_slice(&structured.stdout).unwrap();
+    assert_eq!(value["scope"], "all-supported-stories");
+    assert_eq!(
+        value["paragraphs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|paragraph| paragraph["text"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["Body NEEDLE one.", "", "Cell NEEDLE", "Footnote here"]
+    );
+    let story = |kind: &str, part_name: &str, items: Value| json!({ "kind": kind, "part_name": part_name, "owner_index": 0, "items": items });
+    let paragraph = |index: usize, text: &str| json!({ "index_path": [index], "kind": "paragraph", "text": text });
+    assert_eq!(
+        value["stories"],
+        json!([
+            story(
+                "text_box",
+                "/word/document.xml",
+                json!([paragraph(0, "Text box NEEDLE")])
+            ),
+            story(
+                "header",
+                "/word/header1.xml",
+                json!([paragraph(0, "Header NEEDLE")])
+            ),
+            story(
+                "footer",
+                "/word/footer1.xml",
+                json!([paragraph(0, "Footer NEEDLE"), paragraph(2, "")])
+            ),
+            story(
+                "table_cell",
+                "/word/footer1.xml",
+                json!([paragraph(1, "Footer cell NEEDLE")])
+            ),
+            story(
+                "footer",
+                "/word/footerFirst1.xml",
+                json!([paragraph(0, "First footer NEEDLE")])
+            ),
+            story(
+                "footnote",
+                "/word/footnotes.xml",
+                json!([paragraph(0, "Footnote NEEDLE.")])
+            ),
+            story(
+                "endnote",
+                "/word/endnotes.xml",
+                json!([paragraph(0, " Endnote NEEDLE.")])
+            ),
+        ])
+    );
+
+    let markdown = temp.path.join("every-story.md");
+    let output = cli(&[
+        "convert",
+        path_text(&input),
+        "--to",
+        "md",
+        "-o",
+        path_text(&markdown),
+    ]);
+    assert_success(&output, "convert markdown");
+    assert_eq!(
+        fs::read_to_string(&markdown).unwrap(),
+        "Body NEEDLE one.\n\n|  | Cell NEEDLE |\n| --- | --- |\n\nFootnote here\n\n---\n\n\
+         **text_box** (/word/document.xml)\n\nText box NEEDLE\n\n\
+         **header** (/word/header1.xml)\n\nHeader NEEDLE\n\n\
+         **footer** (/word/footer1.xml)\n\nFooter NEEDLE\n\nFooter cell NEEDLE\n\n\
+         **footer** (/word/footerFirst1.xml)\n\nFirst footer NEEDLE\n\n\
+         **footnote** (/word/footnotes.xml)\n\nFootnote NEEDLE.\n\n\
+         **endnote** (/word/endnotes.xml)\n\nEndnote NEEDLE.\n\n"
+    );
+
+    let html = temp.path.join("every-story.html");
+    let output = cli(&[
+        "convert",
+        path_text(&input),
+        "--to",
+        "html",
+        "-o",
+        path_text(&html),
+    ]);
+    assert_success(&output, "convert HTML");
+    let html = fs::read_to_string(&html).unwrap();
+    assert!(
+        html.ends_with(
+            "<p>Footnote here</p>\n\n<hr>\n\
+             <section>\n<p><strong>text_box</strong> (/word/document.xml)</p>\n<p>Text box NEEDLE</p>\n</section>\n\
+             <section>\n<p><strong>header</strong> (/word/header1.xml)</p>\n<p>Header NEEDLE</p>\n</section>\n\
+             <section>\n<p><strong>footer</strong> (/word/footer1.xml)</p>\n<p>Footer NEEDLE</p>\n<p>Footer cell NEEDLE</p>\n</section>\n\
+             <section>\n<p><strong>footer</strong> (/word/footerFirst1.xml)</p>\n<p>First footer NEEDLE</p>\n</section>\n\
+             <section>\n<p><strong>footnote</strong> (/word/footnotes.xml)</p>\n<p>Footnote NEEDLE.</p>\n</section>\n\
+             <section>\n<p><strong>endnote</strong> (/word/endnotes.xml)</p>\n<p>Endnote NEEDLE.</p>\n</section>\n\
+             </body>\n</html>"
+        ),
+        "{html}"
+    );
+}
+
+#[test]
+fn text_views_read_comments_but_conversions_leave_them_out() {
+    let temp = TempWorkspace::new("text-comment-story");
+    let input = temp.path.join("source.docx");
+    let commented = temp.path.join("commented.docx");
+    let mut document = fixture_document(&["Reviewed text"]);
+    document.set_header("Head <b> & co");
+    // An empty first-page header has no text to print.
+    document.set_first_page_header("");
+    document.save(&input).unwrap();
+    let output = cli(&[
+        "comment",
+        "add",
+        path_text(&input),
+        "--start-paragraph",
+        "0",
+        "--start-run",
+        "0",
+        "--end-paragraph",
+        "0",
+        "--end-run",
+        "1",
+        "--author",
+        "Reviewer",
+        "--text",
+        "Check this",
+        "-o",
+        path_text(&commented),
+    ]);
+    assert_success(&output, "comment add");
+
+    let structured = cli(&["text", path_text(&commented), "--json"]);
+    assert_success(&structured, "structured text");
+    let value: Value = serde_json::from_slice(&structured.stdout).unwrap();
+    assert_eq!(
+        value["stories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|story| (story["kind"].as_str().unwrap(), story["items"].clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "header",
+                json!([{"index_path": [0], "kind": "paragraph", "text": "Head <b> & co"}])
+            ),
+            (
+                "header",
+                json!([{"index_path": [0], "kind": "paragraph", "text": ""}])
+            ),
+            (
+                "comment",
+                json!([{"index_path": [0], "kind": "paragraph", "text": "Check this"}])
+            ),
+        ]
+    );
+
+    let plain = cli(&["text", path_text(&commented)]);
+    assert_success(&plain, "plain text");
+    assert_eq!(
+        String::from_utf8(plain.stdout).unwrap(),
+        "Reviewed text\n--- header (/word/header1.xml) ---\nHead <b> & co\n\
+         --- comment (/word/comments.xml) ---\nCheck this\n"
+    );
+
+    // A comment is a review annotation, not document content, so a converted
+    // document keeps the header and leaves the comment out.
+    let markdown = temp.path.join("commented.md");
+    let html = temp.path.join("commented.html");
+    for (format, path) in [("md", &markdown), ("html", &html)] {
+        let output = cli(&[
+            "convert",
+            path_text(&commented),
+            "--to",
+            format,
+            "-o",
+            path_text(path),
+        ]);
+        assert_success(&output, "convert");
+    }
+    assert_eq!(
+        fs::read_to_string(&markdown).unwrap(),
+        "Reviewed text\n\n---\n\n**header** (/word/header1.xml)\n\nHead <b> & co\n\n"
+    );
+    let html = fs::read_to_string(&html).unwrap();
+    assert!(
+        html.contains(
+            "<section>\n<p><strong>header</strong> (/word/header1.xml)</p>\n\
+             <p>Head &lt;b&gt; &amp; co</p>\n</section>\n</body>"
+        ),
+        "{html}"
+    );
+    assert!(!html.contains("Check this"), "{html}");
+}
+
+#[test]
+fn text_views_never_read_the_fallback_copy_of_a_word_text_box() {
+    let temp = TempWorkspace::new("text-word-text-box");
+    let input = temp.path.join("text-box.docx");
+    write_document(&input, &["Anchor paragraph"]);
+    // Word writes a text box twice, DrawingML in mc:Choice and a VML copy in
+    // mc:Fallback. The copy holds other text here so that reading it shows.
+    rewrite_run(&input, "Anchor paragraph", |run| {
+        format!(
+            r#"{run}<w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" Requires="wps"><w:drawing><wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="1270000" cy="635000"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="10" name="Text Box 10"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>Box NEEDLE</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" style="width:100pt;height:50pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>Fallback NEEDLE</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>"#
+        )
+    });
+
+    let markdown = temp.path.join("text-box.md");
+    let output = cli(&[
+        "convert",
+        path_text(&input),
+        "--to",
+        "md",
+        "-o",
+        path_text(&markdown),
+    ]);
+    assert_success(&output, "convert markdown");
+    let mut views = vec![fs::read_to_string(&markdown).unwrap()];
+    for args in [&["text"][..], &["text", "--json"][..]] {
+        let output = cli(&[args, &[path_text(&input)]].concat());
+        assert_success(&output, "text");
+        views.push(String::from_utf8(output.stdout).unwrap());
+    }
+    for view in views {
+        assert!(!view.contains("Fallback NEEDLE"), "{view}");
+        assert!(view.matches("Box NEEDLE").count() <= 1, "{view}");
+    }
 }
 
 #[test]
@@ -1610,7 +1922,7 @@ fn cli_structured_text_layout_and_guarded_replace_preserve_exact_contracts() {
     assert_success(&text, "structured text");
     let text: serde_json::Value = serde_json::from_slice(&text.stdout).unwrap();
     assert_eq!(text["schema"], 1);
-    assert_eq!(text["scope"], "main");
+    assert_eq!(text["scope"], "all-supported-stories");
     assert_eq!(text["revision_view"], "accepted");
     assert_eq!(text["paragraphs"].as_array().unwrap().len(), 2);
     assert_eq!(text["paragraphs"][0]["body_index"], 0);
@@ -1708,7 +2020,7 @@ fn text_json_preserves_nested_paths_styles_numbering_and_run_formatting() {
         value,
         json!({
             "schema": 1,
-            "scope": "main",
+            "scope": "all-supported-stories",
             "revision_view": "accepted",
             "paragraphs": [
                 {
@@ -1751,7 +2063,8 @@ fn text_json_preserves_nested_paths_styles_numbering_and_run_formatting() {
                         {"index": 0, "text": "nested", "formatting": null}
                     ]
                 }
-            ]
+            ],
+            "stories": []
         })
     );
 }

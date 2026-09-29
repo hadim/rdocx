@@ -7,7 +7,8 @@ and produces fixed or flow output without an Office host.
 ## Capabilities
 
 - Human-readable or JSON structure and metadata inspection.
-- Accepted-view plain text or schema-1 rich extraction with typed nested paths.
+- Accepted-view plain text or schema-1 rich extraction with typed nested paths,
+  followed by the text boxes, headers, footers, notes, and comments.
 - Deterministic point-space body layout fragments for shell automation.
 - PDF, HTML, Markdown, PNG, JPEG, and multi-page TIFF conversion.
 - Page-range rendering, guarded literal replacement, diffing, and validation
@@ -98,12 +99,32 @@ paragraphs directly inside table cells. It leaves out paragraphs inside
 block-level and cell-level content controls and inside nested tables, which
 `text --json` reports.
 
+After the body, `text` prints every other story: text boxes, headers, footers,
+footnotes, endnotes, and comments, in the order of `Document::stories`. Each
+package part starts with a line that names the kind of its first story and the
+part, such as `--- header (/word/header1.xml) ---`. Each direct paragraph or
+block content control of its stories follows on one line, table cells
+included, with the accepted-view text of Python `StoryItem.text`. A part
+without any text, such as an empty header variant, is left out. A text box
+that Word writes twice, DrawingML in `mc:Choice` and a VML copy in
+`mc:Fallback`, is never read from the copy. A story part that is not
+well-formed XML stops `text` and the Markdown and HTML conversions with an
+error.
+
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,
 its direct style and numbering, and accepted-view runs. Run `formatting` is
 `null` when no direct run properties exist. Otherwise it records nullable
 direct bold, italic, strike, underline, font, point size, colour, highlight,
-language, and character style values.
+language, and character style values. The record has `all-supported-stories`
+scope, and its `stories` array lists the other stories as plain `text` does,
+one entry per story with its Python `Story.kind` name as `kind`, its
+`part_name`, its `owner_index`, and `items`. Each item is a direct paragraph or
+block content control with its story `index_path`, its `kind`, and its `text`.
+
+`convert --to md` and `convert --to html` append the same stories after the
+body, one section per part under a bold label. They leave comments out,
+because comments annotate a document rather than belong to it.
 
 `layout --json` uses bundled deterministic fonts. It lists every direct body
 item, including preserved items that have no fragments. Each laid-out fragment

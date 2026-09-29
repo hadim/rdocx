@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use oxml_cli_support::{
     StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
 };
+use quick_xml::escape::escape;
 use rdocx::{
     BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
-    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
+    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange, StoryId, StoryItemKind,
+    StoryKind,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -127,8 +129,11 @@ fn inspect_json(file: &Path, doc: &Document, style_ids: Vec<String>) -> Result<V
 ///
 /// Body paragraphs and table cell text are both emitted, in document order —
 /// printing only `paragraphs()` would silently drop everything inside tables.
+/// Every other story follows the body: text boxes, headers, footers,
+/// footnotes, endnotes, and comments.
 pub fn text(file: &Path, json_output: bool) -> Result<()> {
     let doc = Document::open(file)?;
+    let stories = other_stories(&doc)?;
     if json_output {
         let document = parsed_main_document(file)?;
         let mut paragraphs = Vec::new();
@@ -146,15 +151,185 @@ pub fn text(file: &Path, json_output: bool) -> Result<()> {
                 BodyContent::RawXml(_) => {}
             }
         }
+        let stories = stories
+            .iter()
+            .map(|story| {
+                let items = story
+                    .items
+                    .iter()
+                    .map(|(index_path, kind, text)| {
+                        json!({ "index_path": index_path, "kind": kind, "text": text })
+                    })
+                    .collect::<Vec<_>>();
+                json!({
+                    "kind": story_kind_name(story.story.kind()),
+                    "part_name": story.story.part_name(),
+                    "owner_index": story.story.owner_index(),
+                    "items": items,
+                })
+            })
+            .collect::<Vec<_>>();
         print_json(json!({
-            "scope": "main",
+            "scope": "all-supported-stories",
             "revision_view": "accepted",
             "paragraphs": paragraphs,
+            "stories": stories,
         }))?;
     } else {
         print!("{}", doc.text());
+        for (kind, part_name, texts) in story_parts(&stories) {
+            println!("--- {} ({part_name}) ---", story_kind_name(kind));
+            for text in texts {
+                println!("{text}");
+            }
+        }
     }
     Ok(())
+}
+
+/// One story that the body view leaves out, with the index path, kind, and
+/// accepted-view text of each of its direct paragraphs and block content
+/// controls.
+struct StoryText {
+    story: StoryId,
+    items: Vec<(Vec<usize>, &'static str, String)>,
+}
+
+/// Read every story but the main body and its table cells, which the body
+/// view already covers, in [`Document::stories`] order.
+///
+/// Only the direct items of a story are read, so the text of an inline
+/// control or a field is not repeated after its paragraph. A table is left
+/// out because each of its cells is a table-cell story of its own.
+fn other_stories(doc: &Document) -> Result<Vec<StoryText>> {
+    let mut main_part = None;
+    let mut stories: Vec<StoryText> = Vec::new();
+    for item in doc.story_item_snapshots()? {
+        let story = item.location().story();
+        if story.kind() == StoryKind::Body {
+            main_part = Some(story.part_name().to_owned());
+            continue;
+        }
+        if story.kind() == StoryKind::TableCell && main_part.as_deref() == Some(story.part_name()) {
+            continue;
+        }
+        if stories.last().is_none_or(|last| &last.story != story) {
+            stories.push(StoryText {
+                story: story.clone(),
+                items: Vec::new(),
+            });
+        }
+        let kind = match item.location().item_kind() {
+            StoryItemKind::Paragraph => "paragraph",
+            StoryItemKind::ContentControl => "content_control",
+            _ => continue,
+        };
+        if item.is_direct_child()
+            && let Some(last) = stories.last_mut()
+        {
+            last.items.push((
+                item.location().index_path().to_vec(),
+                kind,
+                item.text().unwrap_or_default().to_owned(),
+            ));
+        }
+    }
+    Ok(stories)
+}
+
+/// Group the texts of the stories by package part, each part labelled with
+/// the kind of its first story, such as a header part holding table cells.
+/// A part without any text, such as an empty header variant, is left out.
+fn story_parts(stories: &[StoryText]) -> Vec<(StoryKind, &str, Vec<&str>)> {
+    let mut parts: Vec<(StoryKind, &str, Vec<&str>)> = Vec::new();
+    for story in stories {
+        let part_name = story.story.part_name();
+        if parts.last().is_none_or(|(_, last, _)| *last != part_name) {
+            parts.push((story.story.kind(), part_name, Vec::new()));
+        }
+        if let Some((_, _, texts)) = parts.last_mut() {
+            texts.extend(story.items.iter().map(|(_, _, text)| text.as_str()));
+        }
+    }
+    parts.retain(|(_, _, texts)| texts.iter().any(|text| !text.trim().is_empty()));
+    parts
+}
+
+/// Name a story kind as Python `Story.kind` does.
+fn story_kind_name(kind: StoryKind) -> &'static str {
+    match kind {
+        StoryKind::Body => "body",
+        StoryKind::TableCell => "table_cell",
+        StoryKind::Header => "header",
+        StoryKind::Footer => "footer",
+        StoryKind::Footnote => "footnote",
+        StoryKind::Endnote => "endnote",
+        StoryKind::Comment => "comment",
+        StoryKind::TextBox => "text_box",
+        _ => "unknown",
+    }
+}
+
+/// The story parts a converted document carries after its body. Comments are
+/// review annotations rather than document content, so they are left out.
+fn converted_story_parts(stories: &[StoryText]) -> Vec<(StoryKind, &str, Vec<&str>)> {
+    story_parts(stories)
+        .into_iter()
+        .filter(|(kind, _, _)| *kind != StoryKind::Comment)
+        .collect()
+}
+
+/// Append the stories after the Markdown body, each part under a bold label.
+fn push_markdown_stories(markdown: &mut String, stories: &[StoryText]) {
+    let parts = converted_story_parts(stories);
+    if parts.is_empty() {
+        return;
+    }
+    if !markdown.is_empty() {
+        if !markdown.ends_with("\n\n") {
+            markdown.push_str(if markdown.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            });
+        }
+        markdown.push_str("---\n\n");
+    }
+    for (kind, part_name, texts) in parts {
+        markdown.push_str(&format!("**{}** ({part_name})\n\n", story_kind_name(kind)));
+        for text in texts.iter().map(|text| text.trim()) {
+            if !text.is_empty() {
+                markdown.push_str(text);
+                markdown.push_str("\n\n");
+            }
+        }
+    }
+}
+
+/// Insert the stories before the end of the HTML body, one section per part.
+fn push_html_stories(html: &mut String, stories: &[StoryText]) {
+    let parts = converted_story_parts(stories);
+    if parts.is_empty() {
+        return;
+    }
+    let mut sections = String::from("<hr>\n");
+    for (kind, part_name, texts) in parts {
+        sections.push_str(&format!(
+            "<section>\n<p><strong>{}</strong> ({})</p>\n",
+            story_kind_name(kind),
+            escape(part_name)
+        ));
+        for text in texts.iter().map(|text| text.trim()) {
+            if !text.is_empty() {
+                sections.push_str(&format!("<p>{}</p>\n", escape(text)));
+            }
+        }
+        sections.push_str("</section>\n");
+    }
+    match html.rfind("</body>") {
+        Some(end) => html.insert_str(end, &sections),
+        None => html.push_str(&sections),
+    }
 }
 
 /// Emit deterministic point-space extents for every direct body item.
@@ -415,11 +590,13 @@ pub fn convert(
             std::fs::write(&output_path, bytes)?;
         }
         "html" => {
-            let html = doc.to_html();
+            let mut html = doc.to_html();
+            push_html_stories(&mut html, &other_stories(&doc)?);
             std::fs::write(&output_path, html)?;
         }
         "md" | "markdown" => {
-            let md = doc.to_markdown();
+            let mut md = doc.to_markdown();
+            push_markdown_stories(&mut md, &other_stories(&doc)?);
             std::fs::write(&output_path, md)?;
         }
         "png" | "jpg" | "jpeg" | "tif" | "tiff" => {

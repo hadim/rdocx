@@ -556,6 +556,9 @@ projections. `StoryItemRef::direct_body_index` adds the safe direct body owner
 coordinate without changing the recursive `index_path`. Python frozen
 `StoryItem` snapshots expose the same optional integer. Items outside the main
 story and final section properties expose no coordinate.
+`StoryItemSnapshot::is_direct_child` tells a direct child of any story owner
+from an item nested in another item of that owner, such as an inline content
+control or a field inside a paragraph.
 `Document::set_story_text` resolves a checked operation-scoped
 location against a staged package and publishes only a serialized and reopened
 candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
@@ -2065,7 +2068,19 @@ emits schema-1 accepted-view paragraphs with a zero-based direct body index,
 typed zero-based nested path, direct style and numbering, text, and ordered
 runs. Run formatting is null when no direct run properties exist. Otherwise it
 contains nullable direct bold, italic, strike, underline, font, point size,
-colour, highlight, language, and character style fields. `layout --json` uses
+colour, highlight, language, and character style fields. Both views then read
+every other story through `Document::story_item_snapshots`, leaving out the
+main body and its table cells, which they already cover. Only the direct
+paragraphs and block content controls of a story are read, so the text of an
+inline control or a field is not repeated after its paragraph. Plain `text`
+prints each package part of those stories under a line such as
+`--- header (/word/header1.xml) ---`, one item text per line, and skips a part
+without any text. `text --json` states `all-supported-stories` scope and adds
+a `stories` array with the Python `Story.kind` name, part name, owner index,
+and items of each story. Each item carries its story `index_path`, its kind,
+and its accepted-view text.
+`convert` to Markdown or HTML appends the same parts after the body under a
+bold label, and leaves comments out as review annotations. `layout --json` uses
 bundled deterministic fonts and reports every direct body item. Its point-space
 fragments carry one-based physical and displayed page numbers, and preserved
 unlaid items retain an empty fragment list. `replace --expect N` checks the
