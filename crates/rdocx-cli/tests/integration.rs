@@ -1372,6 +1372,73 @@ fn replace_with_expect_counts_notes_and_tracked_insertions() {
     }
 }
 
+/// `rdocx text --json` shows the text inside a simple field, a smart tag and
+/// an inline custom XML element, and `rdocx replace --expect` counts it.
+#[test]
+fn text_and_replace_read_simple_fields_smart_tags_and_custom_xml() {
+    let temp = TempWorkspace::new("wrapped-text");
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    for (name, start, end) in [
+        (
+            "field",
+            r#"<w:fldSimple w:instr=" DOCPROPERTY Title ">"#,
+            "</w:fldSimple>",
+        ),
+        (
+            "smart-tag",
+            r#"<w:smartTag w:element="place">"#,
+            "</w:smartTag>",
+        ),
+        (
+            "custom-xml",
+            r#"<w:customXml w:element="item">"#,
+            "</w:customXml>",
+        ),
+    ] {
+        let input = temp.path.join(format!("{name}.docx"));
+        let replaced = temp.path.join(format!("{name}-replaced.docx"));
+        write_document(&input, &["seed"]);
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(fs::read(&input).unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{word}"><w:body><w:p><w:r><w:t xml:space="preserve">before </w:t></w:r>{start}<w:r><w:t>MID</w:t></w:r>{end}<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        package
+            .write_to(&mut fs::File::create(&input).unwrap())
+            .unwrap();
+
+        let output = cli(&["text", path_text(&input), "--json"]);
+        assert_success(&output, "text --json");
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["paragraphs"][0]["text"], "before MID after", "{name}");
+
+        let output = cli(&[
+            "replace",
+            path_text(&input),
+            "--placeholder",
+            "MID",
+            "--value",
+            "X",
+            "--expect",
+            "1",
+            "--output",
+            path_text(&replaced),
+        ]);
+        assert_success(&output, "replace --expect 1");
+        let package = OpcPackage::open(&replaced).unwrap();
+        let body =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        assert!(
+            body.contains(&format!("{start}<w:r><w:t>X</w:t></w:r>{end}")),
+            "{body}"
+        );
+    }
+}
+
 #[test]
 fn validate_exit_status_is_a_verdict() {
     let temp = TempWorkspace::new("validate");

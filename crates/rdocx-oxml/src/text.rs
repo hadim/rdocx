@@ -3726,10 +3726,13 @@ pub(crate) enum BoundaryOwner {
     ContentControl(usize),
     /// An index into [`CT_P::revisions`].
     Revision(usize),
+    /// An index into [`CT_P::extra_xml`] of a smart tag or an inline custom
+    /// XML element, see [`run_wrapper_paragraph`].
+    Wrapper(usize),
 }
 
-/// The content controls and revision wrappers at run `boundary` of
-/// `paragraph`, in document order.
+/// The content controls, revision wrappers, smart tags and inline custom
+/// XML elements at run `boundary` of `paragraph`, in document order.
 pub(crate) fn boundary_owners(paragraph: &CT_P, boundary: usize) -> Vec<BoundaryOwner> {
     let mut owners = paragraph
         .content_controls
@@ -3771,10 +3774,172 @@ pub(crate) fn boundary_owners(paragraph: &CT_P, boundary: usize) -> Vec<Boundary
                     (order, BoundaryOwner::Revision(index))
                 }),
         )
+        .chain(
+            paragraph
+                .extra_xml
+                .iter()
+                .enumerate()
+                .filter(|(_, (at, _))| *at == boundary)
+                .enumerate()
+                .filter(|(_, (_, (_, raw)))| is_run_wrapper(raw))
+                .map(|(slot, (index, _))| {
+                    (AcceptedOwnerOrder::Raw(slot), BoundaryOwner::Wrapper(index))
+                }),
+        )
         .collect::<Vec<_>>();
-    // A control goes before a revision wrapper of the same raw slot.
-    owners.sort_by_key(|(order, owner)| (*order, matches!(owner, BoundaryOwner::Revision(_))));
+    // A control goes before the raw child of the same slot.
+    owners
+        .sort_by_key(|(order, owner)| (*order, !matches!(owner, BoundaryOwner::ContentControl(_))));
     owners.into_iter().map(|(_, owner)| owner).collect()
+}
+
+/// Whether `raw` is a smart tag or an inline custom XML element with
+/// content, read with the conventional `w` prefix and those it declares.
+fn is_run_wrapper(raw: &[u8]) -> bool {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let Ok(Event::Start(start)) = reader.read_event_into(&mut buffer) else {
+        return false;
+    };
+    let Ok(prefixes) = word_prefixes_at(&start, &["w".to_owned()]) else {
+        return false;
+    };
+    is_word_element(start.name().as_ref(), b"smartTag", &prefixes)
+        || is_word_element(start.name().as_ref(), b"customXml", &prefixes)
+}
+
+/// The content of a smart tag, an inline custom XML element or a simple
+/// field, parsed as a paragraph from its preserved source `raw` in the scope
+/// of the Word prefixes `inherited`. Its runs are the text a reader sees
+/// inside the wrapper. None for any other element, and for a wrapper whose
+/// content [`with_run_wrapper_content`] could not write back, because `w`
+/// does not name WordprocessingML there.
+pub(crate) fn run_wrapper_paragraph(raw: &[u8], inherited: &[String]) -> Option<CT_P> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let Ok(Event::Start(start)) = reader.read_event_into(&mut buffer) else {
+        return None;
+    };
+    let prefixes = word_prefixes_at(&start, inherited).ok()?;
+    if !["smartTag", "customXml", "fldSimple"]
+        .iter()
+        .any(|local| is_word_element(start.name().as_ref(), local.as_bytes(), &prefixes))
+        || !prefixes.iter().any(|prefix| prefix == "w")
+    {
+        return None;
+    }
+    let (content_start, content_end) = run_wrapper_content_bounds(raw)?;
+    let mut paragraph_xml = b"<w:p>".to_vec();
+    paragraph_xml.extend_from_slice(&raw[content_start..content_end]);
+    paragraph_xml.extend_from_slice(b"</w:p>");
+    let mut paragraph_reader = Reader::from_reader(paragraph_xml.as_slice());
+    let mut paragraph_buffer = Vec::new();
+    let Ok(Event::Start(paragraph_start)) = paragraph_reader.read_event_into(&mut paragraph_buffer)
+    else {
+        return None;
+    };
+    CT_P::from_xml_with_prefixes_and_root(&mut paragraph_reader, &prefixes, Some(&paragraph_start))
+        .ok()
+}
+
+/// The source `raw` of a wrapper that [`run_wrapper_paragraph`] read, with
+/// `paragraph` written back as its content between its own start and end
+/// tags.
+pub(crate) fn with_run_wrapper_content(raw: &[u8], paragraph: &CT_P) -> Result<Vec<u8>> {
+    let missing = || OxmlError::MissingElement("wrapper content".to_owned());
+    let mut writer = Writer::new(Vec::new());
+    paragraph.to_xml(&mut writer)?;
+    let paragraph_xml = writer.into_inner();
+    // A paragraph without any content is written as `<w:p/>`.
+    let content = match paragraph_xml.iter().position(|byte| *byte == b'>') {
+        Some(end) if paragraph_xml[..end].ends_with(b"/") => &[][..],
+        Some(end) => paragraph_xml[end + 1..]
+            .strip_suffix(b"</w:p>")
+            .ok_or_else(missing)?,
+        None => return Err(missing()),
+    };
+    let (content_start, content_end) = run_wrapper_content_bounds(raw).ok_or_else(missing)?;
+    let mut updated = raw[..content_start].to_vec();
+    updated.extend_from_slice(content);
+    updated.extend_from_slice(&raw[content_end..]);
+    Ok(updated)
+}
+
+/// The byte range of the content of the element `raw`, between the end of
+/// its start tag and the start of its end tag.
+fn run_wrapper_content_bounds(raw: &[u8]) -> Option<(usize, usize)> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let Ok(Event::Start(_)) = reader.read_event_into(&mut buffer) else {
+        return None;
+    };
+    let content_start = reader.buffer_position() as usize;
+    let content_end = raw.iter().rposition(|byte| *byte == b'<')?;
+    (content_start <= content_end).then_some((content_start, content_end))
+}
+
+/// The preserved source of a run that holds only an unchanged simple field,
+/// with the Word prefixes it was read with.
+pub(crate) fn simple_field_source(run: &CT_R) -> Option<(&[u8], &[String])> {
+    let [RunContent::Field(field)] = run.content.as_slice() else {
+        return None;
+    };
+    match &field.source {
+        FieldSource::Parsed {
+            form: FieldForm::Simple,
+            raw_xml,
+            word_prefixes,
+            ..
+        } if field.is_unchanged() => Some((raw_xml, word_prefixes)),
+        _ => None,
+    }
+}
+
+/// Read the simple field of `run` again from the source `raw`, which
+/// [`with_run_wrapper_content`] wrote. Returns false, and changes nothing,
+/// when `run` holds no unchanged simple field or `raw` is not one.
+pub(crate) fn set_simple_field_source(run: &mut CT_R, raw: &[u8]) -> Result<bool> {
+    let Some((_, prefixes)) = simple_field_source(run) else {
+        return Ok(false);
+    };
+    let Some(field) = parse_simple_field(raw, prefixes)? else {
+        return Ok(false);
+    };
+    run.content = vec![RunContent::Field(field)];
+    Ok(true)
+}
+
+/// Append the text of the accepted view of `paragraph` to `output`, see
+/// [`CT_P::accepted_text`].
+fn append_accepted_text(paragraph: &CT_P, output: &mut String) {
+    let wrapper_text = |raw: &[u8], prefixes: &[String], output: &mut String| {
+        if let Some(content) = run_wrapper_paragraph(raw, prefixes) {
+            append_accepted_text(&content, output);
+        }
+    };
+    for boundary in 0..=paragraph.runs.len() {
+        for owner in boundary_owners(paragraph, boundary) {
+            let mut runs = Vec::new();
+            match owner {
+                BoundaryOwner::ContentControl(index) => {
+                    append_accepted_control_runs(&paragraph.content_controls[index].3, &mut runs);
+                }
+                BoundaryOwner::Revision(index) => {
+                    append_accepted_revision_runs(&paragraph.revisions[index].2, &mut runs);
+                }
+                BoundaryOwner::Wrapper(index) => {
+                    wrapper_text(&paragraph.extra_xml[index].1, &["w".to_owned()], output);
+                }
+            }
+            output.extend(runs.iter().map(|run| run.text()));
+        }
+        if let Some(run) = paragraph.runs.get(boundary) {
+            match simple_field_source(run) {
+                Some((raw, prefixes)) => wrapper_text(raw, prefixes, output),
+                None => output.push_str(&run.text()),
+            }
+        }
+    }
 }
 
 fn accepted_paragraph_run_paths(paragraph: &CT_P) -> Vec<AcceptedRunPath> {
@@ -3804,6 +3969,7 @@ pub(crate) fn append_accepted_paragraph_run_paths(
                         .2
                         .append_accepted_run_paths(prefix, output);
                 }
+                BoundaryOwner::Wrapper(_) => continue,
             }
             prefix.pop();
         }
@@ -3828,6 +3994,7 @@ fn accepted_paragraph_runs(paragraph: &CT_P) -> Vec<&CT_R> {
                 BoundaryOwner::Revision(index) => {
                     append_accepted_revision_runs(&paragraph.revisions[index].2, &mut output);
                 }
+                BoundaryOwner::Wrapper(_) => {}
             }
         }
         if let Some(run) = paragraph.runs.get(boundary) {
@@ -3908,6 +4075,7 @@ fn tracked_paragraph_runs(paragraph: &CT_P) -> Vec<&CT_R> {
                 BoundaryOwner::Revision(index) => {
                     append_tracked_revision_runs(&paragraph.revisions[index].2, &mut output);
                 }
+                BoundaryOwner::Wrapper(_) => {}
             }
         }
         if let Some(run) = paragraph.runs.get(boundary) {
@@ -4087,6 +4255,18 @@ impl CT_P {
         let mut runs = Vec::new();
         self.collect_runs(&mut runs);
         runs
+    }
+
+    /// Return the text of the accepted view, as `Paragraph::text` reads it:
+    /// the text of [`Self::accepted_bookmark_runs`], and that of the runs
+    /// inside smart tags, inline custom XML elements and simple fields, in
+    /// document order, nested ones included. The runs of a wrapper inside a
+    /// content control, a revision or a hyperlink are not read.
+    #[doc(hidden)]
+    pub fn accepted_text(&self) -> String {
+        let mut text = String::new();
+        append_accepted_text(self, &mut text);
+        text
     }
 
     /// Return accepted-view runs in the same order as bookmark projections.
