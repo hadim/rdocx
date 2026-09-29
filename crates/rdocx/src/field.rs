@@ -1647,10 +1647,7 @@ fn merge_field_name(field: &Field) -> Option<String> {
 }
 
 fn rich_region_marker(paragraph: &CT_P) -> Option<RichRegionMarker> {
-    if paragraph
-        .extra_xml
-        .iter()
-        .any(|(_, raw)| !raw.iter().all(u8::is_ascii_whitespace))
+    if paragraph_has_raw_content(paragraph)
         || paragraph.properties.is_some()
         || !paragraph.content_controls.is_empty()
         || !paragraph.revisions.is_empty()
@@ -1688,6 +1685,14 @@ fn rich_region_marker(paragraph: &CT_P) -> Option<RichRegionMarker> {
             name.strip_prefix("TableEnd:")
                 .map(|name| RichRegionMarker::End(name.to_owned()))
         })
+}
+
+/// Whether a paragraph holds raw XML other than whitespace. The attributes
+/// of its start tag, such as `w:rsidR` or `w14:paraId`, are not content.
+fn paragraph_has_raw_content(paragraph: &CT_P) -> bool {
+    paragraph.extra_xml.iter().any(|(position, raw)| {
+        !CT_P::raw_is_root_attributes(*position, raw) && !raw.iter().all(u8::is_ascii_whitespace)
+    })
 }
 
 fn find_body_region_end(items: &[BodyContent], start: usize, name: &str) -> Result<usize> {
@@ -1805,10 +1810,7 @@ fn whole_paragraph_fragment<'a>(
     paragraph: &CT_P,
     scopes: &[&'a MailMergeRecord],
 ) -> Result<Option<&'a [u8]>> {
-    if paragraph
-        .extra_xml
-        .iter()
-        .any(|(_, raw)| !raw.iter().all(u8::is_ascii_whitespace))
+    if paragraph_has_raw_content(paragraph)
         || !paragraph.content_controls.is_empty()
         || !paragraph.revisions.is_empty()
         || !paragraph.hyperlinks.is_empty()
@@ -3061,7 +3063,13 @@ fn expand_rich_rows(
 }
 
 fn rich_row_region_marker(row: &CT_Row) -> Option<RichRegionMarker> {
-    if !row.extra_xml.is_empty() || !row.content_controls.is_empty() || row.cells.len() != 1 {
+    if row
+        .extra_xml
+        .iter()
+        .any(|(position, raw)| !CT_Row::raw_is_root_attributes(*position, raw))
+        || !row.content_controls.is_empty()
+        || row.cells.len() != 1
+    {
         return None;
     }
     let cell = &row.cells[0];
@@ -7119,6 +7127,10 @@ struct BodyIdentityRemap {
     drawing_ids: BTreeMap<String, String>,
     non_visual_drawing_ids: BTreeMap<String, String>,
     bookmark_names: BTreeMap<String, String>,
+    /// Remove `w14:paraId` and `w14:textId` from paragraphs and table rows.
+    /// A copy must not share them with its source, and Word assigns new ones
+    /// to an element that has none.
+    drop_paragraph_identities: bool,
 }
 
 fn remap_body_identities(
@@ -7128,7 +7140,10 @@ fn remap_body_identities(
 ) -> Result<BodyIdentityRemap> {
     let xml = document.document.to_xml()?;
     let values = body_identity_values(&xml)?;
-    let mut remap = BodyIdentityRemap::default();
+    let mut remap = BodyIdentityRemap {
+        drop_paragraph_identities: true,
+        ..Default::default()
+    };
     for value in values.bookmark_ids {
         if let std::collections::btree_map::Entry::Vacant(entry) = remap.bookmark_ids.entry(value) {
             entry.insert(identifiers.reserve_bookmark_id()?.to_string());
@@ -7449,6 +7464,7 @@ fn resolved_element_attribute(
 }
 
 const WP_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
 const PIC_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
 const DRAWING_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WPS_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
@@ -7642,7 +7658,10 @@ pub(crate) fn freshen_content_fragment_identities(
         ));
     }
     let mut state = BodyIdentityState::from_documents(std::slice::from_ref(document))?;
-    let mut remap = BodyIdentityRemap::default();
+    let mut remap = BodyIdentityRemap {
+        drop_paragraph_identities: true,
+        ..Default::default()
+    };
     for value in values.bookmark_ids {
         if let std::collections::btree_map::Entry::Vacant(entry) = remap.bookmark_ids.entry(value) {
             entry.insert(document.identifiers.reserve_bookmark_id()?.to_string());
@@ -7803,6 +7822,34 @@ fn collect_body_identity_edits(
             &remap.non_visual_drawing_ids,
             edits,
         )?;
+    } else if remap.drop_paragraph_identities && namespace.word && matches!(local, b"p" | b"tr") {
+        for attribute in element.attributes() {
+            let attribute = attribute
+                .map_err(|error| Error::Other(format!("invalid XML attribute: {error}")))?;
+            let (attribute_namespace, attribute_local) = resolver.resolve_attribute(attribute.key);
+            if !namespace_matches(&attribute_namespace, W14_NS)
+                || !matches!(attribute_local.as_ref(), b"paraId" | b"textId")
+            {
+                continue;
+            }
+            let Some((name_start, _, value_end)) =
+                attribute_source_span(&xml[start..end], attribute.key.as_ref())
+            else {
+                return Err(Error::Other(
+                    "document identity attribute source was not found".to_owned(),
+                ));
+            };
+            // Remove the whitespace before the name with the attribute.
+            let removed_start = xml[start..start + name_start]
+                .iter()
+                .rposition(|byte| !byte.is_ascii_whitespace())
+                .map_or(0, |last| last + 1);
+            edits.push(FieldSourceEdit {
+                start: start + removed_start,
+                end: start + value_end + 1,
+                replacement: Vec::new(),
+            });
+        }
     }
     Ok(())
 }
@@ -7986,6 +8033,13 @@ fn remap_reference_instruction(
 }
 
 fn attribute_value_span(element: &[u8], attribute_name: &[u8]) -> Option<(usize, usize)> {
+    attribute_source_span(element, attribute_name)
+        .map(|(_, value_start, value_end)| (value_start, value_end))
+}
+
+/// Return where the name of one attribute starts in a start tag, and where
+/// its value starts and ends.
+fn attribute_source_span(element: &[u8], attribute_name: &[u8]) -> Option<(usize, usize, usize)> {
     let mut index = 1usize;
     while index < element.len() && !element[index].is_ascii_whitespace() {
         index += 1;
@@ -8026,7 +8080,7 @@ fn attribute_value_span(element: &[u8], attribute_name: &[u8]) -> Option<(usize,
         }
         let value_end = index;
         if &element[name_start..name_end] == attribute_name {
-            return Some((value_start, value_end));
+            return Some((name_start, value_start, value_end));
         }
         index += 1;
     }

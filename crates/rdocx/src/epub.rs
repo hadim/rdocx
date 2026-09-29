@@ -558,7 +558,10 @@ impl<'a> EpubWriter<'a> {
             if let Some(properties) = &row.properties {
                 self.scan_row_properties(properties, &row_path)?;
             }
-            for (raw_index, _) in row.extra_xml.iter().enumerate() {
+            for (raw_index, (position, raw)) in row.extra_xml.iter().enumerate() {
+                if CT_Row::raw_is_root_attributes(*position, raw) {
+                    continue;
+                }
                 self.diagnose(
                     format!("{row_path}/xml[{raw_index}]"),
                     "unmodelled table-row XML was dropped during EPUB export".to_owned(),

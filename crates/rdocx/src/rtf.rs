@@ -248,7 +248,10 @@ impl<'a> RtfWriter<'a> {
             if let Some(properties) = &row.properties {
                 self.scan_row_properties(properties, &format!("{location}/row[{row_index}]"));
             }
-            for (index, _) in &row.extra_xml {
+            for (index, raw) in &row.extra_xml {
+                if CT_Row::raw_is_root_attributes(*index, raw) {
+                    continue;
+                }
                 self.diagnose(
                     &format!("{location}/row[{row_index}]/raw[{index}]"),
                     "unmodelled table-row XML was dropped during RTF export",

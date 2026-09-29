@@ -1841,7 +1841,18 @@ values, source attribute order, child schema order, and deterministic package
 bytes. Focused unit coverage rejects duplicate expanded names and proves that
 authored `paraId` replaces only its expanded-name match. The public run-shape
 regression prevents the internal retention record from changing the existing
-`CT_R` struct literal surface.
+`CT_R` struct literal surface. `table_row_identity_attribute_regressions`
+extends the gate to table rows, direct, inside a table-level content control,
+and self-closing. A one-word edit outside the table keeps every row identity
+in source order and a reopened save is byte identical. Identity-only row
+differences add no comparison revision, a changed word adds two, the rows
+raise no unsupported-content or export diagnostic, and rich merge region
+markers and whole-paragraph fragment fields still resolve in paragraphs and
+rows that carry Word identities. A row or paragraph that declares `w14` itself
+under a root that does not, and a comparison of main and header stories
+against a copy whose roots declare `w14`, both write a readable part. Rows
+and paragraphs copied by `clone_table_row`, `clone_content` and template loops
+drop their w14 identities and keep their revision-save identities.
 
 The run-level page-break differential gate authors both the break-only
 paragraph written by python-docx and a break between two pieces of text. Its

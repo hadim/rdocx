@@ -340,7 +340,10 @@ impl<'a> OdtWriter<'a> {
                     "table-row properties were dropped during ODT export",
                 )?;
             }
-            for (index, _) in &row.extra_xml {
+            for (index, raw) in &row.extra_xml {
+                if CT_Row::raw_is_root_attributes(*index, raw) {
+                    continue;
+                }
                 self.diagnose(
                     &format!("{row_path}/raw[{index}]"),
                     "unmodelled table-row XML was dropped during ODT export",

@@ -813,9 +813,12 @@ each non-final body section properties value to a next-page section-ending
 paragraph, and retains the final body-level section properties value. A
 namespace-aware serialized-body pass remaps bookmark, content-control, and
 drawing identities together with bookmark field and hyperlink references,
-including values held in preserved raw XML. The operation does not evaluate
-structured template tags, and ordinary field traversal keeps its existing
-typed story scope.
+including values held in preserved raw XML. The same pass removes `w14:paraId`
+and `w14:textId` from every copied paragraph and table row, since a copy must
+not share them and Word assigns new ones, and keeps revision-save identities.
+Rich merge region copies and imported fragments go through it too. The
+operation does not evaluate structured template tags, and ordinary field
+traversal keeps its existing typed story scope.
 
 The same facade owns additive native rich mail merge over `MailMergeData` and
 owned text, image, and DOCX fragment values. Whole-paragraph and whole-row
@@ -839,11 +842,13 @@ container-aware stack parser. Top-level marker paragraphs clone body entries,
 including section-ending paragraphs and their section properties. Marker rows
 clone every row in a multi-row template group inside their owning table. The
 owning table is retained, and each row and cell is deep-cloned with its merge,
-banding, content-control, and ordered raw XML state. Numbered paragraphs in a
-loop retain their source `numId` and level, which keeps one continuous list
-without allocating definitions. Numbering references are validated before
-evaluation. Loop variables form lexical scopes, and dotted lookup searches the
-innermost scope before the root value. Structural controls are limited to the
+banding, content-control, and ordered raw XML state. Every paragraph and table
+row a loop renders drops its `w14:paraId` and `w14:textId`, as other copies do,
+and keeps its revision-save identities. Numbered paragraphs in a loop retain
+their source `numId` and level, which keeps one continuous list without
+allocating definitions. Numbering references are validated before evaluation.
+Loop variables form lexical scopes, and dotted lookup searches the innermost
+scope before the root value. Structural controls are limited to the
 main body and its tables. Headers, footers, text boxes, and chart labels retain
 scalar-only replacement through the existing Word placeholder mapper. A
 successful render commits the staged document and package together and
@@ -1272,7 +1277,8 @@ preserved node. Insert, remove, clone, and move resolve canonical
 children of the matching kind. `ContentLocation::end` is the distinct boundary
 after final direct content. It works for empty and self-closing owners and
 remains before body section properties. Moves stay within one unchanged story
-owner. Clones allocate fresh document identities, while relationship-bearing
+owner. Clones allocate fresh document identities and drop the `w14:paraId` and
+`w14:textId` of their paragraphs and table rows, while relationship-bearing
 fragments require the unchanged owner scope. Every operation serializes and
 reopens a staged candidate before publishing it.
 

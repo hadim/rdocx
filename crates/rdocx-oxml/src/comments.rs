@@ -10,7 +10,7 @@ use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::word_prefixes_at;
 use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
-use crate::text::CT_P;
+use crate::text::{CT_P, declare_w14_on_part_root};
 
 const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
 
@@ -149,7 +149,9 @@ impl CT_Comments {
             write_raw_at(&mut writer, &self.extra_xml, index + 1)?;
         }
         writer.write_event(Event::End(BytesEnd::new("w:comments")))?;
-        Ok(writer.into_inner())
+        let mut xml = writer.into_inner();
+        declare_w14_on_part_root(&mut xml)?;
+        Ok(xml)
     }
 }
 
@@ -461,6 +463,19 @@ mod tests {
         assert!(output.contains("</w:comment><ext:after/>"));
         assert!(output.contains(r#"ext:root="kept""#));
         assert!(output.contains(r#"ext:item="kept""#));
+    }
+
+    #[test]
+    fn a_retained_text_identity_stays_bound_without_a_paragraph_identity() {
+        // The root declares `w14` for an authored paragraph identity only, so
+        // a paragraph that carries `w14:textId` alone relies on the check of
+        // the written part.
+        let xml = br#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:comment w:id="1"><w:p w14:textId="5E6F7A8B"><w:r><w:t>thread</w:t></w:r></w:p></w:comment></w:comments>"#;
+        let comments = CT_Comments::from_xml(xml).unwrap();
+        let output = comments.to_xml().unwrap();
+        let reparsed = CT_Comments::from_xml(&output)
+            .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output)));
+        assert_eq!(reparsed.to_xml().unwrap(), output);
     }
 
     #[test]

@@ -17,7 +17,8 @@ use crate::revision::CT_Revision;
 use crate::shared::{ST_PageOrientation, ST_SectionType};
 use crate::table::{CT_Tbl, ST_VerticalJc};
 use crate::text::{
-    CT_P, capture_root_attribute_record, is_root_attribute_record, push_root_attribute_record,
+    CT_P, capture_root_attribute_record, declare_w14_on_part_root, is_root_attribute_record,
+    push_root_attribute_record,
 };
 use crate::units::Twips;
 
@@ -3007,7 +3008,9 @@ impl CT_Document {
 
         writer.write_event(Event::End(BytesEnd::new("w:document")))?;
 
-        Ok(writer.into_inner())
+        let mut xml = writer.into_inner();
+        declare_w14_on_part_root(&mut xml)?;
+        Ok(xml)
     }
 }
 

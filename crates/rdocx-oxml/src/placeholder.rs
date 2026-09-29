@@ -395,6 +395,7 @@ fn rewrite_text_boxes(
                         Ok(Event::Start(ref ie)) => {
                             if matches_local_name(ie.name().as_ref(), b"p") {
                                 // Parse this paragraph: collect its XML, then parse via CT_P
+                                let source = ie.to_owned();
                                 let para_xml = capture_element(&mut reader, ie)?;
                                 let mut para_reader = Reader::from_reader(para_xml.as_slice());
                                 para_reader.config_mut().trim_text(true);
@@ -419,7 +420,7 @@ fn rewrite_text_boxes(
                                     // bytes, start-tag attributes included.
                                     writer.get_mut().extend_from_slice(&para_xml);
                                 } else {
-                                    para.to_xml(&mut writer)?;
+                                    write_text_box_paragraph(&mut writer, &para, &source)?;
                                 }
                                 total_count += count;
                             } else {
@@ -455,6 +456,38 @@ fn rewrite_text_boxes(
     }
 
     Ok((writer.into_inner(), total_count))
+}
+
+/// Write a text-box paragraph that was parsed without its start tag.
+///
+/// The start tag keeps the attributes it was read with, such as `w:rsidR`,
+/// `w14:paraId` or a local namespace declaration. The paragraph goes back to
+/// the place it was read from, so every prefix they use resolves as before.
+fn write_text_box_paragraph<W: std::io::Write>(
+    writer: &mut quick_xml::Writer<W>,
+    paragraph: &CT_P,
+    source: &quick_xml::events::BytesStart<'_>,
+) -> crate::error::Result<()> {
+    use quick_xml::events::{BytesStart, Event};
+
+    let mut xml = Vec::new();
+    paragraph.to_xml(&mut quick_xml::Writer::new(&mut xml))?;
+    let mut start = BytesStart::new("w:p");
+    for attribute in source.attributes() {
+        start.push_attribute(attribute?);
+    }
+    // Parsed without its start tag, the paragraph records no attribute of its
+    // own, so it serializes with a bare start tag. Anything else is written as
+    // it serialized.
+    if xml == b"<w:p/>" {
+        writer.write_event(Event::Empty(start))?;
+    } else if let Some(content) = xml.strip_prefix(b"<w:p>") {
+        writer.write_event(Event::Start(start))?;
+        writer.get_mut().write_all(content)?;
+    } else {
+        writer.get_mut().write_all(&xml)?;
+    }
+    Ok(())
 }
 
 /// Replace placeholders in chart XML parts.
@@ -898,6 +931,29 @@ mod tests {
         let result_str = String::from_utf8(result).unwrap();
         assert!(result_str.contains("Hello Alice"));
         assert!(!result_str.contains("{{name}}"));
+    }
+
+    /// Word writes revision-save and paragraph identities on text-box
+    /// paragraphs too. An edited paragraph used to be written back with a
+    /// bare start tag, so a replacement dropped them.
+    #[test]
+    fn replace_in_textbox_keeps_the_paragraph_start_tag_attributes() {
+        const START: &str = r#"<w:p w:rsidR="00A1B2C3" w14:paraId="1A2B3C4D" w14:textId="5E6F7A8B" xmlns:x="urn:producer" x:id="7">"#;
+        let xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>{START}<w:r><w:t>Hello {{{{name}}}}</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#
+        );
+        let expected = format!("{START}<w:r><w:t>Hello Alice</w:t></w:r></w:p>");
+
+        let (result, count) = replace_in_xml_part(xml.as_bytes(), "{{name}}", "Alice").unwrap();
+        assert_eq!(count, 1);
+        let result = String::from_utf8(result).unwrap();
+        assert!(result.contains(&expected), "{result}");
+
+        let re = regex::Regex::new(r"\{\{name\}\}").unwrap();
+        let (result, count) = replace_regex_in_xml_part(xml.as_bytes(), &re, "Alice").unwrap();
+        assert_eq!(count, 1);
+        let result = String::from_utf8(result).unwrap();
+        assert!(result.contains(&expected), "{result}");
     }
 
     #[test]
