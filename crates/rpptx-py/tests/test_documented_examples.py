@@ -1972,7 +1972,8 @@ def test_fill_and_line_formats_write_what_python_pptx_reads(tmp_path):
     prs.save(output)
     parts = _package_parts(output.read_bytes())
     slide_xml = parts["ppt/slides/slide1.xml"].decode()
-    assert slide_xml.count("<a:ln") == 1
+    assert len(re.findall(r"<a:ln[ />]", slide_xml)) == 1
+    assert slide_xml.count("<p:style>") == 2
 
     pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
     oracle = pptx.Presentation(output).slides[0].shapes
@@ -2092,6 +2093,32 @@ def test_shapes_and_slides_are_removed_and_reordered_with_stale_handles(tmp_path
     pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
     oracle = pptx.Presentation(output)
     assert [len(slide.shapes) for slide in oracle.slides] == [2, 1]
+
+
+def test_add_shape_writes_the_python_pptx_theme_style_and_add_textbox_none(tmp_path):
+    import rpptx
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+
+    def styles(deck):
+        output = tmp_path / "styles.pptx"
+        deck.save(output)
+        slide_xml = _package_parts(output.read_bytes())["ppt/slides/slide1.xml"].decode()
+        return re.findall(r"<p:style>.*?</p:style>", slide_xml)
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_shape(1, 914400, 914400, 2743200, 1828800)
+    prs.slides[0].shapes.add_textbox(0, 0, 100, 100)
+    oracle = pptx.Presentation()
+    oracle.slides.add_slide(oracle.slide_layouts[6])
+    oracle.slides[0].shapes.add_shape(1, 914400, 914400, 2743200, 1828800)
+    oracle.slides[0].shapes.add_textbox(0, 0, 100, 100)
+
+    assert len(styles(prs)) == 1
+    assert styles(prs) == styles(oracle)
+    shape = prs.slides[0].shapes[0]
+    assert (shape.fill.type, shape.line.color.rgb) == (None, None)
 
 
 def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):

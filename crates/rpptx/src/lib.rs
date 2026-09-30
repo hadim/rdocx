@@ -5672,6 +5672,10 @@ impl<'a> SlideMut<'a> {
     }
 
     /// Appends an ordinary preset shape at the top of the slide's z-order.
+    ///
+    /// The shape carries the theme style python-pptx writes, so it shows the
+    /// theme's accent fill, line, and effect with light text until direct
+    /// properties replace them.
     pub fn add_shape(
         &mut self,
         preset: &str,
@@ -5680,15 +5684,36 @@ impl<'a> SlideMut<'a> {
         width: Emu,
         height: Emu,
     ) -> Result<ShapeMut<'_>> {
+        self.append_preset_shape(preset, left, top, width, height, true)
+    }
+
+    /// Appends a preset shape, with the python-pptx theme style only when
+    /// `theme_style` is set. HTML and ODP import map their source's own fill
+    /// and line, so they omit the style that would add an accent fill, line,
+    /// or text colour the source never had.
+    pub(crate) fn append_preset_shape(
+        &mut self,
+        preset: &str,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+        theme_style: bool,
+    ) -> Result<ShapeMut<'_>> {
         let tree = &mut self.record.slide.common_slide_data.shape_tree;
         let id = ShapeIdAllocator::scan(tree).allocate();
-        let shape = CT_Shape::new_preset(
+        let mut shape = CT_Shape::new_preset(
             id,
             &format!("Shape {id}"),
             preset,
             positioned_transform(left, top, width, height),
         )
         .map_err(|error| invalid_shape_construction("add shape", error))?;
+        if theme_style {
+            shape
+                .set_default_style()
+                .map_err(|error| invalid_shape_construction("add shape", error))?;
+        }
         Ok(shape_mut(tree.append_child(ShapeTreeChild::Shape(shape))))
     }
 

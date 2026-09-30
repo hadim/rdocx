@@ -53,6 +53,10 @@ fn html_public_import_saves_reopens_and_remains_editable() {
     );
 
     let bytes = imported.presentation.to_bytes().expect("HTML deck saves");
+    // The rectangle carries the source's own fill, with no theme line or text colour.
+    let package = open_opc(&bytes, "HTML import");
+    let slide_xml = package.get_part("/ppt/slides/slide1.xml").unwrap();
+    assert!(!String::from_utf8_lossy(slide_xml).contains("<p:style>"));
     let mut reopened = rpptx::Presentation::from_bytes(&bytes).expect("HTML deck reopens");
     reopened
         .slide_mut(0)
@@ -935,6 +939,10 @@ fn odp_round_trip_preserves_supported_presentation_content() {
             .any(|shape| shape.kind() == ShapeKind::Picture)
     );
     assert!(slide.shapes().any(|shape| shape.table().is_some()));
+    // ODP styles are not projected, so the rectangle gets no theme style either.
+    let package = open_opc(&source.presentation.to_bytes().unwrap(), "ODP import");
+    let slide_xml = package.get_part("/ppt/slides/slide1.xml").unwrap();
+    assert!(!String::from_utf8_lossy(slide_xml).contains("<p:style>"));
 
     let exported = source.presentation.to_odp_bytes().unwrap();
     assert!(exported.diagnostics.is_empty());
@@ -5954,17 +5962,17 @@ fn animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest() {
         AnimationGoldenManifest {
             timestamps: vec![0, 100, 200, 300, 400, 500],
             frame_hashes: vec![
-                4_894_345_659_775_260_357,
-                14_975_209_435_305_666_729,
-                11_017_240_483_202_348_157,
-                4_894_345_659_775_260_357,
-                12_281_991_332_647_577_373,
-                439_196_692_808_906_197,
+                17_556_814_090_165_878_936,
+                10_302_517_092_935_806_592,
+                1_761_306_763_660_559_477,
+                17_556_814_090_165_878_936,
+                12_485_766_330_883_973_622,
+                15_818_959_144_351_313_115,
             ],
             loop_repetitions: gif::Repeat::Finite(2),
             width: 96,
             height: 54,
-            container_hash: 1_682_901_777_930_996_407,
+            container_hash: 275_460_925_122_224_941,
         }
     );
 
@@ -5982,25 +5990,25 @@ fn animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest() {
                 width: 96,
                 height: 54,
                 duration_ms: 600,
-                payload_sizes: vec![968, 974, 1_015, 968, 907, 908],
+                payload_sizes: vec![1_051, 1_041, 1_083, 1_051, 974, 967],
                 payload_hashes: vec![
-                    9_345_256_692_286_977_543,
-                    2_927_541_614_763_063_172,
-                    6_127_686_133_210_419_864,
-                    9_345_256_692_286_977_543,
-                    10_353_497_591_034_183_350,
-                    7_116_127_623_826_450_847,
+                    6_114_878_512_987_619_525,
+                    6_689_117_434_859_934_405,
+                    10_438_352_793_058_009_424,
+                    6_114_878_512_987_619_525,
+                    5_082_515_722_578_930_998,
+                    3_824_155_140_654_973_691,
                 ],
                 decoded_frame_hashes: vec![
-                    15_016_817_725_945_965_948,
-                    7_383_799_236_496_809_804,
-                    9_379_829_375_826_415_478,
-                    15_016_817_725_945_965_948,
-                    12_438_950_088_017_235_599,
-                    3_796_532_621_390_706_249,
+                    1_119_435_603_157_072_622,
+                    11_478_850_699_532_632_868,
+                    9_098_180_366_198_776_722,
+                    1_119_435_603_157_072_622,
+                    6_400_185_387_006_672_792,
+                    14_121_660_160_416_744_809,
                 ],
             },
-            container_hash: 6_525_351_511_319_371_367,
+            container_hash: 11_822_763_859_841_947_549,
             diagnostics: vec![
                 "media shape 6 rendered as deterministic Video placeholder".to_owned(),
                 "media shape 6 has unsupported content type `video/x-f227-opaque`".to_owned(),
@@ -7883,7 +7891,7 @@ const F124_ARTIFACT_SHA256: &str =
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_CURRENT_ARTIFACT_SHA256: &str =
-    "249c70db36c4fab392a585988a25f8285ead01dfe56dba2b1d6f3d32b7a0e553";
+    "d9221cdd9fba517bda5b58de14ce4262d37cacd5e2a7e3940059d4b471a12b97";
 const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 10",
     "F-116 slide 02",
@@ -15571,6 +15579,86 @@ backgrounds	distinct solid, gradient, picture, and texture visuals
 placeholder-layout-color	exact cyan on black, RGBA #00FFFF
 bug58144-headers-footers-2007	Slide footer once
 "#;
+
+#[test]
+fn added_shape_carries_the_theme_style_and_renders_it() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide
+        .add_shape(
+            "rect",
+            Emu(914_400),
+            Emu(914_400),
+            Emu(2_743_200),
+            Emu(1_828_800),
+        )
+        .expect("add shape")
+        .set_text("Styled")
+        .expect("set shape text");
+    slide
+        .add_textbox(Emu(914_400), Emu(3_200_400), Emu(2_743_200), Emu(914_400))
+        .expect("add textbox")
+        .set_text("Plain")
+        .expect("set textbox text");
+
+    let bytes = presentation
+        .to_bytes()
+        .expect("serialize styled shape deck");
+    let package = open_opc(&bytes, "added shape style");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    // python-pptx 1.0.2 writes this style for add_shape and none for add_textbox.
+    let style = r#"</p:spPr><p:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="3"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="2"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style><p:txBody>"#;
+    assert_eq!(xml.matches("<p:style>").count(), 1);
+    let shape_start = xml.find(r#"name="Shape 2""#).expect("added shape");
+    let textbox_start = xml.find(r#"name="TextBox 3""#).expect("added textbox");
+    assert!(xml[shape_start..textbox_start].contains(style));
+
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen styled shape deck");
+    assert!(reopened.validate().is_empty());
+    let (input, layout) = reopened.render_deterministic().unwrap();
+    assert!(layout.diagnostics.is_empty(), "{:?}", layout.diagnostics);
+    let [shape, textbox] = &input.slides[0].shapes[..] else {
+        panic!("expected the shape and the textbox")
+    };
+    let run_fill = |shape: &rpptx_layout::ResolvedShape| {
+        let ResolvedContent::Text(body) = &shape.content else {
+            panic!("expected text")
+        };
+        let ResolvedTextRun::Text { style, .. } = &body.paragraphs[0].runs[0] else {
+            panic!("expected a text run")
+        };
+        style.fill.clone()
+    };
+    // The third theme fill is an accent1 gradient, the first theme line is
+    // 0.75 pt, and the second theme effect is an outer shadow.
+    assert!(matches!(shape.fill, Some(Paint::Linear { .. })));
+    assert_eq!(shape.line.as_ref().map(|line| line.width), Some(0.75));
+    assert!(shape.shadow.is_some());
+    assert_eq!(
+        run_fill(shape),
+        Some(Paint::Solid(oxml_layout::Color::WHITE))
+    );
+    assert_eq!(
+        (&textbox.fill, &textbox.line, &textbox.shadow),
+        (&None, &None, &None)
+    );
+    assert_ne!(
+        run_fill(textbox),
+        Some(Paint::Solid(oxml_layout::Color::WHITE))
+    );
+    // At 72 DPI the shape spans 72 to 288 by 72 to 216 pixels, and its text
+    // sits at the top left, so the bottom right of its interior is accent blue.
+    let png = reopened.slide_png_deterministic(0, 72.0).unwrap().unwrap();
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    let pixel = pixmap.pixel(270, 200).unwrap();
+    assert!(
+        pixel.blue() > pixel.red() + 40,
+        "{:?}",
+        (pixel.red(), pixel.green(), pixel.blue())
+    );
+}
 
 #[test]
 fn four_appended_shapes_have_unique_ids_and_reopen() {
