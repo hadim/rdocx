@@ -7,7 +7,7 @@ use oxml_drawing::color::ColorChoice;
 use oxml_drawing::fill::{Fill, SolidFill};
 use oxml_drawing::geometry::CT_CustomGeometry2D;
 use oxml_drawing::line::{CT_LineProperties, LineJoin};
-use oxml_drawing::text::{CT_TextBody, Coordinate32Value};
+use oxml_drawing::text::{CT_TextBody, Coordinate32Value, TextAlignment, TextSpacing};
 use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::{Diagnostic, Rect};
 use rpptx_oxml::connector::CT_ConnectionShape;
@@ -4089,23 +4089,32 @@ fn diagram_text(
             return Err("SmartArt owned text has no regular DrawingML run".to_owned());
         }
     }
+    let mut text = CT_TextBody::from_xml(xml.as_bytes()).map_err(|error| error.to_string())?;
     if centered {
-        let paragraph_properties = line_spacing.map_or_else(
-            || "<a:pPr algn=\"ctr\"/>".to_owned(),
-            |spacing| {
-                let spacing = match spacing {
-                    DiagramLineSpacing::Points(value) => {
-                        format!("<a:spcPts val=\"{value}\"/>")
-                    }
-                };
-                format!("<a:pPr algn=\"ctr\"><a:lnSpc>{spacing}</a:lnSpc></a:pPr>")
-            },
-        );
-        xml = xml.replace("<a:p>", &format!("<a:p>{paragraph_properties}"));
+        // The layout's alignment and line spacing are defaults. A data
+        // point's own paragraph properties win where they set a value, and
+        // an empty paragraph stays empty.
+        for index in 0..text.paragraph_count() {
+            let Some(paragraph) = text.paragraph_mut(index) else {
+                continue;
+            };
+            if paragraph.properties.is_none()
+                && paragraph.runs.is_empty()
+                && paragraph.end_properties.is_none()
+                && paragraph.raw_children().is_empty()
+            {
+                continue;
+            }
+            let properties = paragraph.properties_mut();
+            properties.alignment.get_or_insert(TextAlignment::Center);
+            if let Some(DiagramLineSpacing::Points(value)) = line_spacing {
+                properties
+                    .line_spacing
+                    .get_or_insert(TextSpacing::Points(value));
+            }
+        }
     }
-    CT_TextBody::from_xml(xml.as_bytes())
-        .map(Some)
-        .map_err(|error| error.to_string())
+    Ok(Some(text))
 }
 
 fn relative_rect(bounds: Rect, x: f64, y: f64, width: f64, height: f64) -> Rect {

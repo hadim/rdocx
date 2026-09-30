@@ -1566,18 +1566,22 @@ impl CT_TextParagraph {
                 .read_event_into(&mut buffer)
                 .map_err(OxmlError::from)?
             {
-                Event::Start(element) if matches_local_name(element.name().as_ref(), b"pPr") => {
-                    if paragraph.properties.is_some() {
-                        return Err(duplicate("pPr"));
-                    }
+                // The schema allows one leading pPr, but real decks carry a
+                // later one between runs. The first governs the paragraph and
+                // every later one falls through to verbatim preservation at
+                // its position, which is also how python-pptx treats it.
+                Event::Start(element)
+                    if matches_local_name(element.name().as_ref(), b"pPr")
+                        && paragraph.properties.is_none() =>
+                {
                     paragraph.properties =
                         Some(CT_TextParagraphProperties::from_element(reader, &element)?);
                     boundary = boundary.max(1);
                 }
-                Event::Empty(element) if matches_local_name(element.name().as_ref(), b"pPr") => {
-                    if paragraph.properties.is_some() {
-                        return Err(duplicate("pPr"));
-                    }
+                Event::Empty(element)
+                    if matches_local_name(element.name().as_ref(), b"pPr")
+                        && paragraph.properties.is_none() =>
+                {
                     paragraph.properties = Some(CT_TextParagraphProperties::from_start(&element)?);
                     boundary = boundary.max(1);
                 }
@@ -2005,8 +2009,8 @@ mod tests {
     use std::panic;
 
     use super::{
-        CT_TextCharacterProperties, CT_TextParagraph, CT_TextParagraphProperties, TextRun,
-        TextSpace, TextSpacing,
+        CT_TextCharacterProperties, CT_TextParagraph, CT_TextParagraphProperties, TextAlignment,
+        TextRun, TextSpace, TextSpacing,
     };
     use crate::color::ColorChoice;
     use crate::text::CT_TextBody;
@@ -2117,6 +2121,56 @@ mod tests {
         assert_eq!(
             writer.into_inner(),
             br#"<a:rPr><a:hlinkClick x:id="not-a-relationship"/></a:rPr>"#
+        );
+    }
+
+    #[test]
+    fn a_later_paragraph_properties_element_is_preserved_where_it_stands() {
+        let xml = br#"<a:p><a:pPr algn="l"/><a:r><a:t>One.</a:t></a:r><a:pPr algn="r"><a:lnSpc><a:spcPct val="90000"/></a:lnSpc></a:pPr><a:r><a:t>Two.</a:t></a:r><a:pPr/><a:endParaRPr lang="en-US"/></a:p>"#;
+        let mut paragraph = CT_TextParagraph::from_xml(xml).unwrap();
+        let properties = paragraph.properties.as_ref().unwrap();
+        assert_eq!(properties.alignment, Some(TextAlignment::Left));
+        assert_eq!(properties.line_spacing, None);
+        let texts = paragraph
+            .runs
+            .iter()
+            .map(|run| match run {
+                TextRun::Run(run) => run.text.value.as_str(),
+                TextRun::Break(_) | TextRun::Field(_) => panic!("expected regular runs"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(texts, ["One.", "Two."]);
+        assert_eq!(paragraph.to_xml().unwrap(), xml);
+        assert_eq!(CT_TextParagraph::from_xml(xml).unwrap(), paragraph);
+
+        let TextRun::Run(first) = &mut paragraph.runs[0] else {
+            panic!("expected regular run");
+        };
+        first.set_text("Uno.");
+        paragraph.properties_mut().level = Some(1);
+        paragraph.add_run("Three.");
+        assert_eq!(
+            paragraph.to_xml().unwrap(),
+            br#"<a:p><a:pPr lvl="1" algn="l"/><a:r><a:t>Uno.</a:t></a:r><a:pPr algn="r"><a:lnSpc><a:spcPct val="90000"/></a:lnSpc></a:pPr><a:r><a:t>Two.</a:t></a:r><a:pPr/><a:r><a:t>Three.</a:t></a:r><a:endParaRPr lang="en-US"/></a:p>"#
+        );
+
+        paragraph.set_text("Whole.");
+        assert_eq!(
+            paragraph.to_xml().unwrap(),
+            br#"<a:p><a:pPr lvl="1" algn="l"/><a:r><a:t>Whole.</a:t></a:r><a:pPr algn="r"><a:lnSpc><a:spcPct val="90000"/></a:lnSpc></a:pPr><a:pPr/><a:endParaRPr lang="en-US"/></a:p>"#
+        );
+
+        let late = CT_TextParagraph::from_xml(
+            br#"<a:p><a:r><a:t>One.</a:t></a:r><a:pPr algn="l"/><a:r><a:t>Two.</a:t></a:r><a:pPr algn="r"/></a:p>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            late.properties.as_ref().unwrap().alignment,
+            Some(TextAlignment::Left)
+        );
+        assert_eq!(
+            late.to_xml().unwrap(),
+            br#"<a:p><a:pPr algn="l"/><a:r><a:t>One.</a:t></a:r><a:r><a:t>Two.</a:t></a:r><a:pPr algn="r"/></a:p>"#
         );
     }
 

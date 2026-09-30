@@ -401,6 +401,46 @@ fn outline_emits_a_field_only_title_once() {
 }
 
 #[test]
+fn validate_and_text_read_a_paragraph_with_a_second_paragraph_properties_element() {
+    let temp = TempWorkspace::new("second-ppr");
+    let deck = temp.path.join("second-ppr.pptx");
+    write_deck(&deck, &["One. Two."]);
+    let mut package = OpcPackage::open(&deck).expect("open second pPr package");
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type
+                == "application/vnd.openxmlformats-officedocument.presentationml.slide+xml")
+                .then_some(part.clone())
+        })
+        .expect("second pPr slide part");
+    let xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let text = xml.find("One. Two.").expect("text box paragraph");
+    let start = xml[..text].rfind("<a:p>").expect("paragraph start");
+    let end = text + xml[text..].find("</a:p>").expect("paragraph end") + "</a:p>".len();
+    let paragraph = r#"<a:p><a:pPr algn="l"/><a:r><a:t>One. </a:t></a:r><a:pPr algn="l"/><a:r><a:t>Two.</a:t></a:r></a:p>"#;
+    let xml = format!("{}{paragraph}{}", &xml[..start], &xml[end..]);
+    package.set_part(&slide_part, xml.into_bytes());
+    package.save(&deck).expect("write second pPr fixture");
+
+    let validated = cli(&["validate", deck.to_str().unwrap()]);
+    assert!(
+        validated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validated.stderr)
+    );
+    let text = cli(&["text", deck.to_str().unwrap()]);
+    assert!(
+        text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    assert_eq!(String::from_utf8(text.stdout).unwrap(), "One. Two.\n");
+}
+
+#[test]
 fn thumbnail_preserves_a_nonstandard_slide_aspect_ratio() {
     let temp = TempWorkspace::new("thumbnail-aspect");
     let deck = temp.path.join("portrait.pptx");

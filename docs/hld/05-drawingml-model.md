@@ -244,6 +244,18 @@ are absent, inserting them moves preserved boundary-0 content to the slot after
 keeps a preserved `mc:AlternateContent` run substitution after the newly
 inserted properties without changing its bytes.
 
+`CT_TextParagraph` allows one `a:pPr`, but real decks carry a second one
+between runs, and python-pptx and LibreOffice open them. The reader types the
+first `a:pPr` as the paragraph properties, which alone govern resolution,
+layout and rendering. Every later `a:pPr` is preserved verbatim at its
+position. When the first `a:pPr` leads the paragraph, a no-op round trip keeps
+the paragraph bytes. A first `a:pPr` that follows a run is written at the
+front, as before. An edit of a run, of the typed properties, or of the run list
+keeps a later `a:pPr` in place, and whole-paragraph text replacement keeps it
+after the new run. Text reading still reads every run. Chart text shares the
+reader, so a `c:txPr` with a second `a:pPr` now reads where rdocx and rpptx
+used to report the chart invalid.
+
 `CT_TextParagraphProperties::set_bullet` keeps one member per bullet group. A
 typed colour, size, font, or choice removes a preserved `a:buClrTx`,
 `a:buSzTx`, `a:buFontTx`, or `a:buBlip` of the same group, and clearing the
