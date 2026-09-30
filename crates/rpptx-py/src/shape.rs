@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use oxml_py_support::{ContentPath, PathSeg};
-use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyByteArray, PyBytes, PyIterator, PyList, PySlice, PyString, PyTuple};
 use smallvec::smallvec;
 
-use crate::dml::{FillTarget, PyFillFormat, PyLineFormat};
+use crate::dml::{FillTarget, PyFillFormat, PyLineFormat, PyShadowFormat};
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
 use crate::rpptx_to_pyerr;
@@ -16,9 +16,9 @@ use crate::text::{PyHyperlink, PyTextFrame};
 use crate::validate_path;
 
 const MIN_COORDINATE: i64 = -27_273_042_329_600;
-const MAX_COORDINATE: i64 = 27_273_042_316_900;
-const ANGLE_UNITS_PER_DEGREE: f64 = 60_000.0;
-const ANGLE_UNITS_PER_TURN: i64 = 21_600_000;
+pub(crate) const MAX_COORDINATE: i64 = 27_273_042_316_900;
+pub(crate) const ANGLE_UNITS_PER_DEGREE: f64 = 60_000.0;
+pub(crate) const ANGLE_UNITS_PER_TURN: i64 = 21_600_000;
 /// `a:srcRect` stores a crop inset in thousandths of a percent.
 const CROP_UNITS_PER_FRACTION: f64 = 100_000.0;
 
@@ -471,6 +471,31 @@ impl PyShape {
                 self.path.clone(),
                 FillTarget::Line,
             ),
+        )
+    }
+
+    /// The shadow of a shape, picture, connector, or group.
+    ///
+    /// A graphic frame raises `NotImplementedError`, as in python-pptx.
+    #[getter]
+    fn shadow(&self, py: Python<'_>) -> PyResult<Py<PyShadowFormat>> {
+        match self.read(py, |shape| shape.kind())? {
+            rpptx::ShapeKind::Shape
+            | rpptx::ShapeKind::Picture
+            | rpptx::ShapeKind::Connector
+            | rpptx::ShapeKind::Group => {}
+            rpptx::ShapeKind::GraphicFrame => {
+                return Err(PyNotImplementedError::new_err(
+                    "shadow property on GraphicFrame not yet supported",
+                ));
+            }
+            rpptx::ShapeKind::AlternateContent => {
+                return Err(PyValueError::new_err("shape has no shadow"));
+            }
+        }
+        Py::new(
+            py,
+            PyShadowFormat::new(self.presentation.clone_ref(py), self.path.clone()),
         )
     }
 

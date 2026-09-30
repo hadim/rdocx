@@ -48,7 +48,7 @@ its cost is recorded in `00-vision.md`.
 | `add_textbox`, `add_picture`, `add_table`, `add_shape`, `add_connector`, `add_group_shape` | |
 | Shape id, name, type, rotation | |
 | Position and size, with placeholder inheritance | `Option`-returning plus an `effective_bounds` accessor |
-| Fill, line, shadow | Fill and line full, shadow read-only |
+| Fill, line, shadow | Fill and line full. Shadow is the outer shadow, read and written, and python-pptx `inherit` |
 | Adjustment values, `a:avLst` | |
 | Click actions and hyperlinks | |
 | Placeholders by index and by type | |

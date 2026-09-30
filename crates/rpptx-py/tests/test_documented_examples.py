@@ -2764,6 +2764,182 @@ def test_colour_edits_keep_python_pptx_brightness_transforms(tmp_path):
     assert color.brightness == pytest.approx(-0.25)
 
 
+def test_shadow_reads_a_producer_outer_shadow_and_keeps_python_pptx_inherit(tmp_path):
+    import rpptx
+    from rpptx.dml.color import RGBColor
+
+    drawingml = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+
+    def build(deck):
+        pptx = pytest.importorskip("pptx")
+        from pptx.oxml import parse_xml
+        from pptx.oxml.ns import qn
+
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        card = slide.shapes.add_shape(pptx.enum.shapes.MSO_SHAPE.ROUNDED_RECTANGLE, 0, 0, 10, 10)
+        card.shadow.inherit = False
+        effects = card._element.spPr.find(qn("a:effectLst"))
+        effects.append(parse_xml(f'<a:glow {drawingml} rad="63500"><a:srgbClr val="FF0000"/></a:glow>'))
+        effects.append(parse_xml(
+            f'<a:outerShdw {drawingml} blurRad="152400" dist="76200" dir="5400000" algn="t" '
+            'rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="60000"/></a:srgbClr></a:outerShdw>'
+        ))
+        slide.shapes.add_shape(pptx.enum.shapes.MSO_SHAPE.RECTANGLE, 0, 0, 10, 10)
+
+    source = _python_pptx_deck(tmp_path / "producer.pptx", build)
+    prs = rpptx.Presentation(source)
+    card, plain = prs.slides[0].shapes[0].shadow, prs.slides[0].shapes[1].shadow
+    assert (card.inherit, card.visible, card.color.rgb, card.alpha) == (
+        False, True, RGBColor(0, 0, 0), pytest.approx(0.6)
+    )
+    assert (card.blur_radius, card.distance, card.direction) == (152400, 76200, 90.0)
+    assert (card.align, card.rotate_with_shape) == ("t", False)
+    assert (plain.inherit, plain.visible, plain.color.rgb, plain.alpha, plain.blur_radius) == (
+        True, False, None, None, None
+    )
+    assert (plain.distance, plain.direction, plain.align, plain.rotate_with_shape) == (
+        None, None, None, None
+    )
+
+    plain.inherit = False
+    assert (plain.inherit, plain.visible) == (False, False)
+    output = tmp_path / "inherit.pptx"
+    prs.save(output)
+    slide_xml = _package_parts(output.read_bytes())["ppt/slides/slide1.xml"].decode()
+    assert '</a:prstGeom><a:effectLst/></p:spPr>' in slide_xml
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    assert [shape.shadow.inherit for shape in pptx.Presentation(output).slides[0].shapes] == [
+        False, False
+    ]
+
+    card.visible = False
+    plain.inherit = True
+    plain.visible = False
+    assert (card.inherit, card.visible, card.alpha, plain.inherit) == (False, False, None, True)
+    prs.save(output)
+    slide_xml = _package_parts(output.read_bytes())["ppt/slides/slide1.xml"].decode()
+    assert '<a:effectLst><a:glow rad="63500"><a:srgbClr val="FF0000"/></a:glow></a:effectLst>' in slide_xml
+    assert slide_xml.count("effectLst") == 2
+    assert [shape.shadow.inherit for shape in pptx.Presentation(output).slides[0].shapes] == [
+        False, True
+    ]
+
+    card.visible = True
+    assert (card.color.rgb, card.alpha) == (None, 0.4)
+    card.alpha = 1.0
+    prs.save(output)
+    slide_xml = _package_parts(output.read_bytes())["ppt/slides/slide1.xml"].decode()
+    assert (
+        '<a:effectLst><a:glow rad="63500"><a:srgbClr val="FF0000"/></a:glow><a:outerShdw '
+        'blurRad="50800" dist="38100" dir="2700000" algn="tl" rotWithShape="0"><a:prstClr '
+        'val="black"/></a:outerShdw></a:effectLst>'
+    ) in slide_xml
+
+
+def test_shadow_colour_rpptx_does_not_model_reads_none_and_is_replaced_whole(tmp_path):
+    import rpptx
+    from rpptx.dml.color import RGBColor
+
+    source = tmp_path / "scrgb.pptx"
+    output = tmp_path / "scrgb-out.pptx"
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_shape("rect", 0, 0, 100, 100)
+    prs.slides[0].shapes[0].shadow.distance = 12700
+    prs.save(source)
+    _replace_in_slide(
+        source,
+        source,
+        '<a:prstClr val="black"><a:alpha val="40000"/></a:prstClr>',
+        '<a:scrgbClr r="0" g="0" b="0"><a:alpha val="50000"/></a:scrgbClr>',
+    )
+
+    shadow = rpptx.Presentation(source).slides[0].shapes[0].shadow
+    assert (shadow.visible, shadow.color.rgb, shadow.alpha, shadow.distance) == (
+        True, None, None, 12700
+    )
+    with pytest.raises(ValueError, match="a:scrgbClr or a:hslClr"):
+        shadow.alpha = 0.5
+    shadow.color.rgb = RGBColor(0x10, 0x20, 0x30)
+    assert (shadow.color.rgb, shadow.alpha) == (RGBColor(0x10, 0x20, 0x30), 1.0)
+    shadow.alpha = 0.5
+
+    presentation = rpptx.Presentation(source)
+    presentation.slides[0].shapes[0].shadow.color.rgb = RGBColor(0x10, 0x20, 0x30)
+    presentation.save(output)
+    slide_xml = _package_parts(output.read_bytes())["ppt/slides/slide1.xml"].decode()
+    assert "scrgbClr" not in slide_xml
+    assert (
+        '<a:outerShdw blurRad="50800" dist="12700" dir="2700000" algn="tl" rotWithShape="0">'
+        '<a:srgbClr val="102030"/></a:outerShdw>'
+    ) in slide_xml
+
+
+def test_shadow_parameters_write_the_outer_shadow_on_every_kind_python_pptx_shadows(tmp_path):
+    import rpptx
+    from rpptx.dml.color import RGBColor
+    from rpptx.enum.shapes import MSO_CONNECTOR
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_shape("rect", 0, 0, 100, 100)
+    prs.slides[0].shapes.add_textbox(0, 0, 100, 100)
+    prs.slides[0].shapes.add_picture(io.BytesIO(_tiny_png()), 0, 0)
+    prs.slides[0].shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, 100, 100)
+    prs.slides[0].shapes.add_group_shape()
+    shapes = list(prs.slides[0].shapes)
+    for shape in shapes:
+        shadow = shape.shadow
+        shadow.color.rgb = RGBColor(0x12, 0x34, 0x56)
+        shadow.alpha = 0.25
+        shadow.blur_radius = rpptx.Pt(6)
+        shadow.distance = rpptx.Pt(4)
+        shadow.direction = -45.0
+        shadow.align = "ctr"
+        shadow.rotate_with_shape = True
+        assert (shadow.inherit, shadow.visible, shadow.color.rgb) == (
+            False, True, RGBColor(0x12, 0x34, 0x56)
+        )
+        assert (shadow.alpha, shadow.blur_radius, shadow.distance) == (0.25, 76200, 50800)
+        assert (shadow.direction, shadow.align, shadow.rotate_with_shape) == (315.0, "ctr", True)
+
+    with pytest.raises(ValueError, match="shadow alpha must be between 0.0 and 1.0"):
+        shapes[0].shadow.alpha = 1.5
+    with pytest.raises(ValueError, match="shadow align must be one of tl, t, tr"):
+        shapes[0].shadow.align = "middle"
+    with pytest.raises(ValueError, match="shadow blur_radius must be between 0"):
+        shapes[0].shadow.blur_radius = -1
+    with pytest.raises(ValueError, match="shadow direction must be a finite number"):
+        shapes[0].shadow.direction = float("nan")
+    with pytest.raises(ValueError, match="assigned value must be type RGBColor"):
+        shapes[0].shadow.color.rgb = (1, 2, 3)
+    held = shapes[0].shadow
+    held_color = held.color
+    prs.slides.add_slide(prs.slide_layouts[6])
+    with pytest.raises(rpptx.StaleElementError):
+        _ = held.visible
+    with pytest.raises(rpptx.StaleElementError):
+        _ = held_color.rgb
+    with pytest.raises(NotImplementedError, match="GraphicFrame"):
+        _ = prs.slides[1].shapes.add_table(1, 1, 0, 0, 10, 10).shadow
+
+    output = tmp_path / "shadows.pptx"
+    prs.save(output)
+    slide_xml = _package_parts(output.read_bytes())["ppt/slides/slide1.xml"].decode()
+    written = (
+        '<a:effectLst><a:outerShdw blurRad="76200" dist="50800" dir="18900000" algn="ctr" '
+        'rotWithShape="1"><a:srgbClr val="123456"><a:alpha val="25000"/></a:srgbClr>'
+        "</a:outerShdw></a:effectLst>"
+    )
+    assert slide_xml.count(written + "</p:spPr>") == 4
+    assert slide_xml.count(written + "</p:grpSpPr>") == 1
+    assert rpptx.Presentation(output).slides[0].shapes[4].shadow.direction == 315.0
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output).slides[0].shapes
+    assert [shape.shadow.inherit for shape in list(oracle)[:5]] == [False] * 5
+
+
 def test_pictures_accept_bytes_and_file_objects_and_replace_their_image(tmp_path):
     import rpptx
 
