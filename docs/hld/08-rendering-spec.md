@@ -479,11 +479,12 @@ text rectangle minus insets, resolve each paragraph through the nine-level
 chain, build inline items, stack lines from the box top, then anchor.
 
 Every shaped segment carries the selected font's ascent, descent, and `hhea`
-line gap. A line's natural advance is the greater of its combined maximum
-ascent and descent and the tallest complete run advance. Omitted line spacing
-uses that natural advance, while percentage line spacing multiplies the largest
-effective run point size. Exact point spacing remains exact, including when it
-is smaller than the glyph box.
+line gap. PowerPoint single spacing is 1.2 times the largest effective run point
+size on the line, for every font whatever its ascent, descent, and line gap.
+Omitted line spacing is single spacing, percentage line spacing multiplies it,
+and exact point spacing remains exact, including when it is smaller than the
+glyph box. Percentage paragraph spacing before and after is a share of the same
+single spacing.
 
 Complex text enters shared layout as one paragraph-wide logical sequence.
 Coverage and script boundaries select deterministic fonts before HarfRust
@@ -540,10 +541,13 @@ Ambiguous ownership, duplicate or gapped logical indices, and baseline changes
 end the line plan. Nested group transforms are cancelled only while expressing
 the same final glyph positions in page coordinates.
 Legacy Latin remains on `GlyphRun` so existing output bytes do not move.
-Non-negative leading is divided equally above and below the glyph box. A
-below-natural exact line keeps its stated height and places no negative leading
-before the baseline. Stored normal-autofit line-spacing reduction applies only
-to explicit percentage line spacing.
+A PowerPoint line taller than single spacing puts its baseline three quarters of
+the way down, or at the font's ascent share of the line when that is smaller. A
+line no taller than single spacing puts its descent at the bottom of the line,
+so it gives up space above the glyphs first, unless that lifts the baseline
+above the same share. PowerPoint rounds baselines to whole points, which this
+does not. A stored normal-autofit line-spacing reduction comes off the
+percentage, and omitted spacing counts as 100 percent.
 
 An empty paragraph shapes a zero-width metrics carrier from its resolved
 `a:endParaRPr` style. Its line height and font-relative paragraph spacing use
@@ -998,10 +1002,9 @@ with nothing measurable keeps its declared grid.
 - `a:normAutofit fontScale="62500" lnSpcReduction="20000"`: apply verbatim. This
   is both cheapest and most faithful, because it reproduces exactly what the
   authoring application decided. Font scale applies to every effective run and
-  bullet size. Line-spacing reduction multiplies explicit percentage spacing by
-  `1 - lnSpcReduction`. Explicit percentage spacing remains based on the largest
-  effective run point size. Omitted Single and exact point spacing are
-  unchanged.
+  bullet size. Line-spacing reduction comes off the percentage, so 150 percent
+  less `lnSpcReduction="20000"` is 130 percent, and omitted spacing counts as
+  100 percent. Exact point spacing is unchanged.
 - Only a bare `<a:normAutofit/>` needs iteration, and then walk PowerPoint's own
   quantised 2.5 percent ladder rather than binary-searching a continuous scale,
   so the computed value matches what PowerPoint would have written. The ladder
