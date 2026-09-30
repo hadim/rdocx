@@ -96,7 +96,9 @@ use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 pub use rpptx_oxml::presentation::Section;
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
-use rpptx_oxml::relmap::{relationship_ids, rewrite_exact_rel_ids, rewrite_rel_ids};
+use rpptx_oxml::relmap::{
+    relationship_ids, release_hyperlinks, rewrite_exact_rel_ids, rewrite_rel_ids,
+};
 pub use rpptx_oxml::shape_tree::ClickHyperlink;
 use rpptx_oxml::shape_tree::{
     CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
@@ -2540,6 +2542,7 @@ impl Presentation {
                 message: error.to_string(),
             })?;
 
+        self.release_slide_jumps_to(&record.part_name)?;
         let mut media_candidates = HashSet::new();
         collect_media_targets(&self.package, &record.part_name, &mut media_candidates);
         if let Some(notes) = &record.notes {
@@ -2569,6 +2572,46 @@ impl Presentation {
         self.slides.remove(index);
         prune_unreachable_parts(&mut self.package, &media_candidates);
         self.media_store = MediaStore::scan(&self.package);
+        Ok(())
+    }
+
+    /// Makes every hyperlink of another slide that jumps to `slide_part` do
+    /// nothing and removes its relationship, as PowerPoint does when the
+    /// target slide is deleted.
+    ///
+    /// Shape click actions and text run hyperlinks alike keep an
+    /// `a:hlinkClick` with an empty `r:id` and the action
+    /// `ppaction://noaction`, so no relationship is left pointing at a part
+    /// that no longer exists.
+    fn release_slide_jumps_to(&mut self, slide_part: &str) -> Result<()> {
+        for record in &mut self.slides {
+            let Some(relationships) = self.package.get_part_rels_mut(&record.part_name) else {
+                continue;
+            };
+            let released: HashSet<String> = relationships
+                .items
+                .iter()
+                .filter(|relationship| {
+                    !relationship_is_external(relationship)
+                        && OpcPackage::resolve_rel_target(&record.part_name, &relationship.target)
+                            == slide_part
+                })
+                .map(|relationship| relationship.id.clone())
+                .collect();
+            if released.is_empty() || record.part_name == slide_part {
+                continue;
+            }
+            relationships
+                .items
+                .retain(|relationship| !released.contains(&relationship.id));
+            let malformed = |error: OxmlError| Error::MalformedPart {
+                part_name: record.part_name.clone(),
+                message: error.to_string(),
+            };
+            let xml = record.slide.to_xml().map_err(malformed)?;
+            let xml = release_hyperlinks(&xml, &released).map_err(malformed)?;
+            record.slide = CT_Slide::from_xml(&xml).map_err(malformed)?;
+        }
         Ok(())
     }
 

@@ -14922,6 +14922,66 @@ fn shape_click_action_parts_survive_and_relative_jumps_resolve() {
 }
 
 #[test]
+fn removing_a_jump_target_turns_its_links_into_no_action_like_powerpoint() {
+    let (base, ids) = click_action_deck();
+    let slide_part = "/ppt/slides/slide1.xml";
+    let mut package = open_opc(&base.to_bytes().unwrap(), "slide jump removal");
+    let relationships = package.get_or_create_part_rels(slide_part);
+    let run_jump = relationships.add(rel_types::SLIDE, "slide3.xml");
+    let run = format!(
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="60" name="Run jump"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"><a:hlinkClick r:id="{run_jump}" action="ppaction://hlinksldjump" tooltip="Go"/></a:rPr><a:t>run to 3</a:t></a:r></a:p></p:txBody></p:sp>"#
+    );
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec())
+        .unwrap()
+        .replacen("</p:spTree>", &format!("{run}</p:spTree>"), 1);
+    package.set_part(slide_part, xml.into_bytes());
+    let mut presentation = open_package(package).unwrap();
+    presentation
+        .set_shape_target_slide(0, ids[0], Some(2))
+        .unwrap();
+    presentation
+        .set_shape_target_slide(0, ids[1], Some(1))
+        .unwrap();
+    presentation
+        .set_shape_hyperlink(0, ids[2], Some("https://example.com/kept"))
+        .unwrap();
+
+    presentation.remove_slide(2).unwrap();
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    let saved = presentation.to_bytes().unwrap();
+    let package = open_opc(&saved, "slide jump removal");
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+    assert_eq!(
+        xml.matches(r#"<a:hlinkClick r:id="" action="ppaction://noaction"/>"#)
+            .count(),
+        2,
+        "{xml}"
+    );
+    assert!(xml.contains(
+        r#"<a:rPr lang="en-US"><a:hlinkClick r:id="" action="ppaction://noaction"/></a:rPr>"#
+    ));
+    assert_eq!(
+        first_slide_relationships(&presentation, rel_types::SLIDE),
+        ["slide2.xml"]
+    );
+    assert_eq!(
+        first_slide_relationships(&presentation, rel_types::HYPERLINK),
+        ["https://example.com/kept"]
+    );
+    let released = first_slide_click(&presentation, 0).unwrap();
+    assert_eq!(released.relationship_id, None);
+    assert_eq!(released.action.as_deref(), Some("ppaction://noaction"));
+    assert_eq!(presentation.click_target_slide(0, &released), None);
+    let kept = first_slide_click(&presentation, 1).unwrap();
+    assert_eq!(presentation.click_target_slide(0, &kept), Some(1));
+    Presentation::from_bytes(&saved).unwrap();
+}
+
+#[test]
 #[ignore = "requires uv and pinned python-pptx 1.0.2"]
 fn shape_click_actions_read_back_in_pinned_python_pptx() {
     let (mut presentation, ids) = click_action_deck();

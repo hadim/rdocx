@@ -1857,6 +1857,16 @@ def test_shape_click_action_links_and_jumps_like_python_pptx(tmp_path):
     assert first.click_action.target_slide == deck.slides[1]
     assert second.click_action.hyperlink.address == "https://example.com/two"
 
+    prs.slides.remove(prs.slides[1])
+    first, second = prs.slides[0].shapes
+    assert (first.click_action.target_slide, first.click_action.hyperlink.address) == (None, None)
+    assert second.click_action.hyperlink.address == "https://example.com/two"
+    removed = tmp_path / "python-pptx-click-removed.pptx"
+    prs.save(removed)
+    assert _slide_jump_targets(removed.read_bytes()) == []
+    first = pptx.Presentation(removed).slides[0].shapes[0]
+    assert first.click_action.action == pptx.enum.action.PP_ACTION.NONE
+
 
 def test_text_enums_match_python_pptx_member_values_and_xml_tokens():
     if importlib.util.find_spec("pptx") is None:
