@@ -1911,6 +1911,125 @@ fn comment_add_and_reply_write_the_given_rfc3339_date() {
     assert!(!rejected_reply_path.exists());
 }
 
+/// GitHub issue #163: `comment add --anchor TEXT [--occurrence N]` comments
+/// on a piece of text without run index bookkeeping.
+#[test]
+fn comment_add_anchors_the_requested_occurrence_of_a_text() {
+    const DATE: &str = "2026-09-30T09:15:00Z";
+    let temp = TempWorkspace::new("comment-anchor");
+    let input = temp.path.join("input.docx");
+    write_document(
+        &input,
+        &["Alpha has target words.", "Beta repeats the target words."],
+    );
+    let add = |options: &[&str], output: &Path| {
+        let mut args = vec!["comment", "add", path_text(&input)];
+        args.extend_from_slice(options);
+        args.extend_from_slice(&[
+            "--author",
+            "Alice",
+            "--text",
+            "Here",
+            "--output",
+            path_text(output),
+        ]);
+        cli(&args)
+    };
+
+    let added_path = temp.path.join("added.docx");
+    let added = add(
+        &[
+            "--anchor",
+            "target words",
+            "--occurrence",
+            "1",
+            "--initials",
+            "AL",
+            "--date",
+            DATE,
+            "--json",
+        ],
+        &added_path,
+    );
+    assert_success(&added, "comment add --anchor");
+    let value: Value = serde_json::from_slice(&added.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "action": "add",
+            "comment_id": 0,
+            "output": path_text(&added_path),
+        })
+    );
+    let xml = package_part_text(&added_path, "/word/document.xml");
+    let start = xml.find("<w:commentRangeStart").unwrap();
+    let end = xml.find("<w:commentRangeEnd").unwrap();
+    assert!(xml[..start].contains("Beta repeats the "), "{xml}");
+    let anchored = xml[start..end]
+        .split("<w:t")
+        .skip(1)
+        .map(|text| &text[text.find('>').unwrap() + 1..text.find("</w:t>").unwrap()])
+        .collect::<String>();
+    assert_eq!(anchored, "target words");
+    let document = Document::open(&added_path).unwrap();
+    let comment = &document.comments()[0];
+    assert_eq!(
+        (comment.text(), comment.initials(), comment.date()),
+        ("Here".to_owned(), Some("AL"), Some(DATE))
+    );
+    assert_eq!(
+        document.paragraph(1).unwrap().text(),
+        "Beta repeats the target words."
+    );
+
+    // The first occurrence is the default.
+    let first_path = temp.path.join("first.docx");
+    assert_success(
+        &add(&["--anchor", "target words"], &first_path),
+        "comment add --anchor without --occurrence",
+    );
+    let xml = package_part_text(&first_path, "/word/document.xml");
+    assert!(
+        xml[..xml.find("<w:commentRangeStart").unwrap()].contains("Alpha has "),
+        "{xml}"
+    );
+
+    for (options, message) in [
+        (
+            &["--anchor", "absent"][..],
+            r#"Error: comment anchor text "absent" has no occurrence 0: it occurs 0 times in the main story"#,
+        ),
+        (
+            &["--anchor", "target words", "--occurrence", "2"][..],
+            r#"Error: comment anchor text "target words" has no occurrence 2: it occurs 2 times in the main story"#,
+        ),
+    ] {
+        let refused_path = temp.path.join("refused.docx");
+        let refused = add(options, &refused_path);
+        assert_eq!(refused.status.code(), Some(1), "{options:?}");
+        assert!(refused.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(refused.stderr).unwrap(),
+            format!("{message}\n")
+        );
+        assert!(!refused_path.exists());
+    }
+
+    // The text and a run range are exclusive, and one of them is required.
+    for options in [
+        &["--anchor", "Alpha", "--start-paragraph", "0"][..],
+        &["--occurrence", "1"][..],
+        &[][..],
+    ] {
+        let usage_path = temp.path.join("usage.docx");
+        let usage = add(options, &usage_path);
+        assert_eq!(usage.status.code(), Some(2), "{options:?}");
+        assert!(!usage_path.exists());
+    }
+}
+
 #[test]
 fn revision_filters_change_only_matching_revisions() {
     let temp = TempWorkspace::new("revision-filters");

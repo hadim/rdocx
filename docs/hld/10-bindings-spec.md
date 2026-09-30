@@ -1105,7 +1105,9 @@ comment metadata, text, parent identity, and resolved state without permitting
 part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
 removes comments. Add ranges use explicit zero-based, half-open body paragraph
 and run coordinates, and the run coordinates count the runs that `text --json`
-lists. Every mutation publishes a complete validated document
+lists. `comment add --anchor TEXT`, with an optional zero-based
+`--occurrence`, replaces those coordinates with `add_comment_on_text` and keeps
+its refusals. Every mutation publishes a complete validated document
 to an explicit output. Python and WASM keep their package-preserving owners.
 
 Native Word callers remove one exact non-empty literal with

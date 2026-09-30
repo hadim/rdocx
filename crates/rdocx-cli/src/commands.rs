@@ -610,11 +610,19 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
     Ok(())
 }
 
+/// Where `comment add` anchors its comment.
+pub enum CommentAnchor<'a> {
+    /// A zero-based half-open body run range.
+    Range(RunRange),
+    /// The zero-based occurrence of a literal text in the main story.
+    Text { text: &'a str, occurrence: usize },
+}
+
 /// Add one Word comment and publish the complete mutated document atomically.
 #[allow(clippy::too_many_arguments)]
 pub fn comment_add(
     file: &Path,
-    range: RunRange,
+    anchor: CommentAnchor<'_>,
     author: &str,
     initials: Option<&str>,
     text: &str,
@@ -623,7 +631,15 @@ pub fn comment_add(
     json_output: bool,
 ) -> Result<()> {
     let mut doc = Document::open(file)?;
-    let id = doc.add_comment_with_date(range, author, initials, text, date)?;
+    let id = match anchor {
+        CommentAnchor::Range(range) => {
+            doc.add_comment_with_date(range, author, initials, text, date)?
+        }
+        CommentAnchor::Text {
+            text: anchor,
+            occurrence,
+        } => doc.add_comment_on_text(anchor, occurrence, author, initials, text, date)?,
+    };
     publish_document(&mut doc, output)?;
     mutation_record(
         json_output,
