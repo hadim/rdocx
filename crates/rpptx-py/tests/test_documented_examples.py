@@ -2239,6 +2239,89 @@ def test_shape_type_reports_the_python_pptx_member_for_every_shape_kind(tmp_path
     assert actual[-1] == MSO_SHAPE_TYPE.FREEFORM
 
 
+def test_auto_shape_type_reads_like_python_pptx_and_replaces_the_preset(tmp_path):
+    import rpptx
+    from rpptx.enum.shapes import MSO_SHAPE
+
+    def build(deck):
+        pptx = pytest.importorskip("pptx")
+        slide = deck.slides.add_slide(deck.slide_layouts[1])
+        slide.shapes.add_textbox(0, 0, 10, 10)
+        rounded = slide.shapes.add_shape(
+            pptx.enum.shapes.MSO_SHAPE.ROUNDED_RECTANGLE, 0, 0, 100, 50
+        )
+        rounded.text = "Keep me"
+        rounded.fill.solid()
+        rounded.fill.fore_color.rgb = pptx.dml.color.RGBColor(0x11, 0x22, 0x33)
+        rounded.adjustments[0] = 0.3
+        slide.shapes.add_picture(io.BytesIO(_tiny_png()), 0, 0)
+        slide.shapes.add_table(1, 1, 0, 0, 10, 10)
+        slide.shapes.add_connector(pptx.enum.shapes.MSO_CONNECTOR.ELBOW, 0, 0, 10, 10)
+        slide.shapes.add_group_shape()
+        builder = slide.shapes.build_freeform(0, 0)
+        builder.add_line_segments([(10, 10), (0, 10)])
+        builder.convert_to_shape()
+
+    def read(shape):
+        try:
+            value = shape.auto_shape_type
+        except (AttributeError, ValueError):
+            return "not an auto shape"
+        return None if value is None else (value.name, int(value))
+
+    source = _python_pptx_deck(tmp_path / "auto-shapes.pptx", build)
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    expected = [read(shape) for shape in pptx.Presentation(source).slides[0].shapes]
+    prs = rpptx.Presentation(source)
+    shapes = prs.slides[0].shapes
+    assert [read(shape) for shape in shapes] == expected
+    assert expected[3:5] == [("ROUNDED_RECTANGLE", 5), ("RECTANGLE", 1)]
+    assert shapes[3].auto_shape_type is MSO_SHAPE.ROUNDED_RECTANGLE
+    with pytest.raises(ValueError, match="shape is not an auto shape"):
+        _ = shapes[-1].auto_shape_type
+    assert MSO_SHAPE.from_xml("wedgeRoundRectCallout") is MSO_SHAPE.BALLOON
+    # Pins a known gap: the ECMA preset table has no upArrow, python-pptx has UP_ARROW.
+    with pytest.raises(ValueError, match="MSO_SHAPE has no XML mapping for 'upArrow'"):
+        MSO_SHAPE.from_xml("upArrow")
+
+    rounded = shapes[3]
+    identity = (rounded.shape_id, rounded.name, rounded.left, rounded.width)
+    assert list(rounded.adjustments) == [0.3]
+    rounded.auto_shape_type = MSO_SHAPE.RECTANGLE
+    assert rounded.auto_shape_type is MSO_SHAPE.RECTANGLE
+    assert list(rounded.adjustments) == []
+    rounded.auto_shape_type = MSO_SHAPE.OVAL
+    shapes[-1].auto_shape_type = "roundRect"
+    shapes[4].auto_shape_type = MSO_SHAPE.OVAL
+    assert list(shapes[-1].adjustments) == [0.16667]
+    for index in (2, 5, 6, 7):
+        with pytest.raises(ValueError, match="shape is not an auto shape"):
+            shapes[index].auto_shape_type = MSO_SHAPE.RECTANGLE
+    with pytest.raises(ValueError, match="unsupported MSO_SHAPE value"):
+        rounded.auto_shape_type = 35
+    with pytest.raises(rpptx.RpptxError, match="unknown DrawingML preset geometry: upArrow"):
+        rounded.auto_shape_type = "upArrow"
+
+    target = tmp_path / "changed.pptx"
+    prs.save(target)
+    oracle = pptx.Presentation(target).slides[0].shapes
+    assert [read(shape) for shape in oracle] == [
+        *expected[:3],
+        ("OVAL", 9),
+        ("OVAL", 9),
+        *expected[5:8],
+        ("ROUNDED_RECTANGLE", 5),
+    ]
+    changed = oracle[3]
+    assert (changed.shape_id, changed.name, changed.left, changed.width) == identity
+    assert changed.text_frame.text == "Keep me"
+    assert str(changed.fill.fore_color.rgb) == "112233"
+    assert list(changed.adjustments) == []
+    assert [shape.shape_id for shape in oracle] == [
+        shape.shape_id for shape in pptx.Presentation(source).slides[0].shapes
+    ]
+
+
 def test_fill_and_line_formats_write_what_python_pptx_reads(tmp_path):
     import rpptx
     from rpptx.dml.color import RGBColor

@@ -316,6 +316,7 @@ ShapeRef::fill(&self) -> Option<&Fill>;
 ShapeRef::line(&self) -> Option<&CT_LineProperties>;
 ShapeRef::crop(&self) -> Option<(Percent1000, Percent1000, Percent1000, Percent1000)>;
 ShapeRef::adjustments(&self) -> Result<Vec<(String, f64)>>;
+ShapeRef::auto_shape_type(&self) -> Option<&str>;
 ShapeRef::xml(&self) -> Result<Vec<u8>>;
 ```
 
@@ -334,7 +335,10 @@ python-pptx.
 shape properties of ordinary shapes, pictures, and connectors. `adjustments`
 returns the preset definition's defaults in definition order, each replaced by
 a literal `val` guide of the same name in the shape's own `a:avLst`. Only
-ordinary shapes with preset geometry have adjustments. `xml` serializes a
+ordinary shapes with preset geometry have adjustments. `auto_shape_type`
+returns the `a:prstGeom/@prst` name of an ordinary shape that is not a text
+box, and of a picture, where it names the mask. Custom geometry, inherited
+geometry and other shape kinds return `None`. `xml` serializes a
 typed child on its own with the prefixes it uses declared. Alternate content
 returns its preserved bytes, which may rely on prefixes only the slide root
 declares. `crop` reads a picture's `a:srcRect` insets in left, top, right,
@@ -364,9 +368,15 @@ the theme effect applies again, and an empty list suppresses it. A shape that
 carries an `a:effectDag` refuses a list, and a list whose outer shadow cannot
 be written is refused before the slide changes. The list lands before
 `a:scene3d`, `a:sp3d`, and `a:extLst` and keeps its unmodelled effects.
-Adjustment mutation supports finite values on preset geometry. Unsupported
-shape kinds and unsupported geometry return concrete facade errors. Indexed
-access remains total and returns `Option`.
+Adjustment mutation supports finite values on preset geometry.
+`ShapeMut::set_auto_shape_type(preset)` replaces the geometry of an ordinary
+shape or a picture with a known preset in the same `a:spPr` slot, removing any
+custom geometry and restarting from an empty `a:avLst`, so the adjustments
+become the new preset's defaults. Text, fill, line, effects, id, name and
+z-order stay. A text box is refused as not an auto shape, and connectors,
+graphic frames, groups and alternate content are unsupported kinds.
+Unsupported shape kinds and unsupported geometry return concrete facade
+errors. Indexed access remains total and returns `Option`.
 
 Ordinary shapes expose text mutation through behavior-bearing borrowed
 handles:
