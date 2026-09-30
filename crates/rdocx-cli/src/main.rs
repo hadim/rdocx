@@ -72,12 +72,26 @@ enum Command {
         #[arg(long)]
         transparent: bool,
     },
-    /// Structural diff between two DOCX files
+    /// Compare the paragraph text of every story of two DOCX files
+    ///
+    /// Compares the body paragraphs, the table cells of the body, the text
+    /// boxes, the headers and footers of each section, the footnotes, the
+    /// endnotes, and the comments. A changed paragraph prints a `-` and a `+`
+    /// line, each located between brackets: `[2]` for the second body
+    /// paragraph, or a story location such as `[table 1, row 1, cell 2,
+    /// paragraph 1]` or `[header default, section 1, paragraph 1]`. A story
+    /// that cannot be read is named as not compared.
     Diff {
         /// First DOCX file
         file_a: PathBuf,
         /// Second DOCX file
         file_b: PathBuf,
+        /// Output the differences as schema-1 JSON
+        #[arg(long)]
+        json: bool,
+        /// Exit with 1 when the files differ and 2 on an error, as `diff` does
+        #[arg(long)]
+        exit_code: bool,
     },
     /// Replace placeholders in a DOCX file
     Replace {
@@ -372,8 +386,8 @@ enum TocCommand {
 fn main() {
     let cli = Cli::parse();
 
-    // `validate` is the one command whose exit status carries a verdict, so it
-    // is dispatched separately from the commands that only report errors.
+    // `validate` always carries a verdict in its exit status, so it is
+    // dispatched separately from the commands that only report errors.
     if let Command::Validate { file } = &cli.command {
         match commands::validate(file) {
             Ok(true) => return,
@@ -384,6 +398,17 @@ fn main() {
             }
         }
     }
+
+    // `diff --exit-code` carries a verdict too: 1 for files that differ, which
+    // survives a closed standard output, and 2 for an error.
+    let diff_exit_code = matches!(
+        cli.command,
+        Command::Diff {
+            exit_code: true,
+            ..
+        }
+    );
+    let mut differs = false;
 
     let result = match cli.command {
         Command::Inspect { file, json } => commands::inspect(&file, json),
@@ -412,7 +437,12 @@ fn main() {
                 transparent,
             },
         ),
-        Command::Diff { file_a, file_b } => commands::diff(&file_a, &file_b),
+        Command::Diff {
+            file_a,
+            file_b,
+            json,
+            exit_code: _,
+        } => commands::diff(&file_a, &file_b, json, &mut differs),
         Command::Replace {
             file,
             placeholder,
@@ -581,7 +611,10 @@ fn main() {
             .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe);
         if !closed_stdout {
             eprintln!("Error: {e}");
-            process::exit(1);
+            process::exit(if diff_exit_code { 2 } else { 1 });
         }
+    }
+    if diff_exit_code && differs {
+        process::exit(1);
     }
 }

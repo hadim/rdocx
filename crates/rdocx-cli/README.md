@@ -48,6 +48,8 @@ rdocx text report.docx --json
 rdocx layout report.docx --json
 rdocx replace template.docx -p TOKEN -v ready --expect 1 -o report.docx
 rdocx convert report.docx --to pdf -o report.pdf
+rdocx diff before.docx after.docx
+rdocx diff before.docx after.docx --exit-code --json
 rdocx validate report.docx
 rdocx render report.docx --page 0 -o rendered
 rdocx comment list report.docx --json
@@ -117,6 +119,44 @@ item, including preserved items that have no fragments. Each laid-out fragment
 uses points from the top-left page origin and records one-based physical and
 displayed page numbers. A body item that crosses a page boundary has one
 fragment on each occupied page.
+
+`diff` compares the accepted-view paragraph text of every story: body
+paragraphs, the paragraphs of the body's table cells and nested tables, text
+boxes, the headers and footers of each section, footnotes, endnotes, and
+comments. Each story is compared as one sequence through a shortest edit
+script, found by Myers' linear-space algorithm, so a few edits in a long
+document stay fast and memory stays proportional to the story length. Between
+two matched paragraphs, removed and added paragraphs pair in order as changed
+paragraphs. A changed paragraph prints a `-` line and a `+` line, an added one
+only `+`, and a removed one only `-`. The summary line reads
+`N paragraph(s) changed, A added, R removed.`, which replaces the
+`N paragraph(s) differ.` line of earlier releases.
+
+Each line locates its paragraph between brackets. A body paragraph keeps its
+one-based position among the body paragraphs, such as `[2]`. A table cell
+paragraph of the body is located as `[table 1, row 1, cell 2, paragraph 1]`,
+where the table counts the tables placed directly in the body and the rest is
+the `text --json` path made one-based. A header or footer is named by its type
+and the first section that references it, as
+`[header default, section 1, paragraph 1]` or
+`[footer first, section 2, paragraph 1]`, and the two files pair their headers
+and footers by that name. Inserting a new first section with its own header
+therefore shows the old header as changed and itself as added under section 2.
+Notes and comments count in their part, as `[footnote 1, paragraph 1]` or
+`[comment 2, paragraph 1]`, and a text box of the body as
+`[text box 1, paragraph 1]`. A table cell inside a header, a footer, or a
+notes or comments part is labelled `table cell K` in that part, without a row
+and cell path, as `[header default, section 1, table cell 3, paragraph 1]`.
+Outside the body, `paragraph N` counts the paragraphs of its story and a block
+content control reads as `content control N`, counted apart. A story that
+cannot be read is printed as `(not compared: ...)` instead of being counted as
+equal.
+
+`diff --json` writes a schema-1 record with the counts, each difference with
+its story kind, locations, and texts, and the stories not compared.
+`--exit-code` exits with 1 when the files differ and 2 on an error, as `diff`
+and `cmp` do. Without it `diff` exits with 0 whenever it could compare the
+files.
 
 `replace --expect N` publishes only when the run-aware replacement count is
 exactly `N`. A mismatch exits unsuccessfully without creating or replacing the

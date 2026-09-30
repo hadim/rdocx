@@ -1,6 +1,8 @@
 //! CLI command implementations.
 
+use std::collections::HashMap;
 use std::io::{self, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use oxml_cli_support::{
@@ -9,7 +11,8 @@ use oxml_cli_support::{
 };
 use rdocx::{
     BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
-    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
+    HdrFtrType, HeaderFooterKind, RasterFormat, RasterOptions, RasterOutput, RevisionKind,
+    RunRange, StoryId, StoryItemKind, StoryKind,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -497,13 +500,85 @@ pub fn convert(
     Ok(())
 }
 
-/// Structural diff between two DOCX files.
-pub fn diff(file_a: &Path, file_b: &Path) -> Result<()> {
+/// Compare the paragraph text of every story of two DOCX files.
+///
+/// The body paragraphs keep their historical `[i]` locations, every other
+/// paragraph is located by its story. `differs` is set before anything is
+/// printed, so the verdict survives a reader that closes standard output.
+pub fn diff(file_a: &Path, file_b: &Path, json_output: bool, differs: &mut bool) -> Result<()> {
     let doc_a = Document::open(file_a)?;
     let doc_b = Document::open(file_b)?;
+    let (streams_a, mut not_compared) = diff_streams(file_a, &doc_a)?;
+    let (streams_b, not_compared_b) = diff_streams(file_b, &doc_b)?;
+    for entry in not_compared_b {
+        if !not_compared.contains(&entry) {
+            not_compared.push(entry);
+        }
+    }
 
-    let paras_a: Vec<String> = doc_a.paragraphs().iter().map(|p| p.text()).collect();
-    let paras_b: Vec<String> = doc_b.paragraphs().iter().map(|p| p.text()).collect();
+    // Streams pair by name, in the order of the first file and then of the
+    // streams that only the second file has.
+    let mut names: Vec<&str> = streams_a
+        .iter()
+        .map(|stream| stream.name.as_str())
+        .collect();
+    for stream in &streams_b {
+        if !names.contains(&stream.name.as_str()) {
+            names.push(&stream.name);
+        }
+    }
+    let mut changes = Vec::new();
+    for name in names {
+        changes.extend(diff_items(
+            stream_items(&streams_a, name),
+            stream_items(&streams_b, name),
+        ));
+    }
+    let count = |a: bool, b: bool| {
+        changes
+            .iter()
+            .filter(|(old, new)| old.is_some() == a && new.is_some() == b)
+            .count()
+    };
+    let (changed, added, removed) = (count(true, true), count(false, true), count(true, false));
+    *differs = !changes.is_empty();
+
+    if json_output {
+        let side = |item: &Option<DiffItem>, field: fn(&DiffItem) -> &str| {
+            item.as_ref().map(|item| field(item).to_owned())
+        };
+        let differences = changes
+            .iter()
+            .map(|(old, new)| {
+                let (change, story) = match (old, new) {
+                    (Some(item), Some(_)) => ("changed", item.story),
+                    (None, Some(item)) => ("added", item.story),
+                    (Some(item), None) => ("removed", item.story),
+                    (None, None) => unreachable!("a change has at least one side"),
+                };
+                json!({
+                    "change": change,
+                    "story": story,
+                    "location_a": side(old, |item| &item.location),
+                    "text_a": side(old, |item| &item.text),
+                    "location_b": side(new, |item| &item.location),
+                    "text_b": side(new, |item| &item.text),
+                })
+            })
+            .collect::<Vec<_>>();
+        print_json(json!({
+            "file_a": file_a.display().to_string(),
+            "file_b": file_b.display().to_string(),
+            "scope": "all-supported-stories",
+            "revision_view": "accepted",
+            "changed": changed,
+            "added": added,
+            "removed": removed,
+            "differences": differences,
+            "not_compared": not_compared,
+        }))?;
+        return Ok(());
+    }
 
     let mut stdout = io::stdout().lock();
     writeln!(
@@ -521,48 +596,451 @@ pub fn diff(file_a: &Path, file_b: &Path) -> Result<()> {
         doc_b.table_count()
     )?;
     writeln!(stdout)?;
-
-    // Simple LCS-based diff on paragraph texts
-    let lcs = compute_lcs(&paras_a, &paras_b);
-    let mut i = 0;
-    let mut j = 0;
-    let mut k = 0;
-
-    while k < lcs.len() {
-        // Output removed lines before the match
-        while i < paras_a.len() && paras_a[i] != lcs[k] {
-            writeln!(stdout, "- [{}] {}", i + 1, paras_a[i])?;
-            i += 1;
+    for (old, new) in &changes {
+        if let Some(item) = old {
+            writeln!(stdout, "- [{}] {}", item.location, item.text)?;
         }
-        // Output added lines before the match
-        while j < paras_b.len() && paras_b[j] != lcs[k] {
-            writeln!(stdout, "+ [{}] {}", j + 1, paras_b[j])?;
-            j += 1;
+        if let Some(item) = new {
+            writeln!(stdout, "+ [{}] {}", item.location, item.text)?;
         }
-        // Skip the common line
-        i += 1;
-        j += 1;
-        k += 1;
     }
-
-    // Remaining lines
-    while i < paras_a.len() {
-        writeln!(stdout, "- [{}] {}", i + 1, paras_a[i])?;
-        i += 1;
+    if !changes.is_empty() {
+        writeln!(stdout)?;
     }
-    while j < paras_b.len() {
-        writeln!(stdout, "+ [{}] {}", j + 1, paras_b[j])?;
-        j += 1;
+    for entry in &not_compared {
+        writeln!(stdout, "(not compared: {entry})")?;
     }
-
-    let changes = paras_a.len() + paras_b.len() - 2 * lcs.len();
-    if changes == 0 {
+    if changes.is_empty() {
         writeln!(stdout, "(no differences in paragraph text)")?;
     } else {
-        writeln!(stdout, "\n{changes} paragraph(s) differ.")?;
+        writeln!(
+            stdout,
+            "{changed} paragraph(s) changed, {added} added, {removed} removed."
+        )?;
+    }
+    Ok(())
+}
+
+/// One compared paragraph or block content control: its story kind, its
+/// location as `diff` prints it between brackets, and its accepted-view text.
+#[derive(Clone)]
+struct DiffItem {
+    story: &'static str,
+    location: String,
+    text: String,
+}
+
+/// The items that `diff` compares as one sequence, such as the body, the
+/// tables of the body, or one header. Streams of two files pair by name.
+struct DiffStream {
+    name: String,
+    items: Vec<DiffItem>,
+}
+
+/// Read every story of a document into comparable streams, and name the
+/// stories that could not be read instead of dropping them silently.
+fn diff_streams(file: &Path, doc: &Document) -> Result<(Vec<DiffStream>, Vec<String>)> {
+    let body = doc
+        .paragraphs()
+        .iter()
+        .enumerate()
+        .map(|(index, paragraph)| DiffItem {
+            story: "body",
+            location: (index + 1).to_string(),
+            text: paragraph.text(),
+        })
+        .collect();
+    let mut streams = vec![DiffStream {
+        name: "body".to_owned(),
+        items: body,
+    }];
+
+    // The table cells of the body use the `text --json` traversal. A table
+    // inside a block content control is left to the body paragraphs, which
+    // already hold its text.
+    let document = parsed_main_document(file)?;
+    let mut cells = Vec::new();
+    let mut table_number = 0;
+    for (body_index, content) in document.body.content.iter().enumerate() {
+        if let BodyContent::Table(table) = content {
+            table_number += 1;
+            let mut paragraphs = Vec::new();
+            collect_table_paragraphs(body_index, &[], table, &mut paragraphs);
+            cells.extend(paragraphs.iter().map(|paragraph| DiffItem {
+                story: "table_cell",
+                location: format!("table {table_number}, {}", json_path_label(paragraph)),
+                text: paragraph["text"].as_str().unwrap_or_default().to_owned(),
+            }));
+        }
+    }
+    streams.push(DiffStream {
+        name: "tables".to_owned(),
+        items: cells,
+    });
+
+    let mut not_compared = Vec::new();
+    match other_story_streams(doc) {
+        Ok((other, unsupported)) => {
+            streams.extend(other);
+            not_compared.extend(unsupported);
+        }
+        Err(error) => not_compared.push(format!(
+            "headers, footers, footnotes, endnotes, comments and text boxes of {} ({error})",
+            file.display()
+        )),
+    }
+    Ok((streams, not_compared))
+}
+
+/// Label a `text --json` paragraph path one-based, such as `row 1, cell 2,
+/// paragraph 1`.
+fn json_path_label(paragraph: &Value) -> String {
+    paragraph["path"]
+        .as_array()
+        .map(|segments| {
+            segments
+                .iter()
+                .map(|segment| {
+                    format!(
+                        "{} {}",
+                        segment["kind"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .replace('-', " "),
+                        segment["index"].as_u64().unwrap_or_default() + 1
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
+/// Read the stories beyond the main body and its tables: text boxes of the
+/// body, headers and footers named by section and type, footnotes, endnotes,
+/// and comments. Each package part is one stream. Only the direct paragraphs
+/// and block content controls of a story are read, so the text of an inline
+/// control or a field is not compared twice.
+fn other_story_streams(doc: &Document) -> Result<(Vec<DiffStream>, Vec<String>)> {
+    // A header or footer part is named by the first section that references
+    // it explicitly, so that a renamed part still pairs with its section.
+    let mut section_names: Vec<(String, String)> = Vec::new();
+    for section in 0..doc.section_count() {
+        for (kind, kind_name) in [
+            (HeaderFooterKind::Header, "header"),
+            (HeaderFooterKind::Footer, "footer"),
+        ] {
+            for (hdr_type, type_name) in [
+                (HdrFtrType::Default, "default"),
+                (HdrFtrType::First, "first"),
+                (HdrFtrType::Even, "even"),
+            ] {
+                if let Some(story) = doc.section_story(section, kind, hdr_type)?
+                    && !story.is_inherited()
+                    && !section_names
+                        .iter()
+                        .any(|(part, _)| part == story.story().part_name())
+                {
+                    section_names.push((
+                        story.story().part_name().to_owned(),
+                        format!("{kind_name} {type_name}, section {}", section + 1),
+                    ));
+                }
+            }
+        }
     }
 
-    Ok(())
+    let mut main_part = None;
+    let mut streams: Vec<(String, DiffStream)> = Vec::new();
+    let mut unsupported = Vec::new();
+    // The current owner and its paragraph and content control counts so far.
+    let mut owner: Option<(StoryId, [usize; 2])> = None;
+    for item in doc.story_item_snapshots()? {
+        let story = item.location().story();
+        let part = story.part_name();
+        if story.kind() == StoryKind::Body {
+            main_part = Some(part.to_owned());
+            continue;
+        }
+        if story.kind() == StoryKind::TableCell && main_part.as_deref() == Some(part) {
+            continue;
+        }
+        if !item.is_direct_child() {
+            continue;
+        }
+        // Paragraphs and block content controls count apart within their
+        // owner, so `paragraph 2` is the second paragraph of its story.
+        let (item_name, is_paragraph) = match item.location().item_kind() {
+            StoryItemKind::Paragraph => ("paragraph", true),
+            StoryItemKind::ContentControl => ("content control", false),
+            // A table's text is read from its cells, which are stories of
+            // their own, and the other direct items carry no text.
+            _ => continue,
+        };
+        if owner.as_ref().is_none_or(|(current, _)| current != story) {
+            owner = Some((story.clone(), [0, 0]));
+        }
+        let ordinal = match &mut owner {
+            Some((_, counts)) => {
+                let count = &mut counts[usize::from(!is_paragraph)];
+                *count += 1;
+                *count
+            }
+            None => unreachable!("the owner was just set"),
+        };
+        let (story_name, owner_name) = match story.kind() {
+            StoryKind::Header => ("header", None),
+            StoryKind::Footer => ("footer", None),
+            StoryKind::Footnote => ("footnote", Some("footnote")),
+            StoryKind::Endnote => ("endnote", Some("endnote")),
+            StoryKind::Comment => ("comment", Some("comment")),
+            StoryKind::TableCell => ("table_cell", Some("table cell")),
+            StoryKind::TextBox => ("text_box", Some("text box")),
+            _ => {
+                let entry = format!("a story of an unsupported kind in {part}");
+                if !unsupported.contains(&entry) {
+                    unsupported.push(entry);
+                }
+                continue;
+            }
+        };
+        let position = match streams
+            .iter()
+            .position(|(stream_part, _)| stream_part == part)
+        {
+            Some(position) => position,
+            None => {
+                let name = section_names
+                    .iter()
+                    .find(|(named_part, _)| named_part == part)
+                    .map(|(_, name)| name.clone())
+                    .unwrap_or_else(|| match story.kind() {
+                        StoryKind::Header | StoryKind::Footer => format!("{story_name} {part}"),
+                        StoryKind::Footnote => "footnotes".to_owned(),
+                        StoryKind::Endnote => "endnotes".to_owned(),
+                        StoryKind::Comment => "comments".to_owned(),
+                        _ if main_part.as_deref() == Some(part) => String::new(),
+                        _ => part.to_owned(),
+                    });
+                streams.push((
+                    part.to_owned(),
+                    DiffStream {
+                        name,
+                        items: Vec::new(),
+                    },
+                ));
+                streams.len() - 1
+            }
+        };
+        let stream = &mut streams[position].1;
+        // A note or a comment names itself. A header or a footer takes the
+        // name of its stream, and a cell or a text box is placed in it.
+        let mut location = Vec::new();
+        let names_itself = matches!(
+            story.kind(),
+            StoryKind::Footnote | StoryKind::Endnote | StoryKind::Comment
+        );
+        if !names_itself && !stream.name.is_empty() {
+            location.push(stream.name.clone());
+        }
+        if let Some(owner_name) = owner_name {
+            location.push(format!("{owner_name} {}", story.owner_index() + 1));
+        }
+        location.push(format!("{item_name} {ordinal}"));
+        stream.items.push(DiffItem {
+            story: story_name,
+            location: location.join(", "),
+            text: item.text().unwrap_or_default().to_owned(),
+        });
+    }
+    Ok((
+        streams.into_iter().map(|(_, stream)| stream).collect(),
+        unsupported,
+    ))
+}
+
+/// The items of the stream with this name, or none when the file lacks it.
+fn stream_items<'a>(streams: &'a [DiffStream], name: &str) -> &'a [DiffItem] {
+    streams
+        .iter()
+        .find(|stream| stream.name == name)
+        .map_or(&[], |stream| stream.items.as_slice())
+}
+
+/// A removed item, an added item, or both for a changed item.
+type ItemChange = (Option<DiffItem>, Option<DiffItem>);
+
+/// Pair the items of two streams that differ. Matched items come from a
+/// shortest edit script between their texts. Between two matches, removed
+/// and added items pair in order as changed items, and the rest stay removed
+/// or added.
+fn diff_items(a: &[DiffItem], b: &[DiffItem]) -> Vec<ItemChange> {
+    // Equal texts share one number, so the edit search compares integers.
+    let mut numbers: HashMap<&str, u32> = HashMap::new();
+    let mut numbered = Vec::with_capacity(a.len() + b.len());
+    for item in a.iter().chain(b) {
+        let next = numbers.len() as u32;
+        numbered.push(*numbers.entry(item.text.as_str()).or_insert(next));
+    }
+    let (numbers_a, numbers_b) = numbered.split_at(a.len());
+    let mut matches = Vec::new();
+    let mut frontiers = Frontiers::new(a.len() + b.len());
+    matching_indexes(
+        numbers_a,
+        0..a.len(),
+        numbers_b,
+        0..b.len(),
+        &mut frontiers,
+        &mut matches,
+    );
+    matches.push((a.len(), b.len()));
+    let mut changes = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    for (next_i, next_j) in matches {
+        let removed = &a[i..next_i];
+        let added = &b[j..next_j];
+        for index in 0..removed.len().max(added.len()) {
+            changes.push((removed.get(index).cloned(), added.get(index).cloned()));
+        }
+        i = next_i + 1;
+        j = next_j + 1;
+    }
+    changes
+}
+
+/// The forward and backward furthest-reaching `x` of each diagonal in
+/// Myers' search, indexed by the diagonal `k` offset to stay non-negative.
+struct Frontiers {
+    forward: Vec<usize>,
+    backward: Vec<usize>,
+    offset: isize,
+}
+
+impl Frontiers {
+    fn new(total: usize) -> Self {
+        let size = total + 3;
+        Self {
+            forward: vec![0; 2 * size + 1],
+            backward: vec![0; 2 * size + 1],
+            offset: size as isize,
+        }
+    }
+
+    fn slot(&self, k: isize) -> usize {
+        (k + self.offset) as usize
+    }
+}
+
+/// Collect the matched index pairs of a shortest edit script between two
+/// ranges in order, by Myers' linear-space divide and conquer: O((N+M)D)
+/// time and O(N+M) memory, where D is the number of edits. A few edits in a
+/// long story therefore stay cheap.
+fn matching_indexes(
+    a: &[u32],
+    mut a_range: Range<usize>,
+    b: &[u32],
+    mut b_range: Range<usize>,
+    frontiers: &mut Frontiers,
+    matches: &mut Vec<(usize, usize)>,
+) {
+    while !a_range.is_empty() && !b_range.is_empty() && a[a_range.start] == b[b_range.start] {
+        matches.push((a_range.start, b_range.start));
+        a_range.start += 1;
+        b_range.start += 1;
+    }
+    let mut suffix = 0;
+    while !a_range.is_empty() && !b_range.is_empty() && a[a_range.end - 1] == b[b_range.end - 1] {
+        a_range.end -= 1;
+        b_range.end -= 1;
+        suffix += 1;
+    }
+    if !a_range.is_empty() && !b_range.is_empty() {
+        let (x, y) = middle_snake(a, a_range.clone(), b, b_range.clone(), frontiers);
+        matching_indexes(a, a_range.start..x, b, b_range.start..y, frontiers, matches);
+        matching_indexes(a, x..a_range.end, b, y..b_range.end, frontiers, matches);
+    }
+    matches.extend((0..suffix).map(|offset| (a_range.end + offset, b_range.end + offset)));
+}
+
+/// Find a point on a shortest edit path that splits it into two halves of
+/// about half its edits each. Both ranges are non-empty and differ at both
+/// ends, so each half has fewer edits than the whole.
+fn middle_snake(
+    a: &[u32],
+    a_range: Range<usize>,
+    b: &[u32],
+    b_range: Range<usize>,
+    frontiers: &mut Frontiers,
+) -> (usize, usize) {
+    let (n, m) = (a_range.len(), b_range.len());
+    let delta = n as isize - m as isize;
+    let odd = delta & 1 == 1;
+    let one = frontiers.slot(1);
+    frontiers.forward[one] = 0;
+    frontiers.backward[one] = 0;
+    let common_prefix = |x: usize, y: usize| {
+        a[a_range.start + x..a_range.end]
+            .iter()
+            .zip(&b[b_range.start + y..b_range.end])
+            .take_while(|(left, right)| left == right)
+            .count()
+    };
+    let common_suffix = |x: usize, y: usize| {
+        a[a_range.start..a_range.end - x]
+            .iter()
+            .rev()
+            .zip(b[b_range.start..b_range.end - y].iter().rev())
+            .take_while(|(left, right)| left == right)
+            .count()
+    };
+    for d in 0..=(n + m).div_ceil(2) as isize {
+        for k in (-d..=d).rev().step_by(2) {
+            let (below, above) = (frontiers.slot(k - 1), frontiers.slot(k + 1));
+            let mut x =
+                if k == -d || (k != d && frontiers.forward[below] < frontiers.forward[above]) {
+                    frontiers.forward[above]
+                } else {
+                    frontiers.forward[below] + 1
+                };
+            let y = (x as isize - k) as usize;
+            let start = (x, y);
+            if x < n && y < m {
+                x += common_prefix(x, y);
+            }
+            let slot = frontiers.slot(k);
+            frontiers.forward[slot] = x;
+            if odd
+                && (k - delta).abs() < d
+                && x + frontiers.backward[frontiers.slot(delta - k)] >= n
+            {
+                return (a_range.start + start.0, b_range.start + start.1);
+            }
+        }
+        for k in (-d..=d).rev().step_by(2) {
+            let (below, above) = (frontiers.slot(k - 1), frontiers.slot(k + 1));
+            let mut x =
+                if k == -d || (k != d && frontiers.backward[below] < frontiers.backward[above]) {
+                    frontiers.backward[above]
+                } else {
+                    frontiers.backward[below] + 1
+                };
+            let mut y = (x as isize - k) as usize;
+            if x < n && y < m {
+                let common = common_suffix(x, y);
+                x += common;
+                y += common;
+            }
+            let slot = frontiers.slot(k);
+            frontiers.backward[slot] = x;
+            if !odd
+                && (k - delta).abs() <= d
+                && x + frontiers.forward[frontiers.slot(delta - k)] >= n
+            {
+                return (a_range.end - x, b_range.end - y);
+            }
+        }
+    }
+    unreachable!("two non-empty ranges always meet within half their total length of edits")
 }
 
 /// List Word comments in their package order.
@@ -1007,42 +1485,6 @@ fn print_json(payload: Value) -> Result<()> {
     Ok(())
 }
 
-/// Compute the longest common subsequence of two string slices.
-fn compute_lcs(a: &[String], b: &[String]) -> Vec<String> {
-    let m = a.len();
-    let n = b.len();
-    let mut dp = vec![vec![0u32; n + 1]; m + 1];
-
-    for i in 1..=m {
-        for j in 1..=n {
-            dp[i][j] = if a[i - 1] == b[j - 1] {
-                dp[i - 1][j - 1] + 1
-            } else {
-                dp[i - 1][j].max(dp[i][j - 1])
-            };
-        }
-    }
-
-    // Backtrack
-    let mut result = Vec::new();
-    let mut i = m;
-    let mut j = n;
-    while i > 0 && j > 0 {
-        if a[i - 1] == b[j - 1] {
-            result.push(a[i - 1].clone());
-            i -= 1;
-            j -= 1;
-        } else if dp[i - 1][j] >= dp[i][j - 1] {
-            i -= 1;
-        } else {
-            j -= 1;
-        }
-    }
-
-    result.reverse();
-    result
-}
-
 /// Replace a placeholder in a DOCX file and save to output.
 pub fn replace(
     file: &Path,
@@ -1412,6 +1854,43 @@ fn print_validation_report(file: &Path, errors: &[String], warnings: &[String]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Myers matches of `diff` are a longest common subsequence: equal,
+    /// strictly increasing pairs as many as the quadratic table finds.
+    #[test]
+    fn diff_matches_are_a_longest_common_subsequence() {
+        let mut seed = 0x2545_f491_u64;
+        let mut next = |bound: u64| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (seed >> 33) % bound
+        };
+        for _ in 0..2_000 {
+            let alphabet = next(4) + 1;
+            let a: Vec<u32> = (0..next(30)).map(|_| next(alphabet) as u32).collect();
+            let b: Vec<u32> = (0..next(30)).map(|_| next(alphabet) as u32).collect();
+            let mut matches = Vec::new();
+            let mut frontiers = Frontiers::new(a.len() + b.len());
+            matching_indexes(&a, 0..a.len(), &b, 0..b.len(), &mut frontiers, &mut matches);
+            assert!(matches.iter().all(|&(i, j)| a[i] == b[j]), "{a:?} {b:?}");
+            assert!(
+                matches
+                    .windows(2)
+                    .all(|pair| pair[0].0 < pair[1].0 && pair[0].1 < pair[1].1),
+                "{a:?} {b:?} {matches:?}"
+            );
+            let mut lengths = vec![vec![0; b.len() + 1]; a.len() + 1];
+            for i in 1..=a.len() {
+                for j in 1..=b.len() {
+                    lengths[i][j] = if a[i - 1] == b[j - 1] {
+                        lengths[i - 1][j - 1] + 1
+                    } else {
+                        lengths[i - 1][j].max(lengths[i][j - 1])
+                    };
+                }
+            }
+            assert_eq!(matches.len(), lengths[a.len()][b.len()], "{a:?} {b:?}");
+        }
+    }
 
     #[test]
     fn inspect_json_uses_the_shared_schema_one_envelope() {

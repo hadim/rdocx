@@ -296,13 +296,22 @@ fn printing_commands_end_cleanly_when_the_reader_closes_stdout() {
         &lines.iter().map(String::as_str).collect::<Vec<_>>(),
     );
 
+    let empty = temp.path.join("empty.docx");
+    write_document(&empty, &[]);
+
     for args in [
         vec!["text", path_text(&input)],
         vec!["text", path_text(&input), "--json"],
+        vec!["diff", path_text(&empty), path_text(&input)],
     ] {
         let output = cli_with_closed_stdout(&args);
         assert_success(&output, &args.join(" "));
     }
+    // The verdict of `diff --exit-code` survives the closed pipe.
+    let output =
+        cli_with_closed_stdout(&["diff", "--exit-code", path_text(&empty), path_text(&input)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -604,14 +613,284 @@ fn diff_reports_changed_paragraphs_without_using_exit_status_as_a_verdict() {
 
     let output = cli(&["diff", path_text(&before), path_text(&after)]);
     assert_success(&output, "diff");
+    // One replaced paragraph is one changed paragraph, not two.
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         format!(
-            "--- {} (2 paragraphs, 0 tables)\n+++ {} (2 paragraphs, 0 tables)\n\n- [2] Old text\n+ [2] New text\n\n2 paragraph(s) differ.\n",
+            "--- {} (2 paragraphs, 0 tables)\n+++ {} (2 paragraphs, 0 tables)\n\n- [2] Old text\n+ [2] New text\n\n1 paragraph(s) changed, 0 added, 0 removed.\n",
             before.display(),
             after.display()
         )
     );
+}
+
+/// Runs `rdocx diff` on two files and returns its standard output after the
+/// two header lines and the blank line that follows them.
+fn diff_body(before: &Path, after: &Path) -> String {
+    let output = cli(&["diff", path_text(before), path_text(after)]);
+    assert_success(&output, "diff");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    stdout.splitn(4, '\n').nth(3).unwrap().to_owned()
+}
+
+#[test]
+fn diff_counts_added_and_removed_paragraphs_and_reports_identical_files() {
+    let temp = TempWorkspace::new("diff-added-removed");
+    let before = temp.path.join("before.docx");
+    let after = temp.path.join("after.docx");
+    let copy = temp.path.join("copy.docx");
+    write_document(&before, &["Same", "Gone", "Kept"]);
+    write_document(&after, &["Same", "Kept", "New"]);
+    write_document(&copy, &["Same", "Gone", "Kept"]);
+
+    assert_eq!(
+        diff_body(&before, &after),
+        "- [2] Gone\n+ [3] New\n\n0 paragraph(s) changed, 1 added, 1 removed.\n"
+    );
+    assert_eq!(
+        diff_body(&before, &copy),
+        "(no differences in paragraph text)\n"
+    );
+}
+
+/// Two edits far apart in a long story, as in a document with a changed
+/// first and last paragraph, stay cheap and are both reported.
+#[test]
+fn diff_reports_two_far_apart_edits_in_a_long_story() {
+    let temp = TempWorkspace::new("diff-long");
+    let before = temp.path.join("before.docx");
+    let after = temp.path.join("after.docx");
+    let paragraphs = (0..5_001)
+        .map(|index| format!("Paragraph {index}"))
+        .collect::<Vec<_>>();
+    let mut edited = paragraphs.clone();
+    edited[0] = "First edited".to_owned();
+    edited[5_000] = "Last edited".to_owned();
+    for (path, texts) in [(&before, &paragraphs), (&after, &edited)] {
+        write_document(path, &texts.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+
+    assert_eq!(
+        diff_body(&before, &after),
+        "- [1] Paragraph 0\n+ [1] First edited\n- [5001] Paragraph 5000\n+ [5001] Last edited\n\n2 paragraph(s) changed, 0 added, 0 removed.\n"
+    );
+}
+
+#[test]
+fn diff_locates_changed_table_cells_like_text_json() {
+    let temp = TempWorkspace::new("diff-table");
+    let before = temp.path.join("before.docx");
+    let after = temp.path.join("after.docx");
+    for (path, word) in [(&before, "alpha"), (&after, "beta")] {
+        let mut document = fixture_document(&["Body"]);
+        {
+            let mut table = document.add_table(1, 2);
+            table.cell(0, 0).unwrap().set_text("Row label");
+            table
+                .cell(0, 1)
+                .unwrap()
+                .set_text(&format!("The cell says {word}."));
+            let mut outer = table.cell(0, 0).unwrap();
+            let mut nested = outer.add_table(1, 1);
+            nested
+                .cell(0, 0)
+                .unwrap()
+                .set_text(&format!("Nested {word}"));
+        }
+        document.save(path).unwrap();
+    }
+
+    let json = cli(&["text", path_text(&before), "--json"]);
+    assert_success(&json, "text --json");
+    let json: Value = serde_json::from_slice(&json.stdout).unwrap();
+    let nested_path = json["paragraphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|paragraph| paragraph["text"] == "Nested alpha")
+        .map(|paragraph| paragraph["path"].clone())
+        .unwrap();
+    assert_eq!(
+        nested_path,
+        json!([
+            {"kind": "row", "index": 0},
+            {"kind": "cell", "index": 0},
+            {"kind": "table", "index": 1},
+            {"kind": "row", "index": 0},
+            {"kind": "cell", "index": 0},
+            {"kind": "paragraph", "index": 0},
+        ])
+    );
+    assert_eq!(
+        diff_body(&before, &after),
+        "- [table 1, row 1, cell 1, table 2, row 1, cell 1, paragraph 1] Nested alpha\n\
+         + [table 1, row 1, cell 1, table 2, row 1, cell 1, paragraph 1] Nested beta\n\
+         - [table 1, row 1, cell 2, paragraph 1] The cell says alpha.\n\
+         + [table 1, row 1, cell 2, paragraph 1] The cell says beta.\n\
+         \n2 paragraph(s) changed, 0 added, 0 removed.\n"
+    );
+}
+
+#[test]
+fn diff_compares_headers_footers_notes_and_comments() {
+    let temp = TempWorkspace::new("diff-stories");
+    let before = temp.path.join("before.docx");
+    let after = temp.path.join("after.docx");
+    for (path, word) in [(&before, "alpha"), (&after, "beta")] {
+        let mut document = fixture_document(&["Body text."]);
+        document.set_header(&format!("Header {word}"));
+        document.set_footer("Footer unchanged");
+        document.add_footnote(&format!("Footnote {word}"));
+        document
+            .add_comment(
+                rdocx::RunRange {
+                    start: rdocx::RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: rdocx::RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Reviewer",
+                None,
+                &format!("Comment {word}"),
+            )
+            .unwrap();
+        document.save(path).unwrap();
+    }
+
+    assert_eq!(
+        diff_body(&before, &after),
+        "- [header default, section 1, paragraph 1] Header alpha\n\
+         + [header default, section 1, paragraph 1] Header beta\n\
+         - [footnote 1, paragraph 1] Footnote alpha\n\
+         + [footnote 1, paragraph 1] Footnote beta\n\
+         - [comment 1, paragraph 1] Comment alpha\n\
+         + [comment 1, paragraph 1] Comment beta\n\
+         \n3 paragraph(s) changed, 0 added, 0 removed.\n"
+    );
+
+    let output = cli(&["diff", path_text(&before), path_text(&after), "--json"]);
+    assert_success(&output, "diff --json");
+    let record: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(record["schema"], 1);
+    assert_eq!(record["scope"], "all-supported-stories");
+    assert_eq!(
+        (&record["changed"], &record["added"], &record["removed"]),
+        (&json!(3), &json!(0), &json!(0))
+    );
+    assert_eq!(record["not_compared"], json!([]));
+    assert_eq!(
+        record["differences"][0],
+        json!({
+            "change": "changed",
+            "story": "header",
+            "location_a": "header default, section 1, paragraph 1",
+            "text_a": "Header alpha",
+            "location_b": "header default, section 1, paragraph 1",
+            "text_b": "Header beta",
+        })
+    );
+}
+
+/// A text box is read once, not again from its `mc:Fallback` copy, and the
+/// text of an inline content control is read once, with its paragraph.
+#[test]
+fn diff_compares_text_boxes_and_content_controls_once() {
+    let temp = TempWorkspace::new("diff-text-box");
+    let before = temp.path.join("before.docx");
+    let after = temp.path.join("after.docx");
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    for (path, text) in [(&before, "alpha"), (&after, "beta")] {
+        let mut document = fixture_document(&["seed"]);
+        document.set_header("seed");
+        document.save(path).unwrap();
+        let header = header_part_name(path);
+        let copy = format!(
+            r#"<w:txbxContent><w:p><w:r><w:t>Box {text}</w:t></w:r></w:p></w:txbxContent>"#
+        );
+        let text_box = format!(
+            r#"<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx>{copy}</wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox>{copy}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>"#
+        );
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(fs::read(path).unwrap())).unwrap();
+        // Keep the section properties, which reference the header.
+        let original = package_part_text(path, "/word/document.xml");
+        let section = &original[original.find("<w:sectPr").unwrap()
+            ..original.find("</w:sectPr>").unwrap() + "</w:sectPr>".len()];
+        let document_xml = format!(
+            r#"<w:document xmlns:w="{word}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>Anchor</w:t></w:r>{text_box}</w:p>{section}</w:body></w:document>"#
+        );
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        package.set_part(
+            &header,
+            format!(
+                r#"<w:hdr xmlns:w="{word}"><w:sdt><w:sdtContent><w:p><w:r><w:t>Block {text}</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t xml:space="preserve">Inline </w:t></w:r><w:sdt><w:sdtContent><w:r><w:t>{text}</w:t></w:r></w:sdtContent></w:sdt></w:p></w:hdr>"#
+            )
+            .into_bytes(),
+        );
+        package
+            .write_to(&mut fs::File::create(path).unwrap())
+            .unwrap();
+    }
+
+    assert_eq!(
+        diff_body(&before, &after),
+        "- [text box 1, paragraph 1] Box alpha\n\
+         + [text box 1, paragraph 1] Box beta\n\
+         - [header default, section 1, content control 1] Block alpha\n\
+         + [header default, section 1, content control 1] Block beta\n\
+         - [header default, section 1, paragraph 1] Inline alpha\n\
+         + [header default, section 1, paragraph 1] Inline beta\n\
+         \n3 paragraph(s) changed, 0 added, 0 removed.\n"
+    );
+}
+
+#[test]
+fn diff_exit_code_reports_a_difference_and_an_error_apart() {
+    let temp = TempWorkspace::new("diff-exit-code");
+    let before = temp.path.join("before.docx");
+    let after = temp.path.join("after.docx");
+    write_document(&before, &["Same", "Old text"]);
+    write_document(&after, &["Same", "New text"]);
+    let missing = temp.path.join("missing.docx");
+
+    let differ = cli(&["diff", "--exit-code", path_text(&before), path_text(&after)]);
+    assert_eq!(differ.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&differ.stdout).contains("+ [2] New text"));
+    assert!(differ.stderr.is_empty());
+
+    let same = cli(&[
+        "diff",
+        "--exit-code",
+        path_text(&before),
+        path_text(&before),
+    ]);
+    assert_success(&same, "diff --exit-code");
+
+    let json = cli(&[
+        "diff",
+        "--exit-code",
+        "--json",
+        path_text(&before),
+        path_text(&after),
+    ]);
+    assert_eq!(json.status.code(), Some(1));
+    let record: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(record["changed"], 1);
+
+    let error = cli(&[
+        "diff",
+        "--exit-code",
+        path_text(&before),
+        path_text(&missing),
+    ]);
+    assert_eq!(error.status.code(), Some(2));
+    assert!(error.stdout.is_empty());
+    let error = cli(&["diff", path_text(&before), path_text(&missing)]);
+    assert_eq!(error.status.code(), Some(1));
 }
 
 #[test]
