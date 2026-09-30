@@ -374,9 +374,10 @@ slide a named, first, last, next, or previous slide jump opens, or `None`, and
 assigning a `Slide` of the same presentation goes through
 `set_shape_target_slide`, while `None` removes the click action. A slide of
 another presentation raises `ValueError`. A group accepts a click action, where
-python-pptx raises `TypeError`, because PowerPoint honours it. `Slide` handles
-compare equal when they name the same slide at the same revision, so
-`target_slide == prs.slides[2]` holds. No click action write advances the
+python-pptx raises `TypeError`, because PowerPoint honours it. Two current
+`Slide` handles compare equal when they name the same slide, so
+`target_slide == prs.slides[2]` holds, and like python-pptx a `Slide` is not
+hashable. No click action write advances the
 revision.
 
 Text formatting follows python-pptx names and value types. Every property

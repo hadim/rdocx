@@ -2579,10 +2579,10 @@ impl Presentation {
     /// nothing and removes its relationship, as PowerPoint does when the
     /// target slide is deleted.
     ///
-    /// Shape click actions and text run hyperlinks alike keep an
-    /// `a:hlinkClick` with an empty `r:id` and the action
-    /// `ppaction://noaction`, so no relationship is left pointing at a part
-    /// that no longer exists.
+    /// Every `a:hlinkClick`, `a:hlinkHover`, or `a:hlinkMouseOver` that
+    /// named it, on a shape or a text run, keeps an empty `r:id` and the
+    /// action `ppaction://noaction`. A released relationship goes once no
+    /// `r:` attribute of the slide names it any more.
     fn release_slide_jumps_to(&mut self, slide_part: &str) -> Result<()> {
         for record in &mut self.slides {
             let Some(relationships) = self.package.get_part_rels_mut(&record.part_name) else {
@@ -2601,15 +2601,19 @@ impl Presentation {
             if released.is_empty() || record.part_name == slide_part {
                 continue;
             }
-            relationships
-                .items
-                .retain(|relationship| !released.contains(&relationship.id));
             let malformed = |error: OxmlError| Error::MalformedPart {
                 part_name: record.part_name.clone(),
                 message: error.to_string(),
             };
             let xml = record.slide.to_xml().map_err(malformed)?;
             let xml = release_hyperlinks(&xml, &released).map_err(malformed)?;
+            let referenced: HashSet<String> = relationship_ids(&xml)
+                .map_err(malformed)?
+                .into_iter()
+                .collect();
+            relationships.items.retain(|relationship| {
+                !released.contains(&relationship.id) || referenced.contains(&relationship.id)
+            });
             record.slide = CT_Slide::from_xml(&xml).map_err(malformed)?;
         }
         Ok(())
