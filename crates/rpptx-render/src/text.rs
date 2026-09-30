@@ -702,20 +702,22 @@ fn line_text(line: &LayoutLine) -> String {
     spans.into_iter().map(|(_, text)| text).collect()
 }
 
-/// Returns a line's width without the rich text whitespace at either end,
-/// which may hang past the frame when the line wraps.
-fn ink_width(line: &LayoutLine) -> f64 {
-    let whitespace = |item: &&LineItem| {
-        matches!(item, LineItem::MultilingualText(span)
-            if span.text().chars().all(char::is_whitespace))
-    };
-    let leading = line
-        .items
+/// Returns the widths of the spaces hanging off a line's visual left and
+/// right, which alignment and the fit test leave out.
+fn hanging_widths(line: &LayoutLine) -> (f64, f64) {
+    let (start, end) = line.hanging_space_counts();
+    let left = line.items[..start].iter().map(LineItem::width).sum();
+    let right = line.items[line.items.len() - end..]
         .iter()
-        .take_while(whitespace)
-        .map(LineItem::width);
-    let trailing = line.items.iter().rev().take_while(whitespace);
-    (line.width - leading.chain(trailing.map(LineItem::width)).sum::<f64>()).max(0.0)
+        .map(LineItem::width)
+        .sum();
+    (left, right)
+}
+
+/// Returns a line's width without the spaces hanging off either side.
+fn ink_width(line: &LayoutLine) -> f64 {
+    let (left, right) = hanging_widths(line);
+    line.width - left - right
 }
 
 /// Returns the largest scaled run size on a line, ignoring its marker.
@@ -945,7 +947,8 @@ fn paragraph_spacing(spacing: Option<&ResolvedTextSpacing>, font_size: f64) -> f
     }
 }
 
-/// Emits one line and returns its start x and the width its items occupy.
+/// Emits one line and returns its start x and the width its items occupy,
+/// hanging spaces included.
 fn emit_line_items(
     line: &LayoutLine,
     alignment: ParagraphAlignment,
@@ -954,7 +957,8 @@ fn emit_line_items(
     elements: &mut Vec<PositionedElement>,
 ) -> (f64, f64) {
     let element_start = elements.len();
-    let remaining = line.available_width - line.width;
+    let (hanging_left, _) = hanging_widths(line);
+    let remaining = line.available_width - ink_width(line);
     let distribute = match alignment {
         ParagraphAlignment::Justified if !line.is_last => {
             let gaps = word_gap_count(&line.items);
@@ -971,7 +975,8 @@ fn emit_line_items(
         ParagraphAlignment::Right => remaining,
         _ => 0.0,
     };
-    let mut x = content_x + line.indent_left + alignment_offset;
+    // Spaces hanging off the visual left sit outside the aligned ink.
+    let mut x = content_x + line.indent_left + alignment_offset - hanging_left;
     let start_x = x;
     let mut distributed_gaps = distribute
         .filter(|(_, every_glyph)| *every_glyph)
@@ -2243,6 +2248,86 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["still in service, ", "or later"]
         );
+    }
+
+    #[test]
+    fn spaces_hang_off_the_visual_end_of_directed_lines() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let cases = [
+            (
+                "שלום עולם זה טקסט ארוך בעברית שנשבר לכמה שורות בתוך התיבה",
+                ParagraphAlignment::Left,
+                oxml_layout::TextDirection::RightToLeft,
+            ),
+            (
+                "Repainted in 3 weeks while still in service, or re-coated next spring",
+                ParagraphAlignment::Right,
+                oxml_layout::TextDirection::LeftToRight,
+            ),
+        ];
+        for (text, alignment, direction) in cases {
+            for width in (100..240).step_by(2) {
+                let body = ResolvedTextBody {
+                    paragraphs: vec![ResolvedParagraph {
+                        alignment,
+                        runs: vec![ResolvedTextRun::Text {
+                            text: text.to_owned(),
+                            style: ResolvedRunStyle {
+                                font_size: Some(14.0),
+                                latin_typeface: Some("Arial".to_owned()),
+                                ..ResolvedRunStyle::default()
+                            },
+                        }],
+                        ..ResolvedParagraph::default()
+                    }],
+                    ..text_body(TextInsets::default())
+                };
+                let content = test_content_box(f64::from(width));
+                let stacked = stack_text_for_page_with_directions(
+                    &mut fonts,
+                    content,
+                    &body,
+                    1,
+                    &[direction],
+                )
+                .expect("stack directed paragraph");
+                let ink = stacked
+                    .elements
+                    .iter()
+                    .filter_map(|element| match element {
+                        PositionedElement::MultilingualText(run)
+                            if run.logical_text.trim() != "" =>
+                        {
+                            Some((
+                                run.origin.y,
+                                run.origin.x,
+                                run.origin.x + run.x_advances.iter().sum::<f64>(),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let last_baseline = ink.iter().map(|(y, _, _)| *y).fold(f64::MIN, f64::max);
+                for (baseline, left, right) in &ink {
+                    assert!(
+                        *left >= -0.01 && *right <= content.width + 0.01,
+                        "{width}: ink {left}..{right} leaves the frame"
+                    );
+                    // Right-aligned wrapped lines end flush, as in PowerPoint.
+                    if alignment == ParagraphAlignment::Right && *baseline < last_baseline {
+                        let line_right = ink
+                            .iter()
+                            .filter(|(y, _, _)| y == baseline)
+                            .map(|(_, _, right)| *right)
+                            .fold(f64::MIN, f64::max);
+                        assert!(
+                            (line_right - content.width).abs() < 0.01,
+                            "{width}: {line_right}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -497,9 +497,11 @@ not break where they meet, and a word boundary before a comma, a space, or the
 hyphen of a compound is not one. ICU word boundaries add opportunities inside
 Thai and other complex-context scripts, shared punctuation rules protect CJK
 line edges, and language-specific Liang dictionaries supply conditional hyphens.
-Whitespace before an opportunity hangs past the end of a wrapped line instead of
-wrapping it, and does not count against the width the line must fit. Fitting
-never divides a shaping cluster. After fitting, UAX 9 reorders each completed
+Spaces before an opportunity, U+0020 only as UAX 14 classes them, hang past
+the end of a line instead of wrapping it: on its visual right in left-to-right
+text and on its visual left in right-to-left text. They do not count against
+the width the line must fit, and Word and PowerPoint alignment and
+justification leave them out. Fitting never divides a shaping cluster. After fitting, UAX 9 reorders each completed
 line for painting without rewriting its logical text or source spans.
 PowerPoint transports resolved paragraph direction beside the established
 resolved-slide model. Its facade supplies that sidecar to the renderer, so an

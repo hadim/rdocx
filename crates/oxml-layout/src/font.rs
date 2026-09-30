@@ -1492,15 +1492,11 @@ impl FontManager {
         let grapheme_boundaries = icu_segmenter::GraphemeClusterSegmenter::new()
             .segment_str(&segment.text)
             .collect::<Vec<_>>();
-        // Whitespace before a break opportunity gets a span of its own, so a
-        // line can let it hang past its end.
+        // Spaces before a break opportunity get a span of their own, so a
+        // line can let them hang past its end.
         let hanging_starts = break_offsets
             .iter()
-            .map(|offset| {
-                segment.text[..*offset]
-                    .trim_end_matches(char::is_whitespace)
-                    .len()
-            })
+            .map(|offset| segment.text[..*offset].trim_end_matches(' ').len())
             .collect::<HashSet<_>>();
 
         let mut logical_ranges = Vec::<(usize, usize, TextScript, unicode_bidi::Level)>::new();

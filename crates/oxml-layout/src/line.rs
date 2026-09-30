@@ -240,8 +240,8 @@ pub struct LayoutLine {
     pub items: Vec<LineItem>,
     /// Total content width of the line.
     ///
-    /// Rich text whitespace that ends a wrapped line hangs past its end, so it
-    /// can take this past `available_width`.
+    /// Rich text spaces that end a line hang past its end, so they can take
+    /// this past `available_width`. See [`LayoutLine::hanging_space_counts`].
     pub width: f64,
     /// Maximum ascent on this line (above baseline).
     pub ascent: f64,
@@ -267,6 +267,44 @@ impl LayoutLine {
         let leading = self.height - self.ascent - self.descent;
         self.ascent + if leading >= 0.0 { leading / 2.0 } else { 0.0 }
     }
+
+    /// How many items at the visual start and at the visual end of the line
+    /// are rich text spaces that end it logically.
+    ///
+    /// Those spaces hang past the line end, which is its visual right in
+    /// left-to-right text and its visual left in right-to-left text. Alignment
+    /// leaves them out of the width, and they may pass the available width.
+    pub fn hanging_space_counts(&self) -> (usize, usize) {
+        let last_content = self
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(span) if !is_space_run(span.text()) => {
+                    Some(span.logical_index())
+                }
+                _ => None,
+            })
+            .max();
+        let hangs = |item: &LineItem| match (item, last_content) {
+            (LineItem::MultilingualText(span), Some(last)) => {
+                is_space_run(span.text()) && span.logical_index() > last
+            }
+            _ => false,
+        };
+        let start = self.items.iter().take_while(|item| hangs(item)).count();
+        let end = self.items[start..]
+            .iter()
+            .rev()
+            .take_while(|item| hangs(item))
+            .count();
+        (start, end)
+    }
+}
+
+/// Whether text is only U+0020 spaces, the one character UAX 14 classes SP,
+/// which is what hangs at a line end.
+fn is_space_run(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|character| character == ' ')
 }
 
 /// Parameters for line breaking.
@@ -389,7 +427,7 @@ pub fn break_into_lines(
 
                 if params.wrap
                     && !current_items.is_empty()
-                    && current_width + seg_width - hanging_whitespace_width(&seg_items)
+                    && current_width + seg_width - hanging_space_width(&seg_items)
                         > line_avail + 0.01
                 {
                     // Finish current line
@@ -1234,19 +1272,17 @@ fn split_text_at_break_opportunities(seg: &TextSegment) -> Vec<TextBreakInfo> {
     breaks
 }
 
-/// Width of the whitespace that ends a group of rich text items.
+/// Width of the spaces that end a group of rich text items.
 ///
-/// It hangs past the end of a line instead of wrapping the group, as Word and
-/// PowerPoint let it. Only rich text hangs: the plain path keeps counting a
+/// They hang past the end of a line instead of wrapping the group, as Word and
+/// PowerPoint let them. Only rich text hangs: the plain path keeps counting a
 /// trailing space.
-fn hanging_whitespace_width(items: &[InlineItem]) -> f64 {
+fn hanging_space_width(items: &[InlineItem]) -> f64 {
     items
         .iter()
         .rev()
         .map_while(|item| match item {
-            InlineItem::MultilingualText(segment)
-                if segment.text().chars().all(char::is_whitespace) =>
-            {
+            InlineItem::MultilingualText(segment) if is_space_run(segment.text()) => {
                 Some(segment.width())
             }
             _ => None,
@@ -2231,6 +2267,49 @@ mod tests {
             panic!("the second line starts with rich text");
         };
         assert_eq!(next.text(), "or");
+    }
+
+    #[test]
+    fn hanging_spaces_sit_at_the_visual_end_of_their_direction() {
+        let mut fm = deterministic_font_manager();
+        let cases = [
+            ("שלום עולם זה טקסט ארוך", TextDirection::RightToLeft, (1, 0)),
+            (
+                "one two three four five",
+                TextDirection::LeftToRight,
+                (0, 1),
+            ),
+            // An ideographic space is not UAX 14 SP, so it does not hang.
+            (
+                "one\u{3000}two\u{3000}three",
+                TextDirection::LeftToRight,
+                (0, 0),
+            ),
+        ];
+        for (text, direction, wrapped) in cases {
+            let segment = shaped_text_segment(&mut fm, text, 0.0);
+            let items = fm
+                .shape_multilingual_paragraph(vec![(segment, None)], direction, false)
+                .unwrap()
+                .into_iter()
+                .map(InlineItem::MultilingualText)
+                .collect::<Vec<_>>();
+            let lines = break_multilingual_into_lines(
+                &items,
+                &LineBreakParams {
+                    available_width: 150.0,
+                    ..Default::default()
+                },
+                &fm,
+                direction,
+            )
+            .unwrap();
+            assert!(lines.len() > 1, "{text}");
+            for line in &lines[..lines.len() - 1] {
+                assert_eq!(line.hanging_space_counts(), wrapped, "{text}");
+            }
+            assert_eq!(lines.last().unwrap().hanging_space_counts(), (0, 0));
+        }
     }
 
     #[test]
