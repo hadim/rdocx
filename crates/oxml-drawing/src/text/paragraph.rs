@@ -1569,6 +1569,39 @@ impl CT_TextParagraph {
         run
     }
 
+    /// Replaces ordered text choices as [`Self::set_text`] does, then splits
+    /// the one run at each vertical tab by an `a:br` with the run's
+    /// formatting, as python-pptx does. A later run that would be empty is
+    /// left out, as python-pptx leaves it out, and content preserved after the
+    /// old runs stays after the new ones.
+    pub fn set_text_with_line_breaks(&mut self, text: &str) {
+        self.set_text(text);
+        let [TextRun::Run(first)] = self.runs.as_mut_slice() else {
+            return;
+        };
+        if !first.text.value.contains('\u{b}') {
+            return;
+        }
+        let text = std::mem::take(&mut first.text.value);
+        let mut lines = text.split('\u{b}');
+        first.set_text(lines.next().unwrap_or_default());
+        let properties = first.properties.clone();
+        for line in lines {
+            self.raw_children.shift_boundaries_from(2);
+            self.runs.push(TextRun::Break(CT_TextLineBreak {
+                properties: properties.clone(),
+                ..CT_TextLineBreak::default()
+            }));
+            if !line.is_empty() {
+                self.raw_children.shift_boundaries_from(2);
+                self.runs.push(TextRun::Run(CT_RegularTextRun {
+                    properties: properties.clone(),
+                    ..CT_RegularTextRun::new(line)
+                }));
+            }
+        }
+    }
+
     /// Parses one complete `a:p` element with any prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         parse_complete(xml, b"p", Self::from_element, |_| Ok(Self::default()))

@@ -318,6 +318,7 @@ fn layout_presentation_with_font_manager_inner(
                     .and_then(|directions| directions.get(index))
                     .map(Vec::as_slice),
             )
+            .map_err(|error| text_layout_context(error, &format!("slide {}, ", index + 1)))
             .map(Arc::new)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -334,6 +335,17 @@ fn layout_presentation_with_font_manager_inner(
     );
     layout.diagnostics = diagnostics;
     Ok(layout)
+}
+
+/// Names where a text layout failure happened, outermost first, so a deck
+/// that cannot be laid out points at the slide and shape to fix.
+fn text_layout_context(error: RenderInputError, prefix: &str) -> RenderInputError {
+    match error {
+        RenderInputError::TextLayout { detail } => RenderInputError::TextLayout {
+            detail: format!("{prefix}{detail}"),
+        },
+        error => error,
+    }
 }
 
 /// Lower one zero-based resolved slide to a fixed-size page.
@@ -510,6 +522,12 @@ pub(crate) fn layout_resolved_slide_with_fonts_text_directions_and_states(
                         .and_then(|directions| directions.get(shape_index))
                         .map(Vec::as_slice),
                 )
+                .map_err(|error| {
+                    text_layout_context(
+                        error,
+                        &format!("shape {} in draw order: ", shape_index + 1),
+                    )
+                })
                 .map(|mut element| {
                     let Some(state) = state else {
                         return element;

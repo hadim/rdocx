@@ -369,15 +369,24 @@ TextFrame::add_paragraph(&mut self) -> TextParagraphMut<'_>;
 TextParagraphMut::add_run(&mut self, text: &str) -> TextRunMut<'_>;
 ```
 
-`TextFrame` also reads and replaces whole-frame text. Paragraph handles replace
-text, paragraph properties, and bullets. Replaced text keeps the formatting of
-the paragraph's first regular run. A paragraph without one formats the new run
-with its `a:endParaRPr`, without hyperlinks, as PowerPoint formats text typed
-into an empty paragraph. Run handles replace text, character
-properties, and the direct Latin font. The typed formatting values are
-re-exported by `rpptx`. Structural append returns the newly inserted borrowed
-item, and Rust's borrow rules prevent a live nested handle from being
-invalidated by another structural mutation.
+`TextFrame` also reads and replaces whole-frame text. Every caller of the
+shared `CT_TextBody` setter gets one paragraph per line feed, as that type
+describes: frame, shape, table cell, notes, comment and SmartArt node text,
+chart axis titles, and the text the ODP and PDF importers write. Frame and
+shape text read an `a:br` back as a line feed where python-pptx reads a
+vertical tab, so assigning a frame its own text turns each soft break into a
+paragraph. Reading a vertical tab would change the plain text every other
+caller of `CT_TextBody::plain_text` reads, so it is left for a follow-up. The ODP importer writes a
+`text:line-break` as a vertical tab, so it stays an `a:br`.
+
+Paragraph handles replace text, paragraph properties, and bullets. Replaced
+text keeps the formatting of the paragraph's first regular run. A paragraph
+without one formats the new run with its `a:endParaRPr`, without hyperlinks, as
+PowerPoint formats text typed into an empty paragraph. Run handles replace
+text, character properties, and the direct Latin font. The typed formatting
+values are re-exported by `rpptx`. Structural append returns the newly
+inserted borrowed item, and Rust's borrow rules prevent a live nested handle
+from being invalidated by another structural mutation.
 
 `TextFrameRef` reads the direct body insets, vertical anchor, and wrap choice,
 and `TextFrame` replaces them with the autofit choice:
