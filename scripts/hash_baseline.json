@@ -8,8 +8,8 @@
     "contract:word/numbering.xml": "01d6cb0aa0ecc30b3d2a77c4df062b1c727d70ff9cbc0824910f049daf878a26",
     "contract:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4",
     "feature_showcase:page1.png": "6e88403fe63a789fd2ce6803029f67fcd45e00f2d13b9c13d5201a99eda0ada9",
-    "feature_showcase:pdf/bytes": "bf8a0c5bbd4ba70aba19b39e1a19bc1c78d19a12ac6f6324964628df5f78d410",
-    "feature_showcase:pdf/pages": "562b6508a015c227d598b408dfafaf2056cbba4e617e323b20ee39168ff64224",
+    "feature_showcase:pdf/bytes": "6b453f754435adc82adad8426ab7f7ae6eb7c75c2fdc699d2e10684f93c3cb61",
+    "feature_showcase:pdf/pages": "3c65b4a4bb3aef33535a19be8dba9f47c463bad45c39b26138687ccf775b33cf",
     "feature_showcase:pdf/resources": "e624cef80cac1f99ba398b0b0f8fc7986c0389cf12b6599f2a9bb187749bb797",
     "feature_showcase:word/document.xml": "7bfdbc2740871b1b38314dc95b353237d18e49b56ea64fa7a4c6499e4d21c8d3",
     "feature_showcase:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
@@ -50,5 +50,5 @@
     "report:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
     "report:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4"
   },
-  "reason": "Paragraph spacing keeps the larger of space after and space before and horizontal table borders take their width between rows, which moves the rendered PDF and PNG of six samples and no OOXML part"
+  "reason": "A paragraph section break now governs the paragraphs before it, so the closing line of feature_showcase centres on its portrait page instead of the preceding landscape measure"
 }
