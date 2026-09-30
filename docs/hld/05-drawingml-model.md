@@ -74,7 +74,9 @@ producer drawing payload while preventing destination identity collisions.
 parent is part of the contract. Emitting `a:ln` before `a:solidFill` inside
 `a:spPr` produces a repair prompt, not a warning. Every writer in this crate
 emits in schema order, and `OrderedRawChildren` keeps unmodelled siblings in
-their original slots rather than appending them at the end.
+their original slots rather than appending them at the end. An `a:extLst` read
+inside `a:ln` is held in the last slot, so a head or tail end added later is
+still written before it.
 
 **`a:t` whitespace.** Leading and trailing whitespace is significant and needs
 `xml:space="preserve"`. Cheap to guard, and infuriating to diagnose later.
