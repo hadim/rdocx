@@ -2484,6 +2484,244 @@ mod comment_on_text {
     }
 }
 
+/// GitHub issue #168: `Paragraph::remove_run` removes one run in place.
+mod remove_run {
+    use rdocx::{Document, RunPosition, RunRange};
+
+    fn from_body(body: &str) -> Document {
+        super::document_with_content_controls(&super::wrap_word_body(body))
+    }
+
+    /// The serialized body children, without the final section properties
+    /// and the indentation between elements.
+    fn body(document: &mut Document) -> String {
+        let xml = super::document_xml(document);
+        let start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+        let end = xml
+            .find("<w:sectPr")
+            .unwrap_or(xml.find("</w:body>").unwrap());
+        xml[start..end].lines().map(str::trim).collect()
+    }
+
+    fn remove(document: &mut Document, paragraph: usize, run: usize) -> rdocx::Result<()> {
+        document.paragraph_mut(paragraph).unwrap().remove_run(run)
+    }
+
+    fn texts(document: &Document, paragraph: usize) -> Vec<String> {
+        document
+            .paragraph(paragraph)
+            .unwrap()
+            .runs()
+            .map(|run| run.text())
+            .collect()
+    }
+
+    #[test]
+    fn remove_run_keeps_the_markers_around_the_run() {
+        let mut document = from_body(concat!(
+            r#"<w:p><w:bookmarkStart w:id="1" w:name="kept"/>"#,
+            r#"<w:permStart w:id="5" w:edGrp="everyone"/><w:r><w:t>A</w:t></w:r>"#,
+            r#"<w:r><w:t>B</w:t></w:r><w:permEnd w:id="5"/><w:bookmarkEnd w:id="1"/>"#,
+            r#"<w:r><w:t>C</w:t></w:r></w:p>"#,
+        ));
+        remove(&mut document, 0, 1).unwrap();
+        assert_eq!(
+            body(&mut document),
+            concat!(
+                r#"<w:p><w:bookmarkStart w:id="1" w:name="kept"/>"#,
+                r#"<w:permStart w:id="5" w:edGrp="everyone"/><w:r><w:t>A</w:t></w:r>"#,
+                r#"<w:permEnd w:id="5"/><w:bookmarkEnd w:id="1"/><w:r><w:t>C</w:t></w:r></w:p>"#,
+            )
+        );
+        remove(&mut document, 0, 0).unwrap();
+        assert_eq!(
+            body(&mut document),
+            concat!(
+                r#"<w:p><w:bookmarkStart w:id="1" w:name="kept"/>"#,
+                r#"<w:permStart w:id="5" w:edGrp="everyone"/><w:permEnd w:id="5"/>"#,
+                r#"<w:bookmarkEnd w:id="1"/><w:r><w:t>C</w:t></w:r></w:p>"#,
+            )
+        );
+
+        // A comment over the removed run keeps its range and its reference.
+        let mut document = Document::new();
+        let mut paragraph = document.add_paragraph("");
+        for text in ["Keep ", "drop", " this."] {
+            paragraph.add_run(text);
+        }
+        let position = |run_index| RunPosition {
+            body_index: 0,
+            run_index,
+        };
+        let range = |start, end| RunRange {
+            start: position(start),
+            end: position(end),
+        };
+        document
+            .add_comment(range(1, 2), "Ada", None, "On the dropped run")
+            .unwrap();
+        document.add_bookmark("dropped", range(1, 2)).unwrap();
+        assert_eq!(texts(&document, 0), ["Keep ", "drop", "", " this."]);
+        remove(&mut document, 0, 1).unwrap();
+        assert_eq!(texts(&document, 0), ["Keep ", "", " this."]);
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraph(0).unwrap().text(), "Keep  this.");
+        assert_eq!(reopened.comments()[0].text(), "On the dropped run");
+        let bookmarks = reopened.bookmarks();
+        assert_eq!(bookmarks[0].name(), Some("dropped"));
+        assert_eq!(bookmarks[0].issue(), None);
+        assert_eq!(bookmarks[0].range(), Some(range(1, 1)));
+        let xml = body(&mut document);
+        for marker in ["commentRangeStart", "commentRangeEnd", "commentReference"] {
+            assert!(xml.contains(marker), "{marker} missing from {xml}");
+        }
+
+        // The comment reference run belongs to the comment.
+        let before = document.to_bytes().unwrap();
+        let error = remove(&mut document, 0, 1).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "run 1 cannot be removed: it holds the reference of comment 0, which removing the comment removes"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn remove_run_removes_inside_wrappers_and_drops_the_emptied_ones() {
+        let mut document = from_body(concat!(
+            r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
+            r#"<w:ins w:id="1" w:author="Ada"><w:r><w:t>i1</w:t></w:r><w:r><w:t>i2</w:t></w:r></w:ins>"#,
+            r#"<w:sdt><w:sdtContent><w:r><w:t>c1</w:t></w:r><w:r><w:t>c2</w:t></w:r></w:sdtContent></w:sdt>"#,
+            r#"<w:hyperlink w:anchor="a"><w:r><w:t>h1</w:t></w:r><w:r><w:t>h2</w:t></w:r></w:hyperlink>"#,
+            r#"<w:r><w:t>y</w:t></w:r></w:p>"#,
+        ));
+        assert_eq!(
+            texts(&document, 0),
+            ["x", "i1", "i2", "c1", "c2", "h1", "h2", "y"]
+        );
+        remove(&mut document, 0, 1).unwrap();
+        remove(&mut document, 0, 2).unwrap();
+        remove(&mut document, 0, 3).unwrap();
+        assert_eq!(
+            body(&mut document),
+            concat!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
+                r#"<w:ins w:id="1" w:author="Ada"><w:r><w:t>i2</w:t></w:r></w:ins>"#,
+                r#"<w:sdt><w:sdtContent><w:r><w:t>c2</w:t></w:r></w:sdtContent></w:sdt>"#,
+                r#"<w:hyperlink w:anchor="a"><w:r><w:t>h2</w:t></w:r></w:hyperlink>"#,
+                r#"<w:r><w:t>y</w:t></w:r></w:p>"#,
+            )
+        );
+        for _ in 0..3 {
+            remove(&mut document, 0, 1).unwrap();
+        }
+        assert_eq!(
+            body(&mut document),
+            r#"<w:p><w:r><w:t>x</w:t></w:r><w:r><w:t>y</w:t></w:r></w:p>"#
+        );
+
+        // A tracked insertion inside a hyperlink or a control goes with them,
+        // and a wrapper that still holds a marker stays.
+        let mut document = from_body(concat!(
+            r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
+            r#"<w:hyperlink w:anchor="a"><w:ins w:id="2" w:author="Ada"><w:r><w:t>h</w:t></w:r></w:ins></w:hyperlink>"#,
+            r#"<w:bookmarkStart w:id="4" w:name="after"/>"#,
+            r#"<w:sdt><w:sdtContent><w:ins w:id="3" w:author="Ada"><w:r><w:t>s</w:t></w:r></w:ins></w:sdtContent></w:sdt>"#,
+            r#"<w:bookmarkEnd w:id="4"/>"#,
+            r#"<w:sdt><w:sdtContent><w:bookmarkStart w:id="5" w:name="in"/><w:r><w:t>k</w:t></w:r><w:bookmarkEnd w:id="5"/></w:sdtContent></w:sdt>"#,
+            r#"<w:r><w:t>y</w:t></w:r></w:p>"#,
+        ));
+        assert_eq!(texts(&document, 0), ["x", "h", "s", "k", "y"]);
+        for _ in 0..3 {
+            remove(&mut document, 0, 1).unwrap();
+        }
+        assert_eq!(
+            body(&mut document),
+            concat!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r><w:bookmarkStart w:id="4" w:name="after"/>"#,
+                r#"<w:bookmarkEnd w:id="4"/><w:sdt><w:sdtContent>"#,
+                r#"<w:bookmarkStart w:id="5" w:name="in"/><w:bookmarkEnd w:id="5"/>"#,
+                r#"</w:sdtContent></w:sdt><w:r><w:t>y</w:t></w:r></w:p>"#,
+            )
+        );
+        assert_eq!(
+            Document::from_bytes(&document.to_bytes().unwrap())
+                .unwrap()
+                .paragraph(0)
+                .unwrap()
+                .text(),
+            "xy"
+        );
+    }
+
+    #[test]
+    fn remove_run_refuses_part_of_a_field_or_of_a_move_and_removes_a_whole_field() {
+        let mut document = from_body(concat!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> TOC \o "1-3" </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Entry</w:t></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t>Tail</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+            r#"<w:p><w:moveToRangeStart w:id="3" w:author="Ada" w:name="move1"/>"#,
+            r#"<w:moveTo w:id="4" w:author="Ada"><w:r><w:t>moved</w:t></w:r></w:moveTo>"#,
+            r#"<w:moveToRangeEnd w:id="3"/></w:p>"#,
+            r#"<w:p><w:r><w:t>a</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+        ));
+        let before = document.to_bytes().unwrap();
+        for (paragraph, run, reason) in [
+            (
+                0,
+                0,
+                "part of a complex field whose other parts are in other runs",
+            ),
+            (
+                0,
+                1,
+                "part of a complex field whose other parts are in other runs",
+            ),
+            (
+                0,
+                2,
+                "part of a complex field whose other parts are in other runs",
+            ),
+            (
+                1,
+                1,
+                "part of a complex field whose other parts are in other runs",
+            ),
+            (
+                2,
+                0,
+                "part of a tracked move destination, whose source would no longer match it",
+            ),
+            (
+                0,
+                4,
+                "run index 4 is out of range for a paragraph with 4 runs",
+            ),
+        ] {
+            let error = remove(&mut document, paragraph, run).unwrap_err();
+            assert!(error.to_string().contains(reason), "{error}");
+        }
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        // The cached result of a field can go, and a field whose parts are
+        // all in one paragraph is one run, removed whole.
+        remove(&mut document, 0, 3).unwrap();
+        assert_eq!(texts(&document, 0), ["", "", ""]);
+        assert_eq!(texts(&document, 3).len(), 2);
+        remove(&mut document, 3, 1).unwrap();
+        let xml = body(&mut document);
+        assert!(
+            xml.ends_with(r#"<w:p><w:r><w:t>a</w:t></w:r></w:p>"#),
+            "{xml}"
+        );
+        assert!(xml.contains(r#"<w:instrText xml:space="preserve"> TOC \o "1-3" </w:instrText>"#));
+    }
+}
+
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
     let mut document = f255_story_document();
     document.add_picture(b"body image", "body.png", Length::pt(1.0), Length::pt(1.0));
