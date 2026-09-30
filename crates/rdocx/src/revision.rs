@@ -528,26 +528,40 @@ impl<'a> XmlTree<'a> {
                 && self.paragraph_mark_removes(child, state)
             {
                 let mut paragraphs = vec![child];
+                // A table whose every row is removed is crossed, so the
+                // paragraphs on either side of it merge. Rendering it resolves
+                // its row markers and yields no bytes.
+                let mut siblings = vec![child];
                 let mut next_index = child_index + 1;
                 loop {
                     let next = element.children.get(next_index).copied().ok_or_else(|| {
                         Error::Other("cannot remove the final paragraph mark".to_owned())
                     })?;
+                    siblings.push(next);
+                    next_index += 1;
+                    if self.elements[next].word
+                        && self.elements[next].local == "tbl"
+                        && self.owned_rows_all_remove(next, state)
+                    {
+                        continue;
+                    }
                     if !self.elements[next].word || self.elements[next].local != "p" {
                         return Err(Error::Other(
                             "paragraph mark removal requires an adjacent paragraph".to_owned(),
                         ));
                     }
                     paragraphs.push(next);
-                    next_index += 1;
                     if !self.paragraph_mark_removes(next, state) {
                         break;
                     }
                 }
-                for pair in paragraphs.windows(2) {
+                for pair in siblings.windows(2) {
                     output.extend_from_slice(
                         &self.source[self.elements[pair[0]].end..self.elements[pair[1]].start],
                     );
+                    if self.elements[pair[1]].local == "tbl" {
+                        self.render(pair[1], state, false)?;
+                    }
                 }
                 output.extend_from_slice(&self.render_merged_paragraphs(&paragraphs, state)?);
                 cursor = self.elements[*paragraphs.last().expect("paragraph chain exists")].end;

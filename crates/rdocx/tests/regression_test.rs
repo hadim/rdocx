@@ -38929,3 +38929,145 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert!(compared.revisions().is_empty());
 }
+
+fn issue_255_document(spec: &[&str]) -> Document {
+    let mut document = Document::new();
+    for item in spec {
+        if *item == "T" {
+            document
+                .add_table(1, 1)
+                .cell(0, 0)
+                .expect("one-cell table")
+                .set_text("cell");
+        } else {
+            document.add_paragraph(item);
+        }
+    }
+    document
+}
+
+fn issue_255_body(document: &Document) -> Vec<String> {
+    document
+        .body_items()
+        .map(|item| match item {
+            BodyItemRef::Paragraph(paragraph) => paragraph.text(),
+            BodyItemRef::Table(table) => {
+                assert_eq!(table.cell(0, 0).expect("one-cell table").text(), "cell");
+                "T".to_owned()
+            }
+            _ => panic!("unexpected body item"),
+        })
+        .collect()
+}
+
+#[test]
+fn issue_255_table_added_or_removed_with_final_paragraph_compares() {
+    let pairs: [(&[&str], &[&str]); 7] = [
+        (&["a"], &["a", "T", ""]),
+        (&[""], &["", "T", ""]),
+        (&["a", "T", ""], &["a", "T", "", "T", ""]),
+        (&["a"], &["a", "T", "b"]),
+        (&["a", "T", "b"], &["a"]),
+        (&["a", "b"], &["a", "T", "b"]),
+        (&["a", "T", ""], &["a", "b", "T", ""]),
+    ];
+    for granularity in [
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Run,
+    ] {
+        for (original, edited) in pairs {
+            let label = format!("{granularity:?} {original:?} -> {edited:?}");
+            let mut compared = issue_255_document(original);
+            compared
+                .compare_with_options(
+                    &issue_255_document(edited),
+                    "Reviewer",
+                    "2026-09-30T12:00:00Z",
+                    &rdocx::ComparisonOptions {
+                        granularity,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let redline = compared.to_bytes().expect("save redline");
+            for (accept, expected) in [(true, edited), (false, original)] {
+                let mut resolved = Document::from_bytes(&redline).expect("reopen redline");
+                if accept {
+                    resolved.accept_all().expect("accept redline");
+                } else {
+                    resolved.reject_all().expect("reject redline");
+                }
+                let resolved = Document::from_bytes(&resolved.to_bytes().unwrap())
+                    .expect("reopen resolved redline");
+                assert_eq!(
+                    issue_255_body(&resolved),
+                    expected
+                        .iter()
+                        .map(|item| item.to_string())
+                        .collect::<Vec<_>>(),
+                    "{label} accept={accept}"
+                );
+                assert!(resolved.revisions().is_empty(), "{label} accept={accept}");
+            }
+        }
+    }
+}
+
+#[test]
+fn issue_255_table_added_or_removed_with_final_control_paragraph_compares() {
+    let document = |spec: &[&str]| {
+        let content = spec
+            .iter()
+            .map(|item| match *item {
+                "T" => r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#.to_owned(),
+                "" => "<w:p/>".to_owned(),
+                text => format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"),
+            })
+            .collect::<String>();
+        document_with_content_controls(&wrap_word_body(&format!(
+            r#"<w:sdt><w:sdtPr><w:id w:val="7"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt><w:p/>"#
+        )))
+    };
+    let pairs: [(&[&str], &[&str]); 5] = [
+        (&["a"], &["a", "T", ""]),
+        (&[""], &["", "T", ""]),
+        (&["a", "T", ""], &["a", "T", "", "T", ""]),
+        (&["a"], &["a", "T", "b"]),
+        (&["a", "T", "b"], &["a"]),
+    ];
+    for granularity in [
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Run,
+    ] {
+        for (original, edited) in pairs {
+            let label = format!("{granularity:?} {original:?} -> {edited:?}");
+            let mut compared = document(original);
+            compared
+                .compare_with_options(
+                    &document(edited),
+                    "Reviewer",
+                    "2026-09-30T12:00:00Z",
+                    &rdocx::ComparisonOptions {
+                        granularity,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let redline = compared.to_bytes().expect("save redline");
+            for (accept, expected) in [(true, edited), (false, original)] {
+                let mut resolved = Document::from_bytes(&redline).expect("reopen redline");
+                if accept {
+                    resolved.accept_all().expect("accept redline");
+                } else {
+                    resolved.reject_all().expect("reject redline");
+                }
+                assert!(resolved.revisions().is_empty(), "{label} accept={accept}");
+                assert_eq!(
+                    body_from_document(&mut resolved),
+                    body_from_document(&mut document(expected)),
+                    "{label} accept={accept}"
+                );
+            }
+        }
+    }
+}

@@ -892,9 +892,11 @@ Accepting keeps insertions and move destinations, while rejecting keeps
 deletions and move sources and converts deleted text to ordinary text.
 Property rejection restores exactly one namespace-correct prior property
 value. Contextual markers act on their owning run, paragraph mark, numbering
-property, or row. Resolution stages every affected package part, resolves
-selected descendants before their enclosing subtree, reparses the complete
-candidate package, and commits once only after validation succeeds.
+property, or row. A removed paragraph mark merges with the next paragraph
+across any table whose every row is removed. Resolution stages every affected
+package part, resolves selected descendants before their enclosing subtree,
+reparses the complete candidate package, and commits once only after
+validation succeeds.
 
 The `rdocx` facade also owns deterministic comparison of those same stories. A
 source index assigns stable public story categories and private owner paths to
@@ -940,6 +942,9 @@ story terminator. A self-closing original final paragraph expands around its
 marker without creating a raw sibling. This ownership lets acceptance retain
 every appended paragraph and rejection reconstruct the original without an
 empty terminal residue.
+When an inserted or deleted table stands between that boundary and a final
+inserted or deleted paragraph, the paragraph mark before the table carries the
+boundary, because resolving that change removes every row of the table first.
 Comparison patches only owned source spans, preserves every unowned byte,
 stages the complete package, proves that acceptance matches the edited policy
 projection and rejection matches the original, then commits once.
