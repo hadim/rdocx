@@ -1502,6 +1502,14 @@ page identity. `PageFrame::page_number` is physical and
 `PageFrame::displayed_page_number` drives PAGE substitution plus first, even,
 and default header or footer selection.
 
+**A paragraph's `w:sectPr` ends its section.** It governs that paragraph and
+every block since the previous break, and the body `w:sectPr` governs the
+blocks after the last one (ECMA-376 17.6.17 and 17.6.18).
+`main_story_item_sections` resolves that owner for each main-story block once,
+and the block is broken to that section's measure and grid. Word writes a
+section this way whether the break sits on its own empty paragraph or on the
+last paragraph of content.
+
 Columns reach pagination. `sect_pr_to_geometry` resolves one track list per
 section, either equal-width tracks from `w:num` and `w:space` or explicit
 tracks from the `w:col` list when `w:equalWidth` is `0`. **A section that

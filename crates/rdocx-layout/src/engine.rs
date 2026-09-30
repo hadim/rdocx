@@ -114,6 +114,33 @@ fn main_story_layout_items(document: &CT_Document) -> Vec<MainStoryLayoutItem<'_
     items
 }
 
+/// The section properties that govern each main-story item, index for index.
+///
+/// A paragraph's `w:sectPr` ends its section, so it applies to that paragraph
+/// and to every item since the previous break. The body `w:sectPr` applies to
+/// the items after the last paragraph break (ECMA-376 17.6.17 and 17.6.18).
+fn main_story_item_sections<'a>(
+    items: &[MainStoryLayoutItem<'a>],
+    final_section: &'a CT_SectPr,
+) -> Vec<&'a CT_SectPr> {
+    let mut sections = Vec::with_capacity(items.len());
+    let mut open = 0;
+    for item in items {
+        open += 1;
+        if let MainStoryLayoutItem::Paragraph(paragraph, _) = item
+            && let Some(section) = paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.sect_pr.as_ref())
+        {
+            sections.extend(std::iter::repeat_n(section, open));
+            open = 0;
+        }
+    }
+    sections.extend(std::iter::repeat_n(final_section, open));
+    sections
+}
+
 fn collect_body_control_layout_items<'a>(
     control: &'a CT_Sdt,
     path: &[usize],
@@ -1984,18 +2011,14 @@ impl Engine {
         // Build sections: each section has blocks + geometry + header/footer
         let mut sections: Vec<paginator::SharedSection> = Vec::new();
         let mut current_blocks: Vec<SharedLayoutBlock> = Vec::new();
-        let mut current_sect_pr: Option<CT_SectPr> = None; // Will be set from paragraph sect_pr
+        let items = main_story_layout_items(&input.document);
+        let item_sections = main_story_item_sections(&items, &final_sect_pr);
 
-        for content in main_story_layout_items(&input.document) {
+        for (content, sect_pr_for_layout) in items.into_iter().zip(item_sections) {
             match content {
                 MainStoryLayoutItem::Paragraph(para, path) => {
                     // Check if this paragraph ends a section (has sect_pr)
-                    let para_sect_pr = para.properties.as_ref().and_then(|p| p.sect_pr.clone());
-
-                    let sect_pr_for_layout = para_sect_pr
-                        .as_ref()
-                        .or(current_sect_pr.as_ref())
-                        .unwrap_or(&final_sect_pr);
+                    let para_sect_pr = para.properties.as_ref().and_then(|p| p.sect_pr.as_ref());
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);
 
                     let source = sources.and_then(|sources| {
@@ -2060,14 +2083,14 @@ impl Engine {
                     // If this paragraph has sect_pr, it ends a section
                     if let Some(sect_pr) = para_sect_pr {
                         let geometry = section_page_geometry(
-                            &sect_pr,
+                            sect_pr,
                             input,
                             &mut self.font_manager,
                             &mut diagnostics,
                         );
                         let header_footer = layout_header_footer(
                             self,
-                            &sect_pr,
+                            sect_pr,
                             input,
                             styles,
                             &media,
@@ -2086,16 +2109,14 @@ impl Engine {
                             header_footer,
                             header_footer_semantics,
                             title_pg,
-                            page_number_start: section_page_number_start(&sect_pr),
+                            page_number_start: section_page_number_start(sect_pr),
                         });
-                        current_sect_pr = Some(sect_pr);
                         if let Some(numbering) = input.numbering.as_ref() {
                             num_state.restart_after_section_break(numbering);
                         }
                     }
                 }
                 MainStoryLayoutItem::Table(tbl, path) => {
-                    let sect_pr_for_layout = current_sect_pr.as_ref().unwrap_or(&final_sect_pr);
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);
 
                     let mut table_block = self.layout_body_table(
@@ -10279,6 +10300,49 @@ mod tests {
             projected_paragraph_text(paragraph, RevisionView::Tracked),
             "control inserted deleted tail"
         );
+    }
+
+    #[test]
+    fn a_paragraph_section_governs_the_items_that_precede_it() {
+        // Each paragraph carries its own text, and each section its own page
+        // width, so the resolution reads as pairs. The table and the paragraph
+        // inside the block control take the section they sit in, not the one
+        // the previous break closed.
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+            <w:p><w:r><w:t>a</w:t></w:r></w:p>
+            <w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>
+            <w:p><w:pPr><w:sectPr><w:pgSz w:w="1000" w:h="15840"/></w:sectPr></w:pPr><w:r><w:t>b</w:t></w:r></w:p>
+            <w:sdt><w:sdtContent><w:p><w:r><w:t>c</w:t></w:r></w:p></w:sdtContent></w:sdt>
+            <w:p><w:pPr><w:sectPr><w:pgSz w:w="2000" w:h="15840"/></w:sectPr></w:pPr><w:r><w:t>d</w:t></w:r></w:p>
+            <w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>
+            <w:p><w:r><w:t>e</w:t></w:r></w:p>
+            <w:sectPr><w:pgSz w:w="3000" w:h="15840"/></w:sectPr>
+        </w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("section document parses");
+        let items = main_story_layout_items(&document);
+        let final_section = document.body.sect_pr.as_ref().expect("body section");
+        let resolved = main_story_item_sections(&items, final_section)
+            .into_iter()
+            .zip(&items)
+            .map(|(section, item)| {
+                let label = match item {
+                    MainStoryLayoutItem::Paragraph(paragraph, _) => paragraph.text(),
+                    MainStoryLayoutItem::Table(..) => "table".to_owned(),
+                };
+                (label, section.page_width.map(|width| width.0))
+            })
+            .collect::<Vec<_>>();
+        let expected = [
+            ("a", 1000),
+            ("table", 1000),
+            ("b", 1000),
+            ("c", 2000),
+            ("d", 2000),
+            ("table", 3000),
+            ("e", 3000),
+        ]
+        .map(|(label, width)| (label.to_owned(), Some(width)));
+        assert_eq!(resolved, expected);
     }
 
     #[test]

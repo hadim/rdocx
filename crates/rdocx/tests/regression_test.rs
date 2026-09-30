@@ -38278,6 +38278,56 @@ mod f269_section_page_semantics {
     }
 
     #[test]
+    fn each_paragraph_breaks_to_the_measure_of_the_section_it_ends_in() {
+        // A paragraph `w:sectPr` ends its section, so its geometry governs the
+        // paragraphs before it. Line breaking used the previous section's
+        // measure instead, and the final section's for the first section, so
+        // the 2 inch section broke at 5 inches and ran off its page.
+        use rdocx::SectionBreak;
+        let text = "The old bridge was repainted in three weeks while it stayed open to \
+                    traffic, and the new deck was poured in the spring before the river \
+                    rose again, so the crossing reopened on time and under budget.";
+        let mut document = Document::new();
+        for section in 1..=3 {
+            for paragraph in 1..=2 {
+                let owned = document.add_paragraph(&format!("S{section}P{paragraph}. {text}"));
+                if paragraph == 2 && section < 3 {
+                    owned.section_break(SectionBreak::NextPage);
+                }
+            }
+        }
+        let measures = [144.0, 252.0, 360.0];
+        for (index, measure) in measures.into_iter().enumerate() {
+            let mut section = document.section_mut(index).expect("section");
+            section
+                .set_page_size(Length::pt(measure + 144.0), Length::inches(11.0))
+                .unwrap();
+            let inch = Length::inches(1.0);
+            section.set_margins(inch, inch, inch, inch).unwrap();
+        }
+
+        let laid_out = document.layout_deterministic().unwrap();
+        assert_eq!(laid_out.layout.pages.len(), 3);
+        for (page, measure) in laid_out.layout.pages.iter().zip(measures) {
+            // The rightmost glyph edge of any line, from the one inch margin.
+            let mut widest = 0.0_f64;
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element
+                    && !run.text.trim().is_empty()
+                {
+                    widest = widest.max(run.origin.x + run.advances.iter().sum::<f64>() - 72.0);
+                }
+            });
+            assert!(
+                widest <= measure + 0.5 && widest >= measure - 40.0,
+                "page {}x{} broke its lines to {widest}pt, not its {measure}pt measure",
+                page.width,
+                page.height
+            );
+        }
+    }
+
+    #[test]
     fn paper_source_and_book_fold_settings_do_not_change_page_geometry() {
         // Tray selection and book fold are print-time choices. Word leaves the
         // document's page count and page geometry alone for both, and so does
