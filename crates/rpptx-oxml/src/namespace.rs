@@ -133,6 +133,7 @@ pub(crate) fn non_visual_drawing_name(start: &BytesStart<'_>) -> Result<Option<S
 }
 
 pub(crate) fn set_non_visual_drawing_name(xml: &mut Vec<u8>, name: &str) -> Result<(), OxmlError> {
+    oxml_core::xml::reject_non_xml_characters("shape name", name)?;
     let mut reader = Reader::from_reader(xml.as_slice());
     let mut buffer = Vec::new();
     loop {

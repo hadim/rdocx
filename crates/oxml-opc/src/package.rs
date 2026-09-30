@@ -74,6 +74,10 @@ pub struct OpcPackage {
     /// All parts keyed by their URI (e.g. "/word/document.xml").
     pub parts: HashMap<String, Vec<u8>>,
     content_types_source: Option<ContentTypesSource>,
+    /// The bytes of each XML entry that was read already holding a character
+    /// XML 1.0 cannot carry, keyed by ZIP entry name. Such producer bytes
+    /// are written back verbatim, while no writer can add such a character.
+    malformed_source_entries: HashMap<String, Vec<u8>>,
 }
 
 impl OpcPackage {
@@ -235,11 +239,20 @@ impl OpcPackage {
             parts.insert(normalized, data.clone());
         }
 
+        let malformed_source_entries = raw_parts
+            .iter()
+            .filter(|(name, data)| {
+                is_xml_entry(&content_types, name) && first_invalid_xml_character(data).is_some()
+            })
+            .map(|(name, data)| (name.clone(), data.clone()))
+            .collect();
+
         Ok(OpcPackage {
             content_types,
             package_rels,
             part_rels,
             parts,
+            malformed_source_entries,
             content_types_source: Some(ContentTypesSource {
                 xml: ct_xml.clone(),
                 content_types: ContentTypes::from_xml(ct_xml)?,
@@ -470,6 +483,7 @@ impl OpcPackage {
             part_rels: HashMap::new(),
             parts: HashMap::new(),
             content_types_source: None,
+            malformed_source_entries: HashMap::new(),
         }
     }
 
@@ -503,6 +517,19 @@ impl OpcPackage {
             .collect::<Vec<_>>();
         parts.sort_by_key(|(name, _)| *name);
         validate_zip_entry_identities(&part_relationships, &parts)?;
+
+        // No writer may publish a character XML 1.0 forbids, so every XML
+        // entry is checked here, where every save of every format passes.
+        self.reject_written_xml_characters("[Content_Types].xml", &content_types)?;
+        self.reject_written_xml_characters("_rels/.rels", &package_relationships)?;
+        for (rels_path, rels_xml) in &part_relationships {
+            self.reject_written_xml_characters(rels_path, rels_xml)?;
+        }
+        for (name, data) in &parts {
+            if is_xml_entry(&self.content_types, name) {
+                self.reject_written_xml_characters(name, data)?;
+            }
+        }
         Ok(SerializedPackage {
             content_types,
             package_relationships,
@@ -521,6 +548,98 @@ impl OpcPackage {
         }
         Ok(())
     }
+}
+
+impl OpcPackage {
+    /// Refuses an entry to be written that holds a character XML 1.0 cannot
+    /// carry, unless it is the exact bytes a producer wrote into the source.
+    fn reject_written_xml_characters(&self, entry: &str, data: &[u8]) -> Result<()> {
+        let Some((code_point, line, column)) = first_invalid_xml_character(data) else {
+            return Ok(());
+        };
+        let name = entry.strip_prefix('/').unwrap_or(entry);
+        if self.malformed_source_entries.get(name).map(Vec::as_slice) == Some(data) {
+            return Ok(());
+        }
+        Err(OpcError::InvalidXmlCharacter {
+            part: format!("/{name}"),
+            code_point,
+            line,
+            column,
+        })
+    }
+}
+
+/// Whether an entry is XML: a relationship or content types entry, or a part
+/// whose content type ends in `xml`.
+fn is_xml_entry(content_types: &ContentTypes, name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".rels")
+        || lower.ends_with("[content_types].xml")
+        || content_types
+            .content_type_for(&format!("/{}", name.strip_prefix('/').unwrap_or(name)))
+            .is_some_and(|content_type| content_type.to_ascii_lowercase().ends_with("xml"))
+}
+
+/// The code point, line and column of the first character outside the XML
+/// 1.0 `Char` production in a UTF-8 entry, found in its bytes: a C0 control
+/// byte other than tab, LF and CR, or the encoding of U+FFFE or U+FFFF. A
+/// UTF-16 entry, with or without a byte order mark, is not scanned, since no
+/// writer in this workspace produces one. oxml-opc does not depend on
+/// oxml-core, so this does not reuse `oxml_core::xml::is_xml_1_0_character`,
+/// and scanning bytes rather than decoded text also reads an entry that is
+/// not valid UTF-8 the way an XML parser reads it up to its first error.
+fn first_invalid_xml_character(data: &[u8]) -> Option<(u32, usize, usize)> {
+    if data.starts_with(&[0xFF, 0xFE])
+        || data.starts_with(&[0xFE, 0xFF])
+        || data.first() == Some(&0)
+        || data.get(1) == Some(&0)
+    {
+        return None;
+    }
+    let (offset, code_point) = data
+        .iter()
+        .enumerate()
+        .find_map(|(index, byte)| match byte {
+            0x00..=0x08 | 0x0B | 0x0C | 0x0E..=0x1F => Some((index, u32::from(*byte))),
+            0xEF if data.get(index + 1) == Some(&0xBF) => match data.get(index + 2) {
+                Some(0xBE) => Some((index, 0xFFFE)),
+                Some(0xBF) => Some((index, 0xFFFF)),
+                _ => None,
+            },
+            _ => None,
+        })?;
+    let body_start = if data.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        3
+    } else {
+        0
+    };
+    let mut line = 1;
+    let mut line_start = body_start;
+    let mut index = body_start;
+    while index < offset {
+        match data[index] {
+            b'\r' => {
+                line += 1;
+                if data.get(index + 1) == Some(&b'\n') {
+                    index += 1;
+                }
+                line_start = index + 1;
+            }
+            b'\n' => {
+                line += 1;
+                line_start = index + 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    let column = data[line_start.min(offset)..offset]
+        .iter()
+        .filter(|byte| **byte & 0xC0 != 0x80)
+        .count()
+        + 1;
+    Some((code_point, line, column))
 }
 
 pub(crate) fn part_identity(part_name: &str) -> String {
@@ -1636,6 +1755,122 @@ mod tests {
             .get_or_create_part_rels("/ppt/slides/slide1.xml")
             .add(rel_types::SLIDE_LAYOUT, "../slideLayouts/slideLayout1.xml");
         package
+    }
+
+    #[test]
+    fn a_part_holding_a_character_xml_cannot_carry_is_not_written() {
+        let mut package = OpcPackage::with_main_part(
+            "ppt/presentation.xml",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
+        );
+        package
+            .content_types
+            .add_default("bin", "application/octet-stream");
+        package.set_part("/ppt/presentation.xml", b"<p:presentation/>".to_vec());
+        package.set_part("/ppt/data.bin", vec![0, 1, 0x0b, 0xff]);
+        let utf16 = "<a/>"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        package.set_part("/customXml/item1.xml", [&[0xFF, 0xFE][..], &utf16].concat());
+        let utf16_big_endian = "<a>\u{1}</a>"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        package.set_part("/customXml/item2.xml", utf16_big_endian);
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        package
+            .write_to(&mut buffer)
+            .expect("binary and UTF-16 parts are not checked as UTF-8 XML");
+
+        for (text, code_point, line, column) in [
+            ("<p:presentation>\n  <a>x\u{1}</a>", 0x1, 2, 7),
+            ("<p:presentation name=\"\u{b}\"/>", 0xB, 1, 23),
+            ("<p:presentation>\u{ffff}</p:presentation>", 0xFFFF, 1, 17),
+            ("\u{feff}<p:presentation>\r\n\r<a>\u{1}</a>", 0x1, 3, 4),
+            ("<p:presentation>\r<é>\u{c}</é>", 0xC, 2, 4),
+        ] {
+            package.set_part("/ppt/presentation.xml", text.as_bytes().to_vec());
+            let error = package
+                .write_to(std::io::Cursor::new(Vec::new()))
+                .expect_err("a forbidden character must not be written");
+            assert!(
+                matches!(
+                    &error,
+                    OpcError::InvalidXmlCharacter { part, code_point: found, line: l, column: c }
+                        if part == "/ppt/presentation.xml"
+                            && *found == code_point
+                            && *l == line
+                            && *c == column
+                ),
+                "{error}"
+            );
+        }
+        assert_eq!(
+            package
+                .write_to(std::io::Cursor::new(Vec::new()))
+                .unwrap_err()
+                .to_string(),
+            "/ppt/presentation.xml holds U+000C at line 2, column 4, a character XML 1.0 cannot carry"
+        );
+
+        package.set_part("/ppt/presentation.xml", b"<p:presentation/>".to_vec());
+        package
+            .get_or_create_part_rels("/ppt/presentation.xml")
+            .add("urn:type", "target\u{1}.xml");
+        assert_eq!(
+            package
+                .write_to(std::io::Cursor::new(Vec::new()))
+                .unwrap_err()
+                .to_string(),
+            "/ppt/_rels/presentation.xml.rels holds U+0001 at line 3, column 57, a character XML 1.0 cannot carry"
+        );
+        package.part_rels.clear();
+
+        // A producer part that already held one is written back verbatim,
+        // and only a writer's change to it is refused.
+        let producer = "<p:presentation>producer\u{1}</p:presentation>".as_bytes();
+        package.set_part("/ppt/presentation.xml", b"<p:presentation/>".to_vec());
+        let mut valid = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut valid).unwrap();
+        let mut source = zip::ZipArchive::new(std::io::Cursor::new(valid.into_inner())).unwrap();
+        let mut rebuilt = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for index in 0..source.len() {
+            let mut entry = source.by_index(index).unwrap();
+            let name = entry.name().to_owned();
+            let mut data = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut data).unwrap();
+            if name == "ppt/presentation.xml" {
+                data = producer.to_vec();
+            }
+            rebuilt
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            rebuilt.write_all(&data).unwrap();
+        }
+        let source = rebuilt.finish().unwrap().into_inner();
+        let mut reopened = OpcPackage::from_reader(std::io::Cursor::new(source)).unwrap();
+        let mut saved = std::io::Cursor::new(Vec::new());
+        reopened
+            .write_to(&mut saved)
+            .expect("producer bytes pass through");
+        saved.set_position(0);
+        assert_eq!(
+            OpcPackage::from_reader(saved)
+                .unwrap()
+                .get_part("/ppt/presentation.xml"),
+            Some(producer)
+        );
+        reopened.set_part(
+            "/ppt/presentation.xml",
+            "<p:presentation>written\u{1}</p:presentation>"
+                .as_bytes()
+                .to_vec(),
+        );
+        assert!(matches!(
+            reopened.write_to(std::io::Cursor::new(Vec::new())),
+            Err(OpcError::InvalidXmlCharacter { code_point: 1, .. })
+        ));
     }
 
     #[test]

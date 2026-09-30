@@ -23157,3 +23157,73 @@ fn no_op_save_preserves_every_unchanged_part() {
         .collect::<Vec<_>>();
     assert_eq!(changed, ["ppt/slides/slide1.xml"]);
 }
+
+/// A name or chart text holding a character XML 1.0 cannot carry used to
+/// reach its attribute or `c:v` raw, so the saved part was not well-formed.
+/// python-pptx refuses such a name and such chart data, so rpptx refuses a
+/// name at its setter, and no save writes such a character into any part.
+#[test]
+fn names_and_chart_text_xml_cannot_carry_are_refused() {
+    use rpptx::CommentAuthor;
+
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    let error = presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(914_400), Emu(914_400), Emu(914_400), Emu(914_400))
+        .unwrap()
+        .set_name("box\u{1}name")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("shape name holds U+0001 at character 4"),
+        "{error}"
+    );
+    let error = CommentAuthor::new(
+        "{11111111-1111-1111-1111-111111111111}",
+        "Ada\u{b}",
+        Some("A"),
+        "ada@example.test",
+        "test",
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("comment author name holds U+000B at character 4"),
+        "{error}"
+    );
+    presentation
+        .to_bytes()
+        .expect("refused names changed nothing");
+
+    // Chart authoring already refuses such text, as python-pptx does.
+    let error = presentation
+        .add_chart(
+            0,
+            ChartKind::Bar,
+            Emu(914_400),
+            Emu(2_743_200),
+            Emu(4_572_000),
+            Emu(2_743_200),
+            &ChartData {
+                categories: vec!["North\u{1f}".to_owned(), "South".to_owned()],
+                series: vec![("Revenue".to_owned(), vec![1.0, 2.0])],
+                ..f124_chart_data()
+            },
+        )
+        .err()
+        .expect("chart text XML cannot carry is refused")
+        .to_string();
+    assert!(error.contains("c:v has invalid value"), "{error}");
+
+    // A value set through a public field reaches no part either.
+    presentation.core_properties_mut().title = Some("Deck\u{c}title".to_owned());
+    let error = presentation.to_bytes().unwrap_err().to_string();
+    assert!(
+        error.contains("/docProps/core.xml holds U+000C at line"),
+        "{error}"
+    );
+}
