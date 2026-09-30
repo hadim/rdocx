@@ -17,11 +17,23 @@ pub(crate) fn emit_markdown(
     hyperlink_urls: &HashMap<String, String>,
 ) -> String {
     let mut out = String::new();
+    let mut carried = Vec::new();
 
-    for content in &body.content {
+    for (index, content) in body.content.iter().enumerate() {
         match content {
             BodyContent::Paragraph(p) => {
-                emit_paragraph(&mut out, p, styles, numbering, hyperlink_urls);
+                let next_is_paragraph = body.content[index + 1..]
+                    .iter()
+                    .find(|next| matches!(next, BodyContent::Paragraph(_) | BodyContent::Table(_)))
+                    .is_some_and(|next| matches!(next, BodyContent::Paragraph(_)));
+                if let Some(runs) = crate::emitter::paragraph_runs(
+                    p,
+                    next_is_paragraph,
+                    hyperlink_urls,
+                    &mut carried,
+                ) {
+                    emit_paragraph(&mut out, p, runs, styles, numbering);
+                }
             }
             BodyContent::Table(tbl) => {
                 emit_table(&mut out, tbl, hyperlink_urls);
@@ -108,15 +120,15 @@ fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u
 fn emit_paragraph(
     out: &mut String,
     para: &CT_P,
+    runs: Vec<(Option<&str>, &CT_R)>,
     styles: &CT_Styles,
     numbering: Option<&CT_Numbering>,
-    hyperlink_urls: &HashMap<String, String>,
 ) {
     let heading_level = detect_heading_level(para.properties.as_ref(), styles);
     let list_info = detect_list(para, numbering);
 
     // Collect inline text for the paragraph
-    let text = collect_paragraph_text(para, hyperlink_urls);
+    let text = collect_paragraph_text(runs);
 
     // Skip empty paragraphs (but still emit blank line for spacing)
     if text.trim().is_empty() && heading_level.is_none() && list_info.is_none() {
@@ -146,14 +158,13 @@ fn emit_paragraph(
     }
 }
 
-/// Collect all text from a paragraph, applying inline formatting.
-fn collect_paragraph_text(para: &CT_P, hyperlink_urls: &HashMap<String, String>) -> String {
+/// Collect all text from the runs of a paragraph, applying inline formatting.
+///
+/// The link targets come from `crate::emitter::accepted_runs`, which applies
+/// the same scheme allowlist as HTML, since Markdown renderers turn
+/// `[text](javascript:...)` into a live link too.
+fn collect_paragraph_text(runs: Vec<(Option<&str>, &CT_R)>) -> String {
     let mut out = String::new();
-
-    // Markdown renderers turn `[text](javascript:...)` into a live link too,
-    // so the same scheme allowlist as HTML applies here.
-    let mut runs = Vec::new();
-    crate::emitter::accepted_runs(para, hyperlink_urls, None, &mut runs);
 
     // Track link state to group consecutive runs in same link
     let mut current_link: Option<&str> = None;
@@ -331,11 +342,24 @@ fn collect_cell_text(
     hyperlink_urls: &HashMap<String, String>,
 ) -> String {
     let mut parts = Vec::new();
+    let mut carried = Vec::new();
 
-    for content in &cell.content {
+    for (index, content) in cell.content.iter().enumerate() {
         match content {
             CellContent::Paragraph(p) => {
-                let text = collect_paragraph_text(p, hyperlink_urls);
+                let next_is_paragraph = cell.content[index + 1..]
+                    .iter()
+                    .find(|next| matches!(next, CellContent::Paragraph(_) | CellContent::Table(_)))
+                    .is_some_and(|next| matches!(next, CellContent::Paragraph(_)));
+                let Some(runs) = crate::emitter::paragraph_runs(
+                    p,
+                    next_is_paragraph,
+                    hyperlink_urls,
+                    &mut carried,
+                ) else {
+                    continue;
+                };
+                let text = collect_paragraph_text(runs);
                 let trimmed = text.trim().to_string();
                 if !trimmed.is_empty() {
                     parts.push(trimmed);

@@ -651,6 +651,11 @@ fn collect_emitted_table_paragraphs<'a>(table: &'a CT_Tbl, paragraphs: &mut Vec<
 /// it reads them: the direct runs and, at their boundaries, the runs of the
 /// insertions and move destinations, recursively. Deletions and move sources
 /// are left out, as are inline content controls.
+///
+/// This must stay in step with `accepted_runs` in `rdocx-html`, or the image
+/// order check below fails. The emitter's merging of a paragraph whose mark is
+/// deleted into the next paragraph keeps the same run order, and it drops only
+/// paragraphs that have no runs, so it needs nothing here.
 fn append_emitted_runs<'a>(paragraph: &'a CT_P, runs: &mut Vec<&'a CT_R>) {
     for boundary in 0..=paragraph.runs.len() {
         for (_, _, revision) in paragraph
@@ -4170,10 +4175,19 @@ mod tests {
             &xml[run_start..run_end],
             &xml[run_end..]
         );
+        // The emitter drops the first paragraph, whose mark and picture are
+        // deleted, and merges the second, whose mark alone is deleted, into
+        // the third.
+        let xml = xml.replacen(
+            "<w:p>",
+            r#"<w:p><w:pPr><w:rPr><w:del w:id="3" w:author="Ada"/></w:rPr></w:pPr>"#,
+            2,
+        );
         package.set_part("/word/document.xml", xml.into_bytes());
         let mut saved = Cursor::new(Vec::new());
         package.write_to(&mut saved).unwrap();
         let document = Document::from_bytes(saved.get_ref()).unwrap();
+        assert_eq!(document.to_html_fragment().matches("<p>").count(), 1);
 
         let written = document
             .to_mhtml_bytes()
