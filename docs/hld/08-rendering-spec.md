@@ -93,9 +93,12 @@ through the same text, paint, effect, geometry, group, and clipping machinery
 as ordinary shapes. The centred layouts set node alignment and line spacing as
 typed defaults that fill only what a data paragraph's own `a:pPr` leaves
 unset, so a node whose data says `algn="r"` renders right-aligned rather than
-as a labelled placeholder. An empty data paragraph takes no defaults. Static,
-timeline, media, and animation entry points reuse that resolved group.
-Unsupported or invalid programs retain a visible bounds
+as a labelled placeholder. An empty data paragraph takes no defaults. A node's
+text colour is the colour definition's `dgm:txFillClrLst` entry. When that
+list is empty, as in PowerPoint's own `accent1_2` colours, it is the quick
+style's `a:fontRef` colour, and a style without one leaves the inherited text
+colour. Static, timeline, media, and animation entry points reuse that
+resolved group. Unsupported or invalid programs retain a visible bounds
 fallback and a stable diagnostic. The renderer never reads diagram XML or
 treats a cached diagram drawing as authoritative.
 
