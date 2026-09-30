@@ -38929,3 +38929,35 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert!(compared.revisions().is_empty());
 }
+
+/// A redline converted to HTML or Markdown shows its accepted view, as its
+/// text does: the inserted words and paragraphs, not the deleted ones.
+#[test]
+fn a_compare_redline_exports_its_accepted_view_to_html_and_markdown() {
+    let document = |paragraphs: &[&str]| {
+        let mut document = Document::new();
+        for text in paragraphs {
+            document.add_paragraph(text);
+        }
+        document
+    };
+    let mut redline = document(&["Keep OLDWORD here.", "OLDPARA", "Last"]);
+    let edited = document(&["Keep NEWWORD here.", "Last", "NEWPARA"]);
+    redline
+        .compare(&edited, "Ada", "2026-09-30T00:00:00Z")
+        .unwrap();
+    assert!(!redline.revisions().is_empty());
+
+    for exported in [
+        redline.to_html(),
+        redline.to_html_fragment(),
+        redline.to_markdown(),
+    ] {
+        for present in ["Keep NEWWORD here.", "Last", "NEWPARA"] {
+            assert!(exported.contains(present), "{present}: {exported}");
+        }
+        for absent in ["OLDWORD", "OLDPARA"] {
+            assert!(!exported.contains(absent), "{absent}: {exported}");
+        }
+    }
+}

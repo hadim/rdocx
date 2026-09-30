@@ -148,6 +148,34 @@ mod tests {
     }
 
     #[test]
+    fn html_and_markdown_export_the_accepted_view_of_tracked_changes() {
+        let document = CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t xml:space="preserve">Keep </w:t></w:r><w:del w:id="1" w:author="A"><w:r><w:delText>OLDWORD</w:delText></w:r></w:del><w:ins w:id="2" w:author="A"><w:r><w:t>NEWWORD</w:t></w:r></w:ins><w:r><w:t xml:space="preserve"> here.</w:t></w:r></w:p><w:p><w:pPr><w:rPr><w:del w:id="3" w:author="A"/></w:rPr></w:pPr><w:del w:id="4" w:author="A"><w:r><w:delText>OLDPARA</w:delText></w:r></w:del></w:p><w:p><w:pPr><w:rPr><w:ins w:id="5" w:author="A"/></w:rPr></w:pPr><w:ins w:id="6" w:author="A"><w:r><w:t>NEWPARA</w:t></w:r></w:ins></w:p><w:p><w:moveFrom w:id="7" w:author="A"><w:r><w:t>OLDMOVE</w:t></w:r></w:moveFrom><w:moveTo w:id="8" w:author="A"><w:r><w:t>NEWMOVE</w:t></w:r></w:moveTo></w:p><w:p><w:ins w:id="9" w:author="A"><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink r:id="rId1"><w:r><w:t>NEWLINK</w:t></w:r></w:hyperlink></w:ins><w:hyperlink r:id="rId1"><w:del w:id="10" w:author="A"><w:r><w:delText>OLDLINK</w:delText></w:r></w:del><w:ins w:id="11" w:author="A"><w:r><w:t>INLINK</w:t></w:r></w:ins></w:hyperlink></w:p></w:body></w:document>"#,
+        )
+        .unwrap();
+        let input = HtmlInput {
+            document,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            images: HashMap::new(),
+            hyperlink_urls: HashMap::from([("rId1".to_owned(), "https://example.com/".to_owned())]),
+        };
+
+        let html = to_html_fragment(&input, &HtmlOptions::default());
+        assert_eq!(
+            html,
+            "<p>Keep NEWWORD here.</p>\n<p></p>\n<p>NEWPARA</p>\n<p>NEWMOVE</p>\n\
+             <p>See <a href=\"https://example.com/\">NEWLINKINLINK</a></p>\n"
+        );
+        let markdown = to_markdown(&input);
+        assert_eq!(
+            markdown,
+            "Keep NEWWORD here.\n\n\nNEWPARA\n\nNEWMOVE\n\n\
+             See [NEWLINKINLINK](https://example.com/)\n\n"
+        );
+    }
+
+    #[test]
     fn html_heading() {
         let mut doc = CT_Document::new();
         let mut p = CT_P::new();

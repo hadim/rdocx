@@ -1412,10 +1412,15 @@ Nested tables and the content controls at every level contribute their
 paragraphs in place. `Document::images` and `Document::word_count` reach the
 same content. `Document::headings` and `Document::links` read the body
 paragraphs and those that body-level content controls wrap, and do not search
-table cells. MHTML export sizes its images from the paragraphs the HTML emitter
+table cells. MHTML export sizes its images from the runs the HTML emitter
 reaches, which leaves content controls out.
 Each paragraph contributes the same accepted-view text as paragraph text, so
 tracked insertions are included and tracked deletions are left out.
+HTML and Markdown export apply the same revision rule. They emit the runs of
+insertions and move destinations at their boundaries, inside the hyperlink that
+holds them or with the hyperlink they hold, and never the runs of deletions or
+move sources. A paragraph whose mark is deleted stays its own paragraph, as it
+does in `Document::text` and in the accepted PDF render.
 The WASM binding uses `Document::text` for its existing `getText` method and
 otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.

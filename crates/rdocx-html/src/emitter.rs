@@ -5,10 +5,13 @@ use std::collections::HashMap;
 use rdocx_oxml::document::{BodyContent, CT_Body};
 use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::revision::RevisionKind;
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CellContent, VMerge};
-use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
+use rdocx_oxml::text::{
+    BreakType, CT_P, CT_R, RunContent, SpecialCharacter, hyperlink_revision_index,
+};
 
 use crate::css;
 use crate::sanitize::{escape_html, escape_html_attr, safe_url};
@@ -215,28 +218,12 @@ fn emit_paragraph_content(
     hyperlink_urls: &HashMap<String, String>,
     options: &HtmlOptions,
 ) {
-    // Build a map of which runs are inside hyperlinks
-    let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
-    for hl in &para.hyperlinks {
-        // A target with an unsafe scheme yields no <a> at all, so the run text
-        // still renders but cannot become a script trigger.
-        if let Some(rel_id) = &hl.rel_id
-            && let Some(url) = hyperlink_urls
-                .get(rel_id)
-                .map(String::as_str)
-                .and_then(safe_url)
-        {
-            for i in hl.run_start..hl.run_end {
-                hyperlink_map.insert(i, url);
-            }
-        }
-    }
+    let mut runs = Vec::new();
+    accepted_runs(para, hyperlink_urls, None, &mut runs);
 
     let mut current_link: Option<&str> = None;
 
-    for (run_idx, run) in para.runs.iter().enumerate() {
-        let in_link = hyperlink_map.get(&run_idx).copied();
-
+    for (in_link, run) in runs {
         // Open/close link tags as needed
         match (current_link, in_link) {
             (None, Some(url)) => {
@@ -261,6 +248,62 @@ fn emit_paragraph_content(
     // Close any open link
     if current_link.is_some() {
         out.push_str("</a>");
+    }
+}
+
+/// Collect the direct and tracked runs of `para` in document order, each with
+/// the URL of the hyperlink it sits in.
+///
+/// Tracked changes follow the accepted view that `Paragraph::text` and the
+/// default PDF render read. The runs inside `w:ins` and `w:moveTo` are
+/// included and the runs inside `w:del` and `w:moveFrom` are not. A paragraph
+/// whose mark is deleted stays its own paragraph, as it does in those readers.
+pub(crate) fn accepted_runs<'a>(
+    para: &'a CT_P,
+    hyperlink_urls: &'a HashMap<String, String>,
+    enclosing_link: Option<&'a str>,
+    output: &mut Vec<(Option<&'a str>, &'a CT_R)>,
+) {
+    // A target with an unsafe scheme yields no link at all, so the run text
+    // still renders but cannot become a script trigger.
+    let link_url = |index: usize| {
+        para.hyperlinks
+            .get(index)?
+            .rel_id
+            .as_ref()
+            .and_then(|rel_id| hyperlink_urls.get(rel_id))
+            .map(String::as_str)
+            .and_then(safe_url)
+    };
+    let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
+    for (index, hl) in para.hyperlinks.iter().enumerate() {
+        if let Some(url) = link_url(index) {
+            for i in hl.run_start..hl.run_end {
+                hyperlink_map.insert(i, url);
+            }
+        }
+    }
+
+    for boundary in 0..=para.runs.len() {
+        for (_, slot, revision) in para.revisions.iter().filter(|(at, _, _)| *at == boundary) {
+            if !matches!(
+                revision.kind(),
+                RevisionKind::Insertion | RevisionKind::MoveTo
+            ) {
+                continue;
+            }
+            if let Some(content) = revision.content_paragraph() {
+                let link = match hyperlink_revision_index(*slot) {
+                    Some(index) => link_url(index),
+                    None => enclosing_link,
+                };
+                accepted_runs(content, hyperlink_urls, link, output);
+            }
+        }
+        if let Some(run) = para.runs.get(boundary) {
+            let link = hyperlink_map.get(&boundary).copied().or(enclosing_link);
+            output.push((link, run));
+        }
     }
 }
 

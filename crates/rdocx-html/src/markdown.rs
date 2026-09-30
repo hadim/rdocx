@@ -150,30 +150,16 @@ fn emit_paragraph(
 fn collect_paragraph_text(para: &CT_P, hyperlink_urls: &HashMap<String, String>) -> String {
     let mut out = String::new();
 
-    // Build hyperlink map
-    let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
-    for hl in &para.hyperlinks {
-        // Markdown renderers turn `[text](javascript:...)` into a live link too,
-        // so the same scheme allowlist applies here.
-        if let Some(rel_id) = &hl.rel_id
-            && let Some(url) = hyperlink_urls
-                .get(rel_id)
-                .map(String::as_str)
-                .and_then(crate::sanitize::safe_url)
-        {
-            for i in hl.run_start..hl.run_end {
-                hyperlink_map.insert(i, url);
-            }
-        }
-    }
+    // Markdown renderers turn `[text](javascript:...)` into a live link too,
+    // so the same scheme allowlist as HTML applies here.
+    let mut runs = Vec::new();
+    crate::emitter::accepted_runs(para, hyperlink_urls, None, &mut runs);
 
     // Track link state to group consecutive runs in same link
     let mut current_link: Option<&str> = None;
     let mut link_text = String::new();
 
-    for (run_idx, run) in para.runs.iter().enumerate() {
-        let in_link = hyperlink_map.get(&run_idx).copied();
-
+    for (in_link, run) in runs {
         // Handle link transitions
         match (current_link, in_link) {
             (Some(url), None) => {
