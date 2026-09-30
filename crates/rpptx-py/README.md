@@ -52,8 +52,8 @@ with open("review.pdf", "wb") as output:
   pictures, preset shapes, and tables.
 - Deterministic PDF and PNG output for slides and speaker notes.
 - Formatting-preserving text replacement across slides and speaker notes,
-  with an optional expected count that leaves the deck unchanged on a
-  mismatch.
+  on one slide or in one text frame, with an optional expected count that
+  leaves the deck unchanged on a mismatch.
 - Package and PresentationML validation that returns the issues
   `rpptx validate` reports as typed values.
 - Speaker-note text plus modern comment authors, threads, replies, thread

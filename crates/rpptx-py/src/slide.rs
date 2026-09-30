@@ -8,6 +8,7 @@ use smallvec::smallvec;
 use crate::dml::{FillTarget, PyFillFormat};
 use crate::normalize_index;
 use crate::presentation::{PyComment, PyPresentation};
+use crate::replacement_count_to_pyerr;
 use crate::shape::{PyPlaceholderCollection, PyShapeCollection};
 use crate::validate_path;
 
@@ -226,6 +227,38 @@ impl PySlide {
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
         presentation.revisions.bump();
         Ok(())
+    }
+
+    /// Replaces literal text on this slide, and in its speaker notes when
+    /// `notes` is true, and returns the count.
+    ///
+    /// The contract is `Presentation.try_replace_text` restricted to this
+    /// slide: with `expect`, a count that differs raises and leaves the
+    /// presentation and its revision as they were, and the revision advances
+    /// once only when something was replaced. The native call works on a
+    /// copy of this slide alone.
+    #[pyo3(signature = (placeholder, replacement, *, expect = None, notes = true))]
+    fn try_replace_text(
+        &self,
+        py: Python<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+        notes: bool,
+    ) -> PyResult<usize> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let inner = &mut presentation.inner;
+        let count = py
+            .detach(|| inner.try_replace_slide_text(index, placeholder, replacement, notes, expect))
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        if let Some(expected) = expect.filter(|&expected| expected != count) {
+            return Err(replacement_count_to_pyerr(py, placeholder, expected, count));
+        }
+        if count > 0 {
+            presentation.revisions.bump();
+        }
+        Ok(count)
     }
 
     #[getter]

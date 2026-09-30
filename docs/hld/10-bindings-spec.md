@@ -626,6 +626,20 @@ on one slide, and invalid ranges leave the presentation unchanged. Without
 these arguments, the comment uses the
 existing unknown-anchor form.
 
+`Slide.try_replace_text(placeholder, replacement, *, expect=None, notes=True)`
+and `TextFrame.try_replace_text(placeholder, replacement, *, expect=None)`
+keep that contract over a narrower scope. The slide form covers the slide's
+shapes, groups and table cells, plus its speaker notes unless `notes` is
+false, and leaves every other slide untouched. The text frame form covers that
+frame only. The count, the error and its message, the unchanged presentation
+and revision after a mismatch, and the single revision advance are those of
+the presentation form, so a replacement that changes something invalidates
+every held handle, including the slide or frame it was called on. Neither
+form clones the presentation. The slide form works on a copy of that slide
+and its notes and checks that they serialize. The frame form works on a copy
+of the text body when `expect` is given, in place otherwise, and serializes
+nothing, because replacing run text cannot make a body fail to serialize.
+
 `Presentation.validate()` runs the native `validate` with the GIL released and
 returns a tuple of frozen `ValidationIssue` snapshots in native order. Each
 carries a `kind` that names the native variant in snake_case, such as
