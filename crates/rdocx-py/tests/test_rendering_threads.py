@@ -260,8 +260,6 @@ def _pdf_base_fonts(pdf):
 
 
 def test_to_pdf_takes_caller_fonts_as_bytes_or_from_a_directory(tmp_path):
-    from rdocx import LayoutError
-
     mono = Path(__file__).resolve().parents[2] / "oxml-layout" / "fonts"
     mono = mono / "LiberationMono-Regular.ttf"
     document = _caller_font_document()
@@ -275,11 +273,11 @@ def test_to_pdf_takes_caller_fonts_as_bytes_or_from_a_directory(tmp_path):
     assert b"LiberationMono" in _pdf_base_fonts(document.to_pdf(font_dir=tmp_path))
     assert b"LiberationMono" in _pdf_base_fonts(document.to_pdf(font_dir=str(tmp_path)))
 
-    # Caller fonts replace every other source, as `rdocx convert --font-dir` does.
+    # A family the caller fonts miss resolves as `to_pdf` resolves it, as
+    # `rdocx convert --font-dir` does.
     empty = tmp_path / "empty"
     empty.mkdir()
-    with pytest.raises(LayoutError, match="No font found for family 'Rdocx Test Face'"):
-        document.to_pdf(font_dir=empty)
+    assert document.to_pdf(font_dir=empty) == document.to_pdf()
     with pytest.raises(FileNotFoundError, match="font directory .*missing does not exist"):
         document.to_pdf(font_dir=tmp_path / "missing")
     with pytest.raises(NotADirectoryError, match="is not a directory"):
