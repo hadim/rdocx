@@ -3401,6 +3401,11 @@ const SMARTART_COLOR_RESOURCE: (&str, &str) = (
     "dc0a610ca9a665158d3afaff8612e29320e009f151990f74a265197a4e96f9a4",
 );
 
+const SMARTART_EMPTY_TEXT_COLOR_RESOURCE: (&str, &str) = (
+    "cs/accent1_2.gcs",
+    "976be28bebc3205a68a7ec604519fbe1a85b6b5fe13f4729ddabf147296848ff",
+);
+
 fn pinned_smartart_resources_available() -> bool {
     let resources = [
         SMARTART_STYLE_RESOURCE,
@@ -4071,6 +4076,87 @@ fn smartart_rust_source_bytes(family: &str) -> Vec<u8> {
         "../diagrams/colors1.xml",
     );
     package_bytes(package)
+}
+
+#[test]
+fn smartart_text_without_a_colour_list_entry_uses_the_quick_style_font_colour() {
+    if !pinned_smartart_resources_available()
+        || !smartart_resources_match(
+            Path::new(SMARTART_RESOURCE_ROOT),
+            &[SMARTART_EMPTY_TEXT_COLOR_RESOURCE],
+        )
+    {
+        eprintln!(
+            "SmartArt text colour check skipped because pinned PowerPoint resources are absent or hash-mismatched"
+        );
+        return;
+    }
+    // PowerPoint's accent1_2 colours give node0 no txFillClrLst, so the node
+    // text takes the fontRef colour of the simple1 quick style, lt1, and
+    // never the accent1 node fill.
+    let node_text_fills = |without_style_colour: bool| {
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(authentic_smartart_oracle_source_bytes("list")))
+                .unwrap();
+        package.set_part(
+            "/ppt/diagrams/colors1.xml",
+            read_pinned_smartart_resource(
+                SMARTART_EMPTY_TEXT_COLOR_RESOURCE.0,
+                SMARTART_EMPTY_TEXT_COLOR_RESOURCE.1,
+            ),
+        );
+        if without_style_colour {
+            let style = String::from_utf8(
+                package
+                    .get_part("/ppt/diagrams/quickStyle1.xml")
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap()
+            .replace(
+                r#"<a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef>"#,
+                r#"<a:fontRef idx="minor"/>"#,
+            );
+            package.set_part("/ppt/diagrams/quickStyle1.xml", style.into_bytes());
+        }
+        let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let (input, _) = presentation.render_deterministic().unwrap();
+        input.slides[0]
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                let ResolvedContent::Text(body) = &shape.content else {
+                    return None;
+                };
+                body.paragraphs
+                    .iter()
+                    .flat_map(|paragraph| &paragraph.runs)
+                    .find_map(|run| match run {
+                        ResolvedTextRun::Text { text, style } if !text.trim().is_empty() => {
+                            Some(style.fill.clone())
+                        }
+                        _ => None,
+                    })
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let styled = node_text_fills(false);
+    assert!(!styled.is_empty());
+    assert!(
+        styled
+            .iter()
+            .all(|fill| *fill == Some(Paint::Solid(oxml_layout::Color::WHITE))),
+        "{styled:?}"
+    );
+    let unstyled = node_text_fills(true);
+    assert_eq!(unstyled.len(), styled.len());
+    assert!(
+        unstyled
+            .iter()
+            .all(|fill| *fill == Some(Paint::Solid(oxml_layout::Color::BLACK))),
+        "{unstyled:?}"
+    );
 }
 
 #[test]

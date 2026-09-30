@@ -85,8 +85,11 @@ programs into transient ordinary PresentationML groups before the shared
 resolver runs. Authoritative data-node text, layout-owned decorative shapes,
 quick styles, colours, connector paths, and the graphic-frame transform flow
 through the same text, paint, effect, geometry, group, and clipping machinery
-as ordinary shapes. Static, timeline, media, and animation entry points reuse
-that resolved group. Unsupported or invalid programs retain a visible bounds
+as ordinary shapes. A node's text colour is the colour definition's
+`dgm:txFillClrLst` entry. When that list is empty, as in PowerPoint's own
+`accent1_2` colours, it is the quick style's `a:fontRef` colour, and a style
+without one leaves the inherited text colour. Static, timeline, media, and
+animation entry points reuse that resolved group. Unsupported or invalid programs retain a visible bounds
 fallback and a stable diagnostic. The renderer never reads diagram XML or
 treats a cached diagram drawing as authoritative.
 
