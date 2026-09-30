@@ -13,8 +13,8 @@ and produces fixed or flow output without an Office host.
 - PDF, HTML, Markdown, PNG, JPEG, and multi-page TIFF conversion.
 - Page-range rendering, guarded literal replacement, diffing, and validation
   verdicts that check every related part and every style id.
-- Comment thread inspection and mutation with explicit body run ranges and
-  optional RFC 3339 dates.
+- Comment thread inspection and mutation with explicit body run ranges or an
+  anchor text, and optional RFC 3339 dates.
 - Tracked revision inspection, filtered resolution, table-of-contents rebuilds,
   and document comparison at run, word, or character granularity with ignore
   options.
@@ -55,6 +55,8 @@ rdocx comment list report.docx --json
 rdocx comment add report.docx --start-paragraph 0 --start-run 0 \
   --end-paragraph 0 --end-run 1 --author Reviewer --text 'Check this' \
   --date 2026-09-13T12:00:00Z -o commented.docx
+rdocx comment add report.docx --anchor 'target words' --occurrence 1 \
+  --author Reviewer --text 'Check this' -o commented.docx
 rdocx revision accept reviewed.docx --author Reviewer -o accepted.docx
 rdocx compare original.docx edited.docx --author Reviewer \
   --timestamp 2026-09-13T12:00:00Z -o redline.docx
@@ -68,7 +70,13 @@ Comment `add` ranges use zero-based body paragraph and run boundaries. The
 start is inclusive and the end is exclusive. Run boundaries count the runs that
 `text --json` lists, including the runs inside inline content controls and
 tracked insertions. A range that cannot be anchored exactly, such as one that
-crosses the edge of an inline content control, is refused. Comment replies,
+crosses the edge of an inline content control, is refused. In place of the
+four range flags, `--anchor TEXT` comments on the zero-based `--occurrence`
+(default 0) of a literal, case-sensitive text of the main story, through body
+paragraphs, tables and block content controls, and splits the runs at both
+ends of the match. A text that does not occur, an occurrence past the last
+match, and a match that cannot be anchored exactly exit unsuccessfully without
+creating the output. Comment replies,
 resolution, and removal select a decimal comment id. Comment `add` and `reply`
 write an optional `--date` RFC 3339 timestamp as the comment date. An invalid
 timestamp exits unsuccessfully without creating the output, and without

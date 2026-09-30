@@ -2788,6 +2788,320 @@ mod comment_on_text {
     }
 }
 
+/// GitHub issue #168: `Paragraph::remove_run` removes one run in place.
+mod remove_run {
+    use rdocx::{Document, RunPosition, RunRange};
+
+    fn from_body(body: &str) -> Document {
+        super::document_with_content_controls(&super::wrap_word_body(body))
+    }
+
+    /// The serialized body children, without the final section properties
+    /// and the indentation between elements.
+    fn body(document: &mut Document) -> String {
+        let xml = super::document_xml(document);
+        let start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+        let end = xml
+            .find("<w:sectPr")
+            .unwrap_or(xml.find("</w:body>").unwrap());
+        xml[start..end].lines().map(str::trim).collect()
+    }
+
+    fn remove(document: &mut Document, paragraph: usize, run: usize) -> rdocx::Result<()> {
+        document.paragraph_mut(paragraph).unwrap().remove_run(run)
+    }
+
+    fn texts(document: &Document, paragraph: usize) -> Vec<String> {
+        document
+            .paragraph(paragraph)
+            .unwrap()
+            .runs()
+            .map(|run| run.text())
+            .collect()
+    }
+
+    #[test]
+    fn remove_run_keeps_the_markers_around_the_run() {
+        let mut document = from_body(concat!(
+            r#"<w:p><w:bookmarkStart w:id="1" w:name="kept"/>"#,
+            r#"<w:permStart w:id="5" w:edGrp="everyone"/><w:r><w:t>A</w:t></w:r>"#,
+            r#"<w:r><w:t>B</w:t></w:r><w:permEnd w:id="5"/><w:bookmarkEnd w:id="1"/>"#,
+            r#"<w:r><w:t>C</w:t></w:r></w:p>"#,
+        ));
+        remove(&mut document, 0, 1).unwrap();
+        assert_eq!(
+            body(&mut document),
+            concat!(
+                r#"<w:p><w:bookmarkStart w:id="1" w:name="kept"/>"#,
+                r#"<w:permStart w:id="5" w:edGrp="everyone"/><w:r><w:t>A</w:t></w:r>"#,
+                r#"<w:permEnd w:id="5"/><w:bookmarkEnd w:id="1"/><w:r><w:t>C</w:t></w:r></w:p>"#,
+            )
+        );
+        remove(&mut document, 0, 0).unwrap();
+        assert_eq!(
+            body(&mut document),
+            concat!(
+                r#"<w:p><w:bookmarkStart w:id="1" w:name="kept"/>"#,
+                r#"<w:permStart w:id="5" w:edGrp="everyone"/><w:permEnd w:id="5"/>"#,
+                r#"<w:bookmarkEnd w:id="1"/><w:r><w:t>C</w:t></w:r></w:p>"#,
+            )
+        );
+
+        // A comment over the removed run keeps its range and its reference.
+        let mut document = Document::new();
+        let mut paragraph = document.add_paragraph("");
+        for text in ["Keep ", "drop", " this."] {
+            paragraph.add_run(text);
+        }
+        let position = |run_index| RunPosition {
+            body_index: 0,
+            run_index,
+        };
+        let range = |start, end| RunRange {
+            start: position(start),
+            end: position(end),
+        };
+        document
+            .add_comment(range(1, 2), "Ada", None, "On the dropped run")
+            .unwrap();
+        document.add_bookmark("dropped", range(1, 2)).unwrap();
+        assert_eq!(texts(&document, 0), ["Keep ", "drop", "", " this."]);
+        remove(&mut document, 0, 1).unwrap();
+        assert_eq!(texts(&document, 0), ["Keep ", "", " this."]);
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraph(0).unwrap().text(), "Keep  this.");
+        assert_eq!(reopened.comments()[0].text(), "On the dropped run");
+        let bookmarks = reopened.bookmarks();
+        assert_eq!(bookmarks[0].name(), Some("dropped"));
+        assert_eq!(bookmarks[0].issue(), None);
+        assert_eq!(bookmarks[0].range(), Some(range(1, 1)));
+        let xml = body(&mut document);
+        for marker in ["commentRangeStart", "commentRangeEnd", "commentReference"] {
+            assert!(xml.contains(marker), "{marker} missing from {xml}");
+        }
+
+        // The comment reference run belongs to the comment.
+        let before = document.to_bytes().unwrap();
+        let error = remove(&mut document, 0, 1).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "run 1 cannot be removed: it holds the reference of comment 0, which removing the comment removes"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn remove_run_removes_inside_wrappers_and_drops_emptied_hyperlinks_and_insertions() {
+        let control = concat!(
+            r#"<w:sdt><w:sdtPr><w:alias w:val="Client"/><w:tag w:val="client"/><w:lock w:val="sdtLocked"/></w:sdtPr>"#,
+            r#"<w:sdtContent><w:r><w:t>c1</w:t></w:r><w:r><w:t>c2</w:t></w:r></w:sdtContent></w:sdt>"#,
+        );
+        let mut document = from_body(&format!(
+            "{}{}{control}{}{}",
+            r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
+            r#"<w:ins w:id="1" w:author="Ada"><w:r><w:t>i1</w:t></w:r><w:r><w:t>i2</w:t></w:r></w:ins>"#,
+            r#"<w:hyperlink w:anchor="a"><w:r><w:t>h1</w:t></w:r><w:r><w:t>h2</w:t></w:r></w:hyperlink>"#,
+            r#"<w:r><w:t>y</w:t></w:r></w:p>"#,
+        ));
+        assert_eq!(
+            texts(&document, 0),
+            ["x", "i1", "i2", "c1", "c2", "h1", "h2", "y"]
+        );
+        remove(&mut document, 0, 1).unwrap();
+        remove(&mut document, 0, 2).unwrap();
+        remove(&mut document, 0, 3).unwrap();
+        assert_eq!(
+            body(&mut document),
+            concat!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
+                r#"<w:ins w:id="1" w:author="Ada"><w:r><w:t>i2</w:t></w:r></w:ins>"#,
+                r#"<w:sdt><w:sdtPr><w:alias w:val="Client"/><w:tag w:val="client"/><w:lock w:val="sdtLocked"/></w:sdtPr>"#,
+                r#"<w:sdtContent><w:r><w:t>c2</w:t></w:r></w:sdtContent></w:sdt>"#,
+                r#"<w:hyperlink w:anchor="a"><w:r><w:t>h2</w:t></w:r></w:hyperlink>"#,
+                r#"<w:r><w:t>y</w:t></w:r></w:p>"#,
+            )
+        );
+        // The emptied insertion and hyperlink go, and the emptied control
+        // stays with its properties, as Word keeps it to show its placeholder.
+        for _ in 0..3 {
+            remove(&mut document, 0, 1).unwrap();
+        }
+        assert_eq!(
+            body(&mut document),
+            concat!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
+                r#"<w:sdt><w:sdtPr><w:alias w:val="Client"/><w:tag w:val="client"/><w:lock w:val="sdtLocked"/></w:sdtPr>"#,
+                r#"<w:sdtContent></w:sdtContent></w:sdt><w:r><w:t>y</w:t></w:r></w:p>"#,
+            )
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraph(0).unwrap().text(), "xy");
+
+        // A tracked insertion inside a hyperlink or a control goes, the
+        // control stays, and so does a control that still holds a marker.
+        let mut document = from_body(concat!(
+            r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
+            r#"<w:hyperlink w:anchor="a"><w:ins w:id="2" w:author="Ada"><w:r><w:t>h</w:t></w:r></w:ins></w:hyperlink>"#,
+            r#"<w:bookmarkStart w:id="4" w:name="after"/>"#,
+            r#"<w:sdt><w:sdtContent><w:ins w:id="3" w:author="Ada"><w:r><w:t>s</w:t></w:r></w:ins></w:sdtContent></w:sdt>"#,
+            r#"<w:bookmarkEnd w:id="4"/>"#,
+            r#"<w:sdt><w:sdtContent><w:bookmarkStart w:id="5" w:name="in"/><w:r><w:t>k</w:t></w:r><w:bookmarkEnd w:id="5"/></w:sdtContent></w:sdt>"#,
+            r#"<w:r><w:t>y</w:t></w:r></w:p>"#,
+        ));
+        assert_eq!(texts(&document, 0), ["x", "h", "s", "k", "y"]);
+        for _ in 0..3 {
+            remove(&mut document, 0, 1).unwrap();
+        }
+        assert_eq!(
+            body(&mut document),
+            concat!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r><w:bookmarkStart w:id="4" w:name="after"/>"#,
+                r#"<w:sdt><w:sdtContent></w:sdtContent></w:sdt><w:bookmarkEnd w:id="4"/>"#,
+                r#"<w:sdt><w:sdtContent>"#,
+                r#"<w:bookmarkStart w:id="5" w:name="in"/><w:bookmarkEnd w:id="5"/>"#,
+                r#"</w:sdtContent></w:sdt><w:r><w:t>y</w:t></w:r></w:p>"#,
+            )
+        );
+        assert_eq!(
+            Document::from_bytes(&document.to_bytes().unwrap())
+                .unwrap()
+                .paragraph(0)
+                .unwrap()
+                .text(),
+            "xy"
+        );
+    }
+
+    /// A hyperlink that keeps a marker after its last run goes stays where it
+    /// was, so the marker keeps its partner on the right side.
+    #[test]
+    fn remove_run_keeps_a_hyperlink_holding_a_marker_in_place() {
+        for (inside_start, outside_start, inside_end, outside_end) in [
+            (
+                r#"<w:bookmarkStart w:id="9" w:name="b"/>"#,
+                "",
+                "",
+                r#"<w:bookmarkEnd w:id="9"/>"#,
+            ),
+            (
+                "",
+                r#"<w:bookmarkStart w:id="9" w:name="b"/>"#,
+                r#"<w:bookmarkEnd w:id="9"/>"#,
+                "",
+            ),
+            (
+                r#"<w:permStart w:id="7" w:edGrp="everyone"/>"#,
+                "",
+                "",
+                r#"<w:permEnd w:id="7"/>"#,
+            ),
+            (
+                "",
+                r#"<w:permStart w:id="7" w:edGrp="everyone"/>"#,
+                r#"<w:permEnd w:id="7"/>"#,
+                "",
+            ),
+        ] {
+            let hyperlink = format!(
+                r#"<w:hyperlink w:anchor="a"><w:r><w:t>h</w:t></w:r>{inside_start}{inside_end}</w:hyperlink>"#
+            );
+            let source = format!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r>{outside_start}{hyperlink}{outside_end}<w:r><w:t>y</w:t></w:r></w:p>"#
+            );
+            let mut document = from_body(&source);
+            remove(&mut document, 0, 1).unwrap();
+            let expected = format!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r>{outside_start}<w:hyperlink w:anchor="a">{inside_start}{inside_end}</w:hyperlink>{outside_end}<w:r><w:t>y</w:t></w:r></w:p>"#
+            );
+            assert_eq!(body(&mut document), expected, "{source}");
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            assert_eq!(reopened.paragraph(0).unwrap().text(), "xy");
+            for bookmark in reopened.bookmarks() {
+                assert_eq!(bookmark.issue(), None, "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn remove_run_refuses_part_of_a_field_or_of_a_move_and_removes_a_whole_field() {
+        let mut document = from_body(concat!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> TOC \o "1-3" </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Entry</w:t></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t>Tail</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+            r#"<w:p><w:moveToRangeStart w:id="3" w:author="Ada" w:name="move1"/>"#,
+            r#"<w:moveTo w:id="4" w:author="Ada"><w:r><w:t>moved</w:t></w:r></w:moveTo>"#,
+            r#"<w:moveToRangeEnd w:id="3"/></w:p>"#,
+            r#"<w:p><w:r><w:t>a</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t>n</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r>"#,
+            r#"<w:r><w:endnoteReference w:id="2"/></w:r></w:p>"#,
+        ));
+        let before = document.to_bytes().unwrap();
+        for (paragraph, run, reason) in [
+            (
+                4,
+                1,
+                "run 1 cannot be removed: it holds the reference of footnote 1",
+            ),
+            (
+                4,
+                2,
+                "run 2 cannot be removed: it holds the reference of endnote 2",
+            ),
+            (
+                0,
+                0,
+                "part of a complex field whose other parts are in other runs",
+            ),
+            (
+                0,
+                1,
+                "part of a complex field whose other parts are in other runs",
+            ),
+            (
+                0,
+                2,
+                "part of a complex field whose other parts are in other runs",
+            ),
+            (
+                1,
+                1,
+                "part of a complex field whose other parts are in other runs",
+            ),
+            (
+                2,
+                0,
+                "part of a tracked move destination, whose source would no longer match it",
+            ),
+            (
+                0,
+                4,
+                "run index 4 is out of range for a paragraph with 4 runs",
+            ),
+        ] {
+            let error = remove(&mut document, paragraph, run).unwrap_err();
+            assert!(error.to_string().contains(reason), "{error}");
+        }
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        // The cached result of a field can go, and a field whose parts are
+        // all in one paragraph is one run, removed whole.
+        remove(&mut document, 0, 3).unwrap();
+        assert_eq!(texts(&document, 0), ["", "", ""]);
+        assert_eq!(texts(&document, 3).len(), 2);
+        remove(&mut document, 3, 1).unwrap();
+        let xml = body(&mut document);
+        assert!(
+            xml.contains(r#"<w:p><w:r><w:t>a</w:t></w:r></w:p><w:p><w:r><w:t>n</w:t>"#),
+            "{xml}"
+        );
+        assert!(xml.contains(r#"<w:instrText xml:space="preserve"> TOC \o "1-3" </w:instrText>"#));
+    }
+}
+
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
     let mut document = f255_story_document();
     document.add_picture(b"body image", "body.png", Length::pt(1.0), Length::pt(1.0));
@@ -10008,6 +10322,198 @@ fn numbered_toc_entries_reuse_the_visible_layout_marker() {
     assert_eq!(
         toc_entry_signatures(&document_xml(&mut document))[0].0,
         "1.\tOverview\t1"
+    );
+}
+
+/// GitHub issue #168: python-docx's default template gives `Subtitle` a
+/// `w:numPr` holding a `w:ilvl` and no `w:numId`, so every numbering edit of
+/// a python-docx document was refused. The style takes the instance of its
+/// `basedOn` chain and is not numbered when the chain has none, which is what
+/// Word renders: `1.`, `1.1)`, `1.2)`, `2.` and an unnumbered subtitle here.
+#[test]
+fn style_numbering_level_without_an_instance_follows_its_based_on_chain() {
+    let producer_styles = concat!(
+        // python-docx's `Subtitle`, without its linked character style.
+        r#"<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/>"#,
+        r#"<w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="11"/>"#,
+        r#"<w:qFormat/><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="Base"><w:name w:val="Base"/>"#,
+        r#"<w:basedOn w:val="Normal"/></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="Derived"><w:name w:val="Derived"/>"#,
+        r#"<w:basedOn w:val="Base"/><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>"#,
+        r#"</w:style>"#,
+    );
+    let body = [
+        ("Base", "Base one"),
+        ("Derived", "Derived one"),
+        ("Derived", "Derived two"),
+        ("Base", "Base two"),
+        ("Subtitle", "Subtitle text"),
+    ]
+    .map(|(style, text)| {
+        format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#
+        )
+    })
+    .concat();
+    let mut document = document_with_producer_styles(&body, producer_styles);
+    document.validate_numbering_graph().unwrap();
+
+    let definition = document
+        .add_numbering_definition(&[
+            ListLevel::decimal().level_text("%1."),
+            ListLevel::decimal().level_text("%1.%2)"),
+        ])
+        .unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .link_style_to_numbering("Base", instance, 0)
+        .unwrap();
+
+    let markers = |document: &mut Document| {
+        let layout = document.layout_deterministic().unwrap();
+        (0..5)
+            .map(|body_index| {
+                layout
+                    .document_body_paragraph_numbering(body_index)
+                    .map(|numbering| numbering.marker_text.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = ["1.", "1.1)", "1.2)", "2."]
+        .map(|marker| Some(marker.to_owned()))
+        .into_iter()
+        .chain([None])
+        .collect::<Vec<_>>();
+    assert_eq!(markers(&mut document), expected);
+
+    // A level may name the inheriting style back, which records its link.
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let numbering =
+        String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec()).unwrap();
+    let level = numbering.find(r#"<w:lvl w:ilvl="1""#).unwrap();
+    let level_end = level + numbering[level..].find("<w:lvlText").unwrap();
+    let numbering = format!(
+        r#"{}<w:pStyle w:val="Derived"/>{}"#,
+        &numbering[..level_end],
+        &numbering[level_end..]
+    );
+    package.set_part("/word/numbering.xml", numbering.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    document.validate_numbering_graph().unwrap();
+    document
+        .add_numbering_definition(&[ListLevel::decimal()])
+        .unwrap();
+    assert_eq!(markers(&mut document), expected);
+
+    // Unlinking the style that the level names back removes only that name,
+    // and the style stays numbered through `Base`.
+    document
+        .unlink_style_from_numbering("Derived", instance, 1)
+        .unwrap();
+    assert_eq!(markers(&mut document), expected);
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let numbering = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert!(
+        !numbering.contains(r#"<w:pStyle w:val="Derived"/>"#),
+        "{numbering}"
+    );
+    // A style that no level names is not linked, and unlinking it changes
+    // nothing.
+    let before = document.to_bytes().unwrap();
+    document
+        .unlink_style_from_numbering("Subtitle", instance, 1)
+        .unwrap();
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+/// The same rule for a style linked to a list and for a repeated template
+/// paragraph. A style `w:numPr` holding only a `w:ilvl` owns no link, so a
+/// link replaces it. A paragraph `w:ilvl` without a `w:numId` takes the
+/// instance of its style chain, which Word renders as `1.a)` under a `Base`
+/// paragraph numbered `1.`, and numbers nothing under `Normal`.
+#[test]
+fn link_and_template_accept_a_numbering_level_without_an_instance() {
+    let producer_styles = concat!(
+        r#"<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/>"#,
+        r#"<w:basedOn w:val="Normal"/><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>"#,
+        r#"</w:style><w:style w:type="paragraph" w:styleId="Base"><w:name w:val="Base"/>"#,
+        r#"<w:basedOn w:val="Normal"/></w:style>"#,
+    );
+    let body = concat!(
+        r#"<w:p><w:r><w:t>{% for item in items %}</w:t></w:r></w:p>"#,
+        r#"<w:p><w:pPr><w:pStyle w:val="Base"/><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>"#,
+        r#"<w:r><w:t>{{ item }}</w:t></w:r></w:p>"#,
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>"#,
+        r#"<w:r><w:t>Note {{ item }}</w:t></w:r></w:p>"#,
+        r#"<w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p>"#,
+        r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>Subtitle</w:t></w:r></w:p>"#,
+    );
+    let mut document = document_with_producer_styles(body, producer_styles);
+    let levels = [
+        ListLevel::decimal().level_text("%1."),
+        ListLevel::decimal().level_text("%1.%2)"),
+    ];
+    let definition = document.add_numbering_definition(&levels).unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .link_style_to_numbering("Base", instance, 0)
+        .unwrap();
+    let subtitle_definition = document
+        .add_numbering_definition(&[ListLevel::decimal().level_text("S%1.")])
+        .unwrap();
+    let subtitle = document
+        .add_numbering_instance(subtitle_definition, &[])
+        .unwrap();
+    document
+        .link_style_to_numbering("Subtitle", subtitle, 0)
+        .unwrap();
+
+    document
+        .render_template(&serde_json::json!({"items": ["one", "two"]}))
+        .unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    let markers = (0..5)
+        .map(|body_index| {
+            let text = document.paragraph(body_index).unwrap().text();
+            let marker = layout
+                .document_body_paragraph_numbering(body_index)
+                .map(|numbering| numbering.marker_text.clone());
+            (text, marker)
+        })
+        .collect::<Vec<_>>();
+    let entry = |text: &str, marker: Option<&str>| (text.to_owned(), marker.map(str::to_owned));
+    assert_eq!(
+        markers,
+        [
+            entry("one", Some("1.1)")),
+            entry("Note one", None),
+            entry("two", Some("1.2)")),
+            entry("Note two", None),
+            entry("Subtitle", Some("S1.")),
+        ]
+    );
+
+    // Unlinking removes the whole `w:numPr`, so the level the style held
+    // before it was linked does not come back.
+    document
+        .unlink_style_from_numbering("Subtitle", subtitle, 0)
+        .unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    let subtitle_start = styles.find(r#"w:styleId="Subtitle""#).unwrap();
+    let subtitle_end = subtitle_start + styles[subtitle_start..].find("</w:style>").unwrap();
+    assert!(
+        !styles[subtitle_start..subtitle_end].contains("numPr"),
+        "{styles}"
     );
 }
 

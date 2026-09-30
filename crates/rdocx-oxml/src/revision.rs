@@ -238,6 +238,32 @@ impl CT_Revision {
         })
     }
 
+    /// Remove an accepted-view run of an insertion. Returns `None` for a
+    /// stale path, and otherwise whether nothing is left in the wrapper, which
+    /// is then left unchanged for its owner to remove. A move destination is
+    /// refused, since its source would no longer match it.
+    pub(crate) fn remove_accepted_run_segments(
+        &mut self,
+        path: &[AcceptedRunPathSegment],
+    ) -> crate::Result<Option<bool>> {
+        if self.kind == RevisionKind::MoveTo {
+            return Err(crate::OxmlError::InvalidValue(
+                "it is part of a tracked move destination, whose source would no longer match it"
+                    .to_owned(),
+            ));
+        }
+        let mut outcome = None;
+        self.edit_accepted_paragraph(|paragraph| {
+            if !paragraph.remove_accepted_run_segments(path)? {
+                return Ok(false);
+            }
+            let emptied = paragraph.has_no_children();
+            outcome = Some(emptied);
+            Ok(!emptied)
+        })?;
+        Ok(outcome)
+    }
+
     /// The paragraph of an insertion or a move destination, when
     /// [`Self::edit_accepted_paragraph`] can write an edit of it back.
     pub(crate) fn editable_accepted_paragraph(&self) -> Option<&CT_P> {

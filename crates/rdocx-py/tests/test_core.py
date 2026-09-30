@@ -2380,6 +2380,86 @@ def test_split_run_accepts_a_paragraph_handle_in_a_control_or_the_body():
     assert document.to_bytes() == before
 
 
+def test_run_remove_keeps_markers_and_drops_emptied_wrappers():
+    import rdocx
+
+    # GitHub issue #168 asks for the python-docx idiom
+    # run._r.getparent().remove(run._r) as a method of the run.
+    document = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:bookmarkStart w:id="1" w:name="kept"/>'
+        '<w:r><w:t xml:space="preserve">Keep </w:t></w:r>'
+        "<w:r><w:t>drop</w:t></w:r><w:bookmarkEnd w:id=\"1\"/>"
+        '<w:hyperlink w:anchor="kept"><w:r><w:t>link</w:t></w:r></w:hyperlink>'
+        '<w:ins w:id="2" w:author="Ada"><w:r><w:t>inserted</w:t></w:r></w:ins>'
+        "</w:p>",
+    )
+    paragraph = document.paragraphs[0]
+    runs = paragraph.runs
+    assert [run.text for run in runs] == ["Keep ", "drop", "link", "inserted"]
+    kept = runs[0]
+    runs[1].remove()
+    with pytest.raises(rdocx.StaleElementError):
+        kept.text
+    with pytest.raises(rdocx.StaleElementError):
+        paragraph.text
+    assert [run.text for run in document.paragraphs[0].runs] == [
+        "Keep ",
+        "link",
+        "inserted",
+    ]
+    document.paragraphs[0].runs[1].remove()
+    document.paragraphs[0].runs[1].remove()
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [run.text for run in reopened.paragraphs[0].runs] == ["Keep "]
+    xml = _document_xml(reopened).decode()
+    assert '<w:bookmarkStart w:id="1" w:name="kept"/>' in xml
+    assert '<w:bookmarkEnd w:id="1"/>' in xml
+    assert "hyperlink" not in xml
+    assert "w:ins" not in xml
+
+    table = document.add_table(1, 1)
+    table.cell(0, 0).text = "cell"
+    document.tables[0].cell(0, 0).paragraphs[0].runs[0].remove()
+    assert document.tables[0].cell(0, 0).paragraphs[0].text == ""
+
+
+def test_run_remove_refuses_part_of_a_field_or_a_comment_reference():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> TOC </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:t>Entry</w:t></w:r></w:p>"
+        '<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+        "<w:p><w:r><w:t>Commented</w:t></w:r></w:p>",
+    )
+    comment_range = rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=2, run_index=0),
+        end=rdocx.RunPosition(body_index=2, run_index=1),
+    )
+    document.add_comment(comment_range, author="Ada", text="Here")
+    before = document.to_bytes()
+    for paragraph, run, reason in (
+        (0, 0, "part of a complex field"),
+        (0, 2, "part of a complex field"),
+        (1, 0, "part of a complex field"),
+        (2, 1, "the reference of comment 0"),
+    ):
+        handle = document.paragraphs[paragraph].runs[run]
+        with pytest.raises(rdocx.RdocxError, match=reason):
+            handle.remove()
+        # A refused removal leaves the handles valid.
+        assert handle.text == ""
+    assert document.to_bytes() == before
+
+    document.paragraphs[0].runs[3].remove()
+    assert document.paragraphs[0].text == ""
+    assert [comment.text for comment in document.comments] == ["Here"]
+
+
 def test_story_comment_after_a_block_content_control_anchors_on_its_paragraph():
     import rdocx
 
