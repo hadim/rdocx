@@ -309,6 +309,11 @@ live `FillFormat` over the direct background fill that never changes the slide
 when read, and `follow_master_background` reports and sets whether the slide
 has no `p:bg`. `SlideCollection.remove` and `SlideCollection.move(from_, to)`
 use the native staged slide operations and advance the revision once.
+`SlideCollection.import_slide(slide, layout=None, index=None)` wraps the native
+import. `layout` must be a layout of the destination. `index` is an insertion
+position counted from the end when negative, and one outside the collection is
+an `IndexError`. A slide of the same presentation is imported from a snapshot
+and keeps its own layout unless `layout` is given.
 
 `Shape` geometry, `name`, and `rotation` are writable without a revision bump.
 A missing partner coordinate becomes zero, as in python-pptx, and a negative

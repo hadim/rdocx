@@ -228,6 +228,9 @@ def exercise_rpptx_types(path: Path) -> None:
     picture.replace_image(path)
     presentation.slides[0].shapes.remove(group)
     presentation.slides.move(0, -1)
+    imported: Slide = presentation.slides.import_slide(
+        presentation.slides[0], layout=presentation.slide_layouts[0], index=0
+    )
     presentation.slides.remove(presentation.slides[0])
     presentation.save(path)
     (
