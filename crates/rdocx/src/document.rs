@@ -3309,6 +3309,11 @@ pub(crate) struct DocumentIdentifiers {
     bookmark_ids: HashSet<i32>,
     comment_ids: HashSet<i32>,
     drawing_ids: HashSet<u32>,
+    /// Per part, the `wp:docPr/@id` values the opened XML repeats, with
+    /// their occurrence count. Producers repeat them and consumers renumber
+    /// or ignore them, so a scan accepts them. A staged edit keeps the counts
+    /// of the opened document and may not exceed them.
+    repeated_drawing_ids: HashMap<String, HashMap<u32, usize>>,
     abstract_numbering_ids: HashSet<u32>,
     numbering_instance_ids: HashSet<u32>,
     part_names: HashSet<String>,
@@ -3341,6 +3346,7 @@ impl DocumentIdentifiers {
             bookmark_ids: HashSet::new(),
             comment_ids: HashSet::new(),
             drawing_ids: HashSet::new(),
+            repeated_drawing_ids: HashMap::new(),
             abstract_numbering_ids: HashSet::new(),
             numbering_instance_ids: HashSet::new(),
             part_names: package
@@ -3450,7 +3456,7 @@ impl DocumentIdentifiers {
             if let Some(categories) = identity_parts.get(&part_name_identity(part_name))
                 && identifier_xml_is_well_formed(bytes)
             {
-                let mut part_drawing_ids = HashSet::new();
+                let mut part_drawing_ids = HashMap::new();
                 identifiers
                     .scan_xml_definitions(bytes, categories, &mut part_drawing_ids)
                     .map_err(|error| {
@@ -3458,7 +3464,17 @@ impl DocumentIdentifiers {
                             "cannot scan identifiers in XML part {part_name}: {error}"
                         ))
                     })?;
-                identifiers.drawing_ids.extend(part_drawing_ids);
+                let repeated = part_drawing_ids
+                    .iter()
+                    .filter(|(_, count)| **count > 1)
+                    .map(|(id, count)| (*id, *count))
+                    .collect::<HashMap<_, _>>();
+                if !repeated.is_empty() {
+                    identifiers
+                        .repeated_drawing_ids
+                        .insert(part_name_identity(part_name), repeated);
+                }
+                identifiers.drawing_ids.extend(part_drawing_ids.into_keys());
             }
         }
         identifiers.preserved_relationship_ids = identifiers.relationship_ids.clone();
@@ -3504,7 +3520,7 @@ impl DocumentIdentifiers {
         &mut self,
         xml: &[u8],
         categories: &HashSet<IdentifierXmlCategory>,
-        part_drawing_ids: &mut HashSet<u32>,
+        part_drawing_ids: &mut HashMap<u32, usize>,
     ) -> Result<()> {
         let mut reader = NsReader::from_reader(xml);
         let mut buffer = Vec::new();
@@ -3555,7 +3571,7 @@ impl DocumentIdentifiers {
         reader: &NsReader<&[u8]>,
         element: &BytesStart<'_>,
         category: IdentifierXmlCategory,
-        part_drawing_ids: &mut HashSet<u32>,
+        part_drawing_ids: &mut HashMap<u32, usize>,
     ) -> Result<()> {
         for attribute in element.attributes() {
             let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
@@ -3588,7 +3604,7 @@ impl DocumentIdentifiers {
                     let value = value
                         .parse::<u32>()
                         .map_err(|_| Error::Other(format!("invalid drawing id {value}")))?;
-                    Self::insert_unique(part_drawing_ids, value, "drawing")?;
+                    *part_drawing_ids.entry(value).or_default() += 1;
                 }
                 IdentifierXmlCategory::Bookmark => {
                     let value = value
@@ -3626,6 +3642,33 @@ impl DocumentIdentifiers {
             break;
         }
         Ok(())
+    }
+
+    /// Refuse a `wp:docPr/@id` occurrence that a staged edit added to an id
+    /// its part already uses. Repetitions the source document had are kept.
+    fn reject_new_repeated_drawing_ids(&self, source: &Self) -> Result<()> {
+        let mut added = self
+            .repeated_drawing_ids
+            .iter()
+            .flat_map(|(part_name, repeated)| {
+                repeated.iter().filter_map(move |(id, count)| {
+                    let kept = source
+                        .repeated_drawing_ids
+                        .get(part_name)
+                        .and_then(|repeated| repeated.get(id))
+                        .copied()
+                        .unwrap_or(1);
+                    (*count > kept).then_some((part_name, *id))
+                })
+            })
+            .collect::<Vec<_>>();
+        added.sort_unstable();
+        match added.first() {
+            Some((part_name, id)) => Err(Error::Other(format!(
+                "duplicate drawing id {id} in authored XML of part {part_name}"
+            ))),
+            None => Ok(()),
+        }
     }
 
     fn insert_unique<T: std::hash::Hash + Eq + std::fmt::Display + Copy>(
@@ -4074,6 +4117,8 @@ impl DocumentIdentifiers {
     }
 
     fn reconcile_provenance(&mut self, source: &Self) {
+        self.repeated_drawing_ids
+            .clone_from(&source.repeated_drawing_ids);
         self.preserved_relationship_ids = intersect_relationship_registry(
             &source.preserved_relationship_ids,
             &self.relationship_ids,
@@ -12361,6 +12406,9 @@ impl Document {
         let mut output = std::io::Cursor::new(Vec::new());
         self.package.write_to(&mut output)?;
         let mut reopened = Self::from_bytes_with_limits(output.get_ref(), limits)?;
+        reopened
+            .identifiers
+            .reject_new_repeated_drawing_ids(&provenance)?;
         reopened.identifiers.reconcile_provenance(&provenance);
         reopened.custom_properties_owned = custom_properties_owned;
         reopened.settings_owned = settings_owned;
@@ -25382,7 +25430,7 @@ mod tests {
     }
 
     #[test]
-    fn same_part_normalized_drawing_ids_remain_invalid() {
+    fn same_part_normalized_drawing_ids_are_counted_not_refused() {
         let mut package =
             OpcPackage::with_main_part("word/document.xml", content_types::WORD_DOCUMENT);
         package.set_part(
@@ -25393,8 +25441,12 @@ mod tests {
             )
             .into_bytes(),
         );
-        let error = DocumentIdentifiers::scan(&package).unwrap_err();
-        assert!(error.to_string().contains("duplicate drawing id 1"));
+        let mut identifiers = DocumentIdentifiers::scan(&package).unwrap();
+        assert_eq!(
+            identifiers.repeated_drawing_ids,
+            HashMap::from([("/word/document.xml".to_owned(), HashMap::from([(1, 2)]))])
+        );
+        assert_eq!(identifiers.reserve_drawing_id().unwrap(), 2);
     }
 
     #[test]
