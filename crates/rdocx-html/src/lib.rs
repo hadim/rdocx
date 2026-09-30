@@ -122,7 +122,7 @@ fn push_control_blocks<'a>(control: &'a CT_Sdt, blocks: &mut Vec<Block<'a>>) {
             SdtContent::ContentControl(nested) => push_control_blocks(nested, blocks),
             // A control around a paragraph or a table holds no rows, cells or
             // runs of its own. Those around rows, cells and runs are read
-            // through `CT_Tbl::rows`, `CT_Row::cells` and `CT_P::runs`.
+            // through `CT_Tbl::rows`, `CT_Row::cells` and `CT_P::accepted_view`.
             SdtContent::Row(_) | SdtContent::Cell(_) | SdtContent::Run(_) => {}
             SdtContent::RawXml(_) => {}
         }
@@ -203,13 +203,29 @@ mod tests {
     }
 
     #[test]
-    fn content_controls_are_transparent_to_lists_links_and_merged_rows() {
+    fn controls_revisions_and_wrappers_are_transparent_to_lists_links_and_merged_rows() {
         let input = |wrap: bool| {
             let control = |content: &str| {
                 if wrap {
                     format!(
                         "<w:sdt><w:sdtPr><w:tag w:val=\"c\"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"
                     )
+                } else {
+                    content.to_owned()
+                }
+            };
+            let tracked = |kind: &str, content: &str| {
+                if wrap {
+                    format!(r#"<w:{kind} w:id="1" w:author="a">{content}</w:{kind}>"#)
+                } else if kind == "ins" {
+                    content.to_owned()
+                } else {
+                    String::new()
+                }
+            };
+            let smart_tag = |content: &str| {
+                if wrap {
+                    format!(r#"<w:smartTag w:uri="u" w:element="e">{content}</w:smartTag>"#)
                 } else {
                     content.to_owned()
                 }
@@ -224,8 +240,11 @@ mod tests {
                 control(&item("two")),
                 item("three"),
                 format!(
-                    r#"<w:p><w:hyperlink r:id="rId1"><w:r><w:t>link</w:t></w:r></w:hyperlink>{}</w:p>"#,
-                    control(r#"<w:r><w:t xml:space="preserve"> wrapped</w:t></w:r>"#)
+                    r#"<w:p><w:hyperlink r:id="rId1"><w:r><w:t>link</w:t></w:r>{}</w:hyperlink>{}{}{}</w:p>"#,
+                    tracked("ins", r#"<w:r><w:t xml:space="preserve"> more</w:t></w:r>"#),
+                    control(r#"<w:r><w:t xml:space="preserve"> wrapped</w:t></w:r>"#),
+                    tracked("del", r#"<w:r><w:delText> gone</w:delText></w:r>"#),
+                    smart_tag(r#"<w:r><w:t xml:space="preserve"> tagged</w:t></w:r>"#)
                 ),
                 format!(
                     r#"<w:tbl><w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>merged</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr>{}</w:tbl>"#,
@@ -266,7 +285,7 @@ mod tests {
             "{html}"
         );
         assert!(
-            html.contains("<p><a href=\"https://example.com/\">link</a> wrapped</p>"),
+            html.contains("<p><a href=\"https://example.com/\">link more</a> wrapped tagged</p>"),
             "{html}"
         );
         assert!(html.contains("<td rowspan=\"2\"><p>merged</p>"), "{html}");
@@ -279,7 +298,7 @@ mod tests {
             "{markdown}"
         );
         assert!(
-            markdown.contains("[link](https://example.com/) wrapped"),
+            markdown.contains("[link more](https://example.com/) wrapped tagged"),
             "{markdown}"
         );
         assert!(markdown.contains("|  | b |"), "{markdown}");

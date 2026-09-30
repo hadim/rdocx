@@ -6864,7 +6864,7 @@ fn rtf_writer_reports_each_lossy_item_without_dropping_supported_siblings() {
         [
             (
                 "body[1]",
-                "body content control was dropped during RTF export",
+                "body content control was flattened during RTF export",
             ),
             (
                 "body[2]",
@@ -6881,7 +6881,7 @@ fn rtf_writer_reports_each_lossy_item_without_dropping_supported_siblings() {
         ]
     );
     let reparsed = Document::from_rtf_bytes(&written.bytes).unwrap().document;
-    assert_eq!(reparsed.text(), "first\nlast\n");
+    assert_eq!(reparsed.text(), "first\ncontrol\nlast\n");
 }
 
 #[test]

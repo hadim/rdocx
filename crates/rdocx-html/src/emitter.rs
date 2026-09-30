@@ -204,8 +204,8 @@ fn emit_paragraph(
     out.push_str(&format!("</{tag}>\n"));
 }
 
-/// Emit the inner content of a paragraph (runs, the runs content controls
-/// wrap, and hyperlinks).
+/// Emit the inner content of a paragraph (the runs of its accepted view and
+/// hyperlinks).
 fn emit_paragraph_content(
     out: &mut String,
     para: &CT_P,
@@ -214,10 +214,12 @@ fn emit_paragraph_content(
     hyperlink_urls: &HashMap<String, String>,
     options: &HtmlOptions,
 ) {
-    // Build a map of which runs are inside hyperlinks. It is keyed by run
-    // identity because `CT_P::runs` also yields the runs that content
-    // controls wrap, which are never inside a hyperlink.
-    let mut hyperlink_map: HashMap<*const CT_R, &str> = HashMap::new();
+    // The runs the text readers read, those of content controls, tracked
+    // insertions, smart tags and custom XML included, deleted ones left out.
+    let para = &para.accepted_view();
+
+    // Build a map of which runs are inside hyperlinks
+    let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
     for hl in &para.hyperlinks {
         // A target with an unsafe scheme yields no <a> at all, so the run text
         // still renders but cannot become a script trigger.
@@ -227,16 +229,16 @@ fn emit_paragraph_content(
                 .map(String::as_str)
                 .and_then(safe_url)
         {
-            for run in para.runs.iter().take(hl.run_end).skip(hl.run_start) {
-                hyperlink_map.insert(run, url);
+            for i in hl.run_start..hl.run_end {
+                hyperlink_map.insert(i, url);
             }
         }
     }
 
     let mut current_link: Option<&str> = None;
 
-    for run in para.runs() {
-        let in_link = hyperlink_map.get(&std::ptr::from_ref(run)).copied();
+    for (run_idx, run) in para.runs.iter().enumerate() {
+        let in_link = hyperlink_map.get(&run_idx).copied();
 
         // Open/close link tags as needed
         match (current_link, in_link) {

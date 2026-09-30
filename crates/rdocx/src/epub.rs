@@ -11,13 +11,15 @@ use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
 use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
 use rdocx_oxml::numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_Numbering, ST_NumberFormat};
+use rdocx_oxml::revision::CT_Revision;
 use rdocx_oxml::styles::{CT_Style, CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, Field, HyperlinkSpan, RunContent, SpecialCharacter};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::document::{visit_all_drawings, visit_body_paragraphs};
+use crate::document::{visit_accepted_drawings, visit_body_paragraphs};
+use crate::revision::accepted_revision_content;
 use crate::{Document, Error, Result};
 
 const MAX_EPUB_BYTES: usize = 64 * 1024 * 1024;
@@ -689,11 +691,8 @@ impl<'a> EpubWriter<'a> {
                 )?,
             }
         }
-        for (revision_index, _) in control.revisions().iter().enumerate() {
-            self.diagnose(
-                format!("{path}/revision[{revision_index}]"),
-                "content control revision was dropped during EPUB export".to_owned(),
-            )?;
+        for (revision_index, (_, revision)) in control.revisions().iter().enumerate() {
+            self.scan_revision(revision, &format!("{path}/revision[{revision_index}]"))?;
         }
         Ok(())
     }
@@ -1122,9 +1121,21 @@ impl<'a> EpubWriter<'a> {
             }
         }
         for (extra_index, consumed) in consumed_raw.into_iter().enumerate() {
-            if !consumed {
+            if consumed {
+                continue;
+            }
+            let raw_path = format!("{path}/xml[{extra_index}]");
+            if let Some(content) =
+                CT_P::raw_run_wrapper_content(&paragraph.extra_xml[extra_index].1)
+            {
                 self.diagnose(
-                    format!("{path}/xml[{extra_index}]"),
+                    raw_path.clone(),
+                    "smart tag or custom XML wrapper was flattened during EPUB export".to_owned(),
+                )?;
+                self.scan_inline_content(&content, &raw_path)?;
+            } else {
+                self.diagnose(
+                    raw_path,
                     "unmodelled paragraph XML was dropped during EPUB export".to_owned(),
                 )?;
             }
@@ -1137,11 +1148,8 @@ impl<'a> EpubWriter<'a> {
             )?;
             self.scan_control(control, &control_path, 1, false)?;
         }
-        for (revision_index, _) in paragraph.revisions.iter().enumerate() {
-            self.diagnose(
-                format!("{path}/revision[{revision_index}]"),
-                "paragraph revision wrapper was flattened during EPUB export".to_owned(),
-            )?;
+        for (revision_index, (_, _, revision)) in paragraph.revisions.iter().enumerate() {
+            self.scan_revision(revision, &format!("{path}/revision[{revision_index}]"))?;
         }
         for (marker_index, _) in paragraph.comment_ranges.iter().enumerate() {
             self.diagnose(
@@ -1179,6 +1187,33 @@ impl<'a> EpubWriter<'a> {
             }
         }
         for (run_index, run) in paragraph.runs.iter().enumerate() {
+            self.scan_run(run, &format!("{path}/run[{run_index}]"))?;
+        }
+        Ok(())
+    }
+
+    /// Scan a tracked revision. An insertion or a move in is written in place,
+    /// and a deletion or a move away is left out, as the accepted view reads.
+    fn scan_revision(&mut self, revision: &CT_Revision, path: &str) -> Result<()> {
+        match accepted_revision_content(revision) {
+            Some(content) => {
+                self.diagnose(
+                    path.to_owned(),
+                    "paragraph revision wrapper was flattened during EPUB export".to_owned(),
+                )?;
+                self.scan_inline_content(content, path)
+            }
+            None => self.diagnose(
+                path.to_owned(),
+                "deleted or moved-away revision content was dropped during EPUB export".to_owned(),
+            ),
+        }
+    }
+
+    /// Scan the runs of the inline content of a wrapper or a revision, as its
+    /// accepted view writes them.
+    fn scan_inline_content(&mut self, content: &CT_P, path: &str) -> Result<()> {
+        for (run_index, run) in content.accepted_view().runs.iter().enumerate() {
             self.scan_run(run, &format!("{path}/run[{run_index}]"))?;
         }
         Ok(())
@@ -1806,8 +1841,7 @@ fn list_definition<'a>(
 
 fn projected_paragraph_text(paragraph: &CT_P) -> String {
     let mut text = String::new();
-    // The runs content controls wrap are exported in place.
-    for run in paragraph.runs() {
+    for run in &paragraph.accepted_view().runs {
         for content in &run.content {
             match content {
                 RunContent::Text(value) | RunContent::DeletedText(value) => {
@@ -1837,7 +1871,7 @@ fn projected_paragraph_text(paragraph: &CT_P) -> String {
 
 fn referenced_drawing_ids(content: &[BodyContent]) -> Vec<String> {
     let mut ids = Vec::new();
-    visit_all_drawings(content, &mut |drawing| {
+    visit_accepted_drawings(content, &mut |drawing| {
         if let Some(id) = drawing
             .inline
             .as_ref()
@@ -2449,42 +2483,25 @@ fn render_paragraph_projection(paragraph: &CT_P) -> CT_P {
         properties.outline_lvl = Some(5);
         properties.style_id = Some("Heading6".to_owned());
     }
-    // The runs content controls wrap join the direct runs in document order.
-    // They are never inside a hyperlink, so a hyperlink span moves by the
-    // wrapped runs before it.
-    let runs = paragraph.runs();
-    let mut direct_positions = Vec::with_capacity(paragraph.runs.len());
-    for (position, run) in runs.iter().enumerate() {
-        if paragraph
-            .runs
-            .get(direct_positions.len())
-            .is_some_and(|direct| std::ptr::eq(direct, *run))
-        {
-            direct_positions.push(position);
-        }
-    }
+    // The runs the text readers read, those of content controls, tracked
+    // insertions, smart tags and custom XML included, deleted ones left out.
+    let view = paragraph.accepted_view();
     CT_P {
         properties,
-        runs: runs.iter().map(|run| render_run_projection(run)).collect(),
-        hyperlinks: paragraph
+        runs: view.runs.iter().map(render_run_projection).collect(),
+        hyperlinks: view
             .hyperlinks
             .iter()
-            .map(|hyperlink| {
-                let run_start = direct_positions
-                    .get(hyperlink.run_start)
-                    .copied()
-                    .unwrap_or(runs.len());
-                HyperlinkSpan {
-                    rel_id: hyperlink.rel_id.clone(),
-                    anchor: hyperlink.anchor.clone(),
-                    tooltip: hyperlink.tooltip.clone(),
-                    doc_location: hyperlink.doc_location.clone(),
-                    run_start,
-                    run_end: run_start + hyperlink.run_end.saturating_sub(hyperlink.run_start),
-                    extra_attributes: Vec::new(),
-                    extra_xml: Vec::new(),
-                    preserved_raw_before: None,
-                }
+            .map(|hyperlink| HyperlinkSpan {
+                rel_id: hyperlink.rel_id.clone(),
+                anchor: hyperlink.anchor.clone(),
+                tooltip: hyperlink.tooltip.clone(),
+                doc_location: hyperlink.doc_location.clone(),
+                run_start: hyperlink.run_start,
+                run_end: hyperlink.run_end,
+                extra_attributes: Vec::new(),
+                extra_xml: Vec::new(),
+                preserved_raw_before: None,
             })
             .collect(),
         comment_ranges: Vec::new(),
@@ -2845,10 +2862,10 @@ fn supported_image_occurrences(
     content: &BodyContent,
     input: &rdocx_html::HtmlInput,
 ) -> Vec<ImageOccurrence> {
-    // The emitter writes the pictures of the projected block, those content
-    // controls wrap included, in the order this visitor reaches them.
+    // The emitter writes the pictures of the projected block, that is of the
+    // accepted view of its paragraphs, in the order this visitor reaches them.
     let mut occurrences = Vec::new();
-    visit_all_drawings(std::slice::from_ref(content), &mut |drawing| {
+    visit_accepted_drawings(std::slice::from_ref(content), &mut |drawing| {
         let source = drawing
             .inline
             .as_ref()
@@ -3339,7 +3356,7 @@ fn measure_body_content(
 
 /// Measure what a block content control wraps, which is exported in place.
 /// The rows, cells and runs that controls wrap are measured through
-/// `CT_Tbl::rows`, `CT_Row::cells` and `CT_P::runs`.
+/// `CT_Tbl::rows`, `CT_Row::cells` and `CT_P::accepted_bookmark_runs`.
 fn measure_control(
     control: &CT_Sdt,
     depth: usize,
@@ -3516,8 +3533,9 @@ fn measure_paragraph(
             add_source_bytes(text_bytes, raw.len())?;
         }
     }
-    // The runs content controls wrap are exported in place.
-    for run in paragraph.runs() {
+    // The runs of content controls and tracked insertions are exported in
+    // place. Those of smart tags and custom XML are measured as raw XML below.
+    for run in paragraph.accepted_bookmark_runs() {
         add_projected_nodes(projected_nodes, 1 + run.content.len())?;
         if let Some(properties) = &run.properties {
             for value in [

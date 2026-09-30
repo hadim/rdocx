@@ -13576,13 +13576,34 @@ mod content_control_read_walker_regressions {
 
     /// A document with a content control wherever one can wrap exported
     /// content: around a body heading, a run, a cell paragraph, a run in a
-    /// cell, a cell, a row, another control, and two of three pictures. The
-    /// header paragraph is wrapped too. With `wrap` false, the same document
-    /// without any control.
+    /// cell, a cell, a row, another control, and two of four pictures. The
+    /// header paragraph is wrapped too. It also holds a tracked insertion,
+    /// deletion and move, a picture in an insertion, a smart tag and inline
+    /// custom XML. With `wrap` false, the document the text readers read: no
+    /// control or wrapper, the inserted and moved-in runs as plain runs, and
+    /// no deleted or moved-away run.
     fn exporter_fixture(wrap: bool) -> Document {
         let wrap_in = |tag: &str, content: &str| {
             if wrap {
                 control(tag, content)
+            } else {
+                content.to_owned()
+            }
+        };
+        let tracked = |kind: &str, id: usize, content: &str| {
+            if wrap {
+                format!(
+                    r#"<w:{kind} w:id="{id}" w:author="Ada" w:date="2026-09-30T00:00:00Z">{content}</w:{kind}>"#
+                )
+            } else if matches!(kind, "ins" | "moveTo") {
+                content.to_owned()
+            } else {
+                String::new()
+            }
+        };
+        let wrapper = |element: &str, attributes: &str, content: &str| {
+            if wrap {
+                format!("<w:{element} {attributes}>{content}</w:{element}>")
             } else {
                 content.to_owned()
             }
@@ -13645,6 +13666,33 @@ mod content_control_read_walker_regressions {
                 &format!("<w:p>{}</w:p>", picture_run(&image, 2, 19_050, 28_575)),
             ),
             format!("<w:p>{}</w:p>", picture_run(&image, 3, 28_575, 38_100)),
+            format!(
+                "<w:p>{}{}{}{}</w:p>",
+                run("Tracked "),
+                tracked(
+                    "ins",
+                    101,
+                    r#"<w:r><w:rPr><w:b/></w:rPr><w:t>inserted</w:t></w:r>"#
+                ),
+                tracked("del", 102, r#"<w:r><w:delText>removed</w:delText></w:r>"#),
+                run(" text.")
+            ),
+            format!(
+                "<w:p>{}{}</w:p>",
+                tracked("moveFrom", 103, &run("moved away")),
+                tracked("moveTo", 104, &run("Moved here"))
+            ),
+            format!(
+                "<w:p>{}{}{}{}</w:p>",
+                run("Tagged "),
+                wrapper("smartTag", r#"w:uri="urn:x" w:element="place""#, &run("smart")),
+                run(" and "),
+                wrapper("customXml", r#"w:element="field""#, &run("custom"))
+            ),
+            format!(
+                "<w:p>{}</w:p>",
+                tracked("ins", 105, &picture_run(&image, 4, 38_100, 47_625))
+            ),
             paragraph("Plain after."),
         ]
         .concat();
@@ -13685,7 +13733,7 @@ mod content_control_read_walker_regressions {
     }
 
     #[test]
-    fn every_exporter_writes_what_content_controls_wrap_in_place() {
+    fn every_exporter_writes_what_the_text_readers_read() {
         let wrapped = exporter_fixture(true);
         let plain = exporter_fixture(false);
         assert_eq!(
@@ -13696,16 +13744,24 @@ mod content_control_read_walker_regressions {
             3
         );
         assert_eq!(wrapped.text(), plain.text());
+        assert!(
+            wrapped
+                .text()
+                .contains("Tracked inserted text.\nMoved here\nTagged smart and custom\n")
+        );
 
-        // A control is transparent: each exporter writes the wrapped document
-        // exactly as the same document without controls.
+        // Controls, tracked changes and wrappers are transparent: each exporter
+        // writes the wrapped document exactly as the document the text readers
+        // read. The main story is the only one these exporters write, so the
+        // header control must leave the output unchanged.
         let markdown = wrapped.to_markdown();
         assert_eq!(markdown, plain.to_markdown());
         assert_eq!(
             markdown,
             "Plain before.\n\n# Wrapped heading\n\nInline **wrapped run** after.\n\n\
              | Cell block | Cell inline | Wrapped cell |\n| --- | --- | --- |\n\
-             | Wrapped row |  |  |\n\nNested text\n\n\n\nPlain after.\n\n"
+             | Wrapped row |  |  |\n\nNested text\n\n\n\nTracked **inserted** text.\n\n\
+             Moved here\n\nTagged smart and custom\n\n\nPlain after.\n\n"
         );
 
         let html = wrapped.to_html();
@@ -13719,15 +13775,18 @@ mod content_control_read_walker_regressions {
             "<td><p>Wrapped cell</p>",
             "<td><p>Wrapped row</p>",
             "<p>Nested text</p>",
+            "<p>Tracked <strong>inserted</strong> text.</p>",
+            "<p>Moved here</p>",
+            "<p>Tagged smart and custom</p>",
             "<p>Plain after.</p>",
         ] {
             assert!(html.contains(text), "{text}: {html}");
         }
-        assert_eq!(html.matches("<img ").count(), 3, "{html}");
-        assert!(!html.contains("Header text"), "{html}");
+        assert_eq!(html.matches("<img ").count(), 4, "{html}");
 
         // MHTML pairs each picture with its size in document order: the one in
-        // the row control, the one in the block control, then the plain one.
+        // the row control, the one in the block control, the plain one, then
+        // the inserted one.
         let mhtml = wrapped.to_mhtml_bytes().unwrap();
         let plain_mhtml = plain.to_mhtml_bytes().unwrap();
         assert_eq!(mhtml.bytes, plain_mhtml.bytes);
@@ -13739,7 +13798,12 @@ mod content_control_read_walker_regressions {
                 .iter()
                 .map(|image| (image.width_emu, image.height_emu))
                 .collect::<Vec<_>>(),
-            [(9_525, 19_050), (19_050, 28_575), (28_575, 38_100)]
+            [
+                (9_525, 19_050),
+                (19_050, 28_575),
+                (28_575, 38_100),
+                (38_100, 47_625)
+            ]
         );
 
         let epub = wrapped.to_epub_bytes().unwrap();
@@ -13756,51 +13820,154 @@ mod content_control_read_walker_regressions {
             "<p>Wrapped cell</p>",
             "<p>Wrapped row</p>",
             "<p>Nested text</p>",
+            "Tracked <strong>inserted</strong> text.",
+            "<p>Moved here</p>",
+            "<p>Tagged smart and custom</p>",
             "<p>Plain after.</p>",
         ] {
             assert!(chapter.contains(text), "{text}: {chapter}");
         }
-        assert_eq!(chapter.matches("<img ").count(), 3, "{chapter}");
+        assert_eq!(chapter.matches("<img ").count(), 4, "{chapter}");
+
+        let odt = wrapped.to_odt_bytes().unwrap();
+        let plain_odt = plain.to_odt_bytes().unwrap();
+        assert_eq!(odt.bytes, plain_odt.bytes);
+        let content = archive_text(&odt.bytes, "content.xml");
+        for text in [
+            "Wrapped heading",
+            "wrapped run",
+            "Cell block",
+            "inline",
+            "Wrapped cell",
+            "Wrapped row",
+            "Nested text",
+            "inserted",
+            "Moved here",
+            "smart",
+            "custom",
+        ] {
+            // ODF spells a space between words as `<text:s/>`.
+            let text = text.replace(' ', "<text:s/>");
+            assert!(content.contains(&text), "{text}: {content}");
+        }
+        assert_eq!(content.matches("<draw:image ").count(), 4, "{content}");
+
+        let rtf = wrapped.to_rtf_bytes().unwrap();
+        let plain_rtf = plain.to_rtf_bytes().unwrap();
+        assert_eq!(rtf.bytes, plain_rtf.bytes);
+        let rtf_text = String::from_utf8_lossy(&rtf.bytes).into_owned();
+        for text in [
+            "Wrapped heading",
+            "wrapped run",
+            "Cell block",
+            "Wrapped cell",
+            "Wrapped row",
+            "Nested text",
+            "inserted",
+            "Moved here",
+            "smart",
+            "custom",
+        ] {
+            assert!(rtf_text.contains(text), "{text}: {rtf_text}");
+        }
+
+        for output in [&markdown, &html, &chapter, &content, &rtf_text] {
+            for absent in ["removed", "moved", "Header"] {
+                assert!(!output.contains(absent), "{absent}: {output}");
+            }
+        }
 
         // Each exporter reports what it loses of the wrapped content as it does
-        // outside a control, in document order, and notes each control it
-        // flattens.
-        let mhtml_diagnostics = |result: &rdocx::MhtmlWriteResult| {
-            result
-                .diagnostics
-                .iter()
-                .map(|diagnostic| (diagnostic.location.clone(), diagnostic.message.clone()))
-                .collect::<Vec<_>>()
-        };
-        let epub_diagnostics = |result: &rdocx::EpubWriteResult| {
-            result
-                .diagnostics
-                .iter()
-                .map(|diagnostic| (diagnostic.path.clone(), diagnostic.message.clone()))
-                .collect::<Vec<_>>()
-        };
+        // outside a wrapper, in document order, and notes each control,
+        // revision and wrapper it flattens or leaves out.
         let split = |diagnostics: Vec<(String, String)>| {
-            let (notes, losses): (Vec<_>, Vec<_>) = diagnostics
-                .into_iter()
-                .partition(|(_, message)| message.contains("content control"));
+            let (notes, losses): (Vec<_>, Vec<_>) =
+                diagnostics.into_iter().partition(|(_, message)| {
+                    ["content control", "revision", "smart tag"]
+                        .iter()
+                        .any(|kind| message.contains(kind))
+                });
             let losses = losses
                 .into_iter()
                 .map(|(_, message)| message)
                 .collect::<Vec<_>>();
             (notes, losses)
         };
-        let owned = |notes: &[(&str, &str)]| {
-            notes
-                .iter()
-                .map(|(path, message)| ((*path).to_owned(), (*message).to_owned()))
+        let pairs = |diagnostics: Vec<(&str, &str)>| {
+            diagnostics
+                .into_iter()
+                .map(|(path, message)| (path.to_owned(), message.to_owned()))
                 .collect::<Vec<_>>()
         };
-
-        let (notes, losses) = split(mhtml_diagnostics(&mhtml));
-        assert_eq!(losses, split(mhtml_diagnostics(&plain_mhtml)).1);
+        let mhtml_diagnostics = |result: &rdocx::MhtmlWriteResult| {
+            pairs(
+                result
+                    .diagnostics
+                    .iter()
+                    .map(|d| (d.location.as_str(), d.message.as_str()))
+                    .collect(),
+            )
+        };
+        let epub_diagnostics = |result: &rdocx::EpubWriteResult| {
+            pairs(
+                result
+                    .diagnostics
+                    .iter()
+                    .map(|d| (d.path.as_str(), d.message.as_str()))
+                    .collect(),
+            )
+        };
+        let odt_diagnostics = |result: &rdocx::OdtWriteResult| {
+            pairs(
+                result
+                    .diagnostics
+                    .iter()
+                    .map(|d| (d.path.as_str(), d.message.as_str()))
+                    .collect(),
+            )
+        };
+        let rtf_diagnostics = |result: &rdocx::RtfWriteResult| {
+            pairs(
+                result
+                    .diagnostics
+                    .iter()
+                    .map(|d| (d.destination.as_deref().unwrap_or(""), d.message.as_str()))
+                    .collect(),
+            )
+        };
+        let mut notes = Vec::new();
+        for (name, wrapped, plain) in [
+            (
+                "mhtml",
+                mhtml_diagnostics(&mhtml),
+                mhtml_diagnostics(&plain_mhtml),
+            ),
+            (
+                "epub",
+                epub_diagnostics(&epub),
+                epub_diagnostics(&plain_epub),
+            ),
+            ("odt", odt_diagnostics(&odt), odt_diagnostics(&plain_odt)),
+            ("rtf", rtf_diagnostics(&rtf), rtf_diagnostics(&plain_rtf)),
+        ] {
+            let (wrapped_notes, losses) = split(wrapped);
+            let (plain_notes, plain_losses) = split(plain);
+            assert_eq!(losses, plain_losses, "{name}");
+            assert!(plain_notes.is_empty(), "{name}: {plain_notes:?}");
+            // Only deleted and moved-away content is left out.
+            assert!(
+                wrapped_notes
+                    .iter()
+                    .all(|(_, message)| message.contains("flattened")
+                        || message.starts_with("deleted or moved-away")
+                        || message == "dropped Word revision"),
+                "{name}: {wrapped_notes:?}"
+            );
+            notes.push(wrapped_notes);
+        }
         assert_eq!(
-            notes,
-            owned(&[
+            notes[0],
+            pairs(vec![
                 ("body[1]", "flattened Word body content control"),
                 (
                     "body[2]/paragraph/item[1]",
@@ -13829,17 +13996,24 @@ mod content_control_read_walker_regressions {
                 ("body[4]", "flattened Word body content control"),
                 ("body[4]/item[0]", "flattened nested Word content control"),
                 ("body[5]", "flattened Word body content control"),
+                ("body[7]/paragraph/item[1]", "flattened Word revision"),
+                ("body[7]/paragraph/item[2]", "dropped Word revision"),
+                ("body[8]/paragraph/item[0]", "dropped Word revision"),
+                ("body[8]/paragraph/item[1]", "flattened Word revision"),
+                (
+                    "body[9]/paragraph/item[1]",
+                    "flattened Word smart tag or custom XML element"
+                ),
+                (
+                    "body[9]/paragraph/item[3]",
+                    "flattened Word smart tag or custom XML element"
+                ),
+                ("body[10]/paragraph/item[0]", "flattened Word revision"),
             ])
         );
-
-        let (notes, losses) = split(epub_diagnostics(&epub));
-        assert_eq!(losses, split(epub_diagnostics(&plain_epub)).1);
-        assert!(
-            losses.contains(&"drawing extent was simplified to responsive EPUB sizing".to_owned())
-        );
         assert_eq!(
-            notes,
-            owned(&[
+            notes[1],
+            pairs(vec![
                 (
                     "body[1]",
                     "body content control was flattened during EPUB export"
@@ -13880,8 +14054,38 @@ mod content_control_read_walker_regressions {
                     "body[5]",
                     "body content control was flattened during EPUB export"
                 ),
+                (
+                    "body[7]/revision[0]",
+                    "paragraph revision wrapper was flattened during EPUB export"
+                ),
+                (
+                    "body[7]/revision[1]",
+                    "deleted or moved-away revision content was dropped during EPUB export"
+                ),
+                (
+                    "body[8]/revision[0]",
+                    "deleted or moved-away revision content was dropped during EPUB export"
+                ),
+                (
+                    "body[8]/revision[1]",
+                    "paragraph revision wrapper was flattened during EPUB export"
+                ),
+                (
+                    "body[9]/xml[0]",
+                    "smart tag or custom XML wrapper was flattened during EPUB export"
+                ),
+                (
+                    "body[9]/xml[1]",
+                    "smart tag or custom XML wrapper was flattened during EPUB export"
+                ),
+                (
+                    "body[10]/revision[0]",
+                    "paragraph revision wrapper was flattened during EPUB export"
+                ),
             ])
         );
+        assert_eq!(notes[2].len(), 15, "{:?}", notes[2]);
+        assert_eq!(notes[3].len(), 15, "{:?}", notes[3]);
     }
 }
 

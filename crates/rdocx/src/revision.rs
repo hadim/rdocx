@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 pub use rdocx_oxml::RevisionKind;
+use rdocx_oxml::text::CT_P;
 use rdocx_oxml::{CT_Document, CT_Revision};
 
 use crate::{Document, Error, ParagraphRef, Result};
@@ -13,6 +14,33 @@ const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/m
 
 type NamespaceScope = HashMap<String, String>;
 type NamespaceDeclarations = Vec<(String, String)>;
+
+/// The content of a tracked insertion or move in, which the exporters write in
+/// place. None for a deletion, a move away or a property change, whose text
+/// the accepted view leaves out.
+pub(crate) fn accepted_revision_content(revision: &CT_Revision) -> Option<&CT_P> {
+    matches!(
+        revision.kind(),
+        RevisionKind::Insertion | RevisionKind::MoveTo
+    )
+    .then(|| revision.content_paragraph())
+    .flatten()
+}
+
+/// Whether the preserved paragraph child `paragraph.extra_xml[index]` is the
+/// source of one of the typed `paragraph.revisions`, which the exporters read
+/// through the revision instead.
+pub(crate) fn raw_is_typed_revision(paragraph: &CT_P, index: usize) -> bool {
+    let run_index = paragraph.extra_xml[index].0;
+    let slot = paragraph.extra_xml[..index]
+        .iter()
+        .filter(|(at, _)| *at == run_index)
+        .count();
+    paragraph
+        .revisions
+        .iter()
+        .any(|(at, revision_slot, _)| *at == run_index && *revision_slot == slot)
+}
 
 /// An immutable view of one tracked revision in the main document.
 #[derive(Debug, Clone, Copy)]

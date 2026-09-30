@@ -19,8 +19,9 @@ use rdocx_oxml::units::Twips;
 use scraper::{ElementRef, Html, Node, Selector};
 use sha2::{Digest, Sha256};
 
-use crate::document::visit_all_drawings;
+use crate::document::visit_accepted_drawings;
 use crate::paragraph::{Alignment, Paragraph};
+use crate::revision::accepted_revision_content;
 use crate::run::{DrawingKind, DrawingRelationshipKind, Run};
 use crate::table::Cell;
 use crate::{
@@ -623,9 +624,10 @@ fn base64_lines(bytes: &[u8]) -> String {
 fn mhtml_export_html(document: &Document) -> Result<(String, Vec<MhtmlResource>)> {
     let html = document.to_html();
     // The HTML emitter writes the pictures in the order this visitor reaches
-    // them, those in content controls included.
+    // them, those of content controls, tracked insertions, smart tags and
+    // custom XML included.
     let mut image_sizes = Vec::new();
-    visit_all_drawings(&document.document.body.content, &mut |drawing| {
+    visit_accepted_drawings(&document.document.body.content, &mut |drawing| {
         let inline = drawing
             .inline
             .as_ref()
@@ -807,12 +809,43 @@ fn paragraph_mhtml_losses(
                 control_mhtml_losses(document, control.inner, &location, diagnostics)?;
                 continue;
             }
-            ParagraphItemRef::Revision(_) => "dropped Word revision",
+            ParagraphItemRef::Revision(revision) => {
+                let location = format!("{location}/item[{index}]");
+                if let Some(content) = accepted_revision_content(revision.inner) {
+                    push_mhtml_loss(diagnostics, location.clone(), "flattened Word revision")?;
+                    paragraph_mhtml_losses(
+                        document,
+                        ParagraphRef { inner: content },
+                        &format!("{location}/paragraph"),
+                        diagnostics,
+                    )?;
+                } else {
+                    push_mhtml_loss(diagnostics, location, "dropped Word revision")?;
+                }
+                continue;
+            }
             ParagraphItemRef::CommentRangeStart { .. } => "dropped Word comment range start",
             ParagraphItemRef::CommentRangeEnd { .. } => "dropped Word comment range end",
             ParagraphItemRef::BookmarkStart { .. } => "dropped Word bookmark start",
             ParagraphItemRef::BookmarkEnd { .. } => "dropped Word bookmark end",
-            ParagraphItemRef::UnsupportedXml(_) => "dropped unsupported Word paragraph XML",
+            ParagraphItemRef::UnsupportedXml(raw) => match CT_P::raw_run_wrapper_content(raw) {
+                Some(content) => {
+                    let location = format!("{location}/item[{index}]");
+                    push_mhtml_loss(
+                        diagnostics,
+                        location.clone(),
+                        "flattened Word smart tag or custom XML element",
+                    )?;
+                    paragraph_mhtml_losses(
+                        document,
+                        ParagraphRef { inner: &content },
+                        &format!("{location}/paragraph"),
+                        diagnostics,
+                    )?;
+                    continue;
+                }
+                None => "dropped unsupported Word paragraph XML",
+            },
         };
         push_mhtml_loss(diagnostics, format!("{location}/item[{index}]"), message)?;
     }
@@ -906,11 +939,24 @@ fn hyperlink_mhtml_losses(
                 &format!("{location}/item[{index}]/run"),
                 diagnostics,
             )?,
-            HyperlinkItemRef::Revision(_) => push_mhtml_loss(
-                diagnostics,
-                format!("{location}/item[{index}]"),
-                "dropped Word hyperlink revision",
-            )?,
+            HyperlinkItemRef::Revision(revision) => {
+                let location = format!("{location}/item[{index}]");
+                if let Some(content) = accepted_revision_content(revision.inner) {
+                    push_mhtml_loss(
+                        diagnostics,
+                        location.clone(),
+                        "flattened Word hyperlink revision",
+                    )?;
+                    paragraph_mhtml_losses(
+                        document,
+                        ParagraphRef { inner: content },
+                        &format!("{location}/paragraph"),
+                        diagnostics,
+                    )?;
+                } else {
+                    push_mhtml_loss(diagnostics, location, "dropped Word hyperlink revision")?;
+                }
+            }
             HyperlinkItemRef::UnsupportedXml(_) => push_mhtml_loss(
                 diagnostics,
                 format!("{location}/item[{index}]"),
@@ -1105,12 +1151,19 @@ fn control_mhtml_losses(
             )?,
         }
     }
-    for (index, _) in control.revisions().iter().enumerate() {
-        push_mhtml_loss(
-            diagnostics,
-            format!("{location}/revision[{index}]"),
-            "dropped Word revision",
-        )?;
+    for (index, (_, revision)) in control.revisions().iter().enumerate() {
+        let location = format!("{location}/revision[{index}]");
+        if let Some(content) = accepted_revision_content(revision) {
+            push_mhtml_loss(diagnostics, location.clone(), "flattened Word revision")?;
+            paragraph_mhtml_losses(
+                document,
+                ParagraphRef { inner: content },
+                &format!("{location}/paragraph"),
+                diagnostics,
+            )?;
+        } else {
+            push_mhtml_loss(diagnostics, location, "dropped Word revision")?;
+        }
     }
     Ok(())
 }
@@ -4325,7 +4378,7 @@ mod tests {
                 ),
                 (
                     "body[0]/paragraph/item[12]/hyperlink/item[1]",
-                    "dropped Word hyperlink revision",
+                    "flattened Word hyperlink revision",
                 ),
                 (
                     "body[0]/paragraph/item[12]/hyperlink/item[2]/run/item[1]",

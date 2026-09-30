@@ -146,15 +146,17 @@ fn emit_paragraph(
     }
 }
 
-/// Collect all text from a paragraph, the runs content controls wrap
-/// included, applying inline formatting.
+/// Collect all text from the accepted view of a paragraph, applying inline
+/// formatting.
 fn collect_paragraph_text(para: &CT_P, hyperlink_urls: &HashMap<String, String>) -> String {
     let mut out = String::new();
 
-    // Build hyperlink map, keyed by run identity because `CT_P::runs` also
-    // yields the runs that content controls wrap, which are never inside a
-    // hyperlink.
-    let mut hyperlink_map: HashMap<*const CT_R, &str> = HashMap::new();
+    // The runs the text readers read, those of content controls, tracked
+    // insertions, smart tags and custom XML included, deleted ones left out.
+    let para = &para.accepted_view();
+
+    // Build hyperlink map
+    let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
     for hl in &para.hyperlinks {
         // Markdown renderers turn `[text](javascript:...)` into a live link too,
         // so the same scheme allowlist applies here.
@@ -164,8 +166,8 @@ fn collect_paragraph_text(para: &CT_P, hyperlink_urls: &HashMap<String, String>)
                 .map(String::as_str)
                 .and_then(crate::sanitize::safe_url)
         {
-            for run in para.runs.iter().take(hl.run_end).skip(hl.run_start) {
-                hyperlink_map.insert(run, url);
+            for i in hl.run_start..hl.run_end {
+                hyperlink_map.insert(i, url);
             }
         }
     }
@@ -174,8 +176,8 @@ fn collect_paragraph_text(para: &CT_P, hyperlink_urls: &HashMap<String, String>)
     let mut current_link: Option<&str> = None;
     let mut link_text = String::new();
 
-    for run in para.runs() {
-        let in_link = hyperlink_map.get(&std::ptr::from_ref(run)).copied();
+    for (run_idx, run) in para.runs.iter().enumerate() {
+        let in_link = hyperlink_map.get(&run_idx).copied();
 
         // Handle link transitions
         match (current_link, in_link) {
