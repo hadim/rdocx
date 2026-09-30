@@ -1072,8 +1072,12 @@ deterministic renderers use their own bundle. Tracked layouts remain uncached
 and use the normal engine with a distinct revision-view paragraph identity.
 Caller-supplied font layouts construct an isolated engine, remain uncached, and
 cannot observe bundled or system fonts. Caller-font access returns an owned
-bundle. The separate bundled-fallback caller-font mode retains one reusable
-deterministic-base engine. Caller faces have highest priority, missing families
+bundle. `to_pdf_with_fonts` instead lays out uncached in a fresh normal-font
+engine with the caller fonts loaded over it, so a family the caller does not
+supply resolves as `to_pdf` resolves it, from system fonts when the
+`system-fonts` feature is enabled and then from the bundled fonts. The separate
+bundled-fallback caller-font mode retains one reusable deterministic-base
+engine. Caller faces have highest priority, missing families
 resolve from bundled faces, and system fonts remain unavailable. Its owned
 result shares immutable pages and font bytes without caching the completed
 bundle. Every PDF and raster path borrows its `LayoutResult` field from the same

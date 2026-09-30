@@ -25075,13 +25075,16 @@ fn fixed_break_runs_match_pdf_and_raster_backends() {
     let direct_pdf = oxml_pdf::render_to_pdf(&layout.layout);
     let direct_png = oxml_pdf::render_page_to_png(&layout.layout, 0, 96.0)
         .expect("raster backend renders first page");
+    assert!(!direct_pdf.is_empty());
+    assert!(!direct_png.is_empty());
+    // The PDF facade adds caller fonts to the fonts `to_pdf` resolves from,
+    // and this caller face is the bundled Carlito, so it renders `to_pdf`.
     assert_eq!(
         document
             .to_pdf_with_fonts(&[(family, bytes)])
             .expect("PDF facade"),
-        direct_pdf
+        document.to_pdf().expect("PDF")
     );
-    assert!(!direct_png.is_empty());
 }
 
 #[test]
