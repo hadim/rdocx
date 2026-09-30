@@ -11725,9 +11725,28 @@ fn nested_table_round_trip() {
     assert_eq!(tbl2.cell(0, 1).unwrap().text(), "Outer A2");
     assert_eq!(tbl2.cell(1, 1).unwrap().text(), "Outer B2");
 
-    // Cell (1,0) should have paragraph text (nested table text excluded from text())
+    // Cell (1,0) should have paragraph text (nested table text excluded from text()),
+    // then the empty trailing paragraph that follows the nested table.
     let cell_b1_ref = tbl2.cell(1, 0).unwrap();
-    assert_eq!(cell_b1_ref.text(), "Before nested");
+    assert_eq!(cell_b1_ref.text(), "Before nested\n");
+}
+
+#[test]
+fn nested_table_keeps_the_trailing_cell_paragraph_word_requires() {
+    // Word refuses a package whose w:tc ends with a w:tbl.
+    let mut doc = Document::new();
+    let mut table = doc.add_table(1, 1);
+    let mut cell = table.cell(0, 0).unwrap();
+    cell.set_text("Nested table below:");
+    cell.add_table(1, 1).cell(0, 0).unwrap().set_text("Inner");
+    let package = OpcPackage::from_reader(std::io::Cursor::new(doc.to_bytes().unwrap())).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let nested_end = xml.find("</w:tbl>").expect("nested table closes first") + "</w:tbl>".len();
+    let after_nested = xml[nested_end..].trim_start();
+    assert!(
+        after_nested.starts_with("<w:p>") || after_nested.starts_with("<w:p/>"),
+        "outer cell must end with a paragraph after the nested table: {after_nested:.40}"
+    );
 }
 
 #[test]

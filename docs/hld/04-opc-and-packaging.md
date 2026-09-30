@@ -1120,8 +1120,9 @@ Row and cell property readers select modeled elements and attributes by their
 bound WordprocessingML namespace. Foreign same-local children remain raw in
 their exact schema slots. Changed modeled children use canonical `w` prefixes
 and row or cell `xsd:sequence`, while unrelated row, cell, and border extension
-bytes remain exact. Checked nested tables are nonempty and retain the required
-trailing cell paragraph.
+bytes remain exact. Nested tables retain the required trailing cell paragraph,
+because Word refuses a cell that ends with a table, and checked nested tables
+are also nonempty.
 
 Paragraph property readers select every modeled `w:pPr` child and attribute by
 its bound WordprocessingML namespace, and a foreign same-local child stays
