@@ -15,8 +15,8 @@ use oxml_drawing::line::{
 };
 use oxml_drawing::style_ref::{FontCollectionIndex, StyleReference};
 use oxml_drawing::table::{
-    CT_TableBorders, CT_TableCellStyle, CT_TablePartStyle, CT_TableStyle, CT_TableStyleList,
-    CT_TableTextStyle,
+    CT_TableBackgroundStyle, CT_TableBorders, CT_TableCellStyle, CT_TablePartStyle, CT_TableStyle,
+    CT_TableStyleList, CT_TableTextStyle,
 };
 use oxml_drawing::text::{
     CT_TextBody, CT_TextBodyProperties, CT_TextCharacterProperties, CT_TextListStyle,
@@ -2157,7 +2157,7 @@ impl ResolveCtx<'_> {
             .columns
             .iter()
             .map(|width| emu_to_points(width.0))
-            .collect();
+            .collect::<Vec<_>>();
         let style_id = table
             .properties
             .as_ref()
@@ -2388,11 +2388,58 @@ impl ResolveCtx<'_> {
                 })
             })
             .collect::<Result<Vec<_>, ResolveError>>()?;
+        let background = match style.and_then(|style| style.background.as_ref()) {
+            Some(background) => {
+                let size = (
+                    column_widths.iter().sum(),
+                    rows.iter().map(|row| row.height).sum(),
+                );
+                self.resolve_table_background(background, size, diagnostics)?
+            }
+            None => None,
+        };
         Ok(ResolvedTable {
             right_to_left: table_properties.is_some_and(|properties| properties.right_to_left),
             column_widths,
             rows,
+            background,
         })
+    }
+
+    /// Resolves a table style's `a:tblBg` fill over the whole table box.
+    fn resolve_table_background(
+        &self,
+        background: &CT_TableBackgroundStyle,
+        size: (f64, f64),
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<Option<Paint>, ResolveError> {
+        let referenced = background
+            .fill_reference
+            .as_ref()
+            .map(|reference| self.table_referenced_fill(reference))
+            .transpose()?
+            .flatten();
+        let (paint, unsupported) = referenced
+            .as_ref()
+            .or(background.fill.as_ref())
+            .map(|fill| self.concrete_fill(fill, size))
+            .transpose()?
+            .unwrap_or((None, None));
+        for unsupported in background
+            .unsupported
+            .iter()
+            .map(String::as_str)
+            .chain(unsupported)
+        {
+            let message = format!("unsupported table background {unsupported} was ignored");
+            if !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message == message)
+            {
+                diagnostics.push(Diagnostic { message });
+            }
+        }
+        Ok(paint)
     }
 
     fn resolve_table_border(
@@ -6464,6 +6511,34 @@ mod tests {
         let styles = oxml_drawing::table::CT_TableStyleList::from_xml(br#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>"#).unwrap();
         let table = resolve(&frame(""), Some(&styles));
         assert!(table.rows.iter().all(|row| row.cells[0].fill.is_none()));
+    }
+
+    #[test]
+    fn table_style_background_resolves_over_the_whole_table() {
+        // Themed Style 1 - Accent 1 fills the table from the theme's second
+        // fill style (a gradient) in accent 1 and adds a theme effect.
+        let frame = r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="0" y="0"/><a:ext cx="254000" cy="127000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1"><a:tableStyleId>{3C2FFA5D-87B4-456A-9821-1D502468CF0F}</a:tableStyleId></a:tblPr><a:tblGrid><a:gridCol w="127000"/><a:gridCol w="127000"/></a:tblGrid><a:tr h="63500"><a:tc/><a:tc/></a:tr><a:tr h="63500"><a:tc/><a:tc/></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#;
+        let fixture = Fixture::new(frame, "", "");
+
+        let resolved = fixture.context().resolve_slide((20.0, 10.0)).unwrap();
+        let ResolvedContent::Table(table) = &resolved.shapes[0].content else {
+            panic!("expected table");
+        };
+
+        let Some(Paint::Linear { start, end, .. }) = &table.background else {
+            panic!("expected a gradient background, got {:?}", table.background);
+        };
+        // The gradient runs down the 20 by 10 point table box, as the theme's
+        // 90 degree fill style says.
+        assert!((start.x - 10.0).abs() < 1e-9 && (end.x - 10.0).abs() < 1e-9);
+        assert!(start.y.abs() < 1e-9 && (end.y - 10.0).abs() < 1e-9);
+        assert_eq!(
+            table.rows[0].cells[0].fill,
+            Some(Paint::Solid(Color::from_hex("156082")))
+        );
+        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message == "unsupported table background effect was ignored"
+        }));
     }
 
     #[test]

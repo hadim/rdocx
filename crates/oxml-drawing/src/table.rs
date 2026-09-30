@@ -132,6 +132,7 @@ pub struct CT_TableStyleList {
 pub struct CT_TableStyle {
     pub style_id: String,
     pub style_name: String,
+    pub background: Option<CT_TableBackgroundStyle>,
     pub whole_table: Option<CT_TablePartStyle>,
     pub band1_horizontal: Option<CT_TablePartStyle>,
     pub band2_horizontal: Option<CT_TablePartStyle>,
@@ -145,6 +146,17 @@ pub struct CT_TableStyle {
     pub north_east_cell: Option<CT_TablePartStyle>,
     pub south_west_cell: Option<CT_TablePartStyle>,
     pub south_east_cell: Option<CT_TablePartStyle>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// The fill painted behind a whole table, from a style's `a:tblBg`.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CT_TableBackgroundStyle {
+    pub fill: Option<Fill>,
+    pub fill_reference: Option<StyleReference>,
+    pub unsupported: Vec<String>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
 }
@@ -1645,6 +1657,11 @@ impl CT_TableStyle {
                 "a:tblStyle children violate schema order".to_owned(),
             ));
         }
+        if name == b"tblBg" {
+            self.background = Some(CT_TableBackgroundStyle::from_xml(&raw)?);
+            *boundary = slot + 1;
+            return Ok(());
+        }
         let destination = self.region_mut(name);
         if destination.is_some() {
             return Err(OxmlError::InvalidValue(format!(
@@ -1682,6 +1699,10 @@ impl CT_TableStyle {
         start.push_attribute(("styleName", self.style_name.as_str()));
         push_attributes(&mut start, &self.raw_attributes);
         writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(background) = &self.background {
+            background.write_xml(writer)?;
+        }
         let ordered = [
             ("a:wholeTbl", self.whole_table.as_ref()),
             ("a:band1H", self.band1_horizontal.as_ref()),
@@ -1697,15 +1718,122 @@ impl CT_TableStyle {
             ("a:neCell", self.north_east_cell.as_ref()),
             ("a:nwCell", self.north_west_cell.as_ref()),
         ];
-        for (slot, (tag, region)) in ordered.into_iter().enumerate() {
-            emit_raw(writer, self.raw_children.at(slot))?;
+        for (index, (tag, region)) in ordered.into_iter().enumerate() {
+            emit_raw(writer, self.raw_children.at(index + 1))?;
             if let Some(region) = region {
                 region.write_xml(writer, tag)?;
             }
         }
-        emit_raw(writer, self.raw_children.at(13))?;
         emit_raw(writer, self.raw_children.at(14))?;
+        emit_raw(writer, self.raw_children.at(15))?;
         writer.write_event(Event::End(BytesEnd::new("a:tblStyle")))?;
+        Ok(())
+    }
+}
+
+impl CT_TableBackgroundStyle {
+    fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) if matches_local_name(start.name().as_ref(), b"tblBg") => {
+                    let mut value = Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    };
+                    let mut boundary = 0usize;
+                    loop {
+                        buffer.clear();
+                        match reader.read_event_into(&mut buffer)? {
+                            Event::Start(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_element(&mut reader, &child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::Empty(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_empty_element(&child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::End(end)
+                                if matches_local_name(end.name().as_ref(), b"tblBg") =>
+                            {
+                                return Ok(value);
+                            }
+                            Event::Eof => return Err(missing("closing a:tblBg")),
+                            _ => {}
+                        }
+                    }
+                }
+                Event::Empty(start) if matches_local_name(start.name().as_ref(), b"tblBg") => {
+                    return Ok(Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    });
+                }
+                Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
+                Event::Eof => return Err(missing("a:tblBg")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn capture_child(&mut self, name: &[u8], raw: Vec<u8>, boundary: &mut usize) -> Result<()> {
+        let slot = match name {
+            b"fill" | b"fillRef" => Some(0),
+            b"effect" | b"effectRef" => Some(1),
+            _ => None,
+        };
+        ensure_schema_order(slot, *boundary, "a:tblBg")?;
+        match name {
+            b"fill" | b"fillRef" if self.fill.is_some() || self.fill_reference.is_some() => {
+                return Err(OxmlError::InvalidValue(
+                    "duplicate a:tblBg fill choice".to_owned(),
+                ));
+            }
+            b"fill" => {
+                if let Some(fill) = parse_fill_wrapper(&raw)? {
+                    self.fill = Some(fill);
+                } else {
+                    self.unsupported.push("fill form".to_owned());
+                    self.raw_children.push(0, raw);
+                }
+            }
+            b"fillRef" => self.fill_reference = Some(parse_style_reference(&raw)?),
+            b"effect" | b"effectRef" => {
+                self.unsupported.push("effect".to_owned());
+                self.raw_children.push(1, raw);
+            }
+            _ => self.raw_children.push(*boundary, raw),
+        }
+        if let Some(slot) = slot {
+            *boundary = (*boundary).max(slot + 1);
+        }
+        Ok(())
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("a:tblBg");
+        push_attributes(&mut start, &self.raw_attributes);
+        if self.fill.is_none() && self.fill_reference.is_none() && self.raw_children.is_empty() {
+            writer.write_event(Event::Empty(start))?;
+            return Ok(());
+        }
+        writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(fill) = &self.fill {
+            writer.write_event(Event::Start(BytesStart::new("a:fill")))?;
+            fill.write_xml(writer).map_err(drawing_error)?;
+            writer.write_event(Event::End(BytesEnd::new("a:fill")))?;
+        }
+        if let Some(reference) = &self.fill_reference {
+            reference.write_xml(writer).map_err(drawing_error)?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
+        emit_raw(writer, self.raw_children.at(2))?;
+        writer.write_event(Event::End(BytesEnd::new("a:tblBg")))?;
         Ok(())
     }
 }
@@ -2668,19 +2796,20 @@ fn table_background(fill: u8, effect: u8, color: &str) -> String {
 
 fn table_style_slot(name: &[u8]) -> Option<usize> {
     match name {
-        b"wholeTbl" => Some(0),
-        b"band1H" => Some(1),
-        b"band2H" => Some(2),
-        b"band1V" => Some(3),
-        b"band2V" => Some(4),
-        b"lastCol" => Some(5),
-        b"firstCol" => Some(6),
-        b"lastRow" => Some(7),
-        b"seCell" => Some(8),
-        b"swCell" => Some(9),
-        b"firstRow" => Some(10),
-        b"neCell" => Some(11),
-        b"nwCell" => Some(12),
+        b"tblBg" => Some(0),
+        b"wholeTbl" => Some(1),
+        b"band1H" => Some(2),
+        b"band2H" => Some(3),
+        b"band1V" => Some(4),
+        b"band2V" => Some(5),
+        b"lastCol" => Some(6),
+        b"firstCol" => Some(7),
+        b"lastRow" => Some(8),
+        b"seCell" => Some(9),
+        b"swCell" => Some(10),
+        b"firstRow" => Some(11),
+        b"neCell" => Some(12),
+        b"nwCell" => Some(13),
         _ => None,
     }
 }
@@ -3613,6 +3742,17 @@ mod tests {
                 "firstRow fill accent6",
             ],
         );
+        for (style_id, index) in [
+            ("{08FB837D-C827-4EFA-A057-4D05807E0F7C}", 2),
+            ("{306799F8-075E-4A3A-A7F6-7FBC6576F1A4}", 3),
+        ] {
+            let style = CT_TableStyle::builtin(style_id).unwrap();
+            let background = style.background.unwrap();
+            let Some(StyleReference::Fill(reference)) = background.fill_reference else {
+                panic!("{style_id}: expected a background fill reference");
+            };
+            assert_eq!(reference.index, index);
+        }
         assert_regions(
             "{306799F8-075E-4A3A-A7F6-7FBC6576F1A4}",
             &[
@@ -3620,6 +3760,51 @@ mod tests {
                 "band1H fill lt1 alpha 20%",
                 "firstRow text bold",
             ],
+        );
+    }
+
+    #[test]
+    fn table_background_models_its_fill_and_keeps_its_effect_in_place() {
+        let xml = format!(
+            r#"<q:tblStyleLst xmlns:q="{A_NS}" xmlns:x="urn:producer" def="s"><q:tblStyle styleId="s" styleName="S"><x:first/><q:tblBg><q:fillRef idx="2"><q:schemeClr val="accent1"/></q:fillRef><x:between/><q:effectRef idx="1"><q:schemeClr val="accent1"/></q:effectRef></q:tblBg><q:wholeTbl><q:tcStyle/></q:wholeTbl></q:tblStyle></q:tblStyleLst>"#
+        );
+        let styles = CT_TableStyleList::from_xml(xml.as_bytes()).unwrap();
+        let background = styles.styles[0].background.as_ref().unwrap();
+        let Some(StyleReference::Fill(reference)) = &background.fill_reference else {
+            panic!("expected a fill reference");
+        };
+        assert_eq!(reference.index, 2);
+        assert!(background.fill.is_none());
+        assert_eq!(background.unsupported, ["effect"]);
+
+        let written = String::from_utf8(styles.to_xml().unwrap()).unwrap();
+        assert_order(
+            &written,
+            &[
+                "<x:first",
+                "<a:tblBg>",
+                r#"<a:fillRef idx="2">"#,
+                "<x:between",
+                r#"effectRef idx="1">"#,
+                "</a:tblBg>",
+                "<a:wholeTbl>",
+            ],
+        );
+        assert_eq!(
+            CT_TableStyleList::from_xml(written.as_bytes()).unwrap(),
+            styles
+        );
+
+        let solid = format!(
+            r#"<a:tblStyleLst xmlns:a="{A_NS}"><a:tblStyle styleId="s" styleName="S"><a:tblBg><a:fill><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:fill></a:tblBg></a:tblStyle></a:tblStyleLst>"#
+        );
+        let styles = CT_TableStyleList::from_xml(solid.as_bytes()).unwrap();
+        let background = styles.styles[0].background.as_ref().unwrap();
+        assert!(matches!(background.fill, Some(Fill::Solid(_))));
+        assert!(background.unsupported.is_empty());
+        assert_eq!(
+            CT_TableStyleList::from_xml(&styles.to_xml().unwrap()).unwrap(),
+            styles
         );
     }
 
