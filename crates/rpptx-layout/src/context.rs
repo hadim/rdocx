@@ -15,7 +15,8 @@ use oxml_drawing::line::{
 };
 use oxml_drawing::style_ref::{FontCollectionIndex, StyleReference};
 use oxml_drawing::table::{
-    CT_TableBorders, CT_TableCellStyle, CT_TablePartStyle, CT_TableStyleList, CT_TableTextStyle,
+    CT_TableBorders, CT_TableCellStyle, CT_TablePartStyle, CT_TableStyle, CT_TableStyleList,
+    CT_TableTextStyle,
 };
 use oxml_drawing::text::{
     CT_TextBody, CT_TextBodyProperties, CT_TextCharacterProperties, CT_TextListStyle,
@@ -2157,14 +2158,25 @@ impl ResolveCtx<'_> {
             .iter()
             .map(|width| emu_to_points(width.0))
             .collect();
-        let style = self.table_styles.and_then(|styles| {
-            styles.style(
-                table
-                    .properties
-                    .as_ref()
-                    .and_then(|properties| properties.style_id.as_deref()),
-            )
-        });
+        let style_id = table
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.style_id.as_deref());
+        // A style the package defines wins. Otherwise a built-in GUID selects
+        // PowerPoint's own definition before the list default applies.
+        let builtin = style_id
+            .filter(|style_id| {
+                !self.table_styles.is_some_and(|styles| {
+                    styles
+                        .styles
+                        .iter()
+                        .any(|style| style.style_id == *style_id)
+                })
+            })
+            .and_then(CT_TableStyle::builtin);
+        let style = builtin
+            .as_ref()
+            .or_else(|| self.table_styles.and_then(|styles| styles.style(style_id)));
         let row_count = table.rows.len();
         let column_count = table.grid.columns.len();
         let table_properties = table.properties.as_ref();
@@ -6392,6 +6404,66 @@ mod tests {
         assert!(resolved.diagnostics.iter().any(|diagnostic| {
             diagnostic.message == "unsupported table cell pattern fill was ignored"
         }));
+    }
+
+    #[test]
+    fn builtin_table_style_ids_resolve_unless_the_package_defines_them() {
+        // python-pptx names Medium Style 2 - Accent 1 without defining it.
+        let frame = |style_id: &str| {
+            format!(
+                r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="381000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1" bandRow="1">{style_id}</a:tblPr><a:tblGrid><a:gridCol w="127000"/></a:tblGrid><a:tr h="127000"><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>head</a:t></a:r></a:p></a:txBody></a:tc></a:tr><a:tr h="127000"><a:tc/></a:tr><a:tr h="127000"><a:tc/></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#
+            )
+        };
+        let medium_2_accent_1 =
+            "<a:tableStyleId>{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}</a:tableStyleId>";
+        let resolve = |frame: &str, styles: Option<&oxml_drawing::table::CT_TableStyleList>| {
+            let fixture = Fixture::new(frame, "", "");
+            let mut context = fixture.context();
+            if let Some(styles) = styles {
+                context = context.with_table_styles(styles);
+            }
+            let resolved = context.resolve_slide((10.0, 30.0)).unwrap();
+            let ResolvedContent::Table(table) = &resolved.shapes[0].content else {
+                panic!("expected table");
+            };
+            table.clone()
+        };
+
+        let table = resolve(&frame(medium_2_accent_1), None);
+        let fills = table
+            .rows
+            .iter()
+            .map(|row| row.cells[0].fill.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(fills[0], Some(Paint::Solid(Color::from_hex("156082"))));
+        assert_eq!(fills[1], Some(Paint::Solid(Color::from_hex("CCD2D8"))));
+        assert_eq!(fills[2], Some(Paint::Solid(Color::from_hex("E7EAED"))));
+        let heading_rule = table.rows[0].cells[0].bottom.as_ref().unwrap();
+        let heading_rule = heading_rule.stroke.as_ref().unwrap();
+        assert_eq!(heading_rule.paint, Paint::Solid(Color::from_hex("FFFFFF")));
+        assert_eq!(heading_rule.width, 3.0);
+        let ResolvedTextRun::Text { style, .. } =
+            &table.rows[0].cells[0].text.as_ref().unwrap().paragraphs[0].runs[0]
+        else {
+            panic!("expected heading run");
+        };
+        assert!(style.bold);
+        assert_eq!(style.fill, Some(Paint::Solid(Color::from_hex("FFFFFF"))));
+
+        // A definition in the package wins over the built-in one.
+        let styles = oxml_drawing::table::CT_TableStyleList::from_xml(br#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"><a:tblStyle styleId="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}" styleName="Own"><a:firstRow><a:tcStyle><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:tcStyle></a:firstRow></a:tblStyle></a:tblStyleLst>"#).unwrap();
+        let table = resolve(&frame(medium_2_accent_1), Some(&styles));
+        assert_eq!(
+            table.rows[0].cells[0].fill,
+            Some(Paint::Solid(Color::from_hex("FF0000")))
+        );
+        assert_eq!(table.rows[1].cells[0].fill, None);
+
+        // PowerPoint leaves a table without a style id unstyled, even when the
+        // list default names a built-in style.
+        let styles = oxml_drawing::table::CT_TableStyleList::from_xml(br#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>"#).unwrap();
+        let table = resolve(&frame(""), Some(&styles));
+        assert!(table.rows.iter().all(|row| row.cells[0].fill.is_none()));
     }
 
     #[test]

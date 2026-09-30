@@ -139,12 +139,13 @@ its layout or master match. Typed slide-number fields retain that type across
 the resolver boundary so the renderer can substitute the current page before
 shaping.
 
-Table resolution selects the explicit table style or the table style list's
-default. It applies whole-table, row and column bands, first and last columns,
-first and last rows, then corner regions. Direct cell properties apply last.
-The result carries concrete fills, text styles, margins, four borders, spans,
-merge ownership, and right-to-left order. Border values retain region priority
-so the renderer can settle adjacent edge conflicts after all cells resolve.
+Table resolution selects the explicit table style from the table style list,
+then PowerPoint's built-in style with that GUID, then the list's default. It
+applies whole-table, row and column bands, first and last columns, first and
+last rows, then corner regions. Direct cell properties apply last. The result
+carries concrete fills, text styles, margins, four borders, spans, merge
+ownership, and right-to-left order. Border values retain region priority so the
+renderer can settle adjacent edge conflicts after all cells resolve.
 
 Table cell text always uses fixed-box layout. Cell autofit is ignored and
 records one stable diagnostic. Unsupported diagonal borders, effects, and 3-D

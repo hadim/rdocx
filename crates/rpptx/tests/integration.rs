@@ -14145,6 +14145,51 @@ fn table_mutation_preserves_unmodelled_xml_and_schema_order() {
 }
 
 #[test]
+fn builtin_table_style_named_by_guid_renders_without_a_package_definition() {
+    // python-pptx names Medium Style 2 - Accent 1 in every table it adds, and
+    // its template's table style part defines no style. PowerPoint fills the
+    // heading row with accent 1 (4F81BD in this template's theme).
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_table(
+            3,
+            2,
+            Emu(914_400),
+            Emu(914_400),
+            Emu(3_657_600),
+            Emu(2_743_200),
+        )
+        .expect("add table");
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "built-in table style");
+    let part = "/ppt/slides/slide1.xml";
+    let slide = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+    let styled = slide.replacen(
+        r#"<a:tblPr firstRow="1" bandRow="1"/>"#,
+        r#"<a:tblPr firstRow="1" bandRow="1"><a:tableStyleId>{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}</a:tableStyleId></a:tblPr>"#,
+        1,
+    );
+    assert_ne!(styled, slide);
+    package.set_part(part, styled.into_bytes());
+    let table_styles = package.get_part("/ppt/tableStyles.xml").unwrap();
+    assert!(!String::from_utf8_lossy(table_styles).contains("<a:tblStyle "));
+
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let png = presentation
+        .slide_png_deterministic(0, 20.0)
+        .unwrap()
+        .unwrap();
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    let heading = pixmap.pixel(30, 24).unwrap();
+    assert_eq!(
+        (heading.red(), heading.green(), heading.blue()),
+        (0x4F, 0x81, 0xBD)
+    );
+}
+
+#[test]
 #[ignore = "requires uv and pinned python-pptx 1.0.2"]
 fn add_table_matches_pinned_python_pptx_table_semantics() {
     let mut presentation = Presentation::new().expect("open bundled template");
