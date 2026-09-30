@@ -30,6 +30,7 @@ extension-module = ["pyo3/extension-module"]
 oxml-py-support = { workspace = true }
 pyo3 = { workspace = true }
 rdocx = { workspace = true, features = ["system-fonts"] }
+rdocx-oxml = { workspace = true }
 smallvec = { workspace = true }
 
 [dev-dependencies]

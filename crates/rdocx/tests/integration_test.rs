@@ -695,6 +695,125 @@ fn legacy_section_geometry_setters_preserve_infallible_compatibility() {
     assert_eq!(section.footer_distance.unwrap().0, -5);
 }
 
+#[test]
+fn section_page_margin_setters_write_every_required_attribute() {
+    let build = |fill: bool| {
+        let mut document = Document::new();
+        document.add_paragraph("first");
+        for index in 1..4 {
+            document.insert_section(index).unwrap();
+            document.add_paragraph("next");
+        }
+        if fill {
+            let inch = Length::twips(1440);
+            let half_inch = Length::twips(720);
+            let mut section = document.section_mut(1).unwrap();
+            section.set_gutter(Length::twips(0)).unwrap();
+            let mut section = document.section_mut(2).unwrap();
+            section.set_margins(inch, inch, inch, inch).unwrap();
+            let mut section = document.section_mut(3).unwrap();
+            section
+                .set_header_footer_distance(half_inch, half_inch)
+                .unwrap();
+        }
+        document
+    };
+
+    // Each setter writes the value layout assumes for an absent one, and so
+    // does every attribute it fills in, so the pages are unchanged.
+    let mut filled = build(true);
+    assert_eq!(
+        filled.to_pdf_deterministic().unwrap(),
+        build(false).to_pdf_deterministic().unwrap()
+    );
+    let xml = String::from_utf8(document_xml(&mut filled)).unwrap();
+    let complete = concat!(
+        r#"<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440""#,
+        r#" w:gutter="0" w:header="720" w:footer="720"/>"#,
+    );
+    assert_eq!(xml.matches("<w:pgMar ").count(), 4, "{xml}");
+    assert_eq!(xml.matches(complete).count(), 4, "{xml}");
+
+    let mut section = filled.section_mut(3).unwrap();
+    section
+        .set_header_footer_distance(Length::twips(360), Length::twips(540))
+        .unwrap();
+    section
+        .set_margins(
+            Length::twips(720),
+            Length::twips(1080),
+            Length::twips(1440),
+            Length::twips(1800),
+        )
+        .unwrap();
+    assert_eq!(
+        section
+            .header_footer_distance()
+            .map(|(header, footer)| (header.to_twips(), footer.to_twips())),
+        Some((360, 540))
+    );
+    assert_eq!(section.gutter().map(Length::to_twips), Some(0));
+}
+
+/// `test_section_edits_write_the_native_body` in
+/// `crates/rdocx-py/tests/test_core.py` makes the same edits from Python and
+/// pins the same body, so CI checks that the binding writes what these native
+/// calls write.
+#[test]
+fn section_edits_write_the_body_the_python_binding_pins() {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.insert_section(1).unwrap();
+    let mut section = document.section_mut(0).unwrap();
+    section.set_orientation(ST_PageOrientation::Landscape);
+    // The values Python leaves out keep the section's own ones.
+    section
+        .set_margins(
+            Length::emu(457200),
+            Length::twips(1440),
+            Length::twips(1440),
+            Length::emu(1828800),
+        )
+        .unwrap();
+    section.set_page_number_start(3).unwrap();
+    section
+        .set_header_footer_distance(Length::twips(720), Length::emu(228600))
+        .unwrap();
+    section.set_different_first_page(true);
+    let mut section = document.section_mut(1).unwrap();
+    section
+        .set_page_size(Length::emu(7772400), Length::emu(10058400))
+        .unwrap();
+    section
+        .set_margins(
+            Length::emu(914400),
+            Length::emu(1143000),
+            Length::emu(685800),
+            Length::emu(1371600),
+        )
+        .unwrap();
+    section.set_gutter(Length::emu(127000)).unwrap();
+    section.set_columns(2, Length::emu(457200)).unwrap();
+    section.set_break_type(ST_SectionType::Continuous);
+    document.add_paragraph("second");
+
+    assert_eq!(
+        compact_body_xml(&mut document),
+        concat!(
+            r#"<w:body><w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:pPr>"#,
+            r#"<w:sectPr><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>"#,
+            r#"<w:pgMar w:top="720" w:right="1440" w:bottom="1440" w:left="2880""#,
+            r#" w:gutter="0" w:header="720" w:footer="360"/>"#,
+            r#"<w:pgNumType w:start="3"/><w:titlePg/></w:sectPr></w:pPr></w:p>"#,
+            r#"<w:p><w:r><w:t>second</w:t></w:r></w:p><w:sectPr>"#,
+            r#"<w:type w:val="continuous"/><w:pgSz w:w="12240" w:h="15840"/>"#,
+            r#"<w:pgMar w:top="1440" w:right="1800" w:bottom="1080" w:left="2160""#,
+            r#" w:gutter="200" w:header="720" w:footer="720"/>"#,
+            r#"<w:cols w:num="2" w:space="720"/></w:sectPr></w:body>"#,
+        )
+    );
+}
+
 struct F251OracleArtifacts {
     path: std::path::PathBuf,
 }
@@ -7588,6 +7707,15 @@ fn document_xml(document: &mut Document) -> Vec<u8> {
     package.get_part("/word/document.xml").unwrap().to_vec()
 }
 
+/// The saved `w:body` on one line without indentation, the form the Python
+/// binding tests compare against the same pinned value.
+fn compact_body_xml(document: &mut Document) -> String {
+    let xml = String::from_utf8(document_xml(document)).unwrap();
+    let start = xml.find("<w:body>").unwrap();
+    let end = xml.find("</w:body>").unwrap() + "</w:body>".len();
+    xml[start..end].lines().map(str::trim).collect()
+}
+
 #[test]
 fn m23_layout_and_data_tables_match_word() {
     let mut document = Document::new();
@@ -8463,6 +8591,115 @@ fn checked_row_cell_topology_is_atomic() {
     for (cell, width) in original_widths.into_iter().enumerate() {
         assert_eq!(table.cell(0, cell).unwrap().width(), Some(width));
     }
+}
+
+/// `test_table_acceptance_workflow_writes_the_native_body` in
+/// `crates/rdocx-py/tests/test_formatting_tables.py` makes the same calls from
+/// Python and pins the same body, so CI checks that the binding writes what
+/// these native calls write.
+#[test]
+fn table_acceptance_workflow_writes_the_body_the_python_binding_pins() {
+    let mut document = Document::new();
+    document.add_paragraph("before");
+    document.add_paragraph("after");
+    let mut table = document.insert_table(1, 3, 3);
+    table.set_cell_grid_span_checked(0, 0, Some(2)).unwrap();
+    table
+        .set_cell_vertical_merge(1, 2, Some(rdocx::table::VMerge::Restart))
+        .unwrap();
+    table
+        .set_cell_vertical_merge(2, 2, Some(rdocx::table::VMerge::Continue))
+        .unwrap();
+    table
+        .set_all_borders_checked(BorderStyle::Single, 4, "000000")
+        .unwrap();
+    table
+        .set_border_checked(
+            TableBorderEdge::InsideVertical,
+            BorderStyle::Dashed,
+            8,
+            "FF0000",
+        )
+        .unwrap();
+    table
+        .set_cell_margins_checked(
+            Length::emu(0),
+            Length::emu(63500),
+            Length::emu(12700),
+            Length::emu(127000),
+        )
+        .unwrap();
+    table
+        .set_grid_widths(&[
+            Length::emu(1371600),
+            Length::emu(1828800),
+            Length::emu(1828800),
+        ])
+        .unwrap();
+    assert!(table.set_column_width(2, Length::emu(914400)));
+    let mut cell = table.cell(1, 0).unwrap();
+    cell.set_shading_checked("D9D9D9").unwrap();
+    cell.set_margins_checked(
+        Length::emu(12700),
+        Length::emu(0),
+        Length::emu(25400),
+        Length::emu(6350),
+    )
+    .unwrap();
+    cell.set_border_checked(CellBorderEdge::Bottom, BorderStyle::Double, 6, "auto")
+        .unwrap();
+    let mut row = table.row(0).unwrap();
+    row.set_height_checked(RowHeight::AtLeast(Length::emu(254000)))
+        .unwrap();
+    row.set_cant_split_value(Some(true));
+    row.set_header_value(Some(true));
+    table
+        .row(1)
+        .unwrap()
+        .set_height_checked(RowHeight::Exact(Length::emu(381000)))
+        .unwrap();
+
+    assert_eq!(
+        compact_body_xml(&mut document),
+        concat!(
+            r#"<w:body><w:p><w:r><w:t>before</w:t></w:r></w:p><w:tbl><w:tblPr>"#,
+            r#"<w:tblW w:w="6480" w:type="dxa"/><w:tblBorders>"#,
+            r#"<w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>"#,
+            r#"<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>"#,
+            r#"<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>"#,
+            r#"<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>"#,
+            r#"<w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>"#,
+            r#"<w:insideV w:val="dashed" w:sz="8" w:space="0" w:color="FF0000"/>"#,
+            r#"</w:tblBorders><w:tblCellMar><w:top w:w="0" w:type="dxa"/>"#,
+            r#"<w:left w:w="200" w:type="dxa"/><w:bottom w:w="20" w:type="dxa"/>"#,
+            r#"<w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>"#,
+            r#"<w:tblGrid><w:gridCol w:w="2160"/><w:gridCol w:w="2880"/>"#,
+            r#"<w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:trPr><w:cantSplit/>"#,
+            r#"<w:trHeight w:val="400" w:hRule="atLeast"/><w:tblHeader/></w:trPr>"#,
+            r#"<w:tc><w:tcPr><w:tcW w:w="5040" w:type="dxa"/>"#,
+            r#"<w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr>"#,
+            r#"<w:tcW w:w="1440" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+            r#"<w:tr><w:trPr><w:trHeight w:val="600" w:hRule="exact"/></w:trPr>"#,
+            r#"<w:tc><w:tcPr><w:tcW w:w="2160" w:type="dxa"/><w:tcBorders>"#,
+            r#"<w:bottom w:val="double" w:sz="6" w:space="0" w:color="auto"/>"#,
+            r#"</w:tcBorders>"#,
+            r#"<w:shd w:val="clear" w:color="auto" w:fill="D9D9D9"/><w:tcMar>"#,
+            r#"<w:top w:w="20" w:type="dxa"/><w:left w:w="10" w:type="dxa"/>"#,
+            r#"<w:bottom w:w="40" w:type="dxa"/><w:right w:w="0" w:type="dxa"/>"#,
+            r#"</w:tcMar></w:tcPr><w:p/></w:tc><w:tc><w:tcPr>"#,
+            r#"<w:tcW w:w="2880" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc>"#,
+            r#"<w:tcPr><w:tcW w:w="1440" w:type="dxa"/>"#,
+            r#"<w:vMerge w:val="restart"/></w:tcPr><w:p/></w:tc></w:tr><w:tr>"#,
+            r#"<w:tc><w:tcPr><w:tcW w:w="2160" w:type="dxa"/></w:tcPr><w:p/>"#,
+            r#"</w:tc><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/></w:tcPr>"#,
+            r#"<w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="1440" w:type="dxa"/>"#,
+            r#"<w:vMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p><w:r>"#,
+            r#"<w:t>after</w:t></w:r></w:p><w:sectPr>"#,
+            r#"<w:pgSz w:w="12240" w:h="15840"/>"#,
+            r#"<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440""#,
+            r#" w:gutter="0" w:header="720" w:footer="720"/></w:sectPr></w:body>"#,
+        )
+    );
 }
 
 #[test]

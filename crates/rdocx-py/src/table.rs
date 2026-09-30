@@ -1,7 +1,7 @@
 use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyList, PySlice};
+use pyo3::types::{PyAny, PyList, PySlice, PyTuple};
 use smallvec::smallvec;
 
 use crate::document::PyDocument;
@@ -85,6 +85,122 @@ fn vertical_to_int(value: rdocx::VerticalAlignment) -> i32 {
         rdocx::VerticalAlignment::Top => 0,
         rdocx::VerticalAlignment::Center => 1,
         rdocx::VerticalAlignment::Bottom => 3,
+    }
+}
+
+fn border_style_from_name(value: &str) -> PyResult<rdocx::BorderStyle> {
+    match value {
+        "none" => Ok(rdocx::BorderStyle::None),
+        "single" => Ok(rdocx::BorderStyle::Single),
+        "thick" => Ok(rdocx::BorderStyle::Thick),
+        "double" => Ok(rdocx::BorderStyle::Double),
+        "dotted" => Ok(rdocx::BorderStyle::Dotted),
+        "dashed" => Ok(rdocx::BorderStyle::Dashed),
+        "dotDash" => Ok(rdocx::BorderStyle::DotDash),
+        "wave" => Ok(rdocx::BorderStyle::Wave),
+        _ => Err(PyValueError::new_err(
+            "border style must be none, single, thick, double, dotted, dashed, dotDash or wave",
+        )),
+    }
+}
+
+fn table_border_edge(value: &str) -> PyResult<rdocx::TableBorderEdge> {
+    match value {
+        "top" => Ok(rdocx::TableBorderEdge::Top),
+        "bottom" => Ok(rdocx::TableBorderEdge::Bottom),
+        "left" => Ok(rdocx::TableBorderEdge::Left),
+        "right" => Ok(rdocx::TableBorderEdge::Right),
+        "insideH" => Ok(rdocx::TableBorderEdge::InsideHorizontal),
+        "insideV" => Ok(rdocx::TableBorderEdge::InsideVertical),
+        _ => Err(PyValueError::new_err(
+            "border edge must be top, bottom, left, right, insideH or insideV",
+        )),
+    }
+}
+
+fn cell_border_edge(value: &str) -> PyResult<rdocx::CellBorderEdge> {
+    match value {
+        "top" => Ok(rdocx::CellBorderEdge::Top),
+        "bottom" => Ok(rdocx::CellBorderEdge::Bottom),
+        "left" => Ok(rdocx::CellBorderEdge::Left),
+        "right" => Ok(rdocx::CellBorderEdge::Right),
+        "insideH" => Ok(rdocx::CellBorderEdge::InsideHorizontal),
+        "insideV" => Ok(rdocx::CellBorderEdge::InsideVertical),
+        _ => Err(PyValueError::new_err(
+            "border edge must be top, bottom, left, right, insideH or insideV",
+        )),
+    }
+}
+
+/// A border edge as `(style, size in eighths of a point, color)`.
+type BorderSnapshot = (String, Option<u32>, Option<String>);
+
+fn border_snapshot(border: rdocx::TableBorderRef<'_>) -> BorderSnapshot {
+    (
+        border.style().to_owned(),
+        border.size_eighths_pt(),
+        border.color().map(str::to_owned),
+    )
+}
+
+/// Cell margins as `(top, right, bottom, left)`, each a `Length` or `None`.
+type MarginSnapshot = (
+    Option<Py<PyAny>>,
+    Option<Py<PyAny>>,
+    Option<Py<PyAny>>,
+    Option<Py<PyAny>>,
+);
+
+fn margin_snapshot(py: Python<'_>, margins: rdocx::TableCellMargins) -> PyResult<MarginSnapshot> {
+    let length =
+        |value: Option<rdocx::Length>| value.map(|value| length_object(py, value)).transpose();
+    Ok((
+        length(margins.top)?,
+        length(margins.right)?,
+        length(margins.bottom)?,
+        length(margins.left)?,
+    ))
+}
+
+/// Read a `WD_ROW_HEIGHT_RULE` value, where `AT_LEAST` is 1 and `EXACTLY` is 2.
+fn row_height_rule_is_exact(value: i32) -> PyResult<bool> {
+    match value {
+        1 => Ok(false),
+        2 => Ok(true),
+        _ => Err(PyValueError::new_err("unsupported row height rule")),
+    }
+}
+
+fn row_height(length: rdocx::Length, exact: bool) -> rdocx::RowHeight {
+    if exact {
+        rdocx::RowHeight::Exact(length)
+    } else {
+        rdocx::RowHeight::AtLeast(length)
+    }
+}
+
+fn row_height_parts(value: rdocx::RowHeight) -> (rdocx::Length, bool) {
+    match value {
+        rdocx::RowHeight::AtLeast(length) => (length, false),
+        rdocx::RowHeight::Exact(length) => (length, true),
+    }
+}
+
+fn vertical_merge_from_name(value: Option<&str>) -> PyResult<Option<rdocx::VMerge>> {
+    match value {
+        None => Ok(None),
+        Some("restart") => Ok(Some(rdocx::VMerge::Restart)),
+        Some("continue") => Ok(Some(rdocx::VMerge::Continue)),
+        Some(_) => Err(PyValueError::new_err(
+            "vertical merge must be restart, continue or None",
+        )),
+    }
+}
+
+fn vertical_merge_name(value: rdocx::VMerge) -> &'static str {
+    match value {
+        rdocx::VMerge::Restart => "restart",
+        rdocx::VMerge::Continue => "continue",
     }
 }
 
@@ -197,6 +313,38 @@ impl PyTable {
     pub(crate) fn belongs_to(&self, py: Python<'_>, document: &Py<PyDocument>) -> bool {
         self.document.bind(py).is(document.bind(py))
     }
+
+    /// Apply one checked native table edit without advancing the revision.
+    fn edit<T>(
+        &self,
+        py: Python<'_>,
+        edit: impl FnOnce(&mut rdocx::Table<'_>) -> rdocx::Result<T>,
+    ) -> PyResult<T> {
+        let index = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut table = document
+            .inner
+            .table_mut(index)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        edit(&mut table).map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    /// Resolve possibly negative row and cell indexes against this table.
+    fn cell_coordinates(&self, py: Python<'_>, row: isize, col: isize) -> PyResult<(usize, usize)> {
+        let table_index = self.validate(py)?;
+        let document = self.document.borrow(py);
+        let table = document
+            .inner
+            .table(table_index)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let row = normalize_index(row, table.row_count(), "row")?;
+        let col = normalize_index(
+            col,
+            table.row(row).map(|row| row.cell_count()).unwrap_or(0),
+            "cell",
+        )?;
+        Ok((row, col))
+    }
 }
 
 #[pymethods]
@@ -211,19 +359,9 @@ impl PyTable {
     }
 
     fn cell(&self, py: Python<'_>, row: isize, col: isize) -> PyResult<Py<PyCell>> {
-        let table_index = self.validate(py)?;
-        let document = self.document.borrow(py);
-        let table = document
-            .inner
-            .table(table_index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        let row = normalize_index(row, table.row_count(), "row")?;
-        let col = normalize_index(
-            col,
-            table.row(row).map(|row| row.cell_count()).unwrap_or(0),
-            "cell",
-        )?;
-        let path = document.revisions.capture(smallvec![
+        let (row, col) = self.cell_coordinates(py, row, col)?;
+        let table_index = table_index(&self.path)?;
+        let path = self.document.borrow(py).revisions.capture(smallvec![
             PathSeg::Body(table_index),
             PathSeg::Row(row),
             PathSeg::Cell(col)
@@ -302,6 +440,157 @@ impl PyTable {
             .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
             .set_width(rdocx::Length::emu(value));
         Ok(())
+    }
+
+    #[pyo3(signature = (style, *, size, color))]
+    fn set_borders(&self, py: Python<'_>, style: &str, size: u32, color: &str) -> PyResult<()> {
+        let style = border_style_from_name(style)?;
+        self.edit(py, |table| {
+            table.set_all_borders_checked(style, size, color)
+        })
+    }
+
+    #[pyo3(signature = (edge, style, *, size, color))]
+    fn set_border(
+        &self,
+        py: Python<'_>,
+        edge: &str,
+        style: &str,
+        size: u32,
+        color: &str,
+    ) -> PyResult<()> {
+        let edge = table_border_edge(edge)?;
+        let style = border_style_from_name(style)?;
+        self.edit(py, |table| {
+            table.set_border_checked(edge, style, size, color)
+        })
+    }
+
+    fn border(&self, py: Python<'_>, edge: &str) -> PyResult<Option<BorderSnapshot>> {
+        let edge = table_border_edge(edge)?;
+        let index = self.validate(py)?;
+        Ok(self
+            .document
+            .borrow(py)
+            .inner
+            .table(index)
+            .and_then(|table| table.border(edge).map(border_snapshot)))
+    }
+
+    #[getter]
+    fn cell_margins(&self, py: Python<'_>) -> PyResult<Option<MarginSnapshot>> {
+        let index = self.validate(py)?;
+        let margins = self
+            .document
+            .borrow(py)
+            .inner
+            .table(index)
+            .and_then(|table| table.cell_margins());
+        margins
+            .map(|margins| margin_snapshot(py, margins))
+            .transpose()
+    }
+
+    #[pyo3(signature = (*, top, right, bottom, left))]
+    fn set_cell_margins(
+        &self,
+        py: Python<'_>,
+        top: i64,
+        right: i64,
+        bottom: i64,
+        left: i64,
+    ) -> PyResult<()> {
+        self.edit(py, |table| {
+            table.set_cell_margins_checked(
+                rdocx::Length::emu(top),
+                rdocx::Length::emu(right),
+                rdocx::Length::emu(bottom),
+                rdocx::Length::emu(left),
+            )
+        })
+    }
+
+    #[getter]
+    fn grid_widths<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let index = self.validate(py)?;
+        let widths = self
+            .document
+            .borrow(py)
+            .inner
+            .table(index)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
+            .grid_widths();
+        let widths = widths
+            .into_iter()
+            .map(|width| length_object(py, width))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, widths)
+    }
+
+    #[setter]
+    fn set_grid_widths(&self, py: Python<'_>, value: Vec<i64>) -> PyResult<()> {
+        let widths = value
+            .into_iter()
+            .map(rdocx::Length::emu)
+            .collect::<Vec<_>>();
+        self.edit(py, |table| table.set_grid_widths(&widths))
+    }
+
+    fn set_column_width(&self, py: Python<'_>, column: isize, width: i64) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let columns = self
+            .document
+            .borrow(py)
+            .inner
+            .table(index)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
+            .grid_widths()
+            .len();
+        let column = normalize_index(column, columns, "column")?;
+        let applied = self.edit(py, |table| {
+            Ok(table.set_column_width(column, rdocx::Length::emu(width)))
+        })?;
+        if !applied {
+            return Err(PyValueError::new_err(
+                "column width must be nonnegative and every row must fit the table grid",
+            ));
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (row, col, span))]
+    fn set_cell_grid_span(
+        &self,
+        py: Python<'_>,
+        row: isize,
+        col: isize,
+        span: Option<u32>,
+    ) -> PyResult<()> {
+        let (row, col) = self.cell_coordinates(py, row, col)?;
+        let cells = |table: &mut rdocx::Table<'_>| table.row(row).map(|row| row.cell_count());
+        let changed = self.edit(py, |table| {
+            let before = cells(table);
+            table.set_cell_grid_span_checked(row, col, span)?;
+            Ok(cells(table) != before)
+        })?;
+        // Absorbed or restored cells shift the indexes after this one.
+        if changed {
+            self.document.borrow_mut(py).revisions.bump();
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (row, col, merge))]
+    fn set_cell_vertical_merge(
+        &self,
+        py: Python<'_>,
+        row: isize,
+        col: isize,
+        merge: Option<&str>,
+    ) -> PyResult<()> {
+        let merge = vertical_merge_from_name(merge)?;
+        let (row, col) = self.cell_coordinates(py, row, col)?;
+        self.edit(py, |table| table.set_cell_vertical_merge(row, col, merge))
     }
 
     #[pyo3(signature = (index, at = None))]
@@ -476,6 +765,38 @@ impl PyRow {
             .map_err(|error| stale_to_pyerr(py, error))?;
         Ok((table_index(&self.path)?, row_index(&self.path)?))
     }
+
+    fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::RowRef<'_>) -> T) -> PyResult<T> {
+        let (table, row) = self.validate(py)?;
+        let document = self.document.borrow(py);
+        let table = document
+            .inner
+            .table(table)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let row = table
+            .row(row)
+            .ok_or_else(|| PyIndexError::new_err("row index out of range"))?;
+        Ok(read(row))
+    }
+
+    /// Apply one checked native row edit that moves no content, so live
+    /// handles stay valid.
+    fn edit(
+        &self,
+        py: Python<'_>,
+        edit: impl FnOnce(&mut rdocx::Row<'_>) -> rdocx::Result<()>,
+    ) -> PyResult<()> {
+        let (table, row) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut table = document
+            .inner
+            .table_mut(table)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let mut row = table
+            .row(row)
+            .ok_or_else(|| PyIndexError::new_err("row index out of range"))?;
+        edit(&mut row).map_err(|error| rdocx_to_pyerr(py, error))
+    }
 }
 
 #[pymethods]
@@ -487,6 +808,75 @@ impl PyRow {
             py,
             PyCellCollection::new(self.document.clone_ref(py), self.path.clone()),
         )
+    }
+
+    #[getter]
+    fn height(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.read(py, |row| row.height())?
+            .map(|height| length_object(py, row_height_parts(height).0))
+            .transpose()
+    }
+
+    // An exact height keeps its rule. Any other row gets a minimum height,
+    // including one whose w:trHeight has an auto rule or no value, which the
+    // native reader reports as no height.
+    #[setter]
+    fn set_height(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+        let exact = self
+            .read(py, |row| row.height())?
+            .is_some_and(|height| row_height_parts(height).1);
+        let height = row_height(rdocx::Length::emu(value), exact);
+        self.edit(py, |row| row.set_height_checked(height))
+    }
+
+    #[getter]
+    fn height_rule(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.read(py, |row| row.height())?
+            .map(|height| {
+                let exact = row_height_parts(height).1;
+                enum_object(py, "WD_ROW_HEIGHT_RULE", if exact { 2 } else { 1 })
+            })
+            .transpose()
+    }
+
+    #[setter]
+    fn set_height_rule(&self, py: Python<'_>, value: i32) -> PyResult<()> {
+        let exact = row_height_rule_is_exact(value)?;
+        let length = self
+            .read(py, |row| row.height())?
+            .map(|height| row_height_parts(height).0)
+            .ok_or_else(|| {
+                PyValueError::new_err(
+                    "row has no height for the rule to apply to, set height first",
+                )
+            })?;
+        self.edit(py, |row| row.set_height_checked(row_height(length, exact)))
+    }
+
+    #[getter]
+    fn cant_split(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.read(py, |row| row.cant_split_value())
+    }
+
+    #[setter]
+    fn set_cant_split(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.edit(py, |row| {
+            row.set_cant_split_value(value);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn is_header(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.read(py, |row| row.header_value())
+    }
+
+    #[setter]
+    fn set_is_header(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.edit(py, |row| {
+            row.set_header_value(value);
+            Ok(())
+        })
     }
 }
 
@@ -618,6 +1008,38 @@ impl PyCell {
             cell_index(&self.path)?,
         ))
     }
+
+    fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::CellRef<'_>) -> T) -> PyResult<T> {
+        let (table, row, cell) = self.validate(py)?;
+        let document = self.document.borrow(py);
+        let table = document
+            .inner
+            .table(table)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let cell = table
+            .cell(row, cell)
+            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+        Ok(read(cell))
+    }
+
+    /// Apply one checked native cell edit that moves no content, so live
+    /// handles stay valid.
+    fn edit(
+        &self,
+        py: Python<'_>,
+        edit: impl FnOnce(&mut rdocx::Cell<'_>) -> rdocx::Result<()>,
+    ) -> PyResult<()> {
+        let (table, row, cell) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut table = document
+            .inner
+            .table_mut(table)
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let mut cell = table
+            .cell(row, cell)
+            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+        edit(&mut cell).map_err(|error| rdocx_to_pyerr(py, error))
+    }
 }
 
 #[pymethods]
@@ -737,6 +1159,71 @@ impl PyCell {
             .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
             .set_vertical_alignment(value);
         Ok(())
+    }
+
+    #[getter]
+    fn grid_span(&self, py: Python<'_>) -> PyResult<u32> {
+        self.read(py, |cell| cell.grid_span().unwrap_or(1))
+    }
+
+    #[getter]
+    fn vertical_merge(&self, py: Python<'_>) -> PyResult<Option<&'static str>> {
+        self.read(py, |cell| cell.v_merge().copied().map(vertical_merge_name))
+    }
+
+    #[getter]
+    fn shading(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.read(py, |cell| cell.shading_fill().map(str::to_owned))
+    }
+
+    #[setter]
+    fn set_shading(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.edit(py, |cell| cell.set_shading_checked(value))
+    }
+
+    fn border(&self, py: Python<'_>, edge: &str) -> PyResult<Option<BorderSnapshot>> {
+        let edge = cell_border_edge(edge)?;
+        self.read(py, |cell| cell.border(edge).map(border_snapshot))
+    }
+
+    #[pyo3(signature = (edge, style, *, size, color))]
+    fn set_border(
+        &self,
+        py: Python<'_>,
+        edge: &str,
+        style: &str,
+        size: u32,
+        color: &str,
+    ) -> PyResult<()> {
+        let edge = cell_border_edge(edge)?;
+        let style = border_style_from_name(style)?;
+        self.edit(py, |cell| cell.set_border_checked(edge, style, size, color))
+    }
+
+    #[getter]
+    fn margins(&self, py: Python<'_>) -> PyResult<Option<MarginSnapshot>> {
+        self.read(py, |cell| cell.margins())?
+            .map(|margins| margin_snapshot(py, margins))
+            .transpose()
+    }
+
+    #[pyo3(signature = (*, top, right, bottom, left))]
+    fn set_margins(
+        &self,
+        py: Python<'_>,
+        top: i64,
+        right: i64,
+        bottom: i64,
+        left: i64,
+    ) -> PyResult<()> {
+        self.edit(py, |cell| {
+            cell.set_margins_checked(
+                rdocx::Length::emu(top),
+                rdocx::Length::emu(right),
+                rdocx::Length::emu(bottom),
+                rdocx::Length::emu(left),
+            )
+        })
     }
 }
 

@@ -2937,6 +2937,9 @@ impl Section<'_> {
     }
 
     /// Set this section's top, right, bottom, and left margins.
+    ///
+    /// Any other `w:pgMar` value the section lacks takes its layout default, so
+    /// the written element carries every attribute `CT_PageMar` requires.
     pub fn set_margins(
         &mut self,
         top: Length,
@@ -2952,6 +2955,7 @@ impl Section<'_> {
         self.inner.margin_right = Some(right);
         self.inner.margin_bottom = Some(bottom);
         self.inner.margin_left = Some(left);
+        complete_page_margins(self.inner);
         Ok(())
     }
 
@@ -2961,9 +2965,13 @@ impl Section<'_> {
     }
 
     /// Set this section's nonnegative gutter.
+    ///
+    /// Any other `w:pgMar` value the section lacks takes its layout default, so
+    /// the written element carries every attribute `CT_PageMar` requires.
     pub fn set_gutter(&mut self, gutter: Length) -> Result<()> {
         let gutter = checked_nonnegative_section_twips(gutter, "gutter")?;
         self.inner.gutter = Some(gutter);
+        complete_page_margins(self.inner);
         Ok(())
     }
 
@@ -3200,11 +3208,15 @@ impl Section<'_> {
     }
 
     /// Set nonnegative header and footer distances from the page edges.
+    ///
+    /// Any other `w:pgMar` value the section lacks takes its layout default, so
+    /// the written element carries every attribute `CT_PageMar` requires.
     pub fn set_header_footer_distance(&mut self, header: Length, footer: Length) -> Result<()> {
         let header = checked_nonnegative_section_twips(header, "header distance")?;
         let footer = checked_nonnegative_section_twips(footer, "footer distance")?;
         self.inner.header_distance = Some(header);
         self.inner.footer_distance = Some(footer);
+        complete_page_margins(self.inner);
         Ok(())
     }
 
@@ -3237,6 +3249,23 @@ impl Section<'_> {
     pub fn properties_mut(&mut self) -> &mut CT_SectPr {
         self.inner
     }
+}
+
+/// Give every `w:pgMar` attribute a value once a setter has written one.
+///
+/// `CT_PageMar` requires all seven attributes. A value the section already has
+/// is kept, and an absent one takes the value layout assumes when it is
+/// missing, which is the `CT_SectPr::default_letter` value, so the section
+/// renders exactly as before.
+fn complete_page_margins(properties: &mut CT_SectPr) {
+    let defaults = CT_SectPr::default_letter();
+    properties.margin_top = properties.margin_top.or(defaults.margin_top);
+    properties.margin_right = properties.margin_right.or(defaults.margin_right);
+    properties.margin_bottom = properties.margin_bottom.or(defaults.margin_bottom);
+    properties.margin_left = properties.margin_left.or(defaults.margin_left);
+    properties.gutter = properties.gutter.or(defaults.gutter);
+    properties.header_distance = properties.header_distance.or(defaults.header_distance);
+    properties.footer_distance = properties.footer_distance.or(defaults.footer_distance);
 }
 
 fn checked_positive_section_twips(value: Length, name: &str) -> Result<Twips> {
