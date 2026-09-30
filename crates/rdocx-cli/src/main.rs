@@ -220,7 +220,11 @@ enum CommentCommand {
         anchor: Option<String>,
         /// Zero-based occurrence of the --anchor text in document order,
         /// 0 when absent
-        #[arg(long, requires = "anchor")]
+        #[arg(
+            long,
+            requires = "anchor",
+            conflicts_with_all = ["start_paragraph", "start_run", "end_paragraph", "end_run"]
+        )]
         occurrence: Option<usize>,
         /// Comment author
         #[arg(long)]

@@ -2018,14 +2018,38 @@ fn comment_add_anchors_the_requested_occurrence_of_a_text() {
     }
 
     // The text and a run range are exclusive, and one of them is required.
-    for options in [
-        &["--anchor", "Alpha", "--start-paragraph", "0"][..],
-        &["--occurrence", "1"][..],
-        &[][..],
+    let range = [
+        "--start-paragraph",
+        "0",
+        "--start-run",
+        "0",
+        "--end-paragraph",
+        "0",
+        "--end-run",
+        "1",
+    ];
+    let with_range = |extra: &[&'static str]| {
+        let mut options = range.to_vec();
+        options.extend_from_slice(extra);
+        options
+    };
+    for (options, message) in [
+        (
+            vec!["--anchor", "Alpha", "--start-paragraph", "0"],
+            "cannot be used with",
+        ),
+        (with_range(&["--occurrence", "1"]), "cannot be used with"),
+        (
+            vec!["--occurrence", "1"],
+            "required arguments were not provided",
+        ),
+        (vec![], "required arguments were not provided"),
     ] {
         let usage_path = temp.path.join("usage.docx");
-        let usage = add(options, &usage_path);
+        let usage = add(&options, &usage_path);
         assert_eq!(usage.status.code(), Some(2), "{options:?}");
+        let stderr = String::from_utf8(usage.stderr).unwrap();
+        assert!(stderr.contains(message), "{options:?}: {stderr}");
         assert!(!usage_path.exists());
     }
 }
