@@ -1456,6 +1456,14 @@ so the rectangle is inset here and the edges carry no further offset.
 section's own first page, and `w:zOrder="back"` draws the frame before every
 other element on the page while the default draws it after.
 
+That renderer draws `dashed`, `dotted`, `dotDash` and `dotDotDash` with a dash
+pattern and `double` as two lines. A style without a pattern of its own draws
+as the nearest one, `dashSmallGap` as `dashed` and `dashDotStroked` as
+`dotDash`, and every other line style, `triple` and the `thinThickThin` family
+included, draws as one solid line. A picture border such as `apples` has no
+line to draw, so it draws nothing, while every `ST_Border` token, picture
+borders included, survives an edit and a save.
+
 `w:lnNumType` numbers body lines in the margin. The number is right-aligned
 `w:distance` clear of the track it labels, defaulting to Word's automatic
 quarter inch, shaped at nine points through the deterministic font manager and

@@ -38929,3 +38929,28 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert!(compared.revisions().is_empty());
 }
+
+/// A border style the model did not list read as `none` and was written back
+/// as `none` by the next edit, which removed the border in Word. Every
+/// `ST_Border` token now survives an edit and a save, the picture borders of
+/// a page frame included.
+#[test]
+fn every_border_style_token_survives_an_edit_and_save() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pBdr><w:top w:val="dashSmallGap" w:sz="12" w:space="1" w:color="FF0000"/><w:left w:val="dashDotStroked" w:sz="8" w:space="4"/><w:bottom w:val="thinThickThinSmallGap" w:sz="12" w:space="1"/><w:right w:val="thinThickThinLargeGap" w:sz="12" w:space="4"/></w:pBdr></w:pPr><w:r><w:t>Bordered</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:pgBorders w:offsetFrom="page"><w:top w:val="apples" w:sz="20" w:space="24"/><w:left w:val="thinThickThinMediumGap" w:sz="12" w:space="24"/><w:bottom w:val="zigZagStitch" w:sz="10" w:space="24"/><w:right w:val="custom" w:sz="10" w:space="24"/></w:pgBorders></w:sectPr></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    document.add_paragraph("Edited");
+    let saved = document_xml(&mut document);
+    for edge in [
+        r#"<w:top w:val="dashSmallGap" w:sz="12" w:space="1" w:color="FF0000"/>"#,
+        r#"<w:left w:val="dashDotStroked" w:sz="8" w:space="4"/>"#,
+        r#"<w:bottom w:val="thinThickThinSmallGap" w:sz="12" w:space="1"/>"#,
+        r#"<w:right w:val="thinThickThinLargeGap" w:sz="12" w:space="4"/>"#,
+        r#"<w:top w:val="apples" w:sz="20" w:space="24"/>"#,
+        r#"<w:left w:val="thinThickThinMediumGap" w:sz="12" w:space="24"/>"#,
+        r#"<w:bottom w:val="zigZagStitch" w:sz="10" w:space="24"/>"#,
+        r#"<w:right w:val="custom" w:sz="10" w:space="24"/>"#,
+    ] {
+        assert!(saved.contains(edge), "{edge} is missing from {saved}");
+    }
+    assert!(!saved.contains(r#"w:val="none""#), "{saved}");
+}

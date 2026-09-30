@@ -4929,7 +4929,9 @@ fn render_border_edges(
                        start: Point,
                        end: Point,
                        elements: &mut Vec<PositionedElement>| {
-        if edge.val.is_none() {
+        // A picture border has no line to draw, so it keeps its token and
+        // draws nothing, as it did when it read as `none`.
+        if edge.val.is_none() || matches!(edge.val, ST_Border::Art(_)) {
             return;
         }
         let thickness = edge.sz.unwrap_or(4) as f64 / 8.0; // sz is in eighths of a point
@@ -5048,11 +5050,16 @@ fn render_border_edges(
 
 /// Map a border style to a dash pattern (dash_on, dash_off) in points.
 /// Returns None for solid lines (Single, Thick, Double, etc.).
+///
+/// A style with no pattern of its own draws as the nearest one here:
+/// `dashSmallGap` as `dashed` and `dashDotStroked` as `dotDash`.
 fn border_dash_pattern(style: ST_Border, thickness: f64) -> Option<(f64, f64)> {
     match style {
-        ST_Border::Dashed => Some((3.0 * thickness, 2.0 * thickness)),
+        ST_Border::Dashed | ST_Border::DashSmallGap => Some((3.0 * thickness, 2.0 * thickness)),
         ST_Border::Dotted => Some((thickness, thickness)),
-        ST_Border::DotDash | ST_Border::DotDotDash => Some((3.0 * thickness, thickness)),
+        ST_Border::DotDash | ST_Border::DotDotDash | ST_Border::DashDotStroked => {
+            Some((3.0 * thickness, thickness))
+        }
         _ => None,
     }
 }
@@ -7187,6 +7194,37 @@ mod tests {
             &mut interior,
         );
         assert!(interior.is_empty(), "interior nil remains suppressive");
+    }
+
+    #[test]
+    fn line_styles_without_a_pattern_draw_as_the_nearest_one_and_art_draws_none() {
+        use rdocx_oxml::borders::{CT_BorderEdge, CT_PBdr};
+
+        let drawn = |token: &str| {
+            let mut edge = CT_BorderEdge::new(ST_Border::from_str(token).unwrap());
+            edge.sz = Some(8);
+            let borders = CT_PBdr {
+                top: Some(edge),
+                ..CT_PBdr::default()
+            };
+            let mut elements = Vec::new();
+            render_border_edges(&borders, 72.0, 72.0, 200.0, 20.0, &mut elements);
+            elements
+                .iter()
+                .map(|element| match element {
+                    PositionedElement::Line { dash_pattern, .. } => *dash_pattern,
+                    other => panic!("{token} drew {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(drawn("dashSmallGap"), drawn("dashed"));
+        assert_eq!(drawn("dashSmallGap"), [Some((3.0, 2.0))]);
+        assert_eq!(drawn("dashDotStroked"), drawn("dotDash"));
+        assert_eq!(drawn("thinThickThinSmallGap"), [None]);
+        assert_eq!(drawn("thinThickThinLargeGap"), drawn("triple"));
+        assert!(drawn("apples").is_empty());
+        assert!(drawn("custom").is_empty());
     }
 
     /// The same offset must land somewhere different once the paragraph moves.
