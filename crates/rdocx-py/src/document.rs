@@ -12,7 +12,9 @@ use smallvec::smallvec;
 
 use rdocx_oxml::{ST_PageOrientation, ST_SectionType};
 
-use crate::paragraph::{ParagraphLocation, PyParagraph, PyParagraphCollection};
+use crate::paragraph::{
+    ParagraphLocation, PyParagraph, PyParagraphCollection, defined_style, style_id_of_type,
+};
 use crate::rdocx_to_pyerr;
 use crate::table::{PyTable, PyTableCollection};
 
@@ -856,6 +858,156 @@ impl PyStyle {
             is_default,
         }
     }
+}
+
+/// One level of a numbering definition for `Document.add_numbering_definition`.
+///
+/// `format` is a Word `w:numFmt` name such as `decimal`, `lowerLetter` or
+/// `bullet`. `text` is the level text, `%1.` or a bullet glyph by default.
+/// The indents are EMU, as `Length` values are, and default to half an inch
+/// per level with a quarter-inch hanging indent.
+#[pyclass(name = "ListLevel", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyListLevel {
+    pub format: String,
+    pub text: Option<String>,
+    pub start: Option<u32>,
+    pub left_indent: Option<i64>,
+    pub hanging_indent: Option<i64>,
+}
+
+#[pymethods]
+impl PyListLevel {
+    #[new]
+    #[pyo3(signature = (*, format = "decimal", text = None, start = None, left_indent = None, hanging_indent = None))]
+    fn new(
+        format: &str,
+        text: Option<String>,
+        start: Option<u32>,
+        left_indent: Option<i64>,
+        hanging_indent: Option<i64>,
+    ) -> PyResult<Self> {
+        if let rdocx::ListNumberFormat::Other(_) = rdocx::ListNumberFormat::from_name(format) {
+            return Err(PyValueError::new_err(format!(
+                "'{format}' is not a Word numbering format"
+            )));
+        }
+        if hanging_indent.is_some_and(|value| value < 0) {
+            return Err(PyValueError::new_err("hanging_indent cannot be negative"));
+        }
+        Ok(Self {
+            format: format.to_owned(),
+            text,
+            start,
+            left_indent,
+            hanging_indent,
+        })
+    }
+}
+
+impl PyListLevel {
+    fn native(&self) -> rdocx::ListLevel {
+        let twips = |value: Option<i64>| value.map(|emu| rdocx::Length::emu(emu).as_twips());
+        let mut level = rdocx::ListLevel::new(rdocx::ListNumberFormat::from_name(&self.format))
+            .indentation(twips(self.left_indent), twips(self.hanging_indent), None);
+        level.start = self.start;
+        match &self.text {
+            Some(text) => level.level_text(text.as_str()),
+            None => level,
+        }
+    }
+}
+
+/// The formatting `Document.add_style` gives a new style. Lengths and the
+/// font size are EMU, as `Length` values are, and `None` leaves a property to
+/// the style's base.
+struct StyleFormatting {
+    font_name: Option<String>,
+    font_size: Option<i64>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    color: Option<(u8, u8, u8)>,
+    space_before: Option<i64>,
+    space_after: Option<i64>,
+    left_indent: Option<i64>,
+    right_indent: Option<i64>,
+    first_line_indent: Option<i64>,
+}
+
+impl StyleFormatting {
+    /// The run properties, written as the `Font` setters write them on a run.
+    fn run_properties(&self) -> Option<rdocx::CT_RPr> {
+        let font = || self.font_name.clone();
+        let size = self
+            .font_size
+            .map(|emu| rdocx::HalfPoint::from_pt(rdocx::Length::emu(emu).to_pt()));
+        let properties = rdocx::CT_RPr {
+            font_ascii: font(),
+            font_hansi: font(),
+            font_east_asia: font(),
+            font_cs: font(),
+            bold: self.bold,
+            bold_cs: self.bold,
+            italic: self.italic,
+            italic_cs: self.italic,
+            sz: size,
+            sz_cs: size,
+            color: self
+                .color
+                .map(|(red, green, blue)| format!("{red:02X}{green:02X}{blue:02X}")),
+            ..rdocx::CT_RPr::default()
+        };
+        (properties != rdocx::CT_RPr::default()).then_some(properties)
+    }
+
+    /// The paragraph properties, written as the `ParagraphFormat` setters
+    /// write them, a negative first-line indent becoming a hanging one.
+    fn paragraph_properties(&self) -> Option<rdocx::CT_PPr> {
+        let twips = |value: Option<i64>| value.map(|emu| rdocx::Length::emu(emu).as_twips());
+        let first_line = twips(self.first_line_indent);
+        let properties = rdocx::CT_PPr {
+            space_before: twips(self.space_before),
+            space_after: twips(self.space_after),
+            ind_left: twips(self.left_indent),
+            ind_right: twips(self.right_indent),
+            ind_first_line: first_line.filter(|value| value.0 >= 0),
+            ind_hanging: first_line
+                .filter(|value| value.0 < 0)
+                .map(|value| rdocx::Twips(value.0.saturating_abs())),
+            ..rdocx::CT_PPr::default()
+        };
+        (properties != rdocx::CT_PPr::default()).then_some(properties)
+    }
+}
+
+/// The style ID Word derives from a style name: the name's ASCII letters,
+/// digits and hyphens, so "Q&A" gives `QA`. A name with none of them, such as
+/// a Japanese one, gets the first of `a`, `a0`, `a1` and so on that `document`
+/// does not use, as Word numbers them. As in python-docx, Word's lowercase
+/// built-in names `caption` and `heading 1` to `heading 9` keep their
+/// capitalised IDs.
+fn style_id_from_name(document: &rdocx::Document, name: &str) -> String {
+    match (name, name.strip_prefix("heading ")) {
+        ("caption", _) => return "Caption".to_owned(),
+        (_, Some(level)) if matches!(level.as_bytes(), [b'1'..=b'9']) => {
+            return format!("Heading{level}");
+        }
+        _ => {}
+    }
+    let kept = name
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .collect::<String>();
+    if !kept.is_empty() {
+        return kept;
+    }
+    let mut fallback = "a".to_owned();
+    let mut number = 0;
+    while document.style(&fallback).is_some() {
+        fallback = format!("a{number}");
+        number += 1;
+    }
+    fallback
 }
 
 #[pymethods]
@@ -1754,7 +1906,13 @@ impl PyDocument {
             Some(path) => rdocx::Document::open(path)
                 .map(Self::from_document)
                 .map_err(|error| rdocx_to_pyerr(py, error)),
-            None => Ok(Self::from_document(rdocx::Document::new())),
+            None => {
+                let mut document = rdocx::Document::new();
+                document
+                    .add_common_styles()
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                Ok(Self::from_document(document))
+            }
         }
     }
 
@@ -2313,6 +2471,180 @@ impl PyDocument {
     #[getter]
     fn styles<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         PyTuple::new(py, self.inner.styles().into_iter().map(style_snapshot))
+    }
+
+    // Create a style as python-docx's `styles.add_style` does, deriving the
+    // ID from the name unless one is given, with the formatting given as
+    // keywords. Styles change no content, so handles stay valid.
+    #[pyo3(signature = (
+        name,
+        style_type = "paragraph",
+        *,
+        style_id = None,
+        based_on = None,
+        next_style = None,
+        font_name = None,
+        font_size = None,
+        bold = None,
+        italic = None,
+        color = None,
+        space_before = None,
+        space_after = None,
+        left_indent = None,
+        right_indent = None,
+        first_line_indent = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_style(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+        style_type: &str,
+        style_id: Option<&str>,
+        based_on: Option<&str>,
+        next_style: Option<&str>,
+        font_name: Option<String>,
+        font_size: Option<i64>,
+        bold: Option<bool>,
+        italic: Option<bool>,
+        color: Option<(u8, u8, u8)>,
+        space_before: Option<i64>,
+        space_after: Option<i64>,
+        left_indent: Option<i64>,
+        right_indent: Option<i64>,
+        first_line_indent: Option<i64>,
+    ) -> PyResult<PyStyle> {
+        type NewStyle = fn(&str, &str) -> rdocx::StyleBuilder;
+        let (native_type, new_style): (rdocx::StyleType, NewStyle) = match style_type {
+            "paragraph" => (rdocx::StyleType::Paragraph, rdocx::StyleBuilder::paragraph),
+            "character" => (rdocx::StyleType::Character, rdocx::StyleBuilder::character),
+            "table" => (rdocx::StyleType::Table, rdocx::StyleBuilder::table),
+            _ => {
+                return Err(PyValueError::new_err(
+                    "style_type must be 'paragraph', 'character' or 'table'",
+                ));
+            }
+        };
+        let style_id =
+            style_id.map_or_else(|| style_id_from_name(&self.inner, name), str::to_owned);
+        if name.trim().is_empty() || style_id.trim().is_empty() {
+            return Err(PyValueError::new_err(
+                "a style name and style ID cannot be blank",
+            ));
+        }
+        if self.inner.style(&style_id).is_some() {
+            return Err(PyValueError::new_err(format!(
+                "a style with the ID '{style_id}' already exists"
+            )));
+        }
+        let lowered = name.to_lowercase();
+        if self.inner.styles().iter().any(|style| {
+            style
+                .name()
+                .is_some_and(|name| name.to_lowercase() == lowered)
+        }) {
+            return Err(PyValueError::new_err(format!(
+                "a style named '{name}' already exists"
+            )));
+        }
+        let formatting = StyleFormatting {
+            font_name,
+            font_size,
+            bold,
+            italic,
+            color,
+            space_before,
+            space_after,
+            left_indent,
+            right_indent,
+            first_line_indent,
+        };
+        let mut builder = new_style(&style_id, name);
+        if let Some(parent) = based_on {
+            builder = builder.based_on(&style_id_of_type(&self.inner, parent, native_type)?);
+        }
+        if let Some(next) = next_style {
+            if native_type != rdocx::StyleType::Paragraph {
+                return Err(PyValueError::new_err(
+                    "only a paragraph style has a next style",
+                ));
+            }
+            builder = builder.next_style(&style_id_of_type(
+                &self.inner,
+                next,
+                rdocx::StyleType::Paragraph,
+            )?);
+        }
+        if let Some(properties) = formatting.paragraph_properties() {
+            if native_type == rdocx::StyleType::Character {
+                return Err(PyValueError::new_err(
+                    "a character style takes no paragraph formatting",
+                ));
+            }
+            builder = builder.paragraph_properties(properties);
+        }
+        if let Some(properties) = formatting.run_properties() {
+            builder = builder.run_properties(properties);
+        }
+        self.inner
+            .add_style(builder)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(style_snapshot(
+            self.inner
+                .style(&style_id)
+                .expect("the style was just added"),
+        ))
+    }
+
+    // Return false when no style has the ID or name. The native call refuses
+    // a style that content, another style or a numbering level still uses.
+    fn remove_style(&mut self, py: Python<'_>, style: &str) -> PyResult<bool> {
+        let Ok((_, style_id)) = defined_style(&self.inner, style) else {
+            return Ok(false);
+        };
+        self.inner
+            .remove_style(&style_id)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn set_default_style(&mut self, py: Python<'_>, style: &str) -> PyResult<()> {
+        let (style_type, style_id) = defined_style(&self.inner, style)?;
+        self.inner
+            .set_default_style(style_type, &style_id)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn add_numbering_definition(
+        &mut self,
+        py: Python<'_>,
+        levels: Vec<PyRef<'_, PyListLevel>>,
+    ) -> PyResult<u32> {
+        let levels = levels
+            .iter()
+            .map(|level| level.native())
+            .collect::<Vec<_>>();
+        self.inner
+            .add_numbering_definition(&levels)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn add_numbering_instance(&mut self, py: Python<'_>, definition_id: u32) -> PyResult<u32> {
+        self.inner
+            .add_numbering_instance(definition_id, &[])
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn link_style_to_numbering(
+        &mut self,
+        py: Python<'_>,
+        style: &str,
+        num_id: u32,
+        level: u32,
+    ) -> PyResult<()> {
+        let style_id = style_id_of_type(&self.inner, style, rdocx::StyleType::Paragraph)?;
+        self.inner
+            .link_style_to_numbering(&style_id, num_id, level)
+            .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     #[getter]
