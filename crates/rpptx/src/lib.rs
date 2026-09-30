@@ -7235,12 +7235,14 @@ impl<'a> TableMut<'a> {
             ));
         }
         let mut staged = self.table.clone();
-        staged.grid.columns[column] = width;
+        staged
+            .set_column_width(column, width)
+            .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
         let (total_width, total_height) = table_extent(&staged, OPERATION)?;
         staged
             .to_xml()
             .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
-        self.table.grid.columns[column] = width;
+        *self.table = staged;
         let height = self
             .transform
             .extent
@@ -7290,6 +7292,78 @@ impl<'a> TableMut<'a> {
             cx: width,
             cy: total_height,
         });
+        Ok(())
+    }
+
+    /// Inserts a row before `index`, or appends one when `index` equals the
+    /// row count, and grows the frame height by the new row's height.
+    ///
+    /// The new row copies the height of the row above it, or of the first row
+    /// when it becomes the first, and each new cell copies that row's cell
+    /// properties and first-paragraph formatting without its text. A row
+    /// inserted inside a merged cell extends the merge.
+    pub fn insert_row(&mut self, index: usize) -> Result<()> {
+        self.restructure("insert row", |table| table.insert_row(index))
+    }
+
+    /// Removes one row, which must not be the only one, and shrinks the frame
+    /// height by its height.
+    ///
+    /// A merged cell across the row loses one row, and when the row holds the
+    /// merge origin the row below takes it over with the origin's text.
+    pub fn remove_row(&mut self, index: usize) -> Result<()> {
+        self.restructure("remove row", |table| table.remove_row(index))
+    }
+
+    /// Inserts a grid column before `index`, or appends one when `index`
+    /// equals the column count, and grows the frame width by its width.
+    ///
+    /// The new column copies the width of the column left of it, or of the
+    /// first column when it becomes the first, and its cells copy that
+    /// column's cells as `insert_row` does. A column inserted inside a merged
+    /// cell extends the merge.
+    pub fn insert_column(&mut self, index: usize) -> Result<()> {
+        self.restructure("insert column", |table| table.insert_column(index))
+    }
+
+    /// Removes one grid column, which must not be the only one, and shrinks
+    /// the frame width by its width.
+    ///
+    /// A merged cell across the column loses one column, and when the column
+    /// holds the merge origin the column to its right takes it over with the
+    /// origin's text.
+    pub fn remove_column(&mut self, index: usize) -> Result<()> {
+        self.restructure("remove column", |table| table.remove_column(index))
+    }
+
+    /// Applies one row or column edit to a staged table and commits it.
+    ///
+    /// Each frame edge moves by the change of its grid sum, so the frame grows
+    /// or shrinks by the inserted or removed row or column. A frame that
+    /// PowerPoint measured taller than its stored rows, because it grew rows
+    /// to fit their text, keeps that excess.
+    fn restructure(
+        &mut self,
+        operation: &'static str,
+        edit: impl FnOnce(&mut CT_Table) -> std::result::Result<(), OxmlError>,
+    ) -> Result<()> {
+        let (old_width, old_height) = table_extent(self.table, operation)?;
+        let mut staged = self.table.clone();
+        edit(&mut staged).map_err(|error| invalid_table_mutation(operation, error.to_string()))?;
+        let (new_width, new_height) = table_extent(&staged, operation)?;
+        staged
+            .to_xml()
+            .map_err(|error| invalid_table_mutation(operation, error.to_string()))?;
+        let frame = self.transform.extent.unwrap_or(CT_PositiveSize2D {
+            cx: old_width,
+            cy: old_height,
+        });
+        let extent = CT_PositiveSize2D {
+            cx: moved_frame_edge(frame.cx, old_width, new_width, operation)?,
+            cy: moved_frame_edge(frame.cy, old_height, new_height, operation)?,
+        };
+        *self.table = staged;
+        self.transform.extent = Some(extent);
         Ok(())
     }
 
@@ -7647,6 +7721,28 @@ fn table_extent(table: &CT_Table, operation: &'static str) -> Result<(Emu, Emu)>
         ));
     }
     Ok((Emu(total_width), Emu(total_height)))
+}
+
+/// Moves one frame edge by the change of its grid sum and requires the edge
+/// to stay positive.
+fn moved_frame_edge(
+    frame: Emu,
+    old_total: Emu,
+    new_total: Emu,
+    operation: &'static str,
+) -> Result<Emu> {
+    new_total
+        .0
+        .checked_sub(old_total.0)
+        .and_then(|change| frame.0.checked_add(change))
+        .filter(|size| *size > 0)
+        .map(Emu)
+        .ok_or_else(|| {
+            invalid_table_mutation(
+                operation,
+                "table frame size must remain positive and within the EMU range".to_owned(),
+            )
+        })
 }
 
 fn rectangular_dimensions(table: &CT_Table) -> std::result::Result<(usize, usize), String> {

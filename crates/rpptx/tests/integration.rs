@@ -14603,6 +14603,65 @@ fn table_mutation_rejects_invalid_ranges_without_partial_changes() {
     assert_eq!(presentation.to_bytes().unwrap(), before_overlap);
 }
 
+/// One `a16:colId` or `a16:rowId` extension list, as PowerPoint writes it on
+/// every grid column and row.
+fn powerpoint_table_id(kind: &str, value: u32) -> String {
+    let uri = if kind == "colId" {
+        "{9D8B030D-6E8A-4147-A177-3AD203B41FA5}"
+    } else {
+        "{0D108BD9-81ED-4DB2-BD59-A6C34878D82A}"
+    };
+    format!(
+        r#"<a:extLst><a:ext uri="{uri}"><a16:{kind} xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" val="{value}"/></a:ext></a:extLst>"#
+    )
+}
+
+#[test]
+fn column_widths_change_on_a_powerpoint_grid_whose_columns_share_a_width() {
+    let columns = (1..=3)
+        .map(|id| {
+            format!(
+                r#"<a:gridCol w="1000">{}</a:gridCol>"#,
+                powerpoint_table_id("colId", id)
+            )
+        })
+        .collect::<String>();
+    let cells = r#"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody><a:tcPr/></a:tc>"#;
+    let frame = format!(
+        r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="2" name="Table 1"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="3000" cy="500"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid>{columns}</a:tblGrid><a:tr h="500">{}{}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#,
+        cells.repeat(3),
+        powerpoint_table_id("rowId", 10)
+    );
+    let mut presentation = text_layout_deck(&frame, "");
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        table.set_column_width(0, Emu(1500)).unwrap();
+        table.set_column_width(2, Emu(1500)).unwrap();
+    }
+
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let shape = slide.shapes().next().unwrap();
+    assert_eq!(shape.size(), Some((Emu(4000), Emu(500))));
+    let package = open_opc(&saved, "PowerPoint grid widths");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let grid = (1..=3)
+        .zip([1500, 1000, 1500])
+        .map(|(id, width)| {
+            format!(
+                r#"<a:gridCol w="{width}">{}</a:gridCol>"#,
+                powerpoint_table_id("colId", id)
+            )
+        })
+        .collect::<String>();
+    assert!(xml.contains(&grid), "{xml}");
+    assert!(reopened.validate().is_empty());
+}
+
 fn table_border_line(color: &str) -> CT_LineProperties {
     CT_LineProperties::from_xml(
         format!(r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></a:ln>"#)
@@ -14755,6 +14814,304 @@ print(left.get("w"), left.find(qn("a:solidFill"))[0].get("val"))
     assert_eq!(
         records,
         "[457200, 600000] 1057200\n['lnL', 'lnB']\n12700 FF0000\n"
+    );
+}
+
+/// The slide 4 table of the rdocx-skills deck fixture as python-pptx 1.0.2
+/// writes it: a filled header row and runs of 15 points.
+fn python_pptx_options_table_frame() -> String {
+    let rows = [
+        ["", "A. Repair", "B. Refurbish", "C. Replace deck"],
+        ["Cost (EUR)", "46,000", "212,000", "690,000"],
+        ["Closure", "2 weeks", "7 weeks", "5 months"],
+        ["Next major work", "2031", "2040", "2055"],
+    ];
+    let mut table = String::new();
+    for (index, row) in rows.iter().enumerate() {
+        table.push_str(r#"<a:tr h="548640">"#);
+        for text in row {
+            let paragraph = if text.is_empty() {
+                "<a:p/>".to_owned()
+            } else {
+                format!(r#"<a:p><a:r><a:rPr sz="1500"/><a:t>{text}</a:t></a:r></a:p>"#)
+            };
+            let properties = if index == 0 {
+                r#"<a:tcPr><a:solidFill><a:srgbClr val="3E4A59"/></a:solidFill></a:tcPr>"#
+            } else {
+                "<a:tcPr/>"
+            };
+            write!(
+                table,
+                "<a:tc><a:txBody><a:bodyPr/><a:lstStyle/>{paragraph}</a:txBody>{properties}</a:tc>"
+            )
+            .unwrap();
+        }
+        table.push_str("</a:tr>");
+    }
+    format!(
+        r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="Table 2"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="457200" y="1371600"/><a:ext cx="8229600" cy="2194560"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1" bandRow="1"><a:tableStyleId>{{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}}</a:tableStyleId></a:tblPr><a:tblGrid>{}</a:tblGrid>{table}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#,
+        r#"<a:gridCol w="2057400"/>"#.repeat(4)
+    )
+}
+
+#[test]
+fn table_rows_and_columns_are_inserted_and_removed_with_the_frame_in_step() {
+    let mut presentation = text_layout_deck(&python_pptx_options_table_frame(), "");
+    let original = presentation.to_bytes().unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        table.insert_row(4).unwrap();
+        table.insert_row(0).unwrap();
+        table.insert_column(4).unwrap();
+        table.set_column_width(4, Emu(1_000_000)).unwrap();
+        table.cell_mut(5, 0).unwrap().set_text("Risk");
+    }
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(reopened.validate().is_empty());
+    let slide = reopened.slide(0).unwrap();
+    let shape = slide.shapes().next().unwrap();
+    assert_eq!(
+        shape.size(),
+        Some((Emu(8_229_600 + 1_000_000), Emu(2_194_560 + 2 * 548_640)))
+    );
+    let table = shape.table().unwrap();
+    assert_eq!((table.row_count(), table.column_count()), (6, 5));
+    let texts = (0..6)
+        .map(|row| {
+            (0..5)
+                .map(|column| table.cell(row, column).unwrap().text())
+                .collect::<Vec<_>>()
+                .join("|")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        [
+            "||||",
+            "|A. Repair|B. Refurbish|C. Replace deck|",
+            "Cost (EUR)|46,000|212,000|690,000|",
+            "Closure|2 weeks|7 weeks|5 months|",
+            "Next major work|2031|2040|2055|",
+            "Risk||||",
+        ]
+    );
+    let header =
+        Fill::from_xml(br#"<a:solidFill><a:srgbClr val="3E4A59"/></a:solidFill>"#).unwrap();
+    assert!((0..5).all(|column| table.cell(0, column).unwrap().fill() == Some(&header)));
+    assert!((0..5).all(|column| table.cell(5, column).unwrap().fill().is_none()));
+
+    let package = open_opc(&saved, "rows and columns");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let appended = &xml[xml.rfind(r#"<a:tr h="548640">"#).unwrap()..xml.find("</a:tbl>").unwrap()];
+    let empty = r#"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr sz="1500"/></a:p></a:txBody><a:tcPr/></a:tc>"#;
+    assert_eq!(
+        appended,
+        format!(
+            r#"<a:tr h="548640">{}{}</a:tr>"#,
+            empty.replace(
+                "<a:endParaRPr",
+                r#"<a:r><a:rPr sz="1500"/><a:t>Risk</a:t></a:r><a:endParaRPr"#
+            ),
+            empty.repeat(4)
+        )
+    );
+    assert!(xml.contains(
+        r#"<a:tblGrid><a:gridCol w="2057400"/><a:gridCol w="2057400"/><a:gridCol w="2057400"/><a:gridCol w="2057400"/><a:gridCol w="1000000"/></a:tblGrid>"#
+    ));
+
+    let mut presentation = reopened;
+    let before_rejections = presentation.to_bytes().unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        for result in [
+            table.insert_row(7),
+            table.remove_row(6),
+            table.insert_column(6),
+            table.remove_column(5),
+        ] {
+            assert!(matches!(result, Err(Error::InvalidTableMutation { .. })));
+        }
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before_rejections);
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        table.remove_column(4).unwrap();
+        table.remove_row(5).unwrap();
+        table.remove_row(0).unwrap();
+    }
+    let frame_xml = |bytes: &[u8]| {
+        let xml = String::from_utf8(
+            open_opc(bytes, "restored rows and columns")
+                .get_part("/ppt/slides/slide1.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        xml[xml.find("<p:graphicFrame>").unwrap()..xml.find("</p:graphicFrame>").unwrap()]
+            .replace(&format!(r#"<a:tbl xmlns:a="{A_NS}">"#), "<a:tbl>")
+    };
+    assert_eq!(
+        frame_xml(&presentation.to_bytes().unwrap()),
+        frame_xml(&original)
+    );
+
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        for _ in 0..3 {
+            table.remove_column(0).unwrap();
+            table.remove_row(0).unwrap();
+        }
+        assert!(matches!(
+            table.remove_row(0),
+            Err(Error::InvalidTableMutation {
+                operation: "remove row",
+                ..
+            })
+        ));
+        assert!(matches!(
+            table.remove_column(0),
+            Err(Error::InvalidTableMutation {
+                operation: "remove column",
+                ..
+            })
+        ));
+        assert_eq!(table.cell(0, 0).unwrap().text(), "2055");
+    }
+    let shape_size = presentation
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .next()
+        .unwrap()
+        .size();
+    assert_eq!(shape_size, Some((Emu(2_057_400), Emu(548_640))));
+}
+
+#[test]
+fn table_rows_and_columns_extend_and_shrink_merged_cells() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add slide");
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_table(3, 3, Emu(0), Emu(0), Emu(300), Emu(300))
+            .unwrap();
+        let mut table = shape.table_mut().unwrap();
+        table.cell_mut(0, 0).unwrap().set_text("merged");
+        table.cell_mut(0, 0).unwrap().merge_to(1, 1).unwrap();
+        table.insert_row(1).unwrap();
+        table.insert_column(1).unwrap();
+        let origin = table.cell(0, 0).unwrap();
+        assert_eq!((origin.span_height(), origin.span_width()), (3, 3));
+        assert!(table.cell(1, 1).unwrap().is_spanned());
+        assert!(!table.cell(3, 1).unwrap().is_spanned());
+        table.remove_row(0).unwrap();
+        table.remove_column(0).unwrap();
+        let origin = table.cell(0, 0).unwrap();
+        assert_eq!(
+            (origin.text(), origin.span_height(), origin.span_width()),
+            ("merged".to_owned(), 2, 2)
+        );
+        table.cell_mut(0, 0).unwrap().split().unwrap();
+        assert!((0..3).all(|row| (0..3).all(|column| {
+            let cell = table.cell(row, column).unwrap();
+            !cell.is_merge_origin() && !cell.is_spanned()
+        })));
+    }
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(reopened.validate().is_empty());
+    let slide = reopened.slide(0).unwrap();
+    assert_eq!(
+        slide.shapes().next().unwrap().size(),
+        Some((Emu(300), Emu(300)))
+    );
+}
+
+#[test]
+fn table_row_and_column_edits_keep_the_frame_height_powerpoint_measured() {
+    // A python-pptx 3x3 table of 6 by 0.6 inches with text in every cell, as
+    // PowerPoint saves it: the stored rows keep h="182880" and the frame
+    // records the height PowerPoint measured after growing them to fit.
+    let cell = r#"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" dirty="0"/><a:t>Cell</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>"#;
+    let frame = format!(
+        r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="Table 3"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="5486400" cy="1097280"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1" bandRow="1"/><a:tblGrid>{}</a:tblGrid>{}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#,
+        r#"<a:gridCol w="1828800"/>"#.repeat(3),
+        format!(r#"<a:tr h="182880">{}</a:tr>"#, cell.repeat(3)).repeat(3)
+    );
+    let mut presentation = text_layout_deck(&frame, "");
+    let mut sizes = Vec::new();
+    for edit in [
+        (|table: &mut rpptx::TableMut<'_>| table.insert_row(3))
+            as fn(&mut rpptx::TableMut<'_>) -> rpptx::Result<()>,
+        |table| table.insert_column(3),
+        |table| table.remove_row(0),
+        |table| table.remove_column(0),
+    ] {
+        {
+            let mut slide = presentation.slide_mut(0).unwrap();
+            let mut shape = slide.shape_mut(0).unwrap();
+            edit(&mut shape.table_mut().unwrap()).unwrap();
+        }
+        let slide = presentation.slide(0).unwrap();
+        sizes.push(slide.shapes().next().unwrap().size().unwrap());
+    }
+    assert_eq!(
+        sizes,
+        [
+            (Emu(5_486_400), Emu(1_280_160)),
+            (Emu(7_315_200), Emu(1_280_160)),
+            (Emu(7_315_200), Emu(1_097_280)),
+            (Emu(5_486_400), Emu(1_097_280)),
+        ]
+    );
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert!(reopened.validate().is_empty());
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn table_rows_and_columns_read_back_in_pinned_python_pptx() {
+    let mut presentation = text_layout_deck(&python_pptx_options_table_frame(), "");
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        table.insert_row(4).unwrap();
+        table.insert_column(1).unwrap();
+        table.remove_column(3).unwrap();
+        table.cell_mut(4, 0).unwrap().set_text("Risk");
+    }
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "rows-and-columns",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+shape = Presentation(sys.argv[1]).slides[0].shapes[0]
+table = shape.table
+print(len(table.rows), len(table.columns), shape.height, shape.width)
+print([row.height for row in table.rows])
+print([[cell.text for cell in row.cells] for row in table.rows][3:])
+"#,
+    );
+    assert_eq!(
+        records,
+        "5 4 2743200 8229600\n[548640, 548640, 548640, 548640, 548640]\n\
+         [['Next major work', '', '2031', '2055'], ['Risk', '', '', '']]\n"
     );
 }
 

@@ -17,6 +17,8 @@ presentation, notes, handout, PDF, and animation outputs.
   SmartArt text, and media.
 - Populate groups, nested to any depth, with text boxes, preset shapes,
   connectors, groups, tables, and pictures.
+- Insert and remove table rows and columns, extending or shrinking merged
+  cells and growing or shrinking the frame by the row or column size.
 - Produce PDF, PDF/A, resolved slide frames, notes, handouts, and animations.
 - Import HTML, ODP, and PDF through explicit facade APIs.
 - Resolve master, layout, placeholder, theme, chart, SmartArt, media, notes,

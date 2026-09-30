@@ -520,6 +520,25 @@ of `Row` handles, like `columns`. `Row.height` reads the stored height as
 as a column width keeps the frame width. A height that is not positive raises
 `RpptxError`. None of these writes advances the revision.
 
+python-pptx has no public API to add or remove table rows and columns, and its
+users call `table._tbl.add_tr(height)`, which appends a row without cell
+formatting and leaves the frame height unchanged.
+`RowCollection.add_row(index=None)` inserts a row before `index`, or appends
+one, and returns its `Row`. `ColumnCollection.add_column(index=None)` does the
+same for a grid column.
+Both run the native `insert_row` and `insert_column`, so the new row or column
+copies the size and cell formatting, without the text, of the row above or the
+column to the left, or of the first one at index 0. The frame grows by the new
+row's height or column's width, and text later written into a new cell takes
+the copied formatting. `RowCollection.remove(row)` and
+`ColumnCollection.remove(column)` remove one and shrink the frame by its size,
+so a frame PowerPoint measured taller than its stored rows keeps that excess.
+A negative index counts from the end, as in `list.insert`, and an index outside
+`-len..=len` raises `IndexError`. A row or column of another table raises
+`ValueError`, and removing the only row or column raises `RpptxError`. Each of
+these edits advances the revision once, because row, column, and cell handles
+name indices, and the returned handle is captured after the change.
+
 `TextFrame.autofit`
 reports `none`, `normal`, or `shape` when the body carries an explicit choice.
 `Run.font` reads the run's direct Latin name, size, and sRGB colour, while the
