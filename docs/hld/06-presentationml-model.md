@@ -488,7 +488,10 @@ an internal image relationship in the target slide's own scope. Package,
 media-store, and relationship changes remain staged until picture construction
 succeeds. The picture receives a tree-wide allocated id and deterministic name,
 then its canonical `p:nvPicPr`, relationship-backed `p:blipFill`, and typed
-`p:spPr` shell append at top z-order.
+`p:spPr` shell append at top z-order. The `p:spPr` holds the transform followed
+by `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>`, as python-pptx writes,
+because PowerPoint draws nothing for a picture without geometry. A media
+picture added by `add_media` carries the same geometry.
 
 The owning facade also reads and replaces a picture's image and removes
 shapes:
