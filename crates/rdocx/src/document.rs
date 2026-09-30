@@ -5145,7 +5145,13 @@ fn new_word_compatible_package(
 fn default_application_properties() -> AppProperties {
     let mut properties = AppProperties::default();
     properties.application = Some("rdocx".to_owned());
-    properties.application_version = Some(env!("CARGO_PKG_VERSION").to_owned());
+    // ECMA-376 Part 1, 22.2.2.3 fixes AppVersion to the form XX.YYYY, and Word
+    // refuses to open a package whose AppVersion has another shape, such as 0.14.0.
+    properties.application_version = Some(format!(
+        "{:0>2}.{:0>4}",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR")
+    ));
     properties
 }
 

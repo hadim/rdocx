@@ -1593,6 +1593,30 @@ mod fresh_word_package_profile_tests {
     }
 
     #[test]
+    fn word_compatible_profiles_stamp_an_app_version_word_opens() {
+        // Word refuses a package whose AppVersion is not XX.YYYY (ECMA-376 Part 1, 22.2.2.3).
+        for class in all_classes() {
+            let package = package_from_profile(WordCreationProfile::WordCompatible(class));
+            let app = std::str::from_utf8(package.get_part("/docProps/app.xml").unwrap()).unwrap();
+            let version = app
+                .split_once("<AppVersion>")
+                .and_then(|(_, rest)| rest.split_once("</AppVersion>"))
+                .map(|(version, _)| version)
+                .expect("fresh app properties carry AppVersion");
+            let (major, minor) = version.split_once('.').expect("AppVersion has one dot");
+            assert!(
+                major.len() == 2
+                    && minor.len() == 4
+                    && major
+                        .bytes()
+                        .chain(minor.bytes())
+                        .all(|b| b.is_ascii_digit()),
+                "AppVersion {version:?} is not XX.YYYY"
+            );
+        }
+    }
+
+    #[test]
     fn document_new_uses_the_word_compatible_docx_profile() {
         let default = Document::new().to_bytes().unwrap();
         let compatible = Document::new_with_profile(WordCreationProfile::WordCompatible(
