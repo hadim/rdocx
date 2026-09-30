@@ -21167,6 +21167,59 @@ fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
 }
 
 #[test]
+fn comparison_carries_the_relationship_of_an_inserted_external_hyperlink() {
+    // The redline is staged on the original package, so an inserted table
+    // kept the edited hyperlink's r:id without its relationship, and Word
+    // refused to open the result.
+    let mut original = Document::new();
+    original.add_paragraph("Alpha");
+    original.add_paragraph("Omega");
+    let original_bytes = original.to_bytes().unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(original_bytes.clone())).unwrap();
+    let id = package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_external(
+            oxml_opc::relationship::rel_types::HYPERLINK,
+            "https://example.com/new",
+        );
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let table = format!(
+        r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{id}"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p></w:tc></w:tr></w:tbl>"#
+    );
+    let at = xml.find("<w:p").unwrap();
+    let at = at + xml[at..].find("</w:p>").unwrap() + "</w:p>".len();
+    package.set_part(
+        "/word/document.xml",
+        format!("{}{table}{}", &xml[..at], &xml[at..]).into_bytes(),
+    );
+    let mut edited_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut edited_bytes).unwrap();
+    let edited_bytes = edited_bytes.into_inner();
+
+    compare_and_resolve(&original_bytes, &edited_bytes, &Default::default());
+    let edited = Document::from_bytes(&edited_bytes).unwrap();
+    let mut compared = Document::from_bytes(&original_bytes).unwrap();
+    compared
+        .compare(&edited, "Ada", "2026-09-30T09:30:00Z")
+        .unwrap();
+    let tracked =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(compared.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(tracked.get_part("/word/document.xml").unwrap()).unwrap();
+    let linked = &xml[xml.find("<w:hyperlink").unwrap()..];
+    let linked = &linked[linked.find("r:id=\"").unwrap() + 6..];
+    let linked = &linked[..linked.find('"').unwrap()];
+    let relationship = tracked
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .get_by_id(linked)
+        .unwrap_or_else(|| panic!("{linked} has no relationship"));
+    assert_eq!(relationship.target, "https://example.com/new");
+    assert_eq!(relationship.target_mode.as_deref(), Some("External"));
+}
+
+#[test]
 fn modeled_formatting_changes_are_tracked_without_diagnostics() {
     let original_xml =
         wrap_word_body(r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>same</w:t></w:r></w:p>"#);

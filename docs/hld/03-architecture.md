@@ -920,7 +920,8 @@ twice and keeps refusing. A whole deleted, inserted, or moved paragraph
 carries its hyperlinks, simple fields, bookmarks, and comment ranges inside
 its revision wrappers, and deleted content writes a field code as
 `w:delInstrText`, since Word refuses to open a deletion that holds
-`w:instrText`.
+`w:instrText`. A carried hyperlink whose target only the edited side has gets
+its relationship in the redline.
 Changed field results remain inside their field owner, while instruction or
 form changes replace that complete owner. Supported run, paragraph, table, and
 section properties emit property revisions that retain the original property

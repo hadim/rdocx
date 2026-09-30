@@ -261,7 +261,7 @@ impl Document {
                 "document comparison requires identical related-story shells".to_owned(),
             ));
         }
-        remap_equivalent_story_relationships(
+        let carried_links = remap_equivalent_story_relationships(
             &original,
             &mut edited,
             &original_stories,
@@ -389,6 +389,22 @@ impl Document {
                 &mut diagnostics,
             )?;
             candidate.package.set_part(&story.part_name, tracked_story);
+        }
+        // A hyperlink that only the edited side targets arrives with the
+        // edited content that holds it.
+        for (owner, relationship) in carried_links {
+            let holds = candidate.package.get_part(&owner).is_some_and(|xml| {
+                let quoted = format!("\"{}\"", relationship.id);
+                xml.windows(quoted.len())
+                    .any(|window| window == quoted.as_bytes())
+            });
+            if holds {
+                candidate
+                    .package
+                    .get_or_create_part_rels(&owner)
+                    .items
+                    .push(relationship);
+            }
         }
         candidate = reopen_staged(candidate)?;
         #[cfg(test)]
@@ -598,22 +614,38 @@ fn story_xml<'a>(document: &'a Document, story: &StoryPart) -> Result<&'a [u8]> 
     })
 }
 
+/// Give each edited image and hyperlink relationship the id of its
+/// equivalent in the original. A hyperlink with no equivalent gets a fresh
+/// id, and is returned with the original owner it belongs to, for the
+/// redline to add when edited content carries it.
 fn remap_equivalent_story_relationships(
     original: &Document,
     edited: &mut Document,
     original_stories: &[StoryPart],
     edited_stories: &[StoryPart],
-) -> Result<()> {
-    remap_equivalent_owner_relationships(
+) -> Result<Vec<(String, Relationship)>> {
+    let mut carried = remap_equivalent_owner_relationships(
         original,
         edited,
         &original.doc_part_name,
         &edited.doc_part_name.clone(),
-    )?;
+    )?
+    .into_iter()
+    .map(|relationship| (original.doc_part_name.clone(), relationship))
+    .collect::<Vec<_>>();
     for (left, right) in original_stories.iter().zip(edited_stories) {
-        remap_equivalent_owner_relationships(original, edited, &left.part_name, &right.part_name)?;
+        carried.extend(
+            remap_equivalent_owner_relationships(
+                original,
+                edited,
+                &left.part_name,
+                &right.part_name,
+            )?
+            .into_iter()
+            .map(|relationship| (left.part_name.clone(), relationship)),
+        );
     }
-    Ok(())
+    Ok(carried)
 }
 
 fn remap_equivalent_owner_relationships(
@@ -621,7 +653,7 @@ fn remap_equivalent_owner_relationships(
     edited: &mut Document,
     original_owner: &str,
     edited_owner: &str,
-) -> Result<()> {
+) -> Result<Vec<Relationship>> {
     let original_relationships = original
         .package
         .get_part_rels(original_owner)
@@ -634,8 +666,9 @@ fn remap_equivalent_owner_relationships(
         .unwrap_or_default();
     let mut used = HashSet::new();
     let mut remap = HashMap::new();
+    let mut unmatched_links = Vec::new();
     for right in &edited_relationships.items {
-        if right.rel_type != rel_types::IMAGE {
+        if right.rel_type != rel_types::IMAGE && right.rel_type != rel_types::HYPERLINK {
             continue;
         }
         let right_payload = relationship_payload(edited, edited_owner, right);
@@ -651,6 +684,9 @@ fn remap_equivalent_owner_relationships(
                         && relationship_payload(original, original_owner, left) == right_payload
                 })
         else {
+            if right.rel_type == rel_types::HYPERLINK {
+                unmatched_links.push(right.clone());
+            }
             continue;
         };
         used.insert(index);
@@ -658,15 +694,27 @@ fn remap_equivalent_owner_relationships(
             remap.insert(right.id.clone(), left.id.clone());
         }
     }
-    if remap.is_empty() {
-        return Ok(());
-    }
     let mut occupied = edited_relationships
         .items
         .iter()
+        .chain(&original_relationships.items)
         .map(|relationship| relationship.id.clone())
         .chain(remap.values().cloned())
         .collect::<HashSet<_>>();
+    // The redline allocates a carried hyperlink's id the way the original's
+    // relationships do, which is the id staging keeps when it reopens it.
+    let mut allocator = original_relationships.clone();
+    let mut carried = Vec::with_capacity(unmatched_links.len());
+    for mut link in unmatched_links {
+        let fresh = allocator.add_external(&link.rel_type, &link.target);
+        occupied.insert(fresh.clone());
+        remap.insert(link.id.clone(), fresh.clone());
+        link.id = fresh;
+        carried.push(link);
+    }
+    if remap.is_empty() {
+        return Ok(carried);
+    }
     let mut collision_remap = HashMap::new();
     let remapped_sources = remap.keys().cloned().collect::<HashSet<_>>();
     for target in remap.values() {
@@ -706,7 +754,7 @@ fn remap_equivalent_owner_relationships(
         }
         relationships.to_xml()?;
     }
-    Ok(())
+    Ok(carried)
 }
 
 fn relationship_payload(
