@@ -7,9 +7,12 @@ mod sanitize;
 
 use std::collections::HashMap;
 
-use rdocx_oxml::document::CT_Document;
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
+use rdocx_oxml::document::{BodyContent, CT_Document};
 use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::styles::CT_Styles;
+use rdocx_oxml::table::{CT_Tbl, CT_Tc, CellContent};
+use rdocx_oxml::text::CT_P;
 
 /// Options for HTML conversion.
 #[derive(Debug, Clone)]
@@ -72,6 +75,58 @@ pub fn to_markdown(input: &HtmlInput) -> String {
         input.numbering.as_ref(),
         &input.hyperlink_urls,
     )
+}
+
+/// A paragraph or a table that the emitters write as one block.
+enum Block<'a> {
+    Paragraph(&'a CT_P),
+    Table(&'a CT_Tbl),
+}
+
+/// The paragraphs and tables of a body in document order. A block content
+/// control is transparent: what it wraps, nested controls included, is
+/// written as if the control were not there, which is what `Paragraph.text`
+/// and `Document::text` read.
+fn body_blocks(content: &[BodyContent]) -> Vec<Block<'_>> {
+    let mut blocks = Vec::new();
+    for item in content {
+        match item {
+            BodyContent::Paragraph(paragraph) => blocks.push(Block::Paragraph(paragraph)),
+            BodyContent::Table(table) => blocks.push(Block::Table(table)),
+            BodyContent::ContentControl(control) => push_control_blocks(control, &mut blocks),
+            BodyContent::RawXml(_) => {}
+        }
+    }
+    blocks
+}
+
+/// The paragraphs and nested tables of a table cell, as [`body_blocks`]
+/// reads a body.
+fn cell_blocks(cell: &CT_Tc) -> Vec<Block<'_>> {
+    let mut blocks = Vec::new();
+    for item in &cell.content {
+        match item {
+            CellContent::Paragraph(paragraph) => blocks.push(Block::Paragraph(paragraph)),
+            CellContent::Table(table) => blocks.push(Block::Table(table)),
+            CellContent::ContentControl(control) => push_control_blocks(control, &mut blocks),
+        }
+    }
+    blocks
+}
+
+fn push_control_blocks<'a>(control: &'a CT_Sdt, blocks: &mut Vec<Block<'a>>) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => blocks.push(Block::Paragraph(paragraph)),
+            SdtContent::Table(table) => blocks.push(Block::Table(table)),
+            SdtContent::ContentControl(nested) => push_control_blocks(nested, blocks),
+            // A control around a paragraph or a table holds no rows, cells or
+            // runs of its own. Those around rows, cells and runs are read
+            // through `CT_Tbl::rows`, `CT_Row::cells` and `CT_P::accepted_view`.
+            SdtContent::Row(_) | SdtContent::Cell(_) | SdtContent::Run(_) => {}
+            SdtContent::RawXml(_) => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -145,6 +200,108 @@ mod tests {
             markdown.contains("**one\ttwo***  \nthree\n---\nfour*"),
             "{markdown}"
         );
+    }
+
+    #[test]
+    fn controls_revisions_and_wrappers_are_transparent_to_lists_links_and_merged_rows() {
+        let input = |wrap: bool| {
+            let control = |content: &str| {
+                if wrap {
+                    format!(
+                        "<w:sdt><w:sdtPr><w:tag w:val=\"c\"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"
+                    )
+                } else {
+                    content.to_owned()
+                }
+            };
+            let tracked = |kind: &str, content: &str| {
+                if wrap {
+                    format!(r#"<w:{kind} w:id="1" w:author="a">{content}</w:{kind}>"#)
+                } else if kind == "ins" {
+                    content.to_owned()
+                } else {
+                    String::new()
+                }
+            };
+            let smart_tag = |content: &str| {
+                if wrap {
+                    format!(r#"<w:smartTag w:uri="u" w:element="e">{content}</w:smartTag>"#)
+                } else {
+                    content.to_owned()
+                }
+            };
+            let item = |text: &str| {
+                format!(
+                    r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#
+                )
+            };
+            let body = [
+                item("one"),
+                control(&item("two")),
+                item("three"),
+                format!(
+                    r#"<w:p><w:hyperlink r:id="rId1"><w:r><w:t>link</w:t></w:r>{}</w:hyperlink>{}{}{}</w:p>"#,
+                    tracked("ins", r#"<w:r><w:t xml:space="preserve"> more</w:t></w:r>"#),
+                    control(r#"<w:r><w:t xml:space="preserve"> wrapped</w:t></w:r>"#),
+                    tracked("del", r#"<w:r><w:delText> gone</w:delText></w:r>"#),
+                    smart_tag(r#"<w:r><w:t xml:space="preserve"> tagged</w:t></w:r>"#)
+                ),
+                format!(
+                    r#"<w:tbl><w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>merged</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr>{}</w:tbl>"#,
+                    control(
+                        r#"<w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr>"#
+                    )
+                ),
+            ]
+            .concat();
+            let document = CT_Document::from_xml(
+                format!(
+                    r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}</w:body></w:document>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            let numbering = CT_Numbering::from_xml(
+                br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#,
+            )
+            .unwrap();
+            HtmlInput {
+                document,
+                styles: CT_Styles::new_default(),
+                numbering: Some(numbering),
+                images: HashMap::new(),
+                hyperlink_urls: HashMap::from([(
+                    "rId1".to_owned(),
+                    "https://example.com/".to_owned(),
+                )]),
+            }
+        };
+        let (wrapped, plain) = (input(true), input(false));
+
+        let html = to_html_fragment(&wrapped, &HtmlOptions::default());
+        assert_eq!(html, to_html_fragment(&plain, &HtmlOptions::default()));
+        assert!(
+            html.contains("<ol>\n<li>one</li>\n<li>two</li>\n<li>three</li>\n</ol>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<p><a href=\"https://example.com/\">link more</a> wrapped tagged</p>"),
+            "{html}"
+        );
+        assert!(html.contains("<td rowspan=\"2\"><p>merged</p>"), "{html}");
+        assert!(html.contains("<td><p>b</p>"), "{html}");
+
+        let markdown = to_markdown(&wrapped);
+        assert_eq!(markdown, to_markdown(&plain));
+        assert!(
+            markdown.contains("1. one\n1. two\n1. three\n"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("[link more](https://example.com/) wrapped tagged"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("|  | b |"), "{markdown}");
     }
 
     #[test]

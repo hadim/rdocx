@@ -10036,7 +10036,7 @@ fn insert_html_content_into_cell(
     Ok(())
 }
 
-fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P)) {
+pub(crate) fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P)) {
     for item in content {
         match item {
             BodyContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
@@ -10872,6 +10872,156 @@ fn collect_sdt_relationship_ids(control: &CT_Sdt, output: &mut Vec<String>) {
             SdtContent::RawXml(_) => {}
         }
     }
+}
+
+/// A body child as the ODT and RTF writers export it.
+pub(crate) enum ExportItem<'a> {
+    Paragraph(&'a CT_P),
+    /// A table, with the rows, cells and cell content that content controls
+    /// wrap in place, see [`unwrap_table_controls`].
+    Table(Box<Cow<'a, CT_Tbl>>),
+    /// A block content control. What it wraps follows it.
+    ContentControl,
+    RawXml,
+}
+
+/// The body children in document order with their source paths, `body[i]`.
+/// A block content control is transparent: what it wraps follows it at
+/// `{its path}/content[k]`, nested controls included.
+pub(crate) fn body_export_items(content: &[BodyContent]) -> Vec<(ExportItem<'_>, String)> {
+    let mut items = Vec::new();
+    for (index, item) in content.iter().enumerate() {
+        let path = format!("body[{index}]");
+        match item {
+            BodyContent::Paragraph(paragraph) => {
+                items.push((ExportItem::Paragraph(paragraph), path))
+            }
+            BodyContent::Table(table) => items.push((
+                ExportItem::Table(Box::new(unwrap_table_controls(table))),
+                path,
+            )),
+            BodyContent::ContentControl(control) => {
+                push_control_export_items(control, path, &mut items)
+            }
+            BodyContent::RawXml(_) => items.push((ExportItem::RawXml, path)),
+        }
+    }
+    items
+}
+
+fn push_control_export_items<'a>(
+    control: &'a CT_Sdt,
+    path: String,
+    items: &mut Vec<(ExportItem<'a>, String)>,
+) {
+    items.push((ExportItem::ContentControl, path.clone()));
+    for (index, item) in control.content.iter().enumerate() {
+        let path = format!("{path}/content[{index}]");
+        match item {
+            SdtContent::Paragraph(paragraph) => {
+                items.push((ExportItem::Paragraph(paragraph), path))
+            }
+            SdtContent::Table(table) => items.push((
+                ExportItem::Table(Box::new(unwrap_table_controls(table))),
+                path,
+            )),
+            SdtContent::ContentControl(nested) => push_control_export_items(nested, path, items),
+            // A control around a paragraph or a table holds no rows, cells or
+            // runs of its own.
+            SdtContent::Row(_) | SdtContent::Cell(_) | SdtContent::Run(_) => {}
+            SdtContent::RawXml(_) => items.push((ExportItem::RawXml, path)),
+        }
+    }
+}
+
+/// Whether a table, not counting the tables nested in its cells, holds a
+/// content control around a row, a cell or cell content.
+fn table_has_content_controls(table: &CT_Tbl) -> bool {
+    !table.content_controls.is_empty()
+        || table.rows.iter().any(|row| {
+            !row.content_controls.is_empty()
+                || row.cells.iter().any(|cell| {
+                    cell.content
+                        .iter()
+                        .any(|content| matches!(content, CellContent::ContentControl(_)))
+                })
+        })
+}
+
+/// The table with the rows, cells and cell content that its content controls
+/// wrap in place of the controls, nested ones included. Borrowed when the
+/// table has no such control.
+pub(crate) fn unwrap_table_controls(table: &CT_Tbl) -> Cow<'_, CT_Tbl> {
+    if !table_has_content_controls(table) {
+        return Cow::Borrowed(table);
+    }
+    let rows = table
+        .rows()
+        .into_iter()
+        .map(|row| CT_Row {
+            table_property_exception: row.table_property_exception.clone(),
+            properties: row.properties.clone(),
+            cells: row
+                .cells()
+                .into_iter()
+                .map(|cell| {
+                    let mut content = Vec::with_capacity(cell.content.len());
+                    for item in &cell.content {
+                        match item {
+                            CellContent::ContentControl(control) => {
+                                push_control_cell_content(control, &mut content)
+                            }
+                            item => content.push(item.clone()),
+                        }
+                    }
+                    CT_Tc {
+                        properties: cell.properties.clone(),
+                        content,
+                        extra_xml: cell.extra_xml.clone(),
+                    }
+                })
+                .collect(),
+            extra_xml: row.extra_xml.clone(),
+            content_controls: Vec::new(),
+        })
+        .collect();
+    Cow::Owned(CT_Tbl {
+        properties: table.properties.clone(),
+        grid: table.grid.clone(),
+        rows,
+        extra_xml: table.extra_xml.clone(),
+        content_controls: Vec::new(),
+    })
+}
+
+fn push_control_cell_content(control: &CT_Sdt, content: &mut Vec<CellContent>) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => {
+                content.push(CellContent::Paragraph(paragraph.clone()))
+            }
+            SdtContent::Table(table) => content.push(CellContent::Table(table.clone())),
+            SdtContent::ContentControl(nested) => push_control_cell_content(nested, content),
+            SdtContent::Row(_)
+            | SdtContent::Cell(_)
+            | SdtContent::Run(_)
+            | SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
+/// Visit the drawings the exporters write, in the order they write them: those
+/// of the accepted view of every paragraph (see `CT_P::accepted_view`), in
+/// the paragraphs [`visit_body_paragraphs`] reaches.
+pub(crate) fn visit_accepted_drawings(
+    content: &[BodyContent],
+    visitor: &mut impl FnMut(&CT_Drawing),
+) {
+    visit_body_paragraphs(content, &mut |paragraph| {
+        for run in &paragraph.accepted_view().runs {
+            visit_run_drawings(run, visitor);
+        }
+    });
 }
 
 pub(crate) fn visit_all_drawings(content: &[BodyContent], visitor: &mut impl FnMut(&CT_Drawing)) {

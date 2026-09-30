@@ -1,20 +1,25 @@
 //! Deterministic EPUB 3 export for the native Word facade.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 
 use oxml_opc::relationship::rel_types;
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
 use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
 use rdocx_oxml::numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_Numbering, ST_NumberFormat};
+use rdocx_oxml::revision::CT_Revision;
 use rdocx_oxml::styles::{CT_Style, CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, Field, HyperlinkSpan, RunContent, SpecialCharacter};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
+use crate::document::{visit_accepted_drawings, visit_body_paragraphs};
+use crate::revision::{accepted_revision_content, revision_removes_text};
 use crate::{Document, Error, Result};
 
 const MAX_EPUB_BYTES: usize = 64 * 1024 * 1024;
@@ -132,8 +137,9 @@ impl<'a> EpubWriter<'a> {
             hyperlink_urls: self.epub_hyperlinks(),
         };
         self.collect_diagnostics()?;
-        let mut headings = self.headings();
-        let mut spine = self.spine_items(&headings);
+        let body = unwrap_block_controls(&self.document.document.body.content);
+        let mut headings = self.headings(&body);
+        let mut spine = self.spine_items(&body, &headings);
 
         let mut spine_index = 0;
         for heading in &mut headings {
@@ -154,7 +160,7 @@ impl<'a> EpubWriter<'a> {
 
         for item in &mut spine {
             let fragment = emit_spine_fragment(
-                &self.document.document.body.content,
+                &body,
                 &mut input,
                 &media,
                 &heading_anchors,
@@ -285,9 +291,9 @@ impl<'a> EpubWriter<'a> {
         Ok(())
     }
 
-    fn headings(&self) -> Vec<Heading> {
+    fn headings(&self, body: &[BodyContent]) -> Vec<Heading> {
         let mut headings = Vec::new();
-        for (body_index, content) in self.document.document.body.content.iter().enumerate() {
+        for (body_index, content) in body.iter().enumerate() {
             let BodyContent::Paragraph(paragraph) = content else {
                 continue;
             };
@@ -306,7 +312,7 @@ impl<'a> EpubWriter<'a> {
         headings
     }
 
-    fn spine_items(&self, headings: &[Heading]) -> Vec<SpineItem> {
+    fn spine_items(&self, body: &[BodyContent], headings: &[Heading]) -> Vec<SpineItem> {
         let roots = root_heading_indexes(headings);
         if roots.is_empty() {
             return vec![SpineItem {
@@ -314,7 +320,7 @@ impl<'a> EpubWriter<'a> {
                 href: "document.xhtml".to_owned(),
                 title: "Document".to_owned(),
                 start: 0,
-                end: self.document.document.body.content.len(),
+                end: body.len(),
                 xhtml: String::new(),
             }];
         }
@@ -336,7 +342,7 @@ impl<'a> EpubWriter<'a> {
             let end = roots
                 .get(root_ordinal + 1)
                 .map(|next| headings[*next].body_index)
-                .unwrap_or(self.document.document.body.content.len());
+                .unwrap_or(body.len());
             let number = root_ordinal + 1;
             items.push(SpineItem {
                 id: format!("chapter-{number:03}"),
@@ -390,7 +396,7 @@ impl<'a> EpubWriter<'a> {
         let mut html_images = HashMap::new();
         for (ordinal, relationship_id) in relationship_ids.into_iter().enumerate() {
             let Some(relationship) =
-                relationships.and_then(|items| items.get_by_id(relationship_id))
+                relationships.and_then(|items| items.get_by_id(&relationship_id))
             else {
                 continue;
             };
@@ -455,7 +461,7 @@ impl<'a> EpubWriter<'a> {
             .get_part_rels(&self.document.doc_part_name);
         for relationship_id in relationship_ids {
             let Some(relationship) =
-                relationships.and_then(|items| items.get_by_id(relationship_id))
+                relationships.and_then(|items| items.get_by_id(&relationship_id))
             else {
                 continue;
             };
@@ -517,10 +523,13 @@ impl<'a> EpubWriter<'a> {
         match content {
             BodyContent::Paragraph(paragraph) => self.scan_paragraph(paragraph, path),
             BodyContent::Table(table) => self.scan_table(table, path, depth + 1),
-            BodyContent::ContentControl(_) => self.diagnose(
-                path.to_owned(),
-                "body content control was dropped during EPUB export".to_owned(),
-            ),
+            BodyContent::ContentControl(control) => {
+                self.diagnose(
+                    path.to_owned(),
+                    "body content control was flattened during EPUB export".to_owned(),
+                )?;
+                self.scan_control(control, path, depth + 1, false)
+            }
             BodyContent::RawXml(_) => self.diagnose(
                 path.to_owned(),
                 "unmodelled body XML was dropped during EPUB export".to_owned(),
@@ -547,66 +556,143 @@ impl<'a> EpubWriter<'a> {
                 "unmodelled table XML was dropped during EPUB export".to_owned(),
             )?;
         }
-        for (control_index, _) in table.content_controls.iter().enumerate() {
+        // Rows that content controls wrap are scanned in document order.
+        for row_index in 0..=table.rows.len() {
+            for (control_index, (_, _, control)) in table
+                .content_controls
+                .iter()
+                .enumerate()
+                .filter(|(_, (at, _, _))| *at == row_index)
+            {
+                let control_path = format!("{path}/content-control[{control_index}]");
+                self.diagnose(
+                    control_path.clone(),
+                    "table row content control was flattened during EPUB export".to_owned(),
+                )?;
+                self.scan_control(control, &control_path, depth + 1, true)?;
+            }
+            if let Some(row) = table.rows.get(row_index) {
+                self.scan_row(row, &format!("{path}/row[{row_index}]"), depth)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn scan_row(&mut self, row: &CT_Row, row_path: &str, depth: usize) -> Result<()> {
+        if let Some(properties) = &row.properties {
+            self.scan_row_properties(properties, row_path)?;
+        }
+        for (raw_index, (position, raw)) in row.extra_xml.iter().enumerate() {
+            if CT_Row::raw_is_root_attributes(*position, raw) {
+                continue;
+            }
             self.diagnose(
-                format!("{path}/content-control[{control_index}]"),
-                "table row content control was dropped during EPUB export".to_owned(),
+                format!("{row_path}/xml[{raw_index}]"),
+                "unmodelled table-row XML was dropped during EPUB export".to_owned(),
             )?;
         }
-        for (row_index, row) in table.rows.iter().enumerate() {
-            let row_path = format!("{path}/row[{row_index}]");
-            if let Some(properties) = &row.properties {
-                self.scan_row_properties(properties, &row_path)?;
-            }
-            for (raw_index, (position, raw)) in row.extra_xml.iter().enumerate() {
-                if CT_Row::raw_is_root_attributes(*position, raw) {
-                    continue;
-                }
+        // Cells that content controls wrap are scanned in document order.
+        for cell_index in 0..=row.cells.len() {
+            for (control_index, (_, _, control)) in row
+                .content_controls
+                .iter()
+                .enumerate()
+                .filter(|(_, (at, _, _))| *at == cell_index)
+            {
+                let control_path = format!("{row_path}/content-control[{control_index}]");
                 self.diagnose(
-                    format!("{row_path}/xml[{raw_index}]"),
-                    "unmodelled table-row XML was dropped during EPUB export".to_owned(),
+                    control_path.clone(),
+                    "table-cell content control was flattened during EPUB export".to_owned(),
                 )?;
+                self.scan_control(control, &control_path, depth + 1, true)?;
             }
-            for (control_index, _) in row.content_controls.iter().enumerate() {
-                self.diagnose(
-                    format!("{row_path}/content-control[{control_index}]"),
-                    "table-cell content control was dropped during EPUB export".to_owned(),
-                )?;
+            if let Some(cell) = row.cells.get(cell_index) {
+                self.scan_cell(cell, &format!("{row_path}/cell[{cell_index}]"), depth)?;
             }
-            for (cell_index, cell) in row.cells.iter().enumerate() {
-                let cell_path = format!("{row_path}/cell[{cell_index}]");
-                if let Some(properties) = &cell.properties {
-                    self.scan_cell_properties(properties, &cell_path)?;
+        }
+        Ok(())
+    }
+
+    fn scan_cell(&mut self, cell: &CT_Tc, cell_path: &str, depth: usize) -> Result<()> {
+        if let Some(properties) = &cell.properties {
+            self.scan_cell_properties(properties, cell_path)?;
+        }
+        for (raw_index, _) in cell.extra_xml.iter().enumerate() {
+            self.diagnose(
+                format!("{cell_path}/xml[{raw_index}]"),
+                "unmodelled table-cell XML was dropped during EPUB export".to_owned(),
+            )?;
+        }
+        for (content_index, content) in cell.content.iter().enumerate() {
+            let child_path = format!("{cell_path}/content[{content_index}]");
+            match content {
+                CellContent::Paragraph(paragraph) => {
+                    self.scan_cell_paragraph(paragraph, &child_path)?
                 }
-                for (raw_index, _) in cell.extra_xml.iter().enumerate() {
+                CellContent::Table(nested) => self.scan_table(nested, &child_path, depth + 1)?,
+                CellContent::ContentControl(control) => {
                     self.diagnose(
-                        format!("{cell_path}/xml[{raw_index}]"),
-                        "unmodelled table-cell XML was dropped during EPUB export".to_owned(),
+                        child_path.clone(),
+                        "table-cell content control was flattened during EPUB export".to_owned(),
                     )?;
-                }
-                for (content_index, content) in cell.content.iter().enumerate() {
-                    let child_path = format!("{cell_path}/content[{content_index}]");
-                    match content {
-                        CellContent::Paragraph(paragraph) => {
-                            if detect_list(paragraph, self.document.numbering.as_ref()).is_some() {
-                                self.diagnose(
-                                    format!("{child_path}/properties/numbering"),
-                                    "table-cell list semantics were flattened during EPUB export"
-                                        .to_owned(),
-                                )?;
-                            }
-                            self.scan_paragraph(paragraph, &child_path)?
-                        }
-                        CellContent::Table(nested) => {
-                            self.scan_table(nested, &child_path, depth + 1)?
-                        }
-                        CellContent::ContentControl(_) => self.diagnose(
-                            child_path,
-                            "table-cell content control was dropped during EPUB export".to_owned(),
-                        )?,
-                    }
+                    self.scan_control(control, &child_path, depth + 1, true)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn scan_cell_paragraph(&mut self, paragraph: &CT_P, path: &str) -> Result<()> {
+        if detect_list(paragraph, self.document.numbering.as_ref()).is_some() {
+            self.diagnose(
+                format!("{path}/properties/numbering"),
+                "table-cell list semantics were flattened during EPUB export".to_owned(),
+            )?;
+        }
+        self.scan_paragraph(paragraph, path)
+    }
+
+    /// Scan what a content control wraps, which EPUB export writes in place
+    /// as if the control were not there. `in_cell` says whether its
+    /// paragraphs are table-cell paragraphs.
+    fn scan_control(
+        &mut self,
+        control: &CT_Sdt,
+        path: &str,
+        depth: usize,
+        in_cell: bool,
+    ) -> Result<()> {
+        if depth > MAX_NESTING_DEPTH {
+            return Err(epub_error(
+                "content control nesting exceeds the EPUB depth limit",
+            ));
+        }
+        for (content_index, content) in control.content.iter().enumerate() {
+            let child_path = format!("{path}/content[{content_index}]");
+            match content {
+                SdtContent::Paragraph(paragraph) if in_cell => {
+                    self.scan_cell_paragraph(paragraph, &child_path)?
+                }
+                SdtContent::Paragraph(paragraph) => self.scan_paragraph(paragraph, &child_path)?,
+                SdtContent::Table(table) => self.scan_table(table, &child_path, depth + 1)?,
+                SdtContent::Row(row) => self.scan_row(row, &child_path, depth)?,
+                SdtContent::Cell(cell) => self.scan_cell(cell, &child_path, depth)?,
+                SdtContent::Run(run) => self.scan_run(run, &child_path)?,
+                SdtContent::ContentControl(nested) => {
+                    self.diagnose(
+                        child_path.clone(),
+                        "nested content control was flattened during EPUB export".to_owned(),
+                    )?;
+                    self.scan_control(nested, &child_path, depth + 1, in_cell)?;
+                }
+                SdtContent::RawXml(_) => self.diagnose(
+                    child_path,
+                    "unmodelled content control XML was dropped during EPUB export".to_owned(),
+                )?,
+            }
+        }
+        for (revision_index, (_, revision)) in control.revisions().iter().enumerate() {
+            self.scan_revision(revision, &format!("{path}/revision[{revision_index}]"))?;
         }
         Ok(())
     }
@@ -1035,24 +1121,35 @@ impl<'a> EpubWriter<'a> {
             }
         }
         for (extra_index, consumed) in consumed_raw.into_iter().enumerate() {
-            if !consumed {
+            if consumed {
+                continue;
+            }
+            let raw_path = format!("{path}/xml[{extra_index}]");
+            if let Some(content) =
+                CT_P::raw_run_wrapper_content(&paragraph.extra_xml[extra_index].1)
+            {
                 self.diagnose(
-                    format!("{path}/xml[{extra_index}]"),
+                    raw_path.clone(),
+                    "smart tag or custom XML wrapper was flattened during EPUB export".to_owned(),
+                )?;
+                self.scan_inline_content(&content, &raw_path)?;
+            } else {
+                self.diagnose(
+                    raw_path,
                     "unmodelled paragraph XML was dropped during EPUB export".to_owned(),
                 )?;
             }
         }
-        for (control_index, _) in paragraph.content_controls.iter().enumerate() {
+        for (control_index, (_, _, _, control)) in paragraph.content_controls.iter().enumerate() {
+            let control_path = format!("{path}/content-control[{control_index}]");
             self.diagnose(
-                format!("{path}/content-control[{control_index}]"),
-                "run content control was dropped during EPUB export".to_owned(),
+                control_path.clone(),
+                "run content control was flattened during EPUB export".to_owned(),
             )?;
+            self.scan_control(control, &control_path, 1, false)?;
         }
-        for (revision_index, _) in paragraph.revisions.iter().enumerate() {
-            self.diagnose(
-                format!("{path}/revision[{revision_index}]"),
-                "paragraph revision wrapper was flattened during EPUB export".to_owned(),
-            )?;
+        for (revision_index, (_, _, revision)) in paragraph.revisions.iter().enumerate() {
+            self.scan_revision(revision, &format!("{path}/revision[{revision_index}]"))?;
         }
         for (marker_index, _) in paragraph.comment_ranges.iter().enumerate() {
             self.diagnose(
@@ -1090,93 +1187,132 @@ impl<'a> EpubWriter<'a> {
             }
         }
         for (run_index, run) in paragraph.runs.iter().enumerate() {
-            if let Some(properties) = &run.properties {
-                self.scan_run_properties(properties, &format!("{path}/run[{run_index}]"))?;
+            self.scan_run(run, &format!("{path}/run[{run_index}]"))?;
+        }
+        Ok(())
+    }
+
+    /// Scan a tracked revision. An insertion or a move in is written in place,
+    /// and a deletion or a move away is left out, as the accepted view reads.
+    fn scan_revision(&mut self, revision: &CT_Revision, path: &str) -> Result<()> {
+        if revision_removes_text(revision) {
+            return self.diagnose(
+                path.to_owned(),
+                "deleted or moved-away revision content was dropped during EPUB export".to_owned(),
+            );
+        }
+        self.diagnose(
+            path.to_owned(),
+            "paragraph revision wrapper was flattened during EPUB export".to_owned(),
+        )?;
+        match accepted_revision_content(revision) {
+            Some(content) => self.scan_inline_content(content, path),
+            None => Ok(()),
+        }
+    }
+
+    /// Scan the runs of the inline content of a wrapper or a revision, as its
+    /// accepted view writes them.
+    fn scan_inline_content(&mut self, content: &CT_P, path: &str) -> Result<()> {
+        for (run_index, run) in content.accepted_view().runs.iter().enumerate() {
+            self.scan_run(run, &format!("{path}/run[{run_index}]"))?;
+        }
+        Ok(())
+    }
+
+    fn scan_run(&mut self, run: &CT_R, path: &str) -> Result<()> {
+        if let Some(properties) = &run.properties {
+            self.scan_run_properties(properties, path)?;
+        }
+        for raw_index in 0..run.extra_xml.len() {
+            if run
+                .extra_xml_positions
+                .get(raw_index)
+                .is_some_and(|position| CT_R::raw_child_is_root_attributes(*position))
+            {
+                continue;
             }
-            for raw_index in 0..run.extra_xml.len() {
-                if run
-                    .extra_xml_positions
-                    .get(raw_index)
-                    .is_some_and(|position| CT_R::raw_child_is_root_attributes(*position))
-                {
-                    continue;
-                }
-                self.diagnose(
-                    format!("{path}/run[{run_index}]/xml[{raw_index}]"),
-                    "unmodelled run XML was dropped during EPUB export".to_owned(),
-                )?;
-            }
-            for (drawing_index, _) in run.alt_drawings.iter().enumerate() {
-                self.diagnose(
-                    format!("{path}/run[{run_index}]/alternate-drawing[{drawing_index}]"),
-                    "alternate drawing payload was dropped during EPUB export".to_owned(),
-                )?;
-            }
-            for (content_index, content) in run.content.iter().enumerate() {
-                let content_path = format!("{path}/run[{run_index}]/content[{content_index}]");
-                match content {
-                    RunContent::Text(text) if text.preserve_space => self.diagnose(
+            self.diagnose(
+                format!("{path}/xml[{raw_index}]"),
+                "unmodelled run XML was dropped during EPUB export".to_owned(),
+            )?;
+        }
+        for (drawing_index, _) in run.alt_drawings.iter().enumerate() {
+            self.diagnose(
+                format!("{path}/alternate-drawing[{drawing_index}]"),
+                "alternate drawing payload was dropped during EPUB export".to_owned(),
+            )?;
+        }
+        for (content_index, content) in run.content.iter().enumerate() {
+            let content_path = format!("{path}/content[{content_index}]");
+            match content {
+                RunContent::Text(text) if text.preserve_space => self.diagnose(
+                    format!("{content_path}/space"),
+                    "preserved Word text spacing was normalized during EPUB export".to_owned(),
+                )?,
+                RunContent::DeletedText(text) if text.preserve_space => {
+                    self.diagnose(
                         format!("{content_path}/space"),
                         "preserved Word text spacing was normalized during EPUB export".to_owned(),
-                    )?,
-                    RunContent::DeletedText(text) if text.preserve_space => {
-                        self.diagnose(
-                            format!("{content_path}/space"),
-                            "preserved Word text spacing was normalized during EPUB export"
-                                .to_owned(),
-                        )?;
-                        self.diagnose(
-                            content_path,
-                            "deleted-text revision semantics were flattened during EPUB export"
-                                .to_owned(),
-                        )?;
-                    }
-                    RunContent::Break(rdocx_oxml::text::BreakType::Column) => self.diagnose(
-                        content_path,
-                        "column break was simplified to a line break during EPUB export".to_owned(),
-                    )?,
-                    RunContent::DeletedText(_) => self.diagnose(
+                    )?;
+                    self.diagnose(
                         content_path,
                         "deleted-text revision semantics were flattened during EPUB export"
                             .to_owned(),
-                    )?,
-                    RunContent::Field(_) => self.diagnose(
-                        content_path,
-                        "field semantics were flattened to cached display during EPUB export"
-                            .to_owned(),
-                    )?,
-                    RunContent::FootnoteRef { .. } => self.diagnose(
-                        content_path,
-                        "footnote reference was dropped during EPUB export".to_owned(),
-                    )?,
-                    RunContent::EndnoteRef { .. } => self.diagnose(
-                        content_path,
-                        "endnote reference was dropped during EPUB export".to_owned(),
-                    )?,
-                    RunContent::CommentReference { .. } => self.diagnose(
-                        content_path,
-                        "comment reference was dropped during EPUB export".to_owned(),
-                    )?,
-                    RunContent::Drawing(drawing) => {
-                        let relationship_id = drawing
-                            .inline
-                            .as_ref()
-                            .map(|image| image.embed_id.as_str())
-                            .or_else(|| {
-                                drawing.anchor.as_ref().map(|image| image.embed_id.as_str())
-                            });
-                        if let Some(reason) = self.image_loss_reason(relationship_id) {
-                            self.diagnose(content_path.clone(), reason.to_owned())?;
-                        } else if drawing.anchor.is_some() {
-                            self.diagnose(
-                                content_path.clone(),
-                                "floating image placement was converted to inline flow".to_owned(),
-                            )?;
-                        }
-                        let source = drawing
-                            .inline
-                            .as_ref()
-                            .map(|image| {
+                    )?;
+                }
+                RunContent::Break(rdocx_oxml::text::BreakType::Column) => self.diagnose(
+                    content_path,
+                    "column break was simplified to a line break during EPUB export".to_owned(),
+                )?,
+                RunContent::DeletedText(_) => self.diagnose(
+                    content_path,
+                    "deleted-text revision semantics were flattened during EPUB export".to_owned(),
+                )?,
+                RunContent::Field(_) => self.diagnose(
+                    content_path,
+                    "field semantics were flattened to cached display during EPUB export"
+                        .to_owned(),
+                )?,
+                RunContent::FootnoteRef { .. } => self.diagnose(
+                    content_path,
+                    "footnote reference was dropped during EPUB export".to_owned(),
+                )?,
+                RunContent::EndnoteRef { .. } => self.diagnose(
+                    content_path,
+                    "endnote reference was dropped during EPUB export".to_owned(),
+                )?,
+                RunContent::CommentReference { .. } => self.diagnose(
+                    content_path,
+                    "comment reference was dropped during EPUB export".to_owned(),
+                )?,
+                RunContent::Drawing(drawing) => {
+                    let relationship_id = drawing
+                        .inline
+                        .as_ref()
+                        .map(|image| image.embed_id.as_str())
+                        .or_else(|| drawing.anchor.as_ref().map(|image| image.embed_id.as_str()));
+                    if let Some(reason) = self.image_loss_reason(relationship_id) {
+                        self.diagnose(content_path.clone(), reason.to_owned())?;
+                    } else if drawing.anchor.is_some() {
+                        self.diagnose(
+                            content_path.clone(),
+                            "floating image placement was converted to inline flow".to_owned(),
+                        )?;
+                    }
+                    let source = drawing
+                        .inline
+                        .as_ref()
+                        .map(|image| {
+                            (
+                                image.name.as_deref(),
+                                image.raw_xml.is_some(),
+                                image.extent_cx.0,
+                                image.extent_cy.0,
+                            )
+                        })
+                        .or_else(|| {
+                            drawing.anchor.as_ref().map(|image| {
                                 (
                                     image.name.as_deref(),
                                     image.raw_xml.is_some(),
@@ -1184,41 +1320,30 @@ impl<'a> EpubWriter<'a> {
                                     image.extent_cy.0,
                                 )
                             })
-                            .or_else(|| {
-                                drawing.anchor.as_ref().map(|image| {
-                                    (
-                                        image.name.as_deref(),
-                                        image.raw_xml.is_some(),
-                                        image.extent_cx.0,
-                                        image.extent_cy.0,
-                                    )
-                                })
-                            });
-                        if let Some((name, has_raw_xml, width, height)) = source {
-                            if name.is_some() {
-                                self.diagnose(
-                                    format!("{content_path}/name"),
-                                    "drawing name was dropped during EPUB export".to_owned(),
-                                )?;
-                            }
-                            if width != 0 || height != 0 {
-                                self.diagnose(
-                                    format!("{content_path}/extent"),
-                                    "drawing extent was simplified to responsive EPUB sizing"
-                                        .to_owned(),
-                                )?;
-                            }
-                            if has_raw_xml {
-                                self.diagnose(
-                                    format!("{content_path}/xml"),
-                                    "preserved drawing XML was dropped during EPUB export"
-                                        .to_owned(),
-                                )?;
-                            }
+                        });
+                    if let Some((name, has_raw_xml, width, height)) = source {
+                        if name.is_some() {
+                            self.diagnose(
+                                format!("{content_path}/name"),
+                                "drawing name was dropped during EPUB export".to_owned(),
+                            )?;
+                        }
+                        if width != 0 || height != 0 {
+                            self.diagnose(
+                                format!("{content_path}/extent"),
+                                "drawing extent was simplified to responsive EPUB sizing"
+                                    .to_owned(),
+                            )?;
+                        }
+                        if has_raw_xml {
+                            self.diagnose(
+                                format!("{content_path}/xml"),
+                                "preserved drawing XML was dropped during EPUB export".to_owned(),
+                            )?;
                         }
                     }
-                    _ => {}
                 }
+                _ => {}
             }
         }
         Ok(())
@@ -1717,7 +1842,7 @@ fn list_definition<'a>(
 
 fn projected_paragraph_text(paragraph: &CT_P) -> String {
     let mut text = String::new();
-    for run in &paragraph.runs {
+    for run in &paragraph.accepted_view().runs {
         for content in &run.content {
             match content {
                 RunContent::Text(value) | RunContent::DeletedText(value) => {
@@ -1745,78 +1870,31 @@ fn projected_paragraph_text(paragraph: &CT_P) -> String {
     text
 }
 
-fn referenced_drawing_ids(content: &[BodyContent]) -> Vec<&str> {
-    fn paragraph<'a>(paragraph: &'a CT_P, ids: &mut Vec<&'a str>) {
-        for run in &paragraph.runs {
-            for content in &run.content {
-                let RunContent::Drawing(drawing) = content else {
-                    continue;
-                };
-                if let Some(id) = drawing
-                    .inline
-                    .as_ref()
-                    .map(|image| image.embed_id.as_str())
-                    .or_else(|| drawing.anchor.as_ref().map(|image| image.embed_id.as_str()))
-                {
-                    ids.push(id);
-                }
-            }
-        }
-    }
-    fn table<'a>(current: &'a CT_Tbl, ids: &mut Vec<&'a str>) {
-        for row in &current.rows {
-            for cell in &row.cells {
-                for content in &cell.content {
-                    match content {
-                        CellContent::Paragraph(item) => paragraph(item, ids),
-                        CellContent::Table(item) => table(item, ids),
-                        CellContent::ContentControl(_) => {}
-                    }
-                }
-            }
-        }
-    }
+fn referenced_drawing_ids(content: &[BodyContent]) -> Vec<String> {
     let mut ids = Vec::new();
-    for item in content {
-        match item {
-            BodyContent::Paragraph(item) => paragraph(item, &mut ids),
-            BodyContent::Table(item) => table(item, &mut ids),
-            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {}
+    visit_accepted_drawings(content, &mut |drawing| {
+        if let Some(id) = drawing
+            .inline
+            .as_ref()
+            .map(|image| image.embed_id.as_str())
+            .or_else(|| drawing.anchor.as_ref().map(|image| image.embed_id.as_str()))
+        {
+            ids.push(id.to_owned());
         }
-    }
+    });
     ids
 }
 
-fn referenced_hyperlink_ids(content: &[BodyContent]) -> Vec<&str> {
-    fn paragraph<'a>(paragraph: &'a CT_P, ids: &mut Vec<&'a str>) {
+fn referenced_hyperlink_ids(content: &[BodyContent]) -> Vec<String> {
+    let mut ids = Vec::new();
+    visit_body_paragraphs(content, &mut |paragraph| {
         ids.extend(
             paragraph
                 .hyperlinks
                 .iter()
-                .filter_map(|hyperlink| hyperlink.rel_id.as_deref()),
+                .filter_map(|hyperlink| hyperlink.rel_id.clone()),
         );
-    }
-    fn table<'a>(current: &'a CT_Tbl, ids: &mut Vec<&'a str>) {
-        for row in &current.rows {
-            for cell in &row.cells {
-                for content in &cell.content {
-                    match content {
-                        CellContent::Paragraph(item) => paragraph(item, ids),
-                        CellContent::Table(item) => table(item, ids),
-                        CellContent::ContentControl(_) => {}
-                    }
-                }
-            }
-        }
-    }
-    let mut ids = Vec::new();
-    for item in content {
-        match item {
-            BodyContent::Paragraph(item) => paragraph(item, &mut ids),
-            BodyContent::Table(item) => table(item, &mut ids),
-            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {}
-        }
-    }
+    });
     ids
 }
 
@@ -2345,6 +2423,43 @@ fn render_source_block(
     Ok(fragment)
 }
 
+/// The body with each block content control replaced by the paragraphs and
+/// tables it wraps, nested controls included, so that a wrapped heading, list
+/// item or table is exported as if the control were not there. It clones what
+/// the controls wrap, so it runs after the source limits are checked.
+fn unwrap_block_controls(content: &[BodyContent]) -> Cow<'_, [BodyContent]> {
+    if !content
+        .iter()
+        .any(|item| matches!(item, BodyContent::ContentControl(_)))
+    {
+        return Cow::Borrowed(content);
+    }
+    let mut unwrapped = Vec::with_capacity(content.len());
+    for item in content {
+        match item {
+            BodyContent::ContentControl(control) => push_control_blocks(control, &mut unwrapped),
+            item => unwrapped.push(item.clone()),
+        }
+    }
+    Cow::Owned(unwrapped)
+}
+
+fn push_control_blocks(control: &CT_Sdt, blocks: &mut Vec<BodyContent>) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => {
+                blocks.push(BodyContent::Paragraph(paragraph.clone()))
+            }
+            SdtContent::Table(table) => blocks.push(BodyContent::Table(table.clone())),
+            SdtContent::ContentControl(nested) => push_control_blocks(nested, blocks),
+            SdtContent::Row(_)
+            | SdtContent::Cell(_)
+            | SdtContent::Run(_)
+            | SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
 fn render_body_projection(content: &BodyContent) -> Option<BodyContent> {
     match content {
         BodyContent::Paragraph(paragraph) => Some(BodyContent::Paragraph(
@@ -2369,10 +2484,13 @@ fn render_paragraph_projection(paragraph: &CT_P) -> CT_P {
         properties.outline_lvl = Some(5);
         properties.style_id = Some("Heading6".to_owned());
     }
+    // The runs the text readers read, those of content controls, tracked
+    // insertions, smart tags and custom XML included, deleted ones left out.
+    let view = paragraph.accepted_view();
     CT_P {
         properties,
-        runs: paragraph.runs.iter().map(render_run_projection).collect(),
-        hyperlinks: paragraph
+        runs: view.runs.iter().map(render_run_projection).collect(),
+        hyperlinks: view
             .hyperlinks
             .iter()
             .map(|hyperlink| HyperlinkSpan {
@@ -2554,15 +2672,16 @@ fn render_table_projection(table: &CT_Tbl) -> CT_Tbl {
                 ..Default::default()
             }),
         grid: None,
+        // Rows and cells that content controls wrap are exported in place.
         rows: table
-            .rows
-            .iter()
+            .rows()
+            .into_iter()
             .map(|row| CT_Row {
                 table_property_exception: None,
                 properties: None,
                 cells: row
-                    .cells
-                    .iter()
+                    .cells()
+                    .into_iter()
                     .map(|cell| CT_Tc {
                         properties: cell.properties.as_ref().map(|source| {
                             rdocx_oxml::table::CT_TcPr {
@@ -2574,19 +2693,7 @@ fn render_table_projection(table: &CT_Tbl) -> CT_Tbl {
                                 ..Default::default()
                             }
                         }),
-                        content: cell
-                            .content
-                            .iter()
-                            .filter_map(|content| match content {
-                                CellContent::Paragraph(paragraph) => Some(CellContent::Paragraph(
-                                    render_paragraph_projection(paragraph),
-                                )),
-                                CellContent::Table(table) => {
-                                    Some(CellContent::Table(render_table_projection(table)))
-                                }
-                                CellContent::ContentControl(_) => None,
-                            })
-                            .collect(),
+                        content: render_cell_content_projection(&cell.content),
                         extra_xml: Vec::new(),
                     })
                     .collect(),
@@ -2596,6 +2703,44 @@ fn render_table_projection(table: &CT_Tbl) -> CT_Tbl {
             .collect(),
         extra_xml: Vec::new(),
         content_controls: Vec::new(),
+    }
+}
+
+/// Project the paragraphs and nested tables of a table cell, with what
+/// content controls wrap in place.
+fn render_cell_content_projection(content: &[CellContent]) -> Vec<CellContent> {
+    let mut projected = Vec::with_capacity(content.len());
+    for item in content {
+        match item {
+            CellContent::Paragraph(paragraph) => projected.push(CellContent::Paragraph(
+                render_paragraph_projection(paragraph),
+            )),
+            CellContent::Table(table) => {
+                projected.push(CellContent::Table(render_table_projection(table)))
+            }
+            CellContent::ContentControl(control) => {
+                push_control_cell_projection(control, &mut projected)
+            }
+        }
+    }
+    projected
+}
+
+fn push_control_cell_projection(control: &CT_Sdt, projected: &mut Vec<CellContent>) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => projected.push(CellContent::Paragraph(
+                render_paragraph_projection(paragraph),
+            )),
+            SdtContent::Table(table) => {
+                projected.push(CellContent::Table(render_table_projection(table)))
+            }
+            SdtContent::ContentControl(nested) => push_control_cell_projection(nested, projected),
+            SdtContent::Row(_)
+            | SdtContent::Cell(_)
+            | SdtContent::Run(_)
+            | SdtContent::RawXml(_) => {}
+        }
     }
 }
 
@@ -2718,62 +2863,30 @@ fn supported_image_occurrences(
     content: &BodyContent,
     input: &rdocx_html::HtmlInput,
 ) -> Vec<ImageOccurrence> {
-    fn paragraph(
-        paragraph: &CT_P,
-        input: &rdocx_html::HtmlInput,
-        occurrences: &mut Vec<ImageOccurrence>,
-    ) {
-        for run in &paragraph.runs {
-            for content in &run.content {
-                let RunContent::Drawing(drawing) = content else {
-                    continue;
-                };
-                let source = drawing
-                    .inline
+    // The emitter writes the pictures of the projected block, that is of the
+    // accepted view of its paragraphs, in the order this visitor reaches them.
+    let mut occurrences = Vec::new();
+    visit_accepted_drawings(std::slice::from_ref(content), &mut |drawing| {
+        let source = drawing
+            .inline
+            .as_ref()
+            .map(|image| (image.embed_id.as_str(), image.description.as_deref()))
+            .or_else(|| {
+                drawing
+                    .anchor
                     .as_ref()
                     .map(|image| (image.embed_id.as_str(), image.description.as_deref()))
-                    .or_else(|| {
-                        drawing
-                            .anchor
-                            .as_ref()
-                            .map(|image| (image.embed_id.as_str(), image.description.as_deref()))
-                    });
-                let Some((relationship_id, description)) = source else {
-                    continue;
-                };
-                if input.images.contains_key(relationship_id) {
-                    occurrences.push(ImageOccurrence {
-                        relationship_id: relationship_id.to_owned(),
-                        description: description.unwrap_or_default().to_owned(),
-                    });
-                }
-            }
+            });
+        let Some((relationship_id, description)) = source else {
+            return;
+        };
+        if input.images.contains_key(relationship_id) {
+            occurrences.push(ImageOccurrence {
+                relationship_id: relationship_id.to_owned(),
+                description: description.unwrap_or_default().to_owned(),
+            });
         }
-    }
-    fn table(
-        current: &CT_Tbl,
-        input: &rdocx_html::HtmlInput,
-        occurrences: &mut Vec<ImageOccurrence>,
-    ) {
-        for row in &current.rows {
-            for cell in &row.cells {
-                for content in &cell.content {
-                    match content {
-                        CellContent::Paragraph(item) => paragraph(item, input, occurrences),
-                        CellContent::Table(item) => table(item, input, occurrences),
-                        CellContent::ContentControl(_) => {}
-                    }
-                }
-            }
-        }
-    }
-
-    let mut occurrences = Vec::new();
-    match content {
-        BodyContent::Paragraph(item) => paragraph(item, input, &mut occurrences),
-        BodyContent::Table(item) => table(item, input, &mut occurrences),
-        BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {}
-    }
+    });
     occurrences
 }
 
@@ -3216,15 +3329,7 @@ fn measure_body_content(
     if depth > MAX_NESTING_DEPTH {
         return Err(epub_error("table nesting exceeds the EPUB depth limit"));
     }
-    *item_count = item_count
-        .checked_add(1)
-        .ok_or_else(|| epub_error("document item count overflow during EPUB export"))?;
-    if *item_count > MAX_BODY_ITEMS {
-        return Err(epub_error(
-            "document has too many body items for EPUB export",
-        ));
-    }
-    add_projected_nodes(projected_nodes, 1)?;
+    add_item(item_count, projected_nodes)?;
     match content {
         BodyContent::Paragraph(paragraph) => {
             measure_paragraph(paragraph, text_bytes, projected_nodes, image_occurrences)?
@@ -3237,8 +3342,63 @@ fn measure_body_content(
             projected_nodes,
             image_occurrences,
         )?,
-        BodyContent::ContentControl(_) => {}
+        BodyContent::ContentControl(control) => measure_control(
+            control,
+            depth + 1,
+            item_count,
+            text_bytes,
+            projected_nodes,
+            image_occurrences,
+        )?,
         BodyContent::RawXml(raw) => add_source_bytes(text_bytes, raw.len())?,
+    }
+    Ok(())
+}
+
+/// Measure what a block content control wraps, which is exported in place.
+/// The rows, cells and runs that controls wrap are measured through
+/// `CT_Tbl::rows`, `CT_Row::cells` and `CT_P::accepted_bookmark_runs`.
+fn measure_control(
+    control: &CT_Sdt,
+    depth: usize,
+    item_count: &mut usize,
+    text_bytes: &mut usize,
+    projected_nodes: &mut usize,
+    image_occurrences: &mut usize,
+) -> Result<()> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(epub_error(
+            "content control nesting exceeds the EPUB depth limit",
+        ));
+    }
+    for content in &control.content {
+        match content {
+            SdtContent::Paragraph(paragraph) => {
+                add_item(item_count, projected_nodes)?;
+                measure_paragraph(paragraph, text_bytes, projected_nodes, image_occurrences)?
+            }
+            SdtContent::Table(table) => {
+                add_item(item_count, projected_nodes)?;
+                measure_table(
+                    table,
+                    depth + 1,
+                    item_count,
+                    text_bytes,
+                    projected_nodes,
+                    image_occurrences,
+                )?
+            }
+            SdtContent::ContentControl(nested) => measure_control(
+                nested,
+                depth + 1,
+                item_count,
+                text_bytes,
+                projected_nodes,
+                image_occurrences,
+            )?,
+            SdtContent::RawXml(raw) => add_source_bytes(text_bytes, raw.len())?,
+            SdtContent::Row(_) | SdtContent::Cell(_) | SdtContent::Run(_) => {}
+        }
     }
     Ok(())
 }
@@ -3265,7 +3425,8 @@ fn measure_table(
             add_source_bytes(text_bytes, raw.len())?;
         }
     }
-    for row in &table.rows {
+    // Rows and cells that content controls wrap are exported in place.
+    for row in table.rows() {
         add_projected_nodes(projected_nodes, 1)?;
         for (_, raw) in &row.extra_xml {
             add_source_bytes(text_bytes, raw.len())?;
@@ -3275,7 +3436,7 @@ fn measure_table(
                 add_source_bytes(text_bytes, raw.len())?;
             }
         }
-        for cell in &row.cells {
+        for cell in row.cells() {
             add_projected_nodes(projected_nodes, 1)?;
             for (_, raw) in &cell.extra_xml {
                 add_source_bytes(text_bytes, raw.len())?;
@@ -3292,15 +3453,7 @@ fn measure_table(
                 }
             }
             for content in &cell.content {
-                *item_count = item_count
-                    .checked_add(1)
-                    .ok_or_else(|| epub_error("document item count overflow during EPUB export"))?;
-                if *item_count > MAX_BODY_ITEMS {
-                    return Err(epub_error(
-                        "document has too many body items for EPUB export",
-                    ));
-                }
-                add_projected_nodes(projected_nodes, 1)?;
+                add_item(item_count, projected_nodes)?;
                 match content {
                     CellContent::Paragraph(paragraph) => measure_paragraph(
                         paragraph,
@@ -3316,7 +3469,14 @@ fn measure_table(
                         projected_nodes,
                         image_occurrences,
                     )?,
-                    CellContent::ContentControl(_) => {}
+                    CellContent::ContentControl(control) => measure_control(
+                        control,
+                        depth + 1,
+                        item_count,
+                        text_bytes,
+                        projected_nodes,
+                        image_occurrences,
+                    )?,
                 }
             }
         }
@@ -3374,7 +3534,9 @@ fn measure_paragraph(
             add_source_bytes(text_bytes, raw.len())?;
         }
     }
-    for run in &paragraph.runs {
+    // The runs of content controls and tracked insertions are exported in
+    // place. Those of smart tags and custom XML are measured as raw XML below.
+    for run in paragraph.accepted_bookmark_runs() {
         add_projected_nodes(projected_nodes, 1 + run.content.len())?;
         if let Some(properties) = &run.properties {
             for value in [
@@ -3546,6 +3708,19 @@ fn measure_field_argument(
         rdocx_oxml::text::FieldArgument::Text(text) => add_source_bytes(text_bytes, text.len()),
         rdocx_oxml::text::FieldArgument::Nested(field) => measure_field(field, text_bytes, depth),
     }
+}
+
+/// Count one paragraph or table and the XHTML node it projects to.
+fn add_item(item_count: &mut usize, projected_nodes: &mut usize) -> Result<()> {
+    *item_count = item_count
+        .checked_add(1)
+        .ok_or_else(|| epub_error("document item count overflow during EPUB export"))?;
+    if *item_count > MAX_BODY_ITEMS {
+        return Err(epub_error(
+            "document has too many body items for EPUB export",
+        ));
+    }
+    add_projected_nodes(projected_nodes, 1)
 }
 
 fn add_projected_nodes(total: &mut usize, additional: usize) -> Result<()> {
@@ -4445,26 +4620,32 @@ mod tests {
     }
 
     #[test]
-    fn epub_heading_text_uses_only_bounded_direct_projected_runs() {
-        let hidden = "controlled".repeat(MAX_SOURCE_TEXT_BYTES / 10 + 1);
-        let xml = format!(
-            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Visible heading</w:t></w:r><w:sdt><w:sdtContent><w:r><w:t>{hidden}</w:t></w:r></w:sdtContent></w:sdt></w:p></w:body></w:document>"#
-        );
-        let mut document = Document::new();
-        document.document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+    fn epub_heading_text_reads_the_bounded_runs_content_controls_wrap() {
+        let heading = |wrapped: &str| {
+            let xml = format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t xml:space="preserve">Visible </w:t></w:r><w:sdt><w:sdtContent><w:r><w:t>{wrapped}</w:t></w:r></w:sdtContent></w:sdt></w:p></w:body></w:document>"#
+            );
+            let mut document = Document::new();
+            document.document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+            document.to_epub_bytes()
+        };
 
-        let result = document.to_epub_bytes().unwrap();
+        let result = heading("heading").unwrap();
         let entries = archive_entries(&result.bytes);
         let nav = entry_text(&entries, "EPUB/nav.xhtml");
         let chapter = entry_text(&entries, "EPUB/chapter-001.xhtml");
         assert!(nav.contains(">Visible heading</a>"), "{nav}");
         assert!(chapter.contains(">Visible heading</h1>"), "{chapter}");
-        assert!(!nav.contains("controlledcontrolled"), "{nav}");
-        assert!(!chapter.contains("controlledcontrolled"), "{chapter}");
         assert!(result.diagnostics.iter().any(|diagnostic| {
             diagnostic.path == "body[0]/content-control[0]"
-                && diagnostic.message.contains("content control")
+                && diagnostic.message == "run content control was flattened during EPUB export"
         }));
+
+        // What a control wraps counts against the source limits it is
+        // exported under.
+        let hidden = "controlled".repeat(MAX_SOURCE_TEXT_BYTES / 10 + 1);
+        let error = heading(&hidden).err().unwrap().to_string();
+        assert!(error.contains("document text exceeds the EPUB source limit"));
     }
 
     #[test]

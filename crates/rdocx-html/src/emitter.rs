@@ -2,17 +2,17 @@
 
 use std::collections::HashMap;
 
-use rdocx_oxml::document::{BodyContent, CT_Body};
+use rdocx_oxml::document::CT_Body;
 use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::{CT_Tbl, CellContent, VMerge};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, VMerge};
 use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
 
 use crate::css;
 use crate::sanitize::{escape_html, escape_html_attr, safe_url};
-use crate::{HtmlOptions, ImageData};
+use crate::{Block, HtmlOptions, ImageData, body_blocks, cell_blocks};
 
 /// Emit the full body content as HTML.
 pub(crate) fn emit_body(
@@ -26,9 +26,9 @@ pub(crate) fn emit_body(
     let mut out = String::new();
     let mut list_stack: Vec<ListState> = Vec::new();
 
-    for content in &body.content {
-        match content {
-            BodyContent::Paragraph(p) => {
+    for block in body_blocks(&body.content) {
+        match block {
+            Block::Paragraph(p) => {
                 let list_info = detect_list(p, numbering);
 
                 // Close lists that are no longer active
@@ -68,14 +68,12 @@ pub(crate) fn emit_body(
                     emit_paragraph(&mut out, p, styles, images, hyperlink_urls, options);
                 }
             }
-            BodyContent::Table(tbl) => {
+            Block::Table(tbl) => {
                 while !list_stack.is_empty() {
                     close_list(&mut out, &mut list_stack);
                 }
                 emit_table(&mut out, tbl, styles, images, hyperlink_urls, options);
             }
-            BodyContent::ContentControl(_) => {}
-            BodyContent::RawXml(_) => {}
         }
     }
 
@@ -206,7 +204,8 @@ fn emit_paragraph(
     out.push_str(&format!("</{tag}>\n"));
 }
 
-/// Emit the inner content of a paragraph (runs and hyperlinks).
+/// Emit the inner content of a paragraph (the runs of its accepted view and
+/// hyperlinks).
 fn emit_paragraph_content(
     out: &mut String,
     para: &CT_P,
@@ -215,6 +214,10 @@ fn emit_paragraph_content(
     hyperlink_urls: &HashMap<String, String>,
     options: &HtmlOptions,
 ) {
+    // The runs the text readers read, those of content controls, tracked
+    // insertions, smart tags and custom XML included, deleted ones left out.
+    let para = &para.accepted_view();
+
     // Build a map of which runs are inside hyperlinks
     let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
     for hl in &para.hyperlinks {
@@ -482,9 +485,11 @@ fn emit_table(
         ));
     }
 
-    for row in &tbl.rows {
+    // Rows and cells that content controls wrap are written in place.
+    let rows = tbl.rows();
+    for (row_idx, row) in rows.iter().enumerate() {
         out.push_str("<tr>\n");
-        for cell in &row.cells {
+        for (col_idx, cell) in row.cells().into_iter().enumerate() {
             // Skip vmerge continue cells
             if let Some(props) = &cell.properties
                 && matches!(props.v_merge, Some(VMerge::Continue))
@@ -505,7 +510,7 @@ fn emit_table(
 
                 // Row span (count consecutive vmerge continue cells below)
                 if matches!(props.v_merge, Some(VMerge::Restart)) {
-                    let rowspan = count_vmerge_span(tbl, &row.cells, cell);
+                    let rowspan = count_vmerge_span(&rows[row_idx + 1..], col_idx);
                     if rowspan > 1 {
                         td_attrs.push_str(&format!(" rowspan=\"{rowspan}\""));
                     }
@@ -553,15 +558,14 @@ fn emit_table(
                 ));
             }
 
-            for content in &cell.content {
-                match content {
-                    CellContent::Paragraph(p) => {
+            for block in cell_blocks(cell) {
+                match block {
+                    Block::Paragraph(p) => {
                         emit_paragraph(out, p, styles, images, hyperlink_urls, options);
                     }
-                    CellContent::Table(nested) => {
+                    Block::Table(nested) => {
                         emit_table(out, nested, styles, images, hyperlink_urls, options);
                     }
-                    CellContent::ContentControl(_) => {}
                 }
             }
 
@@ -573,30 +577,12 @@ fn emit_table(
     out.push_str("</table>\n");
 }
 
-/// Count the rowspan for a vmerge restart cell.
-fn count_vmerge_span(
-    tbl: &CT_Tbl,
-    _current_cells: &[rdocx_oxml::table::CT_Tc],
-    cell: &rdocx_oxml::table::CT_Tc,
-) -> u32 {
-    // Find the column index of this cell
-    let col_idx = _current_cells.iter().position(|c| std::ptr::eq(c, cell));
-    let Some(col_idx) = col_idx else {
-        return 1;
-    };
-
-    // Find which row this cell is in
-    let row_idx = tbl
-        .rows
-        .iter()
-        .position(|r| std::ptr::eq(r.cells.as_slice(), _current_cells));
-    let Some(row_idx) = row_idx else {
-        return 1;
-    };
-
+/// Count the rowspan for a vmerge restart cell in column `col_idx`, from the
+/// rows below it.
+fn count_vmerge_span(rows_below: &[&CT_Row], col_idx: usize) -> u32 {
     let mut span = 1;
-    for row in tbl.rows.iter().skip(row_idx + 1) {
-        if let Some(next_cell) = row.cells.get(col_idx)
+    for row in rows_below {
+        if let Some(next_cell) = row.cells().get(col_idx)
             && let Some(props) = &next_cell.properties
             && matches!(props.v_merge, Some(VMerge::Continue))
         {
