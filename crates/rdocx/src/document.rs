@@ -12946,7 +12946,7 @@ impl Document {
         Ok(id)
     }
 
-    fn add_relative_internal_relationship_checked(
+    pub(crate) fn add_relative_internal_relationship_checked(
         &mut self,
         owner: &str,
         rel_type: &str,
@@ -12967,14 +12967,35 @@ impl Document {
         Ok(id)
     }
 
-    pub(crate) fn add_image_relationship_checked(
+    fn add_image_relationship_checked(
         &mut self,
         owner: &str,
         image_data: &[u8],
         filename: &str,
     ) -> Result<String> {
         let (part_name, format) = self.reserve_image_part(image_data, filename)?;
-        self.install_reserved_image_part(&part_name, image_data, format);
+        self.install_reserved_image_part(
+            &part_name,
+            image_data,
+            format.extension(),
+            format.content_type(),
+        );
+        self.add_relative_internal_relationship_checked(owner, rel_types::IMAGE, &part_name)
+    }
+
+    /// Relate `owner` to a copy of an image from another package, keeping
+    /// the extension and content type that package declares for it.
+    pub(crate) fn add_copied_image_relationship_checked(
+        &mut self,
+        owner: &str,
+        image_data: &[u8],
+        extension: &str,
+        content_type: &str,
+    ) -> Result<String> {
+        let part_name = self
+            .identifiers
+            .reserve_part_name("/word/media", "image", extension)?;
+        self.install_reserved_image_part(&part_name, image_data, extension, content_type);
         self.add_relative_internal_relationship_checked(owner, rel_types::IMAGE, &part_name)
     }
 
@@ -14326,7 +14347,12 @@ impl Document {
                 })?;
             relationship.target = relative_target(owner, &new_target);
         }
-        candidate.install_reserved_image_part(&new_target, image_data, format);
+        candidate.install_reserved_image_part(
+            &new_target,
+            image_data,
+            format.extension(),
+            format.content_type(),
+        );
 
         if new_target != old_target {
             let old_target_is_referenced = std::iter::once(("/", &candidate.package.package_rels))
@@ -15663,7 +15689,12 @@ impl Document {
         let (part_name, format) = self
             .reserve_image_part(image_data, filename)
             .expect("an in-memory package cannot exhaust every media part suffix");
-        self.install_reserved_image_part(&part_name, image_data, format)
+        self.install_reserved_image_part(
+            &part_name,
+            image_data,
+            format.extension(),
+            format.content_type(),
+        )
     }
 
     fn reserve_image_part(
@@ -15682,12 +15713,10 @@ impl Document {
         &mut self,
         part_name: &str,
         image_data: &[u8],
-        format: oxml_media::ImageFormat,
+        extension: &str,
+        content_type: &str,
     ) -> String {
-        let extension = format.extension();
-
         self.package.set_part(part_name, image_data.to_vec());
-        let content_type = format.content_type();
         match self.package.content_types.content_type_for(part_name) {
             Some(existing) if existing == content_type => {}
             Some(_) => self
