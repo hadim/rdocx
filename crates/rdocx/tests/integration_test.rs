@@ -19873,20 +19873,20 @@ mod advanced_table_authoring_and_geometry {
     /// column because the content fits. Rows 11 to 14 are the nested table,
     /// which resolves its own grid inside the owning cell content box.
     const GOLDEN_TABLE_GEOMETRY: &[(f64, f64, f64, f64)] = &[
-        (72.0, 72.0, 144.0, 19.87),
-        (216.0, 72.0, 144.0, 19.87),
-        (360.0, 72.0, 180.0, 19.87),
-        (72.0, 91.87, 144.0, 19.87),
-        (216.0, 91.87, 144.0, 19.87),
-        (360.0, 91.87, 180.0, 19.87),
-        (72.0, 111.74, 20.34, 19.87),
-        (92.34, 111.74, 242.28, 19.87),
-        (72.0, 131.61, 20.34, 19.87),
-        (92.34, 131.61, 242.28, 19.87),
-        (311.4, 172.43, 111.6, 19.87),
-        (423.0, 172.43, 111.6, 19.87),
-        (311.4, 192.3, 111.6, 19.87),
-        (423.0, 192.3, 111.6, 19.87),
+        (72.0, 72.0, 144.0, 22.49),
+        (216.0, 72.0, 144.0, 22.49),
+        (360.0, 72.0, 180.0, 22.49),
+        (72.0, 94.49, 144.0, 22.49),
+        (216.0, 94.49, 144.0, 22.49),
+        (360.0, 94.49, 180.0, 22.49),
+        (72.0, 116.98, 20.34, 22.49),
+        (92.34, 116.98, 242.28, 22.49),
+        (72.0, 139.47, 20.34, 22.49),
+        (92.34, 139.47, 242.28, 22.49),
+        (311.4, 184.45, 111.6, 22.49),
+        (423.0, 184.45, 111.6, 22.49),
+        (311.4, 206.94, 111.6, 22.49),
+        (423.0, 206.94, 111.6, 22.49),
     ];
 }
 
@@ -19927,7 +19927,7 @@ mod f266a_mixed_script_typography {
     /// applied to a value whose sign of zero has been normalised, because
     /// `format!("{:.4}", -0.0)` renders `-0.0000`.
     pub(super) const MIXED_SCRIPT_GEOMETRY_DIGEST: &str =
-        "516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402";
+        "76a56930a97629b22c773a4e373ac7b86a00561bf1d90a0ad64b4e1a1e0cea6f";
 
     /// One page holding all five scripts, authored through the public facade.
     ///
@@ -20295,7 +20295,7 @@ mod f266b_ruby_and_emphasis_typography {
     /// rather than the top level. The serialisation is the one F-266a
     /// documents, and it is host-stable for the same reasons.
     pub(super) const RUBY_AND_EMPHASIS_GEOMETRY_DIGEST: &str =
-        "b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6";
+        "c2d4266e76d20d8d2260d55071384d89b3eac1034851437628dd4764eed80373";
 
     /// Wrap producer body XML in a package a `Document` can open.
     fn producer_document(body: &str) -> Vec<u8> {
@@ -20698,9 +20698,9 @@ mod f266b_ruby_and_emphasis_typography {
 
         // The plain paragraphs fit one page. The same count with a 60 point
         // raise does not, which is only true if the raise reached the line.
-        assert_eq!(page_count(false, 30), 1);
+        assert_eq!(page_count(false, 25), 1);
         assert!(
-            page_count(true, 30) > 1,
+            page_count(true, 25) > 1,
             "the raise and the phonetic size reach the line height"
         );
     }
@@ -20923,35 +20923,35 @@ mod floating_table_placement_and_wrap {
 
         // Each float sits whole on one page, at the rect its anchor resolves
         // to, and none of them advanced the flow.
-        assert_eq!(placed(&result, 4), [(1, 72.0, 72.0, 100.0, 39.74)]);
-        assert_eq!(placed(&result, 11), [(1, 72.0, 294.45, 100.0, 39.74)]);
-        assert_eq!(placed(&result, 22), [(1, 360.0, 450.0, 100.0, 39.74)]);
+        assert_eq!(placed(&result, 4), [(1, 72.0, 72.0, 100.0, 44.98)]);
+        assert_eq!(placed(&result, 11), [(1, 72.0, 325.89, 100.0, 44.98)]);
+        assert_eq!(placed(&result, 22), [(1, 360.0, 450.0, 100.0, 44.98)]);
 
         let first = &result.layout.pages[0];
         assert_eq!(
-            boxes_in_band(first, 68.0, 115.75),
+            boxes_in_band(first, 68.0, 120.98),
             [
-                (80.25, 181.0, 525.39),
-                (92.12, 181.0, 277.95),
-                (111.99, 181.0, 525.39),
+                (82.47, 181.0, 525.39),
+                (96.96, 181.0, 277.95),
+                (119.46, 181.0, 525.39),
             ],
             "margin-anchored float geometry moved"
         );
         assert_eq!(
-            boxes_in_band(first, 290.45, 338.2),
+            boxes_in_band(first, 321.89, 374.87),
             [
-                (302.7, 181.0, 525.39),
-                (314.57, 181.0, 277.95),
-                (334.44, 181.0, 525.39),
+                (336.36, 181.0, 525.39),
+                (350.85, 181.0, 277.95),
+                (373.34, 181.0, 525.39),
             ],
             "text-anchored float geometry moved"
         );
         assert_eq!(
-            boxes_in_band(first, 446.0, 493.75),
+            boxes_in_band(first, 446.0, 498.98),
             [
-                (457.54, 72.0, 241.43),
-                (477.41, 72.0, 343.91),
-                (489.28, 72.0, 241.43),
+                (455.31, 72.0, 343.91),
+                (469.8, 72.0, 241.43),
+                (492.29, 72.0, 343.91),
             ],
             "page-anchored float geometry moved"
         );
@@ -20994,7 +20994,7 @@ mod floating_table_placement_and_wrap {
         inline.vertical = TableFloatY::Inline;
         add_float(&mut document, "M", Some(inline));
         let result = document.layout_deterministic().expect("document lays out");
-        assert_eq!(placed(&result, 1), [(1, MARGIN_LEFT, text_y, 100.0, 39.74)]);
+        assert_eq!(placed(&result, 1), [(1, MARGIN_LEFT, text_y, 100.0, 44.98)]);
     }
 
     /// `w:tblpPr` is a position, and a position leaves no room for `w:tblInd`
@@ -21071,7 +21071,7 @@ mod f266c_character_grid_and_vertical_text {
     /// and the six coefficients of the transform that maps the run into page
     /// space, which is what makes a lost or altered rotation fail here.
     const GRID_AND_VERTICAL_GEOMETRY_DIGEST: &str =
-        "cb3043d53719f5dd9e16b61a001aff8c8827c19f96536972d4a17b9a626d2164";
+        "02995cf452d8add0ceb9c147d65773d55bc9f8b065b7a92b0e42073fdd770f7f";
 
     /// One coordinate, with the sign of zero normalised, as F-266a documents.
     fn number(value: f64) -> String {

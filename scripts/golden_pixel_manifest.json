@@ -4,41 +4,41 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "PR 148 paragraph spacing, cell margins, and horizontal table borders move contract, invoice, and quote under pinned Poppler 26.01.0",
+  "reason": "Word line heights: runs, blank lines and picture lines measured the way Word measures them, on OS/2 Windows metrics with external leading (issue 162)",
   "samples": {
     "contract": {
       "height": 1650,
-      "rgba_sha256": "1161c8beb71a576b32e0bd388900efb2aba3e9d95d87ce30fe1a664ee1e3bbb6",
+      "rgba_sha256": "3eeeaa0d0036b5350380c4c655e55d985d56074b9c8faad5cdbbe8a0dcb81008",
       "width": 1275
     },
     "feature_showcase": {
       "height": 1650,
-      "rgba_sha256": "248ee1e604ac75fe19f8ecb5430a93e51a8d8d15b5d03e26dca4d560c413313d",
+      "rgba_sha256": "2c32f6b5d0befdde243d37872ed815b444a503f93bbcb149625768b334296c8a",
       "width": 1275
     },
     "invoice": {
       "height": 1650,
-      "rgba_sha256": "d5d94db1e34f866d254cc0bd7a0917b31aefaa0e7e9d59e9518a4a80cc977eca",
+      "rgba_sha256": "1bd2c38b72e1495e1e6b8b998e10e6bb753b7d6a612ce23da4d2502a936214b7",
       "width": 1275
     },
     "letter": {
       "height": 1650,
-      "rgba_sha256": "5e5e15d7e030b698eadb7f22fe957b4ae08bd6de13be0e8c390af382d0d1eefc",
+      "rgba_sha256": "e4c4ccbe62a76f39739824ee4ba04ca1a2d3cde630b1797aeadca0232a47d1e9",
       "width": 1275
     },
     "proposal": {
       "height": 1650,
-      "rgba_sha256": "ec5ac081098ad70f4464a6e3dd3d2efc5d7982e7affd81387cb86a523e22a342",
+      "rgba_sha256": "dedd3cef621b5ac64170a8e59509c3e1552c653c49f1e4f3cacabcb25d61beb8",
       "width": 1275
     },
     "quote": {
       "height": 1650,
-      "rgba_sha256": "260df8dcf5a9964ce46858517cf77328befdd1022b66f760188244c6430b9008",
+      "rgba_sha256": "db937ca654f4c8045c0f2893abc4fd05a7c67595890904ef67ae032d5897c95a",
       "width": 1275
     },
     "report": {
       "height": 1650,
-      "rgba_sha256": "379a02232203700267455977d80838bee8d75afa9c6e7782f70b42920ddd1a0a",
+      "rgba_sha256": "dc6f5606a90af78ae6c222f0be826d62a3d02c841f0a5d806301075547b33a83",
       "width": 1275
     }
   }

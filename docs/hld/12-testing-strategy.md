@@ -1128,7 +1128,7 @@ content, note-bearing tables, floating drawings, backgrounds, and mismatched
 boundary state must use the full paginator. Ordinary multi-line prose,
 headings, `keepNext`, and `keepLines` must publish complete-boundary restart
 records. A deterministic Issue 67 fixture requires 175 naturally wrapped
-four-line paragraphs to span 16 pages, keep the completed recorded pass, and
+four-line paragraphs to span 19 pages, keep the completed recorded pass, and
 publish no checkpoint on a page ending inside a paragraph. Ten middle edits
 must each produce 174 paragraph-cache hits and one build, recompute at most two
 pages, and equal every field of a fresh deterministic result, including
@@ -1417,7 +1417,7 @@ and advances, and for a rich run also its direction, script, bidi embedding
 level, both offset axes, and its cluster ranges.
 
 The recorded digest is
-`516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402`.
+`76a56930a97629b22c773a4e373ac7b86a00561bf1d90a0ad64b4e1a1e0cea6f`.
 
 The Kanji paragraph is what makes slot resolution load bearing in the gate. It
 names `Noto Sans SC` on `w:ascii` and `Noto Sans JP` on `w:eastAsia`, and both
@@ -1467,10 +1467,10 @@ level, so the runs inside an annotation group reach the digest with everything
 else.
 
 The recorded digest is
-`b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6`.
+`c2d4266e76d20d8d2260d55071384d89b3eac1034851437628dd4764eed80373`.
 
 The same test lays out the mixed-script page again and asserts
-`516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402` is unmoved,
+`76a56930a97629b22c773a4e373ac7b86a00561bf1d90a0ad64b4e1a1e0cea6f` is unmoved,
 so a change that quietly moved the sibling story's baseline fails here rather
 than at the next re-record.
 
@@ -1505,11 +1505,11 @@ six transform coefficients is what makes this gate prove the subject it exists
 for.
 
 The recorded digest is
-`cb3043d53719f5dd9e16b61a001aff8c8827c19f96536972d4a17b9a626d2164`.
+`02995cf452d8add0ceb9c147d65773d55bc9f8b065b7a92b0e42073fdd770f7f`.
 
 The same test lays out both sibling pages again and asserts
-`516ebb6e45438731d3cb0983707ad00c9de55068401e073ef2a069a56f397402` and
-`b119714501d061f912bf9c05224f66dc8d4a30f3bdd195040038b89157e6fbf6` are unmoved,
+`76a56930a97629b22c773a4e373ac7b86a00561bf1d90a0ad64b4e1a1e0cea6f` and
+`c2d4266e76d20d8d2260d55071384d89b3eac1034851437628dd4764eed80373` are unmoved,
 so this story cannot move either recorded baseline while recording its own.
 
 Before the digest the test asserts the properties one at a time. Both rotated
