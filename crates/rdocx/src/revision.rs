@@ -96,6 +96,9 @@ struct RenderState<'a> {
     resolution: Resolution,
     scope: RevisionScope<'a>,
     resolved: HashSet<usize>,
+    /// True while rendering content that the resolution removes, such as a
+    /// removed row. Its paragraph marks need no merge partner.
+    discarded: bool,
 }
 
 impl Document {
@@ -163,6 +166,7 @@ impl Document {
             resolution,
             scope: scope.clone(),
             resolved: HashSet::new(),
+            discarded: false,
         };
         let mut output = Vec::with_capacity(source.len());
         output.extend_from_slice(&source[..tree.elements[tree.root].start]);
@@ -211,6 +215,7 @@ fn resolve_story_xml(
         resolution,
         scope,
         resolved: HashSet::new(),
+        discarded: false,
     };
     let mut output = Vec::with_capacity(source.len());
     output.extend_from_slice(&source[..tree.elements[tree.root].start]);
@@ -525,6 +530,7 @@ impl<'a> XmlTree<'a> {
             output.extend_from_slice(&self.source[cursor..child_element.start]);
             if child_element.word
                 && child_element.local == "p"
+                && !state.discarded
                 && self.paragraph_mark_removes(child, state)
             {
                 let mut paragraphs = vec![child];
@@ -844,10 +850,13 @@ impl<'a> XmlTree<'a> {
         index: usize,
         state: &mut RenderState<'_>,
     ) -> Result<()> {
-        for child in &self.elements[index].children {
-            self.render(*child, state, false)?;
-        }
-        Ok(())
+        let discarded = std::mem::replace(&mut state.discarded, true);
+        let validated = self.elements[index]
+            .children
+            .iter()
+            .try_for_each(|child| self.render(*child, state, false).map(drop));
+        state.discarded = discarded;
+        validated
     }
 
     fn paragraph_mark_removes(&self, index: usize, state: &RenderState<'_>) -> bool {

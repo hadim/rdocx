@@ -21506,10 +21506,23 @@ fn comparison_tracks_changed_table_grids_as_table_replacement() {
         let deletion = tracked.find("<w:del ").expect("tracked table deletion");
         let insertion = tracked.find("<w:ins ").expect("tracked table insertion");
         assert!(deletion < insertion, "{label}: {tracked}");
+        // Word marks the rows and every cell paragraph mark and run, so the
+        // whole old table is deleted before the whole new one is inserted.
         let revisions = compared.revisions();
-        assert_eq!(revisions.len(), 2, "{label}: {tracked}");
-        assert_eq!(revisions[0].kind(), rdocx::RevisionKind::Deletion);
-        assert_eq!(revisions[1].kind(), rdocx::RevisionKind::Insertion);
+        let deletions = revisions
+            .iter()
+            .take_while(|revision| revision.kind() == rdocx::RevisionKind::Deletion)
+            .count();
+        assert!(
+            deletions > 0 && deletions < revisions.len(),
+            "{label}: {tracked}"
+        );
+        assert!(
+            revisions[deletions..]
+                .iter()
+                .all(|revision| revision.kind() == rdocx::RevisionKind::Insertion),
+            "{label}: {tracked}"
+        );
         assert!(revisions.iter().all(|revision| revision.author() == "Ada"));
         assert!(
             revisions
@@ -21665,7 +21678,22 @@ fn whole_row_markers_target_the_outer_row_properties() {
     let nested_properties = tracked.find("<w:tblHeader/>").unwrap();
     assert!(marker < outer_cell, "{tracked}");
     assert!(marker < nested_properties, "{tracked}");
-    assert_eq!(tracked.matches("<w:ins").count(), 1, "{tracked}");
+    // The outer row, the nested row, and each cell paragraph mark and run carry
+    // their own markers, as Word writes an inserted row.
+    assert!(
+        tracked.contains("<w:trPr><w:cantSplit/><w:ins "),
+        "{tracked}"
+    );
+    assert!(
+        tracked.contains("<w:trPr><w:tblHeader/><w:ins "),
+        "{tracked}"
+    );
+    assert_eq!(
+        tracked.matches("<w:pPr><w:rPr><w:ins ").count(),
+        2,
+        "{tracked}"
+    );
+    assert_eq!(tracked.matches("<w:ins ").count(), 5, "{tracked}");
 
     let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
     rejected.reject_all().unwrap();
@@ -39127,6 +39155,29 @@ fn issue_255_redline_marks_follow_schema_order() {
     let rows = table_xml.matches("<w:tr>").count() + table_xml.matches("<w:tr ").count();
     assert!(rows > 0, "{xml}");
     assert_eq!(table_xml.matches("<w:trPr><w:ins ").count(), rows, "{xml}");
+    // As Word writes it, the cell paragraph mark and the cell run are inserted too.
+    assert_eq!(
+        table_xml.matches("<w:p><w:pPr><w:rPr><w:ins ").count(),
+        rows,
+        "{xml}"
+    );
+    assert!(
+        table_xml.contains(r#"Z"><w:r><w:t>cell</w:t></w:r></w:ins>"#),
+        "{xml}"
+    );
+
+    let xml = redline(
+        &mut issue_255_document(&["a", "T", "b"]),
+        &issue_255_document(&["a"]),
+    );
+    assert!(paragraph_a(&xml).contains("<w:pPr><w:rPr><w:del "), "{xml}");
+    let table_xml = &xml[xml.find("<w:tbl>").unwrap()..xml.find("</w:tbl>").unwrap()];
+    assert!(table_xml.contains("<w:trPr><w:del "), "{xml}");
+    assert!(table_xml.contains("<w:p><w:pPr><w:rPr><w:del "), "{xml}");
+    assert!(
+        table_xml.contains(r#"Z"><w:r><w:delText>cell</w:delText></w:r></w:del>"#),
+        "{xml}"
+    );
 
     let bold = |text: &str| {
         format!(r#"<w:p><w:pPr><w:rPr><w:b/></w:rPr></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#)
@@ -39164,4 +39215,46 @@ fn issue_255_redline_marks_follow_schema_order() {
     let order = ["<w:jc ", "<w:rPr><w:ins ", "<w:sectPr", "<w:pPrChange"]
         .map(|child| a.find(child).unwrap_or_else(|| panic!("{child} in {a}")));
     assert!(order.is_sorted(), "{a}");
+}
+
+#[test]
+fn issue_255_word_compare_output_for_a_final_table_resolves() {
+    // Word's own Compare output for a -> a, T, b and the reverse, without its
+    // rsid and w14 attributes.
+    let table = |kind: &str, text: &str| {
+        format!(
+            r#"<w:tbl><w:tblPr><w:tblW w:w="9360" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="9360"/></w:tblGrid><w:tr><w:tblPrEx><w:tblCellMar><w:top w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPrEx><w:trPr><w:{kind} w:id="1" w:author="Reviewer" w:date="2026-10-01T00:07:00Z"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p><w:pPr><w:rPr><w:{kind} w:id="2" w:author="Reviewer" w:date="2026-10-01T00:07:00Z"/></w:rPr></w:pPr><w:proofErr w:type="gramStart"/><w:{kind} w:id="3" w:author="Reviewer" w:date="2026-10-01T00:07:00Z"><w:r>{text}</w:r><w:proofErr w:type="gramEnd"/></w:{kind}></w:p></w:tc></w:tr></w:tbl>"#
+        )
+    };
+    let inserted = format!(
+        r#"<w:p><w:pPr><w:rPr><w:ins w:id="0" w:author="Reviewer" w:date="2026-10-01T00:07:00Z"/></w:rPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>{}<w:p><w:ins w:id="4" w:author="Reviewer" w:date="2026-10-01T00:07:00Z"><w:r><w:t>b</w:t></w:r></w:ins></w:p>"#,
+        table("ins", "<w:t>cell</w:t>")
+    );
+    let deleted = format!(
+        r#"<w:p><w:pPr><w:rPr><w:del w:id="0" w:author="Reviewer" w:date="2026-10-01T00:07:00Z"/></w:rPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>{}<w:p><w:del w:id="4" w:author="Reviewer" w:date="2026-10-01T00:07:00Z"><w:r><w:delText>b</w:delText></w:r></w:del></w:p>"#,
+        table("del", "<w:delText>cell</w:delText>")
+    );
+    let short = vec!["a".to_owned()];
+    let long = ["a", "T", "b"].map(str::to_owned).to_vec();
+    for (label, body, accepted, rejected) in [
+        ("inserted", &inserted, &long, &short),
+        ("deleted", &deleted, &short, &long),
+    ] {
+        for (accept, expected) in [(true, accepted), (false, rejected)] {
+            let mut resolved = document_with_content_controls(&wrap_word_body(body));
+            if accept {
+                resolved.accept_all()
+            } else {
+                resolved.reject_all()
+            }
+            .unwrap_or_else(|error| panic!("{label} accept={accept}: {error}"));
+            let resolved = Document::from_bytes(&resolved.to_bytes().unwrap()).unwrap();
+            assert_eq!(
+                &issue_255_body(&resolved),
+                expected,
+                "{label} accept={accept}"
+            );
+            assert!(resolved.revisions().is_empty(), "{label} accept={accept}");
+        }
+    }
 }

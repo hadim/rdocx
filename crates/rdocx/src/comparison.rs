@@ -4709,26 +4709,93 @@ fn mark_control_owned_rows(
 }
 
 fn marked_row(row: &CT_Row, kind: &str, metadata: &mut Metadata<'_>) -> Result<String> {
+    marked_row_xml(&row_xml(row)?, kind, metadata)
+}
+
+/// Mark a serialized row as Word marks an inserted or deleted row: the row
+/// marker in `w:trPr`, then every cell paragraph mark and every cell run,
+/// nested tables included. Without the cell marks Word merges an adjacent
+/// removed paragraph mark into the first cell and leaves the row unresolved.
+fn marked_row_xml(row: &str, kind: &str, metadata: &mut Metadata<'_>) -> Result<String> {
     let marker = metadata
         .ids
         .marker(kind, metadata.author, metadata.timestamp)?;
-    let mut xml = row_xml(row)?;
+    let mut xml = row.to_owned();
     let properties = direct_word_element_spans(&xml, "trPr")?;
     if let Some(properties_span) = properties.first() {
         let updated = append_word_child(&xml[properties_span.clone()], "trPr", &marker)?;
         xml.replace_range(properties_span.clone(), &updated);
-        Ok(xml)
     } else {
-        let open = xml
-            .find('>')
-            .ok_or_else(|| Error::Other("row XML has no start".to_owned()))?
-            + 1;
-        Ok(format!(
-            "{}<w:trPr>{marker}</w:trPr>{}",
-            &xml[..open],
-            &xml[open..]
-        ))
+        // `w:trPr` follows an optional `w:tblPrEx`.
+        let start = match direct_word_element_spans(&xml, "tblPrEx")?.first() {
+            Some(exception) => exception.end,
+            None => {
+                xml.find('>')
+                    .ok_or_else(|| Error::Other("row XML has no start".to_owned()))?
+                    + 1
+            }
+        };
+        xml.insert_str(start, &format!("<w:trPr>{marker}</w:trPr>"));
     }
+    let cells = direct_word_element_spans(&xml, "tc")?
+        .into_iter()
+        .map(|span| marked_cell_xml(&xml[span], kind, metadata))
+        .collect::<Result<Vec<_>>>()?;
+    replace_direct_word_elements(&xml, "tc", &cells)
+}
+
+fn marked_cell_xml(cell: &str, kind: &str, metadata: &mut Metadata<'_>) -> Result<String> {
+    let paragraphs = direct_word_element_spans(cell, "p")?
+        .into_iter()
+        .map(|span| {
+            let marker = metadata
+                .ids
+                .marker(kind, metadata.author, metadata.timestamp)?;
+            let paragraph = marked_paragraph_xml(&cell[span], &marker)?;
+            let paragraph = marked_direct_runs_xml(&paragraph, kind, metadata)?;
+            let hyperlinks = direct_word_element_spans(&paragraph, "hyperlink")?
+                .into_iter()
+                .map(|span| marked_direct_runs_xml(&paragraph[span], kind, metadata))
+                .collect::<Result<Vec<_>>>()?;
+            replace_direct_word_elements(&paragraph, "hyperlink", &hyperlinks)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let cell = replace_direct_word_elements(cell, "p", &paragraphs)?;
+    let tables = direct_word_element_spans(&cell, "tbl")?
+        .into_iter()
+        .map(|span| {
+            let table = &cell[span];
+            let rows = direct_word_element_spans(table, "tr")?
+                .into_iter()
+                .map(|span| marked_row_xml(&table[span], kind, metadata))
+                .collect::<Result<Vec<_>>>()?;
+            replace_direct_word_elements(table, "tr", &rows)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    replace_direct_word_elements(&cell, "tbl", &tables)
+}
+
+/// Wrap every direct `w:r` of `owner` in a revision, with deleted text as
+/// `w:delText`.
+fn marked_direct_runs_xml(owner: &str, kind: &str, metadata: &mut Metadata<'_>) -> Result<String> {
+    let runs = direct_word_element_spans(owner, "r")?
+        .into_iter()
+        .map(|span| {
+            let mut run = owner[span].to_owned();
+            if kind == "del" {
+                for text in direct_word_element_spans(&run, "t")?.into_iter().rev() {
+                    let deleted = run[text.clone()]
+                        .replacen("<w:t", "<w:delText", 1)
+                        .replace("</w:t>", "</w:delText>");
+                    run.replace_range(text, &deleted);
+                }
+            }
+            metadata
+                .ids
+                .revision(kind, metadata.author, metadata.timestamp, &run)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    replace_direct_word_elements(owner, "r", &runs)
 }
 
 fn compare_row(
