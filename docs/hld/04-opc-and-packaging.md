@@ -492,13 +492,18 @@ prefixes. After a successful canonical publication, by a save or by a story
 splice, the document refreshes its root and body namespace facts from the
 published main-story bytes so a later save applies the same classification.
 
-Paragraph line spacing retains the signed integer path required by
-WordprocessingML and accepts one bounded producer deviation. A plain signed
-decimal `w:spacing/@w:line` value is normalized with exact decimal arithmetic
-to the nearest integer twip, with exact halves rounded away from zero.
-Exponent notation, malformed forms, non-finite spellings, and numeric values
-outside the signed 32-bit range remain errors. The modeled value serializes as
-one canonical integer without widening decimal acceptance to sibling measures.
+Integer WordprocessingML measurements retain the signed integer path the
+schema requires and accept one bounded producer deviation, the decimal part
+Google Docs writes, as in `w:gridCol w:w="2210.0000000000005"`. One parser
+serves paragraph spacing, line spacing and indents, frame geometry, tab stops,
+run spacing, position, kerning and font sizes, page size and margins, columns,
+grid columns, row heights, and the table measurements below, in every part that
+holds them. A plain signed decimal is normalized with exact decimal arithmetic
+to the nearest integer, with exact halves rounded away from zero. Exponent
+notation, malformed forms, non-finite spellings, and exact values outside the
+target integer type remain errors that name the element, the attribute and the
+value. The modeled value serializes as one canonical integer, and an untouched
+part keeps its stored bytes.
 
 Direct paragraph `m:oMath` and `m:oMathPara` children use that same owner and
 boundary discipline. The reader accepts any prefix bound to the Transitional
@@ -1044,12 +1049,11 @@ internal charts, packages, media, OLE, custom parts, missing targets, and
 external slide layouts reject before any destination part or relationship is
 published.
 
-Word table widths, cell widths, table indents, and default cell margins share
-one exact signed-integer projection. The parser accepts integer lexical forms
-and decimals only when the nonempty fractional portion contains zeroes. It
-checked-parses the integer portion into `i32` without floating point. Fractional
-values, exponent forms, empty fractions, overflow, percentages, universal
-measures, and malformed input fail explicitly instead of becoming zero. Missing
+Word table widths, cell widths, table indents, default cell margins, and
+floating positions use that integer measurement parser, so a decimal rounds to
+the nearest twip without floating point. Exponent forms, empty fractions,
+overflow, percentages, universal measures, and malformed input fail explicitly
+instead of becoming zero. Missing
 widths retain their existing default. Attributes are selected by the bound
 WordprocessingML namespace, and serialization writes the canonical integer with
 fixed `w` attributes in schema order while unmodelled table content retains its

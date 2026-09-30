@@ -9,6 +9,7 @@ use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::{OxmlError, Result};
 use crate::namespace::{W_NS, matches_local_name};
+use crate::properties::parse_integer_measurement;
 use crate::shared::{ST_Border, ST_TabJc, ST_TabLeader};
 use crate::units::Twips;
 
@@ -291,7 +292,7 @@ impl CT_TabStop {
             if is_word_attribute(key, b"val", &prefixes) {
                 val = ST_TabJc::from_str(v).unwrap_or(val);
             } else if is_word_attribute(key, b"pos", &prefixes) {
-                pos = Twips(v.parse()?);
+                pos = Twips(parse_integer_measurement(e.name().as_ref(), key, v)?);
             } else if is_word_attribute(key, b"leader", &prefixes) {
                 leader = ST_TabLeader::from_str(v).ok();
             }
