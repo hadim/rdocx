@@ -1248,7 +1248,15 @@ impl Presentation {
                     directions.get(shape_index).map_or(&[], Vec::as_slice),
                     width_factor,
                 )
-                .map_err(|error| render_failure(error.to_string()))?;
+                .map_err(|error| {
+                    render_failure(format!(
+                        "slide {}, shape id {}: {error}",
+                        slide_index + 1,
+                        child
+                            .non_visual_id()
+                            .map_or_else(|| "unknown".to_owned(), |id| id.to_string())
+                    ))
+                })?;
                 if layout.lines.iter().all(|line| line.text.trim().is_empty()) {
                     continue;
                 }
