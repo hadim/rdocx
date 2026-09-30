@@ -893,7 +893,9 @@ deletions and move sources and converts deleted text to ordinary text.
 Property rejection restores exactly one namespace-correct prior property
 value. A `w:pPrChange` holds only the base paragraph properties, so rejecting
 it keeps the paragraph mark `w:rPr` and the `w:sectPr`, which resolve their
-own markers, `w:rPrChange`, and `w:sectPrChange`. Redlines from rdocx 0.14 and
+own markers, `w:rPrChange`, and `w:sectPrChange`. Rejecting a mark
+`w:rPrChange` replaces the whole mark formatting, unmodelled children included,
+and keeps only the mark's markers. Redlines from rdocx 0.14 and
 earlier carry the prior mark formatting as a `w:rPr` in the prior properties,
 which then replaces the current mark formatting, and the current paragraph-mark
 markers that stay go first in it. A mark formatting change that stays cannot

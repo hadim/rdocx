@@ -38954,6 +38954,7 @@ fn resolved_paragraph_properties(
 
 #[test]
 fn rejecting_paragraph_property_change_keeps_mark_and_section_properties() {
+    const LIGATURES: &str = r#"<w14:ligatures xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:val="standard"/>"#;
     let change = |id: u32, local: &str, prior: &str| {
         format!(
             r#"<w:{local}Change w:id="{id}" w:author="Reviewer" w:date="2026-10-01T00:09:00Z">{prior}</w:{local}Change>"#
@@ -39012,6 +39013,16 @@ fn rejecting_paragraph_property_change_keeps_mark_and_section_properties() {
             ),
             format!(r#"<w:jc w:val="right"/>{}"#, section(15840)),
             format!(r#"<w:jc w:val="center"/>{}"#, section(12240)),
+        ),
+        // Rejecting the mark change replaces its unmodelled children too.
+        (
+            format!(
+                r#"<w:jc w:val="right"/><w:rPr><w:b/>{LIGATURES}{}</w:rPr>{}"#,
+                change(1, "rPr", "<w:rPr/>"),
+                change(2, "pPr", centred)
+            ),
+            format!(r#"<w:jc w:val="right"/><w:rPr><w:b/>{LIGATURES}</w:rPr>"#),
+            r#"<w:jc w:val="center"/>"#.to_owned(),
         ),
         // Older rdocx redlines keep the prior mark formatting in the prior
         // properties, which still wins over the current mark.

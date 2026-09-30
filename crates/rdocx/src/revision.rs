@@ -760,9 +760,20 @@ impl<'a> XmlTree<'a> {
         let element = &self.elements[owner];
         let child_namespaces =
             merged_namespaces(promoted_namespaces, &element.namespace_declarations);
+        // A rejected paragraph mark `w:rPrChange` replaces the whole mark
+        // formatting, unmodelled children included, and keeps only its markers.
+        let replaces_mark = prior.is_some()
+            && element.word
+            && element.local == "rPr"
+            && element.parent.is_some_and(|parent| {
+                self.elements[parent].word && self.elements[parent].local == "pPr"
+            });
         let mut output = Vec::new();
         for child in &element.children {
             let child_element = &self.elements[*child];
+            if replaces_mark && child_element.revision.is_none() {
+                continue;
+            }
             if let Some(prior) = prior
                 && element.word
                 && element.local == "pPr"
