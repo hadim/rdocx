@@ -322,10 +322,12 @@ the destination with equal bytes are shared, so a duplicate keeps sharing its
 media wherever the part is stored.
 
 The table style part is typed for layout resolution. A caller may pass its
-`CT_TableStyleList` to `ResolveCtx`, which uses either the table's explicit
-style id or the part's default id. An absent part or unmatched id leaves direct
-cell formatting and DrawingML defaults in force. Package parts outside the
-typed model continue to use the normal preservation path.
+`CT_TableStyleList` to `ResolveCtx`. A table's explicit style id selects the
+part's style with that id, or else PowerPoint's built-in style with that GUID,
+which `CT_TableStyle::builtin` builds from per-family rules for all 74 of them.
+Otherwise the part's default id applies. An id that matches none of these
+leaves direct cell formatting and DrawingML defaults in force. Package parts
+outside the typed model continue to use the normal preservation path.
 
 `ShapeRef` normalizes the six typed shape-tree members to `ShapeKind`. Immediate
 group members and the selected `mc:Fallback` view are exposed through child

@@ -133,6 +133,7 @@ pub struct CT_TableStyleList {
 pub struct CT_TableStyle {
     pub style_id: String,
     pub style_name: String,
+    pub background: Option<CT_TableBackgroundStyle>,
     pub whole_table: Option<CT_TablePartStyle>,
     pub band1_horizontal: Option<CT_TablePartStyle>,
     pub band2_horizontal: Option<CT_TablePartStyle>,
@@ -146,6 +147,17 @@ pub struct CT_TableStyle {
     pub north_east_cell: Option<CT_TablePartStyle>,
     pub south_west_cell: Option<CT_TablePartStyle>,
     pub south_east_cell: Option<CT_TablePartStyle>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// The fill painted behind a whole table, from a style's `a:tblBg`.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CT_TableBackgroundStyle {
+    pub fill: Option<Fill>,
+    pub fill_reference: Option<StyleReference>,
+    pub unsupported: Vec<String>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
 }
@@ -1935,6 +1947,28 @@ impl CT_TableStyleList {
 }
 
 impl CT_TableStyle {
+    /// Returns PowerPoint's definition of one of its 74 built-in table styles.
+    ///
+    /// A deck may name a built-in style by GUID in `a:tableStyleId` without
+    /// defining it in `ppt/tableStyles.xml`, as python-pptx does, and
+    /// PowerPoint then applies its own definition. Each definition is built
+    /// from its family's rules and the variant's colour as `a:tblStyle` XML,
+    /// which the ordinary parser reads. An unknown id returns `None`.
+    pub fn builtin(style_id: &str) -> Option<Self> {
+        let (_, family, accent) = builtin_table_styles()
+            .into_iter()
+            .find(|(id, ..)| *id == style_id)?;
+        let xml = format!(
+            r#"<a:tblStyle styleId="{style_id}" styleName="{}">{}</a:tblStyle>"#,
+            family.style_name(accent),
+            family.regions(accent)
+        );
+        let style = Self::from_xml(xml.as_bytes()).unwrap_or_else(|error| {
+            panic!("built-in table style {style_id} is malformed: {error}")
+        });
+        Some(style)
+    }
+
     fn from_xml(xml: &[u8]) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
@@ -1998,6 +2032,11 @@ impl CT_TableStyle {
                 "a:tblStyle children violate schema order".to_owned(),
             ));
         }
+        if name == b"tblBg" {
+            self.background = Some(CT_TableBackgroundStyle::from_xml(&raw)?);
+            *boundary = slot + 1;
+            return Ok(());
+        }
         let destination = self.region_mut(name);
         if destination.is_some() {
             return Err(OxmlError::InvalidValue(format!(
@@ -2035,6 +2074,10 @@ impl CT_TableStyle {
         start.push_attribute(("styleName", self.style_name.as_str()));
         push_attributes(&mut start, &self.raw_attributes);
         writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(background) = &self.background {
+            background.write_xml(writer)?;
+        }
         let ordered = [
             ("a:wholeTbl", self.whole_table.as_ref()),
             ("a:band1H", self.band1_horizontal.as_ref()),
@@ -2050,15 +2093,122 @@ impl CT_TableStyle {
             ("a:neCell", self.north_east_cell.as_ref()),
             ("a:nwCell", self.north_west_cell.as_ref()),
         ];
-        for (slot, (tag, region)) in ordered.into_iter().enumerate() {
-            emit_raw(writer, self.raw_children.at(slot))?;
+        for (index, (tag, region)) in ordered.into_iter().enumerate() {
+            emit_raw(writer, self.raw_children.at(index + 1))?;
             if let Some(region) = region {
                 region.write_xml(writer, tag)?;
             }
         }
-        emit_raw(writer, self.raw_children.at(13))?;
         emit_raw(writer, self.raw_children.at(14))?;
+        emit_raw(writer, self.raw_children.at(15))?;
         writer.write_event(Event::End(BytesEnd::new("a:tblStyle")))?;
+        Ok(())
+    }
+}
+
+impl CT_TableBackgroundStyle {
+    fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) if matches_local_name(start.name().as_ref(), b"tblBg") => {
+                    let mut value = Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    };
+                    let mut boundary = 0usize;
+                    loop {
+                        buffer.clear();
+                        match reader.read_event_into(&mut buffer)? {
+                            Event::Start(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_element(&mut reader, &child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::Empty(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_empty_element(&child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::End(end)
+                                if matches_local_name(end.name().as_ref(), b"tblBg") =>
+                            {
+                                return Ok(value);
+                            }
+                            Event::Eof => return Err(missing("closing a:tblBg")),
+                            _ => {}
+                        }
+                    }
+                }
+                Event::Empty(start) if matches_local_name(start.name().as_ref(), b"tblBg") => {
+                    return Ok(Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    });
+                }
+                Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
+                Event::Eof => return Err(missing("a:tblBg")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn capture_child(&mut self, name: &[u8], raw: Vec<u8>, boundary: &mut usize) -> Result<()> {
+        let slot = match name {
+            b"fill" | b"fillRef" => Some(0),
+            b"effect" | b"effectRef" => Some(1),
+            _ => None,
+        };
+        ensure_schema_order(slot, *boundary, "a:tblBg")?;
+        match name {
+            b"fill" | b"fillRef" if self.fill.is_some() || self.fill_reference.is_some() => {
+                return Err(OxmlError::InvalidValue(
+                    "duplicate a:tblBg fill choice".to_owned(),
+                ));
+            }
+            b"fill" => {
+                if let Some(fill) = parse_fill_wrapper(&raw)? {
+                    self.fill = Some(fill);
+                } else {
+                    self.unsupported.push("fill form".to_owned());
+                    self.raw_children.push(0, raw);
+                }
+            }
+            b"fillRef" => self.fill_reference = Some(parse_style_reference(&raw)?),
+            b"effect" | b"effectRef" => {
+                self.unsupported.push("effect".to_owned());
+                self.raw_children.push(1, raw);
+            }
+            _ => self.raw_children.push(*boundary, raw),
+        }
+        if let Some(slot) = slot {
+            *boundary = (*boundary).max(slot + 1);
+        }
+        Ok(())
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("a:tblBg");
+        push_attributes(&mut start, &self.raw_attributes);
+        if self.fill.is_none() && self.fill_reference.is_none() && self.raw_children.is_empty() {
+            writer.write_event(Event::Empty(start))?;
+            return Ok(());
+        }
+        writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(fill) = &self.fill {
+            writer.write_event(Event::Start(BytesStart::new("a:fill")))?;
+            fill.write_xml(writer).map_err(drawing_error)?;
+            writer.write_event(Event::End(BytesEnd::new("a:fill")))?;
+        }
+        if let Some(reference) = &self.fill_reference {
+            reference.write_xml(writer).map_err(drawing_error)?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
+        emit_raw(writer, self.raw_children.at(2))?;
+        writer.write_event(Event::End(BytesEnd::new("a:tblBg")))?;
         Ok(())
     }
 }
@@ -2530,21 +2680,511 @@ impl CT_TableTextStyle {
     }
 }
 
+/// PowerPoint's built-in table styles in gallery order, with their family and
+/// colour variant. Variant 0 is a family's plain style and 1 to 6 are Accent 1
+/// to Accent 6. Dark Style 2 pairs accents: its variants 1, 3 and 5 are
+/// Accent 1/Accent 2, Accent 3/Accent 4 and Accent 5/Accent 6.
+fn builtin_table_styles() -> [(&'static str, BuiltinTableFamily, u8); 74] {
+    use BuiltinTableFamily::*;
+    [
+        ("{2D5ABB26-0587-4C30-8999-92F81FD0307C}", NoGrid, 0),
+        ("{3C2FFA5D-87B4-456A-9821-1D502468CF0F}", Themed1, 1),
+        ("{284E427A-3D55-4303-BF80-6455036E1DE7}", Themed1, 2),
+        ("{69C7853C-536D-4A76-A0AE-DD22124D55A5}", Themed1, 3),
+        ("{775DCB02-9BB8-47FD-8907-85C794F793BA}", Themed1, 4),
+        ("{35758FB7-9AC5-4552-8A53-C91805E547FA}", Themed1, 5),
+        ("{08FB837D-C827-4EFA-A057-4D05807E0F7C}", Themed1, 6),
+        ("{5940675A-B579-460E-94D1-54222C63F5DA}", TableGrid, 0),
+        ("{D113A9D2-9D6B-4929-AA2D-F23B5EE8CBE7}", Themed2, 1),
+        ("{18603FDC-E32A-4AB5-989C-0864C3EAD2B8}", Themed2, 2),
+        ("{306799F8-075E-4A3A-A7F6-7FBC6576F1A4}", Themed2, 3),
+        ("{E269D01E-BC32-4049-B463-5C60D7B0CCD2}", Themed2, 4),
+        ("{327F97BB-C833-4FB7-BDE5-3F7075034690}", Themed2, 5),
+        ("{638B1855-1B75-4FBE-930C-398BA8C253C6}", Themed2, 6),
+        ("{9D7B26C5-4107-4FEC-AEDC-1716B250A1EF}", Light1, 0),
+        ("{3B4B98B0-60AC-42C2-AFA5-B58CD77FA1E5}", Light1, 1),
+        ("{0E3FDE45-AF77-4B5C-9715-49D594BDF05E}", Light1, 2),
+        ("{C083E6E3-FA7D-4D7B-A595-EF9225AFEA82}", Light1, 3),
+        ("{D27102A9-8310-4765-A935-A1911B00CA55}", Light1, 4),
+        ("{5FD0F851-EC5A-4D38-B0AD-8093EC10F338}", Light1, 5),
+        ("{68D230F3-CF80-4859-8CE7-A43EE81993B5}", Light1, 6),
+        ("{7E9639D4-E3E2-4D34-9284-5A2195B3D0D7}", Light2, 0),
+        ("{69012ECD-51FC-41F1-AA8D-1B2483CD663E}", Light2, 1),
+        ("{72833802-FEF1-4C79-8D5D-14CF1EAF98D9}", Light2, 2),
+        ("{F2DE63D5-997A-4646-A377-4702673A728D}", Light2, 3),
+        ("{17292A2E-F333-43FB-9621-5CBBE7FDCDCB}", Light2, 4),
+        ("{5A111915-BE36-4E01-A7E5-04B1672EAD32}", Light2, 5),
+        ("{912C8C85-51F0-491E-9774-3900AFEF0FD7}", Light2, 6),
+        ("{616DA210-FB5B-4158-B5E0-FEB733F419BA}", Light3, 0),
+        ("{BC89EF96-8CEA-46FF-86C4-4CE0E7609802}", Light3, 1),
+        ("{5DA37D80-6434-44D0-A028-1B22A696006F}", Light3, 2),
+        ("{8799B23B-EC83-4686-B30A-512413B5E67A}", Light3, 3),
+        ("{ED083AE6-46FA-4A59-8FB0-9F97EB10719F}", Light3, 4),
+        ("{BDBED569-4797-4DF1-A0F4-6AAB3CD982D8}", Light3, 5),
+        ("{E8B1032C-EA38-4F05-BA0D-38AFFFC7BED3}", Light3, 6),
+        ("{793D81CF-94F2-401A-BA57-92F5A7B2D0C5}", Medium1, 0),
+        ("{B301B821-A1FF-4177-AEE7-76D212191A09}", Medium1, 1),
+        ("{9DCAF9ED-07DC-4A11-8D7F-57B35C25682E}", Medium1, 2),
+        ("{1FECB4D8-DB02-4DC6-A0A2-4F2EBAE1DC90}", Medium1, 3),
+        ("{1E171933-4619-4E11-9A3F-F7608DF75F80}", Medium1, 4),
+        ("{FABFCF23-3B69-468F-B69F-88F6DE6A72F2}", Medium1, 5),
+        ("{10A1B5D5-9B99-4C35-A422-299274C87663}", Medium1, 6),
+        ("{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}", Medium2, 0),
+        ("{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}", Medium2, 1),
+        ("{21E4AEA4-8DFA-4A89-87EB-49C32662AFE0}", Medium2, 2),
+        ("{F5AB1C69-6EDB-4FF4-983F-18BD219EF322}", Medium2, 3),
+        ("{00A15C55-8517-42AA-B614-E9B94910E393}", Medium2, 4),
+        ("{7DF18680-E054-41AD-8BC1-D1AEF772440D}", Medium2, 5),
+        ("{93296810-A885-4BE3-A3E7-6D5BEEA58F35}", Medium2, 6),
+        ("{8EC20E35-A176-4012-BC5E-935CFFF8708E}", Medium3, 0),
+        ("{6E25E649-3F16-4E02-A733-19D2CDBF48F0}", Medium3, 1),
+        ("{85BE263C-DBD7-4A20-BB59-AAB30ACAA65A}", Medium3, 2),
+        ("{EB344D84-9AFB-497E-A393-DC336BA19D2E}", Medium3, 3),
+        ("{EB9631B5-78F2-41C9-869B-9F39066F8104}", Medium3, 4),
+        ("{74C1A8A3-306A-4EB7-A6B1-4F7E0EB9C5D6}", Medium3, 5),
+        ("{2A488322-F2BA-4B5B-9748-0D474271808F}", Medium3, 6),
+        ("{D7AC3CCA-C797-4891-BE02-D94E43425B78}", Medium4, 0),
+        ("{69CF1AB2-1976-4502-BF36-3FF5EA218861}", Medium4, 1),
+        ("{8A107856-5554-42FB-B03E-39F5DBC370BA}", Medium4, 2),
+        ("{0505E3EF-67EA-436B-97B2-0124C06EBD24}", Medium4, 3),
+        ("{C4B1156A-380E-4F78-BDF5-A606A8083BF9}", Medium4, 4),
+        ("{22838BEF-8BB2-4498-84A7-C5851F593DF1}", Medium4, 5),
+        ("{16D9F66E-5EB9-4882-86FB-DCBF35E3C3E4}", Medium4, 6),
+        ("{E8034E78-7F5D-4C2E-B375-FC64B27BC917}", Dark1, 0),
+        ("{125E5076-3810-47DD-B79F-674D7AD40C01}", Dark1, 1),
+        ("{37CE84F3-28C3-443E-9E96-99CF82512B78}", Dark1, 2),
+        ("{D03447BB-5D67-496B-8E87-E561075AD55C}", Dark1, 3),
+        ("{E929F9F4-4A8F-4326-A1B4-22849713DDAB}", Dark1, 4),
+        ("{8FD4443E-F989-4FC4-A0C8-D5A2AF1F390B}", Dark1, 5),
+        ("{AF606853-7671-496A-8E4F-DF71F8EC918B}", Dark1, 6),
+        ("{5202B0CA-FC54-4496-8BCA-5EF66A818D29}", Dark2, 0),
+        ("{0660B408-B3CF-4A94-85FC-2B1E0A45F4A2}", Dark2, 1),
+        ("{91EBBBCC-DAD2-459C-BE2E-F6DE35CF9A28}", Dark2, 3),
+        ("{46F890A9-2807-4EBB-B81D-B2AA78EC7F39}", Dark2, 5),
+    ]
+}
+
+/// A family of built-in table styles, whose rules place a variant colour.
+#[derive(Clone, Copy)]
+enum BuiltinTableFamily {
+    NoGrid,
+    TableGrid,
+    Themed1,
+    Themed2,
+    Light1,
+    Light2,
+    Light3,
+    Medium1,
+    Medium2,
+    Medium3,
+    Medium4,
+    Dark1,
+    Dark2,
+}
+
+impl BuiltinTableFamily {
+    fn style_name(self, accent: u8) -> String {
+        let family = match self {
+            Self::NoGrid => "No Style, No Grid",
+            Self::TableGrid => "No Style, Table Grid",
+            Self::Themed1 => "Themed Style 1",
+            Self::Themed2 => "Themed Style 2",
+            Self::Light1 => "Light Style 1",
+            Self::Light2 => "Light Style 2",
+            Self::Light3 => "Light Style 3",
+            Self::Medium1 => "Medium Style 1",
+            Self::Medium2 => "Medium Style 2",
+            Self::Medium3 => "Medium Style 3",
+            Self::Medium4 => "Medium Style 4",
+            Self::Dark1 => "Dark Style 1",
+            Self::Dark2 => "Dark Style 2",
+        };
+        match (self, accent) {
+            (_, 0) => family.to_owned(),
+            (Self::Dark2, _) => format!("{family} - Accent {accent}/Accent {}", accent + 1),
+            _ => format!("{family} - Accent {accent}"),
+        }
+    }
+
+    /// Returns the family's regions for one variant, in schema order.
+    fn regions(self, accent: u8) -> String {
+        // `c` is the variant colour. A plain style takes the text colour.
+        let c = match (self, accent) {
+            (Self::Light1 | Self::Light2 | Self::Light3, 0) => "tx1".to_owned(),
+            (_, 0) => "dk1".to_owned(),
+            _ => format!("accent{accent}"),
+        };
+        match self {
+            Self::NoGrid => part("wholeTbl", &text("tx1"), &all_edges(NO_LINE), NO_FILL),
+            Self::TableGrid => {
+                let grid = line(1, &clr("tx1"));
+                part("wholeTbl", &text("tx1"), &all_edges(&grid), NO_FILL)
+            }
+            Self::Themed1 => {
+                let (thin, thick) = (line_ref(1, &clr(&c)), line_ref(2, &clr(&c)));
+                let divider = line_ref(2, &clr("lt1"));
+                let band = solid(&alpha(&c, 40));
+                let last_col = edges(&thick, &thin, &thin, &thin, &thin, NO_LINE);
+                let first_col = edges(&thin, &thick, &thin, &thin, &thin, NO_LINE);
+                let last_row = edges(&thin, &thin, &thick, &thick, NO_LINE, NO_LINE);
+                let first_row = edges(&thin, &thin, &thin, &divider, NO_LINE, NO_LINE);
+                [
+                    table_background(2, 1, &clr(&c)),
+                    part("wholeTbl", &text("dk1"), &all_edges(&thin), NO_FILL),
+                    part("band1H", "", &[], &band),
+                    part("band2H", "", &[], ""),
+                    part("band1V", "", &[("top", &thin), ("bottom", &thin)], &band),
+                    part("band2V", "", &[], ""),
+                    part("lastCol", BOLD, &last_col, ""),
+                    part("firstCol", BOLD, &first_col, ""),
+                    part("lastRow", BOLD, &last_row, NO_FILL),
+                    part("firstRow", &bold("lt1"), &first_row, &solid(&clr(&c))),
+                ]
+                .concat()
+            }
+            Self::Themed2 => {
+                let edge = line_ref(1, &tint(&c, 50));
+                let divider = line_ref(2, &clr("lt1"));
+                let heading = line_ref(3, &clr("lt1"));
+                let band = solid(&alpha("lt1", 20));
+                let whole = edges(&edge, &edge, &edge, &edge, NO_LINE, NO_LINE);
+                [
+                    table_background(3, 3, &clr(&c)),
+                    part("wholeTbl", &text("lt1"), &whole, NO_FILL),
+                    part("band1H", "", &[], &band),
+                    part("band1V", "", &[], &band),
+                    part("lastCol", BOLD, &[("left", &divider)], ""),
+                    part("firstCol", BOLD, &[("right", &divider)], ""),
+                    part("lastRow", BOLD, &[("top", &divider)], NO_FILL),
+                    part("seCell", "", &[("left", NO_LINE), ("top", NO_LINE)], ""),
+                    part("swCell", "", &[("right", NO_LINE), ("top", NO_LINE)], ""),
+                    part("firstRow", BOLD, &[("bottom", &heading)], NO_FILL),
+                    part("neCell", "", &[("bottom", NO_LINE)], ""),
+                ]
+                .concat()
+            }
+            Self::Light1 => {
+                let rule = line(1, &clr(&c));
+                let band = solid(&alpha(&c, 20));
+                let whole = edges(NO_LINE, NO_LINE, &rule, &rule, NO_LINE, NO_LINE);
+                [
+                    part("wholeTbl", &text("tx1"), &whole, NO_FILL),
+                    part("band1H", "", &[], &band),
+                    part("band2H", "", &[], ""),
+                    part("band1V", "", &[], &band),
+                    part("lastCol", BOLD, &[], ""),
+                    part("firstCol", BOLD, &[], ""),
+                    part("lastRow", BOLD, &[("top", &rule)], NO_FILL),
+                    part("firstRow", BOLD, &[("bottom", &rule)], NO_FILL),
+                ]
+                .concat()
+            }
+            Self::Light2 => {
+                let edge = line_ref(1, &clr(&c));
+                let whole = edges(&edge, &edge, &edge, &edge, NO_LINE, NO_LINE);
+                let total = double_line(4, &clr(&c));
+                [
+                    part("wholeTbl", &text("tx1"), &whole, NO_FILL),
+                    part("band1H", "", &[("top", &edge), ("bottom", &edge)], ""),
+                    part("band1V", "", &[("left", &edge), ("right", &edge)], ""),
+                    part("band2V", "", &[("left", &edge), ("right", &edge)], ""),
+                    part("lastCol", BOLD, &[], ""),
+                    part("firstCol", BOLD, &[], ""),
+                    part("lastRow", BOLD, &[("top", &total)], ""),
+                    part("firstRow", &bold("bg1"), &[], &fill_ref(1, &clr(&c))),
+                ]
+                .concat()
+            }
+            Self::Light3 => {
+                let grid = line(1, &clr(&c));
+                let band = solid(&alpha(&c, 20));
+                [
+                    part("wholeTbl", &text("tx1"), &all_edges(&grid), NO_FILL),
+                    part("band1H", "", &[], &band),
+                    part("band1V", "", &[], &band),
+                    part("lastCol", BOLD, &[], ""),
+                    part("firstCol", BOLD, &[], ""),
+                    part(
+                        "lastRow",
+                        BOLD,
+                        &[("top", &double_line(4, &clr(&c)))],
+                        NO_FILL,
+                    ),
+                    part("firstRow", BOLD, &[("bottom", &line(2, &clr(&c)))], NO_FILL),
+                ]
+                .concat()
+            }
+            Self::Medium1 => {
+                let rule = line(1, &clr(&c));
+                let whole = edges(&rule, &rule, &rule, &rule, &rule, NO_LINE);
+                let band = solid(&tint(&c, 20));
+                let white = solid(&clr("lt1"));
+                [
+                    part("wholeTbl", &text("dk1"), &whole, &white),
+                    part("band1H", "", &[], &band),
+                    part("band1V", "", &[], &band),
+                    part("lastCol", BOLD, &[], ""),
+                    part("firstCol", BOLD, &[], ""),
+                    part(
+                        "lastRow",
+                        BOLD,
+                        &[("top", &double_line(4, &clr(&c)))],
+                        &white,
+                    ),
+                    part("firstRow", &bold("lt1"), &[], &solid(&clr(&c))),
+                ]
+                .concat()
+            }
+            Self::Medium2 => {
+                let grid = line(1, &clr("lt1"));
+                let divider = line(3, &clr("lt1"));
+                let body = solid(&tint(&c, 20));
+                let band = solid(&tint(&c, 40));
+                let heading = solid(&clr(&c));
+                [
+                    part("wholeTbl", &text("dk1"), &all_edges(&grid), &body),
+                    part("band1H", "", &[], &band),
+                    part("band2H", "", &[], ""),
+                    part("band1V", "", &[], &band),
+                    part("band2V", "", &[], ""),
+                    part("lastCol", &bold("lt1"), &[], &heading),
+                    part("firstCol", &bold("lt1"), &[], &heading),
+                    part("lastRow", &bold("lt1"), &[("top", &divider)], &heading),
+                    part("firstRow", &bold("lt1"), &[("bottom", &divider)], &heading),
+                ]
+                .concat()
+            }
+            Self::Medium3 => {
+                // Only the heading fills take the variant colour.
+                let rule = line(2, &clr("dk1"));
+                let whole = edges(NO_LINE, NO_LINE, &rule, &rule, NO_LINE, NO_LINE);
+                let band = solid(&tint("dk1", 20));
+                let white = solid(&clr("lt1"));
+                let heading = solid(&clr(&c));
+                [
+                    part("wholeTbl", &text("dk1"), &whole, &white),
+                    part("band1H", "", &[], &band),
+                    part("band1V", "", &[], &band),
+                    part("lastCol", &bold("lt1"), &[], &heading),
+                    part("firstCol", &bold("lt1"), &[], &heading),
+                    part(
+                        "lastRow",
+                        BOLD,
+                        &[("top", &double_line(4, &clr("dk1")))],
+                        &white,
+                    ),
+                    part("seCell", &bold("dk1"), &[], ""),
+                    part("swCell", &bold("dk1"), &[], ""),
+                    part("firstRow", &bold("lt1"), &[("bottom", &rule)], &heading),
+                ]
+                .concat()
+            }
+            Self::Medium4 => {
+                let grid = line(1, &clr(&c));
+                let body = solid(&tint(&c, 20));
+                let band = solid(&tint(&c, 40));
+                [
+                    part("wholeTbl", &text("dk1"), &all_edges(&grid), &body),
+                    part("band1H", "", &[], &band),
+                    part("band1V", "", &[], &band),
+                    part("lastCol", BOLD, &[], ""),
+                    part("firstCol", BOLD, &[], ""),
+                    part("lastRow", BOLD, &[("top", &line(2, &clr(&c)))], &body),
+                    part("firstRow", BOLD, &[], &body),
+                ]
+                .concat()
+            }
+            Self::Dark1 => {
+                // The plain style tints black, the accent styles shade the accent.
+                let plain = accent == 0;
+                let body = solid(&if plain { tint("dk1", 20) } else { clr(&c) });
+                let band = solid(&if plain {
+                    tint("dk1", 40)
+                } else {
+                    shade(&c, 60)
+                });
+                let edge = solid(&if plain {
+                    tint("dk1", 60)
+                } else {
+                    shade(&c, 60)
+                });
+                let total = solid(&if plain {
+                    tint("dk1", 60)
+                } else {
+                    shade(&c, 40)
+                });
+                let divider = line(2, &clr("lt1"));
+                [
+                    part("wholeTbl", &text("lt1"), &all_edges(NO_LINE), &body),
+                    part("band1H", "", &[], &band),
+                    part("band1V", "", &[], &band),
+                    part("lastCol", BOLD, &[("left", &divider)], &edge),
+                    part("firstCol", BOLD, &[("right", &divider)], &edge),
+                    part("lastRow", BOLD, &[("top", &divider)], &total),
+                    part("seCell", "", &[("left", NO_LINE)], ""),
+                    part("swCell", "", &[("right", NO_LINE)], ""),
+                    part(
+                        "firstRow",
+                        BOLD,
+                        &[("bottom", &divider)],
+                        &solid(&clr("dk1")),
+                    ),
+                    part("neCell", "", &[("left", NO_LINE)], ""),
+                    part("nwCell", "", &[("right", NO_LINE)], ""),
+                ]
+                .concat()
+            }
+            Self::Dark2 => {
+                // The heading row takes the second accent of the pair.
+                let heading = match accent {
+                    0 => clr("dk1"),
+                    _ => clr(&format!("accent{}", accent + 1)),
+                };
+                let body = solid(&tint(&c, 20));
+                let band = solid(&tint(&c, 40));
+                [
+                    part("wholeTbl", &text("dk1"), &all_edges(NO_LINE), &body),
+                    part("band1H", "", &[], &band),
+                    part("band1V", "", &[], &band),
+                    part("lastCol", BOLD, &[], ""),
+                    part("firstCol", BOLD, &[], ""),
+                    part(
+                        "lastRow",
+                        BOLD,
+                        &[("top", &double_line(4, &clr("dk1")))],
+                        &body,
+                    ),
+                    part("firstRow", &bold("lt1"), &[], &solid(&heading)),
+                ]
+                .concat()
+            }
+        }
+    }
+}
+
+const NO_LINE: &str = "<a:ln><a:noFill/></a:ln>";
+const NO_FILL: &str = "<a:fill><a:noFill/></a:fill>";
+const BOLD: &str = r#"<a:tcTxStyle b="on"/>"#;
+
+/// One table style region: its text style, its `a:tcBdr` edges in schema
+/// order, and its fill.
+fn part(tag: &str, text: &str, edges: &[(&str, &str)], fill: &str) -> String {
+    let borders = edges
+        .iter()
+        .map(|(edge, line)| format!("<a:{edge}>{line}</a:{edge}>"))
+        .collect::<String>();
+    let borders = if borders.is_empty() {
+        "<a:tcBdr/>".to_owned()
+    } else {
+        format!("<a:tcBdr>{borders}</a:tcBdr>")
+    };
+    format!("<a:{tag}>{text}<a:tcStyle>{borders}{fill}</a:tcStyle></a:{tag}>")
+}
+
+/// The six `a:tcBdr` edges in schema order.
+fn edges<'a>(
+    left: &'a str,
+    right: &'a str,
+    top: &'a str,
+    bottom: &'a str,
+    inside_h: &'a str,
+    inside_v: &'a str,
+) -> [(&'static str, &'a str); 6] {
+    [
+        ("left", left),
+        ("right", right),
+        ("top", top),
+        ("bottom", bottom),
+        ("insideH", inside_h),
+        ("insideV", inside_v),
+    ]
+}
+
+fn all_edges(line: &str) -> [(&'static str, &str); 6] {
+    edges(line, line, line, line, line, line)
+}
+
+/// Table text in the theme's minor font and a scheme colour.
+fn text(color: &str) -> String {
+    format!(r#"<a:tcTxStyle>{}</a:tcTxStyle>"#, minor_font(color))
+}
+
+fn bold(color: &str) -> String {
+    format!(r#"<a:tcTxStyle b="on">{}</a:tcTxStyle>"#, minor_font(color))
+}
+
+fn minor_font(color: &str) -> String {
+    let font = r#"<a:fontRef idx="minor"><a:scrgbClr r="0" g="0" b="0"/></a:fontRef>"#;
+    format!("{font}{}", clr(color))
+}
+
+fn clr(color: &str) -> String {
+    format!(r#"<a:schemeClr val="{color}"/>"#)
+}
+
+fn tint(color: &str, percent: u32) -> String {
+    modified(color, "tint", percent)
+}
+
+fn shade(color: &str, percent: u32) -> String {
+    modified(color, "shade", percent)
+}
+
+fn alpha(color: &str, percent: u32) -> String {
+    modified(color, "alpha", percent)
+}
+
+fn modified(color: &str, modifier: &str, percent: u32) -> String {
+    let value = percent * 1_000;
+    format!(r#"<a:schemeClr val="{color}"><a:{modifier} val="{value}"/></a:schemeClr>"#)
+}
+
+/// A solid line whose width is in points.
+fn line(points: u32, color: &str) -> String {
+    let width = points * 12_700;
+    format!(r#"<a:ln w="{width}" cmpd="sng"><a:solidFill>{color}</a:solidFill></a:ln>"#)
+}
+
+fn double_line(points: u32, color: &str) -> String {
+    let width = points * 12_700;
+    format!(r#"<a:ln w="{width}" cmpd="dbl"><a:solidFill>{color}</a:solidFill></a:ln>"#)
+}
+
+fn line_ref(index: u8, color: &str) -> String {
+    format!(r#"<a:lnRef idx="{index}">{color}</a:lnRef>"#)
+}
+
+fn solid(color: &str) -> String {
+    format!("<a:fill><a:solidFill>{color}</a:solidFill></a:fill>")
+}
+
+fn fill_ref(index: u8, color: &str) -> String {
+    format!(r#"<a:fillRef idx="{index}">{color}</a:fillRef>"#)
+}
+
+/// A `tblBg` of theme fill and effect references.
+fn table_background(fill: u8, effect: u8, color: &str) -> String {
+    let fill = format!(r#"<a:fillRef idx="{fill}">{color}</a:fillRef>"#);
+    let effect = format!(r#"<a:effectRef idx="{effect}">{color}</a:effectRef>"#);
+    format!("<a:tblBg>{fill}{effect}</a:tblBg>")
+}
+
 fn table_style_slot(name: &[u8]) -> Option<usize> {
     match name {
-        b"wholeTbl" => Some(0),
-        b"band1H" => Some(1),
-        b"band2H" => Some(2),
-        b"band1V" => Some(3),
-        b"band2V" => Some(4),
-        b"lastCol" => Some(5),
-        b"firstCol" => Some(6),
-        b"lastRow" => Some(7),
-        b"seCell" => Some(8),
-        b"swCell" => Some(9),
-        b"firstRow" => Some(10),
-        b"neCell" => Some(11),
-        b"nwCell" => Some(12),
+        b"tblBg" => Some(0),
+        b"wholeTbl" => Some(1),
+        b"band1H" => Some(2),
+        b"band2H" => Some(3),
+        b"band1V" => Some(4),
+        b"band2V" => Some(5),
+        b"lastCol" => Some(6),
+        b"firstCol" => Some(7),
+        b"lastRow" => Some(8),
+        b"seCell" => Some(9),
+        b"swCell" => Some(10),
+        b"firstRow" => Some(11),
+        b"neCell" => Some(12),
+        b"nwCell" => Some(13),
         _ => None,
     }
 }
@@ -2944,7 +3584,13 @@ mod tests {
 
     use oxml_opc::OpcPackage;
 
-    use super::{A_NS, CT_Table, CT_TableStyleList, Emu, OxmlError};
+    use std::collections::HashSet;
+
+    use super::{
+        A_NS, CT_Table, CT_TableStyle, CT_TableStyleList, Emu, Fill, OxmlError, StyleReference,
+        builtin_table_styles,
+    };
+    use crate::color::{ColorChoice, ColorTransform};
 
     #[test]
     fn new_table_uses_truncating_dimensions_and_valid_cell_shells() {
@@ -3603,6 +4249,323 @@ mod tests {
         let reparsed = CT_Table::from_xml(&written).unwrap();
         assert_eq!(no_text.rows[0].cells[0], reparsed.rows[0].cells[0]);
         assert_eq!(no_text, reparsed);
+    }
+
+    #[test]
+    fn builtin_table_styles_resolve_all_74_powerpoint_ids_and_round_trip() {
+        let mut list = CT_TableStyleList::from_xml(
+            format!(r#"<a:tblStyleLst xmlns:a="{A_NS}" def="{{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}}"/>"#)
+                .as_bytes(),
+        )
+        .unwrap();
+        for (style_id, ..) in builtin_table_styles() {
+            let style = CT_TableStyle::builtin(style_id).unwrap();
+            assert_eq!(style.style_id, style_id);
+            assert!(style.whole_table.is_some(), "{style_id}");
+            list.styles.push(style);
+        }
+        let names = list
+            .styles
+            .iter()
+            .map(|style| style.style_name.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(names.len(), 74);
+        for name in [
+            "No Style, No Grid",
+            "Themed Style 2 - Accent 6",
+            "Medium Style 2 - Accent 1",
+            "Dark Style 2",
+            "Dark Style 2 - Accent 5/Accent 6",
+        ] {
+            assert!(names.contains(name), "{name}");
+        }
+        assert_eq!(
+            CT_TableStyleList::from_xml(&list.to_xml().unwrap()).unwrap(),
+            list
+        );
+
+        // ST_Guid is upper case in braces, and PowerPoint refuses a deck otherwise.
+        for unknown in [
+            "{5c22544a-7ee6-4342-b048-85bdc9fd1c3a}",
+            "5C22544A-7EE6-4342-B048-85BDC9FD1C3A",
+            "{00000000-0000-0000-0000-000000000000}",
+        ] {
+            assert!(CT_TableStyle::builtin(unknown).is_none(), "{unknown}");
+        }
+    }
+
+    #[test]
+    fn builtin_table_style_families_place_their_variant_colour() {
+        // Medium Style 2 - Accent 1, python-pptx's default: a white grid on accent tints.
+        assert_regions(
+            "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}",
+            &[
+                "wholeTbl text dk1",
+                "wholeTbl fill accent1 tint 20%",
+                "wholeTbl insideH 12700 lt1",
+                "wholeTbl insideV 12700 lt1",
+                "band1H fill accent1 tint 40%",
+                "band1V fill accent1 tint 40%",
+                "firstCol text bold lt1",
+                "firstCol fill accent1",
+                "lastCol fill accent1",
+                "lastRow top 38100 lt1",
+                "lastRow fill accent1",
+                "firstRow text bold lt1",
+                "firstRow bottom 38100 lt1",
+                "firstRow fill accent1",
+            ],
+        );
+        // A plain variant places dk1 where an accent variant places its accent.
+        assert_regions(
+            "{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}",
+            &["wholeTbl fill dk1 tint 20%", "firstRow fill dk1"],
+        );
+        // Light Style 1 - Accent 2: accent rules and translucent bands under black text.
+        assert_regions(
+            "{0E3FDE45-AF77-4B5C-9715-49D594BDF05E}",
+            &[
+                "wholeTbl text tx1",
+                "wholeTbl left none",
+                "wholeTbl top 12700 accent2",
+                "band1H fill accent2 alpha 20%",
+                "firstRow text bold",
+                "firstRow bottom 12700 accent2",
+                "lastRow top 12700 accent2",
+            ],
+        );
+        // Light Style 2 - Accent 1 fills its heading from the theme's first fill style.
+        assert_regions(
+            "{69012ECD-51FC-41F1-AA8D-1B2483CD663E}",
+            &["firstRow text bold bg1", "firstRow fill ref 1 accent1"],
+        );
+        // Medium Style 3 - Accent 5 places its accent in the heading fills only.
+        assert_regions(
+            "{74C1A8A3-306A-4EB7-A6B1-4F7E0EB9C5D6}",
+            &[
+                "wholeTbl top 25400 dk1",
+                "band1H fill dk1 tint 20%",
+                "firstCol fill accent5",
+                "firstRow bottom 25400 dk1",
+                "firstRow fill accent5",
+                "seCell text bold dk1",
+            ],
+        );
+        // Medium Style 4 - Accent 6: an accent grid over accent tints.
+        assert_regions(
+            "{16D9F66E-5EB9-4882-86FB-DCBF35E3C3E4}",
+            &[
+                "wholeTbl insideV 12700 accent6",
+                "wholeTbl fill accent6 tint 20%",
+                "band1V fill accent6 tint 40%",
+                "lastRow top 25400 accent6",
+                "firstRow text bold",
+            ],
+        );
+        // Dark Style 1 tints black when plain and shades the accent otherwise.
+        assert_regions(
+            "{E8034E78-7F5D-4C2E-B375-FC64B27BC917}",
+            &[
+                "wholeTbl text lt1",
+                "wholeTbl fill dk1 tint 20%",
+                "band1H fill dk1 tint 40%",
+                "firstCol fill dk1 tint 60%",
+                "lastRow fill dk1 tint 60%",
+                "firstRow fill dk1",
+            ],
+        );
+        assert_regions(
+            "{D03447BB-5D67-496B-8E87-E561075AD55C}",
+            &[
+                "wholeTbl fill accent3",
+                "band1H fill accent3 shade 60%",
+                "firstCol right 25400 lt1",
+                "lastRow fill accent3 shade 40%",
+                "firstRow fill dk1",
+                "nwCell right none",
+            ],
+        );
+        // Dark Style 2 - Accent 3/Accent 4 heads a body of the first accent with the second.
+        assert_regions(
+            "{91EBBBCC-DAD2-459C-BE2E-F6DE35CF9A28}",
+            &[
+                "wholeTbl text dk1",
+                "wholeTbl fill accent3 tint 20%",
+                "band1H fill accent3 tint 40%",
+                "lastRow top 50800 dk1",
+                "firstRow text bold lt1",
+                "firstRow fill accent4",
+            ],
+        );
+        // Themed styles band with translucent colour over their table background.
+        assert_regions(
+            "{08FB837D-C827-4EFA-A057-4D05807E0F7C}",
+            &[
+                "band1H fill accent6 alpha 40%",
+                "firstRow text bold lt1",
+                "firstRow fill accent6",
+            ],
+        );
+        for (style_id, index) in [
+            ("{08FB837D-C827-4EFA-A057-4D05807E0F7C}", 2),
+            ("{306799F8-075E-4A3A-A7F6-7FBC6576F1A4}", 3),
+        ] {
+            let style = CT_TableStyle::builtin(style_id).unwrap();
+            let background = style.background.unwrap();
+            let Some(StyleReference::Fill(reference)) = background.fill_reference else {
+                panic!("{style_id}: expected a background fill reference");
+            };
+            assert_eq!(reference.index, index);
+        }
+        assert_regions(
+            "{306799F8-075E-4A3A-A7F6-7FBC6576F1A4}",
+            &[
+                "wholeTbl text lt1",
+                "band1H fill lt1 alpha 20%",
+                "firstRow text bold",
+            ],
+        );
+    }
+
+    #[test]
+    fn table_background_models_its_fill_and_keeps_its_effect_in_place() {
+        let xml = format!(
+            r#"<q:tblStyleLst xmlns:q="{A_NS}" xmlns:x="urn:producer" def="s"><q:tblStyle styleId="s" styleName="S"><x:first/><q:tblBg><q:fillRef idx="2"><q:schemeClr val="accent1"/></q:fillRef><x:between/><q:effectRef idx="1"><q:schemeClr val="accent1"/></q:effectRef></q:tblBg><q:wholeTbl><q:tcStyle/></q:wholeTbl></q:tblStyle></q:tblStyleLst>"#
+        );
+        let styles = CT_TableStyleList::from_xml(xml.as_bytes()).unwrap();
+        let background = styles.styles[0].background.as_ref().unwrap();
+        let Some(StyleReference::Fill(reference)) = &background.fill_reference else {
+            panic!("expected a fill reference");
+        };
+        assert_eq!(reference.index, 2);
+        assert!(background.fill.is_none());
+        assert_eq!(background.unsupported, ["effect"]);
+
+        let written = String::from_utf8(styles.to_xml().unwrap()).unwrap();
+        assert_order(
+            &written,
+            &[
+                "<x:first",
+                "<a:tblBg>",
+                r#"<a:fillRef idx="2">"#,
+                "<x:between",
+                r#"effectRef idx="1">"#,
+                "</a:tblBg>",
+                "<a:wholeTbl>",
+            ],
+        );
+        assert_eq!(
+            CT_TableStyleList::from_xml(written.as_bytes()).unwrap(),
+            styles
+        );
+
+        let solid = format!(
+            r#"<a:tblStyleLst xmlns:a="{A_NS}"><a:tblStyle styleId="s" styleName="S"><a:tblBg><a:fill><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:fill></a:tblBg></a:tblStyle></a:tblStyleLst>"#
+        );
+        let styles = CT_TableStyleList::from_xml(solid.as_bytes()).unwrap();
+        let background = styles.styles[0].background.as_ref().unwrap();
+        assert!(matches!(background.fill, Some(Fill::Solid(_))));
+        assert!(background.unsupported.is_empty());
+        assert_eq!(
+            CT_TableStyleList::from_xml(&styles.to_xml().unwrap()).unwrap(),
+            styles
+        );
+    }
+
+    /// Checks phrases describing a built-in style's modelled region properties.
+    fn assert_regions(style_id: &str, expected: &[&str]) {
+        let style = CT_TableStyle::builtin(style_id).unwrap();
+        let regions = [
+            ("wholeTbl", &style.whole_table),
+            ("band1H", &style.band1_horizontal),
+            ("band2H", &style.band2_horizontal),
+            ("band1V", &style.band1_vertical),
+            ("band2V", &style.band2_vertical),
+            ("lastCol", &style.last_column),
+            ("firstCol", &style.first_column),
+            ("lastRow", &style.last_row),
+            ("seCell", &style.south_east_cell),
+            ("swCell", &style.south_west_cell),
+            ("firstRow", &style.first_row),
+            ("neCell", &style.north_east_cell),
+            ("nwCell", &style.north_west_cell),
+        ];
+        let mut phrases = Vec::new();
+        for (name, region) in regions {
+            let Some(region) = region else { continue };
+            if let Some(text) = &region.text_style {
+                let bold = if text.bold == Some(true) { " bold" } else { "" };
+                let color = text
+                    .color
+                    .as_ref()
+                    .map(|color| format!(" {}", scheme(color)));
+                let color = color.unwrap_or_default();
+                phrases.push(format!("{name} text{bold}{color}"));
+            }
+            let Some(cell) = &region.cell_style else {
+                continue;
+            };
+            match (&cell.fill, &cell.fill_reference) {
+                (Some(Fill::Solid(fill)), _) => {
+                    phrases.push(format!(
+                        "{name} fill {}",
+                        scheme(fill.color.as_ref().unwrap())
+                    ));
+                }
+                (Some(Fill::NoFill(_)), _) => phrases.push(format!("{name} fill none")),
+                (_, Some(StyleReference::Fill(reference))) => phrases.push(format!(
+                    "{name} fill ref {} {}",
+                    reference.index,
+                    scheme(reference.color.as_ref().unwrap())
+                )),
+                _ => {}
+            }
+            let Some(borders) = &cell.borders else {
+                continue;
+            };
+            for (edge, line) in [
+                ("left", &borders.left),
+                ("right", &borders.right),
+                ("top", &borders.top),
+                ("bottom", &borders.bottom),
+                ("insideH", &borders.inside_horizontal),
+                ("insideV", &borders.inside_vertical),
+            ] {
+                match line.as_ref().map(|line| (line.width, &line.fill)) {
+                    Some((Some(width), Some(Fill::Solid(fill)))) => phrases.push(format!(
+                        "{name} {edge} {width} {}",
+                        scheme(fill.color.as_ref().unwrap())
+                    )),
+                    Some((None, Some(Fill::NoFill(_)))) => {
+                        phrases.push(format!("{name} {edge} none"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for phrase in expected {
+            assert!(
+                phrases.iter().any(|candidate| candidate == phrase),
+                "{style_id}: {phrase} not in {phrases:#?}"
+            );
+        }
+    }
+
+    fn scheme(color: &ColorChoice) -> String {
+        let ColorChoice::Scheme {
+            value, transforms, ..
+        } = color
+        else {
+            panic!("expected a scheme colour, got {color:?}");
+        };
+        transforms
+            .iter()
+            .fold(value.clone(), |text, transform| match transform {
+                ColorTransform::Tint(value) => format!("{text} tint {}%", value.0 / 1000),
+                ColorTransform::Shade(value) => format!("{text} shade {}%", value.0 / 1000),
+                ColorTransform::Alpha(value) => format!("{text} alpha {}%", value.0 / 1000),
+                other => panic!("unexpected transform {other:?}"),
+            })
     }
 
     fn assert_ambiguous_grid_error(error: OxmlError) {
