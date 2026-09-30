@@ -8,7 +8,7 @@ use crate::error::{OxmlError, Result};
 use crate::math::{MathProperties, fixed_math_prefix_is_safe, is_math_element};
 use crate::namespace::W_NS;
 use crate::numbering::{namespace_bindings, word_prefixes_at};
-use crate::properties::{is_word_attribute, is_word_element};
+use crate::properties::{is_word_attribute, is_word_element, parse_integer_measurement};
 use crate::raw_xml::capture_element;
 
 /// The editing operation permitted by `w:documentProtection`.
@@ -2579,8 +2579,8 @@ pub(crate) fn word_value(element: &BytesStart<'_>, prefixes: &[String]) -> Optio
 }
 
 fn parse_twips(element: &BytesStart<'_>, prefixes: &[String]) -> Option<Twips> {
-    word_value(element, prefixes)?
-        .parse::<i32>()
+    let value = word_value(element, prefixes)?;
+    parse_integer_measurement::<i32>(element.name().as_ref(), b"w:val", &value)
         .ok()
         .filter(|value| *value >= 0)
         .map(Twips)
@@ -3852,6 +3852,19 @@ mod tests {
         assert_eq!(settings.list_separator(), Some(","));
 
         assert_eq!(settings.diagnostics(), &[]);
+        assert_eq!(settings.to_xml().unwrap(), xml.as_bytes());
+    }
+
+    #[test]
+    fn decimal_twips_settings_round_and_keep_their_bytes() {
+        let xml = format!(
+            r#"<w:settings xmlns:w="{W_NS}"><w:defaultTabStop w:val="720.0"/><w:hyphenationZone w:val="356.5"/></w:settings>"#,
+        );
+        let settings = CT_Settings::from_xml(xml.as_bytes()).unwrap();
+
+        assert_eq!(settings.default_tab_stop(), Some(Twips(720)));
+        assert_eq!(settings.hyphenation_zone(), Some(Twips(357)));
+        assert!(settings.diagnostics().is_empty());
         assert_eq!(settings.to_xml().unwrap(), xml.as_bytes());
     }
 

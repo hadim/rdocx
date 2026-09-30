@@ -10,7 +10,7 @@ use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::borders::{CT_PBdr, CT_Tabs};
 use crate::document::CT_SectPr;
-use crate::error::{OxmlError, Result};
+use crate::error::Result;
 use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::{
     local_namespace_overrides, merged_owner_bindings, namespace_binding, namespace_bindings,
@@ -19,10 +19,11 @@ use crate::numbering::{
 };
 use crate::properties::{
     CT_Shd, append_modeled_toggle_attributes, get_word_val_attr, is_word_attribute,
-    is_word_element, parse_word_toggle, raw_is_modeled_attribute_carrier, raw_occurrence,
-    record_modeled_toggle_candidate, remove_redundant_modeled_toggle_candidate,
-    replay_modeled_toggle_raw, toggle_element_is_explicitly_empty,
-    toggle_has_unsupported_attributes, word_prefixes_at, write_toggle,
+    is_word_element, parse_integer_measurement, parse_word_toggle,
+    raw_is_modeled_attribute_carrier, raw_occurrence, record_modeled_toggle_candidate,
+    remove_redundant_modeled_toggle_candidate, replay_modeled_toggle_raw,
+    toggle_element_is_explicitly_empty, toggle_has_unsupported_attributes, word_prefixes_at,
+    write_toggle,
 };
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
@@ -82,18 +83,19 @@ impl CT_FramePr {
             let attribute = attribute?;
             let key = attribute.key.as_ref();
             let value = std::str::from_utf8(&attribute.value)?;
+            let measurement = || parse_integer_measurement(e.name().as_ref(), key, value);
             if is_word_attribute(key, b"dropCap", word_prefixes) {
                 frame.drop_cap = Some(value.to_owned());
             } else if is_word_attribute(key, b"lines", word_prefixes) {
                 frame.lines = Some(value.parse()?);
             } else if is_word_attribute(key, b"w", word_prefixes) {
-                frame.w = Some(Twips(value.parse()?));
+                frame.w = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"h", word_prefixes) {
-                frame.h = Some(Twips(value.parse()?));
+                frame.h = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"vSpace", word_prefixes) {
-                frame.v_space = Some(Twips(value.parse()?));
+                frame.v_space = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"hSpace", word_prefixes) {
-                frame.h_space = Some(Twips(value.parse()?));
+                frame.h_space = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"wrap", word_prefixes) {
                 frame.wrap = Some(value.to_owned());
             } else if is_word_attribute(key, b"hAnchor", word_prefixes) {
@@ -101,11 +103,11 @@ impl CT_FramePr {
             } else if is_word_attribute(key, b"vAnchor", word_prefixes) {
                 frame.v_anchor = Some(value.to_owned());
             } else if is_word_attribute(key, b"x", word_prefixes) {
-                frame.x = Some(Twips(value.parse()?));
+                frame.x = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"xAlign", word_prefixes) {
                 frame.x_align = Some(value.to_owned());
             } else if is_word_attribute(key, b"y", word_prefixes) {
-                frame.y = Some(Twips(value.parse()?));
+                frame.y = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"yAlign", word_prefixes) {
                 frame.y_align = Some(value.to_owned());
             } else if is_word_attribute(key, b"hRule", word_prefixes) {
@@ -363,67 +365,6 @@ const PPR_RUN_PROPERTIES_SLOT: u8 = 33;
 const PPR_SECTION_SLOT: u8 = 34;
 const PPR_CHANGE_SLOT: u8 = 35;
 const PPR_END_SLOT: u8 = 36;
-
-fn parse_line_spacing(value: &str) -> Result<Twips> {
-    let integer_error = match value.parse::<i32>() {
-        Ok(value) => return Ok(Twips(value)),
-        Err(error) => error,
-    };
-
-    let (negative, unsigned) = match value.as_bytes().first() {
-        Some(b'-') => (true, &value[1..]),
-        Some(b'+') => (false, &value[1..]),
-        _ => (false, value),
-    };
-    let Some((whole, fraction)) = unsigned.split_once('.') else {
-        return Err(integer_error.into());
-    };
-    if whole.is_empty()
-        || fraction.is_empty()
-        || !whole.bytes().all(|byte| byte.is_ascii_digit())
-        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err(integer_error.into());
-    }
-
-    let significant_whole = whole.trim_start_matches('0');
-    if significant_whole.len() > 10 {
-        return Err(OxmlError::InvalidValue(format!(
-            "line spacing is out of range: {value}"
-        )));
-    }
-    let whole = if significant_whole.is_empty() {
-        0
-    } else {
-        significant_whole
-            .parse::<u64>()
-            .map_err(|_| OxmlError::InvalidValue(format!("invalid line spacing: {value}")))?
-    };
-    let limit = if negative {
-        i32::MAX as u64 + 1
-    } else {
-        i32::MAX as u64
-    };
-    let has_fraction = fraction.bytes().any(|byte| byte != b'0');
-    if whole > limit || (whole == limit && has_fraction) {
-        return Err(OxmlError::InvalidValue(format!(
-            "line spacing is out of range: {value}"
-        )));
-    }
-
-    let rounded = whole + u64::from(fraction.as_bytes()[0] >= b'5');
-    if rounded > limit {
-        return Err(OxmlError::InvalidValue(format!(
-            "line spacing rounds out of range: {value}"
-        )));
-    }
-    let signed = if negative {
-        -(rounded as i64)
-    } else {
-        rounded as i64
-    };
-    Ok(Twips(signed as i32))
-}
 
 fn record_ppr_modeled(
     ppr: &mut CT_PPr,
@@ -769,12 +710,14 @@ impl CT_PPr {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val_str = std::str::from_utf8(&attr.value)?;
+                            let measurement =
+                                || parse_integer_measurement(name.as_ref(), key, val_str);
                             if is_word_attribute(key, b"before", &prefixes) {
-                                ppr.space_before = Some(Twips(val_str.parse()?));
+                                ppr.space_before = Some(Twips(measurement()?));
                             } else if is_word_attribute(key, b"after", &prefixes) {
-                                ppr.space_after = Some(Twips(val_str.parse()?));
+                                ppr.space_after = Some(Twips(measurement()?));
                             } else if is_word_attribute(key, b"line", &prefixes) {
-                                ppr.line_spacing = Some(parse_line_spacing(val_str)?);
+                                ppr.line_spacing = Some(Twips(measurement()?));
                             } else if is_word_attribute(key, b"lineRule", &prefixes) {
                                 ppr.line_rule = Some(val_str.to_string());
                             } else if is_word_attribute(key, b"beforeAutospacing", &prefixes) {
@@ -788,18 +731,20 @@ impl CT_PPr {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val_str = std::str::from_utf8(&attr.value)?;
+                            let measurement =
+                                || parse_integer_measurement(name.as_ref(), key, val_str);
                             if is_word_attribute(key, b"left", &prefixes) {
-                                ppr.ind_left = Some(Twips(val_str.parse()?));
+                                ppr.ind_left = Some(Twips(measurement()?));
                             } else if is_word_attribute(key, b"right", &prefixes) {
-                                ppr.ind_right = Some(Twips(val_str.parse()?));
+                                ppr.ind_right = Some(Twips(measurement()?));
                             } else if is_word_attribute(key, b"start", &prefixes) {
-                                ppr.ind_start = Some(Twips(val_str.parse()?));
+                                ppr.ind_start = Some(Twips(measurement()?));
                             } else if is_word_attribute(key, b"end", &prefixes) {
-                                ppr.ind_end = Some(Twips(val_str.parse()?));
+                                ppr.ind_end = Some(Twips(measurement()?));
                             } else if is_word_attribute(key, b"firstLine", &prefixes) {
-                                ppr.ind_first_line = Some(Twips(val_str.parse()?));
+                                ppr.ind_first_line = Some(Twips(measurement()?));
                             } else if is_word_attribute(key, b"hanging", &prefixes) {
-                                ppr.ind_hanging = Some(Twips(val_str.parse()?));
+                                ppr.ind_hanging = Some(Twips(measurement()?));
                             }
                         }
                     } else if is_word_element(name.as_ref(), b"keepNext", &prefixes) {

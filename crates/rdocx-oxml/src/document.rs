@@ -11,7 +11,9 @@ use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::{
     local_namespace_overrides, merged_owner_bindings, namespace_bindings, word_prefixes_at,
 };
-use crate::properties::{get_word_val_attr, is_word_attribute, is_word_element};
+use crate::properties::{
+    get_word_val_attr, is_word_attribute, is_word_element, parse_integer_measurement,
+};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
 use crate::shared::{ST_PageOrientation, ST_SectionType};
@@ -637,50 +639,10 @@ impl CT_SectPr {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"pgSz", &prefixes) {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val_str = std::str::from_utf8(&attr.value)?;
-                            if is_word_attribute(key, b"w", &prefixes) {
-                                sect.page_width = Some(Twips(val_str.parse()?));
-                            } else if is_word_attribute(key, b"h", &prefixes) {
-                                sect.page_height = Some(Twips(val_str.parse()?));
-                            } else if is_word_attribute(key, b"orient", &prefixes) {
-                                sect.orientation = ST_PageOrientation::from_str(val_str).ok();
-                            }
-                        }
+                        Self::parse_page_size_attributes(&mut sect, e, &prefixes)?;
                         raw_position = (4, 0);
                     } else if is_word_element(name.as_ref(), b"pgMar", &prefixes) {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            if is_word_attribute(key, b"top", &prefixes) {
-                                sect.margin_top =
-                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
-                            } else if is_word_attribute(key, b"right", &prefixes)
-                                || is_word_attribute(key, b"end", &prefixes)
-                            {
-                                sect.margin_right =
-                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
-                            } else if is_word_attribute(key, b"bottom", &prefixes) {
-                                sect.margin_bottom =
-                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
-                            } else if is_word_attribute(key, b"left", &prefixes)
-                                || is_word_attribute(key, b"start", &prefixes)
-                            {
-                                sect.margin_left =
-                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
-                            } else if is_word_attribute(key, b"gutter", &prefixes) {
-                                sect.gutter =
-                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
-                            } else if is_word_attribute(key, b"header", &prefixes) {
-                                sect.header_distance =
-                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
-                            } else if is_word_attribute(key, b"footer", &prefixes) {
-                                sect.footer_distance =
-                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
-                            }
-                        }
+                        Self::parse_page_margin_attributes(&mut sect, e, &prefixes)?;
                         raw_position = (5, 0);
                     } else if is_word_element(name.as_ref(), b"type", &prefixes) {
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
@@ -1121,12 +1083,14 @@ impl CT_SectPr {
     ) -> Result<()> {
         for attribute in element.attributes() {
             let attribute = attribute?;
+            let key = attribute.key.as_ref();
             let value = std::str::from_utf8(&attribute.value)?;
-            if is_word_attribute(attribute.key.as_ref(), b"w", word_prefixes) {
-                sect.page_width = Some(Twips(value.parse()?));
-            } else if is_word_attribute(attribute.key.as_ref(), b"h", word_prefixes) {
-                sect.page_height = Some(Twips(value.parse()?));
-            } else if is_word_attribute(attribute.key.as_ref(), b"orient", word_prefixes) {
+            let measurement = || parse_integer_measurement(element.name().as_ref(), key, value);
+            if is_word_attribute(key, b"w", word_prefixes) {
+                sect.page_width = Some(Twips(measurement()?));
+            } else if is_word_attribute(key, b"h", word_prefixes) {
+                sect.page_height = Some(Twips(measurement()?));
+            } else if is_word_attribute(key, b"orient", word_prefixes) {
                 sect.orientation = ST_PageOrientation::from_str(value).ok();
             }
         }
@@ -1141,32 +1105,33 @@ impl CT_SectPr {
         for attribute in element.attributes() {
             let attribute = attribute?;
             let key = attribute.key.as_ref();
-            if is_word_attribute(key, b"top", word_prefixes) {
-                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
-                sect.margin_top = Some(value);
+            let field = if is_word_attribute(key, b"top", word_prefixes) {
+                &mut sect.margin_top
             } else if is_word_attribute(key, b"right", word_prefixes)
                 || is_word_attribute(key, b"end", word_prefixes)
             {
-                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
-                sect.margin_right = Some(value);
+                &mut sect.margin_right
             } else if is_word_attribute(key, b"bottom", word_prefixes) {
-                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
-                sect.margin_bottom = Some(value);
+                &mut sect.margin_bottom
             } else if is_word_attribute(key, b"left", word_prefixes)
                 || is_word_attribute(key, b"start", word_prefixes)
             {
-                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
-                sect.margin_left = Some(value);
+                &mut sect.margin_left
             } else if is_word_attribute(key, b"gutter", word_prefixes) {
-                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
-                sect.gutter = Some(value);
+                &mut sect.gutter
             } else if is_word_attribute(key, b"header", word_prefixes) {
-                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
-                sect.header_distance = Some(value);
+                &mut sect.header_distance
             } else if is_word_attribute(key, b"footer", word_prefixes) {
-                let value = Twips(std::str::from_utf8(&attribute.value)?.parse()?);
-                sect.footer_distance = Some(value);
-            }
+                &mut sect.footer_distance
+            } else {
+                continue;
+            };
+            let value = std::str::from_utf8(&attribute.value)?;
+            *field = Some(Twips(parse_integer_measurement(
+                element.name().as_ref(),
+                key,
+                value,
+            )?));
         }
         Ok(())
     }
@@ -1580,7 +1545,11 @@ impl CT_SectPr {
             if is_word_attribute(key, b"num", word_prefixes) {
                 cols.num = Some(val_str.parse()?);
             } else if is_word_attribute(key, b"space", word_prefixes) {
-                cols.space = Some(Twips(val_str.parse()?));
+                cols.space = Some(Twips(parse_integer_measurement(
+                    e.name().as_ref(),
+                    key,
+                    val_str,
+                )?));
             } else if is_word_attribute(key, b"equalWidth", word_prefixes) {
                 cols.equal_width = Some(val_str == "1" || val_str == "true");
             } else if is_word_attribute(key, b"sep", word_prefixes) {
@@ -1615,10 +1584,13 @@ impl CT_SectPr {
                     for attr in e.attributes() {
                         let attr = attr?;
                         let key = attr.key.as_ref();
+                        let value = std::str::from_utf8(&attr.value)?;
+                        let measurement =
+                            || parse_integer_measurement(e.name().as_ref(), key, value);
                         if is_word_attribute(key, b"w", &prefixes) {
-                            width = Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
+                            width = Some(Twips(measurement()?));
                         } else if is_word_attribute(key, b"space", &prefixes) {
-                            space = Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
+                            space = Some(Twips(measurement()?));
                         }
                     }
                     cols.columns.push(CT_Column { width, space });
@@ -2286,7 +2258,7 @@ fn page_size_attributes_are_modeled(
         if is_word_attribute(key, b"w", word_prefixes)
             || is_word_attribute(key, b"h", word_prefixes)
         {
-            if value.parse::<i64>().is_err() {
+            if parse_integer_measurement::<i32>(element.name().as_ref(), key, value).is_err() {
                 return Ok(false);
             }
         } else if is_word_attribute(key, b"orient", word_prefixes) {
@@ -2323,10 +2295,9 @@ fn page_margin_attributes_are_modeled(
         ]
         .iter()
         .any(|local| is_word_attribute(key, local, word_prefixes));
+        let value = std::str::from_utf8(&attribute.value)?;
         if !modeled
-            || std::str::from_utf8(&attribute.value)?
-                .parse::<i64>()
-                .is_err()
+            || parse_integer_measurement::<i32>(element.name().as_ref(), key, value).is_err()
         {
             return Ok(false);
         }
