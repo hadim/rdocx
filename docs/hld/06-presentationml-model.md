@@ -285,6 +285,7 @@ ShapeRef::shape_type(&self) -> Option<ShapeType>;
 ShapeRef::rotation(&self) -> Option<Angle>;
 ShapeRef::fill(&self) -> Option<&Fill>;
 ShapeRef::line(&self) -> Option<&CT_LineProperties>;
+ShapeRef::crop(&self) -> Option<(Percent1000, Percent1000, Percent1000, Percent1000)>;
 ShapeRef::adjustments(&self) -> Result<Vec<(String, f64)>>;
 ShapeRef::xml(&self) -> Result<Vec<u8>>;
 ```
@@ -307,7 +308,8 @@ a literal `val` guide of the same name in the shape's own `a:avLst`. Only
 ordinary shapes with preset geometry have adjustments. `xml` serializes a
 typed child on its own with the prefixes it uses declared. Alternate content
 returns its preserved bytes, which may rely on prefixes only the slide root
-declares.
+declares. `crop` reads a picture's `a:srcRect` insets in left, top, right,
+bottom order, with zero for an absent edge, and is `None` for other kinds.
 
 `slide_mut(index)` exposes a borrowed `SlideMut` handle. Its `shape(index)`
 method retains read access, while `shape_mut(index)` returns a `ShapeMut` for an
@@ -317,7 +319,11 @@ children only. The selected `mc:Fallback` view remains read-only.
 Position, size, rotation, and name setters support ordinary shapes, pictures,
 graphic frames, groups, and connectors. Fill and line setters support ordinary
 shapes, pictures, and connectors because those kinds own typed shape
-properties. Adjustment mutation supports finite values on preset geometry.
+properties. `ShapeMut::set_crop(left, top, right, bottom)` writes the
+`a:srcRect` of a picture between its blip and fill mode. It keeps the stored
+attribute of an unchanged edge, drops a changed edge of zero, and adds no
+element when a picture without one gets four zero insets. Adjustment mutation
+supports finite values on preset geometry.
 Unsupported shape kinds and unsupported geometry return concrete facade
 errors. Indexed access remains total and returns `Option`.
 
@@ -375,19 +381,32 @@ text-frame handle.
 Table graphic frames expose concrete borrowed `TableRef` and `TableMut`
 handles through `ShapeRef::table` and `ShapeMut::table_mut`. Their cell access
 is total and returns `Option`. Table handles expose row and column counts,
-column widths, and the first-row, last-row, first-column, last-column,
-horizontal-banding, and vertical-banding flags. Cell handles expose plain text,
-typed text-frame mutation, direct fill, four optional margins, merge-origin and
-continuation state, and span height and width.
+column widths, row heights, and the first-row, last-row, first-column,
+last-column, horizontal-banding, and vertical-banding flags. Cell handles
+expose plain text, typed text-frame mutation, direct fill, four optional
+margins, the direct line of each edge, merge-origin and continuation state, and
+span height and width.
+
+```rust
+pub enum CellBorder { Left, Right, Top, Bottom }
+
+TableRef::row_height(&self, row: usize) -> Option<Emu>;
+TableMut::set_row_height(&mut self, row: usize, height: Emu) -> Result<()>;
+TableCellRef::border(&self, edge: CellBorder) -> Option<&CT_LineProperties>;
+TableCellMut::set_border(&mut self, edge: CellBorder, line: Option<CT_LineProperties>);
+```
 
 Changing a column width uses a checked sum and synchronizes the graphic-frame
-width. Merge accepts opposite rectangle corners in either order. It validates
+width. Changing a row height does the same for the frame height and requires a
+positive height. The stored height is a minimum, which PowerPoint grows to fit
+the row's text. A border is the `a:lnL`, `a:lnR`, `a:lnT`, or `a:lnB` line of
+`a:tcPr`, written in that order before the cell fill. Merge accepts opposite rectangle corners in either order. It validates
 the complete rectangle before changing state, rejects overlap with an existing
 merge, migrates typed paragraphs in row-major order, and writes the DrawingML
 origin and continuation pattern described in `05-drawingml-model.md`. Split is
 valid only on a checked merge origin. It restores span one and clears
-continuation flags without redistributing content. Fallible width, merge, and
-split operations stage and serialize a table clone before committing it, so an
+continuation flags without redistributing content. Fallible width, height,
+merge, and split operations stage and serialize a table clone before committing it, so an
 error leaves the table unchanged.
 
 `SlideMut` also exposes the direct shape construction surface:
@@ -460,6 +479,7 @@ pub struct PictureImage<'a> {
 pub fn picture_image(&self, slide_index: usize, shape_id: u32) -> Result<PictureImage<'_>>;
 pub fn replace_picture_image(&mut self, slide_index: usize, shape_id: u32, image_data: &[u8]) -> Result<()>;
 pub fn remove_shape(&mut self, slide_index: usize, shape_index: usize) -> Result<()>;
+pub fn move_shape(&mut self, slide_index: usize, from_index: usize, to_index: usize) -> Result<()>;
 ```
 
 `picture_image` finds the picture by `p:cNvPr/@id`, including inside groups
@@ -483,6 +503,45 @@ whose start or end names a removed shape are detached, as PowerPoint does on
 delete. Slide relationships that only the removed subtree referenced are
 deleted, and their internal targets are pruned recursively once unreachable,
 so a removed chart also drops its embedded workbook.
+
+`move_shape` changes the z-order of one immediate slide child so that it ends
+up at `to_index`, where later children draw on top. An index past the last
+child is rejected without change. Animations, connector glue, and
+relationships name shape ids, so they need no rewrite.
+`CT_ShapeTree::move_child` serializes the tree, moves the child's bytes past
+exactly the children between its two indices, and reparses, the technique
+`remove_child_by_id` uses. Unmodelled members such as `p:contentPart` and
+schema-final `p:extLst` content therefore keep their bytes and their place
+among the other children.
+
+The owning facade also resolves and writes run hyperlinks, because their
+relationships belong to the slide part rather than to a borrowed run handle:
+
+```rust
+pub fn hyperlink_address(&self, slide_index: usize, relationship_id: &str) -> Option<&str>;
+pub fn set_run_hyperlink(
+    &mut self,
+    slide_index: usize,
+    shape_id: u32,
+    paragraph_index: usize,
+    run_index: usize,
+    address: Option<&str>,
+) -> Result<()>;
+```
+
+`hyperlink_address` returns the target of the relationship an
+`a:hlinkClick/@r:id` names, the URL of an external hyperlink or the stored
+relative target of an internal one, as python-pptx `address` does.
+`set_run_hyperlink` finds the ordinary shape by its `p:cNvPr/@id`, inside
+groups too, and rejects an id that another slide child shares. The regular run
+gets a fresh `a:hlinkClick` that names the slide's external hyperlink
+relationship to the address, reused when the slide has one, and `None` removes
+it. Assigning the current address changes nothing. Validation reports an
+unreferenced hyperlink relationship, so the relationship the old hyperlink
+named is removed once no other element of the slide names it, and one call
+changes the run and the relationships together. An empty address, a control
+character, or a missing shape, paragraph, or run leaves the slide and its
+relationships unchanged.
 
 An ordinary shape has canonical non-visual properties, a typed transform,
 preset geometry, and a minimal text body. `add_shape` keeps the string API but

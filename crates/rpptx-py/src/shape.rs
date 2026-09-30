@@ -17,6 +17,16 @@ const MIN_COORDINATE: i64 = -27_273_042_329_600;
 const MAX_COORDINATE: i64 = 27_273_042_316_900;
 const ANGLE_UNITS_PER_DEGREE: f64 = 60_000.0;
 const ANGLE_UNITS_PER_TURN: i64 = 21_600_000;
+/// `a:srcRect` stores a crop inset in thousandths of a percent.
+const CROP_UNITS_PER_FRACTION: f64 = 100_000.0;
+
+/// Left, top, right, and bottom picture crop insets, as the facade reports them.
+type Crop = (
+    rpptx::Percent1000,
+    rpptx::Percent1000,
+    rpptx::Percent1000,
+    rpptx::Percent1000,
+);
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyShape>()?;
@@ -166,6 +176,44 @@ impl PyShape {
         } else {
             Err(PyValueError::new_err(format!("shape has no {property}")))
         }
+    }
+
+    fn crop(&self, py: Python<'_>) -> PyResult<Crop> {
+        self.read(py, |shape| shape.crop())?
+            .ok_or_else(|| PyValueError::new_err("shape is not a picture"))
+    }
+
+    fn crop_edge(
+        &self,
+        py: Python<'_>,
+        edge: fn(&mut Crop) -> &mut rpptx::Percent1000,
+    ) -> PyResult<f64> {
+        let mut crop = self.crop(py)?;
+        Ok(f64::from(edge(&mut crop).0) / CROP_UNITS_PER_FRACTION)
+    }
+
+    /// Writes one crop inset as python-pptx does, rounding half to even, and
+    /// leaves the picture unchanged when the value equals the stored one.
+    fn set_crop_edge(
+        &self,
+        py: Python<'_>,
+        edge: fn(&mut Crop) -> &mut rpptx::Percent1000,
+        value: f64,
+    ) -> PyResult<()> {
+        let units = (value * CROP_UNITS_PER_FRACTION).round_ties_even();
+        if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&units) {
+            return Err(PyValueError::new_err(format!(
+                "crop must be a finite fraction from -21474.83648 to 21474.83647, got {value}"
+            )));
+        }
+        let current = self.crop(py)?;
+        let mut crop = current;
+        *edge(&mut crop) = rpptx::Percent1000(units as i32);
+        if crop == current {
+            return Ok(());
+        }
+        let (left, top, right, bottom) = crop;
+        self.edit(py, |shape| shape.set_crop(left, top, right, bottom))
     }
 
     fn picture_id(&self, py: Python<'_>) -> PyResult<(usize, u32)> {
@@ -361,7 +409,11 @@ impl PyShape {
         self.require_shape_properties(py, "line")?;
         Py::new(
             py,
-            PyLineFormat::new(self.presentation.clone_ref(py), self.path.clone()),
+            PyLineFormat::new(
+                self.presentation.clone_ref(py),
+                self.path.clone(),
+                FillTarget::Line,
+            ),
         )
     }
 
@@ -387,6 +439,50 @@ impl PyShape {
             content_type: image.content_type,
             blob: image.bytes.to_vec(),
         })
+    }
+
+    /// The share of the image cropped from the picture's left edge.
+    #[getter]
+    fn crop_left(&self, py: Python<'_>) -> PyResult<f64> {
+        self.crop_edge(py, |crop| &mut crop.0)
+    }
+
+    #[setter]
+    fn set_crop_left(&self, py: Python<'_>, value: f64) -> PyResult<()> {
+        self.set_crop_edge(py, |crop| &mut crop.0, value)
+    }
+
+    /// The share of the image cropped from the picture's top edge.
+    #[getter]
+    fn crop_top(&self, py: Python<'_>) -> PyResult<f64> {
+        self.crop_edge(py, |crop| &mut crop.1)
+    }
+
+    #[setter]
+    fn set_crop_top(&self, py: Python<'_>, value: f64) -> PyResult<()> {
+        self.set_crop_edge(py, |crop| &mut crop.1, value)
+    }
+
+    /// The share of the image cropped from the picture's right edge.
+    #[getter]
+    fn crop_right(&self, py: Python<'_>) -> PyResult<f64> {
+        self.crop_edge(py, |crop| &mut crop.2)
+    }
+
+    #[setter]
+    fn set_crop_right(&self, py: Python<'_>, value: f64) -> PyResult<()> {
+        self.set_crop_edge(py, |crop| &mut crop.2, value)
+    }
+
+    /// The share of the image cropped from the picture's bottom edge.
+    #[getter]
+    fn crop_bottom(&self, py: Python<'_>) -> PyResult<f64> {
+        self.crop_edge(py, |crop| &mut crop.3)
+    }
+
+    #[setter]
+    fn set_crop_bottom(&self, py: Python<'_>, value: f64) -> PyResult<()> {
+        self.set_crop_edge(py, |crop| &mut crop.3, value)
     }
 
     /// Replaces the picture's image, keeping its position, size, and crop.
@@ -749,6 +845,24 @@ impl PyShapeCollection {
         presentation
             .inner
             .remove_shape(slide_index, shape_index)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
+    /// Moves the shape at `from_` so that it ends up at z-order index `to`,
+    /// where later shapes draw on top.
+    #[pyo3(name = "move")]
+    fn move_shape(&mut self, py: Python<'_>, from_: isize, to: isize) -> PyResult<()> {
+        self.require_slide_root()?;
+        let slide_index = self.validate(py)?;
+        let len = self.len(py)?;
+        let from_ = normalize_index(from_, len, "shape")?;
+        let to = normalize_index(to, len, "shape")?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .move_shape(slide_index, from_, to)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         presentation.revisions.bump();
         Ok(())

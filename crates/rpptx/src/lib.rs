@@ -22,10 +22,11 @@ use oxml_chart::CT_ChartSpace;
 pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
-pub use oxml_core::units::{Angle, Emu};
+pub use oxml_core::units::{Angle, Emu, Percent1000};
 pub use oxml_drawing::color::ColorChoice;
 #[cfg(feature = "render")]
 use oxml_drawing::color::ColorMap;
+use oxml_drawing::fill::RelativeRect;
 pub use oxml_drawing::fill::{Fill, NoFill, PatternFill, SolidFill};
 use oxml_drawing::geometry::{Guide, GuideOp, GuideOperand};
 pub use oxml_drawing::line::CT_LineProperties;
@@ -38,7 +39,7 @@ use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_Tab
 use oxml_drawing::text::CT_TextListStyle;
 use oxml_drawing::text::{
     CT_RegularTextRun, CT_TextBody, CT_TextParagraph, Coordinate32Value, NormalAutofit,
-    TextAutofit, TextRun, TextWrap,
+    TextAutofit, TextHyperlink, TextRun, TextWrap,
 };
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextAlignment, TextAnchor, TextBullet,
@@ -3193,6 +3194,173 @@ impl Presentation {
         self.commit_candidate(staged)
     }
 
+    /// Returns the target of one relationship of a slide, the address that a
+    /// hyperlink naming this relationship id opens.
+    ///
+    /// Pass the `r:id` of an `a:hlinkClick`. An external hyperlink returns
+    /// its URL, and an internal relationship, such as a jump to another
+    /// slide, returns its stored relative target, as python-pptx `address`
+    /// does. An unknown slide or id returns `None`.
+    pub fn hyperlink_address(&self, slide_index: usize, relationship_id: &str) -> Option<&str> {
+        let record = self.slides.get(slide_index)?;
+        self.package
+            .get_part_rels(&record.part_name)?
+            .get_by_id(relationship_id)
+            .map(|relationship| relationship.target.as_str())
+    }
+
+    /// Points one text run's click hyperlink at an external `address`, or
+    /// removes it with `None`, as python-pptx `hyperlink.address` does.
+    ///
+    /// The run is the zero-based regular run of a paragraph in the ordinary
+    /// shape whose `p:cNvPr/@id` is `shape_id`, inside groups too. It gets an
+    /// `a:hlinkClick` naming the slide's external hyperlink relationship to
+    /// `address`, which is reused when the slide has one. Assigning the
+    /// current address changes nothing. Every relationship that only the old
+    /// hyperlink named, its target or a click sound, is removed, so no
+    /// relationship is left unreferenced. An empty address, one with a
+    /// control character, or a shape id that is missing, shared, or not an
+    /// ordinary shape with that run is rejected without change.
+    pub fn set_run_hyperlink(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        paragraph_index: usize,
+        run_index: usize,
+        address: Option<&str>,
+    ) -> Result<()> {
+        const OPERATION: &str = "set run hyperlink";
+        self.require_slide_index(slide_index)?;
+        if address.is_some_and(|address| {
+            address.is_empty()
+                || address.chars().any(|character| {
+                    character.is_control() || matches!(character, '\u{FFFE}' | '\u{FFFF}')
+                })
+        }) {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "a hyperlink address must be non-empty text without control characters",
+            ));
+        }
+        let record = &self.slides[slide_index];
+        let part_name = record.part_name.clone();
+        if shape_id_count(
+            &record.slide.common_slide_data.shape_tree.children,
+            shape_id,
+        ) > 1
+        {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                format!("shape id {shape_id} is not unique on the slide"),
+            ));
+        }
+        let mut slide = record.slide.clone();
+        let mut relationships = self
+            .package
+            .get_part_rels(&part_name)
+            .cloned()
+            .unwrap_or_default();
+        let (old, new) = {
+            let missing = || {
+                invalid_shape_mutation(
+                    OPERATION,
+                    format!(
+                        "shape id {shape_id} has no ordinary shape run {run_index} in paragraph {paragraph_index}"
+                    ),
+                )
+            };
+            let body = find_shape_mut(&mut slide.common_slide_data.shape_tree.children, shape_id)
+                .and_then(|shape| shape.text_body.as_mut())
+                .ok_or_else(missing)?;
+            let mut paragraph = TextFrame { body }
+                .into_paragraph_mut(paragraph_index)
+                .ok_or_else(missing)?;
+            let mut run = paragraph.run_mut(run_index).ok_or_else(missing)?;
+            let mut properties = run.properties().cloned().unwrap_or_default();
+            let old = properties
+                .hyperlink_click
+                .as_ref()
+                .and_then(|hyperlink| hyperlink.relationship_id.clone())
+                .filter(|id| !id.is_empty());
+            let current = old
+                .as_deref()
+                .and_then(|id| relationships.get_by_id(id))
+                .filter(|relationship| {
+                    relationship.rel_type == rel_types::HYPERLINK
+                        && relationship_is_external(relationship)
+                })
+                .map(|relationship| relationship.target.as_str());
+            let unchanged = match address {
+                None => properties.hyperlink_click.is_none(),
+                Some(address) => current == Some(address),
+            };
+            if unchanged {
+                return Ok(());
+            }
+            let new = address.map(|address| {
+                relationships
+                    .items
+                    .iter()
+                    .find(|relationship| {
+                        relationship.rel_type == rel_types::HYPERLINK
+                            && relationship_is_external(relationship)
+                            && relationship.target == address
+                    })
+                    .map(|relationship| relationship.id.clone())
+                    .unwrap_or_else(|| relationships.add_external(rel_types::HYPERLINK, address))
+            });
+            properties.hyperlink_click = new.clone().map(|id| {
+                let mut hyperlink = TextHyperlink::default();
+                hyperlink.relationship_id = Some(id);
+                hyperlink
+            });
+            run.set_properties(properties);
+            (old, new)
+        };
+        if old.is_some_and(|old| Some(&old) != new.as_ref()) {
+            // The old a:hlinkClick can carry more than its r:id, such as an
+            // a:snd click sound naming an audio relationship. Remove every
+            // relationship this edit left without a reference.
+            let before = slide_relationship_ids(&self.slides[slide_index].slide)?;
+            let after = slide_relationship_ids(&slide)?;
+            relationships.items.retain(|relationship| {
+                !before.contains(&relationship.id) || after.contains(&relationship.id)
+            });
+        }
+        self.slides[slide_index].slide = slide;
+        self.package.set_part_rels(&part_name, relationships);
+        Ok(())
+    }
+
+    /// Moves one immediate slide child so that it ends up at z-order index
+    /// `to_index`, where later children draw on top.
+    ///
+    /// Animations, connector glue, and relationships refer to shape ids, so
+    /// they follow the moved shape. Unmodelled shape-tree members keep their
+    /// place among the other children.
+    pub fn move_shape(
+        &mut self,
+        slide_index: usize,
+        from_index: usize,
+        to_index: usize,
+    ) -> Result<()> {
+        const OPERATION: &str = "move shape";
+        self.require_slide_index(slide_index)?;
+        let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
+        let count = tree.children.len();
+        if let Some(index) = [from_index, to_index]
+            .into_iter()
+            .find(|index| *index >= count)
+        {
+            return Err(invalid_slide_mutation(
+                OPERATION,
+                format!("shape index {index} is out of range for {count} shapes"),
+            ));
+        }
+        tree.move_child(from_index, to_index)
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))
+    }
+
     /// Inspects slide, layout, and master SmartArt in producing-scope order.
     pub fn smart_art(&self, slide_index: usize) -> Result<Vec<SmartArtInfo>> {
         let record = self
@@ -4006,6 +4174,37 @@ fn find_picture_mut(children: &mut [ShapeTreeChild], shape_id: u32) -> Option<&m
             ShapeTreeChild::GroupShape(group) => {
                 if let Some(picture) = find_picture_mut(&mut group.children, shape_id) {
                     return Some(picture);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Counts the slide children and group members whose `p:cNvPr/@id` is
+/// `shape_id`.
+fn shape_id_count(children: &[ShapeTreeChild], shape_id: u32) -> usize {
+    children
+        .iter()
+        .map(|child| {
+            let nested = match child {
+                ShapeTreeChild::GroupShape(group) => shape_id_count(&group.children, shape_id),
+                _ => 0,
+            };
+            usize::from(child.non_visual_id() == Some(shape_id)) + nested
+        })
+        .sum()
+}
+
+fn find_shape_mut(children: &mut [ShapeTreeChild], shape_id: u32) -> Option<&mut CT_Shape> {
+    for child in children {
+        let id = child.non_visual_id();
+        match child {
+            ShapeTreeChild::Shape(shape) if id == Some(shape_id) => return Some(shape),
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(shape) = find_shape_mut(&mut group.children, shape_id) {
+                    return Some(shape);
                 }
             }
             _ => {}
@@ -6062,6 +6261,51 @@ impl<'a> ShapeMut<'a> {
         Ok(())
     }
 
+    /// Crops a picture by left, top, right, and bottom insets of its image.
+    ///
+    /// Each inset is a share of the image, where `Percent1000(25_000)` is a
+    /// quarter, and a negative inset extends the image. An edge keeps its
+    /// stored attribute when its value is unchanged, a changed edge of zero
+    /// drops its attribute, and four zero insets add no `a:srcRect` to a
+    /// picture without one. Other shape kinds are rejected.
+    pub fn set_crop(
+        &mut self,
+        left: Percent1000,
+        top: Percent1000,
+        right: Percent1000,
+        bottom: Percent1000,
+    ) -> Result<()> {
+        const OPERATION: &str = "set crop";
+        let shape_kind = shape_kind(self.child);
+        let ShapeTreeChild::Picture(picture) = self.child else {
+            return Err(Error::UnsupportedShapeMutation {
+                operation: OPERATION,
+                shape_kind,
+            });
+        };
+        let fill = picture
+            .blip_fill
+            .as_mut()
+            .ok_or_else(|| invalid_shape_mutation(OPERATION, "picture has no p:blipFill"))?;
+        let zero = Percent1000::default();
+        if fill.source_rect.is_none() && [left, top, right, bottom] == [zero; 4] {
+            return Ok(());
+        }
+        let edge = |stored: Option<Percent1000>, value: Percent1000| {
+            if stored.unwrap_or_default() == value {
+                stored
+            } else {
+                (value != zero).then_some(value)
+            }
+        };
+        let rect = fill.source_rect.get_or_insert_with(RelativeRect::default);
+        rect.left = edge(rect.left, left);
+        rect.top = edge(rect.top, top);
+        rect.right = edge(rect.right, right);
+        rect.bottom = edge(rect.bottom, bottom);
+        Ok(())
+    }
+
     /// Inserts or replaces one finite preset-geometry adjustment.
     pub fn set_adjust_value(&mut self, name: &str, value: f64) -> Result<()> {
         if !value.is_finite() {
@@ -6230,6 +6474,11 @@ impl<'a> TableRef<'a> {
         self.table.grid.columns.get(column).copied()
     }
 
+    /// Returns one stored row height in EMU.
+    pub fn row_height(&self, row: usize) -> Option<Emu> {
+        self.table.rows.get(row).map(|row| row.height)
+    }
+
     /// Returns whether first-row table styling is enabled.
     pub fn first_row(&self) -> bool {
         self.table
@@ -6328,64 +6577,74 @@ impl<'a> TableMut<'a> {
 
     /// Changes one grid width and synchronizes the containing frame width.
     pub fn set_column_width(&mut self, column: usize, width: Emu) -> Result<()> {
+        const OPERATION: &str = "set column width";
         if width.0 <= 0 {
             return Err(invalid_table_mutation(
-                "set column width",
+                OPERATION,
                 "column width must be positive".to_owned(),
             ));
         }
         if column >= self.table.grid.columns.len() {
             return Err(invalid_table_mutation(
-                "set column width",
+                OPERATION,
                 format!("column index {column} is out of range"),
             ));
         }
-        let total_width = self
-            .table
-            .grid
-            .columns
-            .iter()
-            .enumerate()
-            .try_fold(0i64, |total, (index, current)| {
-                total.checked_add(if index == column { width.0 } else { current.0 })
-            })
-            .ok_or_else(|| {
-                invalid_table_mutation(
-                    "set column width",
-                    "table width exceeds the EMU range".to_owned(),
-                )
-            })?;
-        let total_height = self
-            .table
-            .rows
-            .iter()
-            .try_fold(0i64, |total, row| total.checked_add(row.height.0))
-            .ok_or_else(|| {
-                invalid_table_mutation(
-                    "set column width",
-                    "table height exceeds the EMU range".to_owned(),
-                )
-            })?;
-        if total_width <= 0 || total_height <= 0 {
-            return Err(invalid_table_mutation(
-                "set column width",
-                "table width and height must remain positive".to_owned(),
-            ));
-        }
-
         let mut staged = self.table.clone();
         staged.grid.columns[column] = width;
+        let (total_width, total_height) = table_extent(&staged, OPERATION)?;
         staged
             .to_xml()
-            .map_err(|error| invalid_table_mutation("set column width", error.to_string()))?;
+            .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
         self.table.grid.columns[column] = width;
         let height = self
             .transform
             .extent
-            .map_or(Emu(total_height), |extent| extent.cy);
+            .map_or(total_height, |extent| extent.cy);
         self.transform.extent = Some(CT_PositiveSize2D {
-            cx: Emu(total_width),
+            cx: total_width,
             cy: height,
+        });
+        Ok(())
+    }
+
+    /// Returns one stored row height in EMU.
+    pub fn row_height(&self, row: usize) -> Option<Emu> {
+        self.table.rows.get(row).map(|row| row.height)
+    }
+
+    /// Changes one row height and synchronizes the containing frame height.
+    ///
+    /// The stored height is a minimum, as in PowerPoint, which grows a row to
+    /// fit its text when it lays the table out.
+    pub fn set_row_height(&mut self, row: usize, height: Emu) -> Result<()> {
+        const OPERATION: &str = "set row height";
+        if height.0 <= 0 {
+            return Err(invalid_table_mutation(
+                OPERATION,
+                "row height must be positive".to_owned(),
+            ));
+        }
+        if row >= self.table.rows.len() {
+            return Err(invalid_table_mutation(
+                OPERATION,
+                format!("row index {row} is out of range"),
+            ));
+        }
+        let mut staged = self.table.clone();
+        staged.rows[row].height = height;
+        let (total_width, total_height) = table_extent(&staged, OPERATION)?;
+        staged
+            .to_xml()
+            .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
+        self.table.rows[row].height = height;
+        let width = self
+            .transform
+            .extent
+            .map_or(total_width, |extent| extent.cx);
+        self.transform.extent = Some(CT_PositiveSize2D {
+            cx: width,
+            cy: total_height,
         });
         Ok(())
     }
@@ -6469,6 +6728,16 @@ impl<'a> TableMut<'a> {
     }
 }
 
+/// One edge of a table cell, drawn by the `a:lnL`, `a:lnR`, `a:lnT`, or `a:lnB`
+/// line of its `a:tcPr`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CellBorder {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
 /// A borrowed explicit table-grid cell.
 #[derive(Clone, Copy)]
 pub struct TableCellRef<'a> {
@@ -6533,6 +6802,17 @@ impl TableCellRef<'_> {
                     properties.margin_bottom,
                 )
             })
+    }
+
+    /// Returns the direct line of one cell edge, when present.
+    pub fn border(&self, edge: CellBorder) -> Option<&CT_LineProperties> {
+        let properties = self.cell.properties.as_ref()?;
+        match edge {
+            CellBorder::Left => properties.left.as_ref(),
+            CellBorder::Right => properties.right.as_ref(),
+            CellBorder::Top => properties.top.as_ref(),
+            CellBorder::Bottom => properties.bottom.as_ref(),
+        }
     }
 }
 
@@ -6602,6 +6882,29 @@ impl TableCellMut<'_> {
             properties.margin_top,
             properties.margin_bottom,
         )
+    }
+
+    /// Returns the direct line of one cell edge, when present.
+    pub fn border(&self, edge: CellBorder) -> Option<&CT_LineProperties> {
+        let properties = self.cell_ref().cell.properties.as_ref()?;
+        match edge {
+            CellBorder::Left => properties.left.as_ref(),
+            CellBorder::Right => properties.right.as_ref(),
+            CellBorder::Top => properties.top.as_ref(),
+            CellBorder::Bottom => properties.bottom.as_ref(),
+        }
+    }
+
+    /// Replaces or clears the direct line of one cell edge.
+    pub fn set_border(&mut self, edge: CellBorder, line: Option<CT_LineProperties>) {
+        let properties = self.properties_mut();
+        let slot = match edge {
+            CellBorder::Left => &mut properties.left,
+            CellBorder::Right => &mut properties.right,
+            CellBorder::Top => &mut properties.top,
+            CellBorder::Bottom => &mut properties.bottom,
+        };
+        *slot = line;
     }
 
     /// Returns whether this cell is the top-left origin of a merge.
@@ -6674,6 +6977,32 @@ fn table_properties_mut(table: &mut CT_Table) -> &mut CT_TableProperties {
     table
         .properties
         .get_or_insert_with(CT_TableProperties::default)
+}
+
+/// Returns the checked sums of a table's column widths and row heights.
+fn table_extent(table: &CT_Table, operation: &'static str) -> Result<(Emu, Emu)> {
+    let total_width = table
+        .grid
+        .columns
+        .iter()
+        .try_fold(0i64, |total, width| total.checked_add(width.0))
+        .ok_or_else(|| {
+            invalid_table_mutation(operation, "table width exceeds the EMU range".to_owned())
+        })?;
+    let total_height = table
+        .rows
+        .iter()
+        .try_fold(0i64, |total, row| total.checked_add(row.height.0))
+        .ok_or_else(|| {
+            invalid_table_mutation(operation, "table height exceeds the EMU range".to_owned())
+        })?;
+    if total_width <= 0 || total_height <= 0 {
+        return Err(invalid_table_mutation(
+            operation,
+            "table width and height must remain positive".to_owned(),
+        ));
+    }
+    Ok((Emu(total_width), Emu(total_height)))
 }
 
 fn rectangular_dimensions(table: &CT_Table) -> std::result::Result<(usize, usize), String> {
@@ -7352,6 +7681,28 @@ impl<'a> ShapeRef<'a> {
     /// Returns the direct line of a shape, picture, or connector.
     pub fn line(&self) -> Option<&'a CT_LineProperties> {
         shape_properties(self.child)?.line.as_ref()
+    }
+
+    /// Returns a picture's `a:srcRect` crop as left, top, right, and bottom
+    /// insets of its image, reading an absent edge as zero.
+    ///
+    /// Other shape kinds return `None`.
+    pub fn crop(&self) -> Option<(Percent1000, Percent1000, Percent1000, Percent1000)> {
+        let ShapeTreeChild::Picture(picture) = self.child else {
+            return None;
+        };
+        let rect = picture
+            .blip_fill
+            .as_ref()
+            .and_then(|fill| fill.source_rect.as_ref());
+        Some(rect.map_or_else(Default::default, |rect| {
+            (
+                rect.left.unwrap_or_default(),
+                rect.top.unwrap_or_default(),
+                rect.right.unwrap_or_default(),
+                rect.bottom.unwrap_or_default(),
+            )
+        }))
     }
 
     /// Serialises the child as a self-contained element.

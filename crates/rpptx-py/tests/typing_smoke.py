@@ -31,11 +31,14 @@ from rpptx._rpptx import (
     ColumnCollection,
     FillFormat,
     Font,
+    Hyperlink,
     Image,
     LineFormat,
     Paragraph,
     ParagraphCollection,
     PlaceholderCollection,
+    Row,
+    RowCollection,
     Run,
     RunCollection,
     Shape,
@@ -308,6 +311,65 @@ def exercise_rpptx_types(path: Path) -> None:
     )
 
 
+def exercise_rpptx_table_types(table: Table) -> None:
+    origin: Cell = table.cell(0, 0)
+    origin.merge(table.cell(1, 1))
+    spans: tuple[bool, bool, int, int] = (
+        origin.is_merge_origin,
+        origin.is_spanned,
+        origin.span_height,
+        origin.span_width,
+    )
+    origin.split()
+    cell_fill: FillFormat = origin.fill
+    cell_fill.solid()
+    origin.margin_left = Inches(0.1)
+    origin.margin_right = None
+    cell_margins: tuple[Length | None, ...] = (
+        origin.margin_left,
+        origin.margin_right,
+        origin.margin_top,
+        origin.margin_bottom,
+    )
+    rows: RowCollection = table.rows
+    row: Row = rows[0]
+    row.height = Inches(1)
+    row_heights: list[Length] = [current.height for current in rows]
+    borders: tuple[LineFormat, ...] = (
+        origin.border_left,
+        origin.border_right,
+        origin.border_top,
+        origin.border_bottom,
+    )
+    borders[0].width = Pt(1)
+    (spans, cell_margins, row_heights, rows[:])
+
+
+def exercise_rpptx_picture_crop_types(picture: Shape) -> None:
+    picture.crop_left = 0.25
+    picture.crop_top = 0
+    crop: tuple[float, float, float, float] = (
+        picture.crop_left,
+        picture.crop_top,
+        picture.crop_right,
+        picture.crop_bottom,
+    )
+    picture.crop_right = crop[0]
+    picture.crop_bottom = -0.1
+
+
+def exercise_rpptx_z_order_types(slide: Slide) -> None:
+    slide.shapes.move(0, -1)
+
+
+def exercise_rpptx_hyperlink_types(run: Run) -> None:
+    hyperlink: Hyperlink = run.hyperlink
+    hyperlink.address = "https://example.com"
+    address: str | None = hyperlink.address
+    hyperlink.address = None
+    (address,)
+
+
 def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
     frames: tuple[TextFrameLayout, ...] = presentation.text_layout()
     narrower: tuple[TextFrameLayout, ...] = presentation.text_layout(width_factor=0.95)
@@ -363,9 +425,12 @@ if TYPE_CHECKING:
     Column()  # type: ignore[call-arg]
     ColumnCollection()  # type: ignore[call-arg]
     Font()  # type: ignore[call-arg]
+    Hyperlink()  # type: ignore[call-arg]
     Paragraph()  # type: ignore[call-arg]
     ParagraphCollection()  # type: ignore[call-arg]
     PlaceholderCollection()  # type: ignore[call-arg]
+    Row()  # type: ignore[call-arg]
+    RowCollection()  # type: ignore[call-arg]
     Run()  # type: ignore[call-arg]
     RunCollection()  # type: ignore[call-arg]
     Shape()  # type: ignore[call-arg]
