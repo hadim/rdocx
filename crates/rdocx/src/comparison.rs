@@ -788,6 +788,7 @@ fn reject_cross_story_moves(
                 story.kind,
                 options,
                 marker.as_deref(),
+                normalized_body_with_options,
             )?,
         ));
         edited_by_story.push((
@@ -799,6 +800,7 @@ fn reject_cross_story_moves(
                 story.kind,
                 options,
                 marker.as_deref(),
+                normalized_body_with_options,
             )?,
         ));
     }
@@ -2232,6 +2234,7 @@ fn normalized_package(
                     .related
                     .get(&story.part_name)
                     .map(String::as_str),
+                postcondition_body,
             )?,
         ));
     }
@@ -2251,7 +2254,7 @@ fn normalized_package(
     let bindings = root_namespace_bindings(source, "document", &[])?;
     let mut main_document = story_document(extract_body_inner(source.as_bytes())?, &bindings)?;
     normalize_drawing_relationships(&mut main_document, document, &document.doc_part_name);
-    let main = normalized_body_with_options(&main_document, options);
+    let main = postcondition_body(&main_document, options);
     Ok((main, related))
 }
 
@@ -2262,6 +2265,7 @@ fn normalized_story_part(
     kind: ComparisonStoryKind,
     options: &ComparisonOptions,
     text_box_marker: Option<&str>,
+    story_projection: fn(&CT_Document, &ComparisonOptions) -> Vec<String>,
 ) -> Result<Vec<String>> {
     let masked;
     let xml = if story_ignored(options, ComparisonStoryKind::TextBox) {
@@ -2291,14 +2295,14 @@ fn normalized_story_part(
             let owner_bindings = root_namespace_bindings(owner_xml, owner_local, &root_bindings)?;
             let mut model = story_document(&owner_xml[inner], &owner_bindings)?;
             normalize_drawing_relationships(&mut model, document, physical_owner);
-            normalized.extend(normalized_body_with_options(&model, options));
+            normalized.extend(story_projection(&model, options));
         }
         Ok(normalized)
     } else {
         let bindings = root_namespace_bindings(xml, kind.root_local(), &[])?;
         let mut model = story_document(&xml[root], &bindings)?;
         normalize_drawing_relationships(&mut model, document, physical_owner);
-        Ok(normalized_body_with_options(&model, options))
+        Ok(story_projection(&model, options))
     }
 }
 
@@ -6256,6 +6260,74 @@ fn normalized_body(document: &CT_Document) -> Vec<String> {
     document.body.content.iter().map(body_signature).collect()
 }
 
+/// The accept and reject postcondition projection of a story: each item's
+/// policy signature followed by the modeled properties of every paragraph it
+/// owns. The signature leaves formatting out because alignment matches changed
+/// paragraphs through it, so without the properties a resolution that loses
+/// a paragraph's alignment or mark formatting would pass.
+fn postcondition_body(document: &CT_Document, options: &ComparisonOptions) -> Vec<String> {
+    let mut items = normalized_body_with_options(document, options);
+    if options.ignore_formatting {
+        return items;
+    }
+    for (item, content) in items.iter_mut().zip(&document.body.content) {
+        let mut properties = Vec::new();
+        match content {
+            BodyContent::Paragraph(paragraph) => {
+                properties.push(modeled_paragraph_properties(paragraph.properties.as_ref()));
+            }
+            BodyContent::Table(table) => table_paragraph_properties(table, &mut properties),
+            BodyContent::ContentControl(control) => {
+                control_paragraph_properties(control, &mut properties);
+            }
+            BodyContent::RawXml(_) => {}
+        }
+        item.push_str(&format!(":{properties:?}"));
+    }
+    items
+}
+
+fn table_paragraph_properties(table: &CT_Tbl, properties: &mut Vec<Option<CT_PPr>>) {
+    for cell in table.rows.iter().flat_map(|row| &row.cells) {
+        cell_paragraph_properties(cell, properties);
+    }
+}
+
+fn cell_paragraph_properties(cell: &CT_Tc, properties: &mut Vec<Option<CT_PPr>>) {
+    for content in &cell.content {
+        match content {
+            CellContent::Paragraph(paragraph) => {
+                properties.push(modeled_paragraph_properties(paragraph.properties.as_ref()));
+            }
+            CellContent::Table(table) => table_paragraph_properties(table, properties),
+            CellContent::ContentControl(control) => {
+                control_paragraph_properties(control, properties);
+            }
+        }
+    }
+}
+
+fn control_paragraph_properties(control: &CT_Sdt, properties: &mut Vec<Option<CT_PPr>>) {
+    for content in &control.content {
+        match content {
+            SdtContent::Paragraph(paragraph) => {
+                properties.push(modeled_paragraph_properties(paragraph.properties.as_ref()));
+            }
+            SdtContent::Table(table) => table_paragraph_properties(table, properties),
+            SdtContent::Row(row) => {
+                for cell in &row.cells {
+                    cell_paragraph_properties(cell, properties);
+                }
+            }
+            SdtContent::Cell(cell) => cell_paragraph_properties(cell, properties),
+            SdtContent::ContentControl(control) => {
+                control_paragraph_properties(control, properties);
+            }
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
 fn normalized_body_with_options(
     document: &CT_Document,
     options: &ComparisonOptions,
@@ -7170,7 +7242,8 @@ mod tests {
     use super::{
         ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING,
         attributed_run_units, canonical_owned_story, comparison_postcondition_error,
-        complex_field_result, deleted_text_xml, story_document, word_fragments,
+        complex_field_result, deleted_text_xml, normalized_body_with_options, postcondition_body,
+        story_document, word_fragments,
     };
     use crate::Document;
     use rdocx_oxml::document::BodyContent;
@@ -7219,6 +7292,54 @@ mod tests {
             document.body.content[1],
             BodyContent::Paragraph(_)
         ));
+    }
+
+    #[test]
+    fn postcondition_projection_compares_paragraph_properties() {
+        let body = |properties: &str| {
+            let paragraph = format!("<w:p>{properties}<w:r><w:t>a</w:t></w:r></w:p>");
+            story_document(
+                &format!(
+                    "{paragraph}<w:sdt><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>\
+                     <w:tbl><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"
+                ),
+                &[("xmlns:w".to_owned(), W_NS.to_owned())],
+            )
+            .unwrap()
+        };
+        let plain = body("");
+        let default = ComparisonOptions::default();
+        let ignored = ComparisonOptions {
+            ignore_formatting: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            postcondition_body(&plain, &default),
+            postcondition_body(&body("<w:pPr><w:rPr/></w:pPr>"), &default)
+        );
+        for properties in [
+            r#"<w:pPr><w:jc w:val="center"/></w:pPr>"#,
+            "<w:pPr><w:rPr><w:b/></w:rPr></w:pPr>",
+        ] {
+            let formatted = body(properties);
+            // Alignment matches a paragraph whose properties changed.
+            assert_eq!(
+                normalized_body_with_options(&plain, &default),
+                normalized_body_with_options(&formatted, &default)
+            );
+            let (plain_items, formatted_items) = (
+                postcondition_body(&plain, &default),
+                postcondition_body(&formatted, &default),
+            );
+            assert_eq!(plain_items.len(), 3);
+            for (plain_item, formatted_item) in plain_items.iter().zip(&formatted_items) {
+                assert_ne!(plain_item, formatted_item, "{properties}");
+            }
+            assert_eq!(
+                postcondition_body(&plain, &ignored),
+                postcondition_body(&formatted, &ignored)
+            );
+        }
     }
 
     #[test]

@@ -965,6 +965,11 @@ properties of that paragraph.
 Comparison patches only owned source spans, preserves every unowned byte,
 stages the complete package, proves that acceptance matches the edited policy
 projection and rejection matches the original, then commits once.
+Alignment leaves paragraph properties out so that a paragraph whose
+properties changed still matches, but the accept and reject projection adds
+the modeled properties of every paragraph of each story, including those in
+tables and content controls, unless formatting is ignored. A resolution that loses
+paragraph or mark formatting therefore fails the postcondition.
 
 `rdocx-layout` owns the renderer-only revision projection. The
 `LayoutInput::revision_view` selector chooses an accepted or tracked view. The
