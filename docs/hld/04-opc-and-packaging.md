@@ -1451,8 +1451,12 @@ defect the source view already has is one that open, save, layout, and text
 replacement accept, so the rebuild retains it and reports it once in check
 order. A defect only the staged view has was introduced by the rebuild, such
 as a new canonical style completing a dangling producer link into a one-way
-link, and it rejects the rebuild. Public style mutation retains strict
-whole-graph validation.
+link, and it rejects the rebuild. Public style mutation (`add_style`,
+`set_style`, `set_default_style`, `remove_style` and the numbering links)
+compares the styles before and after the same way. It resolves a repeated id
+to its first definition, `remove_style` removes every definition of the id,
+and `validate_style_graph` still reports each retained defect. An id that
+already exists is refused by `add_style`.
 Old-result exclusion adds a total nested-run order within each accepted
 revision or content-control owner, so fields on opposite sides of a marker in
 one wrapper remain distinguishable. The outer coordinate is the typed

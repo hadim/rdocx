@@ -17792,7 +17792,8 @@ impl Document {
     /// Both the style's paragraph properties and the numbering level's
     /// paragraph-style link are published together. Existing links must either
     /// match this exact tuple or the operation fails without changing the
-    /// document.
+    /// document. A repeated style ID resolves to its first definition, and the
+    /// style graph is validated as in [`Document::add_style`].
     pub fn link_style_to_numbering(
         &mut self,
         style_id: &str,
@@ -17800,7 +17801,6 @@ impl Document {
         level: u32,
     ) -> Result<()> {
         let mut candidate = self.clone_for_staging();
-        style::validate_style_graph(&candidate.styles)?;
         candidate.validate_numbering_graph()?;
         candidate.reserve_styles_bundle()?;
         candidate.reserve_numbering_bundle()?;
@@ -17919,7 +17919,7 @@ impl Document {
                 Some(style_id.to_owned());
         }
 
-        style::validate_style_graph(&candidate.styles)?;
+        style::validate_style_graph_change(&self.styles, &candidate.styles)?;
         candidate.validate_numbering_graph()?;
         candidate.flush_to_package()?;
         candidate.invalidate_layout();
@@ -17928,6 +17928,9 @@ impl Document {
     }
 
     /// Atomically remove one exact paragraph-style numbering association.
+    ///
+    /// A repeated style ID resolves to its first definition, and the style
+    /// graph is validated as in [`Document::add_style`].
     pub fn unlink_style_from_numbering(
         &mut self,
         style_id: &str,
@@ -17935,7 +17938,6 @@ impl Document {
         level: u32,
     ) -> Result<()> {
         let mut candidate = self.clone_for_staging();
-        style::validate_style_graph(&candidate.styles)?;
         candidate.validate_numbering_graph()?;
 
         let style_index = candidate
@@ -18021,7 +18023,7 @@ impl Document {
             numbering.abstract_nums[definition_index].levels[definition_level_index].p_style = None;
         }
 
-        style::validate_style_graph(&candidate.styles)?;
+        style::validate_style_graph_change(&self.styles, &candidate.styles)?;
         candidate.validate_numbering_graph()?;
         candidate.flush_to_package()?;
         candidate.invalidate_layout();
@@ -18048,6 +18050,12 @@ impl Document {
     // ---- Style manipulation ----
 
     /// Add a custom style after validating the complete style graph.
+    ///
+    /// A defect the styles part already has, such as a style ID a producer
+    /// repeated, is retained, and [`Document::validate_style_graph`] still
+    /// reports it. Only a defect the change introduces rejects it, and an ID
+    /// that already exists is refused. The style mutations resolve a repeated
+    /// ID to its first definition, as layout and TOC rebuilding do.
     pub fn add_style(&mut self, builder: StyleBuilder) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.reserve_styles_bundle()?;
@@ -18077,13 +18085,16 @@ impl Document {
             None,
             linked_style.as_deref(),
         );
-        style::validate_style_graph(&candidate.styles)?;
+        style::validate_style_graph_change(&self.styles, &candidate.styles)?;
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
         Ok(())
     }
 
     /// Replace an existing style after validating the complete style graph.
+    ///
+    /// A repeated style ID updates its first definition. Validation retains
+    /// existing defects as in [`Document::add_style`].
     pub fn set_style(&mut self, builder: StyleBuilder) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.reserve_styles_bundle()?;
@@ -18130,20 +18141,26 @@ impl Document {
             old_link.as_deref(),
             new_link.as_deref(),
         );
-        style::validate_style_graph(&candidate.styles)?;
+        style::validate_style_graph_change(&self.styles, &candidate.styles)?;
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
         Ok(())
     }
 
     /// Select the sole default style for one style type.
+    ///
+    /// A repeated style ID makes its first definition the default. Validation
+    /// retains existing defects as in [`Document::add_style`].
     pub fn set_default_style(&mut self, style_type: StyleType, style_id: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.reserve_styles_bundle()?;
-        let target = candidate
+        let index = candidate
             .styles
-            .get_by_id(style_id)
+            .styles
+            .iter()
+            .position(|style| style.style_id == style_id)
             .ok_or_else(|| Error::Other(format!("style '{style_id}' does not exist")))?;
+        let target = &candidate.styles.styles[index];
         if target.style_type != style_type {
             return Err(Error::Other(format!(
                 "style '{style_id}' has type '{}', not '{}'",
@@ -18151,27 +18168,26 @@ impl Document {
                 style_type.to_str()
             )));
         }
-        for style in &mut candidate.styles.styles {
+        for (position, style) in candidate.styles.styles.iter_mut().enumerate() {
             if style.style_type == style_type {
-                style.is_default = style.style_id == style_id;
+                style.is_default = position == index;
             }
         }
-        style::validate_style_graph(&candidate.styles)?;
+        style::validate_style_graph_change(&self.styles, &candidate.styles)?;
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
         Ok(())
     }
 
     /// Remove an unreferenced style, returning whether it existed.
+    ///
+    /// Every definition of a repeated style ID is removed, so no later one takes
+    /// over the ID. Validation retains existing defects as in
+    /// [`Document::add_style`].
     pub fn remove_style(&mut self, style_id: &str) -> Result<bool> {
-        let Some(index) = self
-            .styles
-            .styles
-            .iter()
-            .position(|style| style.style_id == style_id)
-        else {
+        if self.styles.get_by_id(style_id).is_none() {
             return Ok(false);
-        };
+        }
         if let Some(owner) = self.styles.styles.iter().find(|style| {
             style.style_id != style_id
                 && (style.based_on.as_deref() == Some(style_id)
@@ -18210,8 +18226,11 @@ impl Document {
 
         let mut candidate = self.clone_for_staging();
         candidate.reserve_styles_bundle()?;
-        candidate.styles.styles.remove(index);
-        style::validate_style_graph(&candidate.styles)?;
+        candidate
+            .styles
+            .styles
+            .retain(|style| style.style_id != style_id);
+        style::validate_style_graph_change(&self.styles, &candidate.styles)?;
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
         Ok(true)
