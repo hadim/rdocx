@@ -411,7 +411,7 @@ in their original namespace and schema positions. Typed `w:ilvl` and `w:numId`
 updates remain before retained `w:numberingChange` and insertion properties.
 Self-closing `w:numPr` carriers copy any inherited namespace binding required
 by a retained root attribute onto the serialized carrier.
-An unchanged plain numeric leaf may use the typed serializer's indentation,
+An unchanged plain numeric leaf may use the typed serializer's layout,
 while malformed or extended source leaves remain byte-exact.
 
 Every standard `w:numFmt` token has a typed representation. Producer-defined
@@ -430,7 +430,10 @@ safely, leaving the opened package bytes authoritative.
 The main document, header, and footer roots also retain their other
 attributes, such as `mc:Ignorable`, in source order. A typed rewrite writes
 them after every namespace declaration it keeps, so a compatibility attribute
-survives the rewrite and every prefix it lists stays declared.
+survives the rewrite and every prefix it lists stays declared. The typed part
+serializers write no indentation, as Word and python-docx do, so a rewritten
+part keeps a Word part's compact layout and whitespace-only text between
+elements is never added.
 
 Modeled paragraph, run, table-row, and section-property owners retain every
 ordered root attribute, including producer identity, revision-session, foreign,
