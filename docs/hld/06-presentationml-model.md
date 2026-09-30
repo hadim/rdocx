@@ -298,6 +298,29 @@ the normal `MediaStore`. Notes are copied to a new part whose slide
 relationship points back to the duplicate. Custom-show membership is not
 copied.
 
+`import_slide(source, index, layout_index, insert_index)` copies one slide of
+another presentation through the same staged graph copy, like PowerPoint's
+reuse with the destination theme. The copy relates to the given destination
+layout, or else to the first destination layout named like the source slide's
+layout, and an unnamed or unmatched layout is refused. Notes relate to the
+destination notes master, which the bundled template supplies when the
+destination has none. Images, audio and video reuse equal destination media
+parts, SmartArt graphs are copied as by the bounded transfer, and external
+relationships such as hyperlinks keep their targets. A preflight refuses
+comments, charts, embedded objects, jumps to another source slide from the
+slide or its notes, and every other internal relationship type before anything
+is staged, so a refused import leaves the destination unchanged. Actions that
+name no relationship, such as `ppaction://customshow`, are carried unchanged
+and may name a custom show the destination lacks.
+
+Duplication, transfer and import rewrite each copied notes or diagram part
+with one exact pass over its complete relationship map, including the
+collapsed notes back-relationship. A second
+pass would re-map ids the first pass had just produced whenever the source
+relationships are not in id order. Audio and video parts that already exist in
+the destination with equal bytes are shared, so a duplicate keeps sharing its
+media wherever the part is stored.
+
 The table style part is typed for layout resolution. A caller may pass its
 `CT_TableStyleList` to `ResolveCtx`, which uses either the table's explicit
 style id or the part's default id. An absent part or unmatched id leaves direct

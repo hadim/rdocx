@@ -3657,6 +3657,88 @@ def test_try_replace_text_scoped_to_a_slide_or_a_text_frame(tmp_path):
     assert prs.slides[0].shapes[0].shapes[0].text == "Other in a group"
 
 
+def test_import_slide_carries_pictures_links_notes_and_background_from_another_deck(tmp_path):
+    import rpptx
+
+    red, blue = _tiny_png(0xDD, 0x20, 0x20), _tiny_png(0x20, 0x20, 0xDD)
+
+    def build_source(deck):
+        from pptx.chart.data import CategoryChartData
+        from pptx.enum.chart import XL_CHART_TYPE
+        from pptx.oxml import parse_xml
+        from pptx.util import Inches
+
+        slide = deck.slides.add_slide(deck.slide_layouts[1])
+        slide.shapes.title.text = "Imported title"
+        slide.placeholders[1].text = "Body bullet"
+        slide.shapes.add_picture(io.BytesIO(red), Inches(6), Inches(4))
+        run = slide.shapes.add_textbox(Inches(1), Inches(5), Inches(4), Inches(1)).text_frame.paragraphs[0].add_run()
+        run.text = "Visit"
+        run.hyperlink.address = "https://example.com/import"
+        slide.notes_slide.notes_text_frame.text = "Speaker notes"
+        _, background = slide.part.get_or_add_image_part(io.BytesIO(blue))
+        slide._element.cSld.insert(0, parse_xml(
+            '<p:bg xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
+            ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+            ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<p:bgPr><a:blipFill><a:blip r:embed="{background}"/></a:blipFill><a:effectLst/></p:bgPr></p:bg>'
+        ))
+        chart = deck.slides.add_slide(deck.slide_layouts[5])
+        data = CategoryChartData()
+        data.categories = ["a", "b"]
+        data.add_series("s", (1, 2))
+        chart.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, 0, 0, Inches(4), Inches(3), data)
+
+    def build_target(deck):
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        slide.shapes.add_picture(io.BytesIO(red), 0, 0)
+
+    source = rpptx.Presentation(_python_pptx_deck(tmp_path / "source.pptx", build_source))
+    prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", build_target))
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="has a chart, which is not carried"):
+        prs.slides.import_slide(source.slides[1])
+    assert prs.to_bytes() == before
+    with pytest.raises(ValueError, match="layout is not a layout of this presentation"):
+        prs.slides.import_slide(source.slides[0], layout=source.slide_layouts[1])
+    with pytest.raises(IndexError):
+        prs.slides.import_slide(source.slides[0], index=2)
+
+    held = prs.slides[0]
+    imported = prs.slides.import_slide(source.slides[0], index=0)
+    with pytest.raises(rpptx.StaleElementError):
+        _ = held.shapes
+    assert [shape.name for shape in imported.shapes] == [
+        "Title 1", "Content Placeholder 2", "Picture 3", "TextBox 4",
+    ]
+    assert imported.shapes[2].image.blob == red
+    assert imported.notes_text == "Speaker notes"
+    again = prs.slides.import_slide(prs.slides[0], layout=prs.slide_layouts[6], index=-1)
+    assert again.shapes[0].text == "Imported title"
+    same = prs.slides.import_slide(prs.slides[0])
+    assert same.slide_layout == prs.slide_layouts[1]
+    output = tmp_path / "imported.pptx"
+    prs.save(output)
+    media = [name for name in _package_parts(output.read_bytes()) if name.startswith("ppt/media/")]
+    assert len(media) == 2
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output)
+    assert [slide.slide_layout.name for slide in oracle.slides] == [
+        "Title and Content", "Blank", "Blank", "Title and Content",
+    ]
+    slide = oracle.slides[0]
+    assert [shape.text_frame.text for shape in slide.shapes if shape.has_text_frame] == [
+        "Imported title", "Body bullet", "Visit",
+    ]
+    assert slide.shapes[2].image.blob == red
+    assert slide.shapes[3].text_frame.paragraphs[0].runs[0].hyperlink.address == "https://example.com/import"
+    assert slide.notes_slide.notes_text_frame.text == "Speaker notes"
+    blip = slide._element.cSld.bg.xpath(".//a:blip")[0]
+    embed = blip.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed")
+    assert slide.part.related_part(embed).blob == blue
+
+
 def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     import rpptx
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE

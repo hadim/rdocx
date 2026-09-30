@@ -15437,6 +15437,407 @@ print(json.dumps(oracle_records, sort_keys=True))
     assert!(lines.next().is_none());
 }
 
+const IMPORT_VIDEO: &[u8] = b"\0\0\0\x18ftypisom-import-video";
+
+/// A default-template deck of two slides. The first carries a picture, a
+/// video, an external hyperlink, a picture background, and speaker notes
+/// whose run links through a relationship listed after the slide
+/// back-relationship's id. `edit` then changes the package with the first
+/// slide's part and its notes part in hand.
+fn import_source_bytes(edit: impl FnOnce(&mut OpcPackage, &str, &str)) -> Vec<u8> {
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(1).unwrap();
+    source.add_slide(6).unwrap();
+    source
+        .add_picture(
+            0,
+            &png_header(4, 3),
+            "shared.png",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        )
+        .unwrap();
+    source
+        .add_media(
+            0,
+            MediaKind::Video,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: IMPORT_VIDEO,
+                filename: "clip.mp4",
+                content_type: "video/mp4",
+            }),
+            MediaPoster {
+                bytes: &png_header(4, 3),
+                filename: "poster.png",
+            },
+            Emu(0),
+            Emu(0),
+            Emu(914_400),
+            Emu(914_400),
+            MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    source.set_notes_text(0, "Imported notes").unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "import source");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap()
+        .clone();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    assert_eq!(slide_part, "/ppt/slides/slide1.xml");
+    package.set_part("/ppt/media/background.png", png_header(5, 5));
+    let relationships = package.get_or_create_part_rels(&slide_part);
+    let background = relationships.add(rel_types::IMAGE, "../media/background.png");
+    let link = relationships.add_external(rel_types::HYPERLINK, "https://example.com/import");
+    let notes_target = relationships
+        .get_by_type(rel_types::NOTES_SLIDE)
+        .unwrap()
+        .target
+        .clone();
+    let notes_part = OpcPackage::resolve_rel_target(&slide_part, &notes_target);
+    let xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<p:cSld>",
+            &format!(
+                r#"<p:cSld><p:bg><p:bgPr><a:blipFill><a:blip r:embed="{background}"/><a:stretch><a:fillRect/></a:stretch></a:blipFill><a:effectLst/></p:bgPr></p:bg>"#
+            ),
+            1,
+        )
+        .replacen(
+            "</p:spTree>",
+            &format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="90" name="Link"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr><a:hlinkClick r:id="{link}"/></a:rPr><a:t>Visit</a:t></a:r></a:p></p:txBody></p:sp></p:spTree>"#
+            ),
+            1,
+        );
+    package.set_part(&slide_part, xml.into_bytes());
+
+    // Notes relationships in file order rId1 master, rId3 hyperlink, rId2
+    // slide, with the notes run linking rId3.
+    let notes_relationships = package.get_or_create_part_rels(&notes_part);
+    let notes_link =
+        notes_relationships.add_external(rel_types::HYPERLINK, "https://example.com/notes");
+    assert_eq!(notes_link, "rId3");
+    let moved = notes_relationships.items.pop().unwrap();
+    notes_relationships.items.insert(1, moved);
+    let notes_xml = String::from_utf8(package.get_part(&notes_part).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<a:r><a:t>Imported notes</a:t>",
+            r#"<a:r><a:rPr><a:hlinkClick r:id="rId3"/></a:rPr><a:t>Imported notes</a:t>"#,
+            1,
+        );
+    assert!(notes_xml.contains("rId3"));
+    package.set_part(&notes_part, notes_xml.into_bytes());
+    edit(&mut package, &slide_part, &notes_part);
+    package_bytes(package)
+}
+
+/// The slide parts of a saved deck in presentation order.
+fn saved_slide_parts(package: &OpcPackage) -> Vec<String> {
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    model
+        .slide_ids
+        .iter()
+        .map(|slide_id| {
+            let relationship = package
+                .get_part_rels(&presentation_part)
+                .unwrap()
+                .get_by_id(&slide_id.relationship_id)
+                .unwrap();
+            OpcPackage::resolve_rel_target(&presentation_part, &relationship.target)
+        })
+        .collect()
+}
+
+/// Asserts that the notes run of `slide_part` still links the notes
+/// hyperlink, and that the notes back-relationship targets the slide.
+fn assert_copied_notes_link(package: &OpcPackage, slide_part: &str) {
+    let notes_relationship = package
+        .get_part_rels(slide_part)
+        .unwrap()
+        .get_by_type(rel_types::NOTES_SLIDE)
+        .unwrap();
+    let notes_part = OpcPackage::resolve_rel_target(slide_part, &notes_relationship.target);
+    let relationships = package.get_part_rels(&notes_part).unwrap();
+    let link = relationships.get_by_type(rel_types::HYPERLINK).unwrap();
+    assert_eq!(link.target, "https://example.com/notes");
+    let back = relationships.get_by_type(rel_types::SLIDE).unwrap();
+    assert_eq!(
+        OpcPackage::resolve_rel_target(&notes_part, &back.target),
+        slide_part
+    );
+    let xml = String::from_utf8(package.get_part(&notes_part).unwrap().to_vec()).unwrap();
+    assert!(
+        xml.contains(&format!(r#"<a:hlinkClick r:id="{}"/>"#, link.id)),
+        "{notes_part}: {xml}"
+    );
+}
+
+#[test]
+fn import_slide_carries_pictures_links_notes_and_background_with_shared_media() {
+    let source = Presentation::from_bytes(&import_source_bytes(|_, _, _| {})).unwrap();
+    let source_before = source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(6).unwrap();
+    destination
+        .add_picture(
+            0,
+            &png_header(4, 3),
+            "existing.png",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        )
+        .unwrap();
+
+    destination
+        .import_slide(&source, 0, None, Some(0))
+        .expect("import slide");
+    destination
+        .import_slide(&source, 0, None, None)
+        .expect("import the slide again");
+
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+    assert_eq!(destination.len(), 3);
+    assert_eq!(
+        destination.layout_name(destination.slide_layout_index(0).unwrap()),
+        source.layout_name(source.slide_layout_index(0).unwrap())
+    );
+    assert_eq!(
+        destination.slide(0).unwrap().notes_text().as_deref(),
+        Some("Imported notes")
+    );
+    let bytes = destination.to_bytes().unwrap();
+    let package = open_opc(&bytes, "imported slide");
+    let mut media = package
+        .parts
+        .keys()
+        .filter(|part| part.starts_with("/ppt/media/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    media.sort();
+    assert_eq!(media.len(), 3, "{media:?}");
+    let slide_parts = saved_slide_parts(&package);
+    let targets = |part: &str, relationship_type: &str| {
+        let mut targets = package
+            .get_part_rels(part)
+            .unwrap()
+            .items
+            .iter()
+            .filter(|relationship| relationship.rel_type == relationship_type)
+            .map(|relationship| OpcPackage::resolve_rel_target(part, &relationship.target))
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets.dedup();
+        targets
+    };
+    let pictures = targets(&slide_parts[0], rel_types::IMAGE);
+    assert_eq!(pictures.len(), 2);
+    assert!(pictures.contains(&targets(&slide_parts[1], rel_types::IMAGE)[0]));
+    let videos = targets(&slide_parts[0], rel_types::VIDEO);
+    assert_eq!(
+        videos,
+        targets(&slide_parts[0], rel_types::POWERPOINT_MEDIA)
+    );
+    assert_eq!(videos, targets(&slide_parts[2], rel_types::VIDEO));
+    assert_eq!(package.get_part(&videos[0]).unwrap(), IMPORT_VIDEO);
+    assert_eq!(
+        package.content_types.content_type_for(&videos[0]),
+        Some("video/mp4")
+    );
+    assert!(media.contains(&videos[0]));
+    let imported_relationships = package.get_part_rels(&slide_parts[0]).unwrap();
+    let link = imported_relationships
+        .get_by_type(rel_types::HYPERLINK)
+        .unwrap();
+    assert_eq!(link.target, "https://example.com/import");
+    assert_eq!(link.target_mode.as_deref(), Some("External"));
+    let slide_xml = String::from_utf8(package.get_part(&slide_parts[0]).unwrap().to_vec()).unwrap();
+    assert!(slide_xml.contains(&format!(r#"<a:hlinkClick r:id="{}"/>"#, link.id)));
+    assert!(slide_xml.contains("<p:bg><p:bgPr><a:blipFill>"));
+    for relationship_id in slide_xml
+        .split("r:embed=\"")
+        .skip(1)
+        .map(|rest| rest.split('"').next().unwrap())
+    {
+        let relationship = imported_relationships.get_by_id(relationship_id).unwrap();
+        assert!(
+            [rel_types::IMAGE, rel_types::POWERPOINT_MEDIA]
+                .contains(&relationship.rel_type.as_str())
+        );
+    }
+    assert_copied_notes_link(&package, &slide_parts[0]);
+    assert_copied_notes_link(&package, &slide_parts[2]);
+    assert!(
+        Presentation::from_bytes(&bytes)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
+}
+
+#[test]
+fn duplicate_slide_keeps_notes_links_and_shares_media_outside_the_media_folder() {
+    let mut presentation =
+        Presentation::from_bytes(&import_source_bytes(|package, slide_part, _| {
+            let video = package
+                .get_part_rels(slide_part)
+                .unwrap()
+                .get_by_type(rel_types::VIDEO)
+                .unwrap()
+                .target
+                .clone();
+            let video = OpcPackage::resolve_rel_target(slide_part, &video);
+            let bytes = package.get_part(&video).unwrap().to_vec();
+            package.parts.remove(&video);
+            package.set_part("/ppt/clips/clip.mp4", bytes);
+            package
+                .content_types
+                .add_override("/ppt/clips/clip.mp4", "video/mp4");
+            for relationship in &mut package.get_or_create_part_rels(slide_part).items {
+                if relationship.target.ends_with(".mp4") {
+                    relationship.target = "../clips/clip.mp4".to_owned();
+                }
+            }
+        }))
+        .unwrap();
+
+    presentation.duplicate_slide(0).expect("duplicate slide");
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "duplicated notes links");
+    let slide_parts = saved_slide_parts(&package);
+    assert_copied_notes_link(&package, &slide_parts[0]);
+    assert_copied_notes_link(&package, &slide_parts[1]);
+    for slide_part in &slide_parts[..2] {
+        let video = package
+            .get_part_rels(slide_part)
+            .unwrap()
+            .get_by_type(rel_types::VIDEO)
+            .unwrap();
+        assert_eq!(
+            OpcPackage::resolve_rel_target(slide_part, &video.target),
+            "/ppt/clips/clip.mp4"
+        );
+    }
+    assert!(
+        !package
+            .parts
+            .keys()
+            .any(|part| part.ends_with(".mp4") && part != "/ppt/clips/clip.mp4")
+    );
+    assert!(
+        Presentation::from_bytes(&bytes)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
+}
+
+#[test]
+fn import_slide_refuses_what_it_does_not_carry_without_mutation() {
+    let chart = Presentation::from_bytes(&import_source_bytes(|package, slide_part, _| {
+        package.set_part("/ppt/charts/chart1.xml", b"<c:chartSpace/>".to_vec());
+        package
+            .content_types
+            .add_override("/ppt/charts/chart1.xml", content_types::CHART);
+        package
+            .get_or_create_part_rels(slide_part)
+            .add(rel_types::CHART, "../charts/chart1.xml");
+    }))
+    .unwrap();
+    let jump = Presentation::from_bytes(&import_source_bytes(|package, slide_part, _| {
+        package
+            .get_or_create_part_rels(slide_part)
+            .add(rel_types::SLIDE, "slide2.xml");
+    }))
+    .unwrap();
+    let notes_jump = Presentation::from_bytes(&import_source_bytes(|package, _, notes_part| {
+        assert!(package.get_part("/ppt/slides/slide2.xml").is_some());
+        let jump = package
+            .get_or_create_part_rels(notes_part)
+            .add(rel_types::SLIDE, "../slides/slide2.xml");
+        let xml = String::from_utf8(package.get_part(notes_part).unwrap().to_vec())
+            .unwrap()
+            .replacen(
+                r#"<a:hlinkClick r:id="rId3"/>"#,
+                &format!(r#"<a:hlinkClick r:id="{jump}" action="ppaction://hlinksldjump"/>"#),
+                1,
+            );
+        package.set_part(notes_part, xml.into_bytes());
+    }))
+    .unwrap();
+    let renamed = Presentation::from_bytes(&import_source_bytes(|package, slide_part, _| {
+        let layout = package
+            .get_part_rels(slide_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_LAYOUT)
+            .unwrap()
+            .target
+            .clone();
+        let layout = OpcPackage::resolve_rel_target(slide_part, &layout);
+        let xml = String::from_utf8(package.get_part(&layout).unwrap().to_vec())
+            .unwrap()
+            .replacen("<p:cSld name=\"", "<p:cSld name=\"Module ", 1);
+        package.set_part(&layout, xml.into_bytes());
+    }))
+    .unwrap();
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(0).unwrap();
+    let before = destination.to_bytes().unwrap();
+
+    for (source, expected) in [
+        (&chart, "slide1.xml has a chart, which is not carried"),
+        (
+            &jump,
+            "slide1.xml has a hyperlink that jumps to another slide",
+        ),
+        (
+            &notes_jump,
+            "notesSlide1.xml has a hyperlink that jumps to another slide",
+        ),
+        (&renamed, "no layout named \"Module "),
+    ] {
+        let error = match destination.import_slide(source, 0, None, None) {
+            Ok(_) => panic!("import should fail with {expected}"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(destination.to_bytes().unwrap(), before);
+    }
+    assert!(matches!(
+        destination.import_slide(&renamed, 0, Some(99), None),
+        Err(Error::UnknownLayoutIndex { .. })
+    ));
+    assert!(matches!(
+        destination.import_slide(&renamed, 0, None, Some(2)),
+        Err(Error::UnknownSlideIndex { .. })
+    ));
+    assert_eq!(destination.to_bytes().unwrap(), before);
+
+    destination
+        .import_slide(&renamed, 0, Some(1), None)
+        .expect("an explicit layout replaces the name match");
+    assert_eq!(destination.slide_layout_index(1), Some(1));
+    let smartart =
+        Presentation::from_bytes(&package_bytes(smartart_transfer_source_package())).unwrap();
+    destination
+        .import_slide(&smartart, 0, Some(6), None)
+        .expect("SmartArt graphs are carried");
+    assert_eq!(destination.smart_art(2).unwrap().len(), 1);
+    assert!(destination.validate().is_empty());
+}
+
 fn png_header(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
     bytes.extend_from_slice(&width.to_be_bytes());
