@@ -15956,17 +15956,25 @@ impl Document {
 
     /// Get the plain text of body paragraphs and table cells in document order.
     ///
-    /// A body paragraph ends with a newline. A table row is one line in which
+    /// A body paragraph normally ends with a newline. A table row is one line in which
     /// every cell paragraph ends with a tab, paragraphs of nested tables
     /// included. Content controls at every level contribute the paragraphs,
     /// rows and cells they wrap at the position they occupy.
     /// Each paragraph contributes its accepted-view text, the same text as
     /// [`ParagraphRef::text`]: tracked insertions are included and tracked
-    /// deletions are left out.
+    /// deletions are left out. A body paragraph whose mark is deleted or moved
+    /// away joins the next body paragraph without a newline when
+    /// `CT_Body::accepted_paragraph_joins_next` says so, as accepting it does,
+    /// so one with no accepted text leaves no line at all.
     pub fn text(&self) -> String {
         let mut result = String::new();
-        for content in &self.document.body.content {
+        for (index, content) in self.document.body.content.iter().enumerate() {
             match content {
+                BodyContent::Paragraph(paragraph)
+                    if self.document.body.accepted_paragraph_joins_next(index) =>
+                {
+                    result.push_str(&ParagraphRef { inner: paragraph }.text());
+                }
                 BodyContent::Paragraph(paragraph) => push_paragraph_line(paragraph, &mut result),
                 BodyContent::Table(table) => push_table_text(table, &mut result),
                 BodyContent::ContentControl(control) => push_control_text(control, &mut result),
