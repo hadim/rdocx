@@ -367,6 +367,7 @@ MEASUREMENT_COLUMNS = (
 )
 MEASUREMENT_DATE = "2026-09-19"
 ARCHIVE_REMEASUREMENT_DATES = {
+    "oxml-chart": "2026-09-30",
     "oxml-cli-support": "2026-09-29",
     "oxml-core": "2026-09-30",
     "oxml-drawing": "2026-09-30",
@@ -385,7 +386,7 @@ ARCHIVE_REMEASUREMENT_DATES = {
 MEASUREMENT_PLATFORM = "macOS 26.6.2, Apple M5 Max, arm64"
 ARCHIVE_COMPRESSION_TOLERANCE_BYTES = 64
 ARCHIVE_MEASUREMENTS = {
-    "oxml-chart": (102_042, 659_367, 6),
+    "oxml-chart": (102_042, 659_394, 6),
     "oxml-cli-support": (8_614, 30_840, 6),
     "oxml-core": (21_495, 103_654, 15),
     "oxml-drawing": (168_367, 1_166_131, 24),

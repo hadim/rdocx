@@ -6478,13 +6478,31 @@ fn render_toc_entries(
         output.push_str("<w:p><w:pPr><w:pStyle w:val=\"");
         output.push_str(&xml_escape_attribute(&entry_style.style_id));
         output.push_str("\"/>");
-        if !source.omit_page_number
+        // Word gives the entry of a heading numbered with a tab its own left
+        // stop after the number, so the title does not go to the page number
+        // stop.
+        let number_stop = match source.numbering_prefix.as_ref() {
+            Some(prefix) if prefix.suffix == ST_LvlSuffix::Tab => {
+                Some(toc_number_tab_stop(&prefix.marker, source.level))
+            }
+            _ => None,
+        };
+        let fallback_right = !source.omit_page_number
             && toc.page_number_separator.is_none()
-            && !entry_style.has_right_tab
-        {
-            output.push_str("<w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"");
-            output.push_str(&fallback_right_tab.to_string());
-            output.push_str("\"/></w:tabs>");
+            && !entry_style.has_right_tab;
+        if number_stop.is_some() || fallback_right {
+            output.push_str("<w:tabs>");
+            if let Some(stop) = number_stop {
+                output.push_str("<w:tab w:val=\"left\" w:pos=\"");
+                output.push_str(&stop.to_string());
+                output.push_str("\"/>");
+            }
+            if fallback_right {
+                output.push_str("<w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"");
+                output.push_str(&fallback_right_tab.to_string());
+                output.push_str("\"/>");
+            }
+            output.push_str("</w:tabs>");
         }
         output.push_str("</w:pPr>");
         if toc.hyperlink {
@@ -6545,6 +6563,45 @@ fn render_toc_entries(
         output.push_str("</w:p>");
     }
     Ok(output.into_bytes())
+}
+
+/// Advance widths of Aptos, Word's default font, for the printable ASCII
+/// characters from space to `~`, in its 2048 units per em.
+///
+/// Word measures a TOC entry's number in this font, so these values are
+/// facts about Word's output rather than about the document. They are the
+/// font's own advances: Word writes 2509 twips for "WWWWWWWWWW1", which is
+/// exactly their sum at 12 points plus 240.
+const APTOS_ADVANCES: [u16; 95] = [
+    416, 600, 757, 1100, 1094, 1692, 1317, 431, 600, 600, 936, 1094, 585, 697, 585, 695, 1094,
+    1094, 1094, 1094, 1094, 1094, 1094, 1094, 1094, 1094, 585, 585, 1094, 1094, 1094, 1027, 1832,
+    1207, 1237, 1418, 1405, 1139, 1074, 1451, 1448, 533, 678, 1164, 1023, 1618, 1446, 1500, 1182,
+    1500, 1241, 1159, 980, 1395, 1199, 1827, 1132, 1105, 1056, 603, 695, 603, 1094, 942, 1130,
+    1088, 1149, 1075, 1148, 1079, 617, 992, 1129, 489, 489, 997, 533, 1747, 1129, 1130, 1149, 1148,
+    685, 995, 662, 1144, 926, 1476, 906, 926, 897, 603, 553, 603, 1094,
+];
+
+/// The left stop Word writes after the number of a TOC entry, in twips.
+///
+/// Word measures the number in its own default font, 12 pt Aptos in current
+/// releases, whatever the document's fonts, and puts the stop on the first
+/// 12 pt boundary at least 12 pt past the number, counting 12 pt of indent
+/// for each level below the first. A character outside the table counts as
+/// one em.
+fn toc_number_tab_stop(marker: &str, level: u8) -> i32 {
+    const STEP: f64 = 240.0;
+    let units: u32 = marker
+        .chars()
+        .map(|ch| {
+            u32::from(ch)
+                .checked_sub(0x20)
+                .and_then(|index| APTOS_ADVANCES.get(index as usize))
+                .map_or(2048, |advance| u32::from(*advance))
+        })
+        .sum();
+    let width = f64::from(units) * STEP / 2048.0;
+    let indent = f64::from(level.saturating_sub(1)) * STEP;
+    ((indent + width + STEP) / STEP).ceil() as i32 * STEP as i32
 }
 
 fn collision_safe_toc_page_token(
@@ -11912,6 +11969,34 @@ mod tests {
     use rdocx_oxml::text::{CT_P, CT_R, Field, FieldSwitch, RunContent};
 
     use super::*;
+
+    #[test]
+    fn toc_number_stops_match_the_ones_word_writes() {
+        // Word 16 for Mac, TOC fields updated in documents whose fonts and
+        // styles vary: the stop depends only on the number and the level.
+        for (marker, level, stop) in [
+            ("1", 1, 480),
+            ("1.", 1, 480),
+            ("(1)", 1, 720),
+            ("10.", 1, 720),
+            ("1.1.", 1, 720),
+            ("iiii1", 1, 720),
+            ("1.1.1.", 1, 960),
+            ("WW1", 1, 960),
+            ("1.1.1.1.", 1, 1200),
+            ("WWW1", 1, 1200),
+            ("WWWWW1", 1, 1440),
+            ("Chapter I:", 1, 1440),
+            ("Section 1.2", 1, 1440),
+            ("1.1.1.1.1.", 1, 1440),
+            ("iiiiiiiiiiiiiiii1", 1, 1440),
+            ("WWWWWWW1", 1, 1920),
+            ("1.1", 2, 960),
+            ("1.1.1", 3, 1440),
+        ] {
+            assert_eq!(toc_number_tab_stop(marker, level), stop, "{marker}");
+        }
+    }
 
     fn document_with_fields(fields: &[(&str, &str)]) -> Document {
         let mut document = Document::new();

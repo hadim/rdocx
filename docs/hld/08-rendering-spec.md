@@ -1568,9 +1568,13 @@ When the effective entry style has no right tab, the generated paragraph adds
 one at page width minus the section's left and right margins. Missing,
 nonpositive, or arithmetically invalid geometry uses the standard 9360 twip
 text width. A style-owned right tab remains authoritative and receives no
-direct duplicate. Numbering marker text and its suffix are separate ordered
-run content. A tab suffix is `w:tab`, a space suffix is preserved whitespace,
-and neither becomes a literal control character inside `w:t`.
+direct duplicate. The entry of a heading numbered with a tab suffix also gets
+a direct left stop after its number, as Word writes it: the first 240 twip
+boundary at least 240 twips past the number, measured at 12 points, counting
+240 twips of indent per level below the first. Numbering marker text and its
+suffix are separate ordered run content. A tab suffix is `w:tab`, a space
+suffix is preserved whitespace, and neither becomes a literal control
+character inside `w:t`.
 
 ### Word watermarks
 
@@ -1764,6 +1768,11 @@ tracked boundary, including deleted and moved-from runs before an accepted
 marker. Complex-field collapse and in-memory direct-run mutation preserve both
 coordinates. When two markers share one projected boundary, encounter order
 qualifies their direction before layout creates a bookmark target.
+
+A page field placeholder in text after a right, centre or decimal tab stop
+records where that text lies on its line. Once pagination gives the field its
+value, the text closes up around it and moves back by the share its stop
+aligns on, as far as the tab allows, so it stays on its stop as in Word.
 
 Only bookmarks named by a valid `PAGEREF` add a zero-width target marker to
 page output. After the document paginates once, the existing field substitution

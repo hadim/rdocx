@@ -2868,6 +2868,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         });
         let pdf = tagged_pdf(
             vec![PositionedElement::MarkedContent {
@@ -2965,6 +2966,7 @@ mod tests {
                         field_kind: None,
                         field_source: None,
                         note: None,
+                        tab_aligned: None,
                     })],
                 }])
                 .into(),
@@ -3295,6 +3297,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         });
         let layout = LayoutResult::new(
             vec![page_with(vec![group(Transform::IDENTITY, vec![text])]).into()],
@@ -3596,6 +3599,7 @@ mod tests {
                 field_kind: None,
                 field_source: None,
                 note: None,
+                tab_aligned: None,
             }),
             PositionedElement::Image {
                 rect: Rect {

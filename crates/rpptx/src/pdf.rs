@@ -1484,6 +1484,7 @@ impl Importer<'_> {
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         };
         if state.graphics_supported && state.fill_supported && state.text_visible {
             self.ensure_shape_room(page, 1)?;
