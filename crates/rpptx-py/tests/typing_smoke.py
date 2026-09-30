@@ -42,7 +42,9 @@ from rpptx._rpptx import (
     Run,
     RunCollection,
     Shape,
+    ShapeClickAction,
     ShapeCollection,
+    ShapeHyperlink,
     Slide,
     SlideCollection,
     SlideLayout,
@@ -393,6 +395,18 @@ def exercise_rpptx_hyperlink_types(run: Run) -> None:
     (address,)
 
 
+def exercise_rpptx_click_action_types(shape: Shape, slide: Slide) -> None:
+    action: ShapeClickAction = shape.click_action
+    link: ShapeHyperlink = action.hyperlink
+    link.address = "https://example.com"
+    link.address = None
+    action.target_slide = slide
+    target: Slide | None = action.target_slide
+    action.target_slide = None
+    same: bool = target == slide
+    (same,)
+
+
 def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
     frames: tuple[TextFrameLayout, ...] = presentation.text_layout()
     narrower: tuple[TextFrameLayout, ...] = presentation.text_layout(width_factor=0.95)
@@ -457,7 +471,9 @@ if TYPE_CHECKING:
     Run()  # type: ignore[call-arg]
     RunCollection()  # type: ignore[call-arg]
     Shape()  # type: ignore[call-arg]
+    ShapeClickAction()  # type: ignore[call-arg]
     ShapeCollection()  # type: ignore[call-arg]
+    ShapeHyperlink()  # type: ignore[call-arg]
     Slide()  # type: ignore[call-arg]
     SlideCollection()  # type: ignore[call-arg]
     SlideLayout()  # type: ignore[call-arg]

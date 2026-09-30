@@ -4,11 +4,13 @@ use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyByteArray, PyBytes, PyIterator, PyList, PySlice, PyString, PyTuple};
+use smallvec::smallvec;
 
 use crate::dml::{FillTarget, PyFillFormat, PyLineFormat};
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
 use crate::rpptx_to_pyerr;
+use crate::slide::PySlide;
 use crate::table::PyTable;
 use crate::text::PyTextFrame;
 use crate::validate_path;
@@ -659,6 +661,62 @@ impl PyShapeClickAction {
                 path: self.path.clone(),
             },
         )
+    }
+
+    /// The slide the click action jumps to, or `None` for any other action.
+    #[getter]
+    fn target_slide(&self, py: Python<'_>) -> PyResult<Option<Py<PySlide>>> {
+        let presentation = self.presentation.borrow(py);
+        validate_path(
+            py,
+            &presentation,
+            &self.path,
+            "shape click action",
+            ".click_action",
+        )?;
+        let shape_id = shape_ref_at(&presentation.inner, &self.path)
+            .and_then(|shape| shape.non_visual_id())
+            .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
+        let Some(target) = presentation
+            .inner
+            .shape_target_slide(slide_index(&self.path)?, shape_id)
+            .map_err(|error| rpptx_to_pyerr(py, error))?
+        else {
+            return Ok(None);
+        };
+        let path = presentation
+            .revisions
+            .capture(smallvec![PathSeg::Slide(target)]);
+        Py::new(py, PySlide::new(self.presentation.clone_ref(py), path)).map(Some)
+    }
+
+    /// Makes the click action jump to `slide`, or removes it for `None`, as
+    /// python-pptx does. The relationship the old click action used goes when
+    /// nothing else on the slide uses it.
+    #[setter]
+    fn set_target_slide(&self, py: Python<'_>, slide: Option<PyRef<'_, PySlide>>) -> PyResult<()> {
+        let target = match slide {
+            Some(slide) if !slide.presentation.is(&self.presentation) => {
+                return Err(PyValueError::new_err("slide is not in this presentation"));
+            }
+            Some(slide) => Some(slide.validate(py)?),
+            None => None,
+        };
+        let mut presentation = self.presentation.borrow_mut(py);
+        validate_path(
+            py,
+            &presentation,
+            &self.path,
+            "shape click action",
+            ".click_action",
+        )?;
+        let shape_id = shape_ref_at(&presentation.inner, &self.path)
+            .and_then(|shape| shape.non_visual_id())
+            .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
+        presentation
+            .inner
+            .set_shape_target_slide(slide_index(&self.path)?, shape_id, target)
+            .map_err(|error| rpptx_to_pyerr(py, error))
     }
 }
 

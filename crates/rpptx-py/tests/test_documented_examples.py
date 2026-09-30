@@ -1804,6 +1804,103 @@ def test_run_hyperlink_address_reads_writes_and_prunes_like_python_pptx(tmp_path
     assert [run.hyperlink.address for run in runs] == ["https://example.com/two", None]
 
 
+def _slide_jump_targets(data):
+    import xml.etree.ElementTree as ElementTree
+
+    relationships = _package_parts(data)["ppt/slides/_rels/slide1.xml.rels"]
+    return sorted(
+        relationship.get("Target")
+        for relationship in ElementTree.fromstring(relationships)
+        if relationship.get("Type").endswith("/slide")
+    )
+
+
+def test_shape_click_action_links_and_jumps_like_python_pptx(tmp_path):
+    import rpptx
+    from rpptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
+
+    prs = _textbox_presentation(rpptx)
+    for _ in range(2):
+        prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, 100, 100)
+    prs.slides[0].shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, 100, 100)
+    prs.slides[0].shapes.add_group_shape()
+    shapes = prs.slides[0].shapes
+    box, rect, line, group = shapes
+    action = box.click_action
+    assert (action.hyperlink.address, action.target_slide) == (None, None)
+    before = prs.to_bytes()
+    action.hyperlink.address = None
+    action.hyperlink.address = ""
+    action.target_slide = None
+    assert prs.to_bytes() == before
+
+    address = "https://example.com/a?x=1&y=2"
+    for shape in (box, rect, line, group):
+        shape.click_action.hyperlink.address = address
+    assert [shape.click_action.hyperlink.address for shape in shapes] == [address] * 4
+    assert _slide_hyperlink_targets(prs.to_bytes()) == [address]
+    rect.click_action.target_slide = prs.slides[2]
+    line.click_action.target_slide = prs.slides[2]
+    assert rect.click_action.target_slide == prs.slides[2]
+    assert rect.click_action.target_slide != prs.slides[1]
+    assert rect.click_action.hyperlink.address == "slide3.xml"
+    assert _slide_jump_targets(prs.to_bytes()) == ["slide3.xml"]
+    for shape in (box, group):
+        shape.click_action.hyperlink.address = None
+    assert _slide_hyperlink_targets(prs.to_bytes()) == []
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="control characters"):
+        rect.click_action.hyperlink.address = "https://example.com/\nnext"
+    other = rpptx.Presentation()
+    other.slides.add_slide(other.slide_layouts[6])
+    with pytest.raises(ValueError, match="not in this presentation"):
+        rect.click_action.target_slide = other.slides[0]
+    assert prs.to_bytes() == before
+    held = rect.click_action
+    prs.slides.add_slide(prs.slide_layouts[6])
+    with pytest.raises(rpptx.StaleElementError, match=r"\.click_action"):
+        _ = held.target_slide
+    output = tmp_path / "click-actions.pptx"
+    prs.save(output)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    deck = pptx.Presentation(output)
+    first, second, third = list(deck.slides[0].shapes)[:3]
+    assert [shape.click_action.hyperlink.address for shape in (first, second, third)] == [
+        None,
+        "slide3.xml",
+        "slide3.xml",
+    ]
+    assert second.click_action.target_slide == deck.slides[2]
+    assert first.click_action.target_slide is None
+
+    def build(deck):
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        target = deck.slides.add_slide(deck.slide_layouts[6])
+        slide.shapes.add_textbox(0, 0, 100, 100).click_action.hyperlink.address = (
+            "https://example.com/one"
+        )
+        slide.shapes.add_textbox(0, 0, 100, 100).click_action.target_slide = target
+
+    source = _python_pptx_deck(tmp_path / "python-pptx-click.pptx", build)
+    prs = rpptx.Presentation(source)
+    first, second = prs.slides[0].shapes
+    assert first.click_action.hyperlink.address == "https://example.com/one"
+    assert first.click_action.target_slide is None
+    assert second.click_action.target_slide == prs.slides[1]
+    first.click_action.target_slide = prs.slides[1]
+    second.click_action.hyperlink.address = "https://example.com/two"
+    retargeted = tmp_path / "python-pptx-click-out.pptx"
+    prs.save(retargeted)
+    assert _slide_hyperlink_targets(retargeted.read_bytes()) == ["https://example.com/two"]
+    assert _slide_jump_targets(retargeted.read_bytes()) == ["slide2.xml"]
+    deck = pptx.Presentation(retargeted)
+    first, second = deck.slides[0].shapes
+    assert first.click_action.target_slide == deck.slides[1]
+    assert second.click_action.hyperlink.address == "https://example.com/two"
+
+
 def test_text_enums_match_python_pptx_member_values_and_xml_tokens():
     if importlib.util.find_spec("pptx") is None:
         pytest.skip("python-pptx oracle is installed only for the differential gate")

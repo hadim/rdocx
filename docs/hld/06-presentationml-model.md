@@ -647,6 +647,32 @@ reads, adds, retargets, and removes the `a:hlinkClick` in `p:cNvPr` while
 retaining other non-visual properties and unmodelled children. Insertion keeps
 the schema order of `p:cNvPr` children.
 
+Shape click actions also jump to other slides:
+
+```rust
+pub fn shape_target_slide(&self, slide_index: usize, shape_id: u32) -> Result<Option<usize>>;
+pub fn set_shape_target_slide(
+    &mut self,
+    slide_index: usize,
+    shape_id: u32,
+    target_slide_index: Option<usize>,
+) -> Result<()>;
+```
+
+Both find a shape, picture, connector, graphic frame, or group by its
+`p:cNvPr/@id`, inside groups too, as the shape hyperlink methods do.
+`set_shape_target_slide` writes the action `ppaction://hlinksldjump` and names
+the slide's internal relationship to the target slide part, reused when
+present. `set_shape_hyperlink` drops that action, so an address replaces a
+slide jump. Either write keeps the other attributes and children of an existing
+`a:hlinkClick`, such as a tooltip or a click sound. `shape_target_slide`
+resolves that jump, and the first, last, next, and previous jumps of
+`ppaction://hlinkshowjump`, counted from the slide that holds the shape. A jump
+off either end of the deck returns `None` where python-pptx raises. python-pptx
+refuses a click action on a group, but PowerPoint honours one, so rpptx writes
+it. Jumping to the current target changes nothing, and relationships only the
+old click action named are removed.
+
 An ordinary shape has canonical non-visual properties, a typed transform,
 preset geometry, and a minimal text body. `add_shape` keeps the string API but
 accepts only names in the generated table of all 187 ECMA preset shapes. An

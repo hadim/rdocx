@@ -186,6 +186,14 @@ impl PySlide {
 
 #[pymethods]
 impl PySlide {
+    /// Two handles are equal when they name the same slide of one
+    /// presentation at the same revision.
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        other
+            .extract::<PyRef<'_, PySlide>>()
+            .is_ok_and(|other| other.presentation.is(&self.presentation) && other.path == self.path)
+    }
+
     #[getter]
     fn shapes(&self, py: Python<'_>) -> PyResult<Py<PyShapeCollection>> {
         self.validate(py)?;
