@@ -1798,21 +1798,7 @@ impl Presentation {
         }
         self.slides
             .iter_mut()
-            .map(|record| {
-                let slide_count = replace_text_in_children(
-                    &mut record.slide.common_slide_data.shape_tree.children,
-                    placeholder,
-                    value,
-                );
-                let notes_count = record.notes.as_mut().map_or(0, |notes| {
-                    replace_text_in_children(
-                        &mut notes.notes.common_slide_data.shape_tree.children,
-                        placeholder,
-                        value,
-                    )
-                });
-                slide_count + notes_count
-            })
+            .map(|record| replace_text_in_slide_record(record, placeholder, value, true))
             .sum()
     }
 
@@ -1821,16 +1807,55 @@ impl Presentation {
     /// The candidate is serialized before it replaces the live presentation,
     /// so a malformed retained subtree cannot publish a partial mutation.
     pub fn try_replace_text(&mut self, placeholder: &str, value: &str) -> Result<usize> {
-        if placeholder.is_empty() {
-            return Err(Error::InvalidSlideMutation {
-                operation: "replace text",
-                message: "placeholder must not be empty".to_owned(),
-            });
-        }
+        require_replacement_placeholder(placeholder)?;
         let mut candidate = self.clone();
         let count = candidate.replace_text(placeholder, value);
         candidate.staged_package(false)?;
         *self = candidate;
+        Ok(count)
+    }
+
+    /// Replaces literal text on one slide, and in its speaker notes when
+    /// `notes` is true, and returns the count.
+    ///
+    /// Matching, formatting and traversal are those of
+    /// [`Presentation::try_replace_text`], restricted to that slide. Other
+    /// slides and their notes are never touched. The replacement runs on a
+    /// copy of the slide and its notes, which must serialize before the copy
+    /// replaces them. With `expect`, a different count also leaves the slide
+    /// unchanged and is returned for the caller to compare.
+    pub fn try_replace_slide_text(
+        &mut self,
+        slide_index: usize,
+        placeholder: &str,
+        value: &str,
+        notes: bool,
+        expect: Option<usize>,
+    ) -> Result<usize> {
+        self.require_slide_index(slide_index)?;
+        require_replacement_placeholder(placeholder)?;
+        let mut candidate = self.slides[slide_index].clone();
+        let count = replace_text_in_slide_record(&mut candidate, placeholder, value, notes);
+        if expect.is_some_and(|expected| expected != count) {
+            return Ok(count);
+        }
+        candidate
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.part_name.clone(),
+                message: error.to_string(),
+            })?;
+        if let Some(record) = candidate.notes.as_ref().filter(|_| notes) {
+            record
+                .notes
+                .to_xml()
+                .map_err(|error| Error::MalformedPart {
+                    part_name: record.part_name.clone(),
+                    message: error.to_string(),
+                })?;
+        }
+        self.slides[slide_index] = candidate;
         Ok(count)
     }
 
@@ -6822,6 +6847,32 @@ impl<'a> TextFrame<'a> {
         self.body.set_text(text);
     }
 
+    /// Replaces literal text in this text body only and returns the count.
+    ///
+    /// Matching and formatting are those of
+    /// [`Presentation::try_replace_text`]. An empty placeholder is rejected
+    /// before anything changes. With `expect`, the replacement runs on a copy
+    /// of the body, and a different count leaves the body unchanged and is
+    /// returned for the caller to compare. Nothing is serialized, because
+    /// replacing run text cannot make a body fail to serialize.
+    pub fn try_replace_text(
+        &mut self,
+        placeholder: &str,
+        value: &str,
+        expect: Option<usize>,
+    ) -> Result<usize> {
+        require_replacement_placeholder(placeholder)?;
+        let Some(expected) = expect else {
+            return Ok(replace_text_in_body(self.body, placeholder, value));
+        };
+        let mut candidate = self.body.clone();
+        let count = replace_text_in_body(&mut candidate, placeholder, value);
+        if count == expected {
+            *self.body = candidate;
+        }
+        Ok(count)
+    }
+
     /// Returns the number of paragraphs in the text body.
     pub fn paragraph_count(&self) -> usize {
         self.body.paragraph_count()
@@ -7531,6 +7582,37 @@ fn first_notes_body_mut(children: &mut [ShapeTreeChild]) -> Option<&mut CT_TextB
         }
     }
     None
+}
+
+fn require_replacement_placeholder(placeholder: &str) -> Result<()> {
+    if placeholder.is_empty() {
+        return Err(Error::InvalidSlideMutation {
+            operation: "replace text",
+            message: "placeholder must not be empty".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn replace_text_in_slide_record(
+    record: &mut SlideRecord,
+    placeholder: &str,
+    value: &str,
+    notes: bool,
+) -> usize {
+    let slide_count = replace_text_in_children(
+        &mut record.slide.common_slide_data.shape_tree.children,
+        placeholder,
+        value,
+    );
+    let notes_count = record.notes.as_mut().filter(|_| notes).map_or(0, |notes| {
+        replace_text_in_children(
+            &mut notes.notes.common_slide_data.shape_tree.children,
+            placeholder,
+            value,
+        )
+    });
+    slide_count + notes_count
 }
 
 fn replace_text_in_children(
