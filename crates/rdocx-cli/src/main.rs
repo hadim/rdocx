@@ -62,6 +62,14 @@ enum Command {
         /// Directory containing font files (.ttf/.otf) to use for PDF rendering
         #[arg(long)]
         font_dir: Option<PathBuf>,
+        /// Revision view: accepted or tracked (tracked is refused for HTML and Markdown)
+        #[arg(
+            long,
+            value_name = "VIEW",
+            default_value = "accepted",
+            value_parser = commands::parse_revision_view
+        )]
+        revision_view: rdocx::RevisionView,
         /// One-based page range for image output, such as 1,3-5
         #[arg(long)]
         pages: Option<String>,
@@ -137,6 +145,14 @@ enum Command {
         /// Output format: png, jpeg, tiff
         #[arg(long, default_value = "png")]
         format: String,
+        /// Revision view to render: accepted or tracked
+        #[arg(
+            long,
+            value_name = "VIEW",
+            default_value = "accepted",
+            value_parser = commands::parse_revision_view
+        )]
+        revision_view: rdocx::RevisionView,
         /// JPEG quality from 1 through 100
         #[arg(long, default_value = "90")]
         quality: u8,
@@ -437,6 +453,7 @@ fn main() {
             force,
             dpi,
             font_dir,
+            revision_view,
             pages,
             quality,
             transparent,
@@ -447,6 +464,7 @@ fn main() {
             force,
             dpi,
             font_dir.as_deref(),
+            revision_view,
             commands::ImageOptions {
                 pages: pages.as_deref(),
                 quality,
@@ -478,6 +496,7 @@ fn main() {
             format,
             quality,
             transparent,
+            revision_view,
         } => commands::render(
             &file,
             output_dir.as_deref(),
@@ -489,6 +508,7 @@ fn main() {
                 format: &format,
                 quality,
                 transparent,
+                revision_view,
             },
         ),
         Command::Comment { command } => match command {
