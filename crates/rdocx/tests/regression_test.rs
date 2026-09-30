@@ -10031,6 +10031,74 @@ fn style_numbering_level_without_an_instance_follows_its_based_on_chain() {
     assert_eq!(markers(&mut document), expected);
 }
 
+/// The same rule for a style linked to a list and for a repeated template
+/// paragraph. A style `w:numPr` holding only a `w:ilvl` owns no link, so a
+/// link replaces it. A paragraph `w:ilvl` without a `w:numId` takes the
+/// instance of its style chain, which Word renders as `1.a)` under a `Base`
+/// paragraph numbered `1.`, and numbers nothing under `Normal`.
+#[test]
+fn link_and_template_accept_a_numbering_level_without_an_instance() {
+    let producer_styles = concat!(
+        r#"<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/>"#,
+        r#"<w:basedOn w:val="Normal"/><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>"#,
+        r#"</w:style><w:style w:type="paragraph" w:styleId="Base"><w:name w:val="Base"/>"#,
+        r#"<w:basedOn w:val="Normal"/></w:style>"#,
+    );
+    let body = concat!(
+        r#"<w:p><w:r><w:t>{% for item in items %}</w:t></w:r></w:p>"#,
+        r#"<w:p><w:pPr><w:pStyle w:val="Base"/><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>"#,
+        r#"<w:r><w:t>{{ item }}</w:t></w:r></w:p>"#,
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>"#,
+        r#"<w:r><w:t>Note {{ item }}</w:t></w:r></w:p>"#,
+        r#"<w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p>"#,
+        r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>Subtitle</w:t></w:r></w:p>"#,
+    );
+    let mut document = document_with_producer_styles(body, producer_styles);
+    let levels = [
+        ListLevel::decimal().level_text("%1."),
+        ListLevel::decimal().level_text("%1.%2)"),
+    ];
+    let definition = document.add_numbering_definition(&levels).unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .link_style_to_numbering("Base", instance, 0)
+        .unwrap();
+    let subtitle_definition = document
+        .add_numbering_definition(&[ListLevel::decimal().level_text("S%1.")])
+        .unwrap();
+    let subtitle = document
+        .add_numbering_instance(subtitle_definition, &[])
+        .unwrap();
+    document
+        .link_style_to_numbering("Subtitle", subtitle, 0)
+        .unwrap();
+
+    document
+        .render_template(&serde_json::json!({"items": ["one", "two"]}))
+        .unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    let markers = (0..5)
+        .map(|body_index| {
+            let text = document.paragraph(body_index).unwrap().text();
+            let marker = layout
+                .document_body_paragraph_numbering(body_index)
+                .map(|numbering| numbering.marker_text.clone());
+            (text, marker)
+        })
+        .collect::<Vec<_>>();
+    let entry = |text: &str, marker: Option<&str>| (text.to_owned(), marker.map(str::to_owned));
+    assert_eq!(
+        markers,
+        [
+            entry("one", Some("1.1)")),
+            entry("Note one", None),
+            entry("two", Some("1.2)")),
+            entry("Note two", None),
+            entry("Subtitle", Some("S1.")),
+        ]
+    );
+}
+
 fn fx114_toc_document() -> Document {
     use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
     use rdocx_oxml::properties::CT_PPr;

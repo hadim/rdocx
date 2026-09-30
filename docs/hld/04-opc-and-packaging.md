@@ -399,6 +399,9 @@ same exact style, instance, and level tuple and removes both edges together.
 A style `w:numPr` that holds a `w:ilvl` and no `w:numId`, as python-docx's
 default `Subtitle` does, owns no link. It takes the instance of its `basedOn`
 chain, as layout and Word do, and has no numbering when the chain has none.
+Linking such a style replaces its level. A paragraph `w:ilvl` without a
+`w:numId` takes the instance of its style chain in the same way, which is how a
+repeated template paragraph is checked.
 
 Numbering parsers retain namespace declarations and compatibility attributes
 from modelled containers. Unknown level and override children use their schema

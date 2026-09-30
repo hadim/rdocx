@@ -331,15 +331,21 @@ fn validate_paragraph_numbering(
     let Some(properties) = &paragraph.properties else {
         return Ok(());
     };
-    let Some(num_id) = properties.num_id else {
-        if properties.num_ilvl.is_some() {
-            return Err(template_error(
-                "a repeated paragraph numbering level has no numId",
-            ));
-        }
-        return Ok(());
+    let (num_id, level) = match (properties.num_id, properties.num_ilvl) {
+        (Some(num_id), level) => (num_id, level.unwrap_or(0)),
+        // A `w:ilvl` without a `w:numId` takes the instance of the paragraph
+        // style chain, as Word does, and numbers nothing without one.
+        (None, Some(level)) => match crate::style::resolve_paragraph_properties(
+            properties.style_id.as_deref(),
+            &document.styles,
+        )
+        .num_id
+        {
+            Some(num_id) if num_id != 0 => (num_id, level),
+            _ => return Ok(()),
+        },
+        (None, None) => return Ok(()),
     };
-    let level = properties.num_ilvl.unwrap_or(0);
     if !document.template_numbering_reference_exists(num_id, level) {
         return Err(template_error(&format!(
             "a repeated paragraph references missing numbering numId {num_id} level {level}"

@@ -17802,7 +17802,8 @@ impl Document {
     /// Both the style's paragraph properties and the numbering level's
     /// paragraph-style link are published together. Existing links must either
     /// match this exact tuple or the operation fails without changing the
-    /// document.
+    /// document. A style `w:numPr` holding a `w:ilvl` and no `w:numId` is not
+    /// a link, and the new link replaces its level.
     pub fn link_style_to_numbering(
         &mut self,
         style_id: &str,
@@ -17859,7 +17860,8 @@ impl Document {
             .as_ref()
             .map(|properties| (properties.num_id, properties.num_ilvl))
             .unwrap_or((None, None));
-        if style_numbering != (None, None) && style_numbering != (Some(num_id), Some(level)) {
+        // A `w:ilvl` without a `w:numId` owns no link, so the link replaces it.
+        if style_numbering.0.is_some() && style_numbering != (Some(num_id), Some(level)) {
             return Err(Error::Other(format!(
                 "style '{style_id}' already references a different numbering level"
             )));
