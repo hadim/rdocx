@@ -36,6 +36,24 @@ serialization. Package serialization validates content-type identity, part
 identity, relationship-owner identity, every relationship-id scope, and output
 ZIP entry identity before opening or truncating a destination path.
 
+**No save writes a character XML 1.0 cannot carry.** Serialization refuses
+`[Content_Types].xml`, every relationship part, and every UTF-8 part whose
+content type ends in `xml` when its bytes hold such a character: a C0 control
+byte other than tab, LF and CR, or the encoding of U+FFFE or U+FFFF. The error
+names the part, the code point, and its line and column. A UTF-16 part is not
+scanned, and neither is a part whose content type does not end in `xml`, such
+as a VML drawing (`application/vnd.openxmlformats-officedocument.vmlDrawing`).
+This is the one place every writer of both formats passes, so a value stored
+through an infallible setter or a public field is caught here. An entry that
+already held such a character when the package was read is written back while
+its bytes are unchanged, so producer content passes through verbatim. The
+check is fail-closed: any edit that re-serializes such a part, or a
+relationship part whose source held one, refuses the save rather than write it
+again. The fallible entry points that take free text refuse such a value
+earlier, naming it and the one-based character position, as python-docx and
+python-pptx refuse such strings. DrawingML `a:t` text set through the text
+setters is the exception, stored as `_xHHHH_` as python-pptx stores it.
+
 **Saves are deterministic.** Both `part_rels` and `parts` are emitted in sorted
 key order, so writing the same package twice produces byte-identical output.
 That property is load-bearing for the round-trip corpus and must not regress.

@@ -500,6 +500,8 @@ impl<'a> Run<'a> {
 
     /// Append a Word field with its cached display result.
     pub fn add_field(&mut self, instruction: &str, cached_result: &str) -> Result<()> {
+        oxml_core::xml::reject_non_xml_characters("field instruction", instruction)?;
+        oxml_core::xml::reject_non_xml_characters("field result", cached_result)?;
         let field = Field::new(instruction, cached_result);
         if field.instruction.name.is_empty() {
             return Err(Error::Other(

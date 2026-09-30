@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Write;
 
 use oxml_core::OxmlError;
@@ -28,6 +29,12 @@ pub enum TextSpace {
 }
 
 /// One DrawingML `a:t` value and its source whitespace intent.
+///
+/// `value` is the text as the part stores it and PowerPoint shows it. The
+/// text setters store a character XML 1.0 cannot carry, such as U+0001, as
+/// `_xHHHH_` with four uppercase hexadecimal digits, as python-pptx does, and
+/// reading never decodes that form, as neither python-pptx nor PowerPoint
+/// does.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TextValue {
     pub value: String,
@@ -112,6 +119,24 @@ impl TextValue {
             .map_err(OxmlError::from)?;
         write_end(writer, "a:t")
     }
+}
+
+/// Spells each character XML 1.0 cannot carry as `_xHHHH_`, as python-pptx's
+/// run text setter does, so text holding one can still be saved.
+pub fn escape_invalid_xml_characters(text: &str) -> Cow<'_, str> {
+    let is_invalid = |character: char| !oxml_core::xml::is_xml_1_0_character(character);
+    if !text.chars().any(is_invalid) {
+        return Cow::Borrowed(text);
+    }
+    let mut escaped = String::with_capacity(text.len() + 6);
+    for character in text.chars() {
+        if is_invalid(character) {
+            escaped.push_str(&format!("_x{:04X}_", u32::from(character)));
+        } else {
+            escaped.push(character);
+        }
+    }
+    Cow::Owned(escaped)
 }
 
 /// The seven members of `ST_TextAlignType`.
@@ -1165,7 +1190,7 @@ impl CT_RegularTextRun {
         Self {
             properties: None,
             text: TextValue {
-                value: text.into(),
+                value: escape_invalid_xml_characters(&text.into()).into_owned(),
                 ..TextValue::default()
             },
             raw_children: OrderedRawChildren::default(),
@@ -1173,8 +1198,11 @@ impl CT_RegularTextRun {
     }
 
     /// Replaces the run text while retaining properties and unmodelled XML.
+    ///
+    /// A character XML 1.0 cannot carry is stored as `_xHHHH_`, as
+    /// python-pptx stores it.
     pub fn set_text(&mut self, text: &str) {
-        self.text.value = text.to_owned();
+        self.text.value = escape_invalid_xml_characters(text).into_owned();
     }
 
     /// Parses one complete `a:r` element with any prefix.
@@ -1521,7 +1549,9 @@ impl CT_TextParagraph {
             .expect("paragraph properties were inserted")
     }
 
-    /// Replaces ordered text choices with one regular run.
+    /// Replaces ordered text choices with one regular run, split at each
+    /// vertical tab by an `a:br` with the run's formatting, since a vertical
+    /// tab is how the paragraph text reports a line break.
     ///
     /// The first existing regular run supplies direct formatting and
     /// unmodelled run content for the replacement. A paragraph without one
@@ -1557,6 +1587,36 @@ impl CT_TextParagraph {
         });
         run.set_text(text);
         self.runs = vec![TextRun::Run(run)];
+        self.split_line_breaks(text);
+    }
+
+    /// Splits the one run `set_text` leaves at each vertical tab of `text`.
+    /// A later run that would be empty is left out, as python-pptx leaves it
+    /// out, and content preserved after the old runs stays after the new ones.
+    fn split_line_breaks(&mut self, text: &str) {
+        let [TextRun::Run(first)] = self.runs.as_mut_slice() else {
+            return;
+        };
+        if !text.contains('\u{b}') {
+            return;
+        }
+        let mut lines = text.split('\u{b}');
+        first.set_text(lines.next().unwrap_or_default());
+        let properties = first.properties.clone();
+        for line in lines {
+            self.raw_children.shift_boundaries_from(2);
+            self.runs.push(TextRun::Break(CT_TextLineBreak {
+                properties: properties.clone(),
+                ..CT_TextLineBreak::default()
+            }));
+            if !line.is_empty() {
+                self.raw_children.shift_boundaries_from(2);
+                self.runs.push(TextRun::Run(CT_RegularTextRun {
+                    properties: properties.clone(),
+                    ..CT_RegularTextRun::new(line)
+                }));
+            }
+        }
     }
 
     /// Appends one regular run after the existing ordered text choices.
@@ -2549,5 +2609,61 @@ mod tests {
             assert!(result.is_ok(), "text parser panicked");
             assert!(result.unwrap().is_err(), "malformed text parsed");
         }
+    }
+
+    #[test]
+    fn characters_xml_cannot_carry_are_stored_escaped_and_never_decoded() {
+        let mut paragraph = CT_TextParagraph::default();
+        paragraph.add_run("a\u{1}b\u{b}c\u{1f}d\u{fffe}e\u{0}");
+        let TextRun::Run(run) = &paragraph.runs[0] else {
+            panic!("expected a run");
+        };
+        assert_eq!(
+            run.text.value, "a_x0001_b_x000B_c_x001F_d_xFFFE_e_x0000_",
+            "the setter stores the escaped form, as python-pptx does"
+        );
+        let written = paragraph.to_xml().unwrap();
+        assert_eq!(
+            written,
+            br#"<a:p><a:r><a:t>a_x0001_b_x000B_c_x001F_d_xFFFE_e_x0000_</a:t></a:r></a:p>"#
+        );
+        let declared = [
+            br#"<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#.as_slice(),
+            &written[4..],
+        ]
+        .concat();
+        oxml_core::xml::validate_strict_xml_1_0(&declared)
+            .expect("the written paragraph is XML 1.0");
+        assert_eq!(CT_TextParagraph::from_xml(&written).unwrap(), paragraph);
+
+        // Reading keeps every `_xHHHH_` spelling as text, as PowerPoint shows
+        // it and python-pptx reads it.
+        let xml = br#"<a:p><a:r><a:t>C_x0041_D bell_x0007_ _x000b_ _x0001</a:t></a:r></a:p>"#;
+        let paragraph = CT_TextParagraph::from_xml(xml).unwrap();
+        let TextRun::Run(run) = &paragraph.runs[0] else {
+            panic!("expected a run");
+        };
+        assert_eq!(run.text.value, "C_x0041_D bell_x0007_ _x000b_ _x0001");
+        assert_eq!(paragraph.to_xml().unwrap(), xml);
+    }
+
+    #[test]
+    fn a_vertical_tab_set_as_paragraph_text_becomes_a_line_break() {
+        let mut paragraph = CT_TextParagraph::from_xml(
+            br#"<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:x"><a:r><a:rPr b="1"/><a:t>old</a:t></a:r><x:after/><a:endParaRPr sz="1200"/><x:end/></a:p>"#,
+        )
+        .unwrap();
+        paragraph.set_text("one\u{b}two\u{1}\u{b}");
+        assert_eq!(
+            String::from_utf8(paragraph.to_xml().unwrap()).unwrap(),
+            r#"<a:p><a:r><a:rPr b="1"/><a:t>one</a:t></a:r><a:br><a:rPr b="1"/></a:br><a:r><a:rPr b="1"/><a:t>two_x0001_</a:t></a:r><a:br><a:rPr b="1"/></a:br><x:after/><a:endParaRPr sz="1200"/><x:end/></a:p>"#
+        );
+
+        let mut plain = CT_TextParagraph::default();
+        plain.set_text("\u{b}");
+        assert_eq!(
+            plain.to_xml().unwrap(),
+            br#"<a:p><a:r><a:t/></a:r><a:br/></a:p>"#
+        );
     }
 }

@@ -34843,7 +34843,8 @@ fn word_embedded_forbidden_literal_xml_characters_fail_closed_atomically() {
             package
         }),
     ] {
-        let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+        let mut document =
+            Document::from_bytes(&f236_package_bytes_with_producer_literals(package)).unwrap();
         let before = document.to_bytes().unwrap();
         assert!(document.embedded_content().is_err(), "{label}");
         assert!(
@@ -35072,6 +35073,40 @@ fn f236_package_bytes(package: oxml_opc::OpcPackage) -> Vec<u8> {
     let mut output = std::io::Cursor::new(Vec::new());
     package.write_to(&mut output).unwrap();
     output.into_inner()
+}
+
+/// The package writer refuses a character XML 1.0 cannot carry, so a fixture
+/// holding one on purpose, as a producer might, writes those parts into the
+/// ZIP itself.
+fn f236_package_bytes_with_producer_literals(mut package: oxml_opc::OpcPackage) -> Vec<u8> {
+    use std::io::Write;
+
+    let literal = package
+        .parts
+        .iter()
+        .filter(|(_, data)| {
+            std::str::from_utf8(data).is_ok_and(|text| {
+                text.chars()
+                    .any(|character| matches!(character, '\u{1}' | '\u{FFFE}'))
+            })
+        })
+        .map(|(name, data)| (name.trim_start_matches('/').to_owned(), data.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for name in literal.keys() {
+        package
+            .parts
+            .insert(format!("/{name}"), b"<placeholder/>".to_vec());
+    }
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in zip_entries(&f236_package_bytes(package)) {
+        archive
+            .start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .write_all(literal.get(&name).unwrap_or(&data))
+            .unwrap();
+    }
+    archive.finish().unwrap().into_inner()
 }
 
 fn f236_open_package(bytes: &[u8]) -> oxml_opc::OpcPackage {
@@ -41717,4 +41752,84 @@ fn every_border_style_token_survives_an_edit_and_save() {
         assert!(saved.contains(edge), "{edge} is missing from {saved}");
     }
     assert!(!saved.contains(r#"w:val="none""#), "{saved}");
+}
+
+/// Text holding a character XML 1.0 cannot carry reached `w:t`, `w:instrText`
+/// and every other Word part raw, so the saved part was not well-formed and
+/// Word could not open it. python-docx refuses such text, so the fallible
+/// entry points refuse it naming the character and its position, and no save
+/// writes it into any part, whichever setter stored it.
+#[test]
+fn text_xml_cannot_carry_is_refused_at_entry_and_never_saved() {
+    let mut document = Document::new();
+    document.add_paragraph("Dear {{NAME}}");
+    let error = document
+        .try_replace_text("{{NAME}}", "Ada\u{1}")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("replacement text holds U+0001 at character 4"),
+        "{error}"
+    );
+    assert!(
+        document
+            .replace_all_regex(&[("NAME".to_owned(), "\u{b}".to_owned())])
+            .is_err()
+    );
+    let range = RunRange {
+        start: RunPosition {
+            body_index: 0,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index: 0,
+            run_index: 1,
+        },
+    };
+    let error = document
+        .add_comment(range, "Ada", None, "see \u{c}")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("comment text holds U+000C at character 5"),
+        "{error}"
+    );
+    let error = document
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .add_field("PAGE\u{1f}", "1")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("field instruction holds U+001F at character 5"),
+        "{error}"
+    );
+    document.to_bytes().expect("refused text changed nothing");
+
+    // An infallible setter stores the text, and the save refuses it.
+    document.add_paragraph("tab\tand\u{1}");
+    let error = document.to_bytes().unwrap_err().to_string();
+    assert!(
+        error.contains("/word/document.xml holds U+0001 at line"),
+        "{error}"
+    );
+
+    let mut document = Document::new();
+    document.set_header("Header \u{ffff}");
+    let error = document.to_bytes().unwrap_err().to_string();
+    assert!(error.contains("holds U+FFFF at line"), "{error}");
+    assert!(error.contains("/word/header"), "{error}");
+
+    let mut document = Document::new();
+    document.add_footnote("note \u{2}");
+    let error = document.to_bytes().unwrap_err().to_string();
+    assert!(
+        error.contains("/word/footnotes.xml holds U+0002 at line"),
+        "{error}"
+    );
 }

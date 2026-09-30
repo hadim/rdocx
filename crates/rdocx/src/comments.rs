@@ -9,12 +9,20 @@ use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::BodyContent;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, RangeAnchor};
-
 #[cfg(test)]
 use rdocx_oxml::text::{CT_R, CommentRangeMarker, HyperlinkSpan, RunContent};
 
 use crate::document::visit_body_paragraphs_mut;
 use crate::{ContentLocation, Document, Error, Result};
+
+/// Refuses comment fields holding a character XML 1.0 cannot carry, as
+/// python-docx refuses such text.
+fn reject_non_xml_comment(author: &str, initials: Option<&str>, text: &str) -> Result<()> {
+    oxml_core::xml::reject_non_xml_characters("comment author", author)?;
+    oxml_core::xml::reject_non_xml_characters("comment initials", initials.unwrap_or_default())?;
+    oxml_core::xml::reject_non_xml_characters("comment text", text)?;
+    Ok(())
+}
 
 pub(crate) const COMMENTS_EXTENDED_REL_TYPE: &str =
     "http://schemas.microsoft.com/office/2011/relationships/commentsExtended";
@@ -536,6 +544,7 @@ impl Document {
         text: &str,
         date: Option<&str>,
     ) -> Result<i32> {
+        reject_non_xml_comment(author, initials, text)?;
         let mut candidate = self.clone_for_staging();
         let id = candidate.add_comment_staged(range, author, initials, text, date)?;
         candidate.flush_dirty_related_story_models()?;
@@ -702,6 +711,7 @@ impl Document {
         text: &str,
         date: Option<&str>,
     ) -> Result<i32> {
+        reject_non_xml_comment(author, initials, text)?;
         let mut candidate = self.clone_for_staging();
         let id = candidate
             .add_comment_on_text_staged(anchor, occurrence, author, initials, text, date)?;

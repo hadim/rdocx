@@ -26741,3 +26741,230 @@ fn no_op_save_preserves_every_unchanged_part() {
         .collect::<Vec<_>>();
     assert_eq!(changed, ["ppt/slides/slide1.xml"]);
 }
+
+/// Text holding a character XML 1.0 cannot carry used to reach `a:t` raw, so
+/// the saved part was not well-formed and PowerPoint offered to repair the
+/// file. The text setters now store it as python-pptx does, `_xHHHH_`, which
+/// is read back and shown as stored, while a vertical tab set as paragraph or
+/// frame text becomes the `a:br` the paragraph text reads back as one.
+#[test]
+fn control_characters_in_text_are_stored_escaped_as_python_pptx_stores_them() {
+    use rpptx::{Comment, CommentAuthor};
+
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut textbox = slide
+            .add_textbox(Emu(914_400), Emu(914_400), Emu(4_572_000), Emu(914_400))
+            .unwrap();
+        textbox.set_text("frame\u{1}text").unwrap();
+        let mut frame = textbox.text_frame().unwrap();
+        let mut paragraph = frame.add_paragraph();
+        paragraph.set_text("soft\u{b}break");
+        paragraph.add_run("run\u{1f}end\u{b}");
+        slide
+            .add_table(
+                1,
+                1,
+                Emu(914_400),
+                Emu(2_743_200),
+                Emu(4_572_000),
+                Emu(914_400),
+            )
+            .unwrap()
+            .table_mut()
+            .unwrap()
+            .cell_mut(0, 0)
+            .unwrap()
+            .set_text("cell\u{c}feed");
+    }
+    presentation
+        .set_notes_text(0, "note\u{2}\u{b}next")
+        .unwrap();
+    presentation
+        .add_comment_author(
+            CommentAuthor::new(
+                "{11111111-1111-1111-1111-111111111111}",
+                "Ada",
+                Some("A"),
+                "ada@example.test",
+                "test",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    presentation
+        .add_comment(
+            0,
+            Comment::new(
+                "{22222222-2222-2222-2222-222222222222}",
+                "{11111111-1111-1111-1111-111111111111}",
+                "2026-09-30T10:11:12Z",
+                "comment\u{7}bell",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    // The setter stores the escaped form, which is what the getter reads.
+    assert!(
+        presentation
+            .slide(0)
+            .unwrap()
+            .shapes()
+            .filter_map(|shape| shape.text_frame())
+            .any(|frame| frame.paragraph(0).unwrap().text() == "frame_x0001_text")
+    );
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "control characters");
+    for (name, xml) in &package.parts {
+        if name.ends_with(".xml") {
+            oxml_core::xml::validate_strict_xml_1_0(xml)
+                .unwrap_or_else(|error| panic!("{name} is not XML 1.0: {error:?}"));
+        }
+    }
+    let slide_xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    assert!(
+        slide_xml.contains("<a:t>frame_x0001_text</a:t>"),
+        "{slide_xml}"
+    );
+    assert!(
+        slide_xml.contains("<a:t>soft</a:t></a:r><a:br/><a:r><a:t>break</a:t>"),
+        "{slide_xml}"
+    );
+    assert!(
+        slide_xml.contains("<a:t>run_x001F_end_x000B_</a:t>"),
+        "{slide_xml}"
+    );
+    assert!(
+        slide_xml.contains("<a:t>cell_x000C_feed</a:t>"),
+        "{slide_xml}"
+    );
+
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let shapes = slide.shapes().collect::<Vec<_>>();
+    let frame = shapes
+        .iter()
+        .filter_map(|shape| shape.text_frame())
+        .find(|frame| frame.text().starts_with("frame"))
+        .unwrap();
+    assert_eq!(frame.paragraph(0).unwrap().text(), "frame_x0001_text");
+    assert_eq!(
+        frame.paragraph(1).unwrap().text(),
+        "soft\u{b}breakrun_x001F_end_x000B_"
+    );
+    let table = shapes.iter().find_map(|shape| shape.table()).unwrap();
+    assert_eq!(table.cell(0, 0).unwrap().text(), "cell_x000C_feed");
+    assert_eq!(slide.notes_text().as_deref(), Some("note_x0002_\nnext"));
+    assert_eq!(
+        reopened.comments(0).unwrap()[0].text(),
+        "comment_x0007_bell"
+    );
+
+    // PowerPoint shows the stored escape as typed, and so does the renderer.
+    let (resolved, _) = reopened.render_deterministic().unwrap();
+    let rendered = resolved.slides[0]
+        .shapes
+        .iter()
+        .map(|shape| resolved_content_text(&shape.content))
+        .collect::<Vec<_>>();
+    assert!(
+        rendered.contains(&"frame_x0001_text\nsoft\nbreakrun_x001F_end_x000B_".to_owned()),
+        "{rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|text| text.contains("cell_x000C_feed")),
+        "{rendered:?}"
+    );
+
+    // A replacement is stored the way the run text setter stores it.
+    let mut replaced = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(replaced.try_replace_text("break", "b\u{7}").unwrap(), 1);
+    oxml_core::xml::validate_strict_xml_1_0(
+        open_opc(&replaced.to_bytes().unwrap(), "replaced")
+            .get_part("/ppt/slides/slide1.xml")
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        replaced
+            .slide(0)
+            .unwrap()
+            .shapes()
+            .filter_map(|shape| shape.text_frame())
+            .any(|frame| frame.text().contains("soft\nb_x0007_run"))
+    );
+}
+
+/// A name or chart text holding a character XML 1.0 cannot carry used to
+/// reach its attribute or `c:v` raw, so the saved part was not well-formed.
+/// python-pptx refuses such a name and such chart data, so rpptx refuses a
+/// name at its setter, and no save writes such a character into any part.
+#[test]
+fn names_and_chart_text_xml_cannot_carry_are_refused() {
+    use rpptx::CommentAuthor;
+
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    let error = presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(914_400), Emu(914_400), Emu(914_400), Emu(914_400))
+        .unwrap()
+        .set_name("box\u{1}name")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("shape name holds U+0001 at character 4"),
+        "{error}"
+    );
+    let error = CommentAuthor::new(
+        "{11111111-1111-1111-1111-111111111111}",
+        "Ada\u{b}",
+        Some("A"),
+        "ada@example.test",
+        "test",
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("comment author name holds U+000B at character 4"),
+        "{error}"
+    );
+    presentation
+        .to_bytes()
+        .expect("refused names changed nothing");
+
+    // Chart authoring already refuses such text, as python-pptx does.
+    let error = presentation
+        .add_chart(
+            0,
+            ChartKind::Bar,
+            Emu(914_400),
+            Emu(2_743_200),
+            Emu(4_572_000),
+            Emu(2_743_200),
+            &ChartData {
+                categories: vec!["North\u{1f}".to_owned(), "South".to_owned()],
+                series: vec![("Revenue".to_owned(), vec![1.0, 2.0])],
+                ..f124_chart_data()
+            },
+        )
+        .err()
+        .expect("chart text XML cannot carry is refused")
+        .to_string();
+    assert!(error.contains("c:v has invalid value"), "{error}");
+
+    // A value set through a public field reaches no part either.
+    presentation.core_properties_mut().title = Some("Deck\u{c}title".to_owned());
+    let error = presentation.to_bytes().unwrap_err().to_string();
+    assert!(
+        error.contains("/docProps/core.xml holds U+000C at line"),
+        "{error}"
+    );
+}

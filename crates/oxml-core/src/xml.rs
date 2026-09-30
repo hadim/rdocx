@@ -33,10 +33,28 @@ pub enum XmlLexicalError {
     InvalidComment(String),
 }
 
+/// Refuses `value` when it holds a character XML 1.0 cannot carry, not even
+/// escaped, naming the character and its one-based position, as python-docx
+/// and python-pptx refuse such a string. `what` names the value in the message.
+pub fn reject_non_xml_characters(what: &str, value: &str) -> Result<()> {
+    match value
+        .chars()
+        .enumerate()
+        .find(|(_, character)| !is_xml_1_0_character(*character))
+    {
+        Some((index, character)) => Err(crate::OxmlError::InvalidValue(format!(
+            "{what} holds U+{:04X} at character {}, a character XML 1.0 cannot carry",
+            u32::from(character),
+            index + 1
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Validate the format-neutral lexical rules required by strict OOXML readers.
 pub fn validate_strict_xml_1_0(xml: &[u8]) -> std::result::Result<(), XmlLexicalError> {
     let text = std::str::from_utf8(xml).map_err(|_| XmlLexicalError::InvalidUtf8)?;
-    if !text.chars().all(xml_1_0_character_is_valid) {
+    if !text.chars().all(is_xml_1_0_character) {
         return Err(XmlLexicalError::ForbiddenLiteralCharacter);
     }
 
@@ -178,7 +196,7 @@ fn validate_element(
         let value = attribute
             .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
             .map_err(|error| XmlLexicalError::InvalidReference(error.to_string()))?;
-        if !value.chars().all(xml_1_0_character_is_valid) {
+        if !value.chars().all(is_xml_1_0_character) {
             return Err(XmlLexicalError::ForbiddenLiteralCharacter);
         }
         if name == b"xmlns" {
@@ -291,7 +309,8 @@ fn xml_ncname_character(character: char) -> bool {
         || matches!(character, '-' | '.' | '0'..='9' | '\u{00B7}' | '\u{0300}'..='\u{036F}' | '\u{203F}'..='\u{2040}')
 }
 
-fn xml_1_0_character_is_valid(character: char) -> bool {
+/// Whether XML 1.0 can carry `character`, the `Char` production.
+pub fn is_xml_1_0_character(character: char) -> bool {
     matches!(character, '\t' | '\n' | '\r')
         || ('\u{20}'..='\u{D7FF}').contains(&character)
         || ('\u{E000}'..='\u{FFFD}').contains(&character)
@@ -303,7 +322,7 @@ fn validate_reference(reference: &BytesRef<'_>) -> std::result::Result<char, Xml
         .resolve_char_ref()
         .map_err(|error| XmlLexicalError::InvalidReference(error.to_string()))?
     {
-        if xml_1_0_character_is_valid(character) {
+        if is_xml_1_0_character(character) {
             return Ok(character);
         }
         return Err(XmlLexicalError::InvalidReference(

@@ -31,6 +31,18 @@ pub enum OpcError {
     #[error("invalid relationship XML")]
     InvalidRelationship,
 
+    /// A part to be written holds a character XML 1.0 cannot carry, not even
+    /// escaped, so writing it would produce a part no reader accepts.
+    #[error(
+        "{part} holds U+{code_point:04X} at line {line}, column {column}, a character XML 1.0 cannot carry"
+    )]
+    InvalidXmlCharacter {
+        part: String,
+        code_point: u32,
+        line: usize,
+        column: usize,
+    },
+
     #[cfg(feature = "agile-encryption")]
     #[error("unsupported encryption: {0}")]
     UnsupportedEncryption(&'static str),

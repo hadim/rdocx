@@ -3,6 +3,7 @@ use std::io::Write;
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::units::Emu;
+use oxml_core::xml::reject_non_xml_characters;
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::text::CT_TextListStyle;
@@ -118,9 +119,11 @@ impl Section {
     ) -> Result<Self> {
         let id = id.into();
         validate_guid("section", &id)?;
+        let name = name.into();
+        reject_non_xml_characters("section name", &name)?;
         Ok(Self {
             id: Some(id),
-            name: Some(name.into()),
+            name: Some(name),
             original_slide_ids: slide_ids.clone(),
             slide_ids,
             raw_attributes: Vec::new(),

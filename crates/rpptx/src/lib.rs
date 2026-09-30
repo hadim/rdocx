@@ -1836,6 +1836,8 @@ impl Presentation {
         if placeholder.is_empty() {
             return 0;
         }
+        // Stored as the run text setters store it, so it can be saved.
+        let value = &oxml_drawing::text::escape_invalid_xml_characters(value);
         self.slides
             .iter_mut()
             .map(|record| replace_text_in_slide_record(record, placeholder, value, true))
