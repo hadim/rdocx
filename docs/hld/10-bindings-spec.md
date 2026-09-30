@@ -1104,10 +1104,13 @@ binding revision advances only when a continuation is created.
 `Paragraph::remove_run` removes one run at the index `Paragraph::run` counts,
 and Python exposes it as `Run.remove()`. The comment, bookmark, and permission
 markers around the run stay in place. A run inside a hyperlink, an inline
-content control, or a tracked insertion is removed inside it, and a wrapper
-left with nothing in it is removed too. A run holding a comment reference, part
-of a complex field whose other parts are in other runs, or part of a tracked
-move destination is refused without change. A field whose parts are all in the
+content control, or a tracked insertion is removed inside it. A hyperlink or
+a tracked insertion left with nothing in it is removed too. An emptied content
+control stays with its properties, as Word keeps it to show its placeholder,
+and a removed hyperlink leaves its relationship in place. A run holding a
+comment, footnote, or endnote reference, part of a complex field whose other
+parts are in other runs, or part of a tracked move destination is refused
+without change. A field whose parts are all in the
 paragraph is one run and is removed whole. A removal advances the binding
 revision. `CommentRef` exposes
 comment metadata, text, parent identity, and resolved state without permitting

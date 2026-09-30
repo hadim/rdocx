@@ -2587,11 +2587,15 @@ mod remove_run {
     }
 
     #[test]
-    fn remove_run_removes_inside_wrappers_and_drops_the_emptied_ones() {
-        let mut document = from_body(concat!(
+    fn remove_run_removes_inside_wrappers_and_drops_emptied_hyperlinks_and_insertions() {
+        let control = concat!(
+            r#"<w:sdt><w:sdtPr><w:alias w:val="Client"/><w:tag w:val="client"/><w:lock w:val="sdtLocked"/></w:sdtPr>"#,
+            r#"<w:sdtContent><w:r><w:t>c1</w:t></w:r><w:r><w:t>c2</w:t></w:r></w:sdtContent></w:sdt>"#,
+        );
+        let mut document = from_body(&format!(
+            "{}{}{control}{}{}",
             r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
             r#"<w:ins w:id="1" w:author="Ada"><w:r><w:t>i1</w:t></w:r><w:r><w:t>i2</w:t></w:r></w:ins>"#,
-            r#"<w:sdt><w:sdtContent><w:r><w:t>c1</w:t></w:r><w:r><w:t>c2</w:t></w:r></w:sdtContent></w:sdt>"#,
             r#"<w:hyperlink w:anchor="a"><w:r><w:t>h1</w:t></w:r><w:r><w:t>h2</w:t></w:r></w:hyperlink>"#,
             r#"<w:r><w:t>y</w:t></w:r></w:p>"#,
         ));
@@ -2607,21 +2611,30 @@ mod remove_run {
             concat!(
                 r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
                 r#"<w:ins w:id="1" w:author="Ada"><w:r><w:t>i2</w:t></w:r></w:ins>"#,
-                r#"<w:sdt><w:sdtContent><w:r><w:t>c2</w:t></w:r></w:sdtContent></w:sdt>"#,
+                r#"<w:sdt><w:sdtPr><w:alias w:val="Client"/><w:tag w:val="client"/><w:lock w:val="sdtLocked"/></w:sdtPr>"#,
+                r#"<w:sdtContent><w:r><w:t>c2</w:t></w:r></w:sdtContent></w:sdt>"#,
                 r#"<w:hyperlink w:anchor="a"><w:r><w:t>h2</w:t></w:r></w:hyperlink>"#,
                 r#"<w:r><w:t>y</w:t></w:r></w:p>"#,
             )
         );
+        // The emptied insertion and hyperlink go, and the emptied control
+        // stays with its properties, as Word keeps it to show its placeholder.
         for _ in 0..3 {
             remove(&mut document, 0, 1).unwrap();
         }
         assert_eq!(
             body(&mut document),
-            r#"<w:p><w:r><w:t>x</w:t></w:r><w:r><w:t>y</w:t></w:r></w:p>"#
+            concat!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
+                r#"<w:sdt><w:sdtPr><w:alias w:val="Client"/><w:tag w:val="client"/><w:lock w:val="sdtLocked"/></w:sdtPr>"#,
+                r#"<w:sdtContent></w:sdtContent></w:sdt><w:r><w:t>y</w:t></w:r></w:p>"#,
+            )
         );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraph(0).unwrap().text(), "xy");
 
-        // A tracked insertion inside a hyperlink or a control goes with them,
-        // and a wrapper that still holds a marker stays.
+        // A tracked insertion inside a hyperlink or a control goes, the
+        // control stays, and so does a control that still holds a marker.
         let mut document = from_body(concat!(
             r#"<w:p><w:r><w:t>x</w:t></w:r>"#,
             r#"<w:hyperlink w:anchor="a"><w:ins w:id="2" w:author="Ada"><w:r><w:t>h</w:t></w:r></w:ins></w:hyperlink>"#,
@@ -2639,7 +2652,8 @@ mod remove_run {
             body(&mut document),
             concat!(
                 r#"<w:p><w:r><w:t>x</w:t></w:r><w:bookmarkStart w:id="4" w:name="after"/>"#,
-                r#"<w:bookmarkEnd w:id="4"/><w:sdt><w:sdtContent>"#,
+                r#"<w:sdt><w:sdtContent></w:sdtContent></w:sdt><w:bookmarkEnd w:id="4"/>"#,
+                r#"<w:sdt><w:sdtContent>"#,
                 r#"<w:bookmarkStart w:id="5" w:name="in"/><w:bookmarkEnd w:id="5"/>"#,
                 r#"</w:sdtContent></w:sdt><w:r><w:t>y</w:t></w:r></w:p>"#,
             )
@@ -2652,6 +2666,56 @@ mod remove_run {
                 .text(),
             "xy"
         );
+    }
+
+    /// A hyperlink that keeps a marker after its last run goes stays where it
+    /// was, so the marker keeps its partner on the right side.
+    #[test]
+    fn remove_run_keeps_a_hyperlink_holding_a_marker_in_place() {
+        for (inside_start, outside_start, inside_end, outside_end) in [
+            (
+                r#"<w:bookmarkStart w:id="9" w:name="b"/>"#,
+                "",
+                "",
+                r#"<w:bookmarkEnd w:id="9"/>"#,
+            ),
+            (
+                "",
+                r#"<w:bookmarkStart w:id="9" w:name="b"/>"#,
+                r#"<w:bookmarkEnd w:id="9"/>"#,
+                "",
+            ),
+            (
+                r#"<w:permStart w:id="7" w:edGrp="everyone"/>"#,
+                "",
+                "",
+                r#"<w:permEnd w:id="7"/>"#,
+            ),
+            (
+                "",
+                r#"<w:permStart w:id="7" w:edGrp="everyone"/>"#,
+                r#"<w:permEnd w:id="7"/>"#,
+                "",
+            ),
+        ] {
+            let hyperlink = format!(
+                r#"<w:hyperlink w:anchor="a"><w:r><w:t>h</w:t></w:r>{inside_start}{inside_end}</w:hyperlink>"#
+            );
+            let source = format!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r>{outside_start}{hyperlink}{outside_end}<w:r><w:t>y</w:t></w:r></w:p>"#
+            );
+            let mut document = from_body(&source);
+            remove(&mut document, 0, 1).unwrap();
+            let expected = format!(
+                r#"<w:p><w:r><w:t>x</w:t></w:r>{outside_start}<w:hyperlink w:anchor="a">{inside_start}{inside_end}</w:hyperlink>{outside_end}<w:r><w:t>y</w:t></w:r></w:p>"#
+            );
+            assert_eq!(body(&mut document), expected, "{source}");
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            assert_eq!(reopened.paragraph(0).unwrap().text(), "xy");
+            for bookmark in reopened.bookmarks() {
+                assert_eq!(bookmark.issue(), None, "{source}");
+            }
+        }
     }
 
     #[test]
@@ -2668,9 +2732,21 @@ mod remove_run {
             r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>"#,
             r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r>"#,
             r#"<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t>n</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r>"#,
+            r#"<w:r><w:endnoteReference w:id="2"/></w:r></w:p>"#,
         ));
         let before = document.to_bytes().unwrap();
         for (paragraph, run, reason) in [
+            (
+                4,
+                1,
+                "run 1 cannot be removed: it holds the reference of footnote 1",
+            ),
+            (
+                4,
+                2,
+                "run 2 cannot be removed: it holds the reference of endnote 2",
+            ),
             (
                 0,
                 0,
@@ -2715,7 +2791,7 @@ mod remove_run {
         remove(&mut document, 3, 1).unwrap();
         let xml = body(&mut document);
         assert!(
-            xml.ends_with(r#"<w:p><w:r><w:t>a</w:t></w:r></w:p>"#),
+            xml.contains(r#"<w:p><w:r><w:t>a</w:t></w:r></w:p><w:p><w:r><w:t>n</w:t>"#),
             "{xml}"
         );
         assert!(xml.contains(r#"<w:instrText xml:space="preserve"> TOC \o "1-3" </w:instrText>"#));

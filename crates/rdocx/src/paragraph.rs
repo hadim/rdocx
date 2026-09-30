@@ -1086,11 +1086,13 @@ impl<'a> Paragraph<'a> {
     ///
     /// Comment ranges, bookmarks, permission ranges and the other markers
     /// next to the run stay where they are. A run inside a hyperlink, an
-    /// inline content control or a tracked insertion is removed inside it,
-    /// and the wrapper is removed too when nothing is left in it. A run that
-    /// holds a comment reference, part of a complex field whose other parts
-    /// are in other runs, or part of a tracked move destination is refused,
-    /// since the comment, the field or the move would lose its balance. A
+    /// inline content control or a tracked insertion is removed inside it. A
+    /// hyperlink or a tracked insertion left with nothing in it is removed
+    /// too, while a content control stays with its properties, empty, as Word
+    /// keeps it to show its placeholder. A run that holds a comment, footnote
+    /// or endnote reference, part of a complex field whose other parts are in
+    /// other runs, or part of a tracked move destination is refused, since
+    /// the note, the field or the move would lose its balance. A
     /// field whose parts are all in the paragraph is one run, removed whole.
     /// On error the paragraph is unchanged.
     pub fn remove_run(&mut self, run_index: usize) -> crate::Result<()> {

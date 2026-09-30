@@ -806,9 +806,9 @@ impl CT_Sdt {
         }
     }
 
-    /// Remove the accepted-view run at `path`, and a nested control or a
-    /// tracked insertion left with nothing in it. Returns false for a stale
-    /// path.
+    /// Remove the accepted-view run at `path`, and a tracked insertion left
+    /// with nothing in it. An emptied nested control stays. Returns false for
+    /// a stale path.
     pub(crate) fn remove_accepted_run_segments(
         &mut self,
         path: &[AcceptedRunPathSegment],
@@ -828,13 +828,7 @@ impl CT_Sdt {
                 let Some(SdtContent::ContentControl(control)) = self.content.get_mut(index) else {
                     return Ok(false);
                 };
-                if !control.remove_accepted_run_segments(rest)? {
-                    return Ok(false);
-                }
-                if control.content.is_empty() {
-                    self.remove_content(index);
-                }
-                Ok(true)
+                control.remove_accepted_run_segments(rest)
             }
             AcceptedRunPathSegment::Revision(index) => {
                 let Some((_, revision)) = self.revisions.get_mut(index) else {
