@@ -19136,13 +19136,17 @@ mod tests {
         }
     }
 
-    /// The x origin and right edge of every body text run, by line.
+    /// The x origin and right edge of the body text ink, by line. A space
+    /// hanging past the end of a line is not ink.
     fn text_extents(page: &oxml_layout::output::PageFrame) -> Vec<(f64, f64)> {
         let mut by_line: Vec<(f64, f64, f64)> = Vec::new();
         for element in compatibility_page_elements(page) {
             let PositionedElement::Text(run) = element else {
                 continue;
             };
+            if run.text.trim().is_empty() {
+                continue;
+            }
             let right = run.origin.x + run.advances.iter().sum::<f64>();
             if let Some(entry) = by_line
                 .iter_mut()
