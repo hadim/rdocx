@@ -1378,7 +1378,12 @@ Block-shaped paragraph, table, row, and cell children below an inline content
 control remain raw and do not enter accepted or tracked layout. The
 same projection applies to body, table, header, footer, footnote, and endnote
 paragraphs. Accepted layout includes insertions and move
-destinations and omits deletions and move sources. Tracked layout includes both
+destinations and omits deletions and move sources. A body paragraph whose mark
+is deleted or moved away and that has no accepted content produces no block,
+so it leaves no line, spacing or list number, when
+`CT_Body::accepted_paragraph_joins_next` says it joins the next paragraph. One
+that keeps accepted content is still laid out as its own paragraph rather than
+at the start of the next one. Tracked layout includes both
 sides. It forces single underline on insertion and move destination text and
 single strike on deletion and move source text while retaining the remaining
 resolved formatting.

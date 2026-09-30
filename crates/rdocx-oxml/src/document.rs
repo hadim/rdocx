@@ -13,7 +13,7 @@ use crate::numbering::{
 };
 use crate::properties::{get_word_val_attr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
-use crate::revision::CT_Revision;
+use crate::revision::{CT_Revision, RevisionKind};
 use crate::shared::{ST_PageOrientation, ST_SectionType};
 use crate::table::{CT_Tbl, ST_VerticalJc};
 use crate::text::{
@@ -2514,6 +2514,51 @@ impl CT_Body {
             }
         }
         paragraphs.into_iter()
+    }
+
+    /// Whether accepting every tracked change joins the body paragraph at
+    /// `index` to the next body paragraph, as Word does when a paragraph mark
+    /// is deleted or moved away (`w:del` or `w:moveFrom` in the mark `w:rPr`).
+    ///
+    /// The joined paragraph keeps the properties of the next paragraph, so a
+    /// joining paragraph with no accepted content leaves nothing. A paragraph
+    /// that ends a section keeps its mark, and so does one that a table, a
+    /// content control or the end of the body follows, which is also where
+    /// Word keeps a paragraph mark.
+    #[doc(hidden)]
+    pub fn accepted_paragraph_joins_next(&self, index: usize) -> bool {
+        let Some(BodyContent::Paragraph(paragraph)) = self.content.get(index) else {
+            return false;
+        };
+        let Some(properties) = paragraph.properties.as_ref() else {
+            return false;
+        };
+        let Some(mark) = properties.rpr.as_ref() else {
+            return false;
+        };
+        // The model keeps a moved-away mark as preserved XML, so it is
+        // recognized by its element name.
+        let moved_away = || {
+            mark.revision_xml.iter().any(|raw| {
+                let mut reader = Reader::from_reader(raw.as_slice());
+                matches!(
+                    reader.read_event(),
+                    Ok(Event::Start(start) | Event::Empty(start))
+                        if matches_local_name(start.name().as_ref(), b"moveFrom")
+                )
+            })
+        };
+        let removed = mark
+            .revision_markers
+            .iter()
+            .any(|marker| marker.kind() == RevisionKind::Deletion)
+            || moved_away();
+        removed
+            && properties.sect_pr.is_none()
+            && self.content[index + 1..]
+                .iter()
+                .find(|next| !matches!(next, BodyContent::RawXml(_)))
+                .is_some_and(|next| matches!(next, BodyContent::Paragraph(_)))
     }
 
     /// Get a mutable iterator over only the paragraphs.

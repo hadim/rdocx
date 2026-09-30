@@ -38929,3 +38929,103 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert!(compared.revisions().is_empty());
 }
+
+/// Accepting a deleted or moved-away paragraph mark joins the paragraph to the
+/// next one. So a deleted paragraph, heading or list item leaves no line in
+/// the text and no line, spacing or list number in the accepted layout, which
+/// then matches the edited document. The tracked view keeps every paragraph.
+#[test]
+fn accepted_view_joins_paragraphs_whose_mark_is_deleted() {
+    let lines = |document: &Document, view: RevisionView| {
+        let result = document
+            .layout_deterministic_with_options(RenderOptions {
+                revision_view: view,
+            })
+            .unwrap();
+        let mut lines = Vec::new();
+        oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && !run.text.trim().is_empty()
+            {
+                lines.push((
+                    run.text.trim().to_owned(),
+                    (run.origin.y * 100.0).round() / 100.0,
+                ));
+            }
+        });
+        lines
+    };
+    let texts = |lines: &[(String, f64)]| {
+        lines
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let document = |edited: bool| {
+        let mut document = Document::new();
+        document.add_paragraph("Alpha");
+        if !edited {
+            document.add_paragraph("Gone");
+            document.add_paragraph("OLDHEAD").set_style("Heading1");
+        }
+        document.add_paragraph("Omega");
+        document.add_numbered_list_item("One", 0);
+        if !edited {
+            document.add_numbered_list_item("OLDITEM", 0);
+        }
+        document.add_numbered_list_item("Two", 0);
+        document
+    };
+    let mut redline = document(false);
+    let edited = document(true);
+    redline
+        .compare(&edited, "Ada", "2026-09-30T00:00:00Z")
+        .unwrap();
+
+    assert_eq!(redline.text(), "Alpha\nOmega\nOne\nTwo\n");
+    assert_eq!(redline.text(), edited.text());
+    assert_eq!(
+        lines(&redline, RevisionView::Accepted),
+        lines(&edited, RevisionView::Accepted)
+    );
+    assert_eq!(
+        texts(&lines(&redline, RevisionView::Accepted)),
+        "Alpha Omega 1. One 2. Two"
+    );
+    assert_eq!(
+        lines(&redline, RevisionView::Tracked),
+        [
+            ("Alpha", 80.25),
+            ("Gone", 100.12),
+            ("OLDHEAD", 127.74),
+            ("Omega", 141.26),
+            ("1.", 162.84),
+            ("One", 162.84),
+            ("2.", 184.55),
+            ("OLDITEM", 184.55),
+            ("3.", 206.27),
+            ("Two", 206.27),
+        ]
+        .map(|(text, y)| (text.to_owned(), y))
+    );
+
+    // A mark deleted alone joins its text to the next paragraph, as
+    // accepting it does. A moved-away paragraph leaves nothing. The layout
+    // still gives the joined text its own line.
+    let mut joined = document_with_content_controls(&wrap_word_body(
+        r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p><w:p><w:pPr><w:rPr><w:del w:id="1" w:author="Ada"/></w:rPr></w:pPr><w:r><w:t xml:space="preserve">Joined </w:t></w:r></w:p><w:p><w:pPr><w:rPr><w:moveFrom w:id="2" w:author="Ada"/></w:rPr></w:pPr><w:moveFrom w:id="3" w:author="Ada"><w:r><w:t>Moved</w:t></w:r></w:moveFrom></w:p><w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#,
+    ));
+    assert_eq!(joined.text(), "Alpha\nJoined Omega\n");
+    assert_eq!(
+        lines(&joined, RevisionView::Accepted),
+        [("Alpha", 80.25), ("Joined", 100.12), ("Omega", 119.99)]
+            .map(|(text, y)| (text.to_owned(), y))
+    );
+    assert_eq!(
+        texts(&lines(&joined, RevisionView::Tracked)),
+        "Alpha Joined Moved Omega"
+    );
+    joined.accept_all().unwrap();
+    assert_eq!(joined.text(), "Alpha\nJoined Omega\n");
+}

@@ -1983,6 +1983,16 @@ impl Engine {
 
         for content in main_story_layout_items(&input.document) {
             match content {
+                // Accepting a deleted or moved-away paragraph mark joins the
+                // paragraph to the next one, so one with no accepted content
+                // leaves no block, spacing or list number behind.
+                MainStoryLayoutItem::Paragraph(para, path)
+                    if input.revision_view == RevisionView::Accepted
+                        && path.len() == 1
+                        && input.document.body.accepted_paragraph_joins_next(path[0])
+                        && para.accepted_text().is_empty()
+                        && para.accepted_bookmark_runs().is_empty()
+                        && para.equations.is_empty() => {}
                 MainStoryLayoutItem::Paragraph(para, path) => {
                     // Check if this paragraph ends a section (has sect_pr)
                     let para_sect_pr = para.properties.as_ref().and_then(|p| p.sect_pr.clone());
