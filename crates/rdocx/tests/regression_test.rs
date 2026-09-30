@@ -21022,13 +21022,18 @@ fn comparison_tracks_a_rebuilt_table_of_contents() {
     // The rebuild moves the field begin into a paragraph of its own, writes
     // each entry with a PAGEREF field, as a hyperlink under `\h`, and
     // bookmarks each heading. Each of those paragraphs refused the pair as a
-    // paragraph boundary or modeled field change.
+    // paragraph boundary or modeled field change. Word writes the field end
+    // in a paragraph of its own, which the rebuild keeps unchanged.
     let titles = [
         ("Heading1", "Chapter 1"),
         ("Heading2", "Section 1.1"),
         ("Heading1", "Chapter 2"),
     ];
-    for switches in [r#""1-3" \h \z \u"#, r#""1-3" \z \u"#] {
+    for (switches, own_end_paragraph) in [
+        (r#""1-3" \h \z \u"#, false),
+        (r#""1-3" \z \u"#, false),
+        (r#""1-3" \h \z \u"#, true),
+    ] {
         let mut entries = String::new();
         for (index, (_, title)) in titles.iter().enumerate() {
             entries.push_str(r#"<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>"#);
@@ -21040,10 +21045,15 @@ fn comparison_tracks_a_rebuilt_table_of_contents() {
             entries.push_str(&format!(
                 "<w:r><w:t>{title}</w:t><w:tab/><w:t>9</w:t></w:r>"
             ));
-            if index + 1 == titles.len() {
+            if index + 1 == titles.len() && !own_end_paragraph {
                 entries.push_str(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
             }
             entries.push_str("</w:p>");
+        }
+        if own_end_paragraph {
+            entries.push_str(
+                r#"<w:p><w:r><w:rPr><w:b/><w:noProof/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+            );
         }
         let mut body = format!(
             r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t>Contents</w:t></w:r></w:p>{entries}</w:sdtContent></w:sdt>"#
@@ -21053,11 +21063,12 @@ fn comparison_tracks_a_rebuilt_table_of_contents() {
                 r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{title}</w:t></w:r></w:p><w:p><w:r><w:t>Body text.</w:t></w:r></w:p>"#
             ));
         }
+        let label = format!("{switches}, end in its own paragraph: {own_end_paragraph}");
         let original_bytes = document_with_field_parts(&wrap_word_body(&body), None, None)
             .to_bytes()
             .unwrap();
         let mut edited = Document::from_bytes(&original_bytes).unwrap();
-        assert_eq!(edited.rebuild_toc().unwrap().entry_count, 3, "{switches}");
+        assert_eq!(edited.rebuild_toc().unwrap().entry_count, 3, "{label}");
         let edited_bytes = edited.to_bytes().unwrap();
 
         for granularity in [
@@ -21069,37 +21080,62 @@ fn comparison_tracks_a_rebuilt_table_of_contents() {
                 ..Default::default()
             };
             let xml = compare_and_resolve(&original_bytes, &edited_bytes, &options);
-            // Every cached entry is deleted before any rebuilt entry is
-            // inserted, so each side keeps one whole TOC field, and the
-            // deleted field code is Word's `w:delInstrText`.
+            // Every cached entry, and the field end, is deleted before any
+            // rebuilt entry is inserted, so each side keeps one whole TOC
+            // field, and the deleted field code is Word's `w:delInstrText`.
             let control =
                 &xml[xml.find("<w:sdtContent>").unwrap()..xml.find("</w:sdtContent>").unwrap()];
             assert!(
                 control.rfind("<w:delText").unwrap() < control.find("PAGEREF").unwrap(),
-                "{switches}: {control}"
+                "{label}: {control}"
             );
-            assert_eq!(control.matches("<w:delInstrText").count(), 1, "{control}");
-            assert_eq!(control.matches("<w:instrText").count(), 1, "{control}");
+            assert_eq!(
+                control.matches("<w:delInstrText").count(),
+                1,
+                "{label}: {control}"
+            );
+            assert_eq!(
+                control.matches("<w:instrText").count(),
+                1,
+                "{label}: {control}"
+            );
             for character in ["begin", "separate", "end"] {
                 let character = format!(r#"w:fldCharType="{character}""#);
-                assert_eq!(control.matches(&character).count(), 2, "{control}");
+                assert_eq!(control.matches(&character).count(), 2, "{label}: {control}");
+            }
+            // A paragraph mark both deleted and inserted lists `w:ins`
+            // first, as the schema orders them.
+            for properties in xml.split("<w:rPr>").skip(1) {
+                let properties = &properties[..properties.find("</w:rPr>").unwrap_or(0)];
+                if let (Some(inserted), Some(deleted)) =
+                    (properties.find("<w:ins "), properties.find("<w:del "))
+                {
+                    assert!(inserted < deleted, "{label}: {properties}");
+                }
             }
         }
     }
 }
 
 #[test]
-fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
+fn comparison_carries_bookmarks_and_whole_fields_in_whole_paragraph_changes() {
     // A whole inserted, deleted or moved paragraph kept only its runs, so a
-    // hyperlink, simple field or bookmark in it failed the acceptance or
-    // rejection check, and a paragraph that gained a hyperlink or a field
-    // refused.
+    // bookmark in it failed the acceptance or rejection check, and so did a
+    // field that spans whole inserted or deleted paragraphs.
     let plain = r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>"#;
     let last = r#"<w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#;
-    let structured = r#"<w:p><w:bookmarkStart w:id="5" w:name="target"/><w:hyperlink w:anchor="target"><w:r><w:t>Linked</w:t></w:r></w:hyperlink><w:r><w:tab/></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="5"/></w:p>"#;
-    let linked = r#"<w:p><w:r><w:t>Alpha</w:t></w:r><w:hyperlink w:anchor="elsewhere"><w:r><w:t> linked</w:t></w:r></w:hyperlink></w:p>"#;
-    let moved = r#"<w:p><w:hyperlink w:anchor="elsewhere"><w:r><w:t>Moved link</w:t></w:r></w:hyperlink></w:p>"#;
-    let paged = r#"<w:p><w:r><w:t xml:space="preserve">Alpha </w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#;
+    let bookmarked = r#"<w:p><w:bookmarkStart w:id="5" w:name="target"/><w:r><w:t>Marked</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>text</w:t></w:r><w:bookmarkEnd w:id="5"/></w:p>"#;
+    let moved = r#"<w:p><w:r><w:t>Moved text</w:t></w:r></w:p>"#;
+    let begin = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> TOC \o "1-3" \h </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    let end = r#"<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    // A field inserted whole, with a hyperlink and a simple field inside.
+    let field = format!(
+        r#"{begin}<w:hyperlink w:anchor="target"><w:r><w:t>Entry</w:t></w:r></w:hyperlink><w:r><w:tab/></w:r><w:fldSimple w:instr=" PAGEREF target \h "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:p>{end}"#
+    );
+    // A cached field whose first entry becomes a hyperlink, with its end in
+    // a paragraph the edit leaves unchanged.
+    let cached =
+        |first: &str| format!(r#"{begin}{first}</w:p><w:p><w:r><w:t>Entry two</w:t></w:r>{end}"#);
     let control = |content: &str| {
         format!(
             r#"<w:sdt><w:sdtPr><w:tag w:val="kept"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>{last}"#
@@ -21109,27 +21145,17 @@ fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
         (
             "inserted",
             format!("{plain}{last}"),
-            format!("{plain}{structured}{last}"),
+            format!("{plain}{bookmarked}{last}"),
         ),
         (
             "appended",
             format!("{plain}{last}"),
-            format!("{plain}{last}{structured}"),
+            format!("{plain}{last}{bookmarked}"),
         ),
         (
             "deleted",
-            format!("{plain}{structured}{last}"),
+            format!("{plain}{bookmarked}{last}"),
             format!("{plain}{last}"),
-        ),
-        (
-            "gains a hyperlink",
-            format!("{plain}{last}"),
-            format!("{linked}{last}"),
-        ),
-        (
-            "gains a simple field",
-            format!("{plain}{last}"),
-            format!("{paged}{last}"),
         ),
         (
             "moved",
@@ -21137,9 +21163,32 @@ fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
             format!("{plain}{last}{moved}"),
         ),
         (
+            "whole field inserted",
+            format!("{plain}{last}"),
+            format!("{plain}{field}{last}"),
+        ),
+        (
+            "whole field deleted",
+            format!("{plain}{field}{last}"),
+            format!("{plain}{last}"),
+        ),
+        (
+            "field entry becomes a hyperlink",
+            format!(
+                r#"{plain}{}{last}"#,
+                cached("<w:r><w:t>Entry one</w:t></w:r>")
+            ),
+            format!(
+                r#"{plain}{}{last}"#,
+                cached(
+                    r#"<w:hyperlink w:anchor="a"><w:r><w:t>Entry one</w:t></w:r></w:hyperlink>"#
+                )
+            ),
+        ),
+        (
             "two paragraphs appended to a control",
             control(plain),
-            control(&format!("{plain}{structured}{linked}")),
+            control(&format!("{plain}{bookmarked}{moved}")),
         ),
     ];
     for (name, original_body, edited_body) in cases {
@@ -21159,10 +21208,69 @@ fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
             };
             let xml = compare_and_resolve(&original_bytes, &edited_bytes, &options);
             assert!(
-                xml.contains("<w:hyperlink") || xml.contains(r#"w:instr=" PAGE ""#),
+                xml.contains("<w:bookmarkStart")
+                    || xml.contains("fldCharType")
+                    || xml.contains("<w:moveTo "),
+                "{name}: {xml}"
+            );
+            // Each side keeps its complex fields whole, so a field ended in
+            // an unchanged paragraph is deleted and inserted with it.
+            assert_eq!(
+                xml.matches(r#"w:fldCharType="begin""#).count(),
+                xml.matches(r#"w:fldCharType="end""#).count(),
                 "{name}: {xml}"
             );
         }
+    }
+}
+
+#[test]
+fn comparison_refuses_whole_paragraph_structures_word_cannot_resolve() {
+    // A hyperlink or simple field may not sit in a revision wrapper. Word
+    // reads either as a field whose codes stay untracked, so accepting a
+    // deleted one or rejecting an inserted one leaves an empty field, unless
+    // a field deleted or inserted whole around it goes with it. A moved
+    // paragraph's bookmark would be held by both ends of the move.
+    let plain = r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>"#;
+    let last = r#"<w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#;
+    let linked = r#"<w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink w:anchor="elsewhere"><w:r><w:t>there</w:t></w:r></w:hyperlink></w:p>"#;
+    let paged = r#"<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#;
+    let bookmarked = r#"<w:p><w:bookmarkStart w:id="5" w:name="target"/><w:r><w:t>Moved text</w:t></w:r><w:bookmarkEnd w:id="5"/></w:p>"#;
+    let cases = [
+        (
+            "hyperlink inserted",
+            format!("{plain}{last}"),
+            format!("{plain}{linked}{last}"),
+            "hyperlink or simple field outside a field",
+        ),
+        (
+            "simple field deleted",
+            format!("{plain}{paged}{last}"),
+            format!("{plain}{last}"),
+            "hyperlink or simple field outside a field",
+        ),
+        (
+            "paragraph gains a hyperlink",
+            format!("{plain}{last}"),
+            format!("{linked}{last}"),
+            "paragraph boundary structures",
+        ),
+        (
+            "bookmarked paragraph moved",
+            format!("{bookmarked}{plain}{last}"),
+            format!("{plain}{last}{bookmarked}"),
+            "cannot move a paragraph that holds a bookmark",
+        ),
+    ];
+    for (name, original_body, edited_body, message) in cases {
+        let edited = document_with_content_controls(&wrap_word_body(&edited_body));
+        let mut compared = document_with_content_controls(&wrap_word_body(&original_body));
+        let before = compared.to_bytes().unwrap();
+        let error = compared
+            .compare(&edited, "Ada", "2026-09-30T09:30:00Z")
+            .expect_err(name);
+        assert!(error.to_string().contains(message), "{name}: {error}");
+        assert_eq!(compared.to_bytes().unwrap(), before, "{name}");
     }
 }
 

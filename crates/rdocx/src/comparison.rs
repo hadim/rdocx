@@ -2429,18 +2429,24 @@ fn compare_body(
             })
             .collect()
     }
-    let aligned = expand_body_alignment(
-        replace_changed_paragraph_runs(
-            align(&original_signatures, &edited_signatures),
-            &paragraphs(&original.body.content),
-            &paragraphs(&edited.body.content),
-            &original_signatures,
-            &edited_signatures,
-            metadata.options,
-        ),
-        &original.body.content,
-        &edited.body.content,
-    );
+    let original_paragraphs = paragraphs(&original.body.content);
+    let edited_paragraphs = paragraphs(&edited.body.content);
+    let (replaced, carried) = replace_changed_paragraph_runs(
+        align(&original_signatures, &edited_signatures),
+        &original_paragraphs,
+        &edited_paragraphs,
+        &original_signatures,
+        &edited_signatures,
+        metadata.options,
+    )?;
+    let aligned = expand_body_alignment(replaced, &original.body.content, &edited.body.content);
+    refuse_uncarried_field_owners(
+        &aligned,
+        &original_paragraphs,
+        &edited_paragraphs,
+        &carried,
+        location,
+    )?;
     let moves = pair_moves(
         &aligned,
         &original_signatures,
@@ -2701,6 +2707,7 @@ fn moved_paragraph_content(
     let BodyContent::Paragraph(paragraph) = content else {
         unreachable!("caller checked paragraph content")
     };
+    refuse_moved_markers(paragraph)?;
     let mut output = String::from("<w:p>");
     if let Some(properties) = &paragraph.properties {
         output.push_str(&property_xml(properties)?);
@@ -2724,13 +2731,14 @@ fn moved_paragraph(
     id: i32,
     metadata: &Metadata<'_>,
 ) -> Result<String> {
+    refuse_moved_markers(paragraph)?;
     let marker = IdAllocator::marker_with_id(kind, metadata.author, metadata.timestamp, id);
     let mut properties = paragraph.properties.clone().unwrap_or_default();
     properties.rpr = Some(properties.rpr.take().unwrap_or_default());
     let mut properties = property_xml(&properties)?;
     let run_properties = direct_word_element_spans(&properties, "rPr")?;
     if let Some(span) = run_properties.first() {
-        let updated = append_word_child(&properties[span.clone()], "rPr", &marker)?;
+        let updated = with_mark_revision(&properties[span.clone()], &marker)?;
         properties.replace_range(span.clone(), &updated);
     } else {
         properties = append_word_child(&properties, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))?;
@@ -2747,6 +2755,17 @@ fn moved_paragraph(
     })?);
     output.push_str("</w:p>");
     Ok(output)
+}
+
+/// Both ends of a move would hold the paragraph's bookmarks and comment
+/// ranges, and each may appear once.
+fn refuse_moved_markers(paragraph: &CT_P) -> Result<()> {
+    if paragraph.bookmark_markers.is_empty() && paragraph.comment_ranges.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Other(
+        "comparison cannot move a paragraph that holds a bookmark or comment range".to_owned(),
+    ))
 }
 
 fn moved_table(table: &CT_Tbl, kind: &str, id: i32, metadata: &Metadata<'_>) -> Result<String> {
@@ -2804,7 +2823,7 @@ fn marked_paragraph_xml(paragraph: &str, marker: &str) -> Result<String> {
         let run_properties = direct_word_element_spans(properties, "rPr")?;
         let updated = if let Some(run_span) = run_properties.first() {
             let run_properties = &properties[run_span.clone()];
-            let updated_run = append_word_child(run_properties, "rPr", marker)?;
+            let updated_run = with_mark_revision(run_properties, marker)?;
             let mut updated = properties.to_owned();
             updated.replace_range(run_span.clone(), &updated_run);
             updated
@@ -4479,12 +4498,7 @@ fn wrapped_paragraph_children(
     let mut groups: Vec<(String, bool)> = Vec::new();
     for span in direct_element_spans(&xml)? {
         let child = &xml[span];
-        let name_end = child
-            .find(|character: char| {
-                character.is_ascii_whitespace() || matches!(character, '/' | '>')
-            })
-            .unwrap_or(child.len());
-        let local = child[1..name_end].rsplit(':').next().unwrap_or_default();
+        let local = element_local_name(child);
         let marker = matches!(
             local,
             "bookmarkStart" | "bookmarkEnd" | "commentRangeStart" | "commentRangeEnd" | "proofErr"
@@ -4526,7 +4540,7 @@ fn paragraph_mark_properties(
     let mut xml = property_xml(&properties)?;
     let run_properties = direct_word_element_spans(&xml, "rPr")?;
     if let Some(run_span) = run_properties.first() {
-        let updated = append_word_child(&xml[run_span.clone()], "rPr", &marker)?;
+        let updated = with_mark_revision(&xml[run_span.clone()], &marker)?;
         xml.replace_range(run_span.clone(), &updated);
         Ok(xml)
     } else {
@@ -5035,18 +5049,24 @@ fn compare_control_from_xml(
             })
             .collect()
     }
-    let aligned = expand_control_alignment(
-        replace_changed_paragraph_runs(
-            align(&original_signatures, &edited_signatures),
-            &paragraphs(&original_content),
-            &paragraphs(&edited_content),
-            &original_signatures,
-            &edited_signatures,
-            metadata.options,
-        ),
-        &original_content,
-        &edited_content,
-    );
+    let original_paragraphs = paragraphs(&original_content);
+    let edited_paragraphs = paragraphs(&edited_content);
+    let (replaced, carried) = replace_changed_paragraph_runs(
+        align(&original_signatures, &edited_signatures),
+        &original_paragraphs,
+        &edited_paragraphs,
+        &original_signatures,
+        &edited_signatures,
+        metadata.options,
+    )?;
+    let aligned = expand_control_alignment(replaced, &original_content, &edited_content);
+    refuse_uncarried_field_owners(
+        &aligned,
+        &original_paragraphs,
+        &edited_paragraphs,
+        &carried,
+        location,
+    )?;
     let trailing_paragraph_insert_start = aligned
         .iter()
         .enumerate()
@@ -5853,18 +5873,24 @@ fn align(original: &[String], edited: &[String]) -> Vec<(Option<usize>, Option<u
 }
 
 /// Replace each changed run of paragraphs that revising in place cannot
-/// express.
+/// express, and name the paragraphs whose hyperlinks and simple fields a
+/// whole-paragraph revision may carry.
 ///
 /// A run is the consecutive changed entries of paragraphs only, between
 /// unchanged owners, tables or controls. When one of its pairs differs in
-/// its inline boundary structures, or gains or loses a modeled field, the
-/// run becomes all its original paragraphs deleted, then all its edited
-/// paragraphs inserted. A field that spans those paragraphs, such as a
-/// table of contents, then stays whole on each side instead of losing its
-/// begin or end to a neighbouring pair.
+/// its inline boundary structures, or gains or loses a modeled field, or
+/// when it holds a hyperlink or simple field, the run becomes all its
+/// original paragraphs deleted, then all its edited paragraphs inserted. The
+/// run grows over its neighbouring paragraphs until each side holds every
+/// complex field it begins or ends, so a table of contents whose end sits
+/// in an unchanged paragraph is still deleted and inserted whole. Word then
+/// removes the whole field on each side, with the hyperlinks and simple
+/// fields inside it.
 ///
-/// A bookmark or comment range on both sides of the run would be held twice
-/// by the replacement, so such a run keeps its pairs and their refusal.
+/// A run keeps its pairs, and their refusal, when a side cannot be closed
+/// that way, when one of its hyperlinks or simple fields lies outside such a
+/// field, or when both sides share a bookmark or comment range, which the
+/// replacement would hold twice.
 fn replace_changed_paragraph_runs(
     aligned: Vec<(Option<usize>, Option<usize>)>,
     original: &[Option<&CT_P>],
@@ -5872,7 +5898,7 @@ fn replace_changed_paragraph_runs(
     original_signatures: &[String],
     edited_signatures: &[String],
     options: &ComparisonOptions,
-) -> Vec<(Option<usize>, Option<usize>)> {
+) -> Result<(Alignment, CarriedParagraphs)> {
     fn markers<'a>(paragraphs: impl Iterator<Item = &'a CT_P>) -> HashSet<String> {
         let mut markers = HashSet::new();
         for paragraph in paragraphs {
@@ -5904,18 +5930,53 @@ fn replace_changed_paragraph_runs(
     let paragraphs_only = |(left, right): &(Option<usize>, Option<usize>)| {
         left.is_none_or(|i| original[i].is_some()) && right.is_none_or(|j| edited[j].is_some())
     };
-    let mut replaced = Vec::with_capacity(aligned.len());
+    let sides = |range: &Range<usize>| {
+        let entries = &aligned[range.clone()];
+        (
+            entries
+                .iter()
+                .filter_map(|(left, _)| left.and_then(|i| original[i]))
+                .collect::<Vec<_>>(),
+            entries
+                .iter()
+                .filter_map(|(_, right)| right.and_then(|j| edited[j]))
+                .collect::<Vec<_>>(),
+        )
+    };
+    // Grow a run until both sides hold their complex fields whole.
+    let close = |mut range: Range<usize>| -> Result<Option<Range<usize>>> {
+        loop {
+            let (originals, edits) = sides(&range);
+            let balances = [field_balance(&originals)?, field_balance(&edits)?];
+            if balances.contains(&FieldBalance::Closes) {
+                if range.start == 0 || !paragraphs_only(&aligned[range.start - 1]) {
+                    return Ok(None);
+                }
+                range.start -= 1;
+            } else if balances.contains(&FieldBalance::Opens) {
+                if range.end == aligned.len() || !paragraphs_only(&aligned[range.end]) {
+                    return Ok(None);
+                }
+                range.end += 1;
+            } else if balances.contains(&FieldBalance::Uncarried)
+                || !markers(originals.into_iter()).is_disjoint(&markers(edits.into_iter()))
+            {
+                return Ok(None);
+            } else {
+                return Ok(Some(range));
+            }
+        }
+    };
+    let mut accepted: Vec<Range<usize>> = Vec::new();
+    let mut start = 0;
     for run in aligned.chunk_by(|first, second| {
         (changed(first), paragraphs_only(first)) == (changed(second), paragraphs_only(second))
     }) {
-        let originals = || {
-            run.iter()
-                .filter_map(|(left, _)| left.and_then(|i| original[i]))
-        };
-        let edits = || {
-            run.iter()
-                .filter_map(|(_, right)| right.and_then(|j| edited[j]))
-        };
+        let range = start..start + run.len();
+        start = range.end;
+        if !changed(&run[0]) || !paragraphs_only(&run[0]) {
+            continue;
+        }
         let inexpressible = run.iter().any(|(left, right)| {
             matches!(
                 (left.and_then(|i| original[i]), right.and_then(|j| edited[j])),
@@ -5923,24 +5984,195 @@ fn replace_changed_paragraph_runs(
                     || (!options.ignore_fields && fields(left) != fields(right))
             )
         });
-        if changed(&run[0])
-            && paragraphs_only(&run[0])
-            && inexpressible
-            && markers(originals()).is_disjoint(&markers(edits()))
+        let (originals, edits) = sides(&range);
+        let mut owners = false;
+        for paragraph in originals.iter().chain(&edits) {
+            owners |= paragraph_field_events(paragraph)?.contains(&FieldEvent::Owner);
+        }
+        if !inexpressible && !owners {
+            continue;
+        }
+        let Some(mut range) = close(range)? else {
+            continue;
+        };
+        // A grown run that reaches an accepted one replaces both together.
+        while let Some(last) = accepted.last()
+            && last.end > range.start
         {
-            replaced.extend(
-                run.iter()
-                    .filter_map(|(left, _)| left.map(|i| (Some(i), None))),
-            );
-            replaced.extend(
-                run.iter()
-                    .filter_map(|(_, right)| right.map(|j| (None, Some(j)))),
-            );
-        } else {
-            replaced.extend_from_slice(run);
+            let merged = last.start.min(range.start)..last.end.max(range.end);
+            match close(merged)? {
+                Some(merged) => {
+                    accepted.pop();
+                    range = merged;
+                }
+                None => break,
+            }
+        }
+        if accepted.last().is_none_or(|last| last.end <= range.start) {
+            accepted.push(range);
         }
     }
-    replaced
+    let mut replaced = Vec::with_capacity(aligned.len());
+    let mut carried = CarriedParagraphs::default();
+    let mut ranges = accepted.into_iter().peekable();
+    let mut index = 0;
+    while index < aligned.len() {
+        let Some(range) = ranges.next_if(|range| range.start == index) else {
+            replaced.push(aligned[index]);
+            index += 1;
+            continue;
+        };
+        let entries = &aligned[range.clone()];
+        for (left, _) in entries {
+            if let Some(i) = *left {
+                carried.original.insert(i);
+                replaced.push((Some(i), None));
+            }
+        }
+        for (_, right) in entries {
+            if let Some(j) = *right {
+                carried.edited.insert(j);
+                replaced.push((None, Some(j)));
+            }
+        }
+        index = range.end;
+    }
+    Ok((replaced, carried))
+}
+
+/// Aligned original and edited owner indices.
+type Alignment = Vec<(Option<usize>, Option<usize>)>;
+
+/// The paragraphs, by index on each side, that a replaced run deletes or
+/// inserts whole inside the complex fields that enclose their hyperlinks
+/// and simple fields.
+#[derive(Default)]
+struct CarriedParagraphs {
+    original: HashSet<usize>,
+    edited: HashSet<usize>,
+}
+
+/// Refuse a whole deleted, inserted or moved paragraph that holds a
+/// hyperlink or simple field outside a complex field carried with it.
+///
+/// Neither may sit inside a revision wrapper, and Word reads each as a field
+/// whose codes stay untracked, so accepting or rejecting the paragraph in
+/// Word would leave an empty field behind.
+fn refuse_uncarried_field_owners(
+    aligned: &[(Option<usize>, Option<usize>)],
+    original: &[Option<&CT_P>],
+    edited: &[Option<&CT_P>],
+    carried: &CarriedParagraphs,
+    location: &str,
+) -> Result<()> {
+    for (left, right) in aligned {
+        let paragraph = match (left, right) {
+            (Some(i), None) if !carried.original.contains(i) => original[*i],
+            (None, Some(j)) if !carried.edited.contains(j) => edited[*j],
+            _ => None,
+        };
+        if let Some(paragraph) = paragraph
+            && paragraph_field_events(paragraph)?.contains(&FieldEvent::Owner)
+        {
+            return Err(Error::Other(format!(
+                "comparison cannot track a whole paragraph's hyperlink or simple field outside a field it replaces at {location}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A complex field character or a field owner of a paragraph.
+#[derive(Clone, Copy, PartialEq)]
+enum FieldEvent {
+    Begin,
+    End,
+    /// A hyperlink or simple field, which a revision wrapper may not hold.
+    Owner,
+}
+
+/// The complex field characters and field owners of a paragraph in
+/// document order.
+fn paragraph_field_events(paragraph: &CT_P) -> Result<Vec<FieldEvent>> {
+    let xml = paragraph_xml(paragraph)?;
+    let mut reader = Reader::from_reader(xml.as_bytes());
+    let mut events = Vec::new();
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comparison XML scan failed: {error}")))?;
+        let (element, empty) = match &event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                buffer.clear();
+                continue;
+            }
+            Event::Eof => break,
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        match element.local_name().as_ref() {
+            b"hyperlink" | b"fldSimple" if depth == 1 => events.push(FieldEvent::Owner),
+            b"fldChar" => {
+                let kind = element
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| attribute.key.local_name().as_ref() == b"fldCharType")
+                    .map(|attribute| attribute.value.into_owned());
+                match kind.as_deref() {
+                    Some(b"begin") => events.push(FieldEvent::Begin),
+                    Some(b"end") => events.push(FieldEvent::End),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        if !empty {
+            depth += 1;
+        }
+        buffer.clear();
+    }
+    Ok(events)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum FieldBalance {
+    /// Every complex field begun is ended, and every owner lies inside one.
+    Whole,
+    /// A complex field begun here ends after the paragraphs.
+    Opens,
+    /// A complex field ended here begins before the paragraphs.
+    Closes,
+    /// The fields are whole, but an owner lies outside all of them.
+    Uncarried,
+}
+
+fn field_balance(paragraphs: &[&CT_P]) -> Result<FieldBalance> {
+    let mut depth = 0usize;
+    let mut uncarried = false;
+    for paragraph in paragraphs {
+        for event in paragraph_field_events(paragraph)? {
+            match event {
+                FieldEvent::Begin => depth += 1,
+                FieldEvent::End if depth == 0 => return Ok(FieldBalance::Closes),
+                FieldEvent::End => depth -= 1,
+                FieldEvent::Owner => uncarried |= depth == 0,
+            }
+        }
+    }
+    Ok(if depth > 0 {
+        FieldBalance::Opens
+    } else if uncarried {
+        FieldBalance::Uncarried
+    } else {
+        FieldBalance::Whole
+    })
 }
 
 fn expand_body_alignment(
@@ -6915,6 +7147,45 @@ fn append_word_child(xml: &str, local: &str, addition: &str) -> Result<String> {
         &xml[..slash],
         &xml[slash + 2..]
     ))
+}
+
+/// Add a revision marker to the `w:rPr` of a paragraph mark in schema
+/// order: `w:ins`, `w:del`, `w:moveFrom` and `w:moveTo` come first, in that
+/// order, before any formatting.
+fn with_mark_revision(run_properties: &str, marker: &str) -> Result<String> {
+    const ORDER: [&str; 4] = ["ins", "del", "moveFrom", "moveTo"];
+    let rank = |xml: &str| {
+        ORDER
+            .iter()
+            .position(|local| *local == element_local_name(xml))
+    };
+    let children = direct_element_spans(run_properties)?;
+    let (Some(marker_rank), Some(open)) = (rank(marker), run_properties.find('>')) else {
+        return append_word_child(run_properties, "rPr", marker);
+    };
+    if children.is_empty() {
+        return append_word_child(run_properties, "rPr", marker);
+    }
+    let at = children
+        .iter()
+        .take_while(|span| {
+            rank(&run_properties[(*span).clone()]).is_some_and(|rank| rank <= marker_rank)
+        })
+        .last()
+        .map_or(open + 1, |span| span.end);
+    let mut marked = run_properties.to_owned();
+    marked.insert_str(at, marker);
+    Ok(marked)
+}
+
+/// The local name of the element that `xml` starts with.
+fn element_local_name(xml: &str) -> &str {
+    let name_end = xml
+        .find(|character: char| character.is_ascii_whitespace() || matches!(character, '/' | '>'))
+        .unwrap_or(xml.len());
+    xml.get(1..name_end)
+        .and_then(|name| name.rsplit(':').next())
+        .unwrap_or_default()
 }
 
 fn direct_word_element_spans(xml: &str, local: &str) -> Result<Vec<Range<usize>>> {

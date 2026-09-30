@@ -911,17 +911,23 @@ untouched and are excluded before shell checks and revision-id allocation.
 Non-text content remains atomic. Unmatched identical owners become move pairs
 only within one story. A changed run of consecutive paragraphs that holds a
 pair whose hyperlinks, bookmarks, comment ranges, preserved raw children, or
-inline controls differ, or that gains or loses a modeled field, is replaced
-whole: all its original paragraphs are deleted, then all its edited paragraphs
-are inserted. A field that spans those paragraphs, such as a rebuilt table of
-contents, then stays whole on each side, which Word needs to accept or reject
-it. A run whose two sides share a bookmark or comment range would hold it
-twice and keeps refusing. A whole deleted, inserted, or moved paragraph
-carries its hyperlinks, simple fields, bookmarks, and comment ranges inside
-its revision wrappers, and deleted content writes a field code as
+inline controls differ, that gains or loses a modeled field, or that holds a
+hyperlink or simple field, is replaced whole: all its original paragraphs are
+deleted, then all its edited paragraphs are inserted. The run grows over its
+neighbouring paragraphs until each side holds every complex field it begins or
+ends, so a table of contents, whose end Word writes in a paragraph of its own,
+is deleted and inserted whole, which Word needs to accept or reject it. A
+whole deleted, inserted, or moved paragraph carries its bookmarks and comment
+ranges inside its revision wrappers, and its hyperlinks and simple fields only
+inside a complex field deleted or inserted whole with it, since neither may
+sit in a revision wrapper and Word reads each as a field whose codes stay
+untracked. Comparison refuses otherwise, and when the two sides of such a run
+share a bookmark or comment range, or a moved paragraph holds one, since the
+redline would hold it twice. Deleted content writes a field code as
 `w:delInstrText`, since Word refuses to open a deletion that holds
 `w:instrText`. A carried hyperlink whose target only the edited side has gets
-its relationship in the redline.
+its relationship in the redline, and a paragraph mark lists its revision
+markers in schema order before its formatting.
 Changed field results remain inside their field owner, while instruction or
 form changes replace that complete owner. Supported run, paragraph, table, and
 section properties emit property revisions that retain the original property
