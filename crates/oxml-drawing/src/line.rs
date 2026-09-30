@@ -177,7 +177,8 @@ impl ST_PresetLineDashVal {
     pub const fn dash_array(self) -> &'static [u16] {
         match self {
             Self::Solid => &[],
-            Self::Dot | Self::SystemDot => &[1, 1],
+            Self::Dot => &[1, 3],
+            Self::SystemDot => &[1, 1],
             Self::Dash => &[4, 3],
             Self::SystemDash => &[3, 1],
             Self::LargeDash => &[8, 3],
@@ -937,7 +938,7 @@ mod tests {
     fn every_preset_line_dash_value_maps_to_a_dash_array() {
         let expected: &[(&str, &[u16])] = &[
             ("solid", &[]),
-            ("dot", &[1, 1]),
+            ("dot", &[1, 3]),
             ("sysDot", &[1, 1]),
             ("dash", &[4, 3]),
             ("sysDash", &[3, 1]),
