@@ -44268,16 +44268,16 @@ fn accepted_view_joins_paragraphs_whose_mark_is_deleted() {
     assert_eq!(
         lines(&redline, RevisionView::Tracked),
         [
-            ("Alpha", 80.25),
-            ("Gone", 100.12),
-            ("OLDHEAD", 127.74),
-            ("Omega", 141.26),
-            ("1.", 162.84),
-            ("One", 162.84),
-            ("2.", 184.55),
-            ("OLDITEM", 184.55),
-            ("3.", 206.27),
-            ("Two", 206.27),
+            ("Alpha", 82.47),
+            ("Gone", 104.96),
+            ("OLDHEAD", 136.22),
+            ("Omega", 152.53),
+            ("1.", 175.02),
+            ("One", 175.02),
+            ("2.", 197.51),
+            ("OLDITEM", 197.51),
+            ("3.", 220.0),
+            ("Two", 220.0),
         ]
         .map(|(text, y)| (text.to_owned(), y))
     );
@@ -44291,7 +44291,7 @@ fn accepted_view_joins_paragraphs_whose_mark_is_deleted() {
     assert_eq!(joined.text(), "Alpha\nJoined Omega\n");
     assert_eq!(
         lines(&joined, RevisionView::Accepted),
-        [("Alpha", 80.25), ("Joined", 100.12), ("Omega", 119.99)]
+        [("Alpha", 82.47), ("Joined", 104.96), ("Omega", 127.46)]
             .map(|(text, y)| (text.to_owned(), y))
     );
     assert_eq!(
@@ -44331,7 +44331,7 @@ fn accepted_view_joins_paragraphs_whose_mark_is_deleted() {
     assert_eq!(accepted.layout.pages.len(), 1);
     assert_eq!(
         lines(&breaks, RevisionView::Accepted),
-        [("Alpha", 80.25), ("Omega", 100.12)].map(|(text, y)| (text.to_owned(), y))
+        [("Alpha", 82.47), ("Omega", 104.96)].map(|(text, y)| (text.to_owned(), y))
     );
     let tracked = breaks
         .layout_deterministic_with_options(RenderOptions {
@@ -44344,7 +44344,6 @@ fn accepted_view_joins_paragraphs_whose_mark_is_deleted() {
 /// A paragraph whose mark is deleted but that holds a bookmark start keeps
 /// its place in the accepted layout, so PAGEREF and REF still find the
 /// bookmark.
-
 #[test]
 fn accepted_view_keeps_a_deleted_paragraph_that_holds_a_bookmark() {
     let body = r#"<w:p><w:r><w:t xml:space="preserve">See page </w:t></w:r><w:fldSimple w:instr=" PAGEREF bm \h "><w:r><w:t>stale</w:t></w:r></w:fldSimple><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF bm \p </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>stored position</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/><w:rPr><w:del w:id="1" w:author="Ada"/></w:rPr></w:pPr><w:bookmarkStart w:id="5" w:name="bm"/><w:del w:id="2" w:author="Ada"><w:r><w:delText>Old heading</w:delText></w:r></w:del><w:bookmarkEnd w:id="5"/></w:p><w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#;
