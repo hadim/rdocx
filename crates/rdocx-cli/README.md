@@ -7,11 +7,12 @@ and produces fixed or flow output without an Office host.
 ## Capabilities
 
 - Human-readable or JSON structure and metadata inspection.
-- Accepted-view plain text or schema-1 rich extraction with typed nested paths.
+- Accepted-view plain text or schema-1 rich extraction with typed nested paths,
+  followed by the text boxes, headers, footers, notes, and comments.
 - Deterministic point-space body layout fragments for shell automation.
 - PDF, HTML, Markdown, PNG, JPEG, and multi-page TIFF conversion.
 - Page-range rendering, guarded literal replacement, diffing, and validation
-  verdicts.
+  verdicts that check every related part and every style id.
 - Comment thread inspection and mutation with explicit body run ranges and
   optional RFC 3339 dates.
 - Tracked revision inspection, filtered resolution, table-of-contents rebuilds,
@@ -106,6 +107,21 @@ and move sources are left out. Plain `text` covers body paragraphs and the
 paragraphs inside content controls, table cells, and nested tables in document
 order.
 
+After the body, `text` prints every other story: text boxes, headers, footers,
+footnotes, endnotes, and comments, in the order of `Document::stories`. Each
+package part starts with a line that names the kind of its first story and the
+part, such as `--- header (/word/header1.xml) ---`. Each direct paragraph or
+block content control of its stories follows on one line, table cells
+included, with the accepted-view text of Python `StoryItem.text`. A part
+without any text, such as an empty header variant, is left out. A text box
+that Word writes twice, DrawingML in `mc:Choice` and a VML copy in
+`mc:Fallback`, is never read from the copy. When a story part cannot be read,
+such as a truncated header or a header relationship to a missing part, `text`
+and the Markdown and HTML conversions keep the body, print one warning on
+stderr that names the part when it can, list no other story, and exit
+successfully. `text --json` then states `main` scope. `validate` reports that
+part as an error.
+
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,
 its direct style and numbering, and accepted-view runs. Its `text` also holds
@@ -113,7 +129,26 @@ the text inside smart tags, inline custom XML elements, and simple fields,
 which `runs` does not list. Run `formatting` is
 `null` when no direct run properties exist. Otherwise it records nullable
 direct bold, italic, strike, underline, font, point size, colour, highlight,
-language, and character style values.
+language, and character style values. The record has `all-supported-stories`
+scope, and its `stories` array lists the other stories as plain `text` does,
+one entry per story with its Python `Story.kind` name as `kind`, its
+`part_name`, its `owner_index`, and `items`. Each item is a direct paragraph or
+block content control with its story `index_path`, its `kind`, and its `text`.
+
+`convert --to md` and `convert --to html` append the same stories after the
+body, one section per part under a bold label. They leave comments out,
+because comments annotate a document rather than belong to it.
+
+`validate` exits unsuccessfully when a relationship of the main document points
+at a missing part, when a part has no declared content type, when an XML part
+that the main document relates to is not well formed, or when the main
+document, a header, a footer, the notes, or the comments name a paragraph,
+character, or table style id that no style defines. Word silently falls back
+to the default style for such an id. A style id inside a tracked property
+change is not checked, because it records the formatting before the change,
+and neither is one inside `mc:Fallback`, which Word does not read, or an empty
+id.
+Empty paragraphs, heading level gaps, and missing metadata are warnings.
 
 `layout --json` uses bundled deterministic fonts. It lists every direct body
 item, including preserved items that have no fragments. Each laid-out fragment
