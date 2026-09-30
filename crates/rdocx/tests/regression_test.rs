@@ -39054,6 +39054,45 @@ fn rejecting_paragraph_property_change_keeps_mark_and_section_properties() {
             );
         }
     }
+
+    // Rejecting only the older form's paragraph change keeps the paragraph
+    // mark insertion, first in the prior mark formatting that replaces the
+    // current one.
+    let legacy = |mark: &str| {
+        paragraph(&format!(
+            r#"<w:jc w:val="right"/><w:rPr>{mark}<w:i/></w:rPr>{}"#,
+            change(
+                2,
+                "pPr",
+                r#"<w:pPr><w:jc w:val="center"/><w:rPr><w:b/></w:rPr></w:pPr>"#
+            )
+        ))
+    };
+    let inserted = r#"<w:ins w:id="1" w:author="Reviewer" w:date="2026-10-01T00:09:00Z"/>"#;
+    let mut resolved = document_with_content_controls(&wrap_word_body(&legacy(inserted)));
+    resolved
+        .reject_revision_id(2)
+        .expect("reject the paragraph change");
+    let mut expected = document_with_content_controls(&wrap_word_body(&paragraph(&format!(
+        r#"<w:jc w:val="center"/><w:rPr>{inserted}<w:b/></w:rPr>"#
+    ))));
+    assert_eq!(
+        resolved_paragraph_properties(&mut resolved),
+        resolved_paragraph_properties(&mut expected)
+    );
+    let revisions = resolved.revisions();
+    assert_eq!(revisions.len(), 1, "{revisions:?}");
+    assert_eq!(revisions[0].id(), 1);
+    resolved.reject_all().expect("reject the paragraph mark");
+    assert_eq!(resolved_paragraph_properties(&mut resolved), [None]);
+    // A mark formatting change left in place has no owner in that form.
+    let mut refused =
+        document_with_content_controls(&wrap_word_body(&legacy(&change(1, "rPr", "<w:rPr/>"))));
+    let error = refused.reject_revision_id(2).unwrap_err().to_string();
+    assert!(
+        error.contains("cannot keep a mark formatting change"),
+        "{error}"
+    );
 }
 
 #[test]

@@ -4241,7 +4241,7 @@ fn paragraph_properties_xml(
         current_xml.push_str("<w:pPr></w:pPr>");
     }
     // `w:pPrChange` holds only the base properties, so the mark records its
-    // own change in a final `w:rPrChange`, as Word writes it.
+    // own change in a `w:rPrChange`, as Word writes it.
     let (original_base, original_mark) = split_paragraph_mark(original_modeled);
     let (edited_base, edited_mark) = split_paragraph_mark(edited_modeled);
     if original_mark != edited_mark {

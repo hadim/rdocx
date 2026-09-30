@@ -602,7 +602,15 @@ impl<'a> XmlTree<'a> {
         state: &mut RenderState<'_>,
         promoted_namespaces: &[(String, String)],
     ) -> Result<Vec<u8>> {
-        let prior_xml = self.render_with_namespaces(prior, state, false, promoted_namespaces)?;
+        let mut prior_xml =
+            self.render_with_namespaces(prior, state, false, promoted_namespaces)?;
+        if let Some((prior_mark, markers)) =
+            self.legacy_mark_markers(owner, prior, state, promoted_namespaces)?
+            && !markers.is_empty()
+        {
+            prior_xml =
+                insert_first_children(&prior_xml, &self.elements[prior_mark].name, &markers)?;
+        }
         let selected = selected
             .iter()
             .map(|(change, _)| *change)
@@ -670,13 +678,77 @@ impl<'a> XmlTree<'a> {
         Ok(output)
     }
 
+    /// The prior mark `w:rPr` of an older rdocx `w:pPrChange`, and the
+    /// paragraph-mark markers of the current mark that the rejection leaves
+    /// in place, which go first in the prior mark.
+    ///
+    /// Those redlines put the prior mark formatting in the prior properties,
+    /// where it replaces the current mark formatting. A mark formatting change
+    /// left in place has no owner then, so it is refused.
+    fn legacy_mark_markers(
+        &self,
+        owner: usize,
+        prior: usize,
+        state: &mut RenderState<'_>,
+        promoted_namespaces: &[(String, String)],
+    ) -> Result<Option<(usize, Vec<u8>)>> {
+        let mark = |properties: usize| {
+            self.elements[properties]
+                .children
+                .iter()
+                .copied()
+                .find(|child| self.elements[*child].word && self.elements[*child].local == "rPr")
+        };
+        let owner_element = &self.elements[owner];
+        if !owner_element.word || owner_element.local != "pPr" {
+            return Ok(None);
+        }
+        let (Some(current), Some(prior_mark)) = (mark(owner), mark(prior)) else {
+            return Ok(None);
+        };
+        let namespaces = merged_namespaces(
+            &merged_namespaces(promoted_namespaces, &owner_element.namespace_declarations),
+            &self.elements[current].namespace_declarations,
+        );
+        let mut markers = Vec::new();
+        for child in &self.elements[current].children {
+            let rendered = self.render_with_namespaces(*child, state, false, &namespaces)?;
+            match &self.elements[*child].revision {
+                Some(metadata)
+                    if matches!(
+                        metadata.kind,
+                        RevisionKind::Insertion
+                            | RevisionKind::Deletion
+                            | RevisionKind::MoveFrom
+                            | RevisionKind::MoveTo
+                    ) =>
+                {
+                    markers.extend_from_slice(&rendered);
+                }
+                Some(metadata)
+                    if metadata.kind == RevisionKind::RunPropertyChange
+                        && !state.scope.matches(metadata) =>
+                {
+                    return Err(Error::Other(
+                        "rejecting a paragraph property change whose prior properties hold the \
+                         mark formatting cannot keep a mark formatting change"
+                            .to_owned(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        Ok(Some((prior_mark, markers)))
+    }
+
     /// Render the children of a property owner that its rejected prior value
     /// does not replace.
     ///
     /// A `w:pPrChange` holds only the prior base paragraph properties, so the
     /// paragraph mark `w:rPr` and the `w:sectPr` stay and resolve their own
     /// revisions. Older rdocx redlines put the prior mark formatting in the
-    /// prior properties, and a prior child of the same name replaces them.
+    /// prior properties, and that `w:rPr` replaces the current one, see
+    /// [`Self::legacy_mark_markers`].
     fn render_retained_owner_children(
         &self,
         owner: usize,
@@ -697,12 +769,12 @@ impl<'a> XmlTree<'a> {
                 && child_element.word
                 && matches!(child_element.local.as_str(), "rPr" | "sectPr")
             {
-                if self.elements[prior].children.iter().any(|replacement| {
-                    self.elements[*replacement].word
-                        && self.elements[*replacement].local == child_element.local
-                }) {
-                    self.validate_selected_descendants(*child, state)?;
-                } else {
+                let replaced = child_element.local == "rPr"
+                    && self.elements[prior].children.iter().any(|replacement| {
+                        self.elements[*replacement].word
+                            && self.elements[*replacement].local == "rPr"
+                    });
+                if !replaced {
                     output.extend_from_slice(&self.render_with_namespaces(
                         *child,
                         state,
@@ -1098,6 +1170,38 @@ fn merged_namespaces(
         }
     }
     merged
+}
+
+/// Insert `children` first in the first element named `name`.
+fn insert_first_children(xml: &[u8], name: &str, children: &[u8]) -> Result<Vec<u8>> {
+    let tag = format!("<{name}");
+    let start = xml
+        .windows(tag.len() + 1)
+        .position(|window| {
+            window.starts_with(tag.as_bytes())
+                && matches!(
+                    window[tag.len()],
+                    b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r'
+                )
+        })
+        .ok_or_else(|| Error::Other(format!("prior properties have no {name}")))?;
+    let open_end = start
+        + xml[start..]
+            .iter()
+            .position(|byte| *byte == b'>')
+            .ok_or_else(|| Error::Other(format!("prior {name} has no end")))?;
+    let mut output = Vec::with_capacity(xml.len() + children.len() + name.len() + 3);
+    if xml[open_end - 1] == b'/' {
+        output.extend_from_slice(&xml[..open_end - 1]);
+        output.push(b'>');
+        output.extend_from_slice(children);
+        output.extend_from_slice(format!("</{name}>").as_bytes());
+    } else {
+        output.extend_from_slice(&xml[..=open_end]);
+        output.extend_from_slice(children);
+    }
+    output.extend_from_slice(&xml[open_end + 1..]);
+    Ok(output)
 }
 
 fn append_children_to_element(element_xml: &[u8], children: &[u8]) -> Result<Vec<u8>> {
