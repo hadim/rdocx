@@ -3206,6 +3206,10 @@ fn connector_preserves_unknown_children_in_their_schema_slots() {
         r#"<p:cxnSp xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer" x:root="kept"><x:before/><p:nvCxnSpPr x:nv="kept"><x:nv-before/><p:cNvPr id="2" name="Connector"><x:drawing/></p:cNvPr><x:nv-middle/><p:cNvCxnSpPr x:connector="kept"><x:locks/><a:stCxn id="3" idx="0" x:endpoint="kept"><x:payload/></a:stCxn><x:between/><a:endCxn id="4" idx="1"/><x:extension/></p:cNvCxnSpPr><x:nv-after/><p:nvPr><x:application/></p:nvPr></p:nvCxnSpPr><x:middle/><p:spPr><a:prstGeom prst="line"><a:avLst/></a:prstGeom></p:spPr><x:after/><p:style><x:style/></p:style><p:extLst><x:extension/></p:extLst></p:cxnSp>"#
     );
     let mut parsed = CT_ConnectionShape::from_xml(xml.as_bytes()).unwrap();
+    assert!(
+        parsed.style().is_none(),
+        "an unmodelled style has no typed view"
+    );
     parsed.start_connection.as_mut().unwrap().id = 30;
     parsed.end_connection.as_mut().unwrap().idx = 10;
     let written = parsed.to_xml().unwrap();

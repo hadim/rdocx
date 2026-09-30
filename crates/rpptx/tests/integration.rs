@@ -7997,7 +7997,7 @@ const F124_ARTIFACT_SHA256: &str =
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_CURRENT_ARTIFACT_SHA256: &str =
-    "6d733c908a6878d981a2985ff09bc85b6aa316714c6d8904f663fd3044569b7e";
+    "4d469759c0539f1c7947389dc914298d10c984ad204becad26ea700a8bbd0f4b";
 const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 10",
     "F-116 slide 02",
@@ -16888,6 +16888,51 @@ fn four_appended_shapes_have_unique_ids_and_reopen() {
     assert!(group_xml.contains("<p:cNvGrpSpPr/>"));
     assert!(group_xml.contains("<p:nvPr/>"));
     assert!(group_xml.contains("<p:grpSpPr/>"));
+}
+
+#[test]
+fn added_connector_carries_the_theme_style_and_renders_its_line() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_connector(
+            ConnectorType::Straight,
+            Emu::from_cm(2.0),
+            Emu::from_cm(3.0),
+            Emu::from_cm(20.0),
+            Emu::from_cm(3.0),
+        )
+        .expect("add connector");
+
+    let bytes = presentation.to_bytes().expect("serialize connector deck");
+    let package = open_opc(&bytes, "added connector style");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<p:cxnSp>").expect("added connector");
+    let end = start + xml[start..].find("</p:cxnSp>").unwrap() + "</p:cxnSp>".len();
+    assert_eq!(
+        &xml[start..end],
+        r#"<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="2" name="Connector 2"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="720000" y="1080000"/><a:ext cx="6480000" cy="0"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom></p:spPr><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="1"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style></p:cxnSp>"#
+    );
+
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen connector deck");
+    assert!(reopened.validate().is_empty());
+    let (_, layout) = reopened.render_deterministic().unwrap();
+    assert!(layout.diagnostics.is_empty(), "{:?}", layout.diagnostics);
+    // The bundled theme's second line is 2 pt of accent1 (4F81BD). At 72 DPI the
+    // line centred at 3 cm (85.04 pt) fully covers pixel row 85.
+    let png = reopened.slide_png_deterministic(0, 72.0).unwrap().unwrap();
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    for x in 60..560 {
+        let pixel = pixmap.pixel(x, 85).unwrap();
+        assert_eq!(
+            (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()),
+            (0x4F, 0x81, 0xBD, 0xFF),
+            "connector line pixel at x {x}"
+        );
+    }
 }
 
 #[test]
