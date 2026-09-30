@@ -496,9 +496,11 @@ Integer WordprocessingML measurements retain the signed integer path the
 schema requires and accept one bounded producer deviation, the decimal part
 Google Docs writes, as in `w:gridCol w:w="2210.0000000000005"`. One parser
 serves paragraph spacing, line spacing and indents, frame geometry, tab stops,
-run spacing, position, kerning and font sizes, page size and margins, columns,
-grid columns, row heights, and the table measurements below, in every part that
-holds them. A plain signed decimal is normalized with exact decimal arithmetic
+border widths and spacing, run spacing, position, kerning and font sizes, page
+size and margins, columns, grid columns, row heights, and the table
+measurements below, in every part that holds them. The settings default tab
+stop and hyphenation zone round the same way and still treat a value that does
+not parse as absent. A plain signed decimal is normalized with exact decimal arithmetic
 to the nearest integer, with exact halves rounded away from zero. Exponent
 notation, malformed forms, non-finite spellings, and exact values outside the
 target integer type remain errors that name the element, the attribute and the

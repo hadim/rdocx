@@ -58,9 +58,9 @@ impl CT_BorderEdge {
             if matches_local_name(key, b"val") {
                 edge.val = ST_Border::from_str(v).unwrap_or(edge.val);
             } else if matches_local_name(key, b"sz") {
-                edge.sz = Some(v.parse()?);
+                edge.sz = Some(parse_integer_measurement(e.name().as_ref(), key, v)?);
             } else if matches_local_name(key, b"space") {
-                edge.space = Some(v.parse()?);
+                edge.space = Some(parse_integer_measurement(e.name().as_ref(), key, v)?);
             } else if matches_local_name(key, b"color") {
                 edge.color = Some(v.to_string());
             } else {
@@ -85,9 +85,9 @@ impl CT_BorderEdge {
             if is_word_attribute(key, b"val", word_prefixes) {
                 edge.val = ST_Border::from_str(value).unwrap_or(edge.val);
             } else if is_word_attribute(key, b"sz", word_prefixes) {
-                edge.sz = Some(value.parse()?);
+                edge.sz = Some(parse_integer_measurement(e.name().as_ref(), key, value)?);
             } else if is_word_attribute(key, b"space", word_prefixes) {
-                edge.space = Some(value.parse()?);
+                edge.space = Some(parse_integer_measurement(e.name().as_ref(), key, value)?);
             } else if is_word_attribute(key, b"color", word_prefixes) {
                 edge.color = Some(value.to_string());
             } else {

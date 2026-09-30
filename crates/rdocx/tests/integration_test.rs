@@ -21631,7 +21631,9 @@ fn decimal_measurement_package() -> Vec<u8> {
         "/word/document.xml",
         "<w:body>",
         concat!(
-            r#"<w:body><w:p><w:pPr><w:spacing w:before="120.0" w:line="275.99999999999994" w:lineRule="auto"/>"#,
+            r#"<w:body><w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4.0" w:space="1.5"/></w:pBdr>"#,
+            r#"<w:tabs><w:tab w:val="left" w:pos="1440.0"/></w:tabs>"#,
+            r#"<w:spacing w:before="120.0" w:line="275.99999999999994" w:lineRule="auto"/>"#,
             r#"<w:ind w:left="720.5" w:hanging="226.99999999999977"/></w:pPr><w:r><w:t>Indented paragraph</w:t></w:r></w:p>"#,
             r#"<w:tbl><w:tblPr><w:tblW w:w="8639.999999999999" w:type="dxa"/></w:tblPr>"#,
             r#"<w:tblGrid><w:gridCol w:w="4320.0"/><w:gridCol w:w="4319.999999999999"/></w:tblGrid>"#,
@@ -21733,6 +21735,9 @@ fn decimal_integer_measurements_round_to_the_nearest_integer() {
         OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
     let body = std::str::from_utf8(edited.get_part("/word/document.xml").unwrap()).unwrap();
     for expected in [
+        r#"w:sz="4""#,
+        r#"w:space="2""#,
+        r#"w:pos="1440""#,
         r#"w:before="120""#,
         r#"w:line="276""#,
         r#"w:left="721""#,

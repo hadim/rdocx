@@ -627,7 +627,9 @@ impl CT_RPr {
                         );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.sz = Some(HalfPoint(parse_integer_measurement(
-                                b"w:sz", b"w:val", &val,
+                                name.as_ref(),
+                                b"w:val",
+                                &val,
                             )?));
                         }
                     } else if is_word_element(name.as_ref(), b"szCs", &prefixes) {
@@ -639,7 +641,9 @@ impl CT_RPr {
                         );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.sz_cs = Some(HalfPoint(parse_integer_measurement(
-                                b"w:szCs", b"w:val", &val,
+                                name.as_ref(),
+                                b"w:val",
+                                &val,
                             )?));
                         }
                     } else if is_word_element(name.as_ref(), b"color", &prefixes) {
@@ -719,7 +723,7 @@ impl CT_RPr {
                         );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.spacing = Some(Twips(parse_integer_measurement(
-                                b"w:spacing",
+                                name.as_ref(),
                                 b"w:val",
                                 &val,
                             )?));
@@ -743,7 +747,7 @@ impl CT_RPr {
                         );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.position =
-                                Some(parse_integer_measurement(b"w:position", b"w:val", &val)?);
+                                Some(parse_integer_measurement(name.as_ref(), b"w:val", &val)?);
                         }
                     } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
                         record_rpr_modeled(
@@ -782,7 +786,9 @@ impl CT_RPr {
                             RPR_KERN_SLOT,
                         );
                         rpr.kern = Some(HalfPoint(parse_integer_measurement(
-                            b"w:kern", b"w:val", &val,
+                            name.as_ref(),
+                            b"w:val",
+                            &val,
                         )?));
                     } else if is_word_element(name.as_ref(), b"effect", &prefixes) {
                         record_rpr_modeled(
