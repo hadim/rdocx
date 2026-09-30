@@ -39028,4 +39028,87 @@ fn accepted_view_joins_paragraphs_whose_mark_is_deleted() {
     );
     joined.accept_all().unwrap();
     assert_eq!(joined.text(), "Alpha\nJoined Omega\n");
+
+    // The dropped heading leaves no outline entry.
+    let outline = |document: &Document, view: RevisionView| {
+        document
+            .layout_deterministic_with_options(RenderOptions {
+                revision_view: view,
+            })
+            .unwrap()
+            .layout
+            .outlines
+            .iter()
+            .map(|entry| entry.title.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(outline(&redline, RevisionView::Accepted).is_empty());
+    assert_eq!(outline(&redline, RevisionView::Tracked), ["OLDHEAD"]);
+
+    // A dropped paragraph takes its page break with it, and a formatted run
+    // with nothing to show does not keep a paragraph.
+    let breaks = document_with_content_controls(&wrap_word_body(
+        r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p><w:p><w:pPr><w:pageBreakBefore/><w:rPr><w:del w:id="1" w:author="Ada"/></w:rPr></w:pPr><w:del w:id="2" w:author="Ada"><w:r><w:delText>Gone</w:delText></w:r></w:del></w:p><w:p><w:pPr><w:rPr><w:del w:id="3" w:author="Ada"/></w:rPr></w:pPr><w:r><w:rPr><w:b/></w:rPr></w:r></w:p><w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#,
+    ));
+    assert_eq!(breaks.text(), "Alpha\nOmega\n");
+    let accepted = breaks
+        .layout_deterministic_with_options(RenderOptions {
+            revision_view: RevisionView::Accepted,
+        })
+        .unwrap();
+    assert_eq!(accepted.layout.pages.len(), 1);
+    assert_eq!(
+        lines(&breaks, RevisionView::Accepted),
+        [("Alpha", 80.25), ("Omega", 100.12)].map(|(text, y)| (text.to_owned(), y))
+    );
+    let tracked = breaks
+        .layout_deterministic_with_options(RenderOptions {
+            revision_view: RevisionView::Tracked,
+        })
+        .unwrap();
+    assert_eq!(tracked.layout.pages.len(), 2);
+}
+
+/// A paragraph whose mark is deleted but that holds a bookmark start keeps
+/// its place in the accepted layout, so PAGEREF and REF still find the
+/// bookmark.
+#[test]
+fn accepted_view_keeps_a_deleted_paragraph_that_holds_a_bookmark() {
+    let body = r#"<w:p><w:r><w:t xml:space="preserve">See page </w:t></w:r><w:fldSimple w:instr=" PAGEREF bm \h "><w:r><w:t>stale</w:t></w:r></w:fldSimple><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF bm \p </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>stored position</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/><w:rPr><w:del w:id="1" w:author="Ada"/></w:rPr></w:pPr><w:bookmarkStart w:id="5" w:name="bm"/><w:del w:id="2" w:author="Ada"><w:r><w:delText>Old heading</w:delText></w:r></w:del><w:bookmarkEnd w:id="5"/></w:p><w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let result = document
+        .layout_deterministic_with_options(RenderOptions {
+            revision_view: RevisionView::Accepted,
+        })
+        .unwrap();
+    let mut texts = Vec::new();
+    oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+        if let oxml_layout::PositionedElement::Text(run) = element {
+            texts.push(run.text.trim().to_owned());
+        }
+    });
+    assert!(texts.iter().any(|text| text == "1"), "{texts:?}");
+    assert!(texts.iter().any(|text| text == "below"), "{texts:?}");
+    assert!(
+        !texts
+            .iter()
+            .any(|text| text == "99" || text == "stale" || text.starts_with("stored")),
+        "{texts:?}"
+    );
+    assert!(
+        result
+            .layout
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !format!("{diagnostic:?}").contains("did not reach pagination")),
+        "{:?}",
+        result.layout.diagnostics
+    );
+    assert_eq!(
+        document
+            .update_layout_backed_fields()
+            .unwrap()
+            .page_reference_fields,
+        1
+    );
 }

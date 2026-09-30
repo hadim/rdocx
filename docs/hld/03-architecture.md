@@ -1419,10 +1419,14 @@ tracked insertions are included and tracked deletions are left out.
 A body paragraph whose mark is deleted or moved away joins the next body
 paragraph without a newline, as accepting it in Word does, so one without
 accepted text leaves no line. `CT_Body::accepted_paragraph_joins_next` owns
-that rule for the text reader and the accepted layout. A paragraph that ends a
-section, or that a table, a content control or the end of the body follows,
-keeps its mark. Paragraphs in cells and content controls keep their marks too.
-Paragraph text, paragraph indices and the editing APIs are unchanged.
+that rule for the text reader and the accepted layout. The next body item must
+be a paragraph, the adjacency `Document::accept_all` requires before it merges
+paragraphs. `accept_all` refuses a removed mark before a table, a content
+control, preserved XML or the end of the body, and those paragraphs keep their
+marks. A paragraph that ends a section also keeps its mark, although
+`accept_all` merges its section break away. Paragraphs in cells and content
+controls keep their marks too. Paragraph text, paragraph indices and the
+editing APIs are unchanged.
 The WASM binding uses `Document::text` for its existing `getText` method and
 otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.

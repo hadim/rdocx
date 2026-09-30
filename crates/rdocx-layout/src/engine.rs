@@ -389,6 +389,36 @@ fn project_paragraph_runs(para: &CT_P, view: RevisionView) -> Vec<ProjectedRun<'
     projected
 }
 
+/// Whether the accepted view of `para` has nothing to lay out: no text, tab,
+/// break, picture, field, symbol, special character or note reference, no
+/// equation and no bookmark start.
+///
+/// A bookmark start keeps the paragraph, because a PAGEREF or REF field
+/// reads the page, number and text of the paragraph that holds it, and
+/// moving it onto the next paragraph, as accepting does, is not modeled.
+fn accepted_paragraph_is_blank(para: &CT_P) -> bool {
+    para.accepted_text().is_empty()
+        && para.equations.is_empty()
+        && !para.bookmark_markers.iter().any(|marker| marker.is_start())
+        && project_paragraph_runs(para, RevisionView::Accepted)
+            .iter()
+            .all(|projected| {
+                projected.run.alt_drawings.is_empty()
+                    && projected.run.content.iter().all(|content| match content {
+                        RunContent::Text(text) => text.text.is_empty(),
+                        RunContent::DeletedText(_) | RunContent::CommentReference { .. } => true,
+                        RunContent::Tab
+                        | RunContent::Break(_)
+                        | RunContent::Drawing(_)
+                        | RunContent::Field(_)
+                        | RunContent::FootnoteRef { .. }
+                        | RunContent::EndnoteRef { .. }
+                        | RunContent::Symbol { .. }
+                        | RunContent::SpecialCharacter(_) => false,
+                    })
+            })
+}
+
 enum ProjectedParagraphOwner<'a> {
     Control(&'a CT_Sdt),
     Revision {
@@ -1990,9 +2020,7 @@ impl Engine {
                     if input.revision_view == RevisionView::Accepted
                         && path.len() == 1
                         && input.document.body.accepted_paragraph_joins_next(path[0])
-                        && para.accepted_text().is_empty()
-                        && para.accepted_bookmark_runs().is_empty()
-                        && para.equations.is_empty() => {}
+                        && accepted_paragraph_is_blank(para) => {}
                 MainStoryLayoutItem::Paragraph(para, path) => {
                     // Check if this paragraph ends a section (has sect_pr)
                     let para_sect_pr = para.properties.as_ref().and_then(|p| p.sect_pr.clone());
