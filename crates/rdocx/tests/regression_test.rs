@@ -37973,7 +37973,7 @@ mod floating_table_placement_regressions {
 
         let float = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
         let wrapped = boxes_for(Some(float));
-        assert_eq!(wrapped[0], (80.25, 181.0, 525.39));
+        assert_eq!(wrapped[0], (80.25, 181.0, 522.9));
         assert_eq!(wrapped[1], (92.12, 181.0, 277.95));
 
         // The same table in the flow leaves the measure alone, which is what
@@ -38974,4 +38974,97 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
         .unwrap();
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert!(compared.revisions().is_empty());
+}
+
+/// Issue 226. On the plain line path a space that ends a line hangs past it,
+/// as in Word. Counting it in the fit test wrapped "spring," at a 2.10 inch
+/// text width, where "deck was poured in the spring," fits once its space
+/// hangs, and alignment left a right-aligned line one space short of the margin.
+/// Word neither widens nor underlines nor highlights a hanging space.
+#[test]
+fn a_plain_line_lets_the_space_after_its_last_word_hang() {
+    const TEXT: &str = "The old bridge was repainted in three weeks, while it stayed open to \
+        traffic, and the new deck was poured in the spring, before the river rose again, so \
+        the crossing reopened on time.";
+    let lines = |alignment| {
+        let mut document = Document::new();
+        {
+            let mut section = document.section_mut(0).unwrap();
+            section
+                .set_page_size(Length::pt(72.0 * 4.1), Length::pt(792.0))
+                .unwrap();
+            section
+                .set_margins(
+                    Length::pt(72.0),
+                    Length::pt(72.0),
+                    Length::pt(72.0),
+                    Length::pt(72.0),
+                )
+                .unwrap();
+        }
+        let mut paragraph = document.add_paragraph("").alignment(alignment);
+        paragraph
+            .add_run(TEXT)
+            .font("Arial")
+            .size(11.0)
+            .underline(true)
+            .highlight("yellow");
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic plain layout");
+        // Text and right edge of the ink of each line, in paint order, and
+        // the right edge of the underlines and highlights.
+        let mut lines: Vec<(f64, String, f64)> = Vec::new();
+        let mut decorations = f64::MIN;
+        oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+            match element {
+                oxml_layout::PositionedElement::Line { start, end, .. } => {
+                    decorations = decorations.max(start.x.max(end.x));
+                }
+                oxml_layout::PositionedElement::FilledRect { rect, .. } => {
+                    decorations = decorations.max(rect.x + rect.width);
+                }
+                _ => {}
+            }
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                let right = run.origin.x + run.advances.iter().sum::<f64>();
+                match lines.last_mut() {
+                    Some((y, text, ink)) if *y == run.origin.y => {
+                        text.push_str(&run.text);
+                        if !run.text.trim().is_empty() {
+                            *ink = right;
+                        }
+                    }
+                    _ => lines.push((run.origin.y, run.text.clone(), right)),
+                }
+            }
+        });
+        assert!(decorations <= 223.21, "a decoration ends at {decorations}");
+        lines
+            .into_iter()
+            .map(|(_, text, ink)| (text.trim_end().to_owned(), ink))
+            .collect::<Vec<_>>()
+    };
+
+    let left = lines(rdocx::paragraph::Alignment::Left);
+    assert_eq!(
+        left.iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "The old bridge was repainted",
+            "in three weeks, while it stayed",
+            "open to traffic, and the new",
+            "deck was poured in the spring,",
+            "before the river rose again, so",
+            "the crossing reopened on time.",
+        ]
+    );
+    for (text, ink) in lines(rdocx::paragraph::Alignment::Right) {
+        assert!((ink - 223.2).abs() < 0.01, "{text:?} ends at {ink}");
+    }
+    let justified = lines(rdocx::paragraph::Alignment::Justify);
+    for (text, ink) in &justified[..justified.len() - 1] {
+        assert!((ink - 223.2).abs() < 0.01, "{text:?} ends at {ink}");
+    }
 }

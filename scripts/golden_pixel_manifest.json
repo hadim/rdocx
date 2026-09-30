@@ -4,11 +4,11 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "PR 148 paragraph spacing, cell margins, and horizontal table borders move contract, invoice, and quote under pinned Poppler 26.01.0",
+  "reason": "A space that ends a plain line hangs past it as in Word, also after a ligature, so contract and invoice keep a last word on lines that fit once it hangs, under pinned Poppler 26.01.0",
   "samples": {
     "contract": {
       "height": 1650,
-      "rgba_sha256": "1161c8beb71a576b32e0bd388900efb2aba3e9d95d87ce30fe1a664ee1e3bbb6",
+      "rgba_sha256": "0ea48871974712dda1345749cd022a3701bf16212643e1997693887a35a00479",
       "width": 1275
     },
     "feature_showcase": {
@@ -18,7 +18,7 @@
     },
     "invoice": {
       "height": 1650,
-      "rgba_sha256": "d5d94db1e34f866d254cc0bd7a0917b31aefaa0e7e9d59e9518a4a80cc977eca",
+      "rgba_sha256": "10646f8d448bd0ff064316d23e0346e13adc07d71065ecd816e5401f9e6e1e6d",
       "width": 1275
     },
     "letter": {
