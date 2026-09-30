@@ -79,6 +79,14 @@ their original slots rather than appending them at the end.
 **`a:t` whitespace.** Leading and trailing whitespace is significant and needs
 `xml:space="preserve"`. Cheap to guard, and infuriating to diagnose later.
 
+**`a:t` characters XML cannot carry.** The text setters store a character XML
+1.0 forbids, such as U+0001 or the vertical tab U+000B, as `_xHHHH_` with four
+uppercase hexadecimal digits, as python-pptx's run text setter does. Reading
+never decodes that form, as neither python-pptx nor PowerPoint does, so the
+getters, the renderer and PowerPoint all show the stored text. Replacing a
+paragraph's text turns each vertical tab into an `a:br`, the break that
+paragraph text reads back as a vertical tab.
+
 ## Colour, the part everyone gets wrong
 
 Resolution is three stages, in this order:

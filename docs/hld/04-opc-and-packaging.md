@@ -51,7 +51,8 @@ check is fail-closed: any edit that re-serializes such a part, or a
 relationship part whose source held one, refuses the save rather than write it
 again. The fallible entry points that take free text refuse such a value
 earlier, naming it and the one-based character position, as python-docx and
-python-pptx refuse such strings.
+python-pptx refuse such strings. DrawingML `a:t` text set through the text
+setters is the exception, stored as `_xHHHH_` as python-pptx stores it.
 
 **Saves are deterministic.** Both `part_rels` and `parts` are emitted in sorted
 key order, so writing the same package twice produces byte-identical output.
