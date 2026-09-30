@@ -920,6 +920,7 @@ struct ReusableEngineContext {
     gutter_at_top: bool,
     do_not_use_html_paragraph_auto_spacing: bool,
     default_tab_stop: Option<rdocx_oxml::units::Twips>,
+    clamp_tabs_past_margin: bool,
     math_properties: Option<rdocx_oxml::math::MathProperties>,
     has_wrapping_drawing: bool,
     styles: CT_Styles,
@@ -1016,6 +1017,7 @@ impl ReusableEngineContext {
             gutter_at_top: input.gutter_at_top,
             do_not_use_html_paragraph_auto_spacing: input.do_not_use_html_paragraph_auto_spacing,
             default_tab_stop: input.default_tab_stop,
+            clamp_tabs_past_margin: input.clamp_tabs_past_margin,
             math_properties: input.math_properties.clone(),
             has_wrapping_drawing,
             styles: input.styles.clone(),
@@ -1093,6 +1095,7 @@ impl ReusableEngineContext {
             && self.do_not_use_html_paragraph_auto_spacing
                 == input.do_not_use_html_paragraph_auto_spacing
             && self.default_tab_stop == input.default_tab_stop
+            && self.clamp_tabs_past_margin == input.clamp_tabs_past_margin
             && self.math_properties == input.math_properties
             && self.has_wrapping_drawing == has_wrapping_drawing
             && self.styles == input.styles
@@ -6887,6 +6890,7 @@ fn layout_paragraph_with_source_and_table(
     // Line breaking
     let mut line_params =
         convert::line_break_params(&effective_ppr, available_width, input.default_tab_stop);
+    line_params.clamp_tabs_past_margin = input.clamp_tabs_past_margin;
     line_params.ind_left = ind_left;
     line_params.ind_right = ind_right;
     line_params.jc = jc;
@@ -7600,9 +7604,7 @@ fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
     if direct.borders.is_some() {
         effective.borders = direct.borders.clone();
     }
-    if direct.tabs.is_some() {
-        effective.tabs = direct.tabs.clone();
-    }
+    style_resolver::merge_tab_stops(&mut effective.tabs, direct.tabs.as_ref());
     if direct.shading.is_some() {
         effective.shading = direct.shading.clone();
     }
@@ -10801,6 +10803,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16405,8 +16408,10 @@ mod tests {
         let mut paragraph = CT_P::new();
         paragraph.properties = Some(CT_PPr {
             tabs: Some(CT_Tabs {
+                // Distinct positions, since stops at one position replace
+                // each other as Word merges them.
                 tabs: (0..stop_count)
-                    .map(|_| CT_TabStop::new(ST_TabJc::Left, Twips(720)))
+                    .map(|index| CT_TabStop::new(ST_TabJc::Left, Twips(720 + index as i32)))
                     .collect(),
             }),
             ..CT_PPr::default()
@@ -17107,6 +17112,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17634,6 +17640,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17701,6 +17708,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17786,6 +17794,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17967,6 +17976,7 @@ mod tests {
                 gutter_at_top: false,
                 do_not_use_html_paragraph_auto_spacing: false,
                 default_tab_stop: None,
+                clamp_tabs_past_margin: false,
                 math_properties: None,
                 document: doc,
                 styles: CT_Styles::new_default(),
@@ -18100,6 +18110,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -18397,6 +18408,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -18545,6 +18557,7 @@ mod tests {
                 gutter_at_top: false,
                 do_not_use_html_paragraph_auto_spacing: false,
                 default_tab_stop: None,
+                clamp_tabs_past_margin: false,
                 math_properties: None,
                 document: doc,
                 styles: CT_Styles::new_default(),
@@ -18677,6 +18690,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -19011,6 +19025,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -19099,6 +19114,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -19207,6 +19223,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -19407,6 +19424,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),

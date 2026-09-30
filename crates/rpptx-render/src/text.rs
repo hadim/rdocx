@@ -872,6 +872,7 @@ fn line_break_params(
         // Slide text has no document-level tab interval, so it keeps the
         // half-inch default this field replaced.
         default_tab_interval_pt: 36.0,
+        clamp_tabs_past_margin: false,
     }
 }
 

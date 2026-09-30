@@ -9901,13 +9901,17 @@ fn rebuilt_toc_uses_localized_styles_section_tabs_and_structural_suffixes() {
             Some(expected)
         );
     }
-    assert!(
-        entries[0]
-            .properties
-            .as_ref()
-            .and_then(|properties| properties.tabs.as_ref())
-            .is_none()
-    );
+    // The numbered entry gets Word's left stop after its number, and its
+    // style keeps the page number stop.
+    let number_tabs = entries[0]
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.tabs.as_ref())
+        .expect("number stop");
+    assert_eq!(number_tabs.tabs.len(), 1);
+    assert_eq!(number_tabs.tabs[0].val, ST_TabJc::Left);
+    assert_eq!(number_tabs.tabs[0].pos, Twips(480));
+    assert_eq!(number_tabs.tabs[0].leader, None);
     for entry in &entries[1..] {
         let tabs = entry
             .properties
@@ -25187,6 +25191,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
         gutter_at_top: false,
         do_not_use_html_paragraph_auto_spacing: false,
         default_tab_stop: None,
+        clamp_tabs_past_margin: false,
         math_properties: None,
         document,
         styles: rdocx_oxml::styles::CT_Styles::new_default(),
@@ -36598,6 +36603,7 @@ mod advanced_table_geometry_regressions {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
@@ -38928,4 +38934,247 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
         .unwrap();
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert!(compared.revisions().is_empty());
+}
+
+/// Tab stops placed where Word 16 for Mac places them. The documents use
+/// python-docx's page, whose 1.25 inch margins put the text between x 90 and
+/// x 522.
+mod tab_stop_regressions {
+    use super::{document_with_field_parts, document_xml, wrap_word_body};
+    use rdocx::{Document, ListLevel, StyleBuilder};
+    use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
+    use rdocx_oxml::properties::CT_PPr;
+    use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
+    use rdocx_oxml::units::Twips;
+
+    const SECTION: &str = r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>"#;
+
+    /// A paragraph of runs separated by tabs, after `properties`.
+    fn tabbed(properties: &str, parts: &[&str]) -> String {
+        let runs = parts
+            .iter()
+            .map(|part| format!("<w:r><w:t>{part}</w:t></w:r>"))
+            .collect::<Vec<_>>()
+            .join("<w:r><w:tab/></w:r>");
+        format!("<w:p><w:pPr>{properties}</w:pPr>{runs}</w:p>")
+    }
+
+    fn stops(stops: &[(&str, i32, &str)]) -> String {
+        let stops = stops
+            .iter()
+            .map(|(val, pos, leader)| {
+                format!(r#"<w:tab w:val="{val}" w:leader="{leader}" w:pos="{pos}"/>"#)
+            })
+            .collect::<String>();
+        format!("<w:tabs>{stops}</w:tabs>")
+    }
+
+    fn document(paragraphs: &[String]) -> Document {
+        document_with_field_parts(
+            &wrap_word_body(&format!("{}{SECTION}", paragraphs.concat())),
+            None,
+            None,
+        )
+    }
+
+    /// Where a text run on page one starts and ends, and where each of its
+    /// characters ends, in points from the page edge.
+    fn run(document: &Document, text: &str) -> (f64, f64, Vec<f64>) {
+        let layout = document.layout_deterministic().unwrap();
+        let mut found = None;
+        oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && run.text == text
+                && found.is_none()
+            {
+                let mut ends = Vec::new();
+                let mut x = run.origin.x;
+                for advance in &run.advances {
+                    x += advance;
+                    ends.push(x);
+                }
+                found = Some((run.origin.x, x, ends));
+            }
+        });
+        found.unwrap_or_else(|| panic!("{text} must be laid out"))
+    }
+
+    fn assert_at(actual: f64, expected: f64, what: &str) {
+        assert!(
+            (actual - expected).abs() < 0.01,
+            "{what}: {actual} instead of {expected}"
+        );
+    }
+
+    /// Word puts the text after the tab at the stop, 150 points from the
+    /// margin. Layout started it 36 points early and laid a right, centre or
+    /// decimal stop as a left one.
+    #[test]
+    fn text_after_a_tab_aligns_on_its_stop() {
+        let document = document(&[
+            tabbed(&stops(&[("left", 3000, "none")]), &["Title", "L12"]),
+            tabbed(&stops(&[("right", 3000, "dot")]), &["Title", "R12"]),
+            tabbed(&stops(&[("center", 3000, "none")]), &["Title", "ABCDEF"]),
+            tabbed(&stops(&[("decimal", 3000, "none")]), &["Title", "123.45"]),
+        ]);
+        assert_at(run(&document, "L12").0, 240.0, "left stop");
+        assert_at(run(&document, "R12").1, 240.0, "right stop");
+        let (start, end, _) = run(&document, "ABCDEF");
+        assert_at((start + end) / 2.0, 240.0, "centre stop");
+        assert_at(run(&document, "123.45").2[2], 240.0, "decimal stop");
+    }
+
+    /// A paragraph's stops add to its style's, as Word merges them, and a
+    /// clear stop removes the style's stop at its position. Default stops
+    /// start after the last explicit stop, and a bar stop is none.
+    #[test]
+    fn paragraph_stops_add_to_style_stops() {
+        let mut document = document(&[
+            tabbed(
+                &format!(
+                    r#"<w:pStyle w:val="Tabbed"/>{}"#,
+                    stops(&[("left", 4000, "none")])
+                ),
+                &["T", "A1", "B1", "C1"],
+            ),
+            tabbed(
+                &format!(
+                    r#"<w:pStyle w:val="Tabbed"/>{}"#,
+                    stops(&[("clear", 2000, "none")])
+                ),
+                &["T", "A2", "B2"],
+            ),
+            tabbed(&stops(&[("left", 3000, "none")]), &["T", "A3", "B3"]),
+            tabbed(&stops(&[("bar", 1500, "none")]), &["T", "A4"]),
+        ]);
+        document
+            .add_style(
+                StyleBuilder::paragraph("Tabbed", "Tabbed").paragraph_properties(CT_PPr {
+                    tabs: Some(CT_Tabs {
+                        tabs: vec![
+                            CT_TabStop::new(ST_TabJc::Left, Twips(2000)),
+                            CT_TabStop {
+                                leader: Some(ST_TabLeader::Dot),
+                                ..CT_TabStop::new(ST_TabJc::Right, Twips(6000))
+                            },
+                        ],
+                    }),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        assert_at(run(&document, "A1").0, 190.0, "style stop");
+        assert_at(run(&document, "B1").0, 290.0, "paragraph stop");
+        assert_at(run(&document, "C1").1, 390.0, "style right stop");
+        assert_at(run(&document, "A2").1, 390.0, "stop after a cleared one");
+        assert_at(run(&document, "B2").0, 414.0, "default stop after the last");
+        assert_at(run(&document, "A3").0, 240.0, "no default stop before");
+        assert_at(run(&document, "B3").0, 270.0, "default stop after");
+        assert_at(run(&document, "A4").0, 126.0, "bar stop");
+    }
+
+    /// The tab after a list number goes to the hanging indent. Layout
+    /// resolved it as if the line started at the margin plus half an inch,
+    /// which put list text 18 points right of Word's.
+    #[test]
+    fn list_text_starts_at_the_hanging_indent() {
+        let mut document = document(&[
+            tabbed(r#"<w:ind w:left="1440" w:hanging="1440"/>"#, &["T", "H1"]),
+            r#"<w:p><w:pPr><w:pStyle w:val="ListParagraph"/></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>"#
+                .to_owned(),
+        ]);
+        let definition = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        document
+            .add_style(StyleBuilder::paragraph("ListParagraph", "List Paragraph"))
+            .unwrap();
+        document
+            .link_style_to_numbering("ListParagraph", instance, 0)
+            .unwrap();
+        assert_at(run(&document, "H1").0, 162.0, "hanging indent stop");
+        // Left 720 and hanging 360, the rdocx list default.
+        assert_at(run(&document, "Item").0, 126.0, "list text");
+    }
+
+    /// Word 2010 keeps a right stop past the right margin, and Word 2013
+    /// ends the text at the margin, or at the right indent.
+    #[test]
+    fn a_stop_past_the_right_margin_follows_the_compatibility_mode() {
+        let paragraphs = [
+            tabbed(&stops(&[("right", 10000, "none")]), &["T", "M12"]),
+            tabbed(
+                &format!(
+                    r#"{}<w:ind w:right="2000"/>"#,
+                    stops(&[("right", 9000, "none")])
+                ),
+                &["T", "I12"],
+            ),
+        ];
+        let document_2010 = document(&paragraphs);
+        assert_at(run(&document_2010, "M12").1, 590.0, "Word 2010");
+        assert_at(run(&document_2010, "I12").1, 540.0, "Word 2010 indented");
+        let mut document_2013 = document(&paragraphs);
+        document_2013
+            .set_compatibility_setting(
+                "compatibilityMode",
+                "http://schemas.microsoft.com/office/word",
+                "15",
+            )
+            .unwrap();
+        assert_at(run(&document_2013, "M12").1, 522.0, "Word 2013");
+        assert_at(run(&document_2013, "I12").1, 422.0, "Word 2013 indented");
+    }
+
+    /// The entry of a heading numbered with a tab gets a left stop after its
+    /// number, which Word writes as 480 twips for "1.", so the title stays on
+    /// the left instead of going to the page number stop. Entries of
+    /// unnumbered headings keep their exact bytes.
+    #[test]
+    fn toc_entry_of_a_numbered_heading_keeps_its_title_on_the_left() {
+        let body = r#"
+            <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-2" \h \z \u</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>placeholder</w:t></w:r></w:p>
+            <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Scope</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Plain</w:t></w:r></w:p>
+        "#;
+        let mut document =
+            document_with_field_parts(&wrap_word_body(&format!("{body}{SECTION}")), None, None);
+        let right_stop = |style_id: &str, name: &str| {
+            StyleBuilder::paragraph(style_id, name).paragraph_properties(CT_PPr {
+                tabs: Some(CT_Tabs {
+                    tabs: vec![CT_TabStop {
+                        leader: Some(ST_TabLeader::Dot),
+                        ..CT_TabStop::new(ST_TabJc::Right, Twips(8640))
+                    }],
+                }),
+                ..Default::default()
+            })
+        };
+        document.add_style(right_stop("TOC1", "toc 1")).unwrap();
+        document.add_style(right_stop("TOC2", "toc 2")).unwrap();
+        let definition = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        document
+            .link_style_to_numbering("Heading1", instance, 0)
+            .unwrap();
+
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+        let xml = document_xml(&mut document);
+        assert!(
+            xml.contains(r#"<w:p><w:pPr><w:pStyle w:val="TOC1"/><w:tabs><w:tab w:val="left" w:pos="480"/></w:tabs></w:pPr>"#),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(r#"<w:p><w:pPr><w:pStyle w:val="TOC2"/></w:pPr>"#),
+            "{xml}"
+        );
+
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_at(run(&reopened, "Scope").0, 114.0, "numbered entry title");
+        assert_at(run(&reopened, "Plain").0, 90.0, "unnumbered entry title");
+    }
 }

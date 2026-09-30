@@ -313,6 +313,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: rdocx_oxml::document::CT_Document::new(),
             styles: CT_Styles::new_default(),

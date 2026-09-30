@@ -6,8 +6,10 @@
 use std::collections::{HashMap, HashSet};
 
 use oxml_layout::SourceNodeId;
+use rdocx_oxml::borders::CT_Tabs;
 use rdocx_oxml::numbering::{CT_Lvl, CT_Numbering, ST_LvlSuffix, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::shared::ST_TabJc;
 use rdocx_oxml::styles::{CT_Style, CT_Styles, StyleType};
 
 /// A fully resolved paragraph with merged properties and numbering info.
@@ -259,11 +261,11 @@ pub fn resolve_paragraph_properties_in_table(
     if let Some(ref defaults) = styles.doc_defaults
         && let Some(ref ppr) = defaults.ppr
     {
-        effective.merge_from(ppr);
+        merge_paragraph_layer(&mut effective, ppr);
     }
 
     if let Some(properties) = table_properties {
-        effective.merge_from(properties);
+        merge_paragraph_layer(&mut effective, properties);
     }
 
     // 2. Walk the selected style's basedOn chain
@@ -277,12 +279,56 @@ pub fn resolve_paragraph_properties_in_table(
         // Apply from most-base to most-derived
         for style in chain.iter().rev() {
             if let Some(ref ppr) = style.ppr {
-                effective.merge_from(ppr);
+                merge_paragraph_layer(&mut effective, ppr);
             }
         }
     }
 
     effective
+}
+
+/// Merge one layer of paragraph properties, with Word's rule for tab stops.
+fn merge_paragraph_layer(effective: &mut CT_PPr, layer: &CT_PPr) {
+    let inherited_tabs = effective.tabs.take();
+    effective.merge_from(layer);
+    effective.tabs = inherited_tabs;
+    merge_tab_stops(&mut effective.tabs, layer.tabs.as_ref());
+}
+
+/// Apply one layer of `w:tabs` to the tab stops inherited so far.
+///
+/// Word adds a layer's stops to the ones a paragraph inherits from its
+/// styles and its list level rather than replacing them. A stop replaces an
+/// inherited stop at the same position, and a `clear` stop removes it. Word
+/// reads the stops of a single layer in their listed order, and sorts stops
+/// merged from several layers.
+pub(crate) fn merge_tab_stops(inherited: &mut Option<CT_Tabs>, layer: Option<&CT_Tabs>) {
+    let Some(layer) = layer else {
+        return;
+    };
+    let merged = inherited.get_or_insert_with(CT_Tabs::default);
+    let sort = !merged.tabs.is_empty();
+    // The last stop a layer sets at a position is the one that counts.
+    let last = layer
+        .tabs
+        .iter()
+        .enumerate()
+        .map(|(index, tab)| (tab.pos.0, index))
+        .collect::<HashMap<_, _>>();
+    merged
+        .tabs
+        .retain(|existing| !last.contains_key(&existing.pos.0));
+    merged.tabs.extend(
+        layer
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(index, tab)| last[&tab.pos.0] == *index && tab.val != ST_TabJc::Clear)
+            .map(|(_, tab)| tab.clone()),
+    );
+    if sort {
+        merged.tabs.sort_by_key(|tab| tab.pos.0);
+    }
 }
 
 /// Resolve run properties by walking paragraph and character style chains.
@@ -793,6 +839,55 @@ mod tests {
             extra_xml: Vec::new(),
         });
         styles
+    }
+
+    #[test]
+    fn tab_stop_layers_add_up_and_a_clear_stop_removes_one() {
+        use rdocx_oxml::borders::CT_TabStop;
+
+        let tabs = |stops: &[(ST_TabJc, i32)]| CT_Tabs {
+            tabs: stops
+                .iter()
+                .map(|(val, pos)| CT_TabStop::new(*val, Twips(*pos)))
+                .collect(),
+        };
+        let positions = |tabs: &Option<CT_Tabs>| -> Vec<(ST_TabJc, i32)> {
+            tabs.as_ref()
+                .map(|tabs| tabs.tabs.iter().map(|tab| (tab.val, tab.pos.0)).collect())
+                .unwrap_or_default()
+        };
+
+        // One layer keeps its listed order, the last stop at a position wins.
+        let mut merged = None;
+        merge_tab_stops(
+            &mut merged,
+            Some(&tabs(&[
+                (ST_TabJc::Right, 9500),
+                (ST_TabJc::Left, 3000),
+                (ST_TabJc::Left, 9500),
+            ])),
+        );
+        assert_eq!(
+            positions(&merged),
+            [(ST_TabJc::Left, 3000), (ST_TabJc::Left, 9500)]
+        );
+
+        // A later layer adds, replaces and clears, and the result is sorted.
+        merge_tab_stops(
+            &mut merged,
+            Some(&tabs(&[
+                (ST_TabJc::Center, 3000),
+                (ST_TabJc::Left, 2000),
+                (ST_TabJc::Clear, 9500),
+                (ST_TabJc::Clear, 100),
+            ])),
+        );
+        assert_eq!(
+            positions(&merged),
+            [(ST_TabJc::Left, 2000), (ST_TabJc::Center, 3000)]
+        );
+        merge_tab_stops(&mut merged, None);
+        assert_eq!(merged.as_ref().map(|tabs| tabs.tabs.len()), Some(2));
     }
 
     #[test]

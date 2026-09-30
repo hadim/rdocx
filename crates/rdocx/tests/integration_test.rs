@@ -16369,9 +16369,10 @@ mod settings_and_web_settings_authoring_tests {
             "{word_default}"
         );
 
-        // A two-inch interval moves the implicit stop onto the wider grid.
+        // A two-inch interval moves the implicit stop onto the wider grid,
+        // two inches from the margin as in Word.
         let two_inch = run_start(Some(Twips(2880)), "B");
-        assert!((two_inch - 180.0).abs() < 0.01, "{two_inch}");
+        assert!((two_inch - 216.0).abs() < 0.01, "{two_inch}");
     }
 }
 
@@ -18911,6 +18912,7 @@ mod advanced_table_authoring_and_geometry {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document,
             styles: rdocx_oxml::styles::CT_Styles::new_default(),

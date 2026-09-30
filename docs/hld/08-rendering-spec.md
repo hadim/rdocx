@@ -1490,9 +1490,13 @@ When the effective entry style has no right tab, the generated paragraph adds
 one at page width minus the section's left and right margins. Missing,
 nonpositive, or arithmetically invalid geometry uses the standard 9360 twip
 text width. A style-owned right tab remains authoritative and receives no
-direct duplicate. Numbering marker text and its suffix are separate ordered
-run content. A tab suffix is `w:tab`, a space suffix is preserved whitespace,
-and neither becomes a literal control character inside `w:t`.
+direct duplicate. The entry of a heading numbered with a tab suffix also gets
+a direct left stop after its number, as Word writes it: the first 240 twip
+boundary at least 240 twips past the number, measured at 12 points, counting
+240 twips of indent per level below the first. Numbering marker text and its
+suffix are separate ordered run content. A tab suffix is `w:tab`, a space
+suffix is preserved whitespace, and neither becomes a literal control
+character inside `w:t`.
 
 ### Word watermarks
 
