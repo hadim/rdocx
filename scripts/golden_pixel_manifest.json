@@ -4,11 +4,11 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "Word line heights: runs, blank lines and picture lines measured the way Word measures them, on OS/2 Windows metrics with external leading (issue 162)",
+  "reason": "Integration snapshot: #225 Word line heights and #237 tab stops combined move the contract and letter list text",
   "samples": {
     "contract": {
       "height": 1650,
-      "rgba_sha256": "3eeeaa0d0036b5350380c4c655e55d985d56074b9c8faad5cdbbe8a0dcb81008",
+      "rgba_sha256": "0f34b5ae475dca439769ac4b5d6604aeb0897e967875be8e3819a12e369c51c1",
       "width": 1275
     },
     "feature_showcase": {
@@ -23,7 +23,7 @@
     },
     "letter": {
       "height": 1650,
-      "rgba_sha256": "e4c4ccbe62a76f39739824ee4ba04ca1a2d3cde630b1797aeadca0232a47d1e9",
+      "rgba_sha256": "416bc89c782dbd63fcfe37dbd5fcb1312da6e7676d8cb033141003d6ae4cd3e6",
       "width": 1275
     },
     "proposal": {
