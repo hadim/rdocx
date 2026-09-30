@@ -36,7 +36,12 @@ glyph-cluster positions. Word assigns spans before shaping. Its initial text
 projection assigns one shaped segment to each formatting and provenance span.
 The shared line breaker alone discovers UAX 14 opportunities, reshapes each
 exact byte slice, and subdivides the scalar source range, so every wrapped
-fragment retains an exact contiguous source range. A language-aware inline
+fragment retains an exact contiguous source range. U+0020 spaces that end a
+line hang past it, as on the rich path and in Word and PowerPoint. The fit test
+leaves them out, the breaker splits their glyphs off the last fragment without
+reshaping it, and alignment and justification leave them out. Word paints no
+underline, strikethrough or highlight on them. A no-break space stays part of
+its word. A language-aware inline
 item additionally exposes embedded Liang opportunities for the `en`, `fr`,
 `de`, and `es` BCP 47 primary subtags. On overflow it tries candidates from
 right to left and selects the farthest opportunity whose prefix plus a shaped

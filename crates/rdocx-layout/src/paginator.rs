@@ -3649,8 +3649,8 @@ fn render_paragraph_lines(
             .unwrap_or_default();
         let baseline_y = geometry.margin_top + y + line.ascent;
 
-        // Compute x offset based on justification. Rich text spaces that end
-        // the line hang off its visual side, outside the aligned width.
+        // Compute x offset based on justification. Spaces that end the line
+        // hang off its visual side, outside the aligned width.
         let (hang_start, hang_end) = line.hanging_space_counts();
         let ink = hang_start..line.items.len() - hang_end;
         let hanging_left: f64 = line.items[..ink.start]
@@ -3695,9 +3695,12 @@ fn render_paragraph_lines(
             match item {
                 LineItem::Text(seg) | LineItem::Marker(seg) => {
                     let adjusted_baseline = baseline_y - seg.baseline_offset;
+                    // Word does not widen, underline, strike or highlight the
+                    // spaces hanging past the end of a line.
+                    let hanging = !ink.contains(&visual_item);
 
                     // For justified text, compute the extra width from spaces in this segment
-                    let segment_spaces = if justify_extra > 0.0 {
+                    let segment_spaces = if justify_extra > 0.0 && !hanging {
                         seg.text.chars().filter(|c| *c == ' ').count()
                     } else {
                         0
@@ -3706,7 +3709,7 @@ fn render_paragraph_lines(
                     let effective_width = seg.width + segment_extra;
 
                     // Render highlight background
-                    if let Some(hl_color) = seg.highlight {
+                    if let Some(hl_color) = seg.highlight.filter(|_| !hanging) {
                         elements.push(PositionedElement::FilledRect {
                             rect: Rect {
                                 x,
@@ -3774,7 +3777,7 @@ fn render_paragraph_lines(
                     });
 
                     // Render underline
-                    if let Some(ul_style) = seg.underline {
+                    if let Some(ul_style) = seg.underline.filter(|_| !hanging) {
                         let ul_y = adjusted_baseline + seg.descent * 0.3;
                         let ul_thickness = match ul_style {
                             Underline::Thick => seg.font_size / 12.0,
@@ -3808,7 +3811,7 @@ fn render_paragraph_lines(
                     }
 
                     // Render strikethrough
-                    if seg.strike {
+                    if seg.strike && !hanging {
                         let strike_y = adjusted_baseline - seg.ascent * 0.3;
                         let strike_thickness = seg.font_size / 24.0;
                         elements.push(PositionedElement::Line {
@@ -3824,7 +3827,7 @@ fn render_paragraph_lines(
                     }
 
                     // Render double strikethrough
-                    if seg.dstrike {
+                    if seg.dstrike && !hanging {
                         let strike_y = adjusted_baseline - seg.ascent * 0.3;
                         let strike_thickness = seg.font_size / 24.0;
                         let gap = strike_thickness * 2.0;
