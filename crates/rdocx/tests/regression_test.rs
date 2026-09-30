@@ -39181,6 +39181,41 @@ mod tab_stop_regressions {
         assert_at(run(&reopened, "1").1, 522.0, "page number");
     }
 
+    /// In Word 2013 a left tab that reaches the end of its line takes a line
+    /// of its own, and the text after it starts on the next line. Layout put
+    /// the text right after the line of the tab, one line short.
+    #[test]
+    fn a_left_stop_at_the_end_of_the_line_leaves_the_tab_a_line_of_its_own() {
+        let mut document = document(&[
+            tabbed(&stops(&[("left", 8640, "none")]), &["B", "Body"]),
+            format!(
+                r#"<w:tbl><w:tblPr><w:tblW w:w="4320" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid><w:gridCol w:w="4320"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="4320" w:type="dxa"/></w:tcPr>{}</w:tc></w:tr></w:tbl>"#,
+                tabbed(&stops(&[("left", 6000, "none")]), &["D", "Cell"])
+            ),
+            "<w:p/>".to_owned(),
+        ]);
+        document
+            .set_compatibility_setting(
+                "compatibilityMode",
+                "http://schemas.microsoft.com/office/word",
+                "15",
+            )
+            .unwrap();
+        let layout = document.layout_deterministic().unwrap();
+        let mut baselines = std::collections::HashMap::new();
+        oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                baselines.insert(run.text.clone(), run.origin.y);
+            }
+        });
+        // Single-spaced 11 point lines are about 12.4 points apart, so the
+        // text is two lines below the start of the paragraph, not one.
+        for (before, after) in [("B", "Body"), ("D", "Cell")] {
+            let gap = baselines[after] - baselines[before];
+            assert!(gap > 22.0 && gap < 28.0, "{after} is {gap} below {before}");
+        }
+    }
+
     /// Page fields take their value after pagination, in place of a wider
     /// placeholder. Word 16 ends "Page 1 of 1" on the right stop, and
     /// centres "C 1" on the centre stop. Layout left both where the

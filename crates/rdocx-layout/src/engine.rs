@@ -5268,6 +5268,7 @@ fn substitute_fields(
 struct FieldWidthChange {
     aligned: oxml_layout::TabAlignedField,
     baseline: f64,
+    font_size: f64,
     /// Where the placeholder started.
     x: f64,
     delta: f64,
@@ -5341,26 +5342,32 @@ fn realign_tab_aligned_text(elements: &mut [PositionedElement], changes: &[Field
                 }
             }
             PositionedElement::Line { start, end, .. } => {
-                // An underline or a strike sits within a line height of the
-                // text it marks.
+                // An underline or a strike lies between the ascent and the
+                // descent of the text it marks.
+                let marks = |change: &&FieldWidthChange| {
+                    start.y > change.baseline - change.font_size
+                        && start.y < change.baseline + change.font_size / 2.0
+                };
                 if let Some(offset) = changes
                     .iter()
-                    .filter(|change| (start.y - change.baseline).abs() < 12.0)
+                    .filter(marks)
                     .find_map(|change| realigned_offset(changes, start.x, change.baseline))
                 {
+                    end.x += offset + own_width_change(changes, start.x, marks);
                     start.x += offset;
-                    end.x += offset;
                 }
             }
             PositionedElement::FilledRect { rect, .. }
             | PositionedElement::LinkAnnotation { rect, .. } => {
+                let covers = |change: &&FieldWidthChange| {
+                    rect.y <= change.baseline && change.baseline <= rect.y + rect.height
+                };
                 if let Some(offset) = changes
                     .iter()
-                    .filter(|change| {
-                        rect.y <= change.baseline && change.baseline <= rect.y + rect.height
-                    })
+                    .filter(covers)
                     .find_map(|change| realigned_offset(changes, rect.x, change.baseline))
                 {
+                    rect.width += own_width_change(changes, rect.x, covers);
                     rect.x += offset;
                 }
             }
@@ -5370,6 +5377,20 @@ fn realign_tab_aligned_text(elements: &mut [PositionedElement], changes: &[Field
             _ => {}
         }
     }
+}
+
+/// The change in width of the field that starts where a mark starts, so a
+/// field's own highlight or underline takes its new width.
+fn own_width_change(
+    changes: &[FieldWidthChange],
+    x: f64,
+    on_line: impl Fn(&&FieldWidthChange) -> bool,
+) -> f64 {
+    changes
+        .iter()
+        .filter(on_line)
+        .find(|change| (change.x - x).abs() < 0.01)
+        .map_or(0.0, |change| change.delta)
 }
 
 /// Lengthen or shorten a tab leader that ends where tab-aligned text starts,
@@ -5469,12 +5490,17 @@ fn substitute_field_values(
                         changes.push(FieldWidthChange {
                             aligned,
                             baseline: run.origin.y,
+                            font_size: run.font_size,
                             x: run.origin.x,
                             delta,
                         });
                     }
                 }
             }
+            // A field shaped as rich text takes its value without moving
+            // the tab-aligned text around it: `MultilingualGlyphRun` carries
+            // no `tab_aligned`, so such text stays where its placeholder
+            // put it.
             PositionedElement::MultilingualText(run) => {
                 let Some(fk) = run.field_kind else {
                     continue;
@@ -20166,6 +20192,58 @@ mod tests {
         let text = output_text(&output);
         assert!(text.iter().any(|value| value == "2"), "{text:?}");
         assert!(!text.iter().any(|value| value == "cached"), "{text:?}");
+    }
+
+    #[test]
+    fn a_page_field_on_a_right_stop_takes_its_marks_along() {
+        let aligned = oxml_layout::TabAlignedField {
+            start: 100.0,
+            end: 112.0,
+            shift: 1.0,
+            gap: 50.0,
+        };
+        // "99" became "1", six points narrower.
+        let changes = [FieldWidthChange {
+            aligned,
+            baseline: 100.0,
+            font_size: 12.0,
+            x: 100.0,
+            delta: -6.0,
+        }];
+        let line = |y: f64| PositionedElement::Line {
+            start: Point { x: 100.0, y },
+            end: Point { x: 112.0, y },
+            width: 0.5,
+            color: Color::BLACK,
+            dash_pattern: None,
+        };
+        let mut elements = vec![
+            PositionedElement::FilledRect {
+                rect: oxml_layout::Rect {
+                    x: 100.0,
+                    y: 90.0,
+                    width: 12.0,
+                    height: 14.0,
+                },
+                color: Color::BLACK,
+            },
+            line(102.0),
+            // A rule a line below is not the field's underline.
+            line(130.0),
+        ];
+        realign_tab_aligned_text(&mut elements, &changes);
+        let PositionedElement::FilledRect { rect, .. } = &elements[0] else {
+            panic!("highlight");
+        };
+        assert_eq!((rect.x, rect.width), (106.0, 6.0));
+        let PositionedElement::Line { start, end, .. } = &elements[1] else {
+            panic!("underline");
+        };
+        assert_eq!((start.x, end.x), (106.0, 112.0));
+        let PositionedElement::Line { start, end, .. } = &elements[2] else {
+            panic!("rule");
+        };
+        assert_eq!((start.x, end.x), (100.0, 112.0));
     }
 
     #[test]

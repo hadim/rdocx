@@ -3528,7 +3528,10 @@ fn tab_aligned_fields(items: &[LineItem]) -> Vec<Option<TabAlignedField>> {
         let segment = &items[index..end_index];
         let start = x;
         let end = start + segment.iter().map(LineItem::width).sum::<f64>();
-        let mut before_point = true;
+        // A decimal stop aligns the first full stop, or else the end of the
+        // first number. A page field is a number.
+        let mut past_point = false;
+        let mut in_number = false;
         for (offset, item) in segment.iter().enumerate() {
             let LineItem::Text(text) = item else {
                 continue;
@@ -3539,13 +3542,19 @@ fn tab_aligned_fields(items: &[LineItem]) -> Vec<Option<TabAlignedField>> {
                     end,
                     shift: match align {
                         TabAlign::Center => 0.5,
-                        TabAlign::Decimal if !before_point => 0.0,
+                        TabAlign::Decimal if past_point => 0.0,
                         _ => 1.0,
                     },
                     gap,
                 });
-            } else if text.text.contains('.') {
-                before_point = false;
+                in_number = true;
+                continue;
+            }
+            for ch in text.text.chars() {
+                if ch == '.' || (in_number && !ch.is_ascii_digit() && ch != ',') {
+                    past_point = true;
+                }
+                in_number |= ch.is_ascii_digit();
             }
         }
     }
@@ -5215,6 +5224,63 @@ mod tests {
             reflow: None,
             content_offset_top: 0.0,
         }
+    }
+
+    #[test]
+    fn a_page_field_after_the_first_number_does_not_move_a_decimal_stop() {
+        let text = |text: &str| {
+            LineItem::Text(directional_test_segment(
+                text,
+                TextDirection::Auto,
+                None,
+                None,
+            ))
+        };
+        let field = || {
+            LineItem::Text(directional_test_segment(
+                "99",
+                TextDirection::Auto,
+                None,
+                Some(oxml_layout::FieldKind::Page),
+            ))
+        };
+        let tab = |align| LineItem::Tab {
+            width: 10.0,
+            leader: None,
+            align,
+            gap: 10.0,
+        };
+        let shifts = |items: &[LineItem]| {
+            tab_aligned_fields(items)
+                .iter()
+                .flatten()
+                .map(|field| field.shift)
+                .collect::<Vec<_>>()
+        };
+        // "Page 99 of 99": the first field is the number the stop aligns,
+        // the second comes after it.
+        let decimal = [
+            tab(TabAlign::Decimal),
+            text("Page "),
+            field(),
+            text(" of "),
+            field(),
+        ];
+        assert_eq!(shifts(&decimal), [1.0, 0.0]);
+        let fields = tab_aligned_fields(&decimal);
+        let first = fields[2].expect("the first field is aligned");
+        assert!((first.start - 10.0).abs() < 1e-9);
+        assert!((first.end - (10.0 + 6.0 * 13.0)).abs() < 1e-9);
+        assert_eq!(
+            shifts(&[tab(TabAlign::Decimal), text("1.5 p. "), field()]),
+            [0.0]
+        );
+        assert_eq!(shifts(&[tab(TabAlign::Center), field()]), [0.5]);
+        assert_eq!(
+            shifts(&[tab(TabAlign::Right), text("Page "), field()]),
+            [1.0]
+        );
+        assert!(shifts(&[tab(TabAlign::Left), field()]).is_empty());
     }
 
     fn directional_test_segment(

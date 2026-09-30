@@ -543,7 +543,7 @@ impl LineState {
                 for item in items {
                     tab.add(item, inline_item_width(item), fm);
                 }
-                tab.start + tab.width() + tab.following
+                tab.visible_line_width()
             }
             None => self.width + items.iter().map(inline_item_width).sum::<f64>(),
         }
@@ -609,7 +609,11 @@ impl LineState {
                 stop: pos,
                 align: stop.align,
                 leader: leader_char(stop.leader),
-                wraps: false,
+                // Word 2013 moves a left tab that reaches the end of its line
+                // to a line of its own, and the text after it to the next.
+                wraps: params.clamp_tabs_past_margin
+                    && stop.align == TabAlign::Left
+                    && pos > reach - 0.01,
                 reach,
                 shift_limit: (params.clamp_tabs_past_margin || pos < margin)
                     .then_some(margin.max(line_end)),
@@ -652,6 +656,7 @@ impl LineState {
                 align: tab.align,
                 leader: tab.leader,
                 following: 0.0,
+                trailing: 0.0,
                 aligned: 0.0,
                 aligned_found: false,
                 in_number: false,
@@ -757,6 +762,9 @@ struct PendingTab {
     leader: Option<char>,
     /// Width of the items after the tab.
     following: f64,
+    /// Width of the spaces that end the items after the tab. Word aligns the
+    /// text without them, so text that wraps ends on its stop.
+    trailing: f64,
     /// For a decimal tab, the width of the text before its alignment point.
     aligned: f64,
     aligned_found: bool,
@@ -769,6 +777,17 @@ struct PendingTab {
 impl PendingTab {
     fn add(&mut self, item: &InlineItem, width: f64, fm: &FontManager) {
         self.following += width;
+        self.trailing = match item {
+            InlineItem::Text(segment) | InlineItem::HyphenatedText { segment, .. }
+                if segment.text.chars().all(char::is_whitespace) =>
+            {
+                self.trailing + width
+            }
+            InlineItem::Text(segment) | InlineItem::HyphenatedText { segment, .. } => {
+                trailing_space_width(segment, fm)
+            }
+            _ => 0.0,
+        };
         if self.align == TabAlign::Decimal && !self.aligned_found {
             match decimal_alignment_offset(item, &mut self.in_number, fm) {
                 Some(offset) => {
@@ -788,16 +807,24 @@ impl PendingTab {
 
     /// The tab's width before it is kept from going negative.
     fn gap(&self) -> f64 {
+        let visible = self.following - self.trailing;
         let before_stop = match self.align {
-            TabAlign::Center => self.following / 2.0,
-            TabAlign::Decimal => self.aligned,
-            _ => self.following,
+            TabAlign::Center => visible / 2.0,
+            TabAlign::Decimal if self.aligned_found => self.aligned,
+            TabAlign::Decimal => self.aligned - self.trailing,
+            _ => visible,
         };
         let mut width = self.stop - self.start - before_stop;
         if let Some(limit) = self.shift_limit {
-            width = width.min(limit - self.start - self.following);
+            width = width.min(limit - self.start - visible);
         }
         width
+    }
+
+    /// How wide the line is with this tab, less the spaces that end it,
+    /// which may run past the stop.
+    fn visible_line_width(&self) -> f64 {
+        self.start + self.width() + self.following - self.trailing
     }
 }
 
@@ -822,6 +849,15 @@ fn decimal_alignment_offset(
         *in_number |= ch.is_ascii_digit();
     }
     None
+}
+
+/// Width of the spaces that end a segment's text.
+fn trailing_space_width(segment: &TextSegment, fm: &FontManager) -> f64 {
+    let trimmed = segment.text.trim_end_matches(char::is_whitespace);
+    if trimmed.len() == segment.text.len() {
+        return 0.0;
+    }
+    segment.width - text_prefix_width(segment, trimmed.len(), fm)
 }
 
 /// Width of a segment's text before a byte offset.
@@ -2816,7 +2852,8 @@ mod tests {
         assert_widths(&widths[0], &[332.0 - 31.0]);
 
         // A left stop: Word 2010 keeps the text after it on the line, past
-        // the margin, and Word 2013 wraps it.
+        // the margin. Word 2013 moves the tab to a line of its own, where it
+        // reaches the end of the line, and the text to the line after.
         let long = [
             text_item("T", 13.0),
             InlineItem::Tab,
@@ -2827,8 +2864,46 @@ mod tests {
         assert_eq!(widths.len(), 1);
         assert_widths(&widths[0], &[487.0]);
         let widths = tab_widths_by_line(&long, &params(TabAlign::Left, true, 0.0));
-        assert_eq!(widths.len(), 2);
-        assert_widths(&widths[0], &[419.0]);
+        assert_eq!(widths.len(), 3);
+        assert_widths(&widths[0], &[]);
+        assert_widths(&widths[1], &[432.0]);
+        assert_widths(&widths[2], &[]);
+        // So does a left stop exactly at the end of the line.
+        let at_end = LineBreakParams {
+            tab_stops: vec![stop(432.0, TabAlign::Left)],
+            ..params(TabAlign::Left, true, 0.0)
+        };
+        assert_eq!(tab_widths_by_line(&long, &at_end).len(), 3);
+
+        // The spaces that end right-aligned text that wraps run past the
+        // stop, so the last word ends on it.
+        let mut fm = deterministic_font_manager();
+        let word = shaped_text_segment(&mut fm, "word ", 0.0);
+        let bare = fm
+            .shape_text(word.font_id, "word", word.font_size)
+            .unwrap()
+            .width;
+        let mut wrapped = vec![text_item("A", 10.0), InlineItem::Tab];
+        wrapped.extend((0..40).map(|_| InlineItem::Text(word.clone())));
+        let lines = break_into_lines(
+            &wrapped,
+            &LineBreakParams {
+                available_width: 432.0,
+                tab_stops: vec![stop(432.0, TabAlign::Right)],
+                clamp_tabs_past_margin: true,
+                ..Default::default()
+            },
+            &fm,
+        )
+        .unwrap();
+        let words = lines[0].items.len() - 2;
+        let tab = tab_widths(&lines[0])[0];
+        let end = 10.0 + tab + (words - 1) as f64 * word.width + bare;
+        assert!(
+            (end - 432.0).abs() < 0.01,
+            "{words} words, tab {tab}, {} {bare}, end {end}",
+            word.width
+        );
 
         // A stop inside the margin but past the right indent keeps its place,
         // and the text after it may run to the margin.
