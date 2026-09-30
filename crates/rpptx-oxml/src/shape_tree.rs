@@ -729,6 +729,13 @@ impl CT_ShapeStyle {
         }))
     }
 
+    /// Serializes the style on its own, for owners that keep it as bytes.
+    pub(crate) fn to_fragment(&self) -> Result<Vec<u8>> {
+        let mut writer = Writer::new(Vec::new());
+        self.write_xml(&mut writer)?;
+        Ok(writer.into_inner())
+    }
+
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         let mut start = BytesStart::new("p:style");
         push_attributes(&mut start, &self.raw_attributes);
@@ -1090,6 +1097,17 @@ impl CT_Shape {
     /// Returns the optional typed format-scheme references.
     pub fn style(&self) -> Option<&CT_ShapeStyle> {
         self.raw.style.as_deref()
+    }
+
+    /// Sets the `idx` of the style's `a:effectRef`, the theme effect style
+    /// the shape draws. Index 0 references no theme effect. Returns `false`
+    /// and changes nothing when the shape has no style.
+    pub fn set_effect_reference_index(&mut self, index: u32) -> bool {
+        let Some(style) = self.raw.style.as_mut() else {
+            return false;
+        };
+        style.effect_reference.index = index;
+        true
     }
 
     /// Returns whether `p:cNvSpPr/@txBox` marks this shape as a text box.
@@ -2426,5 +2444,22 @@ mod style_tests {
         assert!(text.find("<p:spPr").unwrap() < text.find("<p:style").unwrap());
         assert!(text.find("<p:style").unwrap() < text.find("<x:after-style").unwrap());
         assert_eq!(CT_Shape::from_xml(&written).unwrap(), shape);
+    }
+
+    #[test]
+    fn effect_reference_index_changes_only_a_present_style() {
+        let xml = br#"<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvSpPr><p:cNvPr id="2" name="Box"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="3"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="2"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style></p:sp>"#;
+        let mut shape = CT_Shape::from_xml(xml).unwrap();
+
+        assert!(shape.set_effect_reference_index(0));
+
+        let written = String::from_utf8(shape.to_xml().unwrap()).unwrap();
+        assert!(written.contains(
+            r#"<a:fillRef idx="3"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef>"#
+        ));
+        let mut unstyled = CT_Shape::new_preset(3, "Shape 3", "rect", Default::default()).unwrap();
+        let before = unstyled.clone();
+        assert!(!unstyled.set_effect_reference_index(0));
+        assert_eq!(unstyled, before);
     }
 }

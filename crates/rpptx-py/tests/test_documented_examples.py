@@ -2143,6 +2143,35 @@ def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     assert preset(straight) == "line"
 
 
+def test_theme_effect_index_zero_drops_the_connector_theme_shadow(tmp_path):
+    import rpptx
+    from rpptx.enum.shapes import MSO_CONNECTOR
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    arrow = prs.slides[0].shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, 914400, 0)
+    assert arrow.theme_effect_index == 1
+    arrow.theme_effect_index = 0
+    assert arrow.theme_effect_index == 0
+    assert b'<a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef>' in arrow.xml
+    with pytest.raises(OverflowError):
+        arrow.theme_effect_index = -1
+    with pytest.raises(TypeError):
+        arrow.theme_effect_index = None
+    box = prs.slides[0].shapes.add_textbox(0, 0, 10, 10)
+    assert box.theme_effect_index is None
+    with pytest.raises(rpptx.RpptxError, match="no p:style"):
+        box.theme_effect_index = 0
+    output = tmp_path / "no-shadow.pptx"
+    prs.save(output)
+    assert rpptx.Presentation(output).slides[0].shapes[0].theme_effect_index == 0
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output).slides[0].shapes[0]
+    assert oracle.shape_type == pptx.enum.shapes.MSO_SHAPE_TYPE.LINE
+    assert oracle._element.xpath("./p:style/a:effectRef/@idx") == ["0"]
+
+
 def test_notes_text_creates_the_notes_slide_on_a_python_pptx_deck(tmp_path):
     import rpptx
 

@@ -218,6 +218,8 @@ def exercise_rpptx_types(path: Path) -> None:
     connector: Shape = presentation.slides[0].shapes.add_connector(
         MSO_CONNECTOR.STRAIGHT, 0, 0, Inches(1), Inches(1)
     )
+    connector.theme_effect_index = 0
+    theme_effect_index: int | None = connector.theme_effect_index
     group: Shape = presentation.slides[0].shapes.add_group_shape()
     picture = presentation.slides[0].shapes.add_picture(
         io.BytesIO(b""), 0, 0
@@ -283,6 +285,7 @@ def exercise_rpptx_types(path: Path) -> None:
         line_fill,
         shape_xml,
         connector,
+        theme_effect_index,
         blob,
         image.content_type,
         image.ext,

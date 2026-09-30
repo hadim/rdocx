@@ -6067,6 +6067,32 @@ impl<'a> ShapeMut<'a> {
         Ok(())
     }
 
+    /// Changes the theme effect style that the shape's `p:style` references.
+    ///
+    /// Index 0 references no theme effect, so a connector from
+    /// [`SlideMut::add_connector`] loses the theme's shadow in PowerPoint,
+    /// LibreOffice, and the renderer alike. An empty direct `a:effectLst`
+    /// does not remove it in LibreOffice. Only an ordinary shape or a
+    /// connector with a typed style has this reference.
+    pub fn set_theme_effect_index(&mut self, index: u32) -> Result<()> {
+        let changed = match self.child {
+            ShapeTreeChild::Shape(shape) => Ok(shape.set_effect_reference_index(index)),
+            ShapeTreeChild::Connector(connector) => connector.set_effect_reference_index(index),
+            _ => return Err(self.unsupported("set theme effect index")),
+        };
+        match changed {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(Error::InvalidShapeMutation {
+                operation: "set theme effect index",
+                message: "the shape has no p:style with typed theme references".to_owned(),
+            }),
+            Err(error) => Err(Error::InvalidShapeMutation {
+                operation: "set theme effect index",
+                message: error.to_string(),
+            }),
+        }
+    }
+
     /// Inserts or replaces one finite preset-geometry adjustment.
     pub fn set_adjust_value(&mut self, name: &str, value: f64) -> Result<()> {
         if !value.is_finite() {
@@ -7357,6 +7383,19 @@ impl<'a> ShapeRef<'a> {
     /// Returns the direct line of a shape, picture, or connector.
     pub fn line(&self) -> Option<&'a CT_LineProperties> {
         shape_properties(self.child)?.line.as_ref()
+    }
+
+    /// Returns the theme effect style index of an ordinary shape's or a
+    /// connector's `p:style`, or `None` without a typed style.
+    ///
+    /// Index 0 references no theme effect.
+    pub fn theme_effect_index(&self) -> Option<u32> {
+        let style = match self.child {
+            ShapeTreeChild::Shape(shape) => shape.style(),
+            ShapeTreeChild::Connector(connector) => connector.style(),
+            _ => None,
+        }?;
+        Some(style.effect_reference.index)
     }
 
     /// Serialises the child as a self-contained element.
