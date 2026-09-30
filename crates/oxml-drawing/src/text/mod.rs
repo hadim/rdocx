@@ -254,20 +254,28 @@ impl CT_TextBody {
     }
 
     /// Replaces all text content while retaining body-level state.
+    ///
+    /// Each line feed, or CRLF pair, starts a new paragraph and each vertical
+    /// tab becomes an `a:br`, as python-pptx assigns frame text. The first paragraph keeps
+    /// its preserved content, and every paragraph takes the first paragraph's
+    /// properties, end properties and first run formatting, so each line looks
+    /// as the replaced first line did.
     pub fn set_text(&mut self, text: &str) {
         let old_paragraph_count = self.paragraphs.len();
-        let mut paragraph = self.paragraphs.drain(..).next().unwrap_or_default();
-        paragraph.set_text(text);
-        self.paragraphs.push(paragraph);
-
-        let mut raw_children = OrderedRawChildren::default();
-        for boundary in 0..=2 + old_paragraph_count {
-            let new_boundary = boundary.min(3);
-            for child in self.raw_children.at(boundary) {
-                raw_children.push(new_boundary, child.to_vec());
-            }
+        let mut first = self.paragraphs.drain(..).next().unwrap_or_default();
+        let mut lines = text.split("\r\n").flat_map(|part| part.split('\n'));
+        first.set_text_with_line_breaks(lines.next().unwrap_or_default());
+        let mut template = CT_TextParagraph::default();
+        template.properties = first.properties.clone();
+        template.runs = first.runs.iter().take(1).cloned().collect();
+        template.end_properties = first.end_properties.clone();
+        self.paragraphs.push(first);
+        for line in lines {
+            let mut paragraph = template.clone();
+            paragraph.set_text_with_line_breaks(line);
+            self.paragraphs.push(paragraph);
         }
-        self.raw_children = raw_children;
+        self.reconcile_paragraph_raw_children(old_paragraph_count, self.paragraphs.len());
     }
 
     /// Returns one paragraph for in-place mutation.
@@ -391,6 +399,31 @@ mod tests {
         let written = String::from_utf8(destination.to_xml().unwrap()).unwrap();
         assert!(written.contains(r#"<a:rPr b="1"/>"#));
         assert!(written.contains(r#"<a:rPr i="1"/>"#));
+    }
+
+    #[test]
+    fn set_text_starts_a_paragraph_at_each_line_feed_and_breaks_at_each_vertical_tab() {
+        let mut body = CT_TextBody::from_xml(
+            br#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:x"><a:bodyPr/><a:p><a:pPr algn="ctr"/><a:r><a:rPr b="1"/><a:t>old</a:t></a:r><x:in-paragraph/><a:endParaRPr sz="1200"/></a:p><a:p><a:r><a:t>gone</a:t></a:r></a:p><x:after-paragraphs/></a:txBody>"#,
+        )
+        .unwrap();
+        body.set_text("one\r\ntwo\u{b}soft\u{b}\n");
+        assert_eq!(
+            String::from_utf8(body.to_xml().unwrap()).unwrap(),
+            concat!(
+                r#"<a:txBody><a:bodyPr/>"#,
+                r#"<a:p><a:pPr algn="ctr"/><a:r><a:rPr b="1"/><a:t>one</a:t></a:r><x:in-paragraph/><a:endParaRPr sz="1200"/></a:p>"#,
+                r#"<a:p><a:pPr algn="ctr"/><a:r><a:rPr b="1"/><a:t>two</a:t></a:r><a:br><a:rPr b="1"/></a:br><a:r><a:rPr b="1"/><a:t>soft</a:t></a:r><a:br><a:rPr b="1"/></a:br><a:endParaRPr sz="1200"/></a:p>"#,
+                r#"<a:p><a:pPr algn="ctr"/><a:r><a:rPr b="1"/><a:t/></a:r><a:endParaRPr sz="1200"/></a:p>"#,
+                r#"<x:after-paragraphs/></a:txBody>"#,
+            )
+        );
+        assert_eq!(body.plain_text(), "one\ntwo\nsoft\n\n");
+
+        let mut plain = CT_TextBody::new();
+        plain.set_text("single line");
+        assert_eq!(plain.paragraph_count(), 1);
+        assert_eq!(plain.plain_text(), "single line");
     }
 
     #[test]

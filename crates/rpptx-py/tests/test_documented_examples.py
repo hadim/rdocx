@@ -2170,6 +2170,57 @@ def test_notes_text_creates_the_notes_slide_on_a_python_pptx_deck(tmp_path):
     ]
 
 
+def test_line_feeds_in_assigned_text_make_paragraphs_as_python_pptx_does(tmp_path):
+    import rpptx
+    from rpptx.util import Inches
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(2))
+    prs.slides[0].shapes.add_table(1, 1, Inches(1), Inches(4), Inches(4), Inches(1))
+    prs.slides[0].shapes[0].text_frame.text = "first line\nsecond line\vsoft"
+    prs.slides[0].shapes[0].text_frame.add_paragraph().text = "para\nbreak\vtab"
+    prs.slides[0].shapes[0].text_frame.add_paragraph().add_run("run\nliteral")
+    prs.slides[0].shapes[1].table.cell(0, 0).text = "cell\none"
+    prs.slides[0].notes_text = "note\nnext"
+
+    frame = prs.slides[0].shapes[0].text_frame
+    assert [paragraph.text for paragraph in frame.paragraphs] == [
+        "first line",
+        "second line\vsoft",
+        "para\vbreak\vtab",
+        "run\nliteral",
+    ]
+    assert prs.slides[0].shapes[1].table.cell(0, 0).text == "cell\none"
+    assert prs.slides[0].notes_text == "note\nnext"
+    lines = [line.text for line in prs.text_layout()[0].lines]
+    assert lines == ["first line", "second line", "soft", "para", "break", "tab", "run", "literal"]
+    assert prs.render_slide_to_png(0, dpi=36.0)
+
+    prs.slides[0].shapes[0].text = "shape\ntext"
+    paragraphs = prs.slides[0].shapes[0].text_frame.paragraphs
+    assert [paragraph.text for paragraph in paragraphs] == ["shape", "text"]
+    output = tmp_path / "line-feeds.pptx"
+    prs.save(output)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output)
+    assert [paragraph.text for paragraph in oracle.slides[0].shapes[0].text_frame.paragraphs] == [
+        "shape",
+        "text",
+    ]
+    assert [
+        paragraph.text for paragraph in oracle.slides[0].shapes[1].table.cell(0, 0).text_frame.paragraphs
+    ] == ["cell", "one"]
+    expected = pptx.Presentation()
+    textbox = expected.slides.add_slide(expected.slide_layouts[6]).shapes.add_textbox(0, 0, 100, 100)
+    textbox.text_frame.text = "first line\nsecond line\vsoft"
+    assert [paragraph.text for paragraph in textbox.text_frame.paragraphs] == [
+        "first line",
+        "second line\vsoft",
+    ]
+
+
 def test_shape_xml_is_a_self_contained_element():
     import xml.etree.ElementTree as ElementTree
 

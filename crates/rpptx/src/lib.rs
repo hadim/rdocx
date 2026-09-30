@@ -6095,7 +6095,8 @@ impl<'a> ShapeMut<'a> {
             })
     }
 
-    /// Replaces ordinary shape text without changing placeholder identity.
+    /// Replaces ordinary shape text without changing placeholder identity,
+    /// one paragraph per line as [`CT_TextBody::set_text`] describes.
     pub fn set_text(&mut self, text: &str) -> Result<()> {
         let shape_kind = shape_kind(self.child);
         let ShapeTreeChild::Shape(shape) = self.child else {
@@ -6557,7 +6558,8 @@ impl TableCellMut<'_> {
         self.cell_ref().text()
     }
 
-    /// Replaces the cell text with one paragraph and one regular run.
+    /// Replaces the cell text with one paragraph per line, as
+    /// [`CT_TextBody::set_text`] describes.
     pub fn set_text(&mut self, text: &str) {
         self.cell_mut()
             .text_body
@@ -6826,7 +6828,8 @@ impl<'a> TextFrame<'a> {
         self.body.plain_text()
     }
 
-    /// Replaces the frame content with one paragraph and one regular run.
+    /// Replaces the frame content with one paragraph per line, as
+    /// [`CT_TextBody::set_text`] describes.
     pub fn set_text(&mut self, text: &str) {
         self.body.set_text(text);
     }
@@ -7119,9 +7122,12 @@ pub struct TextParagraphMut<'a> {
 }
 
 impl TextParagraphMut<'_> {
-    /// Replaces fields, breaks, and runs with one regular run.
+    /// Replaces fields, breaks, and runs with one regular run, split by an
+    /// `a:br` at each line feed, CRLF pair or vertical tab, as python-pptx
+    /// assigns paragraph text.
     pub fn set_text(&mut self, text: &str) {
-        self.paragraph.set_text(text);
+        self.paragraph
+            .set_text_with_line_breaks(&text.replace("\r\n", "\u{b}").replace('\n', "\u{b}"));
     }
 
     /// Appends a regular run after the existing ordered text choices.

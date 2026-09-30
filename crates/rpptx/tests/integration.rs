@@ -936,6 +936,22 @@ fn odp_round_trip_preserves_supported_presentation_content() {
     );
     assert!(slide.shapes().any(|shape| shape.table().is_some()));
 
+    // A text:line-break stays a line break, and each text:p a paragraph.
+    let breaks = f222_minimal_odp(
+        r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:body><office:presentation><draw:page draw:name="breaks"><draw:frame svg:x="1cm" svg:y="1cm" svg:width="8cm" svg:height="2cm"><draw:text-box><text:p>soft<text:line-break/>break</text:p><text:p>next</text:p></draw:text-box></draw:frame></draw:page></office:presentation></office:body></office:document-content>"#,
+        None,
+        false,
+    );
+    let breaks = Presentation::from_odp_bytes(&breaks).unwrap().presentation;
+    let slide = breaks.slide(0).unwrap();
+    let frame = slide.shapes().find_map(|shape| shape.text_frame()).unwrap();
+    assert_eq!(
+        (0..frame.paragraph_count())
+            .map(|index| frame.paragraph(index).unwrap().text())
+            .collect::<Vec<_>>(),
+        ["soft\u{b}break", "next"]
+    );
+
     let exported = source.presentation.to_odp_bytes().unwrap();
     assert!(exported.diagnostics.is_empty());
     let reopened = Presentation::from_odp_bytes(&exported.bytes).unwrap();
@@ -14826,6 +14842,100 @@ fn text_frame_handles_append_paragraphs_and_runs_in_order() {
         reopened.slide(0).unwrap().shape(0).unwrap().text(),
         Some("one two\nthree".to_owned())
     );
+}
+
+/// Frame, shape, table cell and notes text start a paragraph at each line
+/// feed and break the line at each vertical tab, paragraph text breaks the
+/// line at either, and run text stays literal, as in python-pptx. A line feed
+/// left inside `a:t` breaks the line and U+2028 shows as a space, as
+/// PowerPoint for Mac shows them, where a line feed used to fail the layout of
+/// every slide.
+#[test]
+fn line_feeds_in_assigned_text_make_paragraphs_and_lay_out_as_breaks() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut textbox = slide
+            .add_textbox(Emu(914_400), Emu(914_400), Emu(4_572_000), Emu(2_743_200))
+            .unwrap();
+        textbox.set_text("first\nsecond\u{b}soft").unwrap();
+        let mut frame = textbox.text_frame().unwrap();
+        frame.add_paragraph().set_text("para\r\nbreak\u{b}tab");
+        frame
+            .add_paragraph()
+            .add_run("x")
+            .set_text("run\nliteral\u{2028}space");
+        slide
+            .add_table(
+                1,
+                1,
+                Emu(914_400),
+                Emu(4_114_800),
+                Emu(4_572_000),
+                Emu(914_400),
+            )
+            .unwrap()
+            .table_mut()
+            .unwrap()
+            .cell_mut(0, 0)
+            .unwrap()
+            .set_text("cell\none");
+    }
+    presentation.set_notes_text(0, "note\nnext").unwrap();
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "line feeds");
+    let slide_xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    for expected in [
+        "<a:t>first</a:t></a:r></a:p><a:p><a:r><a:t>second</a:t></a:r><a:br/><a:r><a:t>soft</a:t>",
+        "<a:t>para</a:t></a:r><a:br/><a:r><a:t>break</a:t></a:r><a:br/><a:r><a:t>tab</a:t>",
+        "<a:t>run\nliteral\u{2028}space</a:t>",
+        "<a:t>cell</a:t></a:r></a:p><a:p><a:r><a:t>one</a:t>",
+    ] {
+        assert!(slide_xml.contains(expected), "{expected:?} in {slide_xml}");
+    }
+
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let shapes = slide.shapes().collect::<Vec<_>>();
+    let frame = shapes.iter().find_map(|shape| shape.text_frame()).unwrap();
+    assert_eq!(
+        (0..frame.paragraph_count())
+            .map(|index| frame.paragraph(index).unwrap().text())
+            .collect::<Vec<_>>(),
+        [
+            "first",
+            "second\u{b}soft",
+            "para\u{b}break\u{b}tab",
+            "run\nliteral\u{2028}space"
+        ]
+    );
+    let table = shapes.iter().find_map(|shape| shape.table()).unwrap();
+    assert_eq!(table.cell(0, 0).unwrap().text(), "cell\none");
+    assert_eq!(slide.notes_text().as_deref(), Some("note\nnext"));
+
+    let frames = reopened.text_layout_deterministic(1.0).unwrap();
+    assert_eq!(
+        frames[0]
+            .layout
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "first",
+            "second",
+            "soft",
+            "para",
+            "break",
+            "tab",
+            "run",
+            "literal space"
+        ]
+    );
+    reopened.render_deterministic().unwrap();
 }
 
 #[test]
