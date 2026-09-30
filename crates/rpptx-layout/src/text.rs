@@ -48,9 +48,11 @@ impl ResolveCtx<'_> {
         };
         // The colour of the style's font reference overrides the inherited
         // text styles, and the shape's own list style overrides it in turn.
+        // A colour that does not resolve leaves the inherited colour.
         if let Some(color) = shape
             .style()
             .and_then(|style| style.font_reference.color.as_ref())
+            .filter(|color| self.concrete_color(color).is_ok())
         {
             let mut solid = SolidFill::default();
             solid.color = Some(color.clone());
@@ -484,12 +486,23 @@ mod tests {
         );
         let style = r#"<p:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="3"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="2"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:srgbClr val="222222"/></a:fontRef></p:style>"#;
         let styled = |list_style: &str| {
-            shape(7, list_style).replace("<p:spPr/>", &format!("<p:spPr/>{style}"))
+            shape(7, list_style).replace(
+                "<p:spPr/>",
+                &format!(r#"<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm></p:spPr>{style}"#),
+            )
         };
         let shapes = [
             shape(7, ""),
             styled(""),
             styled(&format!("<a:lvl1pPr>{}</a:lvl1pPr>", colour("333333"))),
+            styled("").replace(
+                r#"<a:srgbClr val="222222"/></a:fontRef>"#,
+                r#"<a:schemeClr val="phClr"/></a:fontRef>"#,
+            ),
+            styled("").replace(
+                r#"<a:srgbClr val="222222"/></a:fontRef>"#,
+                r#"<a:prstClr val="red"/></a:fontRef>"#,
+            ),
         ];
         fixture.slide = CT_Slide::from_xml(slide_xml(&shapes.concat()).as_bytes()).unwrap();
         let context = fixture.context();
@@ -509,6 +522,12 @@ mod tests {
         assert_eq!(run_fill(0), expected("111111"));
         assert_eq!(run_fill(1), expected("222222"));
         assert_eq!(run_fill(2), expected("333333"));
+        // A font colour that does not resolve keeps the inherited colour.
+        assert_eq!(run_fill(3), expected("111111"));
+        assert_eq!(run_fill(4), expected("111111"));
+        context
+            .resolve_slide((720.0, 540.0))
+            .expect("an unresolvable font colour does not fail the slide");
     }
 
     #[test]
