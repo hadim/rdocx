@@ -871,6 +871,21 @@ pub struct ContentMeasurement {
     pub diagnostics: Vec<oxml_layout::Diagnostic>,
 }
 
+/// The pair of a [`Document::try_replace_all_expected`] batch whose count
+/// differed from the count its caller expected.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("pair {index}: expected {expected} replacement(s) of \"{placeholder}\", found {found}")]
+pub struct ReplacementCountMismatch {
+    /// Zero-based position of the pair in the batch.
+    pub index: usize,
+    /// The literal text the pair searched for.
+    pub placeholder: String,
+    /// The count the caller expected.
+    pub expected: usize,
+    /// The count the pair found once the pairs before it had run.
+    pub found: usize,
+}
+
 /// An owned main-body range and the package dependencies it can reach.
 #[derive(Debug, Clone)]
 pub struct DocumentFragment {
@@ -21797,6 +21812,40 @@ impl Document {
         count
     }
 
+    /// Replace literal pairs in order, all or nothing, and return the count of
+    /// each pair.
+    ///
+    /// Each pair searches what [`Self::replace_text`] searches and runs over
+    /// the whole document after the pairs before it, so a later pair sees the
+    /// text an earlier one wrote. A pair may give the count it expects. When a
+    /// pair finds another count, the document is left unchanged and the inner
+    /// error names that pair. A pair without an expected count may find
+    /// nothing. The outer error is a staging failure, which also leaves the
+    /// document unchanged.
+    pub fn try_replace_all_expected(
+        &mut self,
+        pairs: &[(&str, &str, Option<usize>)],
+    ) -> Result<std::result::Result<Vec<usize>, ReplacementCountMismatch>> {
+        let mut candidate = self.clone_for_staging();
+        let mut counts = Vec::with_capacity(pairs.len());
+        for (index, &(placeholder, replacement, expected)) in pairs.iter().enumerate() {
+            let found = candidate.replace_batch(&[(placeholder, replacement)])?;
+            if let Some(expected) = expected
+                && expected != found
+            {
+                return Ok(Err(ReplacementCountMismatch {
+                    index,
+                    placeholder: placeholder.to_owned(),
+                    expected,
+                    found,
+                }));
+            }
+            counts.push(found);
+        }
+        self.commit_staged_mutation(candidate);
+        Ok(Ok(counts))
+    }
+
     /// Render scalar and structural template tags from structured JSON data.
     ///
     /// Tags use `{{ path.to.value }}` syntax and may cross ordinary Word run
@@ -31816,6 +31865,55 @@ mod tests {
     }
 
     #[test]
+    fn expected_replacement_batch_runs_pairs_in_order_and_counts_each() {
+        let mut doc = Document::new();
+        doc.add_paragraph("{{a}} and {{b}}");
+        doc.set_header("{{b}} header");
+
+        let counts = doc
+            .try_replace_all_expected(&[
+                ("{{a}}", "{{b}}", Some(1)),
+                ("{{b}}", "Y", Some(3)),
+                ("{{missing}}", "Z", None),
+            ])
+            .unwrap()
+            .unwrap();
+        assert_eq!(counts, [1, 3, 0]);
+        assert_eq!(doc.paragraphs()[0].text(), "Y and Y");
+        assert_eq!(doc.header_text().as_deref(), Some("Y header"));
+    }
+
+    #[test]
+    fn expected_replacement_batch_mismatch_names_the_pair_and_changes_nothing() {
+        let mut doc = Document::new();
+        doc.add_paragraph("{{a}} {{b}} {{b}} {{c}}");
+        let before = doc.to_bytes().unwrap();
+
+        let mismatch = doc
+            .try_replace_all_expected(&[
+                ("{{a}}", "A", Some(1)),
+                ("{{b}}", "B", Some(1)),
+                ("{{c}}", "C", Some(1)),
+            ])
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            mismatch,
+            ReplacementCountMismatch {
+                index: 1,
+                placeholder: "{{b}}".to_owned(),
+                expected: 1,
+                found: 2,
+            }
+        );
+        assert_eq!(
+            mismatch.to_string(),
+            "pair 1: expected 1 replacement(s) of \"{{b}}\", found 2"
+        );
+        assert_eq!(doc.to_bytes().unwrap(), before);
+    }
+
+    #[test]
     fn replacement_flush_failures_leave_the_live_document_unchanged() {
         fn exhausted() -> Document {
             let mut source = Document::new_with_profile(WordCreationProfile::Minimal(
@@ -31843,6 +31941,18 @@ mod tests {
         }));
         assert!(result.is_err());
         assert_eq!(literal.paragraphs()[0].text(), before);
+
+        let mut counted = exhausted();
+        let before = counted.paragraphs()[0].text();
+        let error = counted
+            .try_replace_all_expected(&[("{{value}}", "after", Some(1))])
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("styles relationship allocation failed")
+        );
+        assert_eq!(counted.paragraphs()[0].text(), before);
 
         let mut regex = exhausted();
         let before = regex.paragraphs()[0].text();

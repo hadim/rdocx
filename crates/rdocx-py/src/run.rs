@@ -48,6 +48,37 @@ impl PyRun {
             .map_err(|error| stale_to_pyerr(py, error))?;
         path_indices(&self.path)
     }
+
+    /// Apply one edit to this run where it lives, in the body or in a cell.
+    fn edit(&self, py: Python<'_>, edit: impl FnOnce(&mut rdocx::run::Run<'_>)) -> PyResult<()> {
+        let (location, _) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        match location {
+            ParagraphLocation::Body(index) => document
+                .inner
+                .paragraph_mut(index)
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                .edit_run(&self.run_path, edit),
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => {
+                let mut table = document
+                    .inner
+                    .table_mut(table)
+                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+                let mut cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+                cell.paragraph_mut(paragraph)
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                    .edit_run(&self.run_path, edit)
+            }
+        }
+        .map_err(|error| crate::rdocx_to_pyerr(py, error))
+    }
 }
 
 #[pymethods]
@@ -77,39 +108,23 @@ impl PyRun {
 
     #[setter]
     fn set_text(&self, py: Python<'_>, text: &str) -> PyResult<()> {
-        let (location, _) = self.validate(py)?;
-        let mut document = self.document.borrow_mut(py);
-        match location {
-            ParagraphLocation::Body(index) => {
-                let mut paragraph = document
-                    .inner
-                    .paragraph_mut(index)
-                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-                paragraph
-                    .edit_run(&self.run_path, |run| run.set_text(text))
-                    .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-            }
-            ParagraphLocation::Cell {
-                table,
-                row,
-                cell,
-                paragraph,
-            } => {
-                let mut table = document
-                    .inner
-                    .table_mut(table)
-                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-                let mut cell = table
-                    .cell(row, cell)
-                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-                let mut paragraph = cell
-                    .paragraph_mut(paragraph)
-                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-                paragraph
-                    .edit_run(&self.run_path, |run| run.set_text(text))
-                    .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-            }
-        }
+        self.edit(py, |run| run.set_text(text))
+    }
+
+    // A tab is appended inside this run, so no run index moves and live
+    // handles stay valid.
+    fn add_tab(&self, py: Python<'_>) -> PyResult<()> {
+        self.edit(py, |run| run.add_tab())
+    }
+
+    #[pyo3(signature = (instruction, cached_result = ""))]
+    fn add_field(&self, py: Python<'_>, instruction: &str, cached_result: &str) -> PyResult<()> {
+        let mut added = Ok(());
+        self.edit(py, |run| added = run.add_field(instruction, cached_result))?;
+        added.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        // The field becomes a story item of its own, which moves the index
+        // path of every later story item.
+        self.document.borrow_mut(py).revisions.bump();
         Ok(())
     }
 

@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError};
-use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyFileNotFoundError, PyIndexError, PyNotADirectoryError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
@@ -79,6 +81,83 @@ impl From<PyRunRange> for rdocx::RunRange {
     }
 }
 
+impl From<rdocx::RunRange> for PyRunRange {
+    fn from(value: rdocx::RunRange) -> Self {
+        let position = |position: rdocx::RunPosition| PyRunPosition {
+            body_index: position.body_index,
+            run_index: position.run_index,
+        };
+        Self {
+            start: position(value.start),
+            end: position(value.end),
+        }
+    }
+}
+
+#[pyclass(name = "Bookmark", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyBookmark {
+    id: Option<i32>,
+    name: Option<String>,
+    range: Option<PyRunRange>,
+    direct_range: Option<PyRunRange>,
+    text: String,
+    issue: Option<String>,
+}
+
+#[pymethods]
+impl PyBookmark {
+    #[new]
+    #[pyo3(signature = (*, id, name, range, direct_range, text, issue))]
+    fn new(
+        id: Option<i32>,
+        name: Option<String>,
+        range: Option<PyRef<'_, PyRunRange>>,
+        direct_range: Option<PyRef<'_, PyRunRange>>,
+        text: String,
+        issue: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            range: range.map(|range| *range),
+            direct_range: direct_range.map(|range| *range),
+            text,
+            issue,
+        }
+    }
+
+    #[getter]
+    fn id(&self) -> Option<i32> {
+        self.id
+    }
+
+    #[getter]
+    fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    #[getter]
+    fn range(&self) -> Option<PyRunRange> {
+        self.range
+    }
+
+    #[getter]
+    fn direct_range(&self) -> Option<PyRunRange> {
+        self.direct_range
+    }
+
+    #[getter]
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    #[getter]
+    fn issue(&self) -> Option<&str> {
+        self.issue.as_deref()
+    }
+}
+
 #[pyclass(name = "Comment", frozen, get_all, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyComment {
@@ -135,6 +214,54 @@ impl PyComparisonDiagnostic {
     #[pyo3(signature = (*, location, message))]
     fn new(location: String, message: String) -> Self {
         Self { location, message }
+    }
+}
+
+#[pyclass(name = "SvgDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PySvgDiagnostic {
+    pub path: String,
+    pub message: String,
+}
+
+#[pymethods]
+impl PySvgDiagnostic {
+    #[new]
+    #[pyo3(signature = (*, path, message))]
+    fn new(path: String, message: String) -> Self {
+        Self { path, message }
+    }
+}
+
+#[pyclass(name = "SvgRenderResult", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PySvgRenderResult {
+    svg: String,
+    diagnostics: Vec<PySvgDiagnostic>,
+}
+
+#[pymethods]
+impl PySvgRenderResult {
+    #[new]
+    #[pyo3(signature = (*, svg, diagnostics))]
+    fn new(svg: String, diagnostics: Vec<PyRef<'_, PySvgDiagnostic>>) -> Self {
+        Self {
+            svg,
+            diagnostics: diagnostics
+                .iter()
+                .map(|diagnostic| (**diagnostic).clone())
+                .collect(),
+        }
+    }
+
+    #[getter]
+    fn svg(&self) -> &str {
+        &self.svg
+    }
+
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.diagnostics.iter().cloned())
     }
 }
 
@@ -1085,6 +1212,40 @@ impl PyDocument {
         }
         Ok(count)
     }
+
+    /// Run an ordered replacement batch that publishes only when every
+    /// expected count holds, and stale live handles only when it replaced
+    /// something.
+    fn expected_replacements(
+        &mut self,
+        py: Python<'_>,
+        pairs: &[(&str, &str, Option<usize>)],
+        batch: bool,
+    ) -> PyResult<Vec<usize>> {
+        let counts = py
+            .detach(|| self.inner.try_replace_all_expected(pairs))
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, batch))?;
+        if counts.iter().any(|count| *count > 0) {
+            self.revisions.bump();
+        }
+        Ok(counts)
+    }
+
+    /// Check the names and the section of one header or footer variant.
+    fn section_story_target(
+        &self,
+        section_index: usize,
+        kind: &str,
+        variant: &str,
+    ) -> PyResult<(rdocx::HeaderFooterKind, rdocx::HdrFtrType)> {
+        let kind = header_footer_kind_from_name(kind)?;
+        let variant = header_footer_variant_from_name(variant)?;
+        if section_index >= self.inner.section_count() {
+            return Err(PyIndexError::new_err("section index out of range"));
+        }
+        Ok((kind, variant))
+    }
 }
 
 fn story_snapshot(story: &rdocx::StoryId) -> PyStory {
@@ -1130,6 +1291,39 @@ fn story_item_kind_from_name(name: &str) -> PyResult<rdocx::StoryItemKind> {
             "unsupported story item kind {name:?}"
         ))),
     }
+}
+
+fn header_footer_kind_from_name(name: &str) -> PyResult<rdocx::HeaderFooterKind> {
+    match name {
+        "header" => Ok(rdocx::HeaderFooterKind::Header),
+        "footer" => Ok(rdocx::HeaderFooterKind::Footer),
+        _ => Err(PyValueError::new_err(format!(
+            "kind must be header or footer, not {name:?}"
+        ))),
+    }
+}
+
+fn header_footer_variant_from_name(name: &str) -> PyResult<rdocx::HdrFtrType> {
+    // `HdrFtrType::from_str` reads every unknown name as the default variant.
+    match name {
+        "default" => Ok(rdocx::HdrFtrType::Default),
+        "first" => Ok(rdocx::HdrFtrType::First),
+        "even" => Ok(rdocx::HdrFtrType::Even),
+        _ => Err(PyValueError::new_err(format!(
+            "variant must be default, first or even, not {name:?}"
+        ))),
+    }
+}
+
+/// Extract a direct body index, naming the accepted forms on a type error.
+fn body_index_argument(value: &Bound<'_, PyAny>, message: &'static str) -> PyResult<usize> {
+    value.extract::<usize>().map_err(|error| {
+        if error.is_instance_of::<PyTypeError>(value.py()) {
+            PyTypeError::new_err(message)
+        } else {
+            error
+        }
+    })
 }
 
 fn section_snapshot(section: rdocx::SectionRef<'_>) -> PySection {
@@ -1357,8 +1551,74 @@ impl PyDocument {
         Ok(boundary)
     }
 
-    fn to_pdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        py.detach(|| self.inner.to_pdf())
+    #[pyo3(signature = (*, fonts = None, font_dir = None))]
+    fn to_pdf<'py>(
+        &self,
+        py: Python<'py>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        if fonts.is_none() && font_dir.is_none() {
+            return py
+                .detach(|| self.inner.to_pdf())
+                .map(|bytes| PyBytes::new(py, &bytes))
+                .map_err(|error| rdocx_to_pyerr(py, error));
+        }
+        let mut font_files = fonts
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(family, data)| (family, data.as_bytes().to_vec()))
+            .collect::<Vec<_>>();
+        // The native loader reads a missing directory as one without fonts.
+        if let Some(font_dir) = &font_dir
+            && !font_dir.is_dir()
+        {
+            return Err(if font_dir.exists() {
+                PyNotADirectoryError::new_err(format!(
+                    "font directory {} is not a directory",
+                    font_dir.display()
+                ))
+            } else {
+                PyFileNotFoundError::new_err(format!(
+                    "font directory {} does not exist",
+                    font_dir.display()
+                ))
+            });
+        }
+        py.detach(|| {
+            if let Some(font_dir) = &font_dir {
+                font_files.extend(
+                    rdocx::Document::load_fonts_from_dir(font_dir)
+                        .into_iter()
+                        .map(|font| (font.family, font.data)),
+                );
+            }
+            let font_files = font_files
+                .iter()
+                .map(|(family, data)| (family.as_str(), data.as_slice()))
+                .collect::<Vec<_>>();
+            self.inner.to_pdf_with_fonts(&font_files)
+        })
+        .map(|bytes| PyBytes::new(py, &bytes))
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[pyo3(signature = (profile = "pdfa-2b"))]
+    fn to_pdfa_deterministic<'py>(
+        &self,
+        py: Python<'py>,
+        profile: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let profile = match profile {
+            "pdfa-2b" => rdocx::PdfConformance::PdfA2b,
+            "pdfa-3b" => rdocx::PdfConformance::PdfA3b,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "profile must be pdfa-2b or pdfa-3b, not {profile:?}"
+                )));
+            }
+        };
+        py.detach(|| self.inner.to_pdfa_deterministic(profile))
             .map(|bytes| PyBytes::new(py, &bytes))
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
@@ -1373,6 +1633,27 @@ impl PyDocument {
         py.detach(|| self.inner.render_page_to_png(page_index, dpi))
             .map(|bytes| bytes.map(|bytes| PyBytes::new(py, &bytes)))
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn render_page_to_svg(
+        &self,
+        py: Python<'_>,
+        page_index: usize,
+    ) -> PyResult<Option<PySvgRenderResult>> {
+        let rendered = py
+            .detach(|| self.inner.render_page_to_svg(page_index))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(rendered.map(|result| PySvgRenderResult {
+            svg: result.svg,
+            diagnostics: result
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| PySvgDiagnostic {
+                    path: diagnostic.path,
+                    message: diagnostic.message,
+                })
+                .collect(),
+        }))
     }
 
     #[pyo3(signature = (dpi = 150.0))]
@@ -1754,6 +2035,64 @@ impl PyDocument {
         PyTuple::new(py, snapshots)
     }
 
+    // The section story operations publish a reopened package, so each one
+    // advances the revision once, even when the variant already had a story.
+    fn create_section_story(
+        &mut self,
+        py: Python<'_>,
+        section_index: usize,
+        kind: &str,
+        variant: &str,
+    ) -> PyResult<PyStory> {
+        let (kind, variant) = self.section_story_target(section_index, kind, variant)?;
+        let story = py
+            .detach(|| {
+                self.inner
+                    .create_section_story(section_index, kind, variant)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(story_snapshot(&story))
+    }
+
+    fn link_section_story(
+        &mut self,
+        py: Python<'_>,
+        section_index: usize,
+        kind: &str,
+        variant: &str,
+        story: PyRef<'_, PyStory>,
+    ) -> PyResult<PyStory> {
+        let (kind, variant) = self.section_story_target(section_index, kind, variant)?;
+        let story = self.native_story(py, &story)?;
+        let linked = py
+            .detach(|| {
+                self.inner
+                    .link_section_story(section_index, kind, variant, &story)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(story_snapshot(&linked))
+    }
+
+    fn unlink_section_story(
+        &mut self,
+        py: Python<'_>,
+        section_index: usize,
+        kind: &str,
+        variant: &str,
+    ) -> PyResult<PyStory> {
+        let (kind, variant) = self.section_story_target(section_index, kind, variant)?;
+        let story = py
+            .detach(|| {
+                self.inner
+                    .unlink_section_story(section_index, kind, variant)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(story_snapshot(&story))
+    }
+
     #[getter]
     fn hyperlinks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let links = self
@@ -1949,6 +2288,37 @@ impl PyDocument {
         Ok(removed)
     }
 
+    #[getter]
+    fn bookmarks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .bookmarks()
+                .into_iter()
+                .map(|bookmark| PyBookmark {
+                    id: bookmark.id(),
+                    name: bookmark.name().map(str::to_owned),
+                    range: bookmark.range().map(PyRunRange::from),
+                    direct_range: bookmark.direct_range().map(PyRunRange::from),
+                    text: bookmark.text().to_owned(),
+                    issue: bookmark.issue().map(str::to_owned),
+                }),
+        )
+    }
+
+    fn add_bookmark(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+        range: PyRef<'_, PyRunRange>,
+    ) -> PyResult<i32> {
+        // Bookmark markers sit between runs, so no content moves and live
+        // handles stay valid.
+        self.inner
+            .add_bookmark(name, (*range).into())
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
     fn layout<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let fragments = py
             .detach(|| {
@@ -2078,15 +2448,53 @@ impl PyDocument {
         self.counted_mutation(py, |document| document.reject_revision_id(id))
     }
 
+    #[pyo3(signature = (placeholder, replacement, *, expect = None))]
     fn try_replace_text(
         &mut self,
         py: Python<'_>,
         placeholder: &str,
         replacement: &str,
+        expect: Option<usize>,
     ) -> PyResult<usize> {
-        self.counted_mutation(py, |document| {
-            document.try_replace_text(placeholder, replacement)
-        })
+        if expect.is_none() {
+            return self.counted_mutation(py, |document| {
+                document.try_replace_text(placeholder, replacement)
+            });
+        }
+        let counts =
+            self.expected_replacements(py, &[(placeholder, replacement, expect)], false)?;
+        Ok(counts[0])
+    }
+
+    fn replace_all<'py>(
+        &mut self,
+        py: Python<'py>,
+        pairs: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let mut owned = Vec::new();
+        for (index, pair) in pairs.try_iter()?.enumerate() {
+            let pair = pair?;
+            let parsed = match pair.extract::<(String, String)>() {
+                Ok((placeholder, replacement)) => (placeholder, replacement, None),
+                Err(_) => pair
+                    .extract::<(String, String, Option<usize>)>()
+                    .map_err(|_| {
+                        PyTypeError::new_err(format!(
+                            "pair {index} must be an (old, new) or (old, new, expected) tuple, \
+                         where expected is a nonnegative int or None"
+                        ))
+                    })?,
+            };
+            owned.push(parsed);
+        }
+        let pairs = owned
+            .iter()
+            .map(|(placeholder, replacement, expected)| {
+                (placeholder.as_str(), replacement.as_str(), *expected)
+            })
+            .collect::<Vec<_>>();
+        let counts = self.expected_replacements(py, &pairs, true)?;
+        PyTuple::new(py, counts)
     }
 
     fn replace_all_regex(
@@ -2171,6 +2579,32 @@ impl PyDocument {
             page_reference_fields: report.page_reference_fields,
             diagnostics: report.diagnostics,
         })
+    }
+
+    #[pyo3(signature = (index, max_level = 3))]
+    fn insert_toc(&mut self, py: Python<'_>, index: usize, max_level: u32) -> PyResult<()> {
+        let before = self.inner.content_count();
+        if index > before {
+            return Err(PyIndexError::new_err("content index out of range"));
+        }
+        if !(1..=9).contains(&max_level) {
+            return Err(PyValueError::new_err("max_level must be between 1 and 9"));
+        }
+        self.inner.insert_toc(index, max_level);
+        // The native call always inserts its title paragraph, unless it
+        // cannot allocate unique heading bookmarks, and then changes nothing.
+        if self.inner.content_count() == before {
+            return Err(rdocx_to_pyerr(
+                py,
+                rdocx::Error::Other(
+                    "table of contents was not inserted because its heading bookmarks \
+                     could not be allocated"
+                        .to_owned(),
+                ),
+            ));
+        }
+        self.revisions.bump();
+        Ok(())
     }
 
     #[getter]
@@ -2292,11 +2726,21 @@ impl PyDocument {
         Py::new(py, PyTable::new(slf, path))
     }
 
-    fn pop_content(slf: Py<Self>, py: Python<'_>, index: usize) -> PyResult<PyContentFragment> {
-        let location = slf.borrow(py).body_location(py, index)?;
-        if index == slf.borrow(py).inner.content_count() {
-            return Err(PyIndexError::new_err("content index out of range"));
-        }
+    fn pop_content(
+        slf: Py<Self>,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+    ) -> PyResult<PyContentFragment> {
+        let location = if let Ok(item) = index.cast::<PyStoryItem>() {
+            slf.borrow(py).native_location(py, &item.borrow())?
+        } else {
+            let index = body_index_argument(index, "index must be an int or a StoryItem")?;
+            let location = slf.borrow(py).body_location(py, index)?;
+            if index == slf.borrow(py).inner.content_count() {
+                return Err(PyIndexError::new_err("content index out of range"));
+            }
+            location
+        };
         let fragment = slf
             .borrow_mut(py)
             .inner
@@ -2309,10 +2753,21 @@ impl PyDocument {
     fn insert_content(
         slf: Py<Self>,
         py: Python<'_>,
-        destination: usize,
+        destination: &Bound<'_, PyAny>,
         fragment: PyRef<'_, PyContentFragment>,
     ) -> PyResult<()> {
-        let location = slf.borrow(py).body_location(py, destination)?;
+        // A story item names the boundary before it, and a story its end.
+        let location = if let Ok(item) = destination.cast::<PyStoryItem>() {
+            slf.borrow(py).native_location(py, &item.borrow())?
+        } else if let Ok(story) = destination.cast::<PyStory>() {
+            rdocx::ContentLocation::end(slf.borrow(py).native_story(py, &story.borrow())?)
+        } else {
+            let destination = body_index_argument(
+                destination,
+                "destination must be an int, a StoryItem or a Story",
+            )?;
+            slf.borrow(py).body_location(py, destination)?
+        };
         let fragment = fragment.inner.clone();
         slf.borrow_mut(py)
             .inner

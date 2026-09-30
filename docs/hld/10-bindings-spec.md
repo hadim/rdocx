@@ -719,7 +719,10 @@ unchanged owner scope. The Python `Document` binds direct-body
 sources must be live direct children of the same Python document. Coordinates
 are zero-based insertion boundaries, and a popped `ContentFragment` exposes
 only its typed kind and remains reusable because insertion clones the native
-value. `try_replace_text` and `replace_all_regex` return exact native counts.
+value. `pop_content` also accepts a `StoryItem` naming a direct child of any
+story, and `insert_content` accepts a `StoryItem` for the boundary before that
+item or a `Story` for the end of that story, so a paragraph authored in the
+body can move into a header or footer. `try_replace_text` and `replace_all_regex` return exact native counts.
 Successful structural mutations stale handles once, successful replacements
 stale them only when their count is nonzero, and every rejected operation
 leaves package bytes and handle revisions unchanged. The native and Python
@@ -788,10 +791,18 @@ section and inherited state. `create_section_story`, `link_section_story`,
 addressed by the returned `StoryId` through the common story API. The facade
 also exposes `even_and_odd_headers` and `set_even_and_odd_headers`, while first
 story creation enables section `titlePg`. These are additive pre-1.0 native
-Rust APIs. Python exposes immutable inspection snapshots, and only the default
-header and footer text setters `Document.set_header` and `Document.set_footer`
-as story mutation entry points. WASM and CLI gain no corresponding binding
-surface.
+Rust APIs. Python exposes immutable inspection snapshots, the default header
+and footer text setters `Document.set_header` and `Document.set_footer`, and
+`Document.create_section_story`, `link_section_story`, and
+`unlink_section_story`. These take a section index, a `header` or `footer`
+kind, and a `default`, `first`, or `even` variant, the names
+`HeaderFooterVariant` reports, and return the resulting `Story`. An unknown
+name raises `ValueError` and a section index out of range raises `IndexError`,
+both before any change. The native operations publish a reopened package, so
+a successful call advances the revision once, even when the variant already
+had its own story. Rich story content is authored with the typed body
+API and moved with `pop_content` and `insert_content`, which accept story
+coordinates. WASM and CLI gain no corresponding binding surface.
 
 `CT_SectPr` adds typed page-number start and raw child-position state, while
 `PageFrame` adds `displayed_page_number` beside its physical `page_number`.
@@ -851,6 +862,16 @@ comments part. `rdocx-cli toc rebuild` publishes the validated result to an
 explicit output and reports the counts through a schema-1 main-story record.
 Python exposes the same operation and returns diagnostics as an immutable tuple
 with a derived `diagnostic_count` property. WASM does not expose this operation.
+
+`Document::insert_toc(index, max_level)` writes a static table of contents at
+a direct body index: a title paragraph and one entry per `Heading1` to
+`HeadingN` paragraph, each linked to a new `_TocN` bookmark on its heading. It
+writes no `TOC` field, so `rebuild_toc` does not refresh it. Python
+`Document.insert_toc(index, max_level=3)` binds it. An index past the body end
+raises `IndexError` and a level outside 1 to 9 raises `ValueError`, both before
+any change. When the native call inserts nothing because it cannot allocate
+unique heading bookmarks, the binding raises `RdocxError`. Otherwise it
+advances the revision once.
 
 The native facade re-exports the concrete OfficeMath tree from `rdocx-oxml`.
 `Paragraph::equations`, `Paragraph::equation`, and their read-only equivalents
@@ -1027,8 +1048,27 @@ The native Word facade provides additive `Document::try_replace_text` beside
 the legacy infallible `replace_text` method. The fallible method stages the
 replacement and publishes it only after namespace-safe serialization succeeds.
 The command-line `replace` operation uses this boundary, reports the stable
-serialization error, and creates no partial output. Python exposes the fallible
-method as `Document.try_replace_text`. The WASM binding keeps its infallible
+serialization error, and creates no partial output.
+`Document::try_replace_all_expected` takes ordered `(placeholder, replacement,
+expected)` pairs and returns the count of each pair. Each pair runs over the
+whole staged document after the pairs before it, so a later pair sees what an
+earlier one wrote. When a pair gives an expected count and finds another, the
+document stays unchanged and the inner result is a `ReplacementCountMismatch`
+naming the pair index, placeholder, expected count, and found count. The outer
+error is a staging failure. The legacy `replace_all` keeps its unordered map
+and panicking preflight.
+
+Python `Document.try_replace_text(placeholder, replacement, *, expect=None)`
+and `Document.replace_all(pairs)` share one contract with the rpptx binding.
+`replace_all` takes `(old, new)` or `(old, new, expected)` tuples and returns a
+tuple of counts. A count that differs from `expect` or from a pair's expected
+count raises `ReplacementCountError`, a subclass of `RdocxError` with
+`expected`, `found`, and `index` attributes, and leaves the package bytes and
+live handles unchanged. `index` names the failing pair of a batch and is
+`None` for `try_replace_text`, whose message is the one `rdocx replace
+--expect` prints. The error pickles. Zero matches without an expected count
+return zero rather than raising. A replacement advances the revision once when
+it replaced something. The WASM binding keeps its infallible
 `replacePlaceholder`, which calls `replace_text`.
 
 Literal replacement reaches the body, tables, content controls at every level,
@@ -1095,8 +1135,12 @@ Native Rust callers can request `PdfA2b` or `PdfA3b` through
 `Document::to_pdfa_deterministic` and
 `Presentation::to_pdfa_deterministic`. Both methods return the PDF backend's
 typed conformance error through the facade error enum. These methods are
-additive on the native pre-1.0 facades. Python, WASM, and CLI method names and
-dependency selections remain unchanged.
+additive on the native pre-1.0 facades. `rdocx` re-exports `PdfConformance`, so
+a caller can name the profile without depending on `oxml-pdf`. Python
+`Document.to_pdfa_deterministic(profile="pdfa-2b")` accepts `pdfa-2b` or
+`pdfa-3b`, raises `ValueError` for any other name, releases the GIL, and maps a
+conformance failure to `LayoutError`. WASM and CLI method names and dependency
+selections remain unchanged.
 
 The pre-1.0 shared layout API carries semantic types, `MarkedContent`, and
 informative `Figure` variants through existing non-exhaustive enums. The image
@@ -1268,9 +1312,14 @@ accepted-view boundaries of the range, which are the run indexes
 boundaries, rejects duplicate or producer-reserved names, and returns the
 allocated nonnegative id. The shared recursive `Field` model retains the
 complete `REF` and `PAGEREF` instruction, target argument, cached display,
-dirty state, source form, and producer XML. These additions are native Rust
-APIs only. Python, WASM, and CLI consumers keep their existing surface and
-preserve the typed content when they save the owned document.
+dirty state, source form, and producer XML. Python `Document.bookmarks`
+returns a tuple of frozen `Bookmark` snapshots with the same fields, both
+ranges as `RunRange` values or `None`. `Document.add_bookmark(name, range)`
+returns the id. Its markers sit between runs, so it keeps live handles valid
+and does not advance the revision. A rejected name or range raises
+`RdocxError` and leaves the document unchanged. WASM and CLI consumers keep
+their existing surface and preserve the typed content when they save the owned
+document.
 
 Native Word callers evaluate fields with `Document::evaluate_fields` and an
 explicit `FieldEvaluationContext`. `FieldDateTime` supplies deterministic civil
@@ -1425,8 +1474,16 @@ relationship already created by `Document::embed_image`. `add_field` rejects
 an instruction without a field name before mutation. `add_symbol` stores one
 Unicode scalar as text. `set_text` remains the explicit replacement operation,
 while formatting setters retain the complete ordered content sequence. These
-methods are additive on the pre-1.0 native Rust facade. Python, WASM, and CLI
-gain no implicit surface.
+methods are additive on the pre-1.0 native Rust facade. Python `Run` binds
+`add_tab()` and `add_field(instruction, cached_result="")`. Both append inside
+the run through the same accepted run path as the text setter, so no run index
+moves. A tab keeps live handles valid. A field becomes a story item of its
+own, which moves the index path of every later `StoryItem`, so `add_field`
+advances the revision once. An instruction without a field name raises
+`RdocxError` and leaves the run and the revision unchanged. The field
+serializes as a simple field after the run's earlier content, and
+`update_layout_backed_fields` fills a `PAGE`, `NUMPAGES`, or `PAGEREF` cache.
+WASM and CLI gain no implicit surface.
 
 `add_symbol` keeps that meaning. `add_symbol_char(font, char_code)` is the
 separate method that produces `w:sym`, and `add_special_character` produces
@@ -1586,14 +1643,29 @@ keyword-only `render_pages` arguments, keeps zero-based page indices, releases
 the GIL for rendering, returns `list[bytes]` for PNG or JPEG, and returns one
 `bytes` value for TIFF.
 
+Python `Document.to_pdf(*, fonts=None, font_dir=None)` keeps the plain call on
+`Document::to_pdf`. With `fonts`, a sequence of `(family, bytes)` pairs, or
+`font_dir`, a directory whose `.ttf`, `.otf`, and `.ttc` files
+`Document::load_fonts_from_dir` labels by file name, it calls
+`Document::to_pdf_with_fonts` with the given fonts first, as
+`rdocx convert --font-dir` does. That call lays out with the caller fonts only,
+so a family they do not provide, even through the automatic label aliases and
+metric-compatible names, raises `LayoutError`. The native loader reads a
+missing directory as an empty one, so the binding raises `FileNotFoundError`
+for a missing `font_dir` and `NotADirectoryError` for a file, before any
+layout. SVG and raster output take no caller fonts.
+
 Native Word SVG adds `SvgDiagnostic`, `SvgRenderResult`, and four additive
 `Document` methods. `render_page_to_svg` and
 `render_page_to_svg_with_options` reuse normal layout. Their deterministic
 counterparts reuse bundled-font-only layout. Every method takes a zero-based
 page index and returns `None` beyond the laid-out document. The result contains
 self-contained searchable SVG plus layout-first, path-specific lowering
-diagnostics. Python, WASM, CLI, Presentation, and public `oxml-pdf` APIs do not
-gain SVG methods or values.
+diagnostics. Python `Document.render_page_to_svg(page_index)` binds the normal
+layout method, releases the GIL, and returns a frozen `SvgRenderResult` with the
+SVG text and a tuple of frozen `SvgDiagnostic` values, or `None` beyond the
+last page. WASM, CLI, Presentation, and public `oxml-pdf` APIs do not gain SVG
+methods or values.
 
 Native renderers obtain the complete positioned output through
 `Document::layout` and `Document::layout_with_options`. Accepted calls return a

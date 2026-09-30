@@ -61,9 +61,9 @@ pub use document::{
     ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
     NumberingLevelOverride, OutlineNode, PictureAnchor, PictureCrop, PictureOptions, RenderOptions,
-    Section, SectionRef, SectionStory, StoryError, StoryId, StoryItemKind, StoryItemRef,
-    StoryItemSnapshot, StoryKind, TextBoxDirection, TextBoxOptions, TextWatermarkOptions,
-    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    ReplacementCountMismatch, Section, SectionRef, SectionStory, StoryError, StoryId,
+    StoryItemKind, StoryItemRef, StoryItemSnapshot, StoryKind, TextBoxDirection, TextBoxOptions,
+    TextWatermarkOptions, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
@@ -97,7 +97,7 @@ pub use oxml_opc::PackageReadLimits;
 pub use oxml_opc::{
     CoveredRelationship, SignatureIssue, SignatureReport, SignerCertificateIdentity,
 };
-pub use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
+pub use oxml_pdf::{PdfConformance, RasterFormat, RasterOptions, RasterOutput};
 pub use paragraph::{
     Alignment, BorderStyle, DropCap, FrameAnchor, FrameWrap, HyperlinkItemRef, HyperlinkRef,
     Paragraph, ParagraphBorderEdge, ParagraphBorderRef, ParagraphFrame, ParagraphItemRef,
