@@ -1,5 +1,6 @@
 //! Text content elements: `CT_P` (paragraph), `CT_R` (run), `CT_Text`.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -4272,12 +4273,23 @@ impl CT_P {
     /// Return the accepted view as a paragraph of plain runs, for the
     /// exporters: the runs whose text [`Self::accepted_text`] reads, in
     /// document order. Those of content controls, tracked insertions and
-    /// moves in, smart tags and inline custom XML elements are included,
-    /// deleted and moved-away runs are left out, and the hyperlink spans
-    /// cover the same runs as in the source. Content controls, revisions,
-    /// wrappers and markers are not kept.
+    /// moves in, smart tags, inline custom XML elements and simple fields
+    /// are included, deleted and moved-away runs are left out, and the
+    /// hyperlink spans cover the same runs as in the source. Content
+    /// controls, revisions, wrappers and markers are not kept. Borrowed when
+    /// the paragraph holds none of them, since its runs are then the view.
     #[doc(hidden)]
-    pub fn accepted_view(&self) -> CT_P {
+    pub fn accepted_view(&self) -> Cow<'_, CT_P> {
+        if self.content_controls.is_empty()
+            && self.revisions.is_empty()
+            && !self.extra_xml.iter().any(|(_, raw)| is_run_wrapper(raw))
+            && !self
+                .runs
+                .iter()
+                .any(|run| simple_field_source(run).is_some())
+        {
+            return Cow::Borrowed(self);
+        }
         let mut runs = Vec::new();
         // The index into `self.hyperlinks` of the hyperlink each run is in.
         let mut links = Vec::new();
@@ -4298,7 +4310,7 @@ impl CT_P {
                         if let Some(content) =
                             run_wrapper_paragraph(&self.extra_xml[index].1, &["w".to_owned()])
                         {
-                            let view = content.accepted_view();
+                            let view = content.accepted_view().into_owned();
                             links.extend(std::iter::repeat_n(None, view.runs.len()));
                             runs.extend(view.runs);
                         }
@@ -4309,10 +4321,24 @@ impl CT_P {
                 runs.extend(owned.into_iter().cloned());
             }
             if let Some(run) = self.runs.get(boundary) {
-                runs.push(run.clone());
-                links.push(self.hyperlinks.iter().position(|hyperlink| {
+                let link = self.hyperlinks.iter().position(|hyperlink| {
                     hyperlink.run_start <= boundary && boundary < hyperlink.run_end
-                }));
+                });
+                // A simple field reads as the runs of its result, as in
+                // `Self::accepted_text`, so a revision inside it is resolved.
+                let field = simple_field_source(run)
+                    .and_then(|(raw, prefixes)| run_wrapper_paragraph(raw, prefixes));
+                match field {
+                    Some(content) => {
+                        let view = content.accepted_view().into_owned();
+                        links.extend(std::iter::repeat_n(link, view.runs.len()));
+                        runs.extend(view.runs);
+                    }
+                    None => {
+                        runs.push(run.clone());
+                        links.push(link);
+                    }
+                }
             }
         }
         let mut hyperlinks = Vec::new();
@@ -4331,12 +4357,12 @@ impl CT_P {
             }
             start = end;
         }
-        CT_P {
+        Cow::Owned(CT_P {
             properties: self.properties.clone(),
             runs,
             hyperlinks,
             ..CT_P::new()
-        }
+        })
     }
 
     /// Return the content of a preserved smart tag or inline custom XML

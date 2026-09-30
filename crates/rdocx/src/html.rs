@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::document::visit_accepted_drawings;
 use crate::paragraph::{Alignment, Paragraph};
-use crate::revision::accepted_revision_content;
+use crate::revision::{accepted_revision_content, revision_removes_text};
 use crate::run::{DrawingKind, DrawingRelationshipKind, Run};
 use crate::table::Cell;
 use crate::{
@@ -29,6 +29,7 @@ use crate::{
     ListLevel, ParagraphItemRef, ParagraphRef, Result, RowRef, RunItemRef, RunRef, StoryId,
     TableRef,
 };
+use rdocx_oxml::CT_Revision;
 
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_MHTML_PARTS: usize = 1_024;
@@ -811,17 +812,14 @@ fn paragraph_mhtml_losses(
             }
             ParagraphItemRef::Revision(revision) => {
                 let location = format!("{location}/item[{index}]");
-                if let Some(content) = accepted_revision_content(revision.inner) {
-                    push_mhtml_loss(diagnostics, location.clone(), "flattened Word revision")?;
-                    paragraph_mhtml_losses(
-                        document,
-                        ParagraphRef { inner: content },
-                        &format!("{location}/paragraph"),
-                        diagnostics,
-                    )?;
-                } else {
-                    push_mhtml_loss(diagnostics, location, "dropped Word revision")?;
-                }
+                revision_mhtml_losses(
+                    document,
+                    revision.inner,
+                    &location,
+                    "flattened Word revision",
+                    "dropped Word revision",
+                    diagnostics,
+                )?;
                 continue;
             }
             ParagraphItemRef::CommentRangeStart { .. } => "dropped Word comment range start",
@@ -941,21 +939,14 @@ fn hyperlink_mhtml_losses(
             )?,
             HyperlinkItemRef::Revision(revision) => {
                 let location = format!("{location}/item[{index}]");
-                if let Some(content) = accepted_revision_content(revision.inner) {
-                    push_mhtml_loss(
-                        diagnostics,
-                        location.clone(),
-                        "flattened Word hyperlink revision",
-                    )?;
-                    paragraph_mhtml_losses(
-                        document,
-                        ParagraphRef { inner: content },
-                        &format!("{location}/paragraph"),
-                        diagnostics,
-                    )?;
-                } else {
-                    push_mhtml_loss(diagnostics, location, "dropped Word hyperlink revision")?;
-                }
+                revision_mhtml_losses(
+                    document,
+                    revision.inner,
+                    &location,
+                    "flattened Word hyperlink revision",
+                    "dropped Word hyperlink revision",
+                    diagnostics,
+                )?;
             }
             HyperlinkItemRef::UnsupportedXml(_) => push_mhtml_loss(
                 diagnostics,
@@ -1152,18 +1143,39 @@ fn control_mhtml_losses(
         }
     }
     for (index, (_, revision)) in control.revisions().iter().enumerate() {
-        let location = format!("{location}/revision[{index}]");
-        if let Some(content) = accepted_revision_content(revision) {
-            push_mhtml_loss(diagnostics, location.clone(), "flattened Word revision")?;
-            paragraph_mhtml_losses(
-                document,
-                ParagraphRef { inner: content },
-                &format!("{location}/paragraph"),
-                diagnostics,
-            )?;
-        } else {
-            push_mhtml_loss(diagnostics, location, "dropped Word revision")?;
-        }
+        revision_mhtml_losses(
+            document,
+            revision,
+            &format!("{location}/revision[{index}]"),
+            "flattened Word revision",
+            "dropped Word revision",
+            diagnostics,
+        )?;
+    }
+    Ok(())
+}
+
+/// Record a tracked revision: an insertion or a move in is written in place
+/// and its losses are recorded, a deletion or a move away is left out.
+fn revision_mhtml_losses(
+    document: &Document,
+    revision: &CT_Revision,
+    location: &str,
+    flattened: &'static str,
+    dropped: &'static str,
+    diagnostics: &mut Vec<MhtmlDiagnostic>,
+) -> Result<()> {
+    if revision_removes_text(revision) {
+        return push_mhtml_loss(diagnostics, location.to_owned(), dropped);
+    }
+    push_mhtml_loss(diagnostics, location.to_owned(), flattened)?;
+    if let Some(content) = accepted_revision_content(revision) {
+        paragraph_mhtml_losses(
+            document,
+            ParagraphRef { inner: content },
+            &format!("{location}/paragraph"),
+            diagnostics,
+        )?;
     }
     Ok(())
 }

@@ -13,7 +13,7 @@ use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblPr, CT_TblWidth, CT_TcPr, CT_TrPr,
 use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
 
 use crate::document::{ExportItem, body_export_items};
-use crate::revision::{accepted_revision_content, raw_is_typed_revision};
+use crate::revision::{raw_is_typed_revision, revision_removes_text};
 use crate::{Alignment, Document, Error, Length, ListLevel, ListNumberFormat, Result};
 
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
@@ -587,10 +587,10 @@ impl<'a> RtfWriter<'a> {
         for (index, _, revision) in &paragraph.revisions {
             self.diagnose(
                 &format!("{location}/revision[{index}]"),
-                if accepted_revision_content(revision).is_some() {
-                    "paragraph revision wrapper was flattened during RTF export"
-                } else {
+                if revision_removes_text(revision) {
                     "deleted or moved-away revision content was dropped during RTF export"
+                } else {
+                    "paragraph revision wrapper was flattened during RTF export"
                 },
             );
         }

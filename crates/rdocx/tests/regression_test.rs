@@ -13578,7 +13578,8 @@ mod content_control_read_walker_regressions {
     /// content: around a body heading, a run, a cell paragraph, a run in a
     /// cell, a cell, a row, another control, and two of four pictures. The
     /// header paragraph is wrapped too. It also holds a tracked insertion,
-    /// deletion and move, a picture in an insertion, a smart tag and inline
+    /// deletion and move, a picture in an insertion, a simple field whose
+    /// result is an insertion, an empty insertion, a smart tag and inline
     /// custom XML. With `wrap` false, the document the text readers read: no
     /// control or wrapper, the inserted and moved-in runs as plain runs, and
     /// no deleted or moved-away run.
@@ -13693,6 +13694,12 @@ mod content_control_read_walker_regressions {
                 "<w:p>{}</w:p>",
                 tracked("ins", 105, &picture_run(&image, 4, 38_100, 47_625))
             ),
+            format!(
+                r#"<w:p>{}<w:fldSimple w:instr=" AUTHOR ">{}</w:fldSimple>{}</w:p>"#,
+                run("Author "),
+                tracked("ins", 106, &run("Ada")),
+                tracked("ins", 107, "")
+            ),
             paragraph("Plain after."),
         ]
         .concat();
@@ -13761,7 +13768,7 @@ mod content_control_read_walker_regressions {
             "Plain before.\n\n# Wrapped heading\n\nInline **wrapped run** after.\n\n\
              | Cell block | Cell inline | Wrapped cell |\n| --- | --- | --- |\n\
              | Wrapped row |  |  |\n\nNested text\n\n\n\nTracked **inserted** text.\n\n\
-             Moved here\n\nTagged smart and custom\n\n\nPlain after.\n\n"
+             Moved here\n\nTagged smart and custom\n\n\nAuthor Ada\n\nPlain after.\n\n"
         );
 
         let html = wrapped.to_html();
@@ -13778,6 +13785,7 @@ mod content_control_read_walker_regressions {
             "<p>Tracked <strong>inserted</strong> text.</p>",
             "<p>Moved here</p>",
             "<p>Tagged smart and custom</p>",
+            "<p>Author Ada</p>",
             "<p>Plain after.</p>",
         ] {
             assert!(html.contains(text), "{text}: {html}");
@@ -13823,6 +13831,7 @@ mod content_control_read_walker_regressions {
             "Tracked <strong>inserted</strong> text.",
             "<p>Moved here</p>",
             "<p>Tagged smart and custom</p>",
+            "<p>Author Ada</p>",
             "<p>Plain after.</p>",
         ] {
             assert!(chapter.contains(text), "{text}: {chapter}");
@@ -13845,6 +13854,7 @@ mod content_control_read_walker_regressions {
             "Moved here",
             "smart",
             "custom",
+            "Ada",
         ] {
             // ODF spells a space between words as `<text:s/>`.
             let text = text.replace(' ', "<text:s/>");
@@ -13867,6 +13877,7 @@ mod content_control_read_walker_regressions {
             "Moved here",
             "smart",
             "custom",
+            "Ada",
         ] {
             assert!(rtf_text.contains(text), "{text}: {rtf_text}");
         }
@@ -14009,6 +14020,7 @@ mod content_control_read_walker_regressions {
                     "flattened Word smart tag or custom XML element"
                 ),
                 ("body[10]/paragraph/item[0]", "flattened Word revision"),
+                ("body[11]/paragraph/item[2]", "flattened Word revision"),
             ])
         );
         assert_eq!(
@@ -14082,10 +14094,14 @@ mod content_control_read_walker_regressions {
                     "body[10]/revision[0]",
                     "paragraph revision wrapper was flattened during EPUB export"
                 ),
+                (
+                    "body[11]/revision[0]",
+                    "paragraph revision wrapper was flattened during EPUB export"
+                ),
             ])
         );
-        assert_eq!(notes[2].len(), 15, "{:?}", notes[2]);
-        assert_eq!(notes[3].len(), 15, "{:?}", notes[3]);
+        assert_eq!(notes[2].len(), 16, "{:?}", notes[2]);
+        assert_eq!(notes[3].len(), 16, "{:?}", notes[3]);
     }
 }
 

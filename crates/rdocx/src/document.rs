@@ -10336,7 +10336,7 @@ fn push_control_export_items<'a>(
 
 /// Whether a table, not counting the tables nested in its cells, holds a
 /// content control around a row, a cell or cell content.
-pub(crate) fn table_has_content_controls(table: &CT_Tbl) -> bool {
+fn table_has_content_controls(table: &CT_Tbl) -> bool {
     !table.content_controls.is_empty()
         || table.rows.iter().any(|row| {
             !row.content_controls.is_empty()

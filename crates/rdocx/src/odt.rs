@@ -27,7 +27,7 @@ use zip::write::SimpleFileOptions;
 
 use crate::document::{ExportItem, body_export_items};
 use crate::paragraph::{Alignment, Paragraph};
-use crate::revision::{accepted_revision_content, raw_is_typed_revision};
+use crate::revision::{raw_is_typed_revision, revision_removes_text};
 use crate::run::Run;
 use crate::{Document, Error, Length, ListLevel, PackageReadLimits, Result};
 
@@ -722,7 +722,7 @@ impl<'a> OdtWriter<'a> {
         if paragraph
             .revisions
             .iter()
-            .any(|(_, _, revision)| accepted_revision_content(revision).is_some())
+            .any(|(_, _, revision)| !revision_removes_text(revision))
         {
             self.diagnose(
                 &format!("{path}/revisions"),
@@ -732,7 +732,7 @@ impl<'a> OdtWriter<'a> {
         if paragraph
             .revisions
             .iter()
-            .any(|(_, _, revision)| accepted_revision_content(revision).is_none())
+            .any(|(_, _, revision)| revision_removes_text(revision))
         {
             self.diagnose(
                 &format!("{path}/revisions"),

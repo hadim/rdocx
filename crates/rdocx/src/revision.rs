@@ -15,9 +15,18 @@ const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/m
 type NamespaceScope = HashMap<String, String>;
 type NamespaceDeclarations = Vec<(String, String)>;
 
+/// Whether a tracked revision takes its text out of the accepted view, as a
+/// deletion or a move away does. The exporters leave that text out.
+pub(crate) fn revision_removes_text(revision: &CT_Revision) -> bool {
+    matches!(
+        revision.kind(),
+        RevisionKind::Deletion | RevisionKind::MoveFrom
+    )
+}
+
 /// The content of a tracked insertion or move in, which the exporters write in
-/// place. None for a deletion, a move away or a property change, whose text
-/// the accepted view leaves out.
+/// place. None for an empty one, and for a deletion, a move away or a property
+/// change.
 pub(crate) fn accepted_revision_content(revision: &CT_Revision) -> Option<&CT_P> {
     matches!(
         revision.kind(),

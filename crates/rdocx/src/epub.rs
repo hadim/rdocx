@@ -19,7 +19,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::document::{visit_accepted_drawings, visit_body_paragraphs};
-use crate::revision::accepted_revision_content;
+use crate::revision::{accepted_revision_content, revision_removes_text};
 use crate::{Document, Error, Result};
 
 const MAX_EPUB_BYTES: usize = 64 * 1024 * 1024;
@@ -1195,18 +1195,19 @@ impl<'a> EpubWriter<'a> {
     /// Scan a tracked revision. An insertion or a move in is written in place,
     /// and a deletion or a move away is left out, as the accepted view reads.
     fn scan_revision(&mut self, revision: &CT_Revision, path: &str) -> Result<()> {
-        match accepted_revision_content(revision) {
-            Some(content) => {
-                self.diagnose(
-                    path.to_owned(),
-                    "paragraph revision wrapper was flattened during EPUB export".to_owned(),
-                )?;
-                self.scan_inline_content(content, path)
-            }
-            None => self.diagnose(
+        if revision_removes_text(revision) {
+            return self.diagnose(
                 path.to_owned(),
                 "deleted or moved-away revision content was dropped during EPUB export".to_owned(),
-            ),
+            );
+        }
+        self.diagnose(
+            path.to_owned(),
+            "paragraph revision wrapper was flattened during EPUB export".to_owned(),
+        )?;
+        match accepted_revision_content(revision) {
+            Some(content) => self.scan_inline_content(content, path),
+            None => Ok(()),
         }
     }
 
