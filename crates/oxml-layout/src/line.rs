@@ -239,6 +239,9 @@ pub enum ForcedBreakKind {
 pub struct LayoutLine {
     pub items: Vec<LineItem>,
     /// Total content width of the line.
+    ///
+    /// Rich text spaces that end a line hang past its end, so they can take
+    /// this past `available_width`. See [`LayoutLine::hanging_space_counts`].
     pub width: f64,
     /// Maximum ascent on this line (above baseline).
     pub ascent: f64,
@@ -264,6 +267,44 @@ impl LayoutLine {
         let leading = self.height - self.ascent - self.descent;
         self.ascent + if leading >= 0.0 { leading / 2.0 } else { 0.0 }
     }
+
+    /// How many items at the visual start and at the visual end of the line
+    /// are rich text spaces that end it logically.
+    ///
+    /// Those spaces hang past the line end, which is its visual right in
+    /// left-to-right text and its visual left in right-to-left text. Alignment
+    /// leaves them out of the width, and they may pass the available width.
+    pub fn hanging_space_counts(&self) -> (usize, usize) {
+        let last_content = self
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(span) if !is_space_run(span.text()) => {
+                    Some(span.logical_index())
+                }
+                _ => None,
+            })
+            .max();
+        let hangs = |item: &LineItem| match (item, last_content) {
+            (LineItem::MultilingualText(span), Some(last)) => {
+                is_space_run(span.text()) && span.logical_index() > last
+            }
+            _ => false,
+        };
+        let start = self.items.iter().take_while(|item| hangs(item)).count();
+        let end = self.items[start..]
+            .iter()
+            .rev()
+            .take_while(|item| hangs(item))
+            .count();
+        (start, end)
+    }
+}
+
+/// Whether text is only U+0020 spaces, the one character UAX 14 classes SP,
+/// which is what hangs at a line end.
+fn is_space_run(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|character| character == ' ')
 }
 
 /// Parameters for line breaking.
@@ -386,7 +427,8 @@ pub fn break_into_lines(
 
                 if params.wrap
                     && !current_items.is_empty()
-                    && current_width + seg_width > line_avail + 0.01
+                    && current_width + seg_width - hanging_space_width(&seg_items)
+                        > line_avail + 0.01
                 {
                     // Finish current line
                     let indent = line_indent_at(params, line_index, is_first_line);
@@ -1228,6 +1270,24 @@ fn split_text_at_break_opportunities(seg: &TextSegment) -> Vec<TextBreakInfo> {
     }
 
     breaks
+}
+
+/// Width of the spaces that end a group of rich text items.
+///
+/// They hang past the end of a line instead of wrapping the group, as Word and
+/// PowerPoint let them. Only rich text hangs: the plain path keeps counting a
+/// trailing space.
+fn hanging_space_width(items: &[InlineItem]) -> f64 {
+    items
+        .iter()
+        .rev()
+        .map_while(|item| match item {
+            InlineItem::MultilingualText(segment) if is_space_run(segment.text()) => {
+                Some(segment.width())
+            }
+            _ => None,
+        })
+        .sum()
 }
 
 fn inline_item_width(item: &InlineItem) -> f64 {
@@ -2110,6 +2170,146 @@ mod tests {
                 .iter()
                 .all(|text| { !text.starts_with(['〉', '、']) && !text.ends_with('〈') })
         );
+    }
+
+    #[test]
+    fn rich_lines_never_start_with_a_comma_a_space_or_a_hyphen() {
+        let mut fm = deterministic_font_manager();
+        let text = "Repainted in 3 weeks while still in service, or re-coated next spring";
+        let segment = shaped_text_segment(&mut fm, text, 0.0);
+        let items = fm
+            .shape_multilingual_paragraph(vec![(segment, None)], TextDirection::LeftToRight, false)
+            .unwrap()
+            .into_iter()
+            .map(InlineItem::MultilingualText)
+            .collect::<Vec<_>>();
+        let rich_text = |line: &LayoutLine| {
+            line.items
+                .iter()
+                .filter_map(|item| match item {
+                    LineItem::MultilingualText(span) => Some(span.text()),
+                    _ => None,
+                })
+                .collect::<String>()
+        };
+
+        for width in (300..=1000).step_by(5) {
+            let lines = break_multilingual_into_lines(
+                &items,
+                &LineBreakParams {
+                    available_width: f64::from(width),
+                    ..Default::default()
+                },
+                &fm,
+                TextDirection::LeftToRight,
+            )
+            .unwrap();
+            let texts = lines.iter().map(rich_text).collect::<Vec<_>>();
+            assert_eq!(texts.concat(), text);
+            for line_text in &texts[1..] {
+                assert!(
+                    !line_text.starts_with([',', ' ', '-']),
+                    "{width}: {texts:?}"
+                );
+            }
+            for line in &lines {
+                let hanging = line
+                    .items
+                    .iter()
+                    .rev()
+                    .map_while(|item| match item {
+                        LineItem::MultilingualText(span) if span.text().trim().is_empty() => {
+                            Some(span.width())
+                        }
+                        _ => None,
+                    })
+                    .sum::<f64>();
+                assert!(
+                    line.width - hanging <= line.available_width + 0.01,
+                    "{width}: {texts:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_rich_line_lets_the_space_after_its_last_word_hang() {
+        let mut fm = deterministic_font_manager();
+        let first = "Repainted in 3 weeks while still in service,";
+        let segment = shaped_text_segment(&mut fm, &format!("{first} or re-coated"), 0.0);
+        let ink = shaped_text_segment(&mut fm, first, 0.0).width;
+        let items = fm
+            .shape_multilingual_paragraph(vec![(segment, None)], TextDirection::LeftToRight, false)
+            .unwrap()
+            .into_iter()
+            .map(InlineItem::MultilingualText)
+            .collect::<Vec<_>>();
+
+        // The comma fits and the space after it does not.
+        let lines = break_multilingual_into_lines(
+            &items,
+            &LineBreakParams {
+                available_width: ink + 1.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::LeftToRight,
+        )
+        .unwrap();
+
+        let LineItem::MultilingualText(last) = lines[0].items.last().unwrap() else {
+            panic!("the first line ends with rich text");
+        };
+        assert_eq!(last.text(), " ");
+        assert!((lines[0].width - last.width() - ink).abs() < 0.001);
+        assert!(lines[0].width > lines[0].available_width);
+        let LineItem::MultilingualText(next) = &lines[1].items[0] else {
+            panic!("the second line starts with rich text");
+        };
+        assert_eq!(next.text(), "or");
+    }
+
+    #[test]
+    fn hanging_spaces_sit_at_the_visual_end_of_their_direction() {
+        let mut fm = deterministic_font_manager();
+        let cases = [
+            ("שלום עולם זה טקסט ארוך", TextDirection::RightToLeft, (1, 0)),
+            (
+                "one two three four five",
+                TextDirection::LeftToRight,
+                (0, 1),
+            ),
+            // An ideographic space is not UAX 14 SP, so it does not hang.
+            (
+                "one\u{3000}two\u{3000}three",
+                TextDirection::LeftToRight,
+                (0, 0),
+            ),
+        ];
+        for (text, direction, wrapped) in cases {
+            let segment = shaped_text_segment(&mut fm, text, 0.0);
+            let items = fm
+                .shape_multilingual_paragraph(vec![(segment, None)], direction, false)
+                .unwrap()
+                .into_iter()
+                .map(InlineItem::MultilingualText)
+                .collect::<Vec<_>>();
+            let lines = break_multilingual_into_lines(
+                &items,
+                &LineBreakParams {
+                    available_width: 150.0,
+                    ..Default::default()
+                },
+                &fm,
+                direction,
+            )
+            .unwrap();
+            assert!(lines.len() > 1, "{text}");
+            for line in &lines[..lines.len() - 1] {
+                assert_eq!(line.hanging_space_counts(), wrapped, "{text}");
+            }
+            assert_eq!(lines.last().unwrap().hanging_space_counts(), (0, 0));
+        }
     }
 
     #[test]
