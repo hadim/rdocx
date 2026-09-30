@@ -1102,7 +1102,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_accepted_revision_refresh_keeps_the_original_projection() {
+    fn accepted_revision_refresh_changes_one_field_of_a_shared_run() {
         let raw = format!(
             concat!(
                 r#"<w:ins xmlns:w="{}" w:id="7" w:author="Ada"><w:r>"#,
@@ -1137,22 +1137,26 @@ mod tests {
             .expect("replacement contains a field");
         field.cached_result = "changed".to_owned();
 
-        let error = revision
-            .replace_accepted_run_segments(&[AcceptedRunPathSegment::Run(page_index)], replacement)
-            .expect_err("shared physical field mutation must fail");
-
         assert!(
-            error
-                .to_string()
-                .contains("field sharing one physical run was changed")
+            revision
+                .replace_accepted_run_segments(
+                    &[AcceptedRunPathSegment::Run(page_index)],
+                    replacement
+                )
+                .expect("one field of a shared physical run can change")
         );
+
         assert_eq!(
             revision
                 .content_paragraph()
-                .expect("original accepted content remains")
+                .expect("accepted content remains")
                 .text(),
-            "firstsecond"
+            "firstchanged"
         );
+        let raw = std::str::from_utf8(&revision.raw_xml).unwrap();
+        assert!(raw.contains("<w:instrText>DATE</w:instrText>"), "{raw}");
+        assert!(raw.contains("<w:t>first</w:t>"), "{raw}");
+        assert!(!raw.contains("second"), "{raw}");
     }
 
     #[test]

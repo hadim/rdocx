@@ -6456,18 +6456,29 @@ fn detach_field_spans(paragraph: &CT_P, source: Option<&str>) -> Result<Option<S
     }
     let mut source =
         source.map_or_else(|| paragraph_xml(paragraph), |source| Ok(source.to_owned()))?;
+    // Each span starts at a physical run of the paragraph, in order.
+    let runs = paragraph_run_spans(&source)?;
+    let mut edits = Vec::with_capacity(spans.len());
     let mut cursor = 0;
     for (raw, detached) in spans {
         let raw = std::str::from_utf8(raw).map_err(utf8_error)?;
-        let detached = String::from_utf8(detached).map_err(utf8_error)?;
-        let start = cursor
-            + source[cursor..].find(raw).ok_or_else(|| {
+        let start = runs
+            .iter()
+            .map(|run| run.start)
+            .find(|start| *start >= cursor && source[*start..].starts_with(raw))
+            .ok_or_else(|| {
                 Error::Other(
                     "comparison could not find a split field run in its paragraph".to_owned(),
                 )
             })?;
-        source.replace_range(start..start + raw.len(), &detached);
-        cursor = start + detached.len();
+        cursor = start + raw.len();
+        edits.push((
+            start..cursor,
+            String::from_utf8(detached).map_err(utf8_error)?,
+        ));
+    }
+    for (range, detached) in edits.into_iter().rev() {
+        source.replace_range(range, &detached);
     }
     Ok(Some(source))
 }

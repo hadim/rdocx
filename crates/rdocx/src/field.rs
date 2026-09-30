@@ -9994,6 +9994,7 @@ fn patch_story_field_sources(
 
 fn paragraph_field_source_replacements(paragraph: &CT_P) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
     let mut replacements = Vec::new();
+    let mut next_run = 0;
     for boundary in 0..=paragraph.runs.len() {
         for (_, _, _, control) in paragraph
             .content_controls
@@ -10002,29 +10003,13 @@ fn paragraph_field_source_replacements(paragraph: &CT_P) -> Result<Vec<(Vec<u8>,
         {
             append_control_field_source_replacements(control, &mut replacements)?;
         }
-        if let Some(run) = paragraph.runs.get(boundary) {
-            append_run_field_source_replacements(run, &mut replacements)?;
+        if boundary < next_run || boundary == paragraph.runs.len() {
+            continue;
         }
+        next_run =
+            boundary + paragraph.field_source_replacements_at(boundary, &mut replacements)?;
     }
     Ok(replacements)
-}
-
-fn append_run_field_source_replacements(
-    run: &CT_R,
-    output: &mut Vec<(Vec<u8>, Vec<u8>)>,
-) -> Result<()> {
-    for content in &run.content {
-        let RunContent::Field(field) = content else {
-            continue;
-        };
-        let Some((source, replacement)) = field.source_replacement()? else {
-            return Err(Error::Other(
-                "parsed package story field has no source XML".to_owned(),
-            ));
-        };
-        output.push((source.to_vec(), replacement));
-    }
-    Ok(())
 }
 
 fn append_control_field_source_replacements(
