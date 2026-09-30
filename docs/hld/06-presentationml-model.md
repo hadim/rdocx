@@ -493,6 +493,61 @@ by `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>`, as python-pptx writes,
 because PowerPoint draws nothing for a picture without geometry. A media
 picture added by `add_media` carries the same geometry.
 
+The owning facade also borrows the shape collection of a slide or of one group
+on it, which populates groups with the same constructors:
+
+```rust
+pub fn shapes_mut(&mut self, slide_index: usize, group: &[usize]) -> Option<ShapesMut<'_>>;
+
+impl ShapesMut<'_> {
+    pub fn add_textbox(&mut self, left: Emu, top: Emu, width: Emu, height: Emu) -> Result<ShapeMut<'_>>;
+    pub fn add_shape(&mut self, preset: &str, left: Emu, top: Emu, width: Emu, height: Emu) -> Result<ShapeMut<'_>>;
+    pub fn add_connector(&mut self, connector: ConnectorType, begin_x: Emu, begin_y: Emu, end_x: Emu, end_y: Emu) -> Result<ShapeMut<'_>>;
+    pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>>;
+    pub fn add_table(&mut self, rows: usize, columns: usize, left: Emu, top: Emu, width: Emu, height: Emu) -> Result<ShapeMut<'_>>;
+    pub fn add_picture(&mut self, image_data: &[u8], image_filename: &str, left: Emu, top: Emu, width: Option<Emu>, height: Option<Emu>) -> Result<ShapeMut<'_>>;
+}
+```
+
+`group` holds one z-order index per nesting level from the slide's own shapes
+down to the group, and an empty path names the slide's own shapes. A missing
+slide or a path that does not end at a group returns `None`. Each constructor
+builds the member the `SlideMut` or `add_picture` constructor builds, with a
+`p:cNvPr` id unused across the whole slide, groups included.
+`CT_GroupShape::append_child` places it right after the group's last typed
+member, as `CT_ShapeTree::append_child` does on the slide, so preserved
+content after that member stays above it: an unmodelled member such as a
+trailing `p:contentPart`, and schema-final `p:extLst`. python-pptx inserts
+just before `p:extLst`, above a trailing `p:contentPart`. Coordinates are in
+the collection's own space, the member space of a group. A group added inside
+a group gets the zero `a:xfrm` python-pptx writes, with every offset and
+extent zero, because python-pptx cannot refit a group whose member group has
+no transform.
+
+After each addition, the group and then every group enclosing it are refit to
+the union of their members' own offsets and extents, as python-pptx
+`recalculate_extents` does. `a:chOff` and `a:chExt` become the union, and
+`a:off` and `a:ext` follow through the group's current mapping from member
+space to its parent. A group's flips and rotation apply about the centre of
+`a:off` and `a:ext`, which the refit moves, so for a group that already had a
+counted member `a:off` also moves by `(L - I)` times the centre's shift, where
+`L` flips, then rotates, as PowerPoint does. A member drawn before the addition
+therefore stays where PowerPoint drew it, and PowerPoint renders such decks
+unchanged before and after an addition. The rpptx renderer rotates a group
+before it flips it, which agrees with PowerPoint unless a group is both
+rotated and flipped. A group without all four values maps members unchanged,
+so a new group ends with four equal values, as python-pptx writes them, and
+its members keep their slide coordinates. python-pptx instead sets `a:off` to
+`a:chOff` and ignores flips and rotation, which moves the members of a group
+that was moved, resized, rotated, or flipped after it was built. Member
+rotation does not widen the union, as in python-pptx. A member without an
+offset and extent does not count, nor does a group without members, so an
+empty member group does not stretch the union to its zero box as it does in
+python-pptx. A group without a counted member keeps its transform until its
+own first member arrives. Rendering composes the mapping of each enclosing
+group, the identity for a fitted new group, and a member's position and size
+read its own `a:off` and `a:ext` in member space.
+
 The owning facade also reads and replaces a picture's image and removes
 shapes:
 
@@ -576,6 +631,8 @@ unknown name returns a contextual error without changing the slide. A textbox
 uses `rect`, sets `txBox="1"`, has `a:noFill`, and contains `a:bodyPr`,
 `a:lstStyle`, and one required paragraph. An empty group contains the required
 `p:nvGrpSpPr` and `p:grpSpPr` shells, with no invented transform or members.
+Only a group added inside a group through `ShapesMut` also gets the zero
+`a:xfrm` described above.
 
 A constructed connector is free-standing and uses `line`, `bentConnector3`,
 or `curvedConnector3` for `Straight`, `Elbow`, or `Curve`. Its transform offset

@@ -1783,6 +1783,29 @@ impl Presentation {
         self.slides.get_mut(index).map(slide_mut)
     }
 
+    /// Returns the shapes of one slide, or of one group on it, for adding
+    /// shapes.
+    ///
+    /// `group` holds one z-order index per nesting level, from the slide's
+    /// own shapes down to the group, and is empty for the slide's own shapes.
+    /// A missing slide or a path that does not end at a group returns `None`.
+    pub fn shapes_mut(&mut self, slide_index: usize, group: &[usize]) -> Option<ShapesMut<'_>> {
+        let tree = &mut self
+            .slides
+            .get_mut(slide_index)?
+            .slide
+            .common_slide_data
+            .shape_tree;
+        if !group.is_empty() {
+            group_at_mut(&mut tree.children, group)?;
+        }
+        Some(ShapesMut {
+            presentation: self,
+            slide_index,
+            group: group.to_vec(),
+        })
+    }
+
     /// Iterates slides in `p:sldIdLst` order.
     pub fn slides(&self) -> impl ExactSizeIterator<Item = SlideRef<'_>> {
         self.slides.iter().map(slide_ref)
@@ -3080,6 +3103,34 @@ impl Presentation {
         width: Option<Emu>,
         height: Option<Emu>,
     ) -> Result<ShapeRef<'_>> {
+        self.append_picture(
+            slide_index,
+            &[],
+            image_data,
+            image_filename,
+            left,
+            top,
+            width,
+            height,
+        )
+        .map(|picture| shape_ref(picture))
+    }
+
+    /// Stages the image part and slide relationship of a new picture, then
+    /// appends it to the slide's own shapes or to the group that `group`
+    /// indexes, which callers have checked.
+    #[allow(clippy::too_many_arguments)]
+    fn append_picture(
+        &mut self,
+        slide_index: usize,
+        group: &[usize],
+        image_data: &[u8],
+        image_filename: &str,
+        left: Emu,
+        top: Emu,
+        width: Option<Emu>,
+        height: Option<Emu>,
+    ) -> Result<&mut ShapeTreeChild> {
         let slide = self
             .slides
             .get(slide_index)
@@ -3126,9 +3177,7 @@ impl Presentation {
         self.package = package;
         self.media_store = media_store;
         let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
-        Ok(shape_ref(
-            tree.append_child(ShapeTreeChild::Picture(picture)),
-        ))
+        Ok(append_member(tree, group, ShapeTreeChild::Picture(picture)))
     }
 
     /// Returns the embedded image one picture shows, found by shape id.
@@ -6065,20 +6114,9 @@ impl<'a> SlideMut<'a> {
         width: Emu,
         height: Emu,
     ) -> Result<ShapeMut<'_>> {
-        let table = CT_Table::new(rows, columns, width, height)
-            .map_err(|error| invalid_table_mutation("add table", error.to_string()))?;
-        let tree = &mut self.record.slide.common_slide_data.shape_tree;
-        let id = ShapeIdAllocator::scan(tree).allocate();
-        let frame = CT_GraphicFrame::new_table(
-            id,
-            &format!("Table {id}"),
-            positioned_transform(left, top, width, height),
-            table,
-        )
-        .map_err(|error| invalid_table_mutation("add table", error.to_string()))?;
-        Ok(shape_mut(tree.append_child(ShapeTreeChild::GraphicFrame(
-            Box::new(frame),
-        ))))
+        append_new_member(self.shape_tree(), &[], |id| {
+            table_member(id, rows, columns, left, top, width, height)
+        })
     }
 
     /// Appends a no-fill textbox at the top of the slide's z-order.
@@ -6089,15 +6127,9 @@ impl<'a> SlideMut<'a> {
         width: Emu,
         height: Emu,
     ) -> Result<ShapeMut<'_>> {
-        let tree = &mut self.record.slide.common_slide_data.shape_tree;
-        let id = ShapeIdAllocator::scan(tree).allocate();
-        let shape = CT_Shape::new_textbox(
-            id,
-            &format!("TextBox {id}"),
-            positioned_transform(left, top, width, height),
-        )
-        .map_err(|error| invalid_shape_construction("add textbox", error))?;
-        Ok(shape_mut(tree.append_child(ShapeTreeChild::Shape(shape))))
+        append_new_member(self.shape_tree(), &[], |id| {
+            textbox_member(id, left, top, width, height)
+        })
     }
 
     /// Appends an ordinary preset shape at the top of the slide's z-order.
@@ -6109,16 +6141,9 @@ impl<'a> SlideMut<'a> {
         width: Emu,
         height: Emu,
     ) -> Result<ShapeMut<'_>> {
-        let tree = &mut self.record.slide.common_slide_data.shape_tree;
-        let id = ShapeIdAllocator::scan(tree).allocate();
-        let shape = CT_Shape::new_preset(
-            id,
-            &format!("Shape {id}"),
-            preset,
-            positioned_transform(left, top, width, height),
-        )
-        .map_err(|error| invalid_shape_construction("add shape", error))?;
-        Ok(shape_mut(tree.append_child(ShapeTreeChild::Shape(shape))))
+        append_new_member(self.shape_tree(), &[], |id| {
+            preset_member(id, preset, left, top, width, height)
+        })
     }
 
     /// Appends a free-standing connector at the top of the slide's z-order.
@@ -6133,32 +6158,18 @@ impl<'a> SlideMut<'a> {
         end_x: Emu,
         end_y: Emu,
     ) -> Result<ShapeMut<'_>> {
-        let transform = connector_transform(begin_x, begin_y, end_x, end_y)?;
-        let tree = &mut self.record.slide.common_slide_data.shape_tree;
-        let id = ShapeIdAllocator::scan(tree).allocate();
-        let mut connector = CT_ConnectionShape::new_free_standing(
-            id,
-            &format!("Connector {id}"),
-            connector.preset_name(),
-            transform,
-        )
-        .map_err(|error| invalid_shape_construction("add connector", error))?;
-        connector
-            .set_default_style()
-            .map_err(|error| invalid_shape_construction("add connector", error))?;
-        Ok(shape_mut(
-            tree.append_child(ShapeTreeChild::Connector(connector)),
-        ))
+        append_new_member(self.shape_tree(), &[], |id| {
+            connector_member(id, connector, begin_x, begin_y, end_x, end_y)
+        })
     }
 
     /// Appends an empty group at the top of the slide's z-order.
     pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>> {
-        let tree = &mut self.record.slide.common_slide_data.shape_tree;
-        let id = ShapeIdAllocator::scan(tree).allocate();
-        let group = CT_GroupShape::new_empty(id, &format!("Group {id}"));
-        Ok(shape_mut(
-            tree.append_child(ShapeTreeChild::GroupShape(Box::new(group))),
-        ))
+        append_new_member(self.shape_tree(), &[], |id| Ok(group_member(id, false)))
+    }
+
+    fn shape_tree(&mut self) -> &mut CT_ShapeTree {
+        &mut self.record.slide.common_slide_data.shape_tree
     }
 
     /// Returns one immediate z-order child as a read-only handle.
@@ -6193,6 +6204,403 @@ impl<'a> SlideMut<'a> {
             .get_mut(index)
             .map(shape_mut)
     }
+}
+
+/// The shapes of one slide, or of one group on it, borrowed for adding
+/// shapes.
+///
+/// A new shape takes a `p:cNvPr` id unused across the whole slide, groups
+/// included, and lands at the top of its collection's z-order. Coordinates
+/// are in the collection's own space, which for a group is its member space.
+/// An addition to a group refits that group and every group enclosing it to
+/// the union of their members, as python-pptx does.
+pub struct ShapesMut<'a> {
+    presentation: &'a mut Presentation,
+    slide_index: usize,
+    group: Vec<usize>,
+}
+
+impl ShapesMut<'_> {
+    /// Appends a no-fill textbox.
+    pub fn add_textbox(
+        &mut self,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        self.append(|id| textbox_member(id, left, top, width, height))
+    }
+
+    /// Appends an ordinary preset shape.
+    pub fn add_shape(
+        &mut self,
+        preset: &str,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        self.append(|id| preset_member(id, preset, left, top, width, height))
+    }
+
+    /// Appends a free-standing connector.
+    pub fn add_connector(
+        &mut self,
+        connector: ConnectorType,
+        begin_x: Emu,
+        begin_y: Emu,
+        end_x: Emu,
+        end_y: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        self.append(|id| connector_member(id, connector, begin_x, begin_y, end_x, end_y))
+    }
+
+    /// Appends an empty group, which the first addition to it fits.
+    ///
+    /// A group added inside a group gets the zero `a:xfrm` python-pptx
+    /// writes, because python-pptx cannot refit a group whose member group
+    /// has none. One added to the slide's own shapes has no transform, as
+    /// [`SlideMut::add_group_shape`] writes it.
+    pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>> {
+        let nested = !self.group.is_empty();
+        self.append(|id| Ok(group_member(id, nested)))
+    }
+
+    /// Appends a rectangular table.
+    pub fn add_table(
+        &mut self,
+        rows: usize,
+        columns: usize,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        self.append(|id| table_member(id, rows, columns, left, top, width, height))
+    }
+
+    /// Appends a relationship-backed picture, sized as
+    /// [`Presentation::add_picture`] sizes it.
+    pub fn add_picture(
+        &mut self,
+        image_data: &[u8],
+        image_filename: &str,
+        left: Emu,
+        top: Emu,
+        width: Option<Emu>,
+        height: Option<Emu>,
+    ) -> Result<ShapeMut<'_>> {
+        self.presentation
+            .append_picture(
+                self.slide_index,
+                &self.group,
+                image_data,
+                image_filename,
+                left,
+                top,
+                width,
+                height,
+            )
+            .map(shape_mut)
+    }
+
+    fn append(
+        &mut self,
+        build: impl FnOnce(u32) -> Result<ShapeTreeChild>,
+    ) -> Result<ShapeMut<'_>> {
+        let tree = &mut self.presentation.slides[self.slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree;
+        append_new_member(tree, &self.group, build)
+    }
+}
+
+fn textbox_member(id: u32, left: Emu, top: Emu, width: Emu, height: Emu) -> Result<ShapeTreeChild> {
+    CT_Shape::new_textbox(
+        id,
+        &format!("TextBox {id}"),
+        positioned_transform(left, top, width, height),
+    )
+    .map(ShapeTreeChild::Shape)
+    .map_err(|error| invalid_shape_construction("add textbox", error))
+}
+
+fn preset_member(
+    id: u32,
+    preset: &str,
+    left: Emu,
+    top: Emu,
+    width: Emu,
+    height: Emu,
+) -> Result<ShapeTreeChild> {
+    CT_Shape::new_preset(
+        id,
+        &format!("Shape {id}"),
+        preset,
+        positioned_transform(left, top, width, height),
+    )
+    .map(ShapeTreeChild::Shape)
+    .map_err(|error| invalid_shape_construction("add shape", error))
+}
+
+fn connector_member(
+    id: u32,
+    connector: ConnectorType,
+    begin_x: Emu,
+    begin_y: Emu,
+    end_x: Emu,
+    end_y: Emu,
+) -> Result<ShapeTreeChild> {
+    let transform = connector_transform(begin_x, begin_y, end_x, end_y)?;
+    let mut connector = CT_ConnectionShape::new_free_standing(
+        id,
+        &format!("Connector {id}"),
+        connector.preset_name(),
+        transform,
+    )
+    .map_err(|error| invalid_shape_construction("add connector", error))?;
+    connector
+        .set_default_style()
+        .map_err(|error| invalid_shape_construction("add connector", error))?;
+    Ok(ShapeTreeChild::Connector(connector))
+}
+
+/// Builds an empty group, with a zero `a:xfrm` when `nested` in a group.
+fn group_member(id: u32, nested: bool) -> ShapeTreeChild {
+    let mut group = CT_GroupShape::new_empty(id, &format!("Group {id}"));
+    if nested {
+        let transform = group.group_transform_mut();
+        transform.offset = Some(CT_Point2D::default());
+        transform.extent = Some(CT_PositiveSize2D::default());
+        transform.child_offset = Some(CT_Point2D::default());
+        transform.child_extent = Some(CT_PositiveSize2D::default());
+    }
+    ShapeTreeChild::GroupShape(Box::new(group))
+}
+
+fn table_member(
+    id: u32,
+    rows: usize,
+    columns: usize,
+    left: Emu,
+    top: Emu,
+    width: Emu,
+    height: Emu,
+) -> Result<ShapeTreeChild> {
+    let table = CT_Table::new(rows, columns, width, height)
+        .map_err(|error| invalid_table_mutation("add table", error.to_string()))?;
+    let frame = CT_GraphicFrame::new_table(
+        id,
+        &format!("Table {id}"),
+        positioned_transform(left, top, width, height),
+        table,
+    )
+    .map_err(|error| invalid_table_mutation("add table", error.to_string()))?;
+    Ok(ShapeTreeChild::GraphicFrame(Box::new(frame)))
+}
+
+/// Appends a new member built with an id that is unused across the slide.
+fn append_new_member<'t>(
+    tree: &'t mut CT_ShapeTree,
+    group: &[usize],
+    build: impl FnOnce(u32) -> Result<ShapeTreeChild>,
+) -> Result<ShapeMut<'t>> {
+    let id = ShapeIdAllocator::scan(tree).allocate();
+    let member = build(id)?;
+    Ok(shape_mut(append_member(tree, group, member)))
+}
+
+/// Appends `member` to the slide's own shapes, for an empty `group`, or to
+/// the group that `group` indexes, then refits that group and each group
+/// enclosing it, innermost first.
+///
+/// Callers pass a path that ends at a group.
+fn append_member<'t>(
+    tree: &'t mut CT_ShapeTree,
+    group: &[usize],
+    member: ShapeTreeChild,
+) -> &'t mut ShapeTreeChild {
+    const CHECKED: &str = "the caller checked the group path";
+    if group.is_empty() {
+        return tree.append_child(member);
+    }
+    // Only a group that already has a counted member has members whose drawn
+    // place its refit must keep.
+    let occupied = (1..=group.len())
+        .map(|depth| {
+            group_at_mut(&mut tree.children, &group[..depth])
+                .expect(CHECKED)
+                .children
+                .iter()
+                .any(|child| member_box(child).is_some())
+        })
+        .collect::<Vec<_>>();
+    group_at_mut(&mut tree.children, group)
+        .expect(CHECKED)
+        .append_child(member);
+    for depth in (1..=group.len()).rev() {
+        fit_group_to_members(
+            group_at_mut(&mut tree.children, &group[..depth]).expect(CHECKED),
+            occupied[depth - 1],
+        );
+    }
+    group_at_mut(&mut tree.children, group)
+        .expect(CHECKED)
+        .children
+        .last_mut()
+        .expect("the member was appended")
+}
+
+/// Returns the group that `path` indexes from `children`, one z-order index
+/// per nesting level.
+fn group_at_mut<'t>(
+    children: &'t mut [ShapeTreeChild],
+    path: &[usize],
+) -> Option<&'t mut CT_GroupShape> {
+    let (index, rest) = path.split_first()?;
+    let ShapeTreeChild::GroupShape(group) = children.get_mut(*index)? else {
+        return None;
+    };
+    if rest.is_empty() {
+        Some(group.as_mut())
+    } else {
+        group_at_mut(&mut group.children, rest)
+    }
+}
+
+/// Returns the offset and extent a member adds to its group's union, or
+/// `None` for a member without both and for a group without members.
+fn member_box(child: &ShapeTreeChild) -> Option<(CT_Point2D, CT_PositiveSize2D)> {
+    if let ShapeTreeChild::GroupShape(group) = child
+        && group.children.is_empty()
+    {
+        return None;
+    }
+    let transform = shape_transform(child)?;
+    Some((transform.offset?, transform.extent?))
+}
+
+/// Refits a group to the union of its members' own boxes, as python-pptx
+/// does after each addition.
+///
+/// `a:chOff` and `a:chExt` become the union in member space, and `a:off` and
+/// `a:ext` follow through the group's current mapping from member space to
+/// its parent, the one the renderer applies. The group's flips and rotation
+/// apply about the centre of `a:off` and `a:ext`, so when the group is
+/// `occupied`, meaning it had a counted member before the addition, `a:off`
+/// also moves by [`pivot_shift`]. No member drawn before the addition moves
+/// on the slide. A group without all four values draws its members unscaled
+/// in place, so its four values end equal, as python-pptx writes them. As
+/// in python-pptx, member rotation does not widen the union. A member
+/// without an offset and an extent does not count, nor does a group without
+/// members, and a group without a counted member keeps its transform.
+fn fit_group_to_members(group: &mut CT_GroupShape, occupied: bool) {
+    let mut union: Option<(i64, i64, i64, i64)> = None;
+    for (offset, extent) in group.children.iter().filter_map(member_box) {
+        let (left, top) = (offset.x.0, offset.y.0);
+        let right = left.saturating_add(extent.cx.0);
+        let bottom = top.saturating_add(extent.cy.0);
+        union = Some(union.map_or((left, top, right, bottom), |(l, t, r, b)| {
+            (l.min(left), t.min(top), r.max(right), b.max(bottom))
+        }));
+    }
+    let Some((left, top, right, bottom)) = union else {
+        return;
+    };
+    let width = right.saturating_sub(left).max(0);
+    let height = bottom.saturating_sub(top).max(0);
+    let transform = group.group_transform_mut();
+    let mapping = transform
+        .offset
+        .zip(transform.extent)
+        .zip(transform.child_offset.zip(transform.child_extent));
+    let (mut x, cx) = member_span_to_parent(
+        left,
+        width,
+        mapping.map(|((offset, extent), (child_offset, child_extent))| {
+            (offset.x.0, extent.cx.0, child_offset.x.0, child_extent.cx.0)
+        }),
+    );
+    let (mut y, cy) = member_span_to_parent(
+        top,
+        height,
+        mapping.map(|((offset, extent), (child_offset, child_extent))| {
+            (offset.y.0, extent.cy.0, child_offset.y.0, child_extent.cy.0)
+        }),
+    );
+    if occupied && let Some(((offset, extent), _)) = mapping {
+        let centre = |start: i64, length: i64| start as f64 + length as f64 / 2.0;
+        let (shift_x, shift_y) = pivot_shift(
+            transform,
+            centre(x, cx) - centre(offset.x.0, extent.cx.0),
+            centre(y, cy) - centre(offset.y.0, extent.cy.0),
+        );
+        x = x.saturating_add(shift_x);
+        y = y.saturating_add(shift_y);
+    }
+    transform.offset = Some(CT_Point2D {
+        x: Emu(x),
+        y: Emu(y),
+    });
+    transform.extent = Some(CT_PositiveSize2D {
+        cx: Emu(cx),
+        cy: Emu(cy),
+    });
+    transform.child_offset = Some(CT_Point2D {
+        x: Emu(left),
+        y: Emu(top),
+    });
+    transform.child_extent = Some(CT_PositiveSize2D {
+        cx: Emu(width),
+        cy: Emu(height),
+    });
+}
+
+/// Returns how far a group's `a:off` must move so that its flips and
+/// rotation, which apply about the centre of `a:off` and `a:ext`, place its
+/// members as before after that centre moved by `(dx, dy)`.
+///
+/// PowerPoint flips, then rotates, so for that linear part `L` the shift is
+/// `(L - I)(dx, dy)`, which is zero without rotation and flips. The rpptx
+/// renderer rotates a group before it flips it, which agrees with
+/// PowerPoint unless a group is both rotated and flipped.
+fn pivot_shift(transform: &CT_Transform2D, dx: f64, dy: f64) -> (i64, i64) {
+    let (sin, cos) = (f64::from(transform.rotation.0) / 60_000.0)
+        .to_radians()
+        .sin_cos();
+    let flip_x = if transform.flip_horizontal { -1.0 } else { 1.0 };
+    let flip_y = if transform.flip_vertical { -1.0 } else { 1.0 };
+    (
+        ((cos * flip_x - 1.0) * dx - sin * flip_y * dy).round() as i64,
+        (sin * flip_x * dx + (cos * flip_y - 1.0) * dy).round() as i64,
+    )
+}
+
+/// Maps one axis of a member-space span onto a group's parent, given the
+/// group's offset, extent, child offset, and child extent on that axis, as
+/// `offset + (start - child_offset) * extent / child_extent`. A zero child
+/// extent scales by one, as in the renderer, and `None` maps unchanged.
+fn member_span_to_parent(
+    start: i64,
+    length: i64,
+    mapping: Option<(i64, i64, i64, i64)>,
+) -> (i64, i64) {
+    let Some((offset, extent, child_offset, child_extent)) = mapping else {
+        return (start, length);
+    };
+    let scale = |value: i64| {
+        if child_extent == 0 || extent == child_extent {
+            value
+        } else {
+            (value as f64 * extent as f64 / child_extent as f64).round() as i64
+        }
+    };
+    (
+        offset.saturating_add(scale(start.saturating_sub(child_offset))),
+        scale(length),
+    )
 }
 
 /// The geometry family of a free-standing connector.

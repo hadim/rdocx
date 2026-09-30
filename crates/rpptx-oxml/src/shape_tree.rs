@@ -1450,7 +1450,11 @@ impl CT_ShapeTree {
         self.non_visual_group_properties.non_visual_id
     }
 
-    /// Appends one member before preserved schema-final shape-tree content.
+    /// Appends one member right after the last typed member.
+    ///
+    /// Preserved content after that member, an unmodelled member such as a
+    /// trailing `p:contentPart` as well as schema-final `p:extLst`, stays
+    /// after the new member.
     pub fn append_child(&mut self, child: ShapeTreeChild) -> &mut ShapeTreeChild {
         self.raw_children.shift_boundaries_from(self.children.len());
         self.children.push(child);
@@ -1656,6 +1660,18 @@ impl CT_GroupShape {
 
     pub(crate) fn non_visual_name(&self) -> Option<&str> {
         self.non_visual_group_properties.non_visual_name.as_deref()
+    }
+
+    /// Appends one member right after the last typed member, as
+    /// [`CT_ShapeTree::append_child`] does.
+    ///
+    /// Preserved content after that member, an unmodelled member such as a
+    /// trailing `p:contentPart` as well as schema-final `p:extLst`, stays
+    /// after the new member.
+    pub fn append_child(&mut self, child: ShapeTreeChild) -> &mut ShapeTreeChild {
+        self.raw_children.shift_boundaries_from(self.children.len());
+        self.children.push(child);
+        self.children.last_mut().expect("group child was appended")
     }
 
     /// Parses a complete recursive `p:grpSp` element.
@@ -2339,6 +2355,27 @@ mod style_tests {
         assert!(group.children.is_empty());
         assert!(group.group_transform().is_none());
         assert_eq!(CT_GroupShape::from_xml(xml.as_bytes()).unwrap(), group);
+    }
+
+    #[test]
+    fn group_members_append_right_after_the_last_typed_member() {
+        let xml = br#"<p:grpSp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:nvGrpSpPr><p:cNvPr id="4" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="5" name="First"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:contentPart r:id="rId9"/><p:extLst><p:ext uri="{kept}"/></p:extLst></p:grpSp>"#;
+        let mut group = CT_GroupShape::from_xml(xml).unwrap();
+        let appended = group.append_child(ShapeTreeChild::GroupShape(Box::new(
+            CT_GroupShape::new_empty(6, "Nested"),
+        )));
+        assert_eq!(appended.non_visual_id(), Some(6));
+
+        let written = String::from_utf8(group.to_xml().unwrap()).unwrap();
+        let first = written.find(r#"id="5""#).unwrap();
+        let nested = written.find(r#"id="6""#).unwrap();
+        let ink = written.find("<p:contentPart").unwrap();
+        let extension = written.find("<p:extLst>").unwrap();
+        assert!(
+            first < nested && nested < ink && ink < extension,
+            "{written}"
+        );
+        assert_eq!(CT_GroupShape::from_xml(written.as_bytes()).unwrap(), group);
     }
 
     #[test]

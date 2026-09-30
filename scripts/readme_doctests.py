@@ -399,7 +399,7 @@ ARCHIVE_MEASUREMENTS = {
     "rpptx-chart": (6_648, 21_136, 6),
     "rpptx-cli": (39_989, 174_505, 8),
     "rpptx-layout": (79_109, 458_112, 11),
-    "rpptx-oxml": (154_086, 1_046_474, 20),
+    "rpptx-oxml": (154_422, 1_048_510, 20),
     "rpptx-render": (59_928, 329_994, 8),
 }
 PACKAGE_VERSIONS = {
