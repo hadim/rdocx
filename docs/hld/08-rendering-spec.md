@@ -491,9 +491,14 @@ Coverage and script boundaries select deterministic fonts before HarfRust
 receives explicit script, language, and direction. Script identity separates
 Latin, Arabic, Hebrew, Devanagari, Thai, Han, Hangul, and Kana, because each
 needs its own shaper feature set. Hangul and Kana are never folded into Han,
-which would silently change how existing Han text shapes. ICU supplies Thai and
-complex-script opportunities, shared punctuation rules protect CJK line edges,
-and language-specific Liang dictionaries supply conditional hyphens. Fitting
+which would silently change how existing Han text shapes. UAX 14 supplies line
+break opportunities over the whole paragraph, so a word split across runs does
+not break where they meet, and a word boundary before a comma, a space, or the
+hyphen of a compound is not one. ICU word boundaries add opportunities inside
+Thai and other complex-context scripts, shared punctuation rules protect CJK
+line edges, and language-specific Liang dictionaries supply conditional hyphens.
+Whitespace before an opportunity hangs past the end of a wrapped line instead of
+wrapping it, and does not count against the width the line must fit. Fitting
 never divides a shaping cluster. After fitting, UAX 9 reorders each completed
 line for painting without rewriting its logical text or source spans.
 PowerPoint transports resolved paragraph direction beside the established

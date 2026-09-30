@@ -630,7 +630,7 @@ fn stack_shaped_text(
         let lines = break_multilingual_into_lines(&items, &params, font_manager, *base_direction)?;
 
         for line in &lines {
-            width_fits &= line.width <= line.available_width + 0.01;
+            width_fits &= ink_width(line) <= line.available_width + 0.01;
             let line_size = line_font_size(line).unwrap_or(font_size);
             let baseline = y + baseline_offset(line, SINGLE_SPACING_EM * line_size);
             let element_start = elements.len();
@@ -700,6 +700,22 @@ fn line_text(line: &LayoutLine) -> String {
         .collect::<Vec<_>>();
     spans.sort_by_key(|(order, _)| *order);
     spans.into_iter().map(|(_, text)| text).collect()
+}
+
+/// Returns a line's width without the rich text whitespace at either end,
+/// which may hang past the frame when the line wraps.
+fn ink_width(line: &LayoutLine) -> f64 {
+    let whitespace = |item: &&LineItem| {
+        matches!(item, LineItem::MultilingualText(span)
+            if span.text().chars().all(char::is_whitespace))
+    };
+    let leading = line
+        .items
+        .iter()
+        .take_while(whitespace)
+        .map(LineItem::width);
+    let trailing = line.items.iter().rev().take_while(whitespace);
+    (line.width - leading.chain(trailing.map(LineItem::width)).sum::<f64>()).max(0.0)
 }
 
 /// Returns the largest scaled run size on a line, ignoring its marker.
@@ -2182,6 +2198,51 @@ mod tests {
                 "{typeface} {spacing:?}: first baseline {first}, PowerPoint {expected}"
             );
         }
+    }
+
+    #[test]
+    fn a_space_hanging_past_the_frame_does_not_shrink_normal_autofit_text() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut body = autofit_body(
+            ResolvedAutofit::Normal {
+                font_scale: None,
+                line_spacing_reduction: None,
+            },
+            20.0,
+            "still in service, or later",
+        );
+        body.wrap = true;
+        let style = first_run_style(&body.paragraphs[0]).clone();
+        let ink = shape_run(&mut fonts, "still in service,", &style)
+            .expect("shape first line")
+            .width;
+        let content = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: ink + 1.0,
+            height: 400.0,
+        };
+
+        // python-pptx text styles set the paragraph direction, which takes the
+        // rich line path.
+        let stacked = stack_text_for_page_with_directions(
+            &mut fonts,
+            content,
+            &body,
+            1,
+            &[oxml_layout::TextDirection::LeftToRight],
+        )
+        .expect("stack directed paragraph");
+
+        assert_eq!(stacked.font_scale, 1.0);
+        assert_eq!(
+            stacked
+                .lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            ["still in service, ", "or later"]
+        );
     }
 
     #[test]

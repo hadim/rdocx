@@ -1398,7 +1398,12 @@ impl FontManager {
         };
         let bidi = unicode_bidi::BidiInfo::new(&segment.text, paragraph_level);
         let levels = bidi.levels.clone();
-        self.shape_multilingual_with_levels(segment, language, no_wrap, &levels, 0)
+        let break_offsets = if no_wrap {
+            HashSet::new()
+        } else {
+            multilingual_break_opportunities(&segment.text)
+        };
+        self.shape_multilingual_with_levels(segment, language, &break_offsets, &levels, 0)
     }
 
     /// Shape styled spans with one paragraph-wide bidi resolution.
@@ -1435,6 +1440,13 @@ impl FontManager {
             .first()
             .map(|paragraph| paragraph.level)
             .unwrap_or_else(unicode_bidi::Level::ltr);
+        // Opportunities come from the whole paragraph, so a word that changes
+        // formatting partway through does not break where its runs meet.
+        let paragraph_breaks = if no_wrap {
+            HashSet::new()
+        } else {
+            multilingual_break_opportunities(&paragraph_text)
+        };
         let mut logical_index = 0usize;
         let mut shaped = Vec::new();
         for ((segment, language), byte_offset) in segments.into_iter().zip(segment_starts) {
@@ -1448,10 +1460,15 @@ impl FontManager {
                 let levels = forced_levels
                     .as_deref()
                     .unwrap_or(&bidi.levels[byte_offset..byte_end]);
+                let break_offsets = paragraph_breaks
+                    .iter()
+                    .filter(|offset| (byte_offset + 1..=byte_end).contains(*offset))
+                    .map(|offset| offset - byte_offset)
+                    .collect();
                 let spans = self.shape_multilingual_with_levels(
                     segment,
                     language.as_deref(),
-                    no_wrap,
+                    &break_offsets,
                     levels,
                     logical_index,
                 )?;
@@ -1462,22 +1479,29 @@ impl FontManager {
         Ok(shaped)
     }
 
+    /// `break_offsets` are the line break opportunities within the segment,
+    /// as byte offsets. An offset at its end lets a line end after it.
     fn shape_multilingual_with_levels(
         &mut self,
         segment: TextSegment,
         language: Option<&str>,
-        no_wrap: bool,
+        break_offsets: &HashSet<usize>,
         levels: &[unicode_bidi::Level],
         logical_index_base: usize,
     ) -> Result<Vec<MultilingualTextSegment>> {
         let grapheme_boundaries = icu_segmenter::GraphemeClusterSegmenter::new()
             .segment_str(&segment.text)
             .collect::<Vec<_>>();
-        let break_offsets = if no_wrap {
-            HashSet::new()
-        } else {
-            multilingual_break_opportunities(&segment.text)
-        };
+        // Whitespace before a break opportunity gets a span of its own, so a
+        // line can let it hang past its end.
+        let hanging_starts = break_offsets
+            .iter()
+            .map(|offset| {
+                segment.text[..*offset]
+                    .trim_end_matches(char::is_whitespace)
+                    .len()
+            })
+            .collect::<HashSet<_>>();
 
         let mut logical_ranges = Vec::<(usize, usize, TextScript, unicode_bidi::Level)>::new();
         let mut start = 0usize;
@@ -1499,7 +1523,9 @@ impl FontManager {
             }
             current_script = script;
             current_level = level;
-            if break_offsets.contains(&grapheme_end) && grapheme_end < segment.text.len() {
+            if (break_offsets.contains(&grapheme_end) || hanging_starts.contains(&grapheme_end))
+                && grapheme_end < segment.text.len()
+            {
                 logical_ranges.push((start, grapheme_end, current_script, current_level));
                 start = grapheme_end;
             }
@@ -1809,10 +1835,26 @@ fn harfrust_script(script: TextScript) -> harfrust::Script {
     }
 }
 
+/// UAX 14 line break opportunities, plus dictionary word boundaries inside
+/// Thai, Lao, Khmer and Myanmar text, which UAX 14 leaves to a dictionary.
+///
+/// A word boundary elsewhere is not a line break opportunity: it falls before
+/// a comma, a space or the hyphen of a compound.
 fn multilingual_break_opportunities(text: &str) -> HashSet<usize> {
+    let complex_context = |character: Option<char>| {
+        character.is_some_and(|character| {
+            unicode_linebreak::break_property(character as u32)
+                == unicode_linebreak::BreakClass::ComplexContext
+        })
+    };
     let mut opportunities = icu_segmenter::WordSegmenter::new_auto(Default::default())
         .segment_str(text)
-        .filter(|offset| *offset > 0 && *offset <= text.len())
+        .filter(|offset| {
+            *offset > 0
+                && *offset < text.len()
+                && complex_context(text[..*offset].chars().next_back())
+                && complex_context(text[*offset..].chars().next())
+        })
         .collect::<HashSet<_>>();
     for (offset, _) in unicode_linebreak::linebreaks(text) {
         if offset > 0 {
@@ -2716,6 +2758,62 @@ mod tests {
         assert_eq!(
             shaped.iter().map(|span| span.text()).collect::<String>(),
             text
+        );
+    }
+
+    #[test]
+    fn latin_spans_end_at_line_break_opportunities_with_their_spaces_apart() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        let segment = multilingual_test_segment(&mut fm, "in service, or re-coated", 18.0, None);
+        let shaped = fm
+            .shape_multilingual_text(segment, None, TextDirection::LeftToRight, false)
+            .unwrap();
+
+        // No opportunity before the comma, the space or the hyphen, and each
+        // space before an opportunity is a span of its own.
+        assert_eq!(
+            shaped
+                .iter()
+                .map(|span| (span.text(), span.break_after()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("in", false),
+                (" ", true),
+                ("service,", false),
+                (" ", true),
+                ("or", false),
+                (" ", true),
+                ("re-", true),
+                ("coated", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_word_split_across_styled_segments_has_no_break_where_they_meet() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        let first = multilingual_test_segment(&mut fm, "Well-kno", 18.0, None);
+        let second = multilingual_test_segment(&mut fm, "wn state", 18.0, None);
+        let shaped = fm
+            .shape_multilingual_paragraph(
+                vec![(first, None), (second, None)],
+                TextDirection::LeftToRight,
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(
+            shaped
+                .iter()
+                .map(|span| (span.text(), span.break_after()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Well-", true),
+                ("kno", false),
+                ("wn", false),
+                (" ", true),
+                ("state", true),
+            ]
         );
     }
 
